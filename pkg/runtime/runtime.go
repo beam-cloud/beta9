@@ -124,18 +124,13 @@ type Runtime interface {
 
 // Config contains configuration for creating a runtime
 type Config struct {
-	Type                  string // "runc" | "gvisor"
-	RuncPath              string // Path to runc binary (default: "runc")
-	RunscPath             string // Path to runsc binary (default: "runsc")
-	RunscPlatform         string // "kvm" | "systrap" | "ptrace" (optional)
-	RunscRoot             string // Root directory for runsc state (default: "/run/gvisor")
-	RunscDirectFS         *bool  // If set, controls --directfs
-	RunscFileAccess       string // If set, controls --file-access for root mount
-	RunscFileAccessMounts string // If set, controls --file-access-mounts for bind mounts
-	RunscOverlay2         string // If set, controls --overlay2
-	RunscDCache           int    // If >0, controls --dcache
-	RunscExtraArgs        []string
-	Debug                 bool // Enable debug mode
+	Type           string // "runc" | "gvisor"
+	RuncPath       string // Path to runc binary (default: "runc")
+	RunscPath      string // Path to runsc binary (default: "runsc")
+	RunscPlatform  string // "kvm" | "systrap" | "ptrace" (optional)
+	RunscRoot      string // Root directory for runsc state (default: "/run/gvisor")
+	RunscExtraArgs []string
+	Debug          bool // Enable debug mode
 }
 
 // New creates a new Runtime based on the provided configuration

@@ -87,7 +87,7 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 
 	if exists == 0 {
 		desiredContainers = 0
-		recordEndpointScaleDecision(i, sample, desiredContainers, "SERVE_LOCK_MISSING")
+		recordEndpointScaleDecisionAsync(i, sample, desiredContainers, "SERVE_LOCK_MISSING")
 	}
 
 	return &abstractions.AutoscalerResult{
@@ -96,16 +96,25 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 	}
 }
 
+func recordEndpointScaleDecisionAsync(i *endpointInstance, sample *endpointAutoscalerSample, desiredContainers int, reason string) {
+	if i == nil || i.EventRepo == nil || sample == nil {
+		return
+	}
+	sampleCopy := *sample
+	go recordEndpointScaleDecision(i, &sampleCopy, desiredContainers, reason)
+}
+
 func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscalerSample, desiredContainers int, reason string) {
+	if i == nil || i.EventRepo == nil {
+		return
+	}
+
 	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return
 	}
 
 	for _, container := range containers {
-		if i.EventRepo == nil {
-			continue
-		}
 		i.EventRepo.PushContainerEvent(types.EventContainerEventSchema{
 			ID:          types.ContainerEventAutoscalerScaleDecision,
 			ContainerID: container.ContainerId,

@@ -66,7 +66,7 @@ func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error
 
 func NewServerWithOptions(ctx context.Context, cfg Config, locality string, options ...ServerOption) (*Server, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
-	startCachePathStatsLogger(ctx)
+	startCachePathStatsLogger()
 
 	opts := &ServerOpts{}
 	for _, opt := range options {
@@ -328,7 +328,8 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 	cs.grpcServer = s
 	cs.listener = serveListener
 
-	Logger.Infof("Running %s@%s, cfg: %+v", cs.hostId, advertiseAddr, cs.serverConfig)
+	Logger.Infof("Running %s@%s", cs.hostId, advertiseAddr)
+	Logger.Debugf("cache server config: %+v", cs.serverConfig)
 
 	go cs.HostKeepAlive()
 	go func() {
@@ -425,7 +426,7 @@ func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequ
 
 	atomic.AddInt64(&cachePathStats.serverGRPCGetHits, 1)
 	atomic.AddInt64(&cachePathStats.serverGRPCGetBytes, n)
-	Logger.Infof("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
+	Logger.Debugf("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
 	return &proto.CacheGetContentResponse{Content: dst[:n], Ok: true}, nil
 }
 
@@ -449,7 +450,7 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 	offset := req.Offset
 	remainingLength := req.Length
 
-	Logger.Infof("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
+	Logger.Debugf("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
 
 	for remainingLength > 0 {
 		currentChunkSize := chunkSize
@@ -492,15 +493,15 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 }
 
 func (cs *Server) storeReader(ctx context.Context, reader io.Reader) (string, uint64, error) {
-	Logger.Infof("Store[ACK]")
+	Logger.Debugf("Store[ACK]")
 
 	hash, size, err := cs.cas.AddReader(ctx, reader)
 	if err != nil {
-		Logger.Infof("Store[ERR] - [%s] - %v", hash, err)
+		Logger.Warnf("Store[ERR] - [%s] - %v", hash, err)
 		return "", 0, status.Errorf(codes.Internal, "Failed to add content: %v", err)
 	}
 
-	Logger.Infof("Store[OK] - [%s] (%d bytes)", hash, size)
+	Logger.Debugf("Store[OK] - [%s] (%d bytes)", hash, size)
 	return hash, uint64(size), nil
 }
 
@@ -675,7 +676,7 @@ func (cs *Server) storeContentInCacheFS(ctx context.Context, path string, hash s
 func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 	ctx := stream.Context()
 
-	Logger.Infof("StoreContent[ACK]")
+	Logger.Debugf("StoreContent[ACK]")
 
 	reader := &storeContentStreamReader{stream: stream}
 	hash, size, err := cs.storeReader(ctx, reader)
@@ -690,12 +691,12 @@ func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 		}
 
 		if err := cs.storeContentInCacheFS(ctx, reader.cachePath, hash, size, metadata); err != nil {
-			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, reader.cachePath, err)
+			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, reader.cachePath, err)
 			return status.Errorf(codes.Internal, "Failed to update cachefs metadata: %v", err)
 		}
 	}
 
-	Logger.Infof("StoreContent[OK] - [%s]", hash)
+	Logger.Debugf("StoreContent[OK] - [%s]", hash)
 	return stream.SendAndClose(&proto.CacheStoreContentResponse{Ok: true, Hash: hash})
 }
 
@@ -713,7 +714,7 @@ func (r *storeContentStreamReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		if err != nil {
-			Logger.Infof("Store[ERR] - error: %v", err)
+			Logger.Warnf("Store[ERR] - error: %v", err)
 			return 0, status.Errorf(codes.Unknown, "Received an error: %v", err)
 		}
 
@@ -763,14 +764,14 @@ func (cs *Server) GetState(ctx context.Context, req *proto.CacheGetStateRequest)
 func (cs *Server) openLocalSource(localPath string) (io.ReadCloser, error) {
 	// Check if the file exists
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		Logger.Infof("StoreFromContent[ERR] - source not found: %v", err)
+		Logger.Warnf("StoreFromContent[ERR] - source not found: %v", err)
 		return nil, err
 	}
 
 	// Open the file
 	file, err := os.Open(localPath)
 	if err != nil {
-		Logger.Infof("StoreFromContent[ERR] - error reading source: %v", err)
+		Logger.Warnf("StoreFromContent[ERR] - error reading source: %v", err)
 		return nil, err
 	}
 
@@ -814,7 +815,7 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 	if req.Source.CachePath != "" {
 		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
-	Logger.Infof("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
+	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
 
 	var reader io.ReadCloser
 	var err error
@@ -841,7 +842,7 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 	// Store the content
 	hash, size, err := cs.storeReader(ctx, reader)
 	if err != nil {
-		Logger.Infof("StoreFromContent[ERR] - error storing data in cache: %v", err)
+		Logger.Warnf("StoreFromContent[ERR] - error storing data in cache: %v", err)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
@@ -864,12 +865,12 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 			err = cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
 		}
 		if err != nil {
-			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
+			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 	}
 
-	Logger.Infof("StoreFromContent[OK] - [%s]", hash)
+	Logger.Debugf("StoreFromContent[OK] - [%s]", hash)
 
 	// HOTFIX: Manually trigger garbage collection
 	go runtime.GC()
@@ -887,9 +888,9 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 	if req.Source.CachePath != "" {
 		sourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
-	Logger.Infof("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
+	Logger.Debugf("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
 	if err := cs.coordinator.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
-		Logger.Warnf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
+		Logger.Debugf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}
 	lockReleased := false
@@ -913,7 +914,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 			case <-storeContext.Done():
 				return
 			case <-ticker.C:
-				Logger.Infof("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
+				Logger.Debugf("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
 				cs.coordinator.RefreshStoreFromContentLock(ctx, cs.locality, sourcePath)
 			}
 		}
@@ -938,6 +939,6 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 	}
 	lockReleased = true
 
-	Logger.Infof("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))
+	Logger.Debugf("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))
 	return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: storeContentFromSourceResp.Hash, Ok: true}, nil
 }

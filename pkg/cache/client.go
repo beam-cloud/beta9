@@ -108,7 +108,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 
 func NewClientWithRegistry(ctx context.Context, cfg Config, registry Registry, locality string) (*Client, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
-	startCachePathStatsLogger(ctx)
+	startCachePathStatsLogger()
 
 	if locality == "" {
 		locality = cfg.Global.GetLocality()
@@ -529,7 +529,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 					addr = host.Addr
 				}
 			}
-			Logger.Warnf("cache raw read result: host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hostID, addr, hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache raw read result: host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hostID, addr, hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
 	if host == nil || !c.clientConfig.ReadTransport.Enabled {
@@ -699,7 +699,7 @@ func (c *Client) LocalPageRegion(hash string, offset int64, length int64, opts C
 	started := time.Now()
 	defer func() {
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || err != nil {
-			Logger.Infof("cache local page region result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache local page region result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
 	atomic.AddInt64(&cachePathStats.localPageRegionRequests, 1)
@@ -742,7 +742,7 @@ func (c *Client) LocalPageRegions(hash string, offset int64, length int64, opts 
 	started := time.Now()
 	defer func() {
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || err != nil {
-			Logger.Infof("cache local page regions result: hash=%s offset=%d length=%d regions=%d err=%v elapsed=%s", hash, offset, length, len(regions), err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache local page regions result: hash=%s offset=%d length=%d regions=%d err=%v elapsed=%s", hash, offset, length, len(regions), err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
 	atomic.AddInt64(&cachePathStats.localPageRegionRequests, 1)
@@ -902,7 +902,7 @@ func (c *Client) promoteRemotePageRegions(host *Host, hash string, offset int64,
 	atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
 	atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
 	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		Logger.Infof("cache remote page promotion result: host=%s hash=%s offset=%d length=%d promoted=%d regions=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(regions), elapsed.Truncate(time.Millisecond))
+		Logger.Debugf("cache remote page promotion result: host=%s hash=%s offset=%d length=%d promoted=%d regions=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(regions), elapsed.Truncate(time.Millisecond))
 	}
 	return regions, true
 }
@@ -927,7 +927,7 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 	started := time.Now()
 	defer func() {
 		if elapsed := time.Since(started); elapsed > time.Second || err != nil {
-			Logger.Warnf("cache read-into result: hash=%s routing_key=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, opts.RoutingKey, offset, length, read, err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache read-into result: hash=%s routing_key=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, opts.RoutingKey, offset, length, read, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
@@ -1324,7 +1324,7 @@ func (c *Client) promoteLocalFileToAttachedServers(hash string, path string) {
 			Logger.Warnf("cache local replica hash mismatch: expected=%s actual=%s path=%s size=%d elapsed=%s", hash, localHash, path, size, time.Since(started).Truncate(time.Millisecond))
 			continue
 		}
-		Logger.Infof("cache local replica stored: hash=%s path=%s size=%d elapsed=%s", hash, path, size, time.Since(started).Truncate(time.Millisecond))
+		Logger.Debugf("cache local replica stored: hash=%s path=%s size=%d elapsed=%s", hash, path, size, time.Since(started).Truncate(time.Millisecond))
 	}
 }
 
@@ -1400,7 +1400,7 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 		return "", fmt.Errorf("stored content hash mismatch: expected %s, got %s", hash, resp.Hash)
 	}
 
-	Logger.Infof("StoreContent[OK] - [expected=%s actual=%s routing_key=%s elapsed=%s]", hash, resp.Hash, routingKey, time.Since(start))
+	Logger.Debugf("StoreContent[OK] - [expected=%s actual=%s routing_key=%s elapsed=%s]", hash, resp.Hash, routingKey, time.Since(start))
 	return resp.Hash, nil
 }
 

@@ -175,19 +175,9 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
-	if err == nil && task.ContainerId != "" && gws.eventRepo != nil {
-		gws.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-			ID:          types.ContainerEventResultEndTask,
-			ContainerID: task.ContainerId,
-			StubID:      task.Stub.ExternalId,
-			StubType:    string(task.Stub.Type.Kind()),
-			TaskID:      task.ExternalId,
-			WorkspaceID: task.Workspace.ExternalId,
-			Source:      "gateway.end_task",
-			Message:     "task end state persisted",
-			Attrs: map[string]string{
-				"status": string(task.Status),
-			},
+	if err == nil {
+		gws.recordTaskEvent(ctx, task, types.ContainerEventResultEndTask, "gateway.end_task", "task end state persisted", map[string]string{
+			"status": string(task.Status),
 		})
 	}
 	return &pb.EndTaskResponse{
@@ -228,62 +218,27 @@ func (gws *GatewayService) recordContainerToStartTaskPhases(ctx context.Context,
 }
 
 func (gws *GatewayService) recordTaskPhaseSincePhase(ctx context.Context, task *types.TaskWithRelated, spanID types.ContainerPhaseID, phase string, end time.Time, source string, attrs map[string]string) {
-	if gws == nil || gws.eventRepo == nil || task == nil || task.ContainerId == "" {
+	if gws == nil {
 		return
 	}
 
-	start, ok, err := taskmetrics.NewPhaseMetrics(gws.redisClient).Timestamp(ctx, task.Workspace.Name, task.ExternalId, phase)
-	if err != nil || !ok || end.Before(start) {
-		return
-	}
-
-	gws.recordTaskPhase(ctx, task, spanID, start, end, source, attrs)
+	taskmetrics.PushContainerTaskPhaseSincePhase(ctx, gws.redisClient, gws.eventRepo, task, spanID, phase, end, source, attrs)
 }
 
 func (gws *GatewayService) recordTaskPhase(ctx context.Context, task *types.TaskWithRelated, spanID types.ContainerPhaseID, start time.Time, end time.Time, source string, attrs map[string]string) {
-	if gws == nil || gws.eventRepo == nil || task == nil || task.ContainerId == "" || end.Before(start) {
+	if gws == nil {
 		return
 	}
 
-	success := true
-	if attrs == nil {
-		attrs = map[string]string{}
-	}
-	attrs["source"] = source
-	gws.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
-		ID:          spanID,
-		StartTime:   start.UTC(),
-		EndTime:     end.UTC(),
-		DurationMs:  end.Sub(start).Milliseconds(),
-		ContainerID: task.ContainerId,
-		StubID:      task.Stub.ExternalId,
-		StubType:    string(task.Stub.Type.Kind()),
-		TaskID:      task.ExternalId,
-		WorkspaceID: task.Workspace.ExternalId,
-		Success:     &success,
-		Attrs:       attrs,
-	})
+	taskmetrics.PushContainerTaskPhase(gws.eventRepo, task, spanID, start, end, source, attrs)
 }
 
 func (gws *GatewayService) recordTaskEvent(ctx context.Context, task *types.TaskWithRelated, eventID types.ContainerEventID, source string, message string, attrs map[string]string) {
-	if gws == nil || gws.eventRepo == nil || task == nil || task.ContainerId == "" {
+	if gws == nil {
 		return
 	}
 
-	if attrs == nil {
-		attrs = map[string]string{}
-	}
-	gws.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-		ID:          eventID,
-		ContainerID: task.ContainerId,
-		StubID:      task.Stub.ExternalId,
-		StubType:    string(task.Stub.Type.Kind()),
-		TaskID:      task.ExternalId,
-		WorkspaceID: task.Workspace.ExternalId,
-		Source:      source,
-		Message:     message,
-		Attrs:       attrs,
-	})
+	taskmetrics.PushContainerTaskEvent(gws.eventRepo, task, eventID, source, message, attrs)
 }
 
 func copyPhaseLabels(labels map[string]string) map[string]string {
@@ -428,18 +383,9 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 }
 
 func (gws *GatewayService) recordTaskCancelEvent(ctx context.Context, task *types.TaskWithRelated, eventID types.ContainerEventID, message string) {
-	if gws.eventRepo == nil || task == nil || task.ContainerId == "" {
+	if gws == nil {
 		return
 	}
-	gws.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-		ID:          eventID,
-		ContainerID: task.ContainerId,
-		StubID:      task.Stub.ExternalId,
-		StubType:    string(task.Stub.Type.Kind()),
-		TaskID:      task.ExternalId,
-		WorkspaceID: task.Workspace.ExternalId,
-		Reason:      string(types.StopContainerReasonUser),
-		Source:      "gateway.stop_task",
-		Message:     message,
-	})
+
+	taskmetrics.PushContainerTaskEventWithReason(gws.eventRepo, task, eventID, string(types.StopContainerReasonUser), "gateway.stop_task", message, nil)
 }

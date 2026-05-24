@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -14,6 +15,8 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
+
+var errPageFDCacheFull = errors.New("page fd cache is full")
 
 type CacheFSNode struct {
 	Path     string
@@ -63,20 +66,15 @@ func (h *cacheFileHandle) file(path string) (*os.File, error) {
 	if file := h.files[path]; file != nil {
 		return file, nil
 	}
+	if len(h.files) >= h.fdCacheSize {
+		return nil, errPageFDCacheFull
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	h.files[path] = file
 	h.order = append(h.order, path)
-	for len(h.order) > h.fdCacheSize {
-		evict := h.order[0]
-		h.order = h.order[1:]
-		if old := h.files[evict]; old != nil {
-			_ = old.Close()
-			delete(h.files, evict)
-		}
-	}
 	return file, nil
 }
 

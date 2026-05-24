@@ -141,6 +141,7 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 		recordsByStream[streamName] = append(recordsByStream[streamName], record)
 	}
 
+	var streamErrs []error
 	for streamName, records := range recordsByStream {
 		if len(records) == 0 {
 			continue
@@ -151,7 +152,8 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
 				continue
 			}
-			return err
+			streamErrs = append(streamErrs, fmt.Errorf("ensure s2 stream %q: %w", streamName, err))
+			continue
 		}
 		if err := r.appendRecordsForWrite(streamName, records); err != nil {
 			if isS2EventStreamDeletionPending(err) {
@@ -159,11 +161,11 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
 				continue
 			}
-			return fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err)
+			streamErrs = append(streamErrs, fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err))
 		}
 	}
 
-	return nil
+	return errors.Join(streamErrs...)
 }
 
 func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, s2.StreamName, error) {
@@ -222,7 +224,7 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	}
 
 	for _, streamName := range streams {
-		if err := r.readContainerStream(ctx, streamName, limit, response); err != nil {
+		if err := r.readContainerStream(ctx, streamName, limit, query, response); err != nil {
 			return nil, err
 		}
 	}
@@ -289,7 +291,7 @@ func (r *S2EventRepository) streamExists(ctx context.Context, streamName s2.Stre
 	return false, nil
 }
 
-func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName s2.StreamName, limit uint64, response *types.ContainerEventsResponse) error {
+func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName s2.StreamName, limit uint64, query types.EventQuery, response *types.ContainerEventsResponse) error {
 	seqNum := uint64(0)
 	batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
 		SeqNum: &seqNum,
@@ -303,7 +305,7 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 	for _, record := range batch.Records {
 		eventRecord := types.ContainerEventRecord{
 			SeqNum:     record.SeqNum,
-			StoredAtNs: record.Timestamp,
+			StoredAtNs: s2TimestampMillisToNanos(record.Timestamp),
 			CloudEvent: append([]byte(nil), record.Body...),
 		}
 
@@ -314,6 +316,9 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 		}
 		if err := json.Unmarshal(record.Body, &envelope); err != nil {
 			log.Debug().Err(err).Str("container_id", response.ContainerID).Msg("failed to unmarshal cloud event envelope")
+			if query.TaskID != "" {
+				continue
+			}
 			response.Events = append(response.Events, eventRecord)
 			continue
 		}
@@ -322,9 +327,22 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 		eventRecord.Timestamp = envelope.Time
 		eventRecord.Data = envelope.Data
 		augmentContainerEventResponse(response, &eventRecord)
+		if query.TaskID != "" && eventRecord.TaskID != query.TaskID {
+			continue
+		}
 		response.Events = append(response.Events, eventRecord)
 	}
 	return nil
+}
+
+func s2TimestampMillisToNanos(timestamp uint64) uint64 {
+	if timestamp == 0 {
+		return 0
+	}
+	if timestamp >= uint64(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()) {
+		return timestamp
+	}
+	return timestamp * uint64(time.Millisecond)
 }
 
 func (r *S2EventRepository) ensureBasin(ctx context.Context) error {
@@ -823,6 +841,9 @@ func containerEventRecordTime(event types.ContainerEventRecord) time.Time {
 	case !event.EndTime.IsZero():
 		return event.EndTime
 	case event.StoredAtNs != 0:
+		if event.StoredAtNs < uint64(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()) {
+			return time.UnixMilli(int64(event.StoredAtNs)).UTC()
+		}
 		return time.Unix(0, int64(event.StoredAtNs)).UTC()
 	default:
 		return time.Time{}

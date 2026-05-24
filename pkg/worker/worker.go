@@ -287,17 +287,12 @@ func NewWorker() (*Worker, error) {
 		}
 
 		gvisorRuntime, err = runtime.New(runtime.Config{
-			Type:                  types.ContainerRuntimeGvisor.String(),
-			RunscPath:             "runsc",
-			RunscRoot:             gvisorRoot,
-			RunscPlatform:         gvisorPlatform,
-			RunscDirectFS:         poolConfig.ContainerRuntimeConfig.GVisorDirectFS,
-			RunscFileAccess:       poolConfig.ContainerRuntimeConfig.GVisorFileAccess,
-			RunscFileAccessMounts: poolConfig.ContainerRuntimeConfig.GVisorFileAccessMounts,
-			RunscOverlay2:         poolConfig.ContainerRuntimeConfig.GVisorOverlay2,
-			RunscDCache:           poolConfig.ContainerRuntimeConfig.GVisorDCache,
-			RunscExtraArgs:        poolConfig.ContainerRuntimeConfig.GVisorExtraArgs,
-			Debug:                 config.DebugMode,
+			Type:           types.ContainerRuntimeGvisor.String(),
+			RunscPath:      "runsc",
+			RunscRoot:      gvisorRoot,
+			RunscPlatform:  gvisorPlatform,
+			RunscExtraArgs: poolConfig.ContainerRuntimeConfig.GVisorExtraArgs,
+			Debug:          config.DebugMode,
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
@@ -702,14 +697,14 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 		if notFoundErr.From(err) {
 			instance.StopReason = types.StopContainerReasonUnknown
 			s.containerInstances.Set(request.ContainerId, instance)
-			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
+			go s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
 				ID:          types.ContainerEventWorkerOrphanStateMissing,
 				ContainerID: request.ContainerId,
 				Reason:      string(types.StopContainerReasonUnknown),
 				Source:      "worker.status_heartbeat",
 				Message:     "container state was missing during worker heartbeat",
 			})
-			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 			return true, nil
 		}
 
@@ -723,7 +718,7 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 
 	status := types.ContainerStatus(state.Status)
 
-	log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
+	log.Debug().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 	expirySeconds := int64(types.ContainerStateTtlS)
 	if status == types.ContainerStatusPending {

@@ -528,21 +528,6 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
-	if r.cfg.RunscDirectFS != nil {
-		args = append(args, fmt.Sprintf("--directfs=%t", *r.cfg.RunscDirectFS))
-	}
-	if r.cfg.RunscFileAccess != "" {
-		args = append(args, "--file-access", r.cfg.RunscFileAccess)
-	}
-	if r.cfg.RunscFileAccessMounts != "" {
-		args = append(args, "--file-access-mounts", r.cfg.RunscFileAccessMounts)
-	}
-	if r.cfg.RunscOverlay2 != "" {
-		args = append(args, "--overlay2", r.cfg.RunscOverlay2)
-	}
-	if r.cfg.RunscDCache > 0 {
-		args = append(args, "--dcache", strconv.Itoa(r.cfg.RunscDCache))
-	}
 	args = append(args, r.cfg.RunscExtraArgs...)
 
 	// Add --net-raw flag if Docker-in-Docker is enabled

@@ -12,6 +12,8 @@ const (
 	prefetchDefaultPartLengthBytes = 4 * 1024 * 1024
 	prefetchDefaultWorkers         = 4
 	prefetchDefaultMaxPartsPerRead = 16
+	prefetchMaxWorkers             = 64
+	prefetchMaxPartsPerRead        = 1024
 	prefetchThresholdBytes         = 2 * 1024 * 1024  // 2MB - detect sequential after 2 adjacent reads
 	prefetchCacheTime              = 30 * time.Second // How long to keep prefetch state
 )
@@ -58,9 +60,15 @@ func NewPrefetcher(ctx context.Context, cas *Store, bufferPool *BufferPool) *Pre
 	if workers <= 0 {
 		workers = prefetchDefaultWorkers
 	}
+	if workers > prefetchMaxWorkers {
+		workers = prefetchMaxWorkers
+	}
 	maxParts := cfg.MaxPartsPerRead
 	if maxParts <= 0 {
 		maxParts = prefetchDefaultMaxPartsPerRead
+	}
+	if maxParts > prefetchMaxPartsPerRead {
+		maxParts = prefetchMaxPartsPerRead
 	}
 
 	pf := &Prefetcher{

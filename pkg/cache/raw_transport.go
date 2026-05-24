@@ -13,15 +13,16 @@ import (
 )
 
 const (
-	rawReadMagic                  = "B9CR\x01"
-	rawReadVersion           byte = 1
-	rawReadStatusOK          byte = 0
-	rawReadStatusMiss        byte = 1
-	rawReadStatusError       byte = 2
-	rawReadHeaderSize             = 19
-	rawReadRespHeaderSize         = 9
-	defaultRawReadChunkBytes      = 1024 * 1024
-	rawReadSocketBufferBytes      = 16 * 1024 * 1024
+	rawReadMagic                    = "B9CR\x01"
+	rawReadVersion             byte = 1
+	rawReadStatusOK            byte = 0
+	rawReadStatusMiss          byte = 1
+	rawReadStatusError         byte = 2
+	rawReadHeaderSize               = 19
+	rawReadRespHeaderSize           = 9
+	defaultRawReadChunkBytes        = 1024 * 1024
+	rawReadSocketBufferBytes        = 16 * 1024 * 1024
+	cacheMuxInitialReadTimeout      = 5 * time.Second
 )
 
 type cacheMuxListener struct {
@@ -80,14 +81,20 @@ func (l *cacheMuxListener) acceptLoop() {
 }
 
 func (l *cacheMuxListener) dispatch(conn net.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(cacheMuxInitialReadTimeout))
 	prefix := make([]byte, len(rawReadMagic))
 	n, err := io.ReadFull(conn, prefix)
 	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			_ = conn.Close()
+			return
+		}
 		if n == 0 {
 			_ = conn.Close()
 			return
 		}
 	}
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if n == len(rawReadMagic) && string(prefix) == rawReadMagic {
 		l.rawHandler(conn)
@@ -241,7 +248,7 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 					copyLength -= sent
 				}
 				if err != nil {
-					Logger.Warnf("raw cache read sendfile partial: hash=%s offset=%d length=%d path=%s page_offset=%d region_length=%d sent=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, region.pageOffset, region.length, sent, copyLength, err)
+					Logger.Debugf("raw cache read sendfile partial: hash=%s offset=%d length=%d path=%s page_offset=%d region_length=%d sent=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, region.pageOffset, region.length, sent, copyLength, err)
 				}
 				if copyLength == 0 {
 					_ = file.Close()

@@ -395,20 +395,7 @@ func (fs *ContainerFunctionService) recordFunctionTaskEvent(ctx context.Context,
 		return
 	}
 
-	if attrs == nil {
-		attrs = map[string]string{}
-	}
-	fs.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-		ID:          eventID,
-		ContainerID: taskWithRelated.ContainerId,
-		StubID:      taskWithRelated.Stub.ExternalId,
-		StubType:    string(taskWithRelated.Stub.Type.Kind()),
-		TaskID:      taskWithRelated.ExternalId,
-		WorkspaceID: taskWithRelated.Workspace.ExternalId,
-		Source:      source,
-		Message:     message,
-		Attrs:       attrs,
-	})
+	task.PushContainerTaskEvent(fs.eventRepo, taskWithRelated, eventID, source, message, attrs)
 }
 
 func (fs *ContainerFunctionService) recordFunctionTaskPhaseSincePhase(ctx context.Context, taskID string, spanID types.ContainerPhaseID, phase string, end time.Time, source string, attrs map[string]string) {
@@ -429,29 +416,7 @@ func (fs *ContainerFunctionService) recordFunctionTaskPhaseSincePhaseForTask(ctx
 		return
 	}
 
-	start, ok, err := task.NewPhaseMetrics(fs.rdb).Timestamp(ctx, taskWithRelated.Workspace.Name, taskWithRelated.ExternalId, phase)
-	if err != nil || !ok || end.Before(start) {
-		return
-	}
-
-	success := true
-	if attrs == nil {
-		attrs = map[string]string{}
-	}
-	attrs["source"] = source
-	fs.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
-		ID:          spanID,
-		StartTime:   start.UTC(),
-		EndTime:     end.UTC(),
-		DurationMs:  end.Sub(start).Milliseconds(),
-		ContainerID: taskWithRelated.ContainerId,
-		StubID:      taskWithRelated.Stub.ExternalId,
-		StubType:    string(taskWithRelated.Stub.Type.Kind()),
-		TaskID:      taskWithRelated.ExternalId,
-		WorkspaceID: taskWithRelated.Workspace.ExternalId,
-		Success:     &success,
-		Attrs:       attrs,
-	})
+	task.PushContainerTaskPhaseSincePhase(ctx, fs.rdb, fs.eventRepo, taskWithRelated, spanID, phase, end, source, attrs)
 }
 
 func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, stream pb.FunctionService_FunctionMonitorServer) error {

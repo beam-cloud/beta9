@@ -143,8 +143,8 @@ type ImageClient struct {
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
 	clipRuntimeMu     sync.RWMutex
 	clipActive        map[string]*types.ContainerRequest
-	clipRuntimePIDs   map[int]string
-	clipPIDCache      map[int]string
+	clipRuntimePIDs   map[int]clipPIDReference
+	clipPIDCache      map[int]clipPIDReference
 	clipReadEvents    chan clipCommon.ReadTraceEvent
 	clipAggregates    map[string]*clipReadAggregate
 }
@@ -179,8 +179,8 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		v2ImageRefs:        common.NewSafeMap[string](),
 		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
 		clipActive:         make(map[string]*types.ContainerRequest),
-		clipRuntimePIDs:    make(map[int]string),
-		clipPIDCache:       make(map[int]string),
+		clipRuntimePIDs:    make(map[int]clipPIDReference),
+		clipPIDCache:       make(map[int]clipPIDReference),
 		clipReadEvents:     make(chan clipCommon.ReadTraceEvent, clipReadEventQueueSize),
 		clipAggregates:     make(map[string]*clipReadAggregate),
 		logger: &ContainerLogger{

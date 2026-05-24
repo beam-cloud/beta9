@@ -91,7 +91,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 				Dur("elapsed", elapsed).
 				Msg("clip image content cache read result")
 		} else if elapsed > imageContentCacheSlowRead {
-			log.Info().
+			log.Debug().
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -159,9 +159,20 @@ func (c *imageContentCache) LocalPageRegions(hash string, offset int64, length i
 	started := time.Now()
 	defer func() {
 		elapsed := time.Since(started)
-		if err != nil || len(regions) == 0 || elapsed > imageContentCacheSlowRead {
-			log.Info().
+		if err != nil {
+			log.Warn().
 				Err(err).
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Int64("offset", offset).
+				Int64("length", length).
+				Int("regions", len(regions)).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache local page regions result")
+		} else if len(regions) == 0 || elapsed > imageContentCacheSlowRead {
+			log.Debug().
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -201,19 +212,26 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	started := time.Now()
 	c.storeRequests.Add(1)
 	countingChunks := make(chan []byte, 2)
+	done := make(chan struct{})
 	var storeBytes atomic.Int64
 
 	go func() {
 		defer close(countingChunks)
 		for chunk := range chunks {
 			n := int64(len(chunk))
-			c.storeBytes.Add(n)
-			storeBytes.Add(n)
-			countingChunks <- chunk
+			select {
+			case countingChunks <- chunk:
+				c.storeBytes.Add(n)
+				storeBytes.Add(n)
+			case <-done:
+				drainImageContentChunks(chunks)
+				return
+			}
 		}
 	}()
 
 	actualHash, err := c.client.StoreContent(countingChunks, hash, opts)
+	close(done)
 	elapsed := time.Since(started)
 	if err != nil {
 		c.storeErrors.Add(1)
@@ -227,7 +245,7 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 			Dur("elapsed", elapsed).
 			Msg("clip image content cache store result")
 	} else if elapsed > imageContentCacheSlowStore {
-		log.Info().
+		log.Debug().
 			Str("image_id", c.imageID).
 			Str("kind", c.kind).
 			Str("hash", shortHash(hash)).
@@ -242,6 +260,11 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	return actualHash, err
 }
 
+func drainImageContentChunks(chunks <-chan []byte) {
+	for range chunks {
+	}
+}
+
 func (c *imageContentCache) maybeLogSummary() {
 	now := time.Now()
 	last := c.lastSummaryNS.Load()
@@ -252,7 +275,7 @@ func (c *imageContentCache) maybeLogSummary() {
 		return
 	}
 
-	log.Info().
+	log.Debug().
 		Str("image_id", c.imageID).
 		Str("kind", c.kind).
 		Int64("read_requests", c.readRequests.Load()).

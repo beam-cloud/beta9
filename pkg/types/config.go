@@ -453,14 +453,9 @@ type WorkerPoolCacheDiskConfig struct {
 
 type RuntimeConfig struct {
 	// gVisor-specific configuration
-	GVisorPlatform         string   `key:"gvisorPlatform" json:"gvisor_platform"`                   // "kvm", "systrap", or "ptrace"
-	GVisorRoot             string   `key:"gvisorRoot" json:"gvisor_root"`                           // Root directory for gVisor state (default: "/run/gvisor")
-	GVisorDirectFS         *bool    `key:"gvisorDirectFS" json:"gvisor_directfs"`                   // Directly access container filesystems from the sentry
-	GVisorFileAccess       string   `key:"gvisorFileAccess" json:"gvisor_file_access"`              // Root mount validation: "exclusive" or "shared"
-	GVisorFileAccessMounts string   `key:"gvisorFileAccessMounts" json:"gvisor_file_access_mounts"` // Bind mount validation: "shared" or "exclusive"
-	GVisorOverlay2         string   `key:"gvisorOverlay2" json:"gvisor_overlay2"`                   // runsc overlay2 setting, e.g. "root:self"
-	GVisorDCache           int      `key:"gvisorDCache" json:"gvisor_dcache"`                       // Global dentry cache size; <=0 leaves runsc default
-	GVisorExtraArgs        []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"`                // Additional runsc flags for controlled experiments
+	GVisorPlatform  string   `key:"gvisorPlatform" json:"gvisor_platform"`    // "kvm", "systrap", or "ptrace"
+	GVisorRoot      string   `key:"gvisorRoot" json:"gvisor_root"`            // Root directory for gVisor state (default: "/run/gvisor")
+	GVisorExtraArgs []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"` // Additional runsc flags for controlled experiments
 }
 
 type WorkerPoolJobSpecConfig struct {

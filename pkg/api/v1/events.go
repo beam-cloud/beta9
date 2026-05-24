@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -122,9 +123,7 @@ func (g *EventGroup) GetContainerEvents(ctx echo.Context) error {
 	}
 
 	query := types.EventQuery{Limit: limit}
-	if cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace != nil {
-		query.WorkspaceID = cc.AuthInfo.Workspace.ExternalId
-	}
+	query.WorkspaceID = requestedEventWorkspaceID(ctx, authInfoFromContext(cc))
 
 	events, err := g.loadContainerEvents(ctx, containerID, query)
 	if err != nil {
@@ -152,9 +151,7 @@ func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
 	}
 
 	query := types.EventQuery{Limit: limit}
-	if cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace != nil {
-		query.WorkspaceID = cc.AuthInfo.Workspace.ExternalId
-	}
+	query.WorkspaceID = requestedEventWorkspaceID(ctx, authInfoFromContext(cc))
 
 	events, err := g.loadContainerEvents(ctx, containerID, query)
 	if err != nil {
@@ -188,9 +185,8 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 	}
 
 	workspaceID := ""
-	if cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace != nil {
-		workspaceID = cc.AuthInfo.Workspace.ExternalId
-	}
+	authInfo := authInfoFromContext(cc)
+	workspaceID = requestedEventWorkspaceID(ctx, authInfo)
 
 	items := make([]ContainerEventSummary, 0, len(req.ContainerIDs)+len(req.TaskIDs))
 	for _, containerID := range uniqueStrings(req.ContainerIDs) {
@@ -207,7 +203,7 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 
 	for _, taskID := range uniqueStrings(req.TaskIDs) {
 		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskID)
-		if err != nil || task == nil || !hasWorkspaceTaskAccess(task, cc.AuthInfo) || task.ContainerId == "" {
+		if err != nil || task == nil || !hasWorkspaceTaskAccess(task, authInfo, workspaceID) || task.ContainerId == "" {
 			items = append(items, ContainerEventSummary{TaskID: taskID, Error: "task not found"})
 			continue
 		}
@@ -222,7 +218,12 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 			items = append(items, ContainerEventSummary{ContainerID: task.ContainerId, TaskID: taskID, Error: err.Error()})
 			continue
 		}
-		items = append(items, summarizeContainerEvents(events, req.TopPhases, req.IncludeEvents))
+		summary := summarizeContainerEvents(events, req.TopPhases, req.IncludeEvents)
+		summary.TaskID = task.ExternalId
+		if summary.ContainerID == "" {
+			summary.ContainerID = task.ContainerId
+		}
+		items = append(items, summary)
 	}
 
 	return ctx.JSON(http.StatusOK, ContainerEventsBatchResponse{
@@ -243,7 +244,8 @@ func (g *EventGroup) GetTaskEvents(ctx echo.Context) error {
 	if err != nil {
 		return HTTPInternalServerError("Failed to retrieve task")
 	}
-	if task == nil || !hasWorkspaceTaskAccess(task, cc.AuthInfo) {
+	authInfo := authInfoFromContext(cc)
+	if task == nil || !hasWorkspaceTaskAccess(task, authInfo, requestedEventWorkspaceID(ctx, authInfo)) {
 		return HTTPNotFound()
 	}
 	if task.ContainerId == "" {
@@ -270,13 +272,15 @@ func (g *EventGroup) GetTaskEvents(ctx echo.Context) error {
 
 func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error) {
 	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := authInfoFromContext(cc)
+	routeWorkspaceID := requestedEventWorkspaceID(ctx, authInfo)
 	if g.eventRepo == nil {
 		return nil, HTTPInternalServerError("Event repository is unavailable")
 	}
 
 	state, stateErr := g.containerRepo.GetContainerState(containerID)
 	if stateErr == nil && state != nil {
-		if cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace != nil && state.WorkspaceId != cc.AuthInfo.Workspace.ExternalId {
+		if !eventWorkspaceAccessAllowed(authInfo, routeWorkspaceID, state.WorkspaceId) {
 			return nil, HTTPNotFound()
 		}
 		if query.WorkspaceID == "" {
@@ -289,6 +293,9 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 
 	events, err := g.eventRepo.GetContainerEvents(ctx.Request().Context(), containerID, query)
 	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return nil, NewHTTPError(http.StatusServiceUnavailable, "Event reads are not configured")
+		}
 		return nil, HTTPInternalServerError("Failed to retrieve container events")
 	}
 
@@ -302,7 +309,7 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 		if events.Status == "" {
 			events.Status = string(state.Status)
 		}
-	} else if cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace != nil && events.WorkspaceID != "" && events.WorkspaceID != cc.AuthInfo.Workspace.ExternalId {
+	} else if events.WorkspaceID != "" && !eventWorkspaceAccessAllowed(authInfo, routeWorkspaceID, events.WorkspaceID) {
 		return nil, HTTPNotFound()
 	}
 
@@ -316,15 +323,52 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 	return events, nil
 }
 
-func hasWorkspaceTaskAccess(task *types.TaskWithRelated, authInfo *auth.AuthInfo) bool {
+func hasWorkspaceTaskAccess(task *types.TaskWithRelated, authInfo *auth.AuthInfo, routeWorkspaceID string) bool {
 	if task == nil || authInfo == nil || authInfo.Workspace == nil {
 		return false
+	}
+	if isClusterAdmin(authInfo) {
+		if routeWorkspaceID == "" || task.Workspace.ExternalId == routeWorkspaceID {
+			return true
+		}
+		return task.ExternalWorkspace != nil && task.ExternalWorkspace.ExternalId != nil && *task.ExternalWorkspace.ExternalId == routeWorkspaceID
 	}
 	if task.WorkspaceId == authInfo.Workspace.Id {
 		return true
 	}
 
 	return task.ExternalWorkspaceId != nil && *task.ExternalWorkspaceId == authInfo.Workspace.Id
+}
+
+func authInfoFromContext(cc *auth.HttpAuthContext) *auth.AuthInfo {
+	if cc == nil {
+		return nil
+	}
+	return cc.AuthInfo
+}
+
+func requestedEventWorkspaceID(ctx echo.Context, authInfo *auth.AuthInfo) string {
+	if isClusterAdmin(authInfo) && ctx.Param("workspaceId") != "" {
+		return ctx.Param("workspaceId")
+	}
+	if authInfo != nil && authInfo.Workspace != nil {
+		return authInfo.Workspace.ExternalId
+	}
+	return ctx.Param("workspaceId")
+}
+
+func isClusterAdmin(authInfo *auth.AuthInfo) bool {
+	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeClusterAdmin
+}
+
+func eventWorkspaceAccessAllowed(authInfo *auth.AuthInfo, routeWorkspaceID string, objectWorkspaceID string) bool {
+	if objectWorkspaceID == "" {
+		return true
+	}
+	if isClusterAdmin(authInfo) {
+		return routeWorkspaceID == "" || objectWorkspaceID == routeWorkspaceID
+	}
+	return authInfo != nil && authInfo.Workspace != nil && objectWorkspaceID == authInfo.Workspace.ExternalId
 }
 
 func eventQueryLimit(ctx echo.Context) (uint64, error) {

@@ -56,21 +56,12 @@ DEFAULT_CACHE_MOUNT_PATH = "/var/lib/beta9/cache"
 DEFAULT_IMAGE_CACHE_PATH = "/images/cache"
 IMAGE_READ_ROOT = "/bench-cache"
 VOLUME_CONTAINER_PREFIX = "/volumes"
-DETERMINISTIC_BLOCK_SIZE = 4096
 
-READ_HARNESS = r"""
-import argparse
-import hashlib
-import json
-import random
-import time
-from pathlib import Path
-
-CHUNK_SIZE = 4 * 1024 * 1024
+DETERMINISTIC_PAYLOAD_SOURCE = r"""
 DETERMINISTIC_BLOCK_SIZE = 4096
 
 
-def deterministic_range(nonce, label, offset, length):
+def deterministic_payload_range(nonce, label, offset, length):
     out = bytearray()
     position = offset
     while len(out) < length:
@@ -82,7 +73,20 @@ def deterministic_range(nonce, label, offset, length):
         out.extend(block[block_offset:block_offset + take])
         position += take
     return bytes(out)
+"""
 
+exec(DETERMINISTIC_PAYLOAD_SOURCE, globals())
+
+READ_HARNESS = r"""
+import argparse
+import hashlib
+import json
+import random
+import time
+from pathlib import Path
+
+CHUNK_SIZE = 4 * 1024 * 1024
+""" + DETERMINISTIC_PAYLOAD_SOURCE + r"""
 
 def manifest_entry(root, rel_path):
     manifest = json.loads((root / "manifest.json").read_text())
@@ -153,7 +157,7 @@ def random_reads(path, manifest, expected, block_size, total_bytes, seed, verify
                 raise SystemExit(f"short random read offset={offset} expected={length} got={len(chunk)}")
             if verify:
                 verify_started = time.monotonic_ns()
-                expected_chunk = deterministic_range(manifest["nonce"], expected["label"], offset, length)
+                expected_chunk = deterministic_payload_range(manifest["nonce"], expected["label"], offset, length)
                 if chunk != expected_chunk:
                     got = hashlib.sha256(chunk).hexdigest()
                     want = hashlib.sha256(expected_chunk).hexdigest()
@@ -892,8 +896,7 @@ PATTERNS = [part for part in os.environ["CACHE_BENCH_PATTERNS"].split(",") if pa
 FILE_PLAN = os.environ.get("CACHE_BENCH_FILE_PLAN", "")
 NONCE = os.environ["CACHE_BENCH_NONCE"]
 CHUNK_SIZE = 1024 * 1024
-DETERMINISTIC_BLOCK_SIZE = 4096
-
+""" + DETERMINISTIC_PAYLOAD_SOURCE + r"""
 
 def parse_file_plan(value):
     specs = []
@@ -906,21 +909,6 @@ def parse_file_plan(value):
         specs.append({"accessType": access_type, "pattern": pattern, "sizeMiB": int(size_text)})
     return specs
 
-
-def deterministic_chunk(label, offset, length):
-    out = bytearray()
-    position = offset
-    while len(out) < length:
-        block_index = position // DETERMINISTIC_BLOCK_SIZE
-        seed = hashlib.sha256(f"{NONCE}:{label}:{block_index}".encode()).digest()
-        block = (seed * ((DETERMINISTIC_BLOCK_SIZE // len(seed)) + 1))[:DETERMINISTIC_BLOCK_SIZE]
-        block_offset = position % DETERMINISTIC_BLOCK_SIZE
-        take = min(length - len(out), len(block) - block_offset)
-        out.extend(block[block_offset:block_offset + take])
-        position += take
-    return bytes(out)
-
-
 def write_file(path, label, size):
     path.parent.mkdir(parents=True, exist_ok=True)
     h = hashlib.sha256()
@@ -929,7 +917,7 @@ def write_file(path, label, size):
     with path.open("wb") as f:
         while remaining > 0:
             chunk_len = min(CHUNK_SIZE, remaining)
-            chunk = deterministic_chunk(label, offset, chunk_len)
+            chunk = deterministic_payload_range(NONCE, label, offset, chunk_len)
             f.write(chunk)
             h.update(chunk)
             remaining -= chunk_len
@@ -989,22 +977,7 @@ import time
 from pathlib import Path
 
 CHUNK_SIZE = 4 * 1024 * 1024
-DETERMINISTIC_BLOCK_SIZE = 4096
-
-
-def deterministic_chunk(nonce, label, offset, length):
-    out = bytearray()
-    position = offset
-    while len(out) < length:
-        block_index = position // DETERMINISTIC_BLOCK_SIZE
-        seed = hashlib.sha256(f"{nonce}:{label}:{block_index}".encode()).digest()
-        block = (seed * ((DETERMINISTIC_BLOCK_SIZE // len(seed)) + 1))[:DETERMINISTIC_BLOCK_SIZE]
-        block_offset = position % DETERMINISTIC_BLOCK_SIZE
-        take = min(length - len(out), len(block) - block_offset)
-        out.extend(block[block_offset:block_offset + take])
-        position += take
-    return bytes(out)
-
+""" + DETERMINISTIC_PAYLOAD_SOURCE + r"""
 
 def write_generated_file(path, nonce, label, size):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1014,7 +987,7 @@ def write_generated_file(path, nonce, label, size):
     with path.open("wb") as f:
         while remaining > 0:
             chunk_len = min(CHUNK_SIZE, remaining)
-            chunk = deterministic_chunk(nonce, label, offset, chunk_len)
+            chunk = deterministic_payload_range(nonce, label, offset, chunk_len)
             f.write(chunk)
             h.update(chunk)
             remaining -= chunk_len
@@ -1502,6 +1475,9 @@ def parse_args():
     parser.add_argument("--require-remote-cache-read", dest="require_remote_cache_read", action="store_true")
     parser.add_argument("--no-require-remote-cache-read", dest="require_remote_cache_read", action="store_false")
     parser.set_defaults(require_remote_cache_read=env_bool("BENCH_CACHE_REQUIRE_REMOTE_READ", False))
+    parser.add_argument("--require-read-path-proof", dest="require_read_path_proof", action="store_true")
+    parser.add_argument("--no-require-read-path-proof", dest="require_read_path_proof", action="store_false")
+    parser.set_defaults(require_read_path_proof=env_bool("BENCH_CACHE_REQUIRE_READ_PATH_PROOF", True))
 
     args = parser.parse_args()
     if args.strict_disk_cache_hit:
@@ -1729,20 +1705,6 @@ def publish_cache_benchmark_image(build_uri, timeout_seconds):
 
     log(f"Pushing cache benchmark image {build_uri}")
     run(["docker", "push", build_uri], timeout=timeout_seconds)
-
-
-def deterministic_payload_range(nonce, label, offset, length):
-    out = bytearray()
-    position = offset
-    while len(out) < length:
-        block_index = position // DETERMINISTIC_BLOCK_SIZE
-        seed = hashlib.sha256(f"{nonce}:{label}:{block_index}".encode()).digest()
-        block = (seed * ((DETERMINISTIC_BLOCK_SIZE // len(seed)) + 1))[:DETERMINISTIC_BLOCK_SIZE]
-        block_offset = position % DETERMINISTIC_BLOCK_SIZE
-        take = min(length - len(out), len(block) - block_offset)
-        out.extend(block[block_offset:block_offset + take])
-        position += take
-    return bytes(out)
 
 
 def payload_sha256(nonce, label, size):
@@ -5148,6 +5110,7 @@ def main():
             "verifyReads": args.verify_reads,
             "requireVerifiedReads": args.require_verified_reads,
             "requireRemoteCacheRead": args.require_remote_cache_read,
+            "requireReadPathProof": args.require_read_path_proof,
             "benchmarkMode": "strict_disk_cache_hit" if args.strict_disk_cache_hit else "warm_cache_hit",
             "strictDiskCacheHit": args.strict_disk_cache_hit,
             "resetWorkersBeforeHot": args.reset_workers_before_hot,
@@ -5220,9 +5183,10 @@ def main():
     remote_failures = remote_cache_read_failures(args, rows)
     if remote_failures:
         failures.append({"ok": False, "error": "; ".join(remote_failures)})
-    path_failures = hot_read_path_failures(args, rows)
-    if path_failures:
-        failures.append({"ok": False, "error": "; ".join(path_failures)})
+    if args.require_read_path_proof:
+        path_failures = hot_read_path_failures(args, rows)
+        if path_failures:
+            failures.append({"ok": False, "error": "; ".join(path_failures)})
     dd_failures = worker_dd_read_failures(args, rows)
     if dd_failures:
         failures.append({"ok": False, "error": "; ".join(dd_failures)})

@@ -131,9 +131,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 
 		for {
 			// Clear the message struct to avoid carrying over previous values
-			msg.Level = ""
-			msg.Message = ""
-			msg.TaskID = nil
+			msg = ContainerLogMessage{}
 
 			err := dec.Decode(&msg)
 			if err != nil {

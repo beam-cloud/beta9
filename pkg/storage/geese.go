@@ -85,7 +85,9 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.HTTPTimeout = s.config.HTTPTimeout
 	}
 	flags.NoPreloadDir = true
-	flags.StatsInterval = 5 * time.Second
+	if s.config.Debug {
+		flags.StatsInterval = 5 * time.Second
+	}
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
 	flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
 	flags.PartSizes = []cfg.PartSizeConfig{
@@ -100,7 +102,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.StagedWritePath = s.config.StagedWritePath
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
-		log.Info().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
+		log.Debug().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
 	}
 
 	// Cache through mode config
@@ -129,7 +131,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.ReadAheadParallelKB = uint64(s.config.ReadAheadParallelKB)
 	}
 
-	log.Info().
+	log.Debug().
 		Str("local_path", localPath).
 		Int64("memory_limit_mb", s.config.MemoryLimit).
 		Int("max_flushers", int(flags.MaxFlushers)).

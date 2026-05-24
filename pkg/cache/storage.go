@@ -734,17 +734,46 @@ func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64
 	}
 	atomic.AddInt64(&cachePathStats.storeDiskPages, 1)
 	atomic.AddInt64(&cachePathStats.storeDiskBytes, int64(n))
+	cas.promoteDiskPageToMemory(hash, chunkIdx, file, info.Size(), pageOffset, dst[:n])
 	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
 		Logger.Warnf("cache store disk page read slow: hash=%s page=%d page_offset=%d max_length=%d read=%d elapsed=%s", hash, chunkIdx, pageOffset, maxLength, n, elapsed.Truncate(time.Millisecond))
 	}
 	return int64(n), nil
 }
 
+func (cas *Store) promoteDiskPageToMemory(hash string, chunkIdx int64, file *os.File, pageSize int64, readOffset int64, readBytes []byte) {
+	if !cas.memoryCacheEnabled || pageSize <= 0 || pageSize > int64(int(^uint(0)>>1)) {
+		return
+	}
+
+	chunkKey := cas.pageKey(hash, chunkIdx)
+	if _, found := cas.cache.Get(chunkKey); found {
+		return
+	}
+
+	var page []byte
+	if readOffset == 0 && int64(len(readBytes)) == pageSize {
+		page = append([]byte(nil), readBytes...)
+	} else {
+		page = make([]byte, int(pageSize))
+		n, err := file.ReadAt(page, 0)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return
+		}
+		if n <= 0 {
+			return
+		}
+		page = page[:n]
+	}
+
+	cas.cache.Set(chunkKey, cacheValue{Hash: hash, Content: page}, int64(len(page)))
+}
+
 func (cas *Store) PageRegion(hash string, offset int64, length int64) (path string, pageOffset int64, n int, ok bool, err error) {
 	started := time.Now()
 	defer func() {
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || (err != nil && !errors.Is(err, ErrContentNotFound)) {
-			Logger.Infof("cache store page-region result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache store page-region result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
 	atomic.AddInt64(&cachePathStats.storePageRegions, 1)
@@ -847,7 +876,7 @@ func (cas *Store) onEvict(item *ristretto.Item[interface{}]) {
 	default:
 	}
 
-	Logger.Infof("Evicted object from memory cache: %s", hash)
+	Logger.Debugf("Evicted object from memory cache: %s", hash)
 	Logger.Debugf("Object chunks: %+v", chunkKeys)
 
 	for _, k := range chunkKeys {
@@ -957,8 +986,8 @@ func (cas *Store) monitorDiskCacheUsage() {
 			cas.metrics.DiskCacheUsageMB.Update(float64(currentUsage))
 			cas.metrics.DiskCacheUsagePct.Update(float64(usagePercentage))
 
-			Logger.Infof("Memory Cache Usage: %dMB / %dMB (%.2f%%)", availableMemoryMb, totalMemoryMb, float64(availableMemoryMb)/float64(totalMemoryMb)*100)
-			Logger.Infof("Disk Cache Usage: %dMB / %dMB (%.2f%%)", currentUsage, totalDiskSpace, usagePercentage*100)
+			Logger.Debugf("Memory Cache Usage: %dMB / %dMB (%.2f%%)", availableMemoryMb, totalMemoryMb, float64(availableMemoryMb)/float64(totalMemoryMb)*100)
+			Logger.Debugf("Disk Cache Usage: %dMB / %dMB (%.2f%%)", currentUsage, totalDiskSpace, usagePercentage*100)
 
 			// Update internal state for disk usage exceeded
 			cas.mu.Lock()

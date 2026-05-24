@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,7 +68,10 @@ type cachePathStatsCounters struct {
 
 type cachePathStatsSnapshot = cachePathStatsCounters
 
-func startCachePathStatsLogger(ctx context.Context) {
+func startCachePathStatsLogger() {
+	if Logger == nil || !Logger.debug {
+		return
+	}
 	cachePathStatsOnce.Do(func() {
 		go func() {
 			ticker := time.NewTicker(cachePathStatsLogInterval)
@@ -77,8 +79,6 @@ func startCachePathStatsLogger(ctx context.Context) {
 			prev := snapshotCachePathStats()
 			for {
 				select {
-				case <-ctx.Done():
-					return
 				case <-ticker.C:
 					cur := snapshotCachePathStats()
 					d := diffCachePathStats(cur, prev)
@@ -86,8 +86,8 @@ func startCachePathStatsLogger(ctx context.Context) {
 					if d.isZero() {
 						continue
 					}
-					Logger.Infof(
-						"cache read path summary: client(read_into=%d %.2fMiB local_hit=%d local_miss=%d raw_hit=%d raw_miss=%d raw_err=%d grpc_hit=%d grpc_miss=%d grpc_err=%d) local_page_region(req=%d hit=%d miss=%d %.2fMiB) cachefs(read=%d %.2fMiB fd_hit=%d data=%d miss_retry=%d read_err=%d) server(grpc_req=%d grpc_hit=%d grpc_miss=%d %.2fMiB stream_req=%d stream_chunks=%d stream_err=%d raw_req=%d raw_sendfile=%d raw_copy=%d raw_readat=%d raw_miss=%d raw_err=%d) store(readat=%d %.2fMiB mem_pages=%d %.2fMiB disk_pages=%d %.2fMiB miss=%d page_region=%d hit=%d miss=%d %.2fMiB)",
+					Logger.Debugf(
+						"cache read path summary: client(read_into=%d %.2fMiB local_hit=%d local_miss=%d raw_hit=%d raw_miss=%d raw_err=%d grpc_hit=%d grpc_miss=%d grpc_err=%d) local_page_region(req=%d hit=%d miss=%d %.2fMiB) cachefs(read=%d %.2fMiB fd_hit=%d data=%d miss_retry=%d store_retry_err=%d read_err=%d) server(grpc_req=%d grpc_hit=%d grpc_miss=%d %.2fMiB stream_req=%d stream_chunks=%d %.2fMiB stream_err=%d raw_req=%d raw_sendfile=%d raw_copy=%d raw_readat=%d raw_miss=%d raw_err=%d) store(readat=%d %.2fMiB mem_pages=%d %.2fMiB disk_pages=%d %.2fMiB miss=%d page_region=%d hit=%d miss=%d %.2fMiB)",
 						d.clientReadIntoRequests,
 						bytesToMiB(d.clientReadIntoBytes),
 						d.clientLocalHits,
@@ -107,6 +107,7 @@ func startCachePathStatsLogger(ctx context.Context) {
 						d.cacheFSLocalFDHits,
 						d.cacheFSDataReads,
 						d.cacheFSMissStoreRetries,
+						d.cacheFSStoreRetryErrors,
 						d.cacheFSReadContentErrors,
 						d.serverGRPCGetRequests,
 						d.serverGRPCGetHits,
@@ -114,6 +115,7 @@ func startCachePathStatsLogger(ctx context.Context) {
 						bytesToMiB(d.serverGRPCGetBytes),
 						d.serverStreamRequests,
 						d.serverStreamChunks,
+						bytesToMiB(d.serverStreamBytes),
 						d.serverStreamErrors,
 						d.serverRawRequests,
 						d.serverRawSendfileHits,

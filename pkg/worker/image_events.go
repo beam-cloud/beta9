@@ -54,6 +54,11 @@ type clipReadRollup struct {
 	BytesRead        int64  `json:"bytes_read"`
 }
 
+type clipPIDReference struct {
+	ContainerID string
+	StartTime   uint64
+}
+
 func (c *ImageClient) observeClipRead(event clipCommon.ReadTraceEvent) {
 	if c == nil || c.clipReadEvents == nil || !strings.HasPrefix(event.Operation, "clip.") {
 		return
@@ -232,7 +237,7 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		attrs[key] = value
 	}
 
-	log.Info().
+	log.Debug().
 		Str("container_id", request.ContainerId).
 		Str("image_id", request.ImageId).
 		Str("flush_reason", flushReason).
@@ -330,12 +335,19 @@ func (c *ImageClient) trackContainerRuntimePID(request *types.ContainerRequest, 
 		return
 	}
 
+	startTime, err := processStartTime(pid)
+	if err != nil {
+		log.Debug().Err(err).Int("pid", pid).Str("container_id", request.ContainerId).Msg("failed to track clip runtime pid")
+		return
+	}
+	ref := clipPIDReference{ContainerID: request.ContainerId, StartTime: startTime}
+
 	c.clipRuntimeMu.Lock()
 	defer c.clipRuntimeMu.Unlock()
 
 	c.clipActive[request.ContainerId] = request
-	c.clipRuntimePIDs[pid] = request.ContainerId
-	c.clipPIDCache[pid] = request.ContainerId
+	c.clipRuntimePIDs[pid] = ref
+	c.clipPIDCache[pid] = ref
 }
 
 func (c *ImageClient) untrackContainer(containerID string) {
@@ -349,13 +361,13 @@ func (c *ImageClient) untrackContainer(containerID string) {
 	delete(c.clipActive, containerID)
 	aggregate = c.clipAggregates[containerID]
 	delete(c.clipAggregates, containerID)
-	for pid, id := range c.clipRuntimePIDs {
-		if id == containerID {
+	for pid, ref := range c.clipRuntimePIDs {
+		if ref.ContainerID == containerID {
 			delete(c.clipRuntimePIDs, pid)
 		}
 	}
-	for pid, id := range c.clipPIDCache {
-		if id == containerID {
+	for pid, ref := range c.clipPIDCache {
+		if ref.ContainerID == containerID {
 			delete(c.clipPIDCache, pid)
 		}
 	}
@@ -382,30 +394,54 @@ func (c *ImageClient) resolveClipReadContainerID(pid int) string {
 	}
 
 	c.clipRuntimeMu.RLock()
-	if containerID, ok := c.clipPIDCache[pid]; ok {
+	if ref, ok := c.clipPIDCache[pid]; ok {
 		c.clipRuntimeMu.RUnlock()
-		return containerID
-	}
-	if containerID, ok := c.clipRuntimePIDs[pid]; ok {
+		if processMatchesStartTime(pid, ref.StartTime) {
+			return ref.ContainerID
+		}
+		c.deleteClipPIDCacheEntry(pid, ref)
+	} else {
 		c.clipRuntimeMu.RUnlock()
-		return containerID
 	}
-	c.clipRuntimeMu.RUnlock()
 
+	c.clipRuntimeMu.RLock()
+	if ref, ok := c.clipRuntimePIDs[pid]; ok {
+		c.clipRuntimeMu.RUnlock()
+		if processMatchesStartTime(pid, ref.StartTime) {
+			return ref.ContainerID
+		}
+		c.deleteClipRuntimePIDEntry(pid, ref)
+	} else {
+		c.clipRuntimeMu.RUnlock()
+	}
+
+	originalStartTime, err := processStartTime(pid)
+	if err != nil {
+		return ""
+	}
 	current := pid
 	for i := 0; i < clipReadPIDResolveMaxParents && current > 1; i++ {
-		c.clipRuntimeMu.RLock()
-		containerID, ok := c.clipRuntimePIDs[current]
-		c.clipRuntimeMu.RUnlock()
-		if ok {
-			c.clipRuntimeMu.Lock()
-			c.clipPIDCache[pid] = containerID
-			c.clipRuntimeMu.Unlock()
-			return containerID
+		currentStartTime, parent, err := processStartTimeAndParent(current)
+		if err != nil || currentStartTime == 0 {
+			return ""
 		}
 
-		parent, err := parentPID(current)
-		if err != nil || parent <= 0 || parent == current {
+		c.clipRuntimeMu.RLock()
+		ref, ok := c.clipRuntimePIDs[current]
+		c.clipRuntimeMu.RUnlock()
+		if ok {
+			if !processStartTimesEqual(currentStartTime, ref.StartTime) {
+				c.deleteClipRuntimePIDEntry(current, ref)
+				return ""
+			}
+			ref = clipPIDReference{ContainerID: ref.ContainerID, StartTime: originalStartTime}
+			c.clipRuntimeMu.Lock()
+			c.clipPIDCache[pid] = ref
+			c.clipRuntimeMu.Unlock()
+			return ref.ContainerID
+		}
+
+		if parent <= 0 || parent == current {
 			return ""
 		}
 		current = parent
@@ -415,13 +451,48 @@ func (c *ImageClient) resolveClipReadContainerID(pid int) string {
 }
 
 func parentPID(pid int) (int, error) {
+	_, parent, err := processStartTimeAndParent(pid)
+	return parent, err
+}
+
+func processStartTime(pid int) (uint64, error) {
+	startTime, _, err := processStartTimeAndParent(pid)
+	return startTime, err
+}
+
+func processStartTimeAndParent(pid int) (uint64, int, error) {
 	proc, err := procfs.NewProc(pid)
 	if err != nil {
-		return 0, fmt.Errorf("open proc %d: %w", pid, err)
+		return 0, 0, fmt.Errorf("open proc %d: %w", pid, err)
 	}
 	stat, err := proc.Stat()
 	if err != nil {
-		return 0, fmt.Errorf("stat proc %d: %w", pid, err)
+		return 0, 0, fmt.Errorf("stat proc %d: %w", pid, err)
 	}
-	return int(stat.PPID), nil
+	return stat.Starttime, int(stat.PPID), nil
+}
+
+func processMatchesStartTime(pid int, startTime uint64) bool {
+	currentStartTime, err := processStartTime(pid)
+	return err == nil && processStartTimesEqual(currentStartTime, startTime)
+}
+
+func processStartTimesEqual(currentStartTime uint64, cachedStartTime uint64) bool {
+	return currentStartTime != 0 && cachedStartTime != 0 && currentStartTime == cachedStartTime
+}
+
+func (c *ImageClient) deleteClipPIDCacheEntry(pid int, ref clipPIDReference) {
+	c.clipRuntimeMu.Lock()
+	defer c.clipRuntimeMu.Unlock()
+	if current, ok := c.clipPIDCache[pid]; ok && current == ref {
+		delete(c.clipPIDCache, pid)
+	}
+}
+
+func (c *ImageClient) deleteClipRuntimePIDEntry(pid int, ref clipPIDReference) {
+	c.clipRuntimeMu.Lock()
+	defer c.clipRuntimeMu.Unlock()
+	if current, ok := c.clipRuntimePIDs[pid]; ok && current == ref {
+		delete(c.clipRuntimePIDs, pid)
+	}
 }

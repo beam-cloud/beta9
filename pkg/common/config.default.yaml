@@ -171,15 +171,9 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
-        # Keep gVisor's current high-throughput filesystem defaults explicit.
-        # directfs avoids gofer round trips; root:self avoids slow host rootfs
-        # mutation checks; bind mounts stay shared because workspace volumes can
-        # be observed or mutated by processes outside the sandbox.
-        gvisorDirectFS: true
-        gvisorFileAccess: exclusive
-        gvisorFileAccessMounts: shared
-        gvisorOverlay2: root:self
-        gvisorDCache: 8192
+        # Additional runsc flags are intentionally opt-in. Keep filesystem
+        # tuning experiments out of the production default until benchmarked.
+        gvisorExtraArgs: []
       # Optional per-pool cache disk override for nodes with different storage layouts.
       # cache:
       #   disk:
@@ -205,11 +199,7 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
-        gvisorDirectFS: true
-        gvisorFileAccess: exclusive
-        gvisorFileAccessMounts: shared
-        gvisorOverlay2: root:self
-        gvisorDCache: 8192
+        gvisorExtraArgs: []
       # Optional per-pool cache disk override.
       # cache:
       #   disk:

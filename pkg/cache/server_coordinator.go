@@ -24,7 +24,7 @@ func (cs *Server) GetAvailableHosts(ctx context.Context, req *proto.CacheGetAvai
 }
 
 func (cs *Server) GetRegionConfig(ctx context.Context, req *proto.CacheGetRegionConfigRequest) (*proto.CacheGetRegionConfigResponse, error) {
-	Logger.Infof("GetRegionConfig[ACK] - [%s]", req.Locality)
+	Logger.Debugf("GetRegionConfig[ACK] - [%s]", req.Locality)
 
 	config, ok := cs.serverConfig.Regions[req.Locality]
 	if !ok {
@@ -57,7 +57,7 @@ func (cs *Server) RemoveClientLock(ctx context.Context, req *proto.CacheRemoveCl
 }
 
 func (cs *Server) SetStoreFromContentLock(ctx context.Context, req *proto.CacheSetStoreFromContentLockRequest) (*proto.CacheSetStoreFromContentLockResponse, error) {
-	Logger.Infof("SetStoreFromContentLock[ACK] - [%s]", req.SourcePath)
+	Logger.Debugf("SetStoreFromContentLock[ACK] - [%s]", req.SourcePath)
 
 	err := cs.coordinator.SetStoreFromContentLock(ctx, req.Locality, req.SourcePath)
 	if err != nil {
@@ -68,7 +68,7 @@ func (cs *Server) SetStoreFromContentLock(ctx context.Context, req *proto.CacheS
 }
 
 func (cs *Server) RemoveStoreFromContentLock(ctx context.Context, req *proto.CacheRemoveStoreFromContentLockRequest) (*proto.CacheRemoveStoreFromContentLockResponse, error) {
-	Logger.Infof("RemoveStoreFromContentLock[ACK] - [%s]", req.SourcePath)
+	Logger.Debugf("RemoveStoreFromContentLock[ACK] - [%s]", req.SourcePath)
 
 	err := cs.coordinator.RemoveStoreFromContentLock(ctx, req.Locality, req.SourcePath)
 	if err != nil {
@@ -79,7 +79,7 @@ func (cs *Server) RemoveStoreFromContentLock(ctx context.Context, req *proto.Cac
 }
 
 func (cs *Server) RefreshStoreFromContentLock(ctx context.Context, req *proto.CacheRefreshStoreFromContentLockRequest) (*proto.CacheRefreshStoreFromContentLockResponse, error) {
-	Logger.Infof("RefreshStoreFromContentLock[ACK] - [%s]", req.SourcePath)
+	Logger.Debugf("RefreshStoreFromContentLock[ACK] - [%s]", req.SourcePath)
 
 	err := cs.coordinator.RefreshStoreFromContentLock(ctx, req.Locality, req.SourcePath)
 	if err != nil {
