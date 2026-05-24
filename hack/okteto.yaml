@@ -16,6 +16,7 @@ dev:
     - 1994:1994
     - 5432:postgresql:5432
     - 6379:redis-master:6379
+    - 4566:localstack:4566
     persistentVolume:
       enabled: false
       # size: 10Gi

@@ -4,6 +4,10 @@ workerTag := latest
 runnerTag := latest
 runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 BENCH_SDK_PYTHON ?= uv run --project ./sdk --no-sync python
+CACHE_BENCHMARK_FILE_PLAN ?=
+CACHE_BENCH_PROFILE ?=
+CACHE_BENCH_CONFIG ?=
+TOKEN ?=
 
 .PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark cache-benchmark
 
@@ -17,9 +21,9 @@ startup-benchmark:
 	python3 "$(CURDIR)/benchmarks/startup.py" $(ARGS)
 
 startup-benchmark-build:
-	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	$(MAKE) startup-benchmark BENCH_INSTALL=1
 
@@ -29,7 +33,12 @@ sandbox-parallel-benchmark:
 
 cache-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
-	$(BENCH_SDK_PYTHON) "$(CURDIR)/benchmarks/cache.py" $(ARGS)
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	CACHE_BENCHMARK_FILE_PLAN="$(CACHE_BENCHMARK_FILE_PLAN)" \
+	CACHE_BENCH_PROFILE="$(CACHE_BENCH_PROFILE)" \
+	CACHE_BENCH_CONFIG="$(CACHE_BENCH_CONFIG)" \
+	TOKEN="$(TOKEN)" \
+	"$(CURDIR)/scripts/cache-benchmark" $(ARGS)
 
 setup-sdk:
 	@if ! command -v uv &> /dev/null; then \
@@ -51,11 +60,11 @@ k3d-rebuild:
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
 gateway:
-	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
 

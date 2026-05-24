@@ -18,6 +18,10 @@ database:
     enableTLS: false
     insecureSkipVerify: false
     dialTimeout: 3s
+  s2:
+    apiKey: ""
+    basin: beta9-events
+    streamPrefix: events
 storage:
   mode: juicefs
   fsName: beta9-fs
@@ -39,7 +43,7 @@ storage:
     defaultAccessKey: test
     defaultSecretKey: test
     defaultEndpointUrl: http://localstack:4566
-    defaultPresignedEndpointUrl:
+    defaultPresignedEndpointUrl: http://127.0.0.1:4566
     defaultRegion: us-east-1
     alluxio:
       debug: false
@@ -47,8 +51,9 @@ storage:
       debug: false
       fsyncOnClose: true
       memoryLimit: 2048
-      maxFlushers: 64
-      maxParallelParts: 64
+      maxFlushers: 16
+      maxParallelParts: 8
+      httpTimeout: 15m
       dirMode: 0777
       fileMode: 0666
       listType: 1
@@ -57,10 +62,11 @@ storage:
       fuseReadAheadKB: 32768
       readAheadParallelKB: 4096
       mountOptions: []
-      stagedWriteModeEnabled: true
+      stagedWriteModeEnabled: false
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false
+      externalCacheDirectIO: false
       cacheThroughModeEnabled: true
 gateway:
   host: beta9-gateway
@@ -101,8 +107,8 @@ imageService:
   # In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
   # That gives 1200 / 1e+10 = 120 ns per byte.
   archiveNanosecondsPerByte: 120
-  # Default to clip v2 (index-only OCI archives). Set to 1 to force legacy.
-  clipVersion: 1
+  # Default to clip v2.
+  clipVersion: 2
   registryStore: local
   registryCredentialProvider: docker
   buildRegistry: registry.localhost:5000
@@ -166,8 +172,12 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+        # Additional runsc flags are intentionally opt-in. Keep filesystem
+        # tuning experiments out of the production default until benchmarked.
+        gvisorExtraArgs: []
       # Optional per-pool cache disk override for nodes with different storage layouts.
       # cache:
+      #   slotsPerNode: 1
       #   disk:
       #     hostPath: /mnt/nvme/beta9/cache
       #     mountPath: /var/lib/beta9/cache
@@ -191,6 +201,7 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+        gvisorExtraArgs: []
       # Optional per-pool cache disk override.
       # cache:
       #   disk:
@@ -271,16 +282,16 @@ cache:
   memory:
     enabled: false
     maxCachePct: 0
+  coordinator:
+    enabled: true
+    registrationTTLSeconds: 30
+    heartbeatIntervalSeconds: 10
+    hostWatchIntervalSeconds: 5
   embedded:
-    # active-active runs a small Redis-lease elected replica set per node, backed by the same hostPath CAS.
-    # single-primary keeps the one-server-per-node mode.
-    mode: active-active
-    replicasPerNode: 2
-    leaseTTLSeconds: 15
-    leaseRefreshSeconds: 5
-    leaseRetrySeconds: 2
+    # Gateway registration deduplicates many workers on the same node/cache path
+    # into logical HRW targets. Keep one slot per shared hostPath by default.
+    slotsPerNode: 1
   global:
-    coordinatorHost:
     defaultLocality: default
     serverPort: 2049
     discoveryIntervalS: 5
@@ -304,7 +315,7 @@ cache:
     diskCacheMaxUsagePct: 0.95
     enableMemoryCache: false
     maxCachePct: 0
-    pageSizeBytes: 4000000
+    pageSizeBytes: 4194304
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000
@@ -354,17 +365,6 @@ monitoring:
     meterInterval: 3s
     traceInterval: 3s
     traceSampleRatio: 1.0
-  fluentbit:
-    events:
-      endpoint: http://fluent-bit.monitoring:9880
-      maxConns: 0
-      maxIdleConns: 30
-      idleConnTimeout: 10s
-      dialTimeout: 2s
-      keepAlive: 30s
-      # mapping:
-      # - name: container.lifecycle
-      #   tag: internal_api
   openmeter:
     serverUrl: ""
     apiKey: ""

@@ -6,15 +6,20 @@ import (
 )
 
 type LogBuffer struct {
-	mu        sync.Mutex
-	logs      []byte
-	writeChan chan []byte
-	closed    bool
+	mu          sync.Mutex
+	closeMu     sync.RWMutex
+	logs        []byte
+	writeChan   chan []byte
+	closed      bool
+	writeClosed bool
+	closeOnce   sync.Once
+	closedChan  chan struct{}
 }
 
 func NewLogBuffer() *LogBuffer {
 	lb := &LogBuffer{
-		writeChan: make(chan []byte, 2048),
+		writeChan:  make(chan []byte, 2048),
+		closedChan: make(chan struct{}),
 	}
 
 	go lb.processWrites()
@@ -31,14 +36,22 @@ func (lb *LogBuffer) processWrites() {
 	lb.mu.Lock()
 	lb.closed = true
 	lb.mu.Unlock()
+	close(lb.closedChan)
 }
 
-func (lb *LogBuffer) Write(buf []byte) {
+func (lb *LogBuffer) Write(buf []byte) bool {
+	lb.closeMu.RLock()
+	defer lb.closeMu.RUnlock()
+
+	if lb.writeClosed {
+		return false
+	}
+
 	select {
 	case lb.writeChan <- buf:
-		// Log message sent to channel
+		return true
 	default:
-		// Non-blocking, log message is dropped
+		return false
 	}
 }
 
@@ -60,5 +73,10 @@ func (lb *LogBuffer) Read(p []byte) (n int, err error) {
 }
 
 func (lb *LogBuffer) Close() {
-	close(lb.writeChan)
+	lb.closeOnce.Do(func() {
+		lb.closeMu.Lock()
+		defer lb.closeMu.Unlock()
+		lb.writeClosed = true
+		close(lb.writeChan)
+	})
 }

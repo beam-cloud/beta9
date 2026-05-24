@@ -66,7 +66,11 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		metrics.RecordFunctionTaskPhase("task_created_to_start_task", startedAt.Sub(task.CreatedAt.Time), phaseLabels)
 	}
 	phaseMetrics.RecordSince(ctx, task.Workspace.Name, task.ExternalId, "container_request_ready_to_start_task", taskmetrics.FunctionPhaseContainerRequestReady, startedAt, phaseLabels)
-	gws.recordContainerToStartTaskPhases(in.ContainerId, startedAt, phaseLabels)
+	gws.recordTaskPhaseSincePhase(ctx, task, types.ContainerPhaseContainerRequestToStartTask, taskmetrics.FunctionPhaseContainerRequestReady, startedAt, "gateway.start_task", nil)
+	gws.recordTaskEvent(ctx, task, types.ContainerEventRunnerStartTask, "gateway.start_task", "runner called start_task", map[string]string{
+		"container_id": in.ContainerId,
+	})
+	gws.recordContainerToStartTaskPhases(ctx, task, startedAt, phaseLabels)
 
 	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
 	if err != nil {
@@ -105,7 +109,8 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		return &pb.EndTaskResponse{Ok: false}, nil
 	}
 
-	if task.Status.IsCompleted() {
+	requestedStatus := types.TaskStatus(in.TaskStatus)
+	if task.Status.IsCompleted() && !(requestedStatus == types.TaskStatusComplete && task.Status != types.TaskStatusComplete) {
 		return &pb.EndTaskResponse{
 			Ok: true,
 		}, nil
@@ -113,7 +118,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	endedAt := time.Now()
 	task.EndedAt = types.NullTime{Time: endedAt, Valid: true}
-	task.Status = types.TaskStatus(in.TaskStatus)
+	task.Status = requestedStatus
 
 	if in.ContainerId != "" {
 		task.ContainerId = in.ContainerId
@@ -126,6 +131,12 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 	phaseMetrics.RecordSince(ctx, task.Workspace.Name, task.ExternalId, "set_result_to_end_task", taskmetrics.FunctionPhaseSetResult, endedAt, phaseLabels)
 	phaseMetrics.RecordSince(ctx, task.Workspace.Name, task.ExternalId, "start_task_to_end_task", taskmetrics.FunctionPhaseStartTask, endedAt, phaseLabels)
+	gws.recordTaskPhaseSincePhase(ctx, task, types.ContainerPhaseResultSetToEndTask, taskmetrics.FunctionPhaseSetResult, endedAt, "gateway.end_task", map[string]string{
+		"status": string(task.Status),
+	})
+	gws.recordTaskPhaseSincePhase(ctx, task, types.ContainerPhaseRunnerStartToEndTask, taskmetrics.FunctionPhaseStartTask, endedAt, "gateway.end_task", map[string]string{
+		"status": string(task.Status),
+	})
 
 	var workspace *types.Workspace = authInfo.Workspace
 
@@ -164,19 +175,24 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
+	if err == nil {
+		gws.recordTaskEvent(ctx, task, types.ContainerEventResultEndTask, "gateway.end_task", "task end state persisted", map[string]string{
+			"status": string(task.Status),
+		})
+	}
 	return &pb.EndTaskResponse{
 		Ok: err == nil,
 	}, nil
 }
 
-func (gws *GatewayService) recordContainerToStartTaskPhases(containerId string, startedAt time.Time, labels map[string]string) {
-	if containerId == "" {
+func (gws *GatewayService) recordContainerToStartTaskPhases(ctx context.Context, task *types.TaskWithRelated, startedAt time.Time, labels map[string]string) {
+	if task == nil || task.ContainerId == "" {
 		return
 	}
 
-	containerState, err := gws.containerRepo.GetContainerState(containerId)
+	containerState, err := gws.containerRepo.GetContainerState(task.ContainerId)
 	if err != nil {
-		log.Debug().Err(err).Str("container_id", containerId).Msg("failed to load container state for function phase metrics")
+		log.Debug().Err(err).Str("container_id", task.ContainerId).Msg("failed to load container state for function phase metrics")
 		return
 	}
 
@@ -194,8 +210,35 @@ func (gws *GatewayService) recordContainerToStartTaskPhases(containerId string, 
 		runningAt := time.Unix(containerState.StartedAt, 0)
 		if !startedAt.Before(runningAt) {
 			metrics.RecordFunctionTaskPhase("container_running_to_start_task", startedAt.Sub(runningAt), containerLabels)
+			gws.recordTaskPhase(ctx, task, types.ContainerPhaseContainerRunningToStartTask, runningAt, startedAt, "gateway.start_task", map[string]string{
+				"container_status": string(containerState.Status),
+			})
 		}
 	}
+}
+
+func (gws *GatewayService) recordTaskPhaseSincePhase(ctx context.Context, task *types.TaskWithRelated, spanID types.ContainerPhaseID, phase string, end time.Time, source string, attrs map[string]string) {
+	if gws == nil {
+		return
+	}
+
+	taskmetrics.PushContainerTaskPhaseSincePhase(ctx, gws.redisClient, gws.eventRepo, task, spanID, phase, end, source, attrs)
+}
+
+func (gws *GatewayService) recordTaskPhase(ctx context.Context, task *types.TaskWithRelated, spanID types.ContainerPhaseID, start time.Time, end time.Time, source string, attrs map[string]string) {
+	if gws == nil {
+		return
+	}
+
+	taskmetrics.PushContainerTaskPhase(gws.eventRepo, task, spanID, start, end, source, attrs)
+}
+
+func (gws *GatewayService) recordTaskEvent(ctx context.Context, task *types.TaskWithRelated, eventID types.ContainerEventID, source string, message string, attrs map[string]string) {
+	if gws == nil {
+		return
+	}
+
+	taskmetrics.PushContainerTaskEvent(gws.eventRepo, task, eventID, source, message, attrs)
 }
 
 func copyPhaseLabels(labels map[string]string) map[string]string {
@@ -318,6 +361,7 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 		return nil
 	}
 
+	gws.recordTaskCancelEvent(ctx, task, types.ContainerEventTaskCancelRequested, "gateway task stop requested")
 	err := gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
@@ -333,6 +377,15 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}
+	gws.recordTaskCancelEvent(ctx, task, types.ContainerEventTaskCancelApplied, "gateway task cancellation applied")
 
 	return nil
+}
+
+func (gws *GatewayService) recordTaskCancelEvent(ctx context.Context, task *types.TaskWithRelated, eventID types.ContainerEventID, message string) {
+	if gws == nil {
+		return
+	}
+
+	taskmetrics.PushContainerTaskEventWithReason(gws.eventRepo, task, eventID, string(types.StopContainerReasonUser), "gateway.stop_task", message, nil)
 }

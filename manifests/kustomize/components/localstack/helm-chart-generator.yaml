@@ -11,6 +11,8 @@ namespace: beta9
 includeCRDs: true
 skipTests: true
 valuesInline:
+  image:
+    tag: "3.8.1"
   extraEnvVars:
   - name: SERVICES
     value: s3

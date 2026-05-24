@@ -10,8 +10,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache/cachegrpc"
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/djherbis/atime"
 	"github.com/google/uuid"
@@ -29,15 +31,11 @@ const (
 
 type ServerOpts struct {
 	HostID        string
-	Registry      Registry
+	MetadataStore CacheMetadataStore
 	AdvertiseAddr string
 }
 
 type ServerOption func(*ServerOpts)
-
-type hostRemover interface {
-	RemoveHost(ctx context.Context, locality string, host *Host) error
-}
 
 type Server struct {
 	ctx    context.Context
@@ -51,7 +49,7 @@ type Server struct {
 	cas           *Store
 	serverConfig  ServerConfig
 	globalConfig  GlobalConfig
-	coordinator   Registry
+	metadataStore CacheMetadataStore
 	grpcServer    *grpc.Server
 	listener      net.Listener
 	s3ClientCache sync.Map
@@ -64,6 +62,7 @@ func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error
 
 func NewServerWithOptions(ctx context.Context, cfg Config, locality string, options ...ServerOption) (*Server, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
+	startCachePathStatsLogger()
 
 	opts := &ServerOpts{}
 	for _, opt := range options {
@@ -74,13 +73,13 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		RTT: 0,
 	}
 
-	var coordinator Registry
+	var metadataStore CacheMetadataStore
 	effectiveServerConfig := cfg.Server
 	var err error = nil
-	if opts.Registry != nil {
-		coordinator = opts.Registry
+	if opts.MetadataStore != nil {
+		metadataStore = opts.MetadataStore
 	} else {
-		coordinator, effectiveServerConfig, err = newRegistry(ctx, cfg, locality)
+		metadataStore, effectiveServerConfig, err = newMetadataStore(cfg)
 		cfg.Server = effectiveServerConfig
 	}
 	if err != nil {
@@ -120,7 +119,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 
 	serverCtx, cancel := context.WithCancel(ctx)
 
-	cas, err := NewStore(serverCtx, currentHost, locality, coordinator, cfg)
+	cas, err := NewStore(serverCtx, currentHost, locality, metadataStore, cfg)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -145,7 +144,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		cas:           cas,
 		serverConfig:  effectiveServerConfig,
 		globalConfig:  cfg.Global,
-		coordinator:   coordinator,
+		metadataStore: metadataStore,
 		privateIpAddr: privateIpAddr,
 		publicIpAddr:  publicIpAddr,
 		s3ClientCache: sync.Map{},
@@ -160,9 +159,9 @@ func WithServerHostID(hostID string) ServerOption {
 	}
 }
 
-func WithServerRegistry(registry Registry) ServerOption {
+func WithServerMetadataStore(metadataStore CacheMetadataStore) ServerOption {
 	return func(opts *ServerOpts) {
-		opts.Registry = registry
+		opts.MetadataStore = metadataStore
 	}
 }
 
@@ -172,26 +171,23 @@ func WithServerAdvertiseAddr(addr string) ServerOption {
 	}
 }
 
-func newRegistry(ctx context.Context, cfg Config, locality string) (Registry, ServerConfig, error) {
-	switch cfg.Server.Mode {
-	case ServerModeCoordinator, ServerModeNode:
-		registry, err := NewRedisRegistry(cfg.Global, cfg.Server)
-		return registry, cfg.Server, err
-	default:
-		coordinator, err := NewRemoteRegistry(cfg.Global, cfg.Client.Token)
-		if err != nil {
-			return nil, cfg.Server, err
-		}
-
-		regionConfig, err := coordinator.GetRegionConfig(ctx, locality)
-		if err != nil {
-			Logger.Infof("No region-specific config found for locality %s, using current config", locality)
-		} else {
-			cfg.Server = regionConfig
-		}
-
-		return coordinator, cfg.Server, nil
+func (cs *Server) Host() *Host {
+	if cs == nil || cs.cas == nil {
+		return nil
 	}
+	return cs.cas.currentHost
+}
+
+func (cs *Server) UsagePct() float64 {
+	if cs == nil {
+		return 0
+	}
+	return cs.usagePct()
+}
+
+func newMetadataStore(cfg Config) (CacheMetadataStore, ServerConfig, error) {
+	metadataStore, err := NewRedisCacheMetadataStore(cfg.Global, cfg.Server)
+	return metadataStore, cfg.Server, err
 }
 
 func getHostId(serverConfig ServerConfig) string {
@@ -206,33 +202,6 @@ func getHostId(serverConfig ServerConfig) string {
 	}
 
 	return hostId
-}
-
-func (cs *Server) HostKeepAlive() {
-	err := cs.coordinator.SetHostKeepAlive(cs.ctx, cs.locality, cs.cas.currentHost)
-	if err != nil {
-		Logger.Warnf("Failed to set host keepalive: %v", err)
-	}
-
-	err = cs.coordinator.AddHostToIndex(cs.ctx, cs.locality, cs.cas.currentHost)
-	if err != nil {
-		Logger.Warnf("Failed to add host to index: %v", err)
-	}
-
-	ticker := time.NewTicker(time.Duration(defaultHostKeepAliveIntervalS) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-cs.ctx.Done():
-			return
-		case <-ticker.C:
-			cs.cas.currentHost.CapacityUsagePct = cs.usagePct()
-
-			cs.coordinator.AddHostToIndex(cs.ctx, cs.locality, cs.cas.currentHost)
-			cs.coordinator.SetHostKeepAlive(cs.ctx, cs.locality, cs.cas.currentHost)
-		}
-	}
 }
 
 func (cs *Server) grpcServerOptions() []grpc.ServerOption {
@@ -268,7 +237,7 @@ func (cs *Server) grpcServerOptions() []grpc.ServerOption {
 		numStreamWorkers = runtime.NumCPU() * 2
 	}
 
-	return []grpc.ServerOption{
+	opts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(maxMessageSize),
 		grpc.MaxSendMsgSize(maxMessageSize),
 		grpc.InitialWindowSize(int32(initialWindowSize)),
@@ -278,6 +247,10 @@ func (cs *Server) grpcServerOptions() []grpc.ServerOption {
 		grpc.MaxConcurrentStreams(uint32(maxConcurrentStreams)),
 		grpc.NumStreamWorkers(uint32(numStreamWorkers)),
 	}
+	if cs.globalConfig.GRPCPayloadCodecV2 {
+		opts = append(opts, grpc.ForceServerCodecV2(cachegrpc.New(cs.globalConfig.GRPCPayloadCodecMinBytes)))
+	}
+	return opts
 }
 
 func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
@@ -303,17 +276,22 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 		cs.cas.currentHost.PrivateAddr = advertiseAddr
 	}
 
+	serveListener := net.Listener(localListener)
+	if cs.serverConfig.ReadTransport.Enabled {
+		serveListener = newCacheMuxListener(localListener, cs.handleRawReadConn)
+	}
+
 	s := grpc.NewServer(cs.grpcServerOptions()...)
 	proto.RegisterCacheServer(s, cs)
 
 	cs.grpcServer = s
-	cs.listener = localListener
+	cs.listener = serveListener
 
-	Logger.Infof("Running %s@%s, cfg: %+v", cs.hostId, advertiseAddr, cs.serverConfig)
+	Logger.Infof("Running %s@%s", cs.hostId, advertiseAddr)
+	Logger.Debugf("cache server config: %+v", cs.serverConfig)
 
-	go cs.HostKeepAlive()
 	go func() {
-		if err := s.Serve(localListener); err != nil {
+		if err := s.Serve(serveListener); err != nil {
 			if err != grpc.ErrServerStopped {
 				Logger.Warnf("cache server stopped: %v", err)
 			}
@@ -346,13 +324,6 @@ func (cs *Server) Close() error {
 		if cs.cancel != nil {
 			cs.cancel()
 		}
-		if remover, ok := cs.coordinator.(hostRemover); ok && cs.cas != nil && cs.cas.currentHost != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := remover.RemoveHost(ctx, cs.locality, cs.cas.currentHost); err != nil {
-				Logger.Warnf("failed to unregister cache host: %v", err)
-			}
-		}
 		if cs.grpcServer != nil {
 			stopped := make(chan struct{})
 			go func() {
@@ -377,7 +348,9 @@ func (cs *Server) Close() error {
 }
 
 func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequest) (*proto.CacheGetContentResponse, error) {
+	atomic.AddInt64(&cachePathStats.serverGRPCGetRequests, 1)
 	if req == nil {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		return nil, status.Error(codes.InvalidArgument, "request is nil")
 	}
 	maxMessageSize := int64(cs.globalConfig.GRPCMessageSizeBytes)
@@ -385,21 +358,26 @@ func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequ
 		maxMessageSize = 4 * 1024 * 1024
 	}
 	if req.Length < 0 || req.Length > maxMessageSize {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
 	}
 
 	dst := make([]byte, int(req.Length))
 	n, err := cs.cas.Get(req.Hash, req.Offset, req.Length, dst)
 	if err != nil {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		Logger.Debugf("Get - [%s] - %v", req.Hash, err)
 		return &proto.CacheGetContentResponse{Content: nil, Ok: false}, nil
 	}
 	if n != req.Length {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		Logger.Debugf("Get - [%s] short read: requested=%d read=%d", req.Hash, req.Length, n)
 		return &proto.CacheGetContentResponse{Content: nil, Ok: false}, nil
 	}
 
-	Logger.Infof("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
+	atomic.AddInt64(&cachePathStats.serverGRPCGetHits, 1)
+	atomic.AddInt64(&cachePathStats.serverGRPCGetBytes, n)
+	Logger.Debugf("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
 	return &proto.CacheGetContentResponse{Content: dst[:n], Ok: true}, nil
 }
 
@@ -409,10 +387,13 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 }
 
 func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream proto.Cache_GetContentStreamServer) error {
+	atomic.AddInt64(&cachePathStats.serverStreamRequests, 1)
 	if req == nil {
+		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 		return status.Error(codes.InvalidArgument, "request is nil")
 	}
 	if req.Length < 0 {
+		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 		return status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
 	}
 
@@ -420,17 +401,18 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 	offset := req.Offset
 	remainingLength := req.Length
 
-	Logger.Infof("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
+	Logger.Debugf("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
 
-	dst := make([]byte, chunkSize)
 	for remainingLength > 0 {
 		currentChunkSize := chunkSize
 		if remainingLength < int64(chunkSize) {
 			currentChunkSize = remainingLength
 		}
 
+		dst := make([]byte, currentChunkSize)
 		n, err := cs.cas.Get(req.Hash, offset, currentChunkSize, dst)
 		if err != nil {
+			atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 			Logger.Debugf("GetContentStream - [%s] - %v", req.Hash, err)
 			return status.Errorf(codes.NotFound, "Content not found: %v", err)
 		}
@@ -439,10 +421,13 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 		}
 
 		Logger.Debugf("GetContentStream[TX] - [%s] - %d bytes", req.Hash, n)
+		atomic.AddInt64(&cachePathStats.serverStreamChunks, 1)
+		atomic.AddInt64(&cachePathStats.serverStreamBytes, n)
 		if err := stream.Send(&proto.CacheGetContentResponse{
 			Ok:      true,
 			Content: dst[:n],
 		}); err != nil {
+			atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 			return status.Errorf(codes.Internal, "Failed to send content chunk: %v", err)
 		}
 
@@ -459,15 +444,15 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 }
 
 func (cs *Server) storeReader(ctx context.Context, reader io.Reader) (string, uint64, error) {
-	Logger.Infof("Store[ACK]")
+	Logger.Debugf("Store[ACK]")
 
 	hash, size, err := cs.cas.AddReader(ctx, reader)
 	if err != nil {
-		Logger.Infof("Store[ERR] - [%s] - %v", hash, err)
+		Logger.Warnf("Store[ERR] - [%s] - %v", hash, err)
 		return "", 0, status.Errorf(codes.Internal, "Failed to add content: %v", err)
 	}
 
-	Logger.Infof("Store[OK] - [%s] (%d bytes)", hash, size)
+	Logger.Debugf("Store[OK] - [%s] (%d bytes)", hash, size)
 	return hash, uint64(size), nil
 }
 
@@ -622,13 +607,13 @@ func (cs *Server) storeContentInCacheFS(ctx context.Context, path string, hash s
 		}
 
 		// Set metadata
-		err = cs.coordinator.SetFsNode(ctx, currentNodeId, metadata)
+		err = cs.metadataStore.SetFsNode(ctx, currentNodeId, metadata)
 		if err != nil {
 			return err
 		}
 
 		// Add the current node as a child of the previous node
-		err = cs.coordinator.AddFsNodeChild(ctx, previousParentId, currentNodeId)
+		err = cs.metadataStore.AddFsNodeChild(ctx, previousParentId, currentNodeId)
 		if err != nil {
 			return err
 		}
@@ -642,7 +627,7 @@ func (cs *Server) storeContentInCacheFS(ctx context.Context, path string, hash s
 func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 	ctx := stream.Context()
 
-	Logger.Infof("StoreContent[ACK]")
+	Logger.Debugf("StoreContent[ACK]")
 
 	reader := &storeContentStreamReader{stream: stream}
 	hash, size, err := cs.storeReader(ctx, reader)
@@ -650,19 +635,19 @@ func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 		return err
 	}
 
-	if cs.coordinator != nil && reader.cachePath != "" {
+	if cs.metadataStore != nil && reader.cachePath != "" {
 		metadata := newCacheFSFileMetadata(hash, size)
 		if reader.metadata != nil {
 			metadata = cacheFSFileMetadataFromProto(reader.metadata, hash, size)
 		}
 
 		if err := cs.storeContentInCacheFS(ctx, reader.cachePath, hash, size, metadata); err != nil {
-			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, reader.cachePath, err)
+			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, reader.cachePath, err)
 			return status.Errorf(codes.Internal, "Failed to update cachefs metadata: %v", err)
 		}
 	}
 
-	Logger.Infof("StoreContent[OK] - [%s]", hash)
+	Logger.Debugf("StoreContent[OK] - [%s]", hash)
 	return stream.SendAndClose(&proto.CacheStoreContentResponse{Ok: true, Hash: hash})
 }
 
@@ -680,7 +665,7 @@ func (r *storeContentStreamReader) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		if err != nil {
-			Logger.Infof("Store[ERR] - error: %v", err)
+			Logger.Warnf("Store[ERR] - error: %v", err)
 			return 0, status.Errorf(codes.Unknown, "Received an error: %v", err)
 		}
 
@@ -730,14 +715,14 @@ func (cs *Server) GetState(ctx context.Context, req *proto.CacheGetStateRequest)
 func (cs *Server) openLocalSource(localPath string) (io.ReadCloser, error) {
 	// Check if the file exists
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		Logger.Infof("StoreFromContent[ERR] - source not found: %v", err)
+		Logger.Warnf("StoreFromContent[ERR] - source not found: %v", err)
 		return nil, err
 	}
 
 	// Open the file
 	file, err := os.Open(localPath)
 	if err != nil {
-		Logger.Infof("StoreFromContent[ERR] - error reading source: %v", err)
+		Logger.Warnf("StoreFromContent[ERR] - error reading source: %v", err)
 		return nil, err
 	}
 
@@ -781,7 +766,7 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 	if req.Source.CachePath != "" {
 		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
-	Logger.Infof("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
+	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
 
 	var reader io.ReadCloser
 	var err error
@@ -808,13 +793,13 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 	// Store the content
 	hash, size, err := cs.storeReader(ctx, reader)
 	if err != nil {
-		Logger.Infof("StoreFromContent[ERR] - error storing data in cache: %v", err)
+		Logger.Warnf("StoreFromContent[ERR] - error storing data in cache: %v", err)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	// Store references in cachefs only when the caller is publishing a path into the
 	// cachefs namespace. Plain S3 source writes are content-addressed only.
-	if cs.coordinator != nil {
+	if cs.metadataStore != nil {
 		var err error
 		if req.Source.BucketName == "" {
 			if req.Source.CachePath == "" {
@@ -831,12 +816,12 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 			err = cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
 		}
 		if err != nil {
-			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
+			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 	}
 
-	Logger.Infof("StoreFromContent[OK] - [%s]", hash)
+	Logger.Debugf("StoreFromContent[OK] - [%s]", hash)
 
 	// HOTFIX: Manually trigger garbage collection
 	go runtime.GC()
@@ -849,11 +834,14 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, ErrorMsg: "source is required"}, nil
 	}
 
+	started := time.Now()
 	sourcePath := req.Source.Path
 	if req.Source.CachePath != "" {
 		sourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
-	if err := cs.coordinator.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+	Logger.Debugf("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
+	if err := cs.metadataStore.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+		Logger.Debugf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}
 	lockReleased := false
@@ -861,7 +849,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		if lockReleased {
 			return
 		}
-		if err := cs.coordinator.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+		if err := cs.metadataStore.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 			Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
 		}
 	}()
@@ -877,14 +865,15 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 			case <-storeContext.Done():
 				return
 			case <-ticker.C:
-				Logger.Infof("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
-				cs.coordinator.RefreshStoreFromContentLock(ctx, cs.locality, sourcePath)
+				Logger.Debugf("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
+				cs.metadataStore.RefreshStoreFromContentLock(ctx, cs.locality, sourcePath)
 			}
 		}
 	}()
 
 	storeContentFromSourceResp, err := cs.StoreContentFromSource(storeContext, req)
 	if err != nil {
+		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	if storeContentFromSourceResp == nil || !storeContentFromSourceResp.Ok {
@@ -892,13 +881,15 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		if storeContentFromSourceResp != nil {
 			errorMsg = storeContentFromSourceResp.ErrorMsg
 		}
+		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%s]", sourcePath, time.Since(started).Truncate(time.Millisecond), errorMsg)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
 	}
 
-	if err := cs.coordinator.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+	if err := cs.metadataStore.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 		Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
 	}
 	lockReleased = true
 
+	Logger.Debugf("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))
 	return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: storeContentFromSourceResp.Hash, Ok: true}, nil
 }

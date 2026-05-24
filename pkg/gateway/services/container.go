@@ -242,10 +242,11 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	}
 
 	serveTimeout := types.DefaultServeContainerTimeout
+	serveLockKey := ""
 
 	if types.StubType(stub.Type).IsServe() {
-		lockKey := common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId)
-		timeoutValue, err := gws.redisClient.Get(context.Background(), lockKey).Result()
+		serveLockKey = common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId)
+		timeoutValue, err := gws.redisClient.Get(context.Background(), serveLockKey).Result()
 		if err == nil {
 			serveTimeout, _ = time.ParseDuration(timeoutValue)
 			if serveTimeout <= 0 {
@@ -253,10 +254,10 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			}
 		}
 
-		// Delete the serve lock key when we detach from the container
-		defer func() {
-			gws.redisClient.Del(context.Background(), lockKey)
-		}()
+		defer gws.recordAttachEvent(container, stub, types.ContainerEventGatewayServeLockPreserved, "attach stream ended without deleting serve lock", map[string]string{
+			"lock_key":        serveLockKey,
+			"timeout_seconds": fmt.Sprintf("%.0f", serveTimeout.Seconds()),
+		})
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
@@ -338,7 +339,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			switch payload := inMsg.Payload.(type) {
 			case *pb.ContainerStreamMessage_SyncContainerWorkspace:
 				if types.StubType(stub.Type).IsServe() {
-					gws.redisClient.Expire(ctx, common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId), serveTimeout)
+					gws.redisClient.Expire(ctx, serveLockKey, serveTimeout)
 				}
 
 				syncQueue <- payload.SyncContainerWorkspace
@@ -350,9 +351,39 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	// Wait for the container stream or the client message loop to finish
 	select {
 	case err := <-streamErrCh:
+		gws.recordAttachEvent(container, stub, types.ContainerEventGatewayAttachDisconnected, "container stream ended during attach", map[string]string{
+			"error":  fmt.Sprintf("%v", err),
+			"source": "container_stream",
+		})
 		return err
 	case err := <-clientMsgErrCh:
+		gws.recordAttachEvent(container, stub, types.ContainerEventGatewayAttachDisconnected, "client attach stream disconnected", map[string]string{
+			"error":  fmt.Sprintf("%v", err),
+			"source": "client_stream",
+		})
 		cancel()
 		return err
 	}
+}
+
+func (gws *GatewayService) recordAttachEvent(container *types.ContainerState, stub *types.StubWithRelated, eventID types.ContainerEventID, message string, attrs map[string]string) {
+	if container == nil {
+		return
+	}
+	event := types.EventContainerEventSchema{
+		ID:          eventID,
+		ContainerID: container.ContainerId,
+		StubID:      container.StubId,
+		WorkspaceID: container.WorkspaceId,
+		Source:      "gateway.attach",
+		Message:     message,
+		Attrs:       attrs,
+	}
+	if stub != nil {
+		event.StubType = string(stub.Type.Kind())
+	}
+	if gws.eventRepo == nil {
+		return
+	}
+	gws.eventRepo.PushContainerEvent(event)
 }

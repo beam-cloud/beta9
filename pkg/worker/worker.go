@@ -224,7 +224,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	eventRepo := repo.NewEventClientRepo(config)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
@@ -234,7 +234,7 @@ func NewWorker() (*Worker, error) {
 	var cacheManager *WorkerCacheManager
 	var cacheClient *cache.Client
 	if config.Cache.Enabled && config.Worker.CacheEnabled {
-		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, redisClient, workerId, podAddr)
+		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, redisClient, workerRepoClient, workerId, workerPoolName, podAddr)
 		cacheClient, err = cacheManager.Start()
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
@@ -287,11 +287,12 @@ func NewWorker() (*Worker, error) {
 		}
 
 		gvisorRuntime, err = runtime.New(runtime.Config{
-			Type:          types.ContainerRuntimeGvisor.String(),
-			RunscPath:     "runsc",
-			RunscRoot:     gvisorRoot,
-			RunscPlatform: gvisorPlatform,
-			Debug:         config.DebugMode,
+			Type:           types.ContainerRuntimeGvisor.String(),
+			RunscPath:      "runsc",
+			RunscRoot:      gvisorRoot,
+			RunscPlatform:  gvisorPlatform,
+			RunscExtraArgs: poolConfig.ContainerRuntimeConfig.GVisorExtraArgs,
+			Debug:          config.DebugMode,
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
@@ -325,6 +326,7 @@ func NewWorker() (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
+	imageClient.eventRepo = eventRepo
 
 	var criuManager CRIUManager = nil
 	var checkpointStorage storage.Storage = nil
@@ -376,6 +378,8 @@ func NewWorker() (*Worker, error) {
 		containerWg:             sync.WaitGroup{},
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
+			eventRepo:          eventRepo,
+			workerID:           workerId,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
 		containerRepoClient: containerRepoClient,
@@ -456,6 +460,11 @@ containerRequestStream:
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				if !request.Timestamp.IsZero() {
+					s.recordContainerPhase(s.ctx, request, containerPhaseFromDuration(types.ContainerPhaseWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
+						"worker_id": s.workerId,
+					}))
+				}
 				s.handleContainerRequest(request)
 			}
 
@@ -686,7 +695,16 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	if err != nil {
 		notFoundErr := &types.ErrContainerStateNotFound{}
 		if notFoundErr.From(err) {
+			instance.StopReason = types.StopContainerReasonUnknown
+			s.containerInstances.Set(request.ContainerId, instance)
 			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
+			go s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerOrphanStateMissing,
+				ContainerID: request.ContainerId,
+				Reason:      string(types.StopContainerReasonUnknown),
+				Source:      "worker.status_heartbeat",
+				Message:     "container state was missing during worker heartbeat",
+			})
 			return true, nil
 		}
 
@@ -700,7 +718,7 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 
 	status := types.ContainerStatus(state.Status)
 
-	log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
+	log.Debug().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 	expirySeconds := int64(types.ContainerStateTtlS)
 	if status == types.ContainerStatusPending {
@@ -709,6 +727,15 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 				Str("container_id", request.ContainerId).
 				Int("pid", instance.RuntimePid).
 				Msg("reconciling pending container to running from runtime start signal")
+			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerPendingReconciled,
+				ContainerID: request.ContainerId,
+				Source:      "worker.status_heartbeat",
+				Message:     "pending state reconciled to running after runtime start",
+				Attrs: map[string]string{
+					"runtime_pid": fmt.Sprintf("%d", instance.RuntimePid),
+				},
+			})
 			state.Status = string(types.ContainerStatusRunning)
 		} else {
 			expirySeconds = int64(types.ContainerStateTtlSWhilePending)
@@ -736,6 +763,16 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			}
 
 			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerStoppingGraceKill,
+				ContainerID: request.ContainerId,
+				Reason:      string(instance.StopReason),
+				Source:      "worker.status_heartbeat",
+				Message:     "container exceeded stopping grace period and will be force killed",
+				Attrs: map[string]string{
+					"grace_period_seconds": fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+				},
+			})
 			s.stopContainerChan <- stopContainerEvent{
 				ContainerId: request.ContainerId,
 				Kill:        true,

@@ -44,7 +44,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	poolJson := []byte(`{"worker":{"pools":{"beta9-build":{},"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
 	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
-	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	eventRepo := repo.NewEventClientRepo(config)
 
 	schedulerUsageMetrics := SchedulerUsageMetrics{
 		UsageRepo: nil,

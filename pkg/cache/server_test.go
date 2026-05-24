@@ -29,8 +29,8 @@ func TestNormalizeAdvertiseHostLeavesDNSHostUnchanged(t *testing.T) {
 
 func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {
 	ctx := context.Background()
-	registry := NewMockRegistry()
-	server := &Server{coordinator: registry}
+	registry := NewMockCacheMetadataStore()
+	server := &Server{metadataStore: registry}
 
 	err := server.StoreSyntheticContentInCacheFS(ctx, "/volumes/workspace/.cache", "sha256-content", 123)
 	require.NoError(t, err)

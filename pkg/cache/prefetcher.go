@@ -8,10 +8,14 @@ import (
 
 const (
 	// Prefetch configuration aligned with optimization plan
-	prefetchAheadChunks    = 16               // Prefetch 16-64 MiB ahead with 4MB chunks
-	prefetchThresholdBytes = 2 * 1024 * 1024  // 2MB - detect sequential after 2 adjacent reads
-	prefetchWorkers        = 4                // Parallel prefetch workers
-	prefetchCacheTime      = 30 * time.Second // How long to keep prefetch state
+	prefetchDefaultAheadBytes      = 64 * 1024 * 1024
+	prefetchDefaultPartLengthBytes = 4 * 1024 * 1024
+	prefetchDefaultWorkers         = 4
+	prefetchDefaultMaxPartsPerRead = 16
+	prefetchMaxWorkers             = 64
+	prefetchMaxPartsPerRead        = 1024
+	prefetchThresholdBytes         = 2 * 1024 * 1024  // 2MB - detect sequential after 2 adjacent reads
+	prefetchCacheTime              = 30 * time.Second // How long to keep prefetch state
 )
 
 // PrefetchState tracks sequential read patterns per file/hash
@@ -30,6 +34,9 @@ type Prefetcher struct {
 	mu         sync.RWMutex
 	workQueue  chan *prefetchTask
 	bufferPool *BufferPool
+	aheadBytes int64
+	partLength int64
+	maxParts   int
 }
 
 type prefetchTask struct {
@@ -40,16 +47,43 @@ type prefetchTask struct {
 
 // NewPrefetcher creates a new prefetcher instance
 func NewPrefetcher(ctx context.Context, cas *Store, bufferPool *BufferPool) *Prefetcher {
+	cfg := cas.prefetchConfig
+	aheadBytes := cfg.AheadBytes
+	if aheadBytes <= 0 {
+		aheadBytes = prefetchDefaultAheadBytes
+	}
+	partLength := cfg.PartLengthBytes
+	if partLength <= 0 {
+		partLength = prefetchDefaultPartLengthBytes
+	}
+	workers := cfg.Workers
+	if workers <= 0 {
+		workers = prefetchDefaultWorkers
+	}
+	if workers > prefetchMaxWorkers {
+		workers = prefetchMaxWorkers
+	}
+	maxParts := cfg.MaxPartsPerRead
+	if maxParts <= 0 {
+		maxParts = prefetchDefaultMaxPartsPerRead
+	}
+	if maxParts > prefetchMaxPartsPerRead {
+		maxParts = prefetchMaxPartsPerRead
+	}
+
 	pf := &Prefetcher{
 		ctx:        ctx,
 		cas:        cas,
 		states:     make(map[string]*PrefetchState),
-		workQueue:  make(chan *prefetchTask, 100),
+		workQueue:  make(chan *prefetchTask, workers*maxParts),
 		bufferPool: bufferPool,
+		aheadBytes: aheadBytes,
+		partLength: partLength,
+		maxParts:   maxParts,
 	}
 
 	// Start prefetch workers
-	for i := 0; i < prefetchWorkers; i++ {
+	for i := 0; i < workers; i++ {
 		go pf.worker()
 	}
 
@@ -116,16 +150,21 @@ func (pf *Prefetcher) startPrefetch(hash string, startOffset int64) {
 			pf.mu.Unlock()
 		}()
 
-		// Queue multiple chunks for prefetch
-		chunkSize := int64(4 * 1024 * 1024) // 4MB chunks
-		for i := int64(0); i < prefetchAheadChunks; i++ {
-			offset := startOffset + (i * chunkSize)
+		parts := int(pf.aheadBytes / pf.partLength)
+		if parts <= 0 {
+			parts = 1
+		}
+		if parts > pf.maxParts {
+			parts = pf.maxParts
+		}
+		for i := 0; i < parts; i++ {
+			offset := startOffset + (int64(i) * pf.partLength)
 
 			select {
 			case pf.workQueue <- &prefetchTask{
 				hash:   hash,
 				offset: offset,
-				length: chunkSize,
+				length: pf.partLength,
 			}:
 			case <-pf.ctx.Done():
 				return
@@ -142,18 +181,7 @@ func (pf *Prefetcher) worker() {
 	for {
 		select {
 		case task := <-pf.workQueue:
-			// Check if content is already in cache
-			if pf.cas.Exists(task.hash) {
-				// Try to warm up the chunk in memory if it's on disk
-				dst := pf.bufferPool.Get(int(task.length))
-				_, err := pf.cas.Get(task.hash, task.offset, task.length, dst)
-				pf.bufferPool.Put(dst)
-
-				if err == nil {
-					Logger.Debugf("Prefetched chunk [%s] offset=%d length=%d",
-						task.hash, task.offset, task.length)
-				}
-			}
+			pf.cas.WarmRange(task.hash, task.offset, task.length)
 		case <-pf.ctx.Done():
 			return
 		}

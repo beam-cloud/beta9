@@ -93,6 +93,98 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 	}, bindings)
 }
 
+func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		cpuEnforced    bool
+		memoryEnforced bool
+		wantCPU        bool
+		wantMemory     bool
+		wantUnified    bool
+	}{
+		{name: "cpu only", cpuEnforced: true, wantCPU: true},
+		{name: "memory only", memoryEnforced: true, wantMemory: true, wantUnified: true},
+		{name: "cpu and memory", cpuEnforced: true, memoryEnforced: true, wantCPU: true, wantMemory: true, wantUnified: true},
+		{name: "neither"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRuntime := &mockRuntime{name: types.ContainerRuntimeGvisor.String()}
+			containerInstances := common.NewSafeMap[*ContainerInstance]()
+			containerInstances.Set("container-1", &ContainerInstance{Runtime: mockRuntime})
+
+			worker := &Worker{
+				config: types.AppConfig{
+					Worker: types.WorkerConfig{
+						ContainerResourceLimits: types.ContainerResourceLimitsConfig{
+							CPUEnforced:    tt.cpuEnforced,
+							MemoryEnforced: tt.memoryEnforced,
+						},
+					},
+				},
+				runtime:            mockRuntime,
+				containerInstances: containerInstances,
+			}
+
+			spec, err := worker.specFromRequest(&types.ContainerRequest{
+				ContainerId: "container-1",
+				EntryPoint:  []string{"python3", "-c", "print('ok')"},
+				Cpu:         500,
+				Memory:      128,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Type: types.StubType(types.StubTypeFunction),
+				}},
+			}, &ContainerOptions{BindPorts: []int{8001}})
+			require.NoError(t, err)
+			require.NotNil(t, spec.Linux)
+			require.NotNil(t, spec.Linux.Resources)
+
+			assert.Equal(t, tt.wantCPU, spec.Linux.Resources.CPU != nil)
+			assert.Equal(t, tt.wantMemory, spec.Linux.Resources.Memory != nil)
+			assert.Equal(t, tt.wantUnified, spec.Linux.Resources.Unified != nil)
+		})
+	}
+}
+
+func TestNormalizeContainerExitCodePreservesUnexpectedSigkill(t *testing.T) {
+	assert.Equal(t,
+		int(types.ContainerExitCodeOomKill),
+		normalizeContainerExitCode(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false),
+	)
+}
+
+func TestNormalizeContainerExitCodeMapsExplicitStopReasons(t *testing.T) {
+	tests := []struct {
+		name     string
+		reason   types.StopContainerReason
+		wantExit int
+	}{
+		{name: "scheduler", reason: types.StopContainerReasonScheduler, wantExit: int(types.ContainerExitCodeScheduler)},
+		{name: "ttl", reason: types.StopContainerReasonTtl, wantExit: int(types.ContainerExitCodeTtl)},
+		{name: "user", reason: types.StopContainerReasonUser, wantExit: int(types.ContainerExitCodeUser)},
+		{name: "admin", reason: types.StopContainerReasonAdmin, wantExit: int(types.ContainerExitCodeAdmin)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantExit, normalizeContainerExitCode(0, tt.reason, false))
+		})
+	}
+}
+
+func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {
+	require.Equal(t, "COMPLETED", containerExitReason(0, types.StopContainerReasonUnknown, false))
+	require.Equal(t, "SIGKILL", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false))
+	require.Equal(t, "OOM", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, true))
+	require.Equal(t, string(types.StopContainerReasonUser), containerExitReason(0, types.StopContainerReasonUser, false))
+}
+
+func TestEventStopReasonOmitsUnknown(t *testing.T) {
+	require.Empty(t, eventStopReason(types.StopContainerReasonUnknown))
+	require.Equal(t, string(types.StopContainerReasonScheduler), eventStopReason(types.StopContainerReasonScheduler))
+}
+
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "volume")
 	spec := getTestBaseSpec()
@@ -484,7 +576,7 @@ func TestPullImageFromRegistryKeepsPersistentLockFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(archivePath, []byte("clip"), 0644))
 
 	imageClient := &ImageClient{}
-	_, err := imageClient.pullImageFromRegistry(context.Background(), archivePath, "image")
+	_, err := imageClient.pullImageFromRegistry(context.Background(), archivePath, &types.ContainerRequest{ImageId: "image"})
 	require.NoError(t, err)
 
 	_, err = os.Stat(lockPath)
