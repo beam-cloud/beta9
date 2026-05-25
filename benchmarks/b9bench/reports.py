@@ -90,6 +90,7 @@ class MetricSink:
         lines = ["## Sandbox Startup", ""]
         for measurement in reports:
             bottleneck = measurement.evidence.get("primary_bottleneck") or {}
+            image = measurement.evidence.get("image_drilldown") or {}
             tti = measurement.evidence.get("time_to_interactive") or {}
             coverage = measurement.evidence.get("event_coverage") or {}
             lines.append(f"- Report: `{measurement.evidence['startup_report']}`")
@@ -115,6 +116,25 @@ class MetricSink:
                 "required lifecycle spans "
                 f"{coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}"
             )
+            image_phase = image.get("slowestPhase") or {}
+            if image_phase:
+                lines.append(
+                    "- Image/CLIP slowest phase: "
+                    f"`{image_phase.get('eventId')}` "
+                    f"p95={self._format_ms(image_phase.get('p95Ms'))}ms "
+                    f"count={image_phase.get('count', 0)}"
+                )
+            clip_accesses = image.get("clipAccesses") or []
+            if clip_accesses:
+                access = clip_accesses[0]
+                lines.append(
+                    "- Slowest CLIP access: "
+                    f"`{access.get('operation') or '-'}` "
+                    f"source=`{access.get('source') or '-'}` "
+                    f"total={self._format_ms(access.get('totalMs'))}ms "
+                    f"max={self._format_ms(access.get('maxMs'))}ms "
+                    f"count={access.get('count', 0)}"
+                )
             lines.append("")
         return lines
 

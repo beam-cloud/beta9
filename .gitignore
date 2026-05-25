@@ -35,3 +35,8 @@ pyrightconfig.json
 .go-version
 docs/*.md
 .beta9ignore
+/benchmarks/runs/
+/artifacts/
+/metrics.jsonl
+/summary.json
+/summary.md

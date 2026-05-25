@@ -31,7 +31,13 @@ Use `--param key=value` for suite/script overrides, for example:
 bin/bench cache --suite cache-smoke --param require_remote_read=false
 ```
 
-Every run writes:
+If `--out-dir` is omitted, every run writes to an ignored execution directory:
+
+```text
+benchmarks/runs/<utc timestamp>-<command>-<suite>-<profile>/
+```
+
+Each run directory contains:
 
 - `metrics.jsonl`: one graphable metric per probe result.
 - `summary.json`: machine-readable aggregate.

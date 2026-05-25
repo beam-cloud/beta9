@@ -403,6 +403,7 @@ class ScriptSuiteProbe(ScriptProbeBase):
                     evidence["time_to_interactive"] = startup_report.get("timeToInteractive")
                     evidence["primary_bottleneck"] = startup_report.get("primaryBottleneck")
                     evidence["event_coverage"] = startup_report.get("eventCoverage")
+                    evidence["image_drilldown"] = startup_report.get("imageDrilldown")
             except json.JSONDecodeError as exc:
                 evidence["parse_error"] = str(exc)
         self.sink.emit(

@@ -40,6 +40,7 @@ EOT
 FROM base AS build
 
 WORKDIR /workspace
+ENV GONOSUMDB="github.com/beam-cloud/*"
 
 RUN apt-get install -y libfuse3-dev libbtrfs-dev libgpgme-dev && \
     go install github.com/cosmtrek/air@v1.49.0

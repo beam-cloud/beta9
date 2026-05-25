@@ -117,6 +117,89 @@ class SandboxStartupReportTests(unittest.TestCase):
         self.assertIn("Primary bottleneck: scheduler.backlog_wait", markdown)
         self.assertIn("Event coverage: 1/1 containers", markdown)
 
+    def test_image_drilldown_aggregates_clip_accesses(self):
+        benchmark = {
+            "summary": {},
+            "samples": [
+                {
+                    "warmup": False,
+                    "ok": True,
+                    "containerId": "container-1",
+                    "execCompleteMs": 100,
+                    "runningObservedMs": 80,
+                    "execExitCode": 0,
+                },
+                {
+                    "warmup": False,
+                    "ok": True,
+                    "containerId": "container-2",
+                    "execCompleteMs": 120,
+                    "runningObservedMs": 90,
+                    "execExitCode": 0,
+                },
+            ],
+        }
+        events = {
+            "items": [
+                {
+                    "container_id": "container-1",
+                    "event_count": 3,
+                    "missing": [],
+                    "clip_accesses": [
+                        {
+                            "operation": "clip.oci_read",
+                            "path": "/usr/local/lib/python.py",
+                            "source": "content_cache",
+                            "count": 2,
+                            "total_us": 2500,
+                            "max_us": 1500,
+                            "bytes_read": 4096,
+                        }
+                    ],
+                    "summary": {"clip_oci_read_ms": 3, "image_ms": 1},
+                },
+                {
+                    "container_id": "container-2",
+                    "event_count": 3,
+                    "missing": [],
+                    "clip_accesses": [
+                        {
+                            "operation": "clip.oci_read",
+                            "path": "/usr/local/lib/python.py",
+                            "source": "content_cache",
+                            "count": 1,
+                            "total_us": 1000,
+                            "max_us": 1000,
+                            "bytes_read": 2048,
+                        }
+                    ],
+                    "summary": {"clip_oci_read_ms": 1, "image_ms": 1},
+                },
+            ],
+            "summary": {
+                "clip_oci_read_ms": {
+                    "count": 2,
+                    "min_ms": 1,
+                    "p50_ms": 2,
+                    "p90_ms": 2.8,
+                    "p95_ms": 2.9,
+                    "max_ms": 3,
+                    "total_ms": 4,
+                }
+            },
+        }
+
+        report = build_startup_report(benchmark, events=events)
+        access = report["imageDrilldown"]["clipAccesses"][0]
+        markdown = render_markdown(report)
+
+        self.assertEqual(report["imageDrilldown"]["containersWithClipAccesses"], 2)
+        self.assertEqual(access["count"], 3)
+        self.assertEqual(access["containerCount"], 2)
+        self.assertEqual(access["totalMs"], 4)
+        self.assertIn("## Image And CLIP Drilldown", markdown)
+        self.assertIn("/usr/local/lib/python.py", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

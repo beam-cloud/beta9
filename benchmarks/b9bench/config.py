@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import configparser
 import os
+import time
 from pathlib import Path
 
-from .model import RunConfig
+from .model import RunConfig, slug
 
 
 def repo_root() -> Path:
@@ -71,6 +72,24 @@ def parse_key_value(values: list[str]) -> dict[str, object]:
     return out
 
 
+def default_benchmark_out_dir(root: Path, command: str, suite_name: str, profile: str) -> Path:
+    suite_context = suite_name
+    if "/" in suite_context or "\\" in suite_context:
+        suite_context = Path(suite_context).stem
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    run_context = "-".join(
+        part
+        for part in (
+            timestamp,
+            slug(command),
+            slug(suite_context),
+            slug(profile),
+        )
+        if part
+    )
+    return root / "benchmarks" / "runs" / run_context
+
+
 def resolve_run_config(args) -> RunConfig:
     root = repo_root()
     profile = (
@@ -106,9 +125,12 @@ def resolve_run_config(args) -> RunConfig:
         grpc_addr = grpc_addr or f"{host}:{config_port}"
         gateway_url = gateway_url or http_url_from_gateway(host, config_port)
 
-    out_dir = Path(args.out_dir or os.getenv("BENCH_OUT_DIR", "")).expanduser()
-    if not str(out_dir):
-        out_dir = Path("/tmp") / f"beta9-bench-{args.command}"
+    raw_out_dir = args.out_dir or os.getenv("BENCH_OUT_DIR")
+    out_dir = (
+        Path(raw_out_dir).expanduser()
+        if raw_out_dir
+        else default_benchmark_out_dir(root, args.command, args.suite, profile)
+    )
 
     extra_args = parse_key_value(args.param or [])
     env_file_plan = os.getenv("CACHE_BENCHMARK_FILE_PLAN") or os.getenv("BENCH_CACHE_FILE_PLAN")

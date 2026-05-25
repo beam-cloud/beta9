@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover - script execution path
 
 EVENTS_API_PREFIX = "/api/v1/events"
 DEFAULT_EVENT_LIMIT = 50_000
-DEFAULT_TOP_LIFECYCLE = 10
+DEFAULT_TOP_LIFECYCLE = 20
 DEFAULT_EVENT_WAIT_SECONDS = 5.0
 DEFAULT_EVENT_POLL_MS = 500
 
@@ -264,6 +264,7 @@ def build_startup_report(
     server_phases = build_server_phases(events, len(samples))
     bottleneck = select_primary_bottleneck(server_phases, len(samples))
     coverage = build_event_coverage(samples, events, event_items)
+    image_drilldown = build_image_drilldown(event_items, server_phases, len(samples))
     slowest = build_slowest_containers(samples, event_by_container)
     data_quality = build_data_quality(samples, coverage, event_items, event_error, bottleneck)
     tti = client_timings.get("execCompleteMs")
@@ -285,6 +286,7 @@ def build_startup_report(
         "eventCoverage": coverage,
         "clientTimings": client_timings,
         "serverPhases": server_phases,
+        "imageDrilldown": image_drilldown,
         "slowestContainers": slowest,
         "dataQuality": data_quality,
         "eventError": event_error,
@@ -313,6 +315,128 @@ def build_server_phases(events: dict[str, Any] | None, measured_count: int) -> l
         phases.append(phase_record(metric_key, event_id, label, metric, measured_count, rollup))
 
     return phases
+
+
+def build_image_drilldown(
+    event_items: list[dict[str, Any]],
+    server_phases: list[dict[str, Any]],
+    measured_count: int,
+) -> dict[str, Any]:
+    image_phases = [
+        phase
+        for phase in server_phases
+        if phase.get("eventId", "").startswith(("image.", "clip."))
+    ]
+    image_phases.sort(
+        key=lambda phase: (
+            float(phase.get("p95Ms") or 0),
+            float(phase.get("maxMs") or 0),
+            int(phase.get("count") or 0),
+        ),
+        reverse=True,
+    )
+
+    clip_accesses, containers_with_clip = summarize_clip_accesses(event_items)
+    slowest_phase = image_phases[0] if image_phases else None
+    notes = []
+    if not image_phases:
+        notes.append("No image or CLIP lifecycle phases were returned by the events API.")
+    if not clip_accesses:
+        notes.append(
+            "No CLIP lazy-read access rollups were returned. This can mean no lazy reads occurred, "
+            "the container did not reach user code, or CLIP read tracing did not flush for this run."
+        )
+    if containers_with_clip and measured_count and containers_with_clip < measured_count:
+        notes.append(
+            f"CLIP access rollups were present for {containers_with_clip}/{measured_count} measured containers."
+        )
+
+    return {
+        "phases": image_phases,
+        "slowestPhase": slowest_phase,
+        "clipAccesses": clip_accesses,
+        "containersWithClipAccesses": containers_with_clip,
+        "measuredContainers": measured_count,
+        "notes": notes,
+    }
+
+
+def summarize_clip_accesses(
+    event_items: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+) -> tuple[list[dict[str, Any]], int]:
+    rollups: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
+    containers_with_clip = set()
+
+    for item in event_items:
+        container_id = item.get("container_id")
+        accesses = item.get("clip_accesses") or []
+        if accesses and container_id:
+            containers_with_clip.add(container_id)
+
+        for access in accesses:
+            key = (
+                str(access.get("operation") or ""),
+                str(access.get("path") or ""),
+                str(access.get("source") or ""),
+                str(access.get("layer_digest") or ""),
+                str(access.get("decompressed_hash") or ""),
+                str(access.get("content_hash") or ""),
+            )
+            rollup = rollups.get(key)
+            if rollup is None:
+                rollup = {
+                    "operation": key[0],
+                    "path": key[1],
+                    "source": key[2],
+                    "layerDigest": key[3],
+                    "decompressedHash": key[4],
+                    "contentHash": key[5],
+                    "count": 0,
+                    "containerCount": 0,
+                    "totalUs": 0,
+                    "maxUs": 0,
+                    "totalMs": 0,
+                    "maxMs": 0,
+                    "bytesRead": 0,
+                    "_containers": set(),
+                }
+                rollups[key] = rollup
+
+            count = int(access.get("count") or 0)
+            total_us = int(access.get("total_us") or 0)
+            max_us = int(access.get("max_us") or 0)
+            if total_us <= 0:
+                total_us = int(access.get("total_ms") or 0) * 1000
+            if max_us <= 0:
+                max_us = int(access.get("max_ms") or 0) * 1000
+
+            rollup["count"] += count
+            rollup["totalUs"] += total_us
+            rollup["maxUs"] = max(int(rollup["maxUs"]), max_us)
+            rollup["bytesRead"] += int(access.get("bytes_read") or 0)
+            if container_id:
+                rollup["_containers"].add(container_id)
+
+    rows = []
+    for rollup in rollups.values():
+        row = dict(rollup)
+        containers = row.pop("_containers")
+        row["containerCount"] = len(containers)
+        row["totalMs"] = duration_us_to_ms(int(row["totalUs"]))
+        row["maxMs"] = duration_us_to_ms(int(row["maxUs"]))
+        rows.append(row)
+
+    rows.sort(
+        key=lambda row: (
+            int(row.get("totalUs") or 0),
+            int(row.get("maxUs") or 0),
+            int(row.get("count") or 0),
+        ),
+        reverse=True,
+    )
+    return rows[:limit], len(containers_with_clip)
 
 
 def phase_record(
@@ -529,6 +653,23 @@ def render_console_summary(report: dict[str, Any]) -> str:
         "required lifecycle spans "
         f"{coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}"
     )
+    image = report.get("imageDrilldown") or {}
+    image_phase = image.get("slowestPhase")
+    if image_phase:
+        lines.append(
+            "  Image/CLIP slowest phase: "
+            f"{image_phase['eventId']} p95={format_ms(image_phase.get('p95Ms'))}ms "
+            f"count={image_phase.get('count', 0)}"
+        )
+    clip_accesses = image.get("clipAccesses") or []
+    if clip_accesses:
+        access = clip_accesses[0]
+        lines.append(
+            "  Slowest CLIP access: "
+            f"{access.get('operation') or '-'} source={access.get('source') or '-'} "
+            f"total={format_ms(access.get('totalMs'))}ms max={format_ms(access.get('maxMs'))}ms "
+            f"count={access.get('count', 0)}"
+        )
     if report.get("markdownPath"):
         lines.append(f"  Report: {report['markdownPath']}")
     return "\n".join(lines)
@@ -582,6 +723,63 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append(phase_table_row(phase))
     if not report.get("serverPhases"):
         lines.append("| unavailable | - | 0 | missing | - | - | - |")
+
+    image = report.get("imageDrilldown") or {}
+    lines.extend(
+        [
+            "",
+            "## Image And CLIP Drilldown",
+            "",
+            f"- CLIP access coverage: `{image.get('containersWithClipAccesses', 0)}/{image.get('measuredContainers', 0)}` containers.",
+        ]
+    )
+    slowest_image_phase = image.get("slowestPhase")
+    if slowest_image_phase:
+        lines.append(
+            "- Slowest image/CLIP phase: "
+            f"`{slowest_image_phase['eventId']}` p95 `{format_ms(slowest_image_phase.get('p95Ms'))}ms`, "
+            f"max `{format_ms(slowest_image_phase.get('maxMs'))}ms`."
+        )
+    for note in image.get("notes") or []:
+        lines.append(f"- {note}")
+
+    lines.extend(
+        [
+            "",
+            "### Image/CLIP Phases",
+            "",
+            "| Phase | Count | Coverage | P50 | P95 | Max |",
+            "| --- | ---: | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for phase in image.get("phases") or []:
+        lines.append(
+            f"| `{phase['eventId']}` | {phase.get('count', 0)} | {phase.get('coverageStatus', 'unknown')} | "
+            f"{format_ms(phase.get('p50Ms'))} | {format_ms(phase.get('p95Ms'))} | {format_ms(phase.get('maxMs'))} |"
+        )
+    if not image.get("phases"):
+        lines.append("| unavailable | 0 | missing | - | - | - |")
+
+    lines.extend(
+        [
+            "",
+            "### Top CLIP Accesses",
+            "",
+            "| Rank | Operation | Source | Path / Object | Count | Containers | Bytes | Total | Max |",
+            "| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for index, access in enumerate(image.get("clipAccesses") or [], 1):
+        lines.append(
+            f"| {index} | `{table_cell(access.get('operation') or '-')}` | "
+            f"`{table_cell(access.get('source') or '-')}` | "
+            f"{table_cell(clip_access_target(access))} | "
+            f"{access.get('count', 0)} | {access.get('containerCount', 0)} | "
+            f"{access.get('bytesRead', 0)} | {format_ms(access.get('totalMs'))} | "
+            f"{format_ms(access.get('maxMs'))} |"
+        )
+    if not image.get("clipAccesses"):
+        lines.append("| 1 | unavailable | - | - | 0 | 0 | 0 | - | - |")
 
     lines.extend(
         [
@@ -670,6 +868,25 @@ def format_ms(value: Any) -> str:
         return f"{float(value):.1f}"
     except (TypeError, ValueError):
         return "-"
+
+
+def duration_us_to_ms(duration_us: int) -> int:
+    if duration_us <= 0:
+        return 0
+    return (duration_us + 999) // 1000
+
+
+def clip_access_target(access: dict[str, Any]) -> str:
+    for key in ("path", "layerDigest", "decompressedHash", "contentHash"):
+        value = access.get(key)
+        if value:
+            return str(value)
+    return "-"
+
+
+def table_cell(value: Any) -> str:
+    text = str(value if value is not None else "")
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def write_startup_report(

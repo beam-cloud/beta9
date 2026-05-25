@@ -1,8 +1,10 @@
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
+from benchmarks.b9bench.config import resolve_run_config
 from benchmarks.b9bench.model import Measurement, ScenarioSpec
 from benchmarks.b9bench.payload import deterministic_payload_range, deterministic_sha256
 from benchmarks.b9bench.reports import MetricSink
@@ -66,6 +68,29 @@ class B9BenchTests(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             self.assertEqual(json.loads(lines[0])["mbps"], 123.4)
             self.assertEqual(json.loads(sink.summary_path.read_text())["status"], "ok")
+
+    def test_default_output_dir_is_timestamped_under_benchmarks_runs(self):
+        args = SimpleNamespace(
+            command="sandbox",
+            suite="sandbox-default",
+            profile=None,
+            config=None,
+            token=None,
+            gateway_url=None,
+            grpc_addr=None,
+            namespace=None,
+            out_dir=None,
+            dry_run=True,
+            param=[],
+            script_arg=[],
+        )
+
+        config = resolve_run_config(args)
+
+        self.assertEqual(config.out_dir.parents[1], config.root / "benchmarks")
+        self.assertEqual(config.out_dir.parent.name, "runs")
+        self.assertIn("sandbox", config.out_dir.name)
+        self.assertIn("sandbox-default", config.out_dir.name)
 
     def test_scenario_tags_include_core_dimensions(self):
         scenario = ScenarioSpec(

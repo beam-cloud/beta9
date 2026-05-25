@@ -12,6 +12,7 @@ dev:
         go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
       BUILD_BINARY_PATH: /workspace/bin/gateway
       CONFIG_PATH: /workspace/config.local.yaml
+      GONOSUMDB: github.com/beam-cloud/*
       GOTOOLCHAIN: auto
     forward:
     - 1993:1993
