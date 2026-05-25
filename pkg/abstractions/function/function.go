@@ -123,7 +123,7 @@ func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest,
 		return err
 	}
 
-	return fs.stream(ctx, stream, authInfo, task, in.StubId, in.Headless)
+	return fs.stream(ctx, stream, authInfo, task, in.Headless)
 }
 
 func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
@@ -168,7 +168,7 @@ func (fs *ContainerFunctionService) functionTaskFactory(ctx context.Context, msg
 	}, nil
 }
 
-func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, stubId string, headless bool) error {
+func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, headless bool) error {
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
 	clientCtx := ctx
@@ -187,32 +187,32 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		completionObserved.Store(true)
 		resultLoadStart := time.Now()
 		result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskId)).Bytes()
-		fs.recordFunctionEvent(types.ContainerEventResultLoadedByGateway, authInfo, task, "function result loaded by gateway", map[string]string{
-			"exit_code": fmt.Sprintf("%d", exitCode),
-			"bytes":     fmt.Sprintf("%d", len(result)),
-		})
+		if fs.eventRepo != nil {
+			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventResultLoadedByGateway, types.ContainerEventOptions{
+				Source:  types.EventSourceGatewayFunctionStream,
+				Message: types.EventMessageFunctionResultLoadedByGateway,
+				Attrs: map[string]string{
+					types.EventAttrExitCode: fmt.Sprintf("%d", exitCode),
+					types.EventAttrBytes:    fmt.Sprintf("%d", len(result)),
+				},
+			})
+		}
 		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
 			return err
 		}
-		success := true
 		if fs.eventRepo != nil {
-			fs.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
-				ID:          types.ContainerPhaseResultDelivery,
-				StartTime:   resultLoadStart.UTC(),
-				EndTime:     time.Now().UTC(),
-				DurationMs:  time.Since(resultLoadStart).Milliseconds(),
-				ContainerID: containerId,
-				StubID:      stubId,
-				StubType:    string(types.StubTypeFunction),
-				TaskID:      taskId,
-				WorkspaceID: authInfo.Workspace.ExternalId,
-				Success:     &success,
+			fs.eventRepo.PushContainerFunctionTaskLifecycle(authInfo.Workspace.ExternalId, task, types.ContainerLifecycleResultDelivery, resultLoadStart, time.Now(), true, types.ContainerLifecycleOptions{
+				Source: types.EventSourceGatewayFunctionStream,
+			})
+			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventResultSentToClient, types.ContainerEventOptions{
+				Source:  types.EventSourceGatewayFunctionStream,
+				Message: types.EventMessageFunctionResultSentToClient,
+				Attrs: map[string]string{
+					types.EventAttrExitCode: fmt.Sprintf("%d", exitCode),
+					types.EventAttrBytes:    fmt.Sprintf("%d", len(result)),
+				},
 			})
 		}
-		fs.recordFunctionEvent(types.ContainerEventResultSentToClient, authInfo, task, "function result sent to client", map[string]string{
-			"exit_code": fmt.Sprintf("%d", exitCode),
-			"bytes":     fmt.Sprintf("%d", len(result)),
-		})
 		return nil
 	}
 
@@ -243,14 +243,26 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 			return
 		}
 
-		fs.recordFunctionEvent(types.ContainerEventTaskCancelRequested, authInfo, task, "function stream client disconnected before completion", map[string]string{
-			"cause": "client_context_done",
-		})
+		if fs.eventRepo != nil {
+			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventTaskCancelRequested, types.ContainerEventOptions{
+				Source:  types.EventSourceGatewayFunctionStream,
+				Message: types.EventMessageFunctionStreamCancelRequested,
+				Reason:  string(types.TaskRequestCancelled),
+				Attrs: map[string]string{
+					types.EventAttrCause: types.EventCauseClientContextDone,
+				},
+			})
+		}
 		if err := task.Cancel(context.Background(), types.TaskRequestCancelled); err != nil {
 			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error cancelling task")
-		} else {
-			fs.recordFunctionEvent(types.ContainerEventTaskCancelApplied, authInfo, task, "function stream cancellation applied", map[string]string{
-				"reason": string(types.TaskRequestCancelled),
+		} else if fs.eventRepo != nil {
+			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventTaskCancelApplied, types.ContainerEventOptions{
+				Source:  types.EventSourceGatewayFunctionStream,
+				Message: types.EventMessageFunctionStreamCancelApplied,
+				Reason:  string(types.TaskRequestCancelled),
+				Attrs: map[string]string{
+					types.EventAttrReason: string(types.TaskRequestCancelled),
+				},
 			})
 		}
 
@@ -296,12 +308,19 @@ func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.
 	if err := phaseMetrics.Mark(ctx, authInfo.Workspace.Name, in.TaskId, task.FunctionPhaseGetArgs, now); err != nil {
 		log.Debug().Err(err).Str("task_id", in.TaskId).Msg("failed to mark function get_args phase")
 	}
-	fs.recordFunctionTaskPhaseSincePhase(ctx, in.TaskId, types.ContainerPhaseRunnerStartToGetArgs, task.FunctionPhaseStartTask, now, "gateway.function_get_args", map[string]string{
-		"bytes": fmt.Sprintf("%d", len(value)),
-	})
-	fs.recordFunctionTaskEvent(ctx, in.TaskId, types.ContainerEventRunnerGetArgs, "gateway.function_get_args", "runner loaded function args", map[string]string{
-		"bytes": fmt.Sprintf("%d", len(value)),
-	})
+	if fs.eventRepo != nil {
+		if taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, in.TaskId); err == nil && taskWithRelated != nil {
+			fs.eventRepo.PushContainerTaskLifecycleSince(ctx, fs.rdb, taskWithRelated, types.ContainerLifecycleRunnerStartToGetArgs, task.FunctionPhaseStartTask, now, true, types.ContainerLifecycleOptions{
+				Source: types.EventSourceGatewayFunctionGetArgs,
+				Attrs:  map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(value))},
+			})
+			fs.eventRepo.PushContainerTaskEvent(taskWithRelated, types.ContainerEventRunnerGetArgs, types.ContainerEventOptions{
+				Source:  types.EventSourceGatewayFunctionGetArgs,
+				Message: types.EventMessageRunnerLoadedFunctionArgs,
+				Attrs:   map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(value))},
+			})
+		}
+	}
 
 	return &pb.FunctionGetArgsResponse{
 		Ok:   true,
@@ -332,24 +351,18 @@ func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *p
 	}
 	if fs.eventRepo != nil {
 		if taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, in.TaskId); err == nil && taskWithRelated != nil {
-			fs.recordFunctionTaskPhaseSincePhaseForTask(ctx, taskWithRelated, types.ContainerPhaseRunnerGetArgsToSetResult, task.FunctionPhaseGetArgs, now, "gateway.function_set_result", map[string]string{
-				"bytes": fmt.Sprintf("%d", len(in.Result)),
+			fs.eventRepo.PushContainerTaskLifecycleSince(ctx, fs.rdb, taskWithRelated, types.ContainerLifecycleRunnerGetArgsToSetResult, task.FunctionPhaseGetArgs, now, true, types.ContainerLifecycleOptions{
+				Source: types.EventSourceGatewayFunctionSetResult,
+				Attrs:  map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(in.Result))},
 			})
-			fs.recordFunctionTaskPhaseSincePhaseForTask(ctx, taskWithRelated, types.ContainerPhaseRunnerStartToSetResult, task.FunctionPhaseStartTask, now, "gateway.function_set_result", map[string]string{
-				"bytes": fmt.Sprintf("%d", len(in.Result)),
+			fs.eventRepo.PushContainerTaskLifecycleSince(ctx, fs.rdb, taskWithRelated, types.ContainerLifecycleRunnerStartToSetResult, task.FunctionPhaseStartTask, now, true, types.ContainerLifecycleOptions{
+				Source: types.EventSourceGatewayFunctionSetResult,
+				Attrs:  map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(in.Result))},
 			})
-			fs.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-				ID:          types.ContainerEventResultSetResult,
-				ContainerID: taskWithRelated.ContainerId,
-				StubID:      taskWithRelated.Stub.ExternalId,
-				StubType:    string(taskWithRelated.Stub.Type.Kind()),
-				TaskID:      taskWithRelated.ExternalId,
-				WorkspaceID: taskWithRelated.Workspace.ExternalId,
-				Source:      "gateway.function_set_result",
-				Message:     "function result stored in redis",
-				Attrs: map[string]string{
-					"bytes": fmt.Sprintf("%d", len(in.Result)),
-				},
+			fs.eventRepo.PushContainerTaskEvent(taskWithRelated, types.ContainerEventResultSetResult, types.ContainerEventOptions{
+				Source:  types.EventSourceGatewayFunctionSetResult,
+				Message: types.EventMessageFunctionResultStored,
+				Attrs:   map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(in.Result))},
 			})
 		}
 	}
@@ -357,66 +370,6 @@ func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *p
 	return &pb.FunctionSetResultResponse{
 		Ok: true,
 	}, nil
-}
-
-func (fs *ContainerFunctionService) recordFunctionEvent(eventID types.ContainerEventID, authInfo *auth.AuthInfo, task types.TaskInterface, message string, attrs map[string]string) {
-	if task == nil || authInfo == nil || authInfo.Workspace == nil {
-		return
-	}
-
-	metadata := task.Metadata()
-	if metadata.ContainerId == "" {
-		return
-	}
-
-	if fs.eventRepo == nil {
-		return
-	}
-	fs.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-		ID:          eventID,
-		ContainerID: metadata.ContainerId,
-		StubID:      metadata.StubId,
-		StubType:    string(types.StubTypeFunction),
-		TaskID:      metadata.TaskId,
-		WorkspaceID: authInfo.Workspace.ExternalId,
-		Source:      "gateway.function_stream",
-		Message:     message,
-		Attrs:       attrs,
-	})
-}
-
-func (fs *ContainerFunctionService) recordFunctionTaskEvent(ctx context.Context, taskID string, eventID types.ContainerEventID, source string, message string, attrs map[string]string) {
-	if fs.eventRepo == nil {
-		return
-	}
-
-	taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, taskID)
-	if err != nil || taskWithRelated == nil || taskWithRelated.ContainerId == "" {
-		return
-	}
-
-	task.PushContainerTaskEvent(fs.eventRepo, taskWithRelated, eventID, source, message, attrs)
-}
-
-func (fs *ContainerFunctionService) recordFunctionTaskPhaseSincePhase(ctx context.Context, taskID string, spanID types.ContainerPhaseID, phase string, end time.Time, source string, attrs map[string]string) {
-	if fs.eventRepo == nil {
-		return
-	}
-
-	taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, taskID)
-	if err != nil || taskWithRelated == nil {
-		return
-	}
-
-	fs.recordFunctionTaskPhaseSincePhaseForTask(ctx, taskWithRelated, spanID, phase, end, source, attrs)
-}
-
-func (fs *ContainerFunctionService) recordFunctionTaskPhaseSincePhaseForTask(ctx context.Context, taskWithRelated *types.TaskWithRelated, spanID types.ContainerPhaseID, phase string, end time.Time, source string, attrs map[string]string) {
-	if fs.eventRepo == nil || taskWithRelated == nil || taskWithRelated.ContainerId == "" {
-		return
-	}
-
-	task.PushContainerTaskPhaseSincePhase(ctx, fs.rdb, fs.eventRepo, taskWithRelated, spanID, phase, end, source, attrs)
 }
 
 func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, stream pb.FunctionService_FunctionMonitorServer) error {

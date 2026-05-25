@@ -1,0 +1,33 @@
+name: cache-smoke
+kind: cache
+runner: cache
+description: Small correctness-focused embedded cache smoke suite.
+defaults:
+  verify_reads: true
+  require_remote_read: false
+  require_read_path_proof: true
+  direct_cache_disk_probe: true
+  require_direct_cache_disk_probe: false
+  worker_dd_reads: true
+  sandbox_dd_reads: true
+  cleanup_cache_before_run: true
+  cleanup_cache_after_run: true
+  reset_workers_after_prepare: true
+  min_hot_file_read_mbps: 0
+  min_remote_cache_socket_mbps: 0
+  min_throughput_size_mb: 1024
+scenarios:
+  - name: volume-smoke-sequential-32
+    access: volume_mount
+    operation: read
+    pattern: sequential
+    size_mib: 32
+    cache_state: strict_disk
+    probes: [sandbox_read, worker_dd, sandbox_dd, cache_path]
+  - name: workspace-smoke-sequential-32
+    access: workspace_fuse
+    operation: read
+    pattern: sequential
+    size_mib: 32
+    cache_state: strict_disk
+    probes: [sandbox_read, worker_dd, sandbox_dd, cache_path]

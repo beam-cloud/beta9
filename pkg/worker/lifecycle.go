@@ -58,10 +58,10 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 			ID:          types.ContainerEventWorkerStopEventReceived,
 			ContainerID: stopArgs.ContainerId,
 			Reason:      string(reason),
-			Source:      "worker.event_bus",
-			Message:     "worker received stop event",
+			Source:      types.EventSourceWorkerEventBus.String(),
+			Message:     types.EventMessageWorkerStopEventReceived.String(),
 			Attrs: map[string]string{
-				"force": fmt.Sprintf("%t", stopArgs.Force),
+				types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
 			},
 		})
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
@@ -253,7 +253,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		Address:     hostname,
 	}))
 	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseSetWorkerAddress, phaseStart, err == nil, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, phaseStart, err == nil, nil)
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 	metrics.RecordWorkerStartupPhase("port_allocation", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
-	s.recordStartupPhase(ctx, request, types.ContainerPhasePortAllocation, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecyclePortAllocation, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
 
 	// Read spec from bundle; guard against empty image IDs
 	if request.ImageId == "" {
@@ -316,7 +316,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	phaseStart = time.Now()
 	initialBundleSpec, _ := s.readBundleConfig(request)
 	metrics.RecordWorkerStartupPhase("read_bundle_config", time.Since(phaseStart), request, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseReadBundleConfig, phaseStart, true, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleReadBundleConfig, phaseStart, true, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
 
 	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
@@ -334,7 +334,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		"mount_count": fmt.Sprintf("%d", len(request.Mounts)),
 		"success":     fmt.Sprintf("%t", err == nil),
 	})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
@@ -343,7 +343,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	phaseStart = time.Now()
 	spec, err := s.specFromRequest(request, opts)
 	metrics.RecordWorkerStartupPhase("spec_from_request", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseSpecFromRequest, phaseStart, err == nil, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSpecFromRequest, phaseStart, err == nil, nil)
 	if err != nil {
 		return err
 	}
@@ -359,7 +359,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			Address:     containerAddr,
 		}))
 		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
-		s.recordStartupPhase(ctx, request, types.ContainerPhaseSetContainerAddr, phaseStart, err == nil, nil)
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, phaseStart, err == nil, nil)
 		if err != nil {
 			return err
 		}
@@ -376,7 +376,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		AddressMap:  addressMap,
 	}))
 	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
 	if err != nil {
 		return err
 	}
@@ -437,14 +437,14 @@ func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.Contain
 	phaseStart := time.Now()
 	elapsed, err := s.imageClient.PullLazy(ctx, request)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	spanID := types.ContainerPhaseImageLoad
+	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
-		spanID = types.ContainerPhaseID("image." + phase)
+		spanID = types.ContainerLifecycleID("image." + phase)
 	}
-	s.recordContainerPhase(ctx, request, containerPhaseFromDuration(spanID, request, phaseStart, time.Since(phaseStart), err == nil, map[string]string{
-		"phase":       phase,
-		"image_id":    request.ImageId,
-		"elapsed_raw": elapsed.String(),
+	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(spanID, request, phaseStart, time.Since(phaseStart), err == nil, map[string]string{
+		types.EventAttrLifecycle: phase,
+		"image_id":               request.ImageId,
+		"elapsed_raw":            elapsed.String(),
 	}))
 	return elapsed, err
 }
@@ -905,7 +905,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseOverlaySetup, phaseStart, err == nil, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleOverlaySetup, phaseStart, err == nil, nil)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -919,7 +919,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	phaseStart = time.Now()
 	err = s.containerNetworkManager.Setup(containerId, spec, request)
 	metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseNetworkSetup, phaseStart, err == nil, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, phaseStart, err == nil, nil)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
@@ -931,7 +931,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		phaseStart = time.Now()
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-		s.recordStartupPhase(ctx, request, types.ContainerPhaseGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
 			return
@@ -967,7 +967,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
 			"success":    "false",
 		})
-		s.recordStartupPhase(ctx, request, types.ContainerPhaseNetworkExpose, phaseStart, false, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, false, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 		return
 	}
@@ -975,7 +975,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
 		"success":    "true",
 	})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -1027,7 +1027,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			"runtime": s.runtime.Name(),
 			"success": "false",
 		})
-		s.recordStartupPhase(ctx, request, types.ContainerPhaseRuntimePrepare, phaseStart, false, map[string]string{"runtime": s.runtime.Name()})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, false, map[string]string{"runtime": s.runtime.Name()})
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
 	}
@@ -1035,7 +1035,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"runtime": s.runtime.Name(),
 		"success": "true",
 	})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseRuntimePrepare, phaseStart, true, map[string]string{"runtime": s.runtime.Name()})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, true, map[string]string{"runtime": s.runtime.Name()})
 
 	// Write container config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -1047,7 +1047,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	phaseStart = time.Now()
 	err = os.WriteFile(configPath, configContents, 0644)
 	metrics.RecordWorkerStartupPhase("config_write", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseConfigWrite, phaseStart, err == nil, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleConfigWrite, phaseStart, err == nil, nil)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to write container config: %v", err)
 		return
@@ -1058,8 +1058,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
-	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
 
 	phaseStart = time.Now()
 	releaseStartupSlot := func() {}
@@ -1076,7 +1074,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
 		"limit": fmt.Sprintf("%d", s.containerStartLimit),
 	})
-	s.recordStartupPhase(ctx, request, types.ContainerPhaseStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
@@ -1156,14 +1154,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		ID:          types.ContainerEventRuntimeExited,
 		ContainerID: containerId,
 		Reason:      eventStopReason(stopReason),
-		Source:      "worker.runtime",
-		Message:     "runtime process exited",
+		Source:      types.EventSourceWorkerRuntime.String(),
+		Message:     types.EventMessageRuntimeExited.String(),
 		Attrs: map[string]string{
-			"raw_exit_code":    fmt.Sprintf("%d", rawExitCode),
-			"mapped_exit_code": fmt.Sprintf("%d", exitCode),
-			"oom_killed":       fmt.Sprintf("%t", isOOMKilled.Load()),
-			"exit_reason":      exitReason,
-			"stop_reason":      string(stopReason),
+			types.EventAttrRawExitCode:    fmt.Sprintf("%d", rawExitCode),
+			types.EventAttrMappedExitCode: fmt.Sprintf("%d", exitCode),
+			types.EventAttrOOMKilled:      fmt.Sprintf("%t", isOOMKilled.Load()),
+			types.EventAttrExitReason:     exitReason,
+			types.EventAttrReason:         string(stopReason),
 		},
 	})
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
@@ -1296,7 +1294,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
 			"runtime": instance.Runtime.Name(),
 		})
-		s.recordContainerPhase(ctx, request, containerPhaseFromDuration(types.ContainerPhaseRuntimeStartToPID, request, runtimeStart, time.Since(runtimeStart), true, map[string]string{
+		s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleRuntimeStartToPID, request, runtimeStart, time.Since(runtimeStart), true, map[string]string{
 			"runtime": instance.Runtime.Name(),
 			"pid":     fmt.Sprintf("%d", pid),
 		}))
@@ -1357,7 +1355,7 @@ func (s *Worker) markContainerRunning(ctx context.Context, request *types.Contai
 	if !startupStartedAt.IsZero() {
 		startupLatency := time.Since(startupStartedAt)
 		metrics.RecordWorkerStartupLatency(startupLatency, request)
-		s.recordContainerPhase(ctx, request, containerPhaseFromDuration(types.ContainerPhaseStartup, request, startupStartedAt, startupLatency, true, map[string]string{
+		s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleStartup, request, startupStartedAt, startupLatency, true, map[string]string{
 			"status": string(types.ContainerStatusRunning),
 		}))
 	}

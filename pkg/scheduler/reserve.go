@@ -43,7 +43,7 @@ func (a *schedulingAttempt) run() {
 func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 	selectionStart := time.Now()
 	worker, err := a.scheduler.selectWorkerFromWorkers(a.workers, a.request)
-	a.scheduler.recordContainerPhase(a.request, types.ContainerPhaseSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
 	})
 	if err != nil || worker == nil {
@@ -72,7 +72,7 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 	reservationStart := time.Now()
 	reserved := a.scheduler.provisioning.reserveCapacity(a.scheduler, a.workers, a.request)
-	a.scheduler.recordContainerPhase(a.request, types.ContainerPhaseSchedulerReservation, reservationStart, time.Now(), reserved, map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerReservation, reservationStart, time.Now(), reserved, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
 	})
 	if !reserved {
@@ -145,7 +145,7 @@ func (a *schedulingAttempt) recordBacklogWait(success bool, reason string) {
 		return
 	}
 
-	a.scheduler.recordContainerPhase(a.request, types.ContainerPhaseSchedulerBacklogWait, a.request.Timestamp, time.Now(), success, map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerBacklogWait, a.request.Timestamp, time.Now(), success, map[string]string{
 		"reason":      reason,
 		"retry_count": fmt.Sprintf("%d", a.request.RetryCount),
 	})
@@ -193,7 +193,7 @@ func (a *workerProvisioningAttempt) run() {
 			a.scheduler.workerMemoryForRequest(a.request),
 			a.scheduler.workerGPUCountForRequest(a.request),
 		)
-		a.scheduler.recordContainerPhase(a.request, types.ContainerPhaseSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
+		a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
 			"pool_name": controller.Name(),
 		})
 		if err != nil {

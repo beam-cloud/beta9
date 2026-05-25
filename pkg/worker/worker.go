@@ -461,7 +461,7 @@ containerRequestStream:
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
 				if !request.Timestamp.IsZero() {
-					s.recordContainerPhase(s.ctx, request, containerPhaseFromDuration(types.ContainerPhaseWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
+					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
 						"worker_id": s.workerId,
 					}))
 				}
@@ -702,8 +702,8 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 				ID:          types.ContainerEventWorkerOrphanStateMissing,
 				ContainerID: request.ContainerId,
 				Reason:      string(types.StopContainerReasonUnknown),
-				Source:      "worker.status_heartbeat",
-				Message:     "container state was missing during worker heartbeat",
+				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+				Message:     types.EventMessageWorkerOrphanStateMissing.String(),
 			})
 			return true, nil
 		}
@@ -730,10 +730,10 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
 				ID:          types.ContainerEventWorkerPendingReconciled,
 				ContainerID: request.ContainerId,
-				Source:      "worker.status_heartbeat",
-				Message:     "pending state reconciled to running after runtime start",
+				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+				Message:     types.EventMessagePendingReconciledRunning.String(),
 				Attrs: map[string]string{
-					"runtime_pid": fmt.Sprintf("%d", instance.RuntimePid),
+					types.EventAttrRuntimePID: fmt.Sprintf("%d", instance.RuntimePid),
 				},
 			})
 			state.Status = string(types.ContainerStatusRunning)
@@ -767,10 +767,10 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 				ID:          types.ContainerEventWorkerStoppingGraceKill,
 				ContainerID: request.ContainerId,
 				Reason:      string(instance.StopReason),
-				Source:      "worker.status_heartbeat",
-				Message:     "container exceeded stopping grace period and will be force killed",
+				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+				Message:     types.EventMessageStoppingGraceKill.String(),
 				Attrs: map[string]string{
-					"grace_period_seconds": fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
 				},
 			})
 			s.stopContainerChan <- stopContainerEvent{

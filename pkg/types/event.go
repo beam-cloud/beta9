@@ -24,21 +24,8 @@ var (
 	EventTaskCreated = "task.created"
 	EventStubState   = "stub.state.%s" // healthy, degraded, warning
 
-	/*
-		TODO: Requires updates
-		stub.ran
-		stub.deployed
-		stub.served
-
-		container.lifecycle.updated
-		worker.lifecycle.updated
-
-		Need to update logic the locations that use these events
-	*/
-
 	EventContainerLifecycle = "container.lifecycle"
 	EventContainerMetrics   = "container.metrics"
-	EventContainerPhase     = "container.phase"
 	EventContainerEvent     = "container.event"
 	EventContainerLog       = "container.log"
 	EventWorkerLifecycle    = "worker.lifecycle"
@@ -54,41 +41,12 @@ var (
 )
 
 var (
-	EventContainerLifecycleRequested = "requested"
-	EventContainerLifecycleScheduled = "scheduled"
-	EventContainerLifecycleStarted   = "started"
-	EventContainerLifecycleStopped   = "stopped"
-	EventContainerLifecycleOOM       = "oom"
-	EventContainerLifecycleFailed    = "failed"
-)
-
-var (
 	EventWorkerLifecycleStarted = "started"
 	EventWorkerLifecycleStopped = "stopped"
 	EventWorkerLifecycleDeleted = "deleted"
 )
 
 // Schema versions should be in ISO 8601 format
-
-var EventContainerLifecycleSchemaVersion = "1.1"
-
-type EventContainerLifecycleSchema struct {
-	ContainerID string           `json:"container_id"`
-	WorkerID    string           `json:"worker_id"`
-	WorkspaceID string           `json:"workspace_id,omitempty"`
-	StubID      string           `json:"stub_id"`
-	StubType    string           `json:"stub_type,omitempty"`
-	TaskID      string           `json:"task_id,omitempty"`
-	Status      string           `json:"status"`
-	Request     ContainerRequest `json:"request"`
-}
-
-var EventContainerStoppedSchemaVersion = "1.0"
-
-type EventContainerStoppedSchema struct {
-	EventContainerLifecycleSchema
-	ExitCode int `json:"exit_code"`
-}
 
 var EventContainerMetricsSchemaVersion = "1.0"
 
@@ -118,18 +76,6 @@ type EventContainerMetricsData struct {
 	GPUMemoryUsed      uint64  `json:"gpu_memory_used_bytes"`
 	GPUMemoryTotal     uint64  `json:"gpu_memory_total_bytes"`
 	GPUType            string  `json:"gpu_type"`
-}
-
-var EventContainerStatusRequestedSchemaVersion = "1.1"
-
-type EventContainerStatusRequestedSchema struct {
-	ContainerID string           `json:"container_id"`
-	WorkspaceID string           `json:"workspace_id,omitempty"`
-	Request     ContainerRequest `json:"request"`
-	StubID      string           `json:"stub_id"`
-	StubType    string           `json:"stub_type,omitempty"`
-	TaskID      string           `json:"task_id,omitempty"`
-	Status      string           `json:"status"`
 }
 
 var EventWorkerLifecycleSchemaVersion = "1.0"
@@ -233,114 +179,245 @@ const (
 	EventDomainAutoscaler EventDomain = "autoscaler"
 )
 
-type ContainerPhaseID string
+type EventSource string
 
 const (
-	ContainerPhaseStartup                     ContainerPhaseID = "container.startup"
-	ContainerPhaseSchedulerQueuePush          ContainerPhaseID = "scheduler.queue_push"
-	ContainerPhaseSchedulerBacklogWait        ContainerPhaseID = "scheduler.backlog_wait"
-	ContainerPhaseSchedulerWorkerSelection    ContainerPhaseID = "scheduler.worker_selection"
-	ContainerPhaseSchedulerReservation        ContainerPhaseID = "scheduler.reservation"
-	ContainerPhaseSchedulerProvisionWorker    ContainerPhaseID = "scheduler.provision_worker"
-	ContainerPhaseWorkerQueueReceive          ContainerPhaseID = "worker.queue_receive"
-	ContainerPhaseImageLoad                   ContainerPhaseID = "image.load"
-	ContainerPhaseSetWorkerAddress            ContainerPhaseID = "worker.set_worker_address"
-	ContainerPhasePortAllocation              ContainerPhaseID = "worker.port_allocation"
-	ContainerPhaseReadBundleConfig            ContainerPhaseID = "worker.read_bundle_config"
-	ContainerPhaseSetupMounts                 ContainerPhaseID = "mount.setup"
-	ContainerPhaseSpecFromRequest             ContainerPhaseID = "worker.spec_from_request"
-	ContainerPhaseSetContainerAddr            ContainerPhaseID = "worker.set_container_address"
-	ContainerPhaseSetAddressMap               ContainerPhaseID = "worker.set_address_map"
-	ContainerPhaseOverlaySetup                ContainerPhaseID = "mount.overlay_setup"
-	ContainerPhaseNetworkSetup                ContainerPhaseID = "network.setup"
-	ContainerPhaseGPUAssignment               ContainerPhaseID = "worker.gpu_assignment"
-	ContainerPhaseNetworkExpose               ContainerPhaseID = "network.expose_ports"
-	ContainerPhaseRuntimePrepare              ContainerPhaseID = "runtime.prepare"
-	ContainerPhaseConfigWrite                 ContainerPhaseID = "runtime.config_write"
-	ContainerPhaseStartQueueWait              ContainerPhaseID = "worker.start_queue_wait"
-	ContainerPhaseRuntimeStartToPID           ContainerPhaseID = "runtime.start_to_pid"
-	ContainerPhaseServeReady                  ContainerPhaseID = "serve.ready"
-	ContainerPhaseResultDelivery              ContainerPhaseID = "result.delivery"
-	ContainerPhaseContainerRequestToStartTask ContainerPhaseID = "function.container_request_to_start_task"
-	ContainerPhaseContainerRunningToStartTask ContainerPhaseID = "container.running_to_start_task"
-	ContainerPhaseRunnerStartToGetArgs        ContainerPhaseID = "runner.start_task_to_get_args"
-	ContainerPhaseRunnerGetArgsToSetResult    ContainerPhaseID = "runner.get_args_to_set_result"
-	ContainerPhaseRunnerStartToSetResult      ContainerPhaseID = "runner.start_task_to_set_result"
-	ContainerPhaseResultSetToEndTask          ContainerPhaseID = "result.set_result_to_end_task"
-	ContainerPhaseRunnerStartToEndTask        ContainerPhaseID = "runner.start_task_to_end_task"
-	ContainerPhaseRunnerGatewayChannelOpen    ContainerPhaseID = "runner.gateway_channel_open"
-	ContainerPhaseRunnerStartTaskRPC          ContainerPhaseID = "runner.start_task_rpc"
-	ContainerPhaseRunnerGetArgsRPC            ContainerPhaseID = "runner.get_args_rpc"
-	ContainerPhaseRunnerUserCodeImport        ContainerPhaseID = "runner.user_code_import"
-	ContainerPhaseRunnerHandlerExecution      ContainerPhaseID = "runner.handler_execution"
-	ContainerPhaseRunnerSetResultRPC          ContainerPhaseID = "runner.set_result_rpc"
-	ContainerPhaseRunnerEndTaskRPC            ContainerPhaseID = "runner.end_task_rpc"
-	ContainerPhaseClipRead                    ContainerPhaseID = "clip.read"
-	ContainerPhaseClipOCIRead                 ContainerPhaseID = "clip.oci_read"
-	ContainerPhaseClipArchiveRead             ContainerPhaseID = "clip.archive_read"
-	ContainerPhaseClipDiskCacheRead           ContainerPhaseID = "clip.disk_cache_read"
-	ContainerPhaseClipContentCacheRead        ContainerPhaseID = "clip.content_cache_read"
-	ContainerPhaseClipCheckpointRead          ContainerPhaseID = "clip.checkpoint_read"
-	ContainerPhaseClipLayerDecompress         ContainerPhaseID = "clip.layer_decompress"
-	ContainerPhaseClipLayerDecompressWait     ContainerPhaseID = "clip.layer_decompress_wait"
+	EventSourceScheduler                EventSource = "scheduler"
+	EventSourceSchedulerStop            EventSource = "scheduler.stop"
+	EventSourceGatewayAttach            EventSource = "gateway.attach"
+	EventSourceGatewayStartTask         EventSource = "gateway.start_task"
+	EventSourceGatewayEndTask           EventSource = "gateway.end_task"
+	EventSourceGatewayFunctionStream    EventSource = "gateway.function_stream"
+	EventSourceGatewayFunctionGetArgs   EventSource = "gateway.function_get_args"
+	EventSourceGatewayFunctionSetResult EventSource = "gateway.function_set_result"
+	EventSourceGatewayStopTask          EventSource = "gateway.stop_task"
+	EventSourceAPITaskStop              EventSource = "api.task.stop"
+	EventSourceEndpointAutoscaler       EventSource = "endpoint.autoscaler"
+	EventSourceWorkerEventBus           EventSource = "worker.event_bus"
+	EventSourceWorkerLogger             EventSource = "worker.logger"
+	EventSourceWorkerRuntime            EventSource = "worker.runtime"
+	EventSourceWorkerStatusHeartbeat    EventSource = "worker.status_heartbeat"
+	EventSourceRunnerStdout             EventSource = "runner.stdout"
+	EventSourceClipFUSE                 EventSource = "clip.fuse"
 )
 
-type ContainerPhaseDefinition struct {
-	ID       ContainerPhaseID `json:"id"`
-	Domain   EventDomain      `json:"domain"`
-	ParentID ContainerPhaseID `json:"parent_id,omitempty"`
-	Label    string           `json:"label"`
-	Required bool             `json:"required"`
+func (s EventSource) String() string {
+	return string(s)
 }
 
-var ContainerPhaseDefinitions = map[ContainerPhaseID]ContainerPhaseDefinition{
-	ContainerPhaseStartup:                     {ID: ContainerPhaseStartup, Domain: EventDomainRuntime, Label: "Container startup", Required: true},
-	ContainerPhaseSchedulerQueuePush:          {ID: ContainerPhaseSchedulerQueuePush, Domain: EventDomainScheduler, ParentID: ContainerPhaseStartup, Label: "Queue request"},
-	ContainerPhaseSchedulerBacklogWait:        {ID: ContainerPhaseSchedulerBacklogWait, Domain: EventDomainScheduler, ParentID: ContainerPhaseStartup, Label: "Scheduler backlog wait"},
-	ContainerPhaseSchedulerWorkerSelection:    {ID: ContainerPhaseSchedulerWorkerSelection, Domain: EventDomainScheduler, ParentID: ContainerPhaseStartup, Label: "Worker selection"},
-	ContainerPhaseSchedulerReservation:        {ID: ContainerPhaseSchedulerReservation, Domain: EventDomainScheduler, ParentID: ContainerPhaseStartup, Label: "Capacity reservation"},
-	ContainerPhaseSchedulerProvisionWorker:    {ID: ContainerPhaseSchedulerProvisionWorker, Domain: EventDomainScheduler, ParentID: ContainerPhaseStartup, Label: "Worker provisioning"},
-	ContainerPhaseWorkerQueueReceive:          {ID: ContainerPhaseWorkerQueueReceive, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Worker queue receive"},
-	ContainerPhaseImageLoad:                   {ID: ContainerPhaseImageLoad, Domain: EventDomainImage, ParentID: ContainerPhaseStartup, Label: "Image load", Required: true},
-	ContainerPhaseSetWorkerAddress:            {ID: ContainerPhaseSetWorkerAddress, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Set worker address"},
-	ContainerPhasePortAllocation:              {ID: ContainerPhasePortAllocation, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Port allocation"},
-	ContainerPhaseReadBundleConfig:            {ID: ContainerPhaseReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Read bundle config"},
-	ContainerPhaseSetupMounts:                 {ID: ContainerPhaseSetupMounts, Domain: EventDomainMount, ParentID: ContainerPhaseStartup, Label: "Setup mounts"},
-	ContainerPhaseSpecFromRequest:             {ID: ContainerPhaseSpecFromRequest, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Spec from request"},
-	ContainerPhaseSetContainerAddr:            {ID: ContainerPhaseSetContainerAddr, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Set container address"},
-	ContainerPhaseSetAddressMap:               {ID: ContainerPhaseSetAddressMap, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Set address map"},
-	ContainerPhaseOverlaySetup:                {ID: ContainerPhaseOverlaySetup, Domain: EventDomainMount, ParentID: ContainerPhaseStartup, Label: "Overlay setup"},
-	ContainerPhaseNetworkSetup:                {ID: ContainerPhaseNetworkSetup, Domain: EventDomainNetwork, ParentID: ContainerPhaseStartup, Label: "Network setup"},
-	ContainerPhaseGPUAssignment:               {ID: ContainerPhaseGPUAssignment, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "GPU assignment"},
-	ContainerPhaseNetworkExpose:               {ID: ContainerPhaseNetworkExpose, Domain: EventDomainNetwork, ParentID: ContainerPhaseStartup, Label: "Expose ports"},
-	ContainerPhaseRuntimePrepare:              {ID: ContainerPhaseRuntimePrepare, Domain: EventDomainRuntime, ParentID: ContainerPhaseStartup, Label: "Runtime prepare"},
-	ContainerPhaseConfigWrite:                 {ID: ContainerPhaseConfigWrite, Domain: EventDomainRuntime, ParentID: ContainerPhaseStartup, Label: "Config write"},
-	ContainerPhaseStartQueueWait:              {ID: ContainerPhaseStartQueueWait, Domain: EventDomainWorker, ParentID: ContainerPhaseStartup, Label: "Worker start queue wait"},
-	ContainerPhaseRuntimeStartToPID:           {ID: ContainerPhaseRuntimeStartToPID, Domain: EventDomainRuntime, ParentID: ContainerPhaseStartup, Label: "Runtime start to PID", Required: true},
-	ContainerPhaseServeReady:                  {ID: ContainerPhaseServeReady, Domain: EventDomainServe, ParentID: ContainerPhaseStartup, Label: "Serve ready"},
-	ContainerPhaseResultDelivery:              {ID: ContainerPhaseResultDelivery, Domain: EventDomainResult, ParentID: ContainerPhaseStartup, Label: "Result delivery"},
-	ContainerPhaseContainerRequestToStartTask: {ID: ContainerPhaseContainerRequestToStartTask, Domain: EventDomainTask, Label: "Container request to runner start"},
-	ContainerPhaseContainerRunningToStartTask: {ID: ContainerPhaseContainerRunningToStartTask, Domain: EventDomainRunner, Label: "Container running to runner start"},
-	ContainerPhaseRunnerStartToGetArgs:        {ID: ContainerPhaseRunnerStartToGetArgs, Domain: EventDomainRunner, Label: "Runner start to get args"},
-	ContainerPhaseRunnerGetArgsToSetResult:    {ID: ContainerPhaseRunnerGetArgsToSetResult, Domain: EventDomainRunner, Label: "Get args to set result"},
-	ContainerPhaseRunnerStartToSetResult:      {ID: ContainerPhaseRunnerStartToSetResult, Domain: EventDomainRunner, Label: "Runner start to set result"},
-	ContainerPhaseResultSetToEndTask:          {ID: ContainerPhaseResultSetToEndTask, Domain: EventDomainResult, Label: "Set result to end task"},
-	ContainerPhaseRunnerStartToEndTask:        {ID: ContainerPhaseRunnerStartToEndTask, Domain: EventDomainRunner, Label: "Runner start to end task"},
-	ContainerPhaseRunnerGatewayChannelOpen:    {ID: ContainerPhaseRunnerGatewayChannelOpen, Domain: EventDomainRunner, Label: "Open gateway channel"},
-	ContainerPhaseRunnerStartTaskRPC:          {ID: ContainerPhaseRunnerStartTaskRPC, Domain: EventDomainRunner, Label: "StartTask RPC"},
-	ContainerPhaseRunnerGetArgsRPC:            {ID: ContainerPhaseRunnerGetArgsRPC, Domain: EventDomainRunner, Label: "GetArgs RPC"},
-	ContainerPhaseRunnerUserCodeImport:        {ID: ContainerPhaseRunnerUserCodeImport, Domain: EventDomainRunner, Label: "Import user code"},
-	ContainerPhaseRunnerHandlerExecution:      {ID: ContainerPhaseRunnerHandlerExecution, Domain: EventDomainRunner, Label: "Run handler"},
-	ContainerPhaseRunnerSetResultRPC:          {ID: ContainerPhaseRunnerSetResultRPC, Domain: EventDomainRunner, Label: "SetResult RPC"},
-	ContainerPhaseRunnerEndTaskRPC:            {ID: ContainerPhaseRunnerEndTaskRPC, Domain: EventDomainRunner, Label: "EndTask RPC"},
-	ContainerPhaseClipRead:                    {ID: ContainerPhaseClipRead, Domain: EventDomainClip, Label: "CLIP lazy read"},
-	ContainerPhaseClipOCIRead:                 {ID: ContainerPhaseClipOCIRead, Domain: EventDomainClip, Label: "CLIP OCI lazy read"},
-	ContainerPhaseClipArchiveRead:             {ID: ContainerPhaseClipArchiveRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP archive read"},
-	ContainerPhaseClipDiskCacheRead:           {ID: ContainerPhaseClipDiskCacheRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP disk cache read"},
-	ContainerPhaseClipContentCacheRead:        {ID: ContainerPhaseClipContentCacheRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP content cache read"},
-	ContainerPhaseClipCheckpointRead:          {ID: ContainerPhaseClipCheckpointRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP checkpoint read"},
-	ContainerPhaseClipLayerDecompress:         {ID: ContainerPhaseClipLayerDecompress, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP layer decompress"},
-	ContainerPhaseClipLayerDecompressWait:     {ID: ContainerPhaseClipLayerDecompressWait, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP layer decompress wait"},
+type EventMessage string
+
+const (
+	EventMessageSchedulerStopRequested         EventMessage = "scheduler received stop request"
+	EventMessageAttachStreamEnded              EventMessage = "container stream ended during attach"
+	EventMessageAttachClientDisconnected       EventMessage = "client attach stream disconnected"
+	EventMessageServeLockPreserved             EventMessage = "attach stream ended without deleting serve lock"
+	EventMessageAutoscalerScaleDecision        EventMessage = "endpoint autoscaler selected desired container count"
+	EventMessageRunnerCalledStartTask          EventMessage = "runner called start_task"
+	EventMessageRunnerLoadedFunctionArgs       EventMessage = "runner loaded function args"
+	EventMessageFunctionResultStored           EventMessage = "function result stored in redis"
+	EventMessageFunctionResultLoadedByGateway  EventMessage = "function result loaded by gateway"
+	EventMessageFunctionResultSentToClient     EventMessage = "function result sent to client"
+	EventMessageFunctionStreamCancelRequested  EventMessage = "function stream client disconnected before completion"
+	EventMessageFunctionStreamCancelApplied    EventMessage = "function stream cancellation applied"
+	EventMessageTaskEndStatePersisted          EventMessage = "task end state persisted"
+	EventMessageGatewayTaskStopRequested       EventMessage = "gateway task stop requested"
+	EventMessageGatewayTaskCancellationApplied EventMessage = "gateway task cancellation applied"
+	EventMessageHTTPTaskStopRequested          EventMessage = "HTTP task cancellation requested"
+	EventMessageHTTPTaskCancellationApplied    EventMessage = "HTTP task cancellation applied"
+	EventMessageLogCaptureFlushed              EventMessage = "container log capture flushed"
+	EventMessageLogBufferDroppedRateLimit      EventMessage = "container log buffer dropped a rate limit message"
+	EventMessageLogBufferDroppedMessage        EventMessage = "container log buffer dropped a message"
+	EventMessageLogBufferDroppedRawMessage     EventMessage = "container log buffer dropped a raw message"
+	EventMessageLogCaptureReceivedFirstByte    EventMessage = "container log capture received first byte"
+	EventMessageLogCaptureReceivedFinalByte    EventMessage = "container log capture received final byte"
+	EventMessageWorkerStopEventReceived        EventMessage = "worker received stop event"
+	EventMessageWorkerOrphanStateMissing       EventMessage = "container state was missing during worker heartbeat"
+	EventMessagePendingReconciledRunning       EventMessage = "pending state reconciled to running after runtime start"
+	EventMessageStoppingGraceKill              EventMessage = "container exceeded stopping grace period and will be force killed"
+	EventMessageRuntimeExited                  EventMessage = "runtime process exited"
+	EventMessageRuntimeOOMKilled               EventMessage = "runtime process was oom killed"
+)
+
+func (m EventMessage) String() string {
+	return string(m)
+}
+
+const (
+	EventAttrBytes              = "bytes"
+	EventAttrCause              = "cause"
+	EventAttrContainerID        = "container_id"
+	EventAttrContainerStatus    = "container_status"
+	EventAttrCurrentContainers  = "current_containers"
+	EventAttrDesiredContainers  = "desired_containers"
+	EventAttrExitCode           = "exit_code"
+	EventAttrError              = "error"
+	EventAttrForce              = "force"
+	EventAttrGracePeriodSeconds = "grace_period_seconds"
+	EventAttrLifecycle          = "lifecycle"
+	EventAttrLockKey            = "lock_key"
+	EventAttrPreviousStatus     = "previous_status"
+	EventAttrMappedExitCode     = "mapped_exit_code"
+	EventAttrOOMKilled          = "oom_killed"
+	EventAttrRawExitCode        = "raw_exit_code"
+	EventAttrReason             = "reason"
+	EventAttrRuntime            = "runtime"
+	EventAttrRuntimePID         = "runtime_pid"
+	EventAttrExitReason         = "exit_reason"
+	EventAttrSource             = "source"
+	EventAttrStatus             = "status"
+	EventAttrTaskID             = "task_id"
+	EventAttrTimeoutSeconds     = "timeout_seconds"
+	EventAttrTotalRequests      = "total_requests"
+)
+
+const (
+	EventCauseClientContextDone = "client_context_done"
+	EventLogStreamStdout        = "stdout"
+	EventStreamSourceContainer  = "container_stream"
+	EventStreamSourceClient     = "client_stream"
+	RunnerEventTypeLifecycle    = "lifecycle"
+	RunnerEventTypeEvent        = "event"
+)
+
+type ContainerEventOptions struct {
+	Source  EventSource
+	Message EventMessage
+	Reason  string
+	TaskID  string
+	Attrs   map[string]string
+}
+
+type ContainerLifecycleOptions struct {
+	Source EventSource
+	TaskID string
+	Attrs  map[string]string
+}
+
+type ContainerRunnerEvent struct {
+	Type        string            `json:"type"`
+	ID          string            `json:"id"`
+	Timestamp   string            `json:"timestamp"`
+	StartTime   string            `json:"start_time"`
+	EndTime     string            `json:"end_time"`
+	DurationMs  int64             `json:"duration_ms"`
+	Success     *bool             `json:"success"`
+	ContainerID string            `json:"container_id"`
+	StubID      string            `json:"stub_id"`
+	StubType    string            `json:"stub_type"`
+	TaskID      string            `json:"task_id"`
+	Message     string            `json:"message"`
+	Attrs       map[string]string `json:"attrs"`
+}
+
+type ContainerLifecycleID string
+
+const (
+	ContainerLifecycleStartup                     ContainerLifecycleID = "container.startup"
+	ContainerLifecycleSchedulerQueuePush          ContainerLifecycleID = "scheduler.queue_push"
+	ContainerLifecycleSchedulerBacklogWait        ContainerLifecycleID = "scheduler.backlog_wait"
+	ContainerLifecycleSchedulerWorkerSelection    ContainerLifecycleID = "scheduler.worker_selection"
+	ContainerLifecycleSchedulerReservation        ContainerLifecycleID = "scheduler.reservation"
+	ContainerLifecycleSchedulerProvisionWorker    ContainerLifecycleID = "scheduler.provision_worker"
+	ContainerLifecycleWorkerQueueReceive          ContainerLifecycleID = "worker.queue_receive"
+	ContainerLifecycleImageLoad                   ContainerLifecycleID = "image.load"
+	ContainerLifecycleSetWorkerAddress            ContainerLifecycleID = "worker.set_worker_address"
+	ContainerLifecyclePortAllocation              ContainerLifecycleID = "worker.port_allocation"
+	ContainerLifecycleReadBundleConfig            ContainerLifecycleID = "worker.read_bundle_config"
+	ContainerLifecycleSetupMounts                 ContainerLifecycleID = "mount.setup"
+	ContainerLifecycleSpecFromRequest             ContainerLifecycleID = "worker.spec_from_request"
+	ContainerLifecycleSetContainerAddr            ContainerLifecycleID = "worker.set_container_address"
+	ContainerLifecycleSetAddressMap               ContainerLifecycleID = "worker.set_address_map"
+	ContainerLifecycleOverlaySetup                ContainerLifecycleID = "mount.overlay_setup"
+	ContainerLifecycleNetworkSetup                ContainerLifecycleID = "network.setup"
+	ContainerLifecycleGPUAssignment               ContainerLifecycleID = "worker.gpu_assignment"
+	ContainerLifecycleNetworkExpose               ContainerLifecycleID = "network.expose_ports"
+	ContainerLifecycleRuntimePrepare              ContainerLifecycleID = "runtime.prepare"
+	ContainerLifecycleConfigWrite                 ContainerLifecycleID = "runtime.config_write"
+	ContainerLifecycleStartQueueWait              ContainerLifecycleID = "worker.start_queue_wait"
+	ContainerLifecycleRuntimeStartToPID           ContainerLifecycleID = "runtime.start_to_pid"
+	ContainerLifecycleServeReady                  ContainerLifecycleID = "serve.ready"
+	ContainerLifecycleResultDelivery              ContainerLifecycleID = "result.delivery"
+	ContainerLifecycleContainerRequestToStartTask ContainerLifecycleID = "function.container_request_to_start_task"
+	ContainerLifecycleContainerRunningToStartTask ContainerLifecycleID = "container.running_to_start_task"
+	ContainerLifecycleRunnerStartToGetArgs        ContainerLifecycleID = "runner.start_task_to_get_args"
+	ContainerLifecycleRunnerGetArgsToSetResult    ContainerLifecycleID = "runner.get_args_to_set_result"
+	ContainerLifecycleRunnerStartToSetResult      ContainerLifecycleID = "runner.start_task_to_set_result"
+	ContainerLifecycleResultSetToEndTask          ContainerLifecycleID = "result.set_result_to_end_task"
+	ContainerLifecycleRunnerStartToEndTask        ContainerLifecycleID = "runner.start_task_to_end_task"
+	ContainerLifecycleRunnerGatewayChannelOpen    ContainerLifecycleID = "runner.gateway_channel_open"
+	ContainerLifecycleRunnerStartTaskRPC          ContainerLifecycleID = "runner.start_task_rpc"
+	ContainerLifecycleRunnerGetArgsRPC            ContainerLifecycleID = "runner.get_args_rpc"
+	ContainerLifecycleRunnerUserCodeImport        ContainerLifecycleID = "runner.user_code_import"
+	ContainerLifecycleRunnerHandlerExecution      ContainerLifecycleID = "runner.handler_execution"
+	ContainerLifecycleRunnerSetResultRPC          ContainerLifecycleID = "runner.set_result_rpc"
+	ContainerLifecycleRunnerEndTaskRPC            ContainerLifecycleID = "runner.end_task_rpc"
+	ContainerLifecycleClipRead                    ContainerLifecycleID = "clip.read"
+	ContainerLifecycleClipOCIRead                 ContainerLifecycleID = "clip.oci_read"
+	ContainerLifecycleClipArchiveRead             ContainerLifecycleID = "clip.archive_read"
+	ContainerLifecycleClipDiskCacheRead           ContainerLifecycleID = "clip.disk_cache_read"
+	ContainerLifecycleClipContentCacheRead        ContainerLifecycleID = "clip.content_cache_read"
+	ContainerLifecycleClipCheckpointRead          ContainerLifecycleID = "clip.checkpoint_read"
+	ContainerLifecycleClipLayerDecompress         ContainerLifecycleID = "clip.layer_decompress"
+	ContainerLifecycleClipLayerDecompressWait     ContainerLifecycleID = "clip.layer_decompress_wait"
+)
+
+type ContainerLifecycleDefinition struct {
+	ID       ContainerLifecycleID `json:"id"`
+	Domain   EventDomain          `json:"domain"`
+	ParentID ContainerLifecycleID `json:"parent_id,omitempty"`
+	Label    string               `json:"label"`
+	Required bool                 `json:"required"`
+}
+
+var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleDefinition{
+	ContainerLifecycleStartup:                     {ID: ContainerLifecycleStartup, Domain: EventDomainRuntime, Label: "Container startup", Required: true},
+	ContainerLifecycleSchedulerQueuePush:          {ID: ContainerLifecycleSchedulerQueuePush, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Queue request"},
+	ContainerLifecycleSchedulerBacklogWait:        {ID: ContainerLifecycleSchedulerBacklogWait, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Scheduler backlog wait"},
+	ContainerLifecycleSchedulerWorkerSelection:    {ID: ContainerLifecycleSchedulerWorkerSelection, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker selection"},
+	ContainerLifecycleSchedulerReservation:        {ID: ContainerLifecycleSchedulerReservation, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Capacity reservation"},
+	ContainerLifecycleSchedulerProvisionWorker:    {ID: ContainerLifecycleSchedulerProvisionWorker, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker provisioning"},
+	ContainerLifecycleWorkerQueueReceive:          {ID: ContainerLifecycleWorkerQueueReceive, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker queue receive"},
+	ContainerLifecycleImageLoad:                   {ID: ContainerLifecycleImageLoad, Domain: EventDomainImage, ParentID: ContainerLifecycleStartup, Label: "Image load", Required: true},
+	ContainerLifecycleSetWorkerAddress:            {ID: ContainerLifecycleSetWorkerAddress, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set worker address"},
+	ContainerLifecyclePortAllocation:              {ID: ContainerLifecyclePortAllocation, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Port allocation"},
+	ContainerLifecycleReadBundleConfig:            {ID: ContainerLifecycleReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Read bundle config"},
+	ContainerLifecycleSetupMounts:                 {ID: ContainerLifecycleSetupMounts, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Setup mounts"},
+	ContainerLifecycleSpecFromRequest:             {ID: ContainerLifecycleSpecFromRequest, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Spec from request"},
+	ContainerLifecycleSetContainerAddr:            {ID: ContainerLifecycleSetContainerAddr, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set container address"},
+	ContainerLifecycleSetAddressMap:               {ID: ContainerLifecycleSetAddressMap, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set address map"},
+	ContainerLifecycleOverlaySetup:                {ID: ContainerLifecycleOverlaySetup, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Overlay setup"},
+	ContainerLifecycleNetworkSetup:                {ID: ContainerLifecycleNetworkSetup, Domain: EventDomainNetwork, ParentID: ContainerLifecycleStartup, Label: "Network setup"},
+	ContainerLifecycleGPUAssignment:               {ID: ContainerLifecycleGPUAssignment, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "GPU assignment"},
+	ContainerLifecycleNetworkExpose:               {ID: ContainerLifecycleNetworkExpose, Domain: EventDomainNetwork, ParentID: ContainerLifecycleStartup, Label: "Expose ports"},
+	ContainerLifecycleRuntimePrepare:              {ID: ContainerLifecycleRuntimePrepare, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime prepare"},
+	ContainerLifecycleConfigWrite:                 {ID: ContainerLifecycleConfigWrite, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Config write"},
+	ContainerLifecycleStartQueueWait:              {ID: ContainerLifecycleStartQueueWait, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker start queue wait"},
+	ContainerLifecycleRuntimeStartToPID:           {ID: ContainerLifecycleRuntimeStartToPID, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime start to PID", Required: true},
+	ContainerLifecycleServeReady:                  {ID: ContainerLifecycleServeReady, Domain: EventDomainServe, ParentID: ContainerLifecycleStartup, Label: "Serve ready"},
+	ContainerLifecycleResultDelivery:              {ID: ContainerLifecycleResultDelivery, Domain: EventDomainResult, ParentID: ContainerLifecycleStartup, Label: "Result delivery"},
+	ContainerLifecycleContainerRequestToStartTask: {ID: ContainerLifecycleContainerRequestToStartTask, Domain: EventDomainTask, Label: "Container request to runner start"},
+	ContainerLifecycleContainerRunningToStartTask: {ID: ContainerLifecycleContainerRunningToStartTask, Domain: EventDomainRunner, Label: "Container running to runner start"},
+	ContainerLifecycleRunnerStartToGetArgs:        {ID: ContainerLifecycleRunnerStartToGetArgs, Domain: EventDomainRunner, Label: "Runner start to get args"},
+	ContainerLifecycleRunnerGetArgsToSetResult:    {ID: ContainerLifecycleRunnerGetArgsToSetResult, Domain: EventDomainRunner, Label: "Get args to set result"},
+	ContainerLifecycleRunnerStartToSetResult:      {ID: ContainerLifecycleRunnerStartToSetResult, Domain: EventDomainRunner, Label: "Runner start to set result"},
+	ContainerLifecycleResultSetToEndTask:          {ID: ContainerLifecycleResultSetToEndTask, Domain: EventDomainResult, Label: "Set result to end task"},
+	ContainerLifecycleRunnerStartToEndTask:        {ID: ContainerLifecycleRunnerStartToEndTask, Domain: EventDomainRunner, Label: "Runner start to end task"},
+	ContainerLifecycleRunnerGatewayChannelOpen:    {ID: ContainerLifecycleRunnerGatewayChannelOpen, Domain: EventDomainRunner, Label: "Open gateway channel"},
+	ContainerLifecycleRunnerStartTaskRPC:          {ID: ContainerLifecycleRunnerStartTaskRPC, Domain: EventDomainRunner, Label: "StartTask RPC"},
+	ContainerLifecycleRunnerGetArgsRPC:            {ID: ContainerLifecycleRunnerGetArgsRPC, Domain: EventDomainRunner, Label: "GetArgs RPC"},
+	ContainerLifecycleRunnerUserCodeImport:        {ID: ContainerLifecycleRunnerUserCodeImport, Domain: EventDomainRunner, Label: "Import user code"},
+	ContainerLifecycleRunnerHandlerExecution:      {ID: ContainerLifecycleRunnerHandlerExecution, Domain: EventDomainRunner, Label: "Run handler"},
+	ContainerLifecycleRunnerSetResultRPC:          {ID: ContainerLifecycleRunnerSetResultRPC, Domain: EventDomainRunner, Label: "SetResult RPC"},
+	ContainerLifecycleRunnerEndTaskRPC:            {ID: ContainerLifecycleRunnerEndTaskRPC, Domain: EventDomainRunner, Label: "EndTask RPC"},
+	ContainerLifecycleClipRead:                    {ID: ContainerLifecycleClipRead, Domain: EventDomainClip, Label: "CLIP lazy read"},
+	ContainerLifecycleClipOCIRead:                 {ID: ContainerLifecycleClipOCIRead, Domain: EventDomainClip, Label: "CLIP OCI lazy read"},
+	ContainerLifecycleClipArchiveRead:             {ID: ContainerLifecycleClipArchiveRead, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: "CLIP archive read"},
+	ContainerLifecycleClipDiskCacheRead:           {ID: ContainerLifecycleClipDiskCacheRead, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: "CLIP disk cache read"},
+	ContainerLifecycleClipContentCacheRead:        {ID: ContainerLifecycleClipContentCacheRead, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: "CLIP content cache read"},
+	ContainerLifecycleClipCheckpointRead:          {ID: ContainerLifecycleClipCheckpointRead, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: "CLIP checkpoint read"},
+	ContainerLifecycleClipLayerDecompress:         {ID: ContainerLifecycleClipLayerDecompress, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: "CLIP layer decompress"},
+	ContainerLifecycleClipLayerDecompressWait:     {ID: ContainerLifecycleClipLayerDecompressWait, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: "CLIP layer decompress wait"},
 }
 
 type ContainerEventID string
@@ -352,6 +429,7 @@ const (
 	ContainerEventWorkerPendingReconciled   ContainerEventID = "worker.pending_reconciled_running"
 	ContainerEventWorkerStoppingGraceKill   ContainerEventID = "worker.stopping_grace_kill"
 	ContainerEventRuntimeExited             ContainerEventID = "runtime.exited"
+	ContainerEventRuntimeOOMKilled          ContainerEventID = "runtime.oom_killed"
 	ContainerEventGatewayAttachDisconnected ContainerEventID = "gateway.attach_disconnected"
 	ContainerEventGatewayServeLockDeleted   ContainerEventID = "gateway.serve_lock_deleted"
 	ContainerEventGatewayServeLockPreserved ContainerEventID = "gateway.serve_lock_preserved"
@@ -387,6 +465,7 @@ var ContainerEventDefinitions = map[ContainerEventID]ContainerEventDefinition{
 	ContainerEventWorkerPendingReconciled:   {ID: ContainerEventWorkerPendingReconciled, Domain: EventDomainWorker, Label: "Pending reconciled to running"},
 	ContainerEventWorkerStoppingGraceKill:   {ID: ContainerEventWorkerStoppingGraceKill, Domain: EventDomainWorker, Label: "Stopping grace kill"},
 	ContainerEventRuntimeExited:             {ID: ContainerEventRuntimeExited, Domain: EventDomainRuntime, Label: "Runtime exited"},
+	ContainerEventRuntimeOOMKilled:          {ID: ContainerEventRuntimeOOMKilled, Domain: EventDomainRuntime, Label: "Runtime OOM killed"},
 	ContainerEventGatewayAttachDisconnected: {ID: ContainerEventGatewayAttachDisconnected, Domain: EventDomainGateway, Label: "Attach disconnected"},
 	ContainerEventGatewayServeLockDeleted:   {ID: ContainerEventGatewayServeLockDeleted, Domain: EventDomainGateway, Label: "Serve lock deleted"},
 	ContainerEventGatewayServeLockPreserved: {ID: ContainerEventGatewayServeLockPreserved, Domain: EventDomainGateway, Label: "Serve lock preserved"},
@@ -408,24 +487,24 @@ var ContainerEventDefinitions = map[ContainerEventID]ContainerEventDefinition{
 	ContainerEventResultSentToClient:        {ID: ContainerEventResultSentToClient, Domain: EventDomainResult, Label: "Result sent to client"},
 }
 
-var EventContainerPhaseSchemaVersion = "1.0"
+var EventContainerLifecycleSchemaVersion = "1.0"
 
-type EventContainerPhaseSchema struct {
-	ID          ContainerPhaseID  `json:"id"`
-	Domain      EventDomain       `json:"domain"`
-	ParentID    ContainerPhaseID  `json:"parent_id,omitempty"`
-	StartTime   time.Time         `json:"start_time"`
-	EndTime     time.Time         `json:"end_time,omitempty"`
-	DurationMs  int64             `json:"duration_ms,omitempty"`
-	ContainerID string            `json:"container_id,omitempty"`
-	StubID      string            `json:"stub_id,omitempty"`
-	StubType    string            `json:"stub_type,omitempty"`
-	TaskID      string            `json:"task_id,omitempty"`
-	WorkspaceID string            `json:"workspace_id,omitempty"`
-	WorkerID    string            `json:"worker_id,omitempty"`
-	Success     *bool             `json:"success,omitempty"`
-	Source      string            `json:"source,omitempty"`
-	Attrs       map[string]string `json:"attrs,omitempty"`
+type EventContainerLifecycleSchema struct {
+	ID          ContainerLifecycleID `json:"id"`
+	Domain      EventDomain          `json:"domain"`
+	ParentID    ContainerLifecycleID `json:"parent_id,omitempty"`
+	StartTime   time.Time            `json:"start_time"`
+	EndTime     time.Time            `json:"end_time,omitempty"`
+	DurationMs  int64                `json:"duration_ms,omitempty"`
+	ContainerID string               `json:"container_id,omitempty"`
+	StubID      string               `json:"stub_id,omitempty"`
+	StubType    string               `json:"stub_type,omitempty"`
+	TaskID      string               `json:"task_id,omitempty"`
+	WorkspaceID string               `json:"workspace_id,omitempty"`
+	WorkerID    string               `json:"worker_id,omitempty"`
+	Success     *bool                `json:"success,omitempty"`
+	Source      string               `json:"source,omitempty"`
+	Attrs       map[string]string    `json:"attrs,omitempty"`
 }
 
 var EventContainerEventSchemaVersion = "1.0"
@@ -515,17 +594,17 @@ func ContainerEventDomain(id ContainerEventID) EventDomain {
 	return ""
 }
 
-func ContainerPhaseDefinitionFor(id ContainerPhaseID) ContainerPhaseDefinition {
-	if def, ok := ContainerPhaseDefinitions[id]; ok {
+func ContainerLifecycleDefinitionFor(id ContainerLifecycleID) ContainerLifecycleDefinition {
+	if def, ok := ContainerLifecycleDefinitions[id]; ok {
 		return def
 	}
 	if strings.HasPrefix(string(id), "image.") {
-		return ContainerPhaseDefinition{ID: id, Domain: EventDomainImage, ParentID: ContainerPhaseImageLoad, Label: string(id)}
+		return ContainerLifecycleDefinition{ID: id, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: string(id)}
 	}
 	if strings.HasPrefix(string(id), "clip.") {
-		return ContainerPhaseDefinition{ID: id, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: string(id)}
+		return ContainerLifecycleDefinition{ID: id, Domain: EventDomainClip, ParentID: ContainerLifecycleClipRead, Label: string(id)}
 	}
-	return ContainerPhaseDefinition{ID: id}
+	return ContainerLifecycleDefinition{ID: id}
 }
 
 func IsContainerRootCauseCandidate(id ContainerEventID) bool {
@@ -535,6 +614,7 @@ func IsContainerRootCauseCandidate(id ContainerEventID) bool {
 		ContainerEventWorkerOrphanStateMissing,
 		ContainerEventWorkerStoppingGraceKill,
 		ContainerEventRuntimeExited,
+		ContainerEventRuntimeOOMKilled,
 		ContainerEventGatewayServeLockDeleted,
 		ContainerEventTaskCancelRequested,
 		ContainerEventTaskCancelApplied:
@@ -552,71 +632,71 @@ func NormalizeEventReason(reason string) string {
 	return reason
 }
 
-func EventSummaryKeyForPhase(id ContainerPhaseID) string {
+func EventSummaryKeyForLifecycle(id ContainerLifecycleID) string {
 	switch id {
-	case ContainerPhaseSchedulerQueuePush:
+	case ContainerLifecycleSchedulerQueuePush:
 		return "scheduler_queue_push_ms"
-	case ContainerPhaseSchedulerBacklogWait:
+	case ContainerLifecycleSchedulerBacklogWait:
 		return "scheduler_backlog_ms"
-	case ContainerPhaseSchedulerWorkerSelection:
+	case ContainerLifecycleSchedulerWorkerSelection:
 		return "scheduler_worker_selection_ms"
-	case ContainerPhaseSchedulerReservation:
+	case ContainerLifecycleSchedulerReservation:
 		return "scheduler_reservation_ms"
-	case ContainerPhaseSchedulerProvisionWorker:
+	case ContainerLifecycleSchedulerProvisionWorker:
 		return "scheduler_provision_worker_ms"
-	case ContainerPhaseWorkerQueueReceive:
+	case ContainerLifecycleWorkerQueueReceive:
 		return "worker_queue_ms"
-	case ContainerPhaseImageLoad:
+	case ContainerLifecycleImageLoad:
 		return "image_ms"
-	case ContainerPhaseRuntimeStartToPID:
+	case ContainerLifecycleRuntimeStartToPID:
 		return "runtime_start_to_pid_ms"
-	case ContainerPhaseServeReady:
+	case ContainerLifecycleServeReady:
 		return "serve_ready_ms"
-	case ContainerPhaseResultDelivery:
+	case ContainerLifecycleResultDelivery:
 		return "result_ms"
-	case ContainerPhaseContainerRequestToStartTask:
+	case ContainerLifecycleContainerRequestToStartTask:
 		return "container_request_to_start_task_ms"
-	case ContainerPhaseContainerRunningToStartTask:
+	case ContainerLifecycleContainerRunningToStartTask:
 		return "container_running_to_start_task_ms"
-	case ContainerPhaseRunnerStartToGetArgs:
+	case ContainerLifecycleRunnerStartToGetArgs:
 		return "runner_start_to_get_args_ms"
-	case ContainerPhaseRunnerGetArgsToSetResult:
+	case ContainerLifecycleRunnerGetArgsToSetResult:
 		return "runner_get_args_to_set_result_ms"
-	case ContainerPhaseRunnerStartToSetResult:
+	case ContainerLifecycleRunnerStartToSetResult:
 		return "runner_start_to_set_result_ms"
-	case ContainerPhaseResultSetToEndTask:
+	case ContainerLifecycleResultSetToEndTask:
 		return "result_set_to_end_task_ms"
-	case ContainerPhaseRunnerStartToEndTask:
+	case ContainerLifecycleRunnerStartToEndTask:
 		return "runner_start_to_end_task_ms"
-	case ContainerPhaseRunnerGatewayChannelOpen:
+	case ContainerLifecycleRunnerGatewayChannelOpen:
 		return "runner_gateway_channel_open_ms"
-	case ContainerPhaseRunnerStartTaskRPC:
+	case ContainerLifecycleRunnerStartTaskRPC:
 		return "runner_start_task_rpc_ms"
-	case ContainerPhaseRunnerGetArgsRPC:
+	case ContainerLifecycleRunnerGetArgsRPC:
 		return "runner_get_args_rpc_ms"
-	case ContainerPhaseRunnerUserCodeImport:
+	case ContainerLifecycleRunnerUserCodeImport:
 		return "runner_user_code_import_ms"
-	case ContainerPhaseRunnerHandlerExecution:
+	case ContainerLifecycleRunnerHandlerExecution:
 		return "runner_handler_execution_ms"
-	case ContainerPhaseRunnerSetResultRPC:
+	case ContainerLifecycleRunnerSetResultRPC:
 		return "runner_set_result_rpc_ms"
-	case ContainerPhaseRunnerEndTaskRPC:
+	case ContainerLifecycleRunnerEndTaskRPC:
 		return "runner_end_task_rpc_ms"
-	case ContainerPhaseClipRead:
+	case ContainerLifecycleClipRead:
 		return "clip_read_ms"
-	case ContainerPhaseClipOCIRead:
+	case ContainerLifecycleClipOCIRead:
 		return "clip_oci_read_ms"
-	case ContainerPhaseClipArchiveRead:
+	case ContainerLifecycleClipArchiveRead:
 		return "clip_archive_read_ms"
-	case ContainerPhaseClipDiskCacheRead:
+	case ContainerLifecycleClipDiskCacheRead:
 		return "clip_disk_cache_read_ms"
-	case ContainerPhaseClipContentCacheRead:
+	case ContainerLifecycleClipContentCacheRead:
 		return "clip_content_cache_read_ms"
-	case ContainerPhaseClipCheckpointRead:
+	case ContainerLifecycleClipCheckpointRead:
 		return "clip_checkpoint_read_ms"
-	case ContainerPhaseClipLayerDecompress:
+	case ContainerLifecycleClipLayerDecompress:
 		return "clip_layer_decompress_ms"
-	case ContainerPhaseClipLayerDecompressWait:
+	case ContainerLifecycleClipLayerDecompressWait:
 		return "clip_layer_decompress_wait_ms"
 	default:
 		return strings.ReplaceAll(string(id), ".", "_") + "_ms"

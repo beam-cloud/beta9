@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+import configparser
+import os
+from pathlib import Path
+
+from .model import RunConfig
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def normalize_local_host(host: str) -> str:
+    if host in {"", "0.0.0.0", "::"}:
+        return "127.0.0.1"
+    return host
+
+
+def http_url_from_gateway(host: str, port: str) -> str:
+    if host.startswith(("http://", "https://")):
+        return host
+    if port == "1993":
+        return f"http://{host}:1994"
+    if port == "80":
+        return f"http://{host}"
+    if port == "443":
+        return f"https://{host}"
+    return f"http://{host}:{port}"
+
+
+def read_profile(config_path: Path, profile: str) -> tuple[str, str, str]:
+    parser = configparser.ConfigParser()
+    parser.read(config_path.expanduser())
+    if not parser.has_section(profile):
+        return "", "", ""
+    section = parser[profile]
+    return (
+        section.get("token", ""),
+        section.get("gateway_host", ""),
+        section.get("gateway_port", ""),
+    )
+
+
+def parse_scalar(value: str):
+    lowered = value.strip().lower()
+    if lowered in {"true", "yes", "on"}:
+        return True
+    if lowered in {"false", "no", "off"}:
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def parse_key_value(values: list[str]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for value in values:
+        if "=" not in value:
+            raise SystemExit(f"expected KEY=VALUE for --param, got {value!r}")
+        key, raw = value.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise SystemExit(f"empty parameter name in {value!r}")
+        out[key] = parse_scalar(raw)
+    return out
+
+
+def resolve_run_config(args) -> RunConfig:
+    root = repo_root()
+    profile = (
+        args.profile
+        or os.getenv("CACHE_BENCH_PROFILE")
+        or os.getenv("BENCH_PROFILE")
+        or os.getenv("BETA9_PROFILE")
+        or "default"
+    )
+    config_path = Path(
+        args.config
+        or os.getenv("CACHE_BENCH_CONFIG")
+        or os.getenv("BENCH_CONFIG")
+        or os.getenv("CONFIG_PATH")
+        or "~/.beta9/config.ini"
+    ).expanduser()
+
+    config_token = config_host = config_port = ""
+    if config_path.exists():
+        config_token, config_host, config_port = read_profile(config_path, profile)
+
+    token = (
+        args.token
+        or os.getenv("BENCH_TOKEN")
+        or os.getenv("TOKEN")
+        or os.getenv("BETA9_TOKEN")
+        or config_token
+    )
+    grpc_addr = args.grpc_addr or os.getenv("BENCH_GRPC_ADDR")
+    gateway_url = args.gateway_url or os.getenv("BENCH_GATEWAY_URL")
+    if config_host and config_port:
+        host = normalize_local_host(config_host)
+        grpc_addr = grpc_addr or f"{host}:{config_port}"
+        gateway_url = gateway_url or http_url_from_gateway(host, config_port)
+
+    out_dir = Path(args.out_dir or os.getenv("BENCH_OUT_DIR", "")).expanduser()
+    if not str(out_dir):
+        out_dir = Path("/tmp") / f"beta9-bench-{args.command}"
+
+    extra_args = parse_key_value(args.param or [])
+    env_file_plan = os.getenv("CACHE_BENCHMARK_FILE_PLAN") or os.getenv("BENCH_CACHE_FILE_PLAN")
+    if env_file_plan and "file_plan" not in extra_args:
+        extra_args["file_plan"] = env_file_plan
+
+    return RunConfig(
+        root=root,
+        command=args.command,
+        suite_name=args.suite,
+        profile=profile,
+        config_path=config_path,
+        namespace=args.namespace or os.getenv("BENCH_NAMESPACE", "beta9"),
+        gateway_url=gateway_url or "http://127.0.0.1:1994",
+        grpc_addr=grpc_addr or "127.0.0.1:1993",
+        token=token,
+        out_dir=out_dir,
+        dry_run=bool(args.dry_run),
+        extra_args=extra_args,
+        passthrough_args=tuple(args.script_arg or ()),
+    )

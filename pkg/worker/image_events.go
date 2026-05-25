@@ -254,8 +254,8 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		Msg("clip read path summary")
 
 	success := aggregate.success
-	c.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
-		ID:          types.ContainerPhaseClipRead,
+	c.eventRepo.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:          types.ContainerLifecycleClipRead,
 		Domain:      types.EventDomainClip,
 		StartTime:   aggregate.startedAt.UTC(),
 		EndTime:     phaseEnd.UTC(),
@@ -267,13 +267,13 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		WorkspaceID: request.WorkspaceId,
 		WorkerID:    c.workerId,
 		Success:     &success,
-		Source:      "clip.fuse",
+		Source:      types.EventSourceClipFUSE.String(),
 		Attrs:       attrs,
 	})
 }
 
 func isCanonicalClipRead(operation string) bool {
-	return operation == string(types.ContainerPhaseClipRead) || operation == string(types.ContainerPhaseClipOCIRead)
+	return operation == string(types.ContainerLifecycleClipRead) || operation == string(types.ContainerLifecycleClipOCIRead)
 }
 
 func clipReadRollupKey(parts ...string) string {

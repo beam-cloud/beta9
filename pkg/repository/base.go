@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	pkgcommon "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -221,15 +222,19 @@ type TailscaleRepository interface {
 
 type EventRepository interface {
 	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
-	PushContainerRequestedEvent(request *types.ContainerRequest)
-	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
-	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
-	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int)
-	PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
-	PushContainerPhaseEvent(phase types.EventContainerPhaseSchema)
+	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)
 	PushContainerEvent(event types.EventContainerEventSchema)
 	PushContainerLogEvent(entry types.EventContainerLogSchema)
+	PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions)
+	PushContainerRequestLifecycle(workerID string, request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerTaskEvent(task *types.TaskWithRelated, eventID types.ContainerEventID, opts types.ContainerEventOptions)
+	PushContainerFunctionTaskEvent(workspaceID string, task types.TaskInterface, eventID types.ContainerEventID, opts types.ContainerEventOptions)
+	PushContainerTaskLifecycle(task *types.TaskWithRelated, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerFunctionTaskLifecycle(workspaceID string, task types.TaskInterface, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerTaskLifecycleSince(ctx context.Context, rdb *pkgcommon.RedisClient, task *types.TaskWithRelated, lifecycleID types.ContainerLifecycleID, sincePhase string, end time.Time, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerRequestLogLine(workerID string, request *types.ContainerRequest, taskID string, stream string, line string)
+	PushContainerRunnerEvent(workerID string, request *types.ContainerRequest, event *types.ContainerRunnerEvent)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)

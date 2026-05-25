@@ -21,17 +21,17 @@ func (s *Worker) recordContainerEvent(ctx context.Context, request *types.Contai
 	s.eventRepo.PushContainerEvent(event)
 }
 
-func (s *Worker) recordContainerPhase(ctx context.Context, request *types.ContainerRequest, phase types.EventContainerPhaseSchema) {
+func (s *Worker) recordContainerLifecycle(ctx context.Context, request *types.ContainerRequest, lifecycle types.EventContainerLifecycleSchema) {
 	if s.eventRepo == nil {
 		return
 	}
 	if request != nil {
-		populateContainerPhaseFromRequest(&phase, request)
+		populateContainerLifecycleFromRequest(&lifecycle, request)
 	}
-	if phase.WorkerID == "" {
-		phase.WorkerID = s.workerId
+	if lifecycle.WorkerID == "" {
+		lifecycle.WorkerID = s.workerId
 	}
-	s.eventRepo.PushContainerPhaseEvent(phase)
+	s.eventRepo.PushContainerLifecycleEvent(lifecycle)
 }
 
 func populateContainerEventFromRequest(event *types.EventContainerEventSchema, request *types.ContainerRequest) {
@@ -52,21 +52,21 @@ func populateContainerEventFromRequest(event *types.EventContainerEventSchema, r
 	}
 }
 
-func populateContainerPhaseFromRequest(phase *types.EventContainerPhaseSchema, request *types.ContainerRequest) {
-	if phase.ContainerID == "" {
-		phase.ContainerID = request.ContainerId
+func populateContainerLifecycleFromRequest(lifecycle *types.EventContainerLifecycleSchema, request *types.ContainerRequest) {
+	if lifecycle.ContainerID == "" {
+		lifecycle.ContainerID = request.ContainerId
 	}
-	if phase.StubID == "" {
-		phase.StubID = request.StubId
+	if lifecycle.StubID == "" {
+		lifecycle.StubID = request.StubId
 	}
-	if phase.StubType == "" {
-		phase.StubType = string(request.Stub.Type.Kind())
+	if lifecycle.StubType == "" {
+		lifecycle.StubType = string(request.Stub.Type.Kind())
 	}
-	if phase.WorkspaceID == "" {
-		phase.WorkspaceID = request.WorkspaceId
+	if lifecycle.WorkspaceID == "" {
+		lifecycle.WorkspaceID = request.WorkspaceId
 	}
-	if phase.TaskID == "" {
-		phase.TaskID = taskIDFromEnv(request.Env)
+	if lifecycle.TaskID == "" {
+		lifecycle.TaskID = taskIDFromEnv(request.Env)
 	}
 }
 
@@ -79,9 +79,9 @@ func taskIDFromEnv(env []string) string {
 	return ""
 }
 
-func containerPhaseFromDuration(id types.ContainerPhaseID, request *types.ContainerRequest, startedAt time.Time, duration time.Duration, success bool, attrs map[string]string) types.EventContainerPhaseSchema {
+func containerLifecycleFromDuration(id types.ContainerLifecycleID, request *types.ContainerRequest, startedAt time.Time, duration time.Duration, success bool, attrs map[string]string) types.EventContainerLifecycleSchema {
 	endTime := startedAt.Add(duration)
-	phase := types.EventContainerPhaseSchema{
+	lifecycle := types.EventContainerLifecycleSchema{
 		ID:         id,
 		StartTime:  startedAt.UTC(),
 		EndTime:    endTime.UTC(),
@@ -89,19 +89,10 @@ func containerPhaseFromDuration(id types.ContainerPhaseID, request *types.Contai
 		Success:    &success,
 		Attrs:      attrs,
 	}
-	populateContainerPhaseFromRequest(&phase, request)
-	return phase
+	populateContainerLifecycleFromRequest(&lifecycle, request)
+	return lifecycle
 }
 
-func (s *Worker) recordStartupPhase(ctx context.Context, request *types.ContainerRequest, id types.ContainerPhaseID, startedAt time.Time, success bool, attrs map[string]string) {
-	s.recordContainerPhase(ctx, request, containerPhaseFromDuration(id, request, startedAt, time.Since(startedAt), success, attrs))
-}
-
-func recordContainerLogLine(eventRepo interface {
-	PushContainerLogEvent(types.EventContainerLogSchema)
-}, entry types.EventContainerLogSchema) {
-	if eventRepo == nil {
-		return
-	}
-	eventRepo.PushContainerLogEvent(entry)
+func (s *Worker) recordStartupLifecycle(ctx context.Context, request *types.ContainerRequest, id types.ContainerLifecycleID, startedAt time.Time, success bool, attrs map[string]string) {
+	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(id, request, startedAt, time.Since(startedAt), success, attrs))
 }

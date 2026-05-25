@@ -122,12 +122,12 @@ func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscaler
 			StubType:    string(i.Stub.Type.Kind()),
 			WorkspaceID: container.WorkspaceId,
 			Reason:      reason,
-			Source:      "endpoint.autoscaler",
-			Message:     "endpoint autoscaler selected desired container count",
+			Source:      types.EventSourceEndpointAutoscaler.String(),
+			Message:     types.EventMessageAutoscalerScaleDecision.String(),
 			Attrs: map[string]string{
-				"desired_containers": fmt.Sprintf("%d", desiredContainers),
-				"current_containers": fmt.Sprintf("%d", sample.CurrentContainers),
-				"total_requests":     fmt.Sprintf("%d", sample.TotalRequests),
+				types.EventAttrDesiredContainers: fmt.Sprintf("%d", desiredContainers),
+				types.EventAttrCurrentContainers: fmt.Sprintf("%d", sample.CurrentContainers),
+				types.EventAttrTotalRequests:     fmt.Sprintf("%d", sample.TotalRequests),
 			},
 		})
 	}

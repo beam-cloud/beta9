@@ -13,7 +13,7 @@ import (
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	stream := repo.streamNameForEvent(types.EventContainerPhase, eventMetadata{
+	stream := repo.streamNameForEvent(types.EventContainerLifecycle, eventMetadata{
 		WorkspaceID: "workspace-123",
 		StubID:      "stub-456",
 		ContainerID: "container-789",
@@ -27,7 +27,7 @@ func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 func TestS2ContainerScopedEventsDoNotFallbackToNonCanonicalStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	stream := repo.streamNameForEvent(types.EventContainerPhase, eventMetadata{
+	stream := repo.streamNameForEvent(types.EventContainerLifecycle, eventMetadata{
 		ContainerID: "container-789",
 		TaskID:      "task-123",
 		WorkerID:    "worker-123",
@@ -90,8 +90,8 @@ func TestAugmentContainerEventResponseBuildsWaterfallSummary(t *testing.T) {
 		Summary:     map[string]int64{},
 	}
 
-	phaseData, err := json.Marshal(types.EventContainerPhaseSchema{
-		ID:          types.ContainerPhaseImageLoad,
+	lifecycleData, err := json.Marshal(types.EventContainerLifecycleSchema{
+		ID:          types.ContainerLifecycleImageLoad,
 		Domain:      types.EventDomainImage,
 		StartTime:   now,
 		EndTime:     now.Add(1200 * time.Millisecond),
@@ -106,12 +106,12 @@ func TestAugmentContainerEventResponseBuildsWaterfallSummary(t *testing.T) {
 	}
 
 	record := types.ContainerEventRecord{
-		Type: types.EventContainerPhase,
-		Data: phaseData,
+		Type: types.EventContainerLifecycle,
+		Data: lifecycleData,
 	}
 	augmentContainerEventResponse(response, &record)
 	response.Events = append(response.Events, record)
-	response.Summary = summarizeContainerPhaseDurations(response.Events)
+	response.Summary = summarizeContainerLifecycleDurations(response.Events)
 
 	if got, want := response.WorkspaceID, "workspace-1"; got != want {
 		t.Fatalf("unexpected workspace: got %q want %q", got, want)
@@ -122,22 +122,22 @@ func TestAugmentContainerEventResponseBuildsWaterfallSummary(t *testing.T) {
 	if got, want := response.Summary["image_ms"], int64(1200); got != want {
 		t.Fatalf("unexpected image summary: got %d want %d", got, want)
 	}
-	if got, want := record.EventID, string(types.ContainerPhaseImageLoad); got != want {
+	if got, want := record.EventID, string(types.ContainerLifecycleImageLoad); got != want {
 		t.Fatalf("unexpected event id: got %q want %q", got, want)
 	}
 }
 
-func TestNestedImagePhaseDoesNotDoubleCountImageSummary(t *testing.T) {
+func TestNestedImageLifecycleDoesNotDoubleCountImageSummary(t *testing.T) {
 	now := time.Now().UTC()
 	response := &types.ContainerEventsResponse{
 		ContainerID: "container-1",
 		Summary:     map[string]int64{},
 	}
 
-	phaseData, err := json.Marshal(types.EventContainerPhaseSchema{
-		ID:          types.ContainerPhaseID("image.embedded_cache_restore"),
+	lifecycleData, err := json.Marshal(types.EventContainerLifecycleSchema{
+		ID:          types.ContainerLifecycleID("image.embedded_cache_restore"),
 		Domain:      types.EventDomainImage,
-		ParentID:    types.ContainerPhaseImageLoad,
+		ParentID:    types.ContainerLifecycleImageLoad,
 		StartTime:   now,
 		EndTime:     now.Add(300 * time.Millisecond),
 		DurationMs:  300,
@@ -150,35 +150,35 @@ func TestNestedImagePhaseDoesNotDoubleCountImageSummary(t *testing.T) {
 	}
 
 	record := types.ContainerEventRecord{
-		Type: types.EventContainerPhase,
-		Data: phaseData,
+		Type: types.EventContainerLifecycle,
+		Data: lifecycleData,
 	}
 	augmentContainerEventResponse(response, &record)
 	response.Events = append(response.Events, record)
-	response.Summary = summarizeContainerPhaseDurations(response.Events)
+	response.Summary = summarizeContainerLifecycleDurations(response.Events)
 
 	if got := response.Summary["image_ms"]; got != 0 {
-		t.Fatalf("nested image phase should not inflate image_ms, got %d", got)
+		t.Fatalf("nested image lifecycle should not inflate image_ms, got %d", got)
 	}
 	if got, want := response.Summary["image_embedded_cache_restore_ms"], int64(300); got != want {
 		t.Fatalf("unexpected nested image summary: got %d want %d", got, want)
 	}
 }
 
-func TestRepeatedCumulativePhaseUsesMaxDuration(t *testing.T) {
+func TestRepeatedCumulativeLifecycleUsesMaxDuration(t *testing.T) {
 	response := &types.ContainerEventsResponse{
 		ContainerID: "container-1",
 		Events: []types.ContainerEventRecord{
 			{
-				Type:        types.EventContainerPhase,
-				EventID:     string(types.ContainerPhaseSchedulerBacklogWait),
+				Type:        types.EventContainerLifecycle,
+				EventID:     string(types.ContainerLifecycleSchedulerBacklogWait),
 				Domain:      string(types.EventDomainScheduler),
 				DurationMs:  1000,
 				ContainerID: "container-1",
 			},
 			{
-				Type:        types.EventContainerPhase,
-				EventID:     string(types.ContainerPhaseSchedulerBacklogWait),
+				Type:        types.EventContainerLifecycle,
+				EventID:     string(types.ContainerLifecycleSchedulerBacklogWait),
 				Domain:      string(types.EventDomainScheduler),
 				DurationMs:  4000,
 				ContainerID: "container-1",
@@ -186,7 +186,7 @@ func TestRepeatedCumulativePhaseUsesMaxDuration(t *testing.T) {
 		},
 	}
 
-	response.Summary = summarizeContainerPhaseDurations(response.Events)
+	response.Summary = summarizeContainerLifecycleDurations(response.Events)
 
 	if got, want := response.Summary["scheduler_backlog_ms"], int64(4000); got != want {
 		t.Fatalf("unexpected backlog summary: got %d want %d", got, want)
@@ -200,15 +200,15 @@ func TestSummaryIncludesLogTimingCheckpoints(t *testing.T) {
 	now := time.Now().UTC()
 	events := []types.ContainerEventRecord{
 		{
-			Type:       types.EventContainerPhase,
-			EventID:    string(types.ContainerPhaseSchedulerQueuePush),
+			Type:       types.EventContainerLifecycle,
+			EventID:    string(types.ContainerLifecycleSchedulerQueuePush),
 			StartTime:  now.Add(-500 * time.Millisecond),
 			EndTime:    now.Add(-400 * time.Millisecond),
 			DurationMs: 100,
 		},
 		{
-			Type:       types.EventContainerPhase,
-			EventID:    string(types.ContainerPhaseStartup),
+			Type:       types.EventContainerLifecycle,
+			EventID:    string(types.ContainerLifecycleStartup),
 			StartTime:  now,
 			EndTime:    now.Add(time.Second),
 			DurationMs: 1000,
@@ -240,7 +240,7 @@ func TestSummaryIncludesLogTimingCheckpoints(t *testing.T) {
 		},
 	}
 
-	summary := summarizeContainerPhaseDurations(events)
+	summary := summarizeContainerLifecycleDurations(events)
 
 	if got, want := summary["running_to_first_log_ms"], int64(5000); got != want {
 		t.Fatalf("unexpected running to first log summary: got %d want %d", got, want)

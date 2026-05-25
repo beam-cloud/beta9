@@ -28,7 +28,7 @@ type ContainerEventsBatchRequest struct {
 	TaskIDs       []string `json:"task_ids"`
 	Limit         uint64   `json:"limit,omitempty"`
 	IncludeEvents bool     `json:"include_events,omitempty"`
-	TopPhases     int      `json:"top_phases,omitempty"`
+	TopLifecycle  int      `json:"top_lifecycle,omitempty"`
 }
 
 type ContainerEventsBatchResponse struct {
@@ -38,25 +38,25 @@ type ContainerEventsBatchResponse struct {
 }
 
 type ContainerEventSummary struct {
-	ContainerID    string                       `json:"container_id"`
-	WorkspaceID    string                       `json:"workspace_id,omitempty"`
-	StubID         string                       `json:"stub_id,omitempty"`
-	TaskID         string                       `json:"task_id,omitempty"`
-	Status         string                       `json:"status,omitempty"`
-	StopReason     string                       `json:"stop_reason,omitempty"`
-	RootCauseEvent string                       `json:"root_cause_event,omitempty"`
-	EventCount     int                          `json:"event_count"`
-	Summary        map[string]int64             `json:"summary"`
-	Phases         []ContainerPhaseMetric       `json:"phases,omitempty"`
-	SlowestPhases  []ContainerPhaseMetric       `json:"slowest_phases,omitempty"`
-	ClipAccesses   []ClipAccessMetric           `json:"clip_accesses,omitempty"`
-	Missing        []string                     `json:"missing,omitempty"`
-	Streams        []string                     `json:"streams,omitempty"`
-	Events         []types.ContainerEventRecord `json:"events,omitempty"`
-	Error          string                       `json:"error,omitempty"`
+	ContainerID      string                       `json:"container_id"`
+	WorkspaceID      string                       `json:"workspace_id,omitempty"`
+	StubID           string                       `json:"stub_id,omitempty"`
+	TaskID           string                       `json:"task_id,omitempty"`
+	Status           string                       `json:"status,omitempty"`
+	StopReason       string                       `json:"stop_reason,omitempty"`
+	RootCauseEvent   string                       `json:"root_cause_event,omitempty"`
+	EventCount       int                          `json:"event_count"`
+	Summary          map[string]int64             `json:"summary"`
+	Lifecycle        []ContainerLifecycleMetric   `json:"lifecycle,omitempty"`
+	SlowestLifecycle []ContainerLifecycleMetric   `json:"slowest_lifecycle,omitempty"`
+	ClipAccesses     []ClipAccessMetric           `json:"clip_accesses,omitempty"`
+	Missing          []string                     `json:"missing,omitempty"`
+	Streams          []string                     `json:"streams,omitempty"`
+	Events           []types.ContainerEventRecord `json:"events,omitempty"`
+	Error            string                       `json:"error,omitempty"`
 }
 
-type ContainerPhaseMetric struct {
+type ContainerLifecycleMetric struct {
 	EventID    string            `json:"event_id"`
 	Domain     string            `json:"domain,omitempty"`
 	ParentID   string            `json:"parent_id,omitempty"`
@@ -145,9 +145,9 @@ func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid event limit")
 	}
 
-	topPhases, err := eventQueryTopPhases(ctx)
+	topLifecycle, err := eventQueryTopLifecycle(ctx)
 	if err != nil {
-		return HTTPBadRequest("Invalid top phases")
+		return HTTPBadRequest("Invalid top lifecycle")
 	}
 
 	query := types.EventQuery{Limit: limit}
@@ -158,7 +158,7 @@ func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
 		return err
 	}
 
-	return ctx.JSON(http.StatusOK, summarizeContainerEvents(events, topPhases, false))
+	return ctx.JSON(http.StatusOK, summarizeContainerEvents(events, topLifecycle, false))
 }
 
 func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
@@ -174,11 +174,11 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 	if len(req.ContainerIDs)+len(req.TaskIDs) > 500 {
 		return HTTPBadRequest("Too many event targets")
 	}
-	if req.TopPhases <= 0 {
-		req.TopPhases = 8
+	if req.TopLifecycle <= 0 {
+		req.TopLifecycle = 8
 	}
-	if req.TopPhases > 50 {
-		req.TopPhases = 50
+	if req.TopLifecycle > 50 {
+		req.TopLifecycle = 50
 	}
 	if req.Limit > 50000 {
 		req.Limit = 50000
@@ -198,7 +198,7 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 			items = append(items, ContainerEventSummary{ContainerID: containerID, Error: err.Error()})
 			continue
 		}
-		items = append(items, summarizeContainerEvents(events, req.TopPhases, req.IncludeEvents))
+		items = append(items, summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents))
 	}
 
 	for _, taskID := range uniqueStrings(req.TaskIDs) {
@@ -218,7 +218,7 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 			items = append(items, ContainerEventSummary{ContainerID: task.ContainerId, TaskID: taskID, Error: err.Error()})
 			continue
 		}
-		summary := summarizeContainerEvents(events, req.TopPhases, req.IncludeEvents)
+		summary := summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents)
 		summary.TaskID = task.ExternalId
 		if summary.ContainerID == "" {
 			summary.ContainerID = task.ContainerId
@@ -387,15 +387,15 @@ func eventQueryLimit(ctx echo.Context) (uint64, error) {
 	return limit, nil
 }
 
-func eventQueryTopPhases(ctx echo.Context) (int, error) {
-	raw := ctx.QueryParam("top_phases")
+func eventQueryTopLifecycle(ctx echo.Context) (int, error) {
+	raw := ctx.QueryParam("top_lifecycle")
 	if raw == "" {
 		return 8, nil
 	}
 
 	top, err := strconv.Atoi(raw)
 	if err != nil || top <= 0 {
-		return 0, fmt.Errorf("invalid top phases %q", raw)
+		return 0, fmt.Errorf("invalid top lifecycle %q", raw)
 	}
 	if top > 50 {
 		top = 50
@@ -403,21 +403,21 @@ func eventQueryTopPhases(ctx echo.Context) (int, error) {
 	return top, nil
 }
 
-func summarizeContainerEvents(events *types.ContainerEventsResponse, topPhases int, includeEvents bool) ContainerEventSummary {
+func summarizeContainerEvents(events *types.ContainerEventsResponse, topLifecycle int, includeEvents bool) ContainerEventSummary {
 	summary := ContainerEventSummary{
-		ContainerID:    events.ContainerID,
-		WorkspaceID:    events.WorkspaceID,
-		StubID:         events.StubID,
-		Status:         events.Status,
-		StopReason:     events.StopReason,
-		RootCauseEvent: events.RootCauseEvent,
-		EventCount:     len(events.Events),
-		Summary:        events.Summary,
-		Missing:        events.Missing,
-		Streams:        events.Streams,
-		Phases:         containerPhasesInOrder(events.Events),
-		SlowestPhases:  slowestContainerPhases(events.Events, topPhases),
-		ClipAccesses:   slowestClipAccesses(events.Events, topPhases),
+		ContainerID:      events.ContainerID,
+		WorkspaceID:      events.WorkspaceID,
+		StubID:           events.StubID,
+		Status:           events.Status,
+		StopReason:       events.StopReason,
+		RootCauseEvent:   events.RootCauseEvent,
+		EventCount:       len(events.Events),
+		Summary:          events.Summary,
+		Missing:          events.Missing,
+		Streams:          events.Streams,
+		Lifecycle:        containerLifecyclesInOrder(events.Events),
+		SlowestLifecycle: slowestContainerLifecycles(events.Events, topLifecycle),
+		ClipAccesses:     slowestClipAccesses(events.Events, topLifecycle),
 	}
 	for _, event := range events.Events {
 		if summary.TaskID == "" && event.TaskID != "" {
@@ -431,13 +431,13 @@ func summarizeContainerEvents(events *types.ContainerEventsResponse, topPhases i
 	return summary
 }
 
-func containerPhasesInOrder(events []types.ContainerEventRecord) []ContainerPhaseMetric {
-	phases := make([]ContainerPhaseMetric, 0)
+func containerLifecyclesInOrder(events []types.ContainerEventRecord) []ContainerLifecycleMetric {
+	lifecycles := make([]ContainerLifecycleMetric, 0)
 	for _, event := range events {
-		if event.Type != types.EventContainerPhase {
+		if event.Type != types.EventContainerLifecycle {
 			continue
 		}
-		phases = append(phases, ContainerPhaseMetric{
+		lifecycles = append(lifecycles, ContainerLifecycleMetric{
 			EventID:    event.EventID,
 			Domain:     event.Domain,
 			ParentID:   event.ParentID,
@@ -448,20 +448,20 @@ func containerPhasesInOrder(events []types.ContainerEventRecord) []ContainerPhas
 			Attrs:      event.Attrs,
 		})
 	}
-	return phases
+	return lifecycles
 }
 
-func slowestContainerPhases(events []types.ContainerEventRecord, limit int) []ContainerPhaseMetric {
+func slowestContainerLifecycles(events []types.ContainerEventRecord, limit int) []ContainerLifecycleMetric {
 	if limit <= 0 {
 		return nil
 	}
 
-	phases := make([]ContainerPhaseMetric, 0)
+	lifecycles := make([]ContainerLifecycleMetric, 0)
 	for _, event := range events {
-		if event.Type != types.EventContainerPhase || event.DurationMs <= 0 {
+		if event.Type != types.EventContainerLifecycle || event.DurationMs <= 0 {
 			continue
 		}
-		phases = append(phases, ContainerPhaseMetric{
+		lifecycles = append(lifecycles, ContainerLifecycleMetric{
 			EventID:    event.EventID,
 			Domain:     event.Domain,
 			ParentID:   event.ParentID,
@@ -473,13 +473,13 @@ func slowestContainerPhases(events []types.ContainerEventRecord, limit int) []Co
 		})
 	}
 
-	sort.SliceStable(phases, func(i, j int) bool {
-		return phases[i].DurationMs > phases[j].DurationMs
+	sort.SliceStable(lifecycles, func(i, j int) bool {
+		return lifecycles[i].DurationMs > lifecycles[j].DurationMs
 	})
-	if len(phases) > limit {
-		phases = phases[:limit]
+	if len(lifecycles) > limit {
+		lifecycles = lifecycles[:limit]
 	}
-	return phases
+	return lifecycles
 }
 
 func slowestClipAccesses(events []types.ContainerEventRecord, limit int) []ClipAccessMetric {
@@ -490,7 +490,7 @@ func slowestClipAccesses(events []types.ContainerEventRecord, limit int) []ClipA
 	rollups := map[string]*ClipAccessMetric{}
 	for _, event := range events {
 		durationUs := containerEventDurationUs(event)
-		if event.Type != types.EventContainerPhase || !strings.HasPrefix(event.EventID, "clip.") || durationUs <= 0 {
+		if event.Type != types.EventContainerLifecycle || !strings.HasPrefix(event.EventID, "clip.") || durationUs <= 0 {
 			continue
 		}
 		attrs := event.Attrs

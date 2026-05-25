@@ -474,6 +474,76 @@ func (c *Client) removeLocalHostCache(hash string) {
 	delete(c.localHostCache, hash)
 }
 
+func sameHostEndpoint(a *Host, b *Host) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.HostId == b.HostId && a.Addr == b.Addr && a.PrivateAddr == b.PrivateAddr
+}
+
+func (c *Client) refreshRoutableHosts(ctx context.Context) error {
+	if c.hostDirectory == nil || c.hostMap == nil {
+		return ErrHostNotFound
+	}
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	refreshCtx := ctx
+	cancel := func() {}
+	if _, ok := ctx.Deadline(); !ok {
+		refreshCtx, cancel = context.WithTimeout(ctx, closestHostTimeout)
+	}
+	defer cancel()
+
+	hosts, err := c.hostDirectory.GetAvailableHosts(refreshCtx, c.locality)
+	if err != nil {
+		return err
+	}
+
+	routable := false
+	for _, host := range hosts {
+		if host == nil || host.HostId == "" {
+			continue
+		}
+
+		verified := host
+		if c.discoveryClient != nil {
+			hostState, err := c.discoveryClient.GetHostState(refreshCtx, host)
+			if err != nil {
+				continue
+			}
+			verified = hostState
+		}
+		if verified == nil || verified.HostId == "" {
+			continue
+		}
+
+		known := c.hostMap.Get(verified.HostId)
+		c.mu.RLock()
+		_, clientExists := c.grpcClients[verified.HostId]
+		c.mu.RUnlock()
+		if known != nil && sameHostEndpoint(known, verified) && !clientExists {
+			if err := c.addHost(verified); err != nil {
+				continue
+			}
+			routable = true
+			continue
+		}
+
+		c.hostMap.Set(verified)
+		routable = true
+	}
+
+	if !routable && len(c.hostMap.GetAll()) == 0 {
+		return ErrHostNotFound
+	}
+	return nil
+}
+
 func (c *Client) getContentAttempts(length int64) int {
 	attempts := int(c.maxGetContentAttempts)
 	if attempts < 1 {
@@ -744,6 +814,9 @@ func (c *Client) ClientLocalPageFileView(hash string, offset int64, length int64
 		hostIndex: 0,
 	})
 	if err != nil {
+		if err == ErrHostNotFound {
+			_ = c.refreshRoutableHosts(c.ctx)
+		}
 		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 		return "", 0, 0, false, err
 	}
@@ -793,7 +866,18 @@ func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int6
 			hostIndex: attempt,
 		})
 		if err != nil {
-			continue
+			if err == ErrHostNotFound {
+				_ = c.refreshRoutableHosts(c.ctx)
+				host, err = c.getHostForRequest(&ClientRequest{
+					rt:        ClientRequestTypeRetrieval,
+					hash:      hash,
+					key:       opts.RoutingKey,
+					hostIndex: attempt,
+				})
+			}
+			if err != nil {
+				continue
+			}
 		}
 
 		c.mu.RLock()
@@ -970,7 +1054,18 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 			hostIndex: attempt,
 		})
 		if err != nil {
-			continue
+			if err == ErrHostNotFound {
+				_ = c.refreshRoutableHosts(c.ctx)
+				host, err = c.getHostForRequest(&ClientRequest{
+					rt:        ClientRequestTypeRetrieval,
+					hash:      hash,
+					key:       opts.RoutingKey,
+					hostIndex: attempt,
+				})
+			}
+			if err != nil {
+				continue
+			}
 		}
 
 		c.mu.RLock()
@@ -1014,6 +1109,7 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 		c.mu.RUnlock()
 		if !exists {
 			c.removeLocalHostCache(hash)
+			_ = c.refreshRoutableHosts(ctx)
 			continue
 		}
 
@@ -1120,6 +1216,9 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 				hostIndex: attempt,
 			})
 			if err != nil {
+				if err == ErrHostNotFound {
+					_ = c.refreshRoutableHosts(ctx)
+				}
 				continue
 			}
 
@@ -1615,10 +1714,13 @@ func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheSto
 			rt:        ClientRequestTypeStorage,
 			hash:      hash,
 			key:       routingKey,
-			hostIndex: attempt,
+			hostIndex: 0,
 		})
 		if err != nil {
 			lastErr = err
+			if err == ErrHostNotFound {
+				_ = c.refreshRoutableHosts(ctx)
+			}
 			continue
 		}
 
@@ -1627,6 +1729,7 @@ func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheSto
 			if err != nil {
 				lastErr = err
 				c.removeHost(host)
+				_ = c.refreshRoutableHosts(ctx)
 				continue
 			}
 
@@ -1646,6 +1749,7 @@ func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheSto
 		if err != nil {
 			lastErr = err
 			c.removeHost(host)
+			_ = c.refreshRoutableHosts(ctx)
 			continue
 		}
 		if resp == nil || !resp.Ok {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	runtime "github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -97,8 +98,17 @@ func (s *Worker) handleOOMKill(
 	isOOMKilled.Store(true)
 	outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
 
-	// Push OOM event for monitoring/notifications
-	go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
+	go s.recordContainerEvent(ctx, request, types.EventContainerEventSchema{
+		ID:        types.ContainerEventRuntimeOOMKilled,
+		Domain:    types.EventDomainRuntime,
+		Timestamp: time.Now().UTC(),
+		Reason:    "OOM",
+		Source:    types.EventSourceWorkerRuntime.String(),
+		Message:   types.EventMessageRuntimeOOMKilled.String(),
+		Attrs: map[string]string{
+			types.EventAttrOOMKilled: "true",
+		},
+	})
 
 	// For gVisor, manually stop the container (kernel won't do it automatically)
 	if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {

@@ -267,7 +267,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	localLockStart := time.Now()
 	unlockMount := c.lockImageMount(request.ImageId)
-	c.recordImagePhase(request, types.ContainerPhaseID("image.local_mount_lock"), localLockStart, time.Since(localLockStart), true, nil)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.local_mount_lock"), localLockStart, time.Since(localLockStart), true, nil)
 	defer unlockMount()
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock"); ok {
@@ -287,7 +287,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	remoteLockStart := time.Now()
 	releaseImageLock, err := c.acquireRemoteImageMountLock(request.ImageId)
-	c.recordImagePhase(request, types.ContainerPhaseID("image.remote_mount_lock"), remoteLockStart, time.Since(remoteLockStart), err == nil, nil)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.remote_mount_lock"), remoteLockStart, time.Since(remoteLockStart), err == nil, nil)
 	if err != nil {
 		return time.Since(startTime), err
 	}
@@ -299,12 +299,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	mountStart := time.Now()
 	if err := c.mountLazyImageArchive(request, mountOptions); err != nil {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.mount_archive"), mountStart, time.Since(mountStart), false, map[string]string{
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.mount_archive"), mountStart, time.Since(mountStart), false, map[string]string{
 			"storage_mode": archive.storageMode,
 		})
 		return time.Since(startTime), err
 	}
-	c.recordImagePhase(request, types.ContainerPhaseID("image.mount_archive"), mountStart, time.Since(mountStart), true, map[string]string{
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.mount_archive"), mountStart, time.Since(mountStart), true, map[string]string{
 		"storage_mode": archive.storageMode,
 	})
 
@@ -332,18 +332,18 @@ func (c *ImageClient) mountedImageHit(startTime time.Time, request *types.Contai
 		"mounted_fuse_hit": "true",
 	}
 	metrics.RecordWorkerStartupPhase(phase, elapsed, request, attrs)
-	c.recordImagePhase(request, types.ContainerPhaseID("image."+phase), startTime, elapsed, true, attrs)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image."+phase), startTime, elapsed, true, attrs)
 	return elapsed, true
 }
 
-func (c *ImageClient) recordImagePhase(request *types.ContainerRequest, id types.ContainerPhaseID, startedAt time.Time, duration time.Duration, success bool, attrs map[string]string) {
+func (c *ImageClient) recordImageLifecycle(request *types.ContainerRequest, id types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, attrs map[string]string) {
 	if c.eventRepo == nil || request == nil {
 		return
 	}
 
-	phase := containerPhaseFromDuration(id, request, startedAt, duration, success, attrs)
-	phase.WorkerID = c.workerId
-	c.eventRepo.PushContainerPhaseEvent(phase)
+	lifecycle := containerLifecycleFromDuration(id, request, startedAt, duration, success, attrs)
+	lifecycle.WorkerID = c.workerId
+	c.eventRepo.PushContainerLifecycleEvent(lifecycle)
 }
 
 func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *types.ContainerRequest) (lazyImageArchive, error) {
@@ -358,7 +358,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 		"success":         fmt.Sprintf("%t", err == nil),
 	}
 	metrics.RecordWorkerStartupPhase("image_registry_pull", time.Since(phaseStart), request, registryAttrs)
-	c.recordImagePhase(request, types.ContainerPhaseID("image.registry_pull"), phaseStart, time.Since(phaseStart), err == nil, registryAttrs)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.registry_pull"), phaseStart, time.Since(phaseStart), err == nil, registryAttrs)
 	if err != nil {
 		return lazyImageArchive{}, err
 	}
@@ -370,7 +370,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 		"success":      fmt.Sprintf("%t", err == nil),
 	}
 	metrics.RecordWorkerStartupPhase("clip_metadata_extract", time.Since(phaseStart), request, metadataAttrs)
-	c.recordImagePhase(request, types.ContainerPhaseID("image.clip_metadata_extract"), phaseStart, time.Since(phaseStart), err == nil, metadataAttrs)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.clip_metadata_extract"), phaseStart, time.Since(phaseStart), err == nil, metadataAttrs)
 	if err != nil {
 		return lazyImageArchive{}, err
 	}
@@ -847,13 +847,13 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 
 	metadataStart := time.Now()
 	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), true, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), true, nil)
 		return true, nil
 	} else if err != nil {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), false, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), false, nil)
 		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive content cache metadata unavailable")
 	} else {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), true, map[string]string{"hit": "false"})
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), true, map[string]string{"hit": "false"})
 	}
 
 	cachePath := c.imageArchiveCachePath(imageId)
@@ -896,24 +896,24 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
 	}
 	if err != nil {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_store"), storeStart, time.Since(storeStart), false, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_store"), storeStart, time.Since(storeStart), false, nil)
 		return false, err
 	}
-	c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_store"), storeStart, time.Since(storeStart), true, map[string]string{
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_store"), storeStart, time.Since(storeStart), true, map[string]string{
 		"registry_store": c.config.ImageService.RegistryStore,
 	})
 
 	restoreStart := time.Now()
 	size, err := c.registry.Size(ctx, imageId)
 	if err != nil {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), false, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), false, nil)
 		return false, err
 	}
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size, routingKey); err != nil {
-		c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), false, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
+		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), false, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
 		return false, err
 	}
-	c.recordImagePhase(request, types.ContainerPhaseID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
 
 	return true, nil
 }

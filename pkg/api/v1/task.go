@@ -360,7 +360,13 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 		return nil
 	}
 
-	g.recordTaskCancelEvent(ctx, task, types.ContainerEventTaskCancelRequested, "HTTP task stop requested")
+	if g.eventRepo != nil {
+		g.eventRepo.PushContainerTaskEvent(task, types.ContainerEventTaskCancelRequested, types.ContainerEventOptions{
+			Source:  types.EventSourceAPITaskStop,
+			Message: types.EventMessageHTTPTaskStopRequested,
+			Reason:  string(types.StopContainerReasonUser),
+		})
+	}
 	err := g.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
@@ -388,26 +394,15 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}
-	g.recordTaskCancelEvent(ctx, task, types.ContainerEventTaskCancelApplied, "HTTP task cancellation applied")
+	if g.eventRepo != nil {
+		g.eventRepo.PushContainerTaskEvent(task, types.ContainerEventTaskCancelApplied, types.ContainerEventOptions{
+			Source:  types.EventSourceAPITaskStop,
+			Message: types.EventMessageHTTPTaskCancellationApplied,
+			Reason:  string(types.StopContainerReasonUser),
+		})
+	}
 
 	return nil
-}
-
-func (g *TaskGroup) recordTaskCancelEvent(ctx context.Context, task *types.TaskWithRelated, eventID types.ContainerEventID, message string) {
-	if g.eventRepo == nil || task == nil || task.ContainerId == "" {
-		return
-	}
-	g.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
-		ID:          eventID,
-		ContainerID: task.ContainerId,
-		StubID:      task.Stub.ExternalId,
-		StubType:    string(task.Stub.Type.Kind()),
-		TaskID:      task.ExternalId,
-		WorkspaceID: task.Workspace.ExternalId,
-		Reason:      string(types.StopContainerReasonUser),
-		Source:      "api.task.stop",
-		Message:     message,
-	})
 }
 
 func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, error) {

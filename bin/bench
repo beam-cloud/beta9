@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_RAW="${BENCH_SDK_PYTHON:-uv run --project ./sdk --no-sync python}"
+read -r -a PYTHON_CMD <<< "$PYTHON_RAW"
+
+export PYTHONPATH="$ROOT:$ROOT/benchmarks:$ROOT/sdk/src:${PYTHONPATH:-}"
+cd "$ROOT"
+exec "${PYTHON_CMD[@]}" -m benchmarks.b9bench "$@"

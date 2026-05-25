@@ -1,0 +1,9 @@
+name: startup-default
+kind: startup
+runner: startup
+description: End-to-end sandbox startup latency through the gateway.
+defaults:
+  iterations: 10
+  warmup: 1
+  reset_workers: false
+  port_forward: true

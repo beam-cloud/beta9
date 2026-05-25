@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -96,22 +97,22 @@ func (r *EventClientRepo) GetContainerEvents(ctx context.Context, containerID st
 	return r.reader.GetContainerEvents(ctx, containerID, query)
 }
 
-func (r *EventClientRepo) PushContainerPhaseEvent(phase types.EventContainerPhaseSchema) {
-	def := types.ContainerPhaseDefinitionFor(phase.ID)
-	if phase.Domain == "" {
-		phase.Domain = def.Domain
+func (r *EventClientRepo) PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema) {
+	def := types.ContainerLifecycleDefinitionFor(lifecycle.ID)
+	if lifecycle.Domain == "" {
+		lifecycle.Domain = def.Domain
 	}
-	if phase.ParentID == "" {
-		phase.ParentID = def.ParentID
+	if lifecycle.ParentID == "" {
+		lifecycle.ParentID = def.ParentID
 	}
-	if phase.EndTime.IsZero() {
-		phase.EndTime = time.Now().UTC()
+	if lifecycle.EndTime.IsZero() {
+		lifecycle.EndTime = time.Now().UTC()
 	}
-	if phase.DurationMs == 0 && !phase.StartTime.IsZero() && !phase.EndTime.Before(phase.StartTime) {
-		phase.DurationMs = phase.EndTime.Sub(phase.StartTime).Milliseconds()
+	if lifecycle.DurationMs == 0 && !lifecycle.StartTime.IsZero() && !lifecycle.EndTime.Before(lifecycle.StartTime) {
+		lifecycle.DurationMs = lifecycle.EndTime.Sub(lifecycle.StartTime).Milliseconds()
 	}
 
-	r.pushEvent(types.EventContainerPhase, types.EventContainerPhaseSchemaVersion, phase)
+	r.pushEvent(types.EventContainerLifecycle, types.EventContainerLifecycleSchemaVersion, lifecycle)
 }
 
 func (r *EventClientRepo) PushContainerEvent(event types.EventContainerEventSchema) {
@@ -134,91 +135,249 @@ func (r *EventClientRepo) PushContainerLogEvent(entry types.EventContainerLogSch
 	r.pushEvent(types.EventContainerLog, types.EventContainerLogSchemaVersion, entry)
 }
 
-func (r *EventClientRepo) PushContainerRequestedEvent(request *types.ContainerRequest) {
-	r.pushEvent(
-		types.EventContainerLifecycle,
-		types.EventContainerStatusRequestedSchemaVersion,
-		types.EventContainerStatusRequestedSchema{
-			ContainerID: request.ContainerId,
-			WorkspaceID: request.WorkspaceId,
-			Request:     sanitizeContainerRequest(request),
-			StubID:      request.StubId,
-			StubType:    string(request.Stub.Type.Kind()),
-			TaskID:      taskIDFromRequestEnv(request),
-			Status:      types.EventContainerLifecycleRequested,
-		},
-	)
+func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions) {
+	if request == nil || request.ContainerId == "" {
+		return
+	}
+
+	taskID := firstNonEmpty(opts.TaskID, taskIDFromRequestEnv(request))
+	r.PushContainerEvent(types.EventContainerEventSchema{
+		ID:          eventID,
+		ContainerID: request.ContainerId,
+		StubID:      request.StubId,
+		StubType:    string(request.Stub.Type.Kind()),
+		TaskID:      taskID,
+		WorkspaceID: request.WorkspaceId,
+		WorkerID:    workerID,
+		Reason:      opts.Reason,
+		Source:      opts.Source.String(),
+		Message:     opts.Message.String(),
+		Attrs:       copyEventAttrs(opts.Attrs),
+	})
 }
 
-func (r *EventClientRepo) PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest) {
-	r.pushEvent(
-		types.EventContainerLifecycle,
-		types.EventContainerLifecycleSchemaVersion,
-		types.EventContainerLifecycleSchema{
-			ContainerID: containerID,
+func (r *EventClientRepo) PushContainerRequestLifecycle(workerID string, request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, opts types.ContainerLifecycleOptions) {
+	if request == nil || request.ContainerId == "" || startedAt.IsZero() || duration < 0 {
+		return
+	}
+
+	endTime := startedAt.Add(duration)
+	attrs := copyEventAttrs(opts.Attrs)
+	if opts.Source != "" {
+		attrs[types.EventAttrSource] = opts.Source.String()
+	}
+	r.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:          lifecycleID,
+		StartTime:   startedAt.UTC(),
+		EndTime:     endTime.UTC(),
+		DurationMs:  duration.Milliseconds(),
+		ContainerID: request.ContainerId,
+		StubID:      request.StubId,
+		StubType:    string(request.Stub.Type.Kind()),
+		TaskID:      firstNonEmpty(opts.TaskID, taskIDFromRequestEnv(request)),
+		WorkspaceID: request.WorkspaceId,
+		WorkerID:    workerID,
+		Success:     &success,
+		Source:      opts.Source.String(),
+		Attrs:       attrs,
+	})
+}
+
+func (r *EventClientRepo) PushContainerTaskEvent(task *types.TaskWithRelated, eventID types.ContainerEventID, opts types.ContainerEventOptions) {
+	if task == nil || task.ContainerId == "" {
+		return
+	}
+
+	r.PushContainerEvent(types.EventContainerEventSchema{
+		ID:          eventID,
+		ContainerID: task.ContainerId,
+		StubID:      task.Stub.ExternalId,
+		StubType:    string(task.Stub.Type.Kind()),
+		TaskID:      task.ExternalId,
+		WorkspaceID: task.Workspace.ExternalId,
+		Reason:      opts.Reason,
+		Source:      opts.Source.String(),
+		Message:     opts.Message.String(),
+		Attrs:       copyEventAttrs(opts.Attrs),
+	})
+}
+
+func (r *EventClientRepo) PushContainerFunctionTaskEvent(workspaceID string, task types.TaskInterface, eventID types.ContainerEventID, opts types.ContainerEventOptions) {
+	if task == nil || workspaceID == "" {
+		return
+	}
+
+	metadata := task.Metadata()
+	if metadata.ContainerId == "" {
+		return
+	}
+
+	r.PushContainerEvent(types.EventContainerEventSchema{
+		ID:          eventID,
+		ContainerID: metadata.ContainerId,
+		StubID:      metadata.StubId,
+		StubType:    string(types.StubTypeFunction),
+		TaskID:      metadata.TaskId,
+		WorkspaceID: workspaceID,
+		Reason:      opts.Reason,
+		Source:      opts.Source.String(),
+		Message:     opts.Message.String(),
+		Attrs:       copyEventAttrs(opts.Attrs),
+	})
+}
+
+func (r *EventClientRepo) PushContainerTaskLifecycle(task *types.TaskWithRelated, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, opts types.ContainerLifecycleOptions) {
+	if task == nil || task.ContainerId == "" || start.IsZero() || end.Before(start) {
+		return
+	}
+
+	attrs := copyEventAttrs(opts.Attrs)
+	if opts.Source != "" {
+		attrs[types.EventAttrSource] = opts.Source.String()
+	}
+	r.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:          lifecycleID,
+		StartTime:   start.UTC(),
+		EndTime:     end.UTC(),
+		DurationMs:  end.Sub(start).Milliseconds(),
+		ContainerID: task.ContainerId,
+		StubID:      task.Stub.ExternalId,
+		StubType:    string(task.Stub.Type.Kind()),
+		TaskID:      firstNonEmpty(opts.TaskID, task.ExternalId),
+		WorkspaceID: task.Workspace.ExternalId,
+		Success:     &success,
+		Source:      opts.Source.String(),
+		Attrs:       attrs,
+	})
+}
+
+func (r *EventClientRepo) PushContainerFunctionTaskLifecycle(workspaceID string, task types.TaskInterface, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, opts types.ContainerLifecycleOptions) {
+	if task == nil || workspaceID == "" || start.IsZero() || end.Before(start) {
+		return
+	}
+
+	metadata := task.Metadata()
+	if metadata.ContainerId == "" {
+		return
+	}
+
+	attrs := copyEventAttrs(opts.Attrs)
+	if opts.Source != "" {
+		attrs[types.EventAttrSource] = opts.Source.String()
+	}
+	r.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:          lifecycleID,
+		StartTime:   start.UTC(),
+		EndTime:     end.UTC(),
+		DurationMs:  end.Sub(start).Milliseconds(),
+		ContainerID: metadata.ContainerId,
+		StubID:      metadata.StubId,
+		StubType:    string(types.StubTypeFunction),
+		TaskID:      firstNonEmpty(opts.TaskID, metadata.TaskId),
+		WorkspaceID: workspaceID,
+		Success:     &success,
+		Source:      opts.Source.String(),
+		Attrs:       attrs,
+	})
+}
+
+func (r *EventClientRepo) PushContainerTaskLifecycleSince(ctx context.Context, rdb *common.RedisClient, task *types.TaskWithRelated, lifecycleID types.ContainerLifecycleID, sincePhase string, end time.Time, success bool, opts types.ContainerLifecycleOptions) {
+	if task == nil || task.ContainerId == "" {
+		return
+	}
+
+	start, ok, err := taskPhaseTimestamp(ctx, rdb, task.Workspace.Name, task.ExternalId, sincePhase)
+	if err != nil || !ok || end.Before(start) {
+		return
+	}
+
+	r.PushContainerTaskLifecycle(task, lifecycleID, start, end, success, opts)
+}
+
+func (r *EventClientRepo) PushContainerRequestLogLine(workerID string, request *types.ContainerRequest, taskID string, stream string, line string) {
+	if request == nil || request.ContainerId == "" || line == "" {
+		return
+	}
+
+	r.PushContainerLogEvent(types.EventContainerLogSchema{
+		Timestamp:   time.Now().UTC(),
+		ContainerID: request.ContainerId,
+		StubID:      request.StubId,
+		StubType:    string(request.Stub.Type.Kind()),
+		TaskID:      firstNonEmpty(taskID, taskIDFromRequestEnv(request)),
+		WorkspaceID: request.WorkspaceId,
+		WorkerID:    workerID,
+		Stream:      stream,
+		Line:        line,
+	})
+}
+
+func (r *EventClientRepo) PushContainerRunnerEvent(workerID string, request *types.ContainerRequest, event *types.ContainerRunnerEvent) {
+	if request == nil || request.ContainerId == "" || event == nil || event.ID == "" {
+		return
+	}
+
+	if event.Attrs == nil {
+		event.Attrs = map[string]string{}
+	}
+
+	switch event.Type {
+	case types.RunnerEventTypeLifecycle:
+		startTime, ok := parseRunnerEventTime(event.StartTime)
+		if !ok {
+			return
+		}
+		endTime, ok := parseRunnerEventTime(event.EndTime)
+		if !ok || endTime.Before(startTime) {
+			return
+		}
+		durationMs := event.DurationMs
+		if durationMs == 0 {
+			durationMs = endTime.Sub(startTime).Milliseconds()
+		}
+		success := true
+		if event.Success != nil {
+			success = *event.Success
+		}
+		r.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+			ID:          types.ContainerLifecycleID(event.ID),
+			StartTime:   startTime,
+			EndTime:     endTime,
+			DurationMs:  durationMs,
+			ContainerID: firstNonEmpty(event.ContainerID, request.ContainerId),
+			StubID:      firstNonEmpty(event.StubID, request.StubId),
+			StubType:    firstNonEmpty(event.StubType, string(request.Stub.Type.Kind())),
+			TaskID:      firstNonEmpty(event.TaskID, taskIDFromRequestEnv(request)),
+			WorkspaceID: request.WorkspaceId,
 			WorkerID:    workerID,
+			Success:     &success,
+			Source:      types.EventSourceRunnerStdout.String(),
+			Attrs:       copyEventAttrs(event.Attrs),
+		})
+	case types.RunnerEventTypeEvent:
+		timestamp, ok := parseRunnerEventTime(event.Timestamp)
+		if !ok {
+			return
+		}
+		domain := types.ContainerEventDomain(types.ContainerEventID(event.ID))
+		if domain == "" {
+			domain = types.EventDomainRunner
+		}
+		r.PushContainerEvent(types.EventContainerEventSchema{
+			ID:          types.ContainerEventID(event.ID),
+			Domain:      domain,
+			Timestamp:   timestamp,
+			ContainerID: firstNonEmpty(event.ContainerID, request.ContainerId),
+			StubID:      firstNonEmpty(event.StubID, request.StubId),
+			StubType:    firstNonEmpty(event.StubType, string(request.Stub.Type.Kind())),
+			TaskID:      firstNonEmpty(event.TaskID, taskIDFromRequestEnv(request)),
 			WorkspaceID: request.WorkspaceId,
-			Request:     sanitizeContainerRequest(request),
-			StubID:      request.StubId,
-			StubType:    string(request.Stub.Type.Kind()),
-			TaskID:      taskIDFromRequestEnv(request),
-			Status:      types.EventContainerLifecycleScheduled,
-		},
-	)
-}
-
-func (r *EventClientRepo) PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest) {
-	r.pushEvent(
-		types.EventContainerLifecycle,
-		types.EventContainerLifecycleSchemaVersion,
-		types.EventContainerLifecycleSchema{
-			ContainerID: containerID,
 			WorkerID:    workerID,
-			WorkspaceID: request.WorkspaceId,
-			Request:     sanitizeContainerRequest(request),
-			StubID:      request.StubId,
-			StubType:    string(request.Stub.Type.Kind()),
-			TaskID:      taskIDFromRequestEnv(request),
-			Status:      types.EventContainerLifecycleStarted,
-		},
-	)
-}
-
-func (r *EventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int) {
-	r.pushEvent(
-		types.EventContainerLifecycle,
-		types.EventContainerLifecycleSchemaVersion,
-		types.EventContainerStoppedSchema{
-			EventContainerLifecycleSchema: types.EventContainerLifecycleSchema{
-				ContainerID: containerID,
-				WorkerID:    workerID,
-				WorkspaceID: request.WorkspaceId,
-				Request:     sanitizeContainerRequest(request),
-				StubID:      request.StubId,
-				StubType:    string(request.Stub.Type.Kind()),
-				TaskID:      taskIDFromRequestEnv(request),
-				Status:      types.EventContainerLifecycleStopped,
-			},
-			ExitCode: exitCode,
-		},
-	)
-}
-
-func (r *EventClientRepo) PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest) {
-	r.pushEvent(
-		types.EventContainerLifecycle,
-		types.EventContainerLifecycleSchemaVersion,
-		types.EventContainerLifecycleSchema{
-			ContainerID: containerID,
-			WorkerID:    workerID,
-			WorkspaceID: request.WorkspaceId,
-			StubID:      request.StubId,
-			StubType:    string(request.Stub.Type.Kind()),
-			TaskID:      taskIDFromRequestEnv(request),
-			Request:     sanitizeContainerRequest(request),
-			Status:      types.EventContainerLifecycleOOM,
-		},
-	)
+			Source:      types.EventSourceRunnerStdout.String(),
+			Message:     event.Message,
+			Attrs:       copyEventAttrs(event.Attrs),
+		})
+	}
 }
 
 func (r *EventClientRepo) PushWorkerStartedEvent(workerID string) {
@@ -444,19 +603,6 @@ func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspace
 	)
 }
 
-func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRequest {
-	requestCopy := *request
-	requestCopy.Env = nil
-	requestCopy.EntryPoint = nil
-	requestCopy.Stub = types.StubWithRelated{}
-	requestCopy.Workspace = types.Workspace{}
-	requestCopy.Mounts = nil
-	requestCopy.PoolSelector = ""
-	requestCopy.Checkpoint = nil
-	requestCopy.ConfigPath = ""
-	return requestCopy
-}
-
 func taskIDFromRequestEnv(request *types.ContainerRequest) string {
 	if request == nil {
 		return ""
@@ -469,29 +615,58 @@ func taskIDFromRequestEnv(request *types.ContainerRequest) string {
 	return ""
 }
 
+func taskPhaseTimestamp(ctx context.Context, rdb *common.RedisClient, workspaceName, taskID, phase string) (time.Time, bool, error) {
+	if rdb == nil || workspaceName == "" || taskID == "" || phase == "" {
+		return time.Time{}, false, nil
+	}
+
+	value, err := rdb.Get(ctx, common.RedisKeys.TaskPhase(workspaceName, taskID, phase)).Int64()
+	if err == redis.Nil {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("failed to get task phase: %w", err)
+	}
+	if value <= 0 {
+		return time.Time{}, false, nil
+	}
+
+	return time.UnixMilli(value), true, nil
+}
+
+func copyEventAttrs(attrs map[string]string) map[string]string {
+	copied := map[string]string{}
+	for key, value := range attrs {
+		copied[key] = value
+	}
+	return copied
+}
+
+func parseRunnerEventTime(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func eventMetadataFromData(data interface{}) eventMetadata {
 	switch d := data.(type) {
-	case types.EventContainerStatusRequestedSchema:
-		workspaceID := d.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = d.Request.WorkspaceId
-		}
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkspaceID: workspaceID}
-	case types.EventContainerLifecycleSchema:
-		workspaceID := d.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = d.Request.WorkspaceId
-		}
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: workspaceID}
-	case types.EventContainerStoppedSchema:
-		workspaceID := d.WorkspaceID
-		if workspaceID == "" {
-			workspaceID = d.Request.WorkspaceId
-		}
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: workspaceID}
 	case types.EventContainerMetricsSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
-	case types.EventContainerPhaseSchema:
+	case types.EventContainerLifecycleSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
 	case types.EventContainerEventSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}

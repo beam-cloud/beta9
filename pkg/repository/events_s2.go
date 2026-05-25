@@ -209,7 +209,7 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 			StubID:      query.StubID,
 			Summary:     map[string]int64{},
 			Events:      []types.ContainerEventRecord{},
-			Missing:     requiredContainerPhaseIDs(nil),
+			Missing:     requiredContainerLifecycleIDs(nil),
 			Streams:     []string{},
 		}, nil
 	}
@@ -230,8 +230,8 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	}
 
 	sortContainerEventRecords(response.Events)
-	response.Summary = summarizeContainerPhaseDurations(response.Events)
-	response.Missing = requiredContainerPhaseIDs(response.Events)
+	response.Summary = summarizeContainerLifecycleDurations(response.Events)
+	response.Missing = requiredContainerLifecycleIDs(response.Events)
 	return response, nil
 }
 
@@ -514,31 +514,31 @@ func s2HeadersForEvent(event cloudevents.Event, metadata eventMetadata) []s2.Hea
 
 func augmentContainerEventResponse(response *types.ContainerEventsResponse, record *types.ContainerEventRecord) {
 	switch record.Type {
-	case types.EventContainerPhase:
-		var phase types.EventContainerPhaseSchema
-		if err := json.Unmarshal(record.Data, &phase); err != nil {
+	case types.EventContainerLifecycle:
+		var lifecycle types.EventContainerLifecycleSchema
+		if err := json.Unmarshal(record.Data, &lifecycle); err != nil {
 			return
 		}
-		record.EventID = string(phase.ID)
-		record.Domain = string(phase.Domain)
-		record.ParentID = string(phase.ParentID)
-		record.StartTime = phase.StartTime
-		record.EndTime = phase.EndTime
-		record.DurationMs = phase.DurationMs
-		record.Success = phase.Success
-		record.Source = phase.Source
-		record.Attrs = phase.Attrs
-		record.ContainerID = phase.ContainerID
-		record.StubID = phase.StubID
-		record.StubType = phase.StubType
-		record.TaskID = phase.TaskID
-		record.WorkspaceID = phase.WorkspaceID
-		record.WorkerID = phase.WorkerID
+		record.EventID = string(lifecycle.ID)
+		record.Domain = string(lifecycle.Domain)
+		record.ParentID = string(lifecycle.ParentID)
+		record.StartTime = lifecycle.StartTime
+		record.EndTime = lifecycle.EndTime
+		record.DurationMs = lifecycle.DurationMs
+		record.Success = lifecycle.Success
+		record.Source = lifecycle.Source
+		record.Attrs = lifecycle.Attrs
+		record.ContainerID = lifecycle.ContainerID
+		record.StubID = lifecycle.StubID
+		record.StubType = lifecycle.StubType
+		record.TaskID = lifecycle.TaskID
+		record.WorkspaceID = lifecycle.WorkspaceID
+		record.WorkerID = lifecycle.WorkerID
 		if response.WorkspaceID == "" {
-			response.WorkspaceID = phase.WorkspaceID
+			response.WorkspaceID = lifecycle.WorkspaceID
 		}
 		if response.StubID == "" {
-			response.StubID = phase.StubID
+			response.StubID = lifecycle.StubID
 		}
 	case types.EventContainerEvent:
 		var event types.EventContainerEventSchema
@@ -590,31 +590,10 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		if response.StubID == "" {
 			response.StubID = entry.StubID
 		}
-	case types.EventContainerLifecycle:
-		var lifecycle types.EventContainerLifecycleSchema
-		if err := json.Unmarshal(record.Data, &lifecycle); err != nil {
-			return
-		}
-		record.ContainerID = lifecycle.ContainerID
-		record.StubID = lifecycle.StubID
-		record.StubType = lifecycle.StubType
-		record.TaskID = lifecycle.TaskID
-		record.WorkerID = lifecycle.WorkerID
-		record.WorkspaceID = lifecycle.WorkspaceID
-		if record.WorkspaceID == "" {
-			record.WorkspaceID = lifecycle.Request.WorkspaceId
-		}
-		if response.WorkspaceID == "" {
-			response.WorkspaceID = record.WorkspaceID
-		}
-		if response.StubID == "" {
-			response.StubID = lifecycle.StubID
-		}
-		response.Status = lifecycle.Status
 	}
 }
 
-func summarizeContainerPhaseDurations(events []types.ContainerEventRecord) map[string]int64 {
+func summarizeContainerLifecycleDurations(events []types.ContainerEventRecord) map[string]int64 {
 	summary := map[string]int64{}
 	var firstEventAt time.Time
 	var queueStartAt time.Time
@@ -634,14 +613,14 @@ func summarizeContainerPhaseDurations(events []types.ContainerEventRecord) map[s
 		}
 
 		switch event.Type {
-		case types.EventContainerPhase:
-			if event.EventID == string(types.ContainerPhaseStartup) && !event.EndTime.IsZero() {
+		case types.EventContainerLifecycle:
+			if event.EventID == string(types.ContainerLifecycleStartup) && !event.EndTime.IsZero() {
 				runningAt = event.EndTime
 			}
-			if event.EventID == string(types.ContainerPhaseSchedulerQueuePush) && !event.StartTime.IsZero() && queueStartAt.IsZero() {
+			if event.EventID == string(types.ContainerLifecycleSchedulerQueuePush) && !event.StartTime.IsZero() && queueStartAt.IsZero() {
 				queueStartAt = event.StartTime
 			}
-			if event.EventID == string(types.ContainerPhaseWorkerQueueReceive) && !event.StartTime.IsZero() && workerReceiveAt.IsZero() {
+			if event.EventID == string(types.ContainerLifecycleWorkerQueueReceive) && !event.StartTime.IsZero() && workerReceiveAt.IsZero() {
 				workerReceiveAt = event.StartTime
 			}
 			durationUs := containerEventRecordDurationUs(event)
@@ -652,8 +631,8 @@ func summarizeContainerPhaseDurations(events []types.ContainerEventRecord) map[s
 			if event.EventID == "" || (durationMs <= 0 && durationUs <= 0) {
 				continue
 			}
-			id := types.ContainerPhaseID(event.EventID)
-			summaryKey := types.EventSummaryKeyForPhase(id)
+			id := types.ContainerLifecycleID(event.EventID)
+			summaryKey := types.EventSummaryKeyForLifecycle(id)
 			setMaxDuration(summary, summaryKey, durationMs)
 			if strings.HasPrefix(event.EventID, "clip.") {
 				baseKey := strings.TrimSuffix(summaryKey, "_ms")
@@ -850,16 +829,16 @@ func containerEventRecordTime(event types.ContainerEventRecord) time.Time {
 	}
 }
 
-func requiredContainerPhaseIDs(events []types.ContainerEventRecord) []string {
+func requiredContainerLifecycleIDs(events []types.ContainerEventRecord) []string {
 	seen := map[string]struct{}{}
 	for _, event := range events {
-		if event.Type == types.EventContainerPhase && event.EventID != "" {
+		if event.Type == types.EventContainerLifecycle && event.EventID != "" {
 			seen[event.EventID] = struct{}{}
 		}
 	}
 
 	missing := []string{}
-	for id, def := range types.ContainerPhaseDefinitions {
+	for id, def := range types.ContainerLifecycleDefinitions {
 		if !def.Required {
 			continue
 		}

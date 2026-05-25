@@ -145,7 +145,6 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	requestedEvent := cloneContainerRequest(request)
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
-	go s.eventRepo.PushContainerRequestedEvent(requestedEvent)
 
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
@@ -159,7 +158,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	queueStart := time.Now()
 	err = s.addRequestToBacklog(request)
-	s.recordContainerPhase(request, types.ContainerPhaseSchedulerQueuePush, queueStart, time.Now(), err == nil, map[string]string{
+	s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerQueuePush, queueStart, time.Now(), err == nil, map[string]string{
 		"retry_count": fmt.Sprintf("%d", request.RetryCount),
 	})
 	if err != nil {
@@ -206,16 +205,16 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 		ID:          types.ContainerEventSchedulerStopRequested,
 		ContainerID: stopArgs.ContainerId,
 		Reason:      reason,
-		Source:      "scheduler.stop",
-		Message:     "scheduler received stop request",
+		Source:      types.EventSourceSchedulerStop.String(),
+		Message:     types.EventMessageSchedulerStopRequested.String(),
 		Attrs: map[string]string{
-			"force": fmt.Sprintf("%t", stopArgs.Force),
+			types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
 		},
 	}
 	if state != nil {
 		event.StubID = state.StubId
 		event.WorkspaceID = state.WorkspaceId
-		event.Attrs["previous_status"] = string(state.Status)
+		event.Attrs[types.EventAttrPreviousStatus] = string(state.Status)
 	}
 	s.eventRepo.PushContainerEvent(event)
 
@@ -353,7 +352,6 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	scheduledEvent := cloneContainerRequest(workerRequest)
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
-	go s.eventRepo.PushContainerScheduledEvent(scheduledEvent.ContainerId, worker.Id, scheduledEvent)
 	return nil
 }
 
@@ -372,16 +370,16 @@ func cloneContainerRequest(request *types.ContainerRequest) *types.ContainerRequ
 	return &cloned
 }
 
-func (s *Scheduler) recordContainerPhase(request *types.ContainerRequest, phaseID types.ContainerPhaseID, start time.Time, end time.Time, success bool, attrs map[string]string) {
+func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, attrs map[string]string) {
 	if s.eventRepo == nil || request == nil || request.ContainerId == "" || start.IsZero() || end.Before(start) {
 		return
 	}
 	if attrs == nil {
 		attrs = map[string]string{}
 	}
-	def := types.ContainerPhaseDefinitionFor(phaseID)
-	s.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
-		ID:          phaseID,
+	def := types.ContainerLifecycleDefinitionFor(lifecycleID)
+	s.eventRepo.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:          lifecycleID,
 		Domain:      def.Domain,
 		ParentID:    def.ParentID,
 		StartTime:   start.UTC(),
@@ -393,7 +391,7 @@ func (s *Scheduler) recordContainerPhase(request *types.ContainerRequest, phaseI
 		TaskID:      taskIDFromRequestEnv(request.Env),
 		WorkspaceID: request.WorkspaceId,
 		Success:     &success,
-		Source:      "scheduler",
+		Source:      types.EventSourceScheduler.String(),
 		Attrs:       attrs,
 	})
 }
