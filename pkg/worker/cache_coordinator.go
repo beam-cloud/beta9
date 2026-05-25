@@ -58,6 +58,7 @@ type gatewayCacheRegistration struct {
 	logicalHostID  string
 	registrationID string
 	cachePathID    string
+	loggedSuccess  bool
 }
 
 func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) *gatewayCacheRegistration {
@@ -114,7 +115,12 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		TtlSeconds: int32(cacheRegistrationTTL(r.cacheConfig) / time.Second),
 	}))
 	if err == nil {
-		log.Info().
+		logger := log.Debug()
+		if !r.loggedSuccess {
+			logger = log.Info()
+			r.loggedSuccess = true
+		}
+		logger.
 			Str("logical_host_id", host.LogicalHostId).
 			Str("registration_id", host.RegistrationId).
 			Str("addr", host.PrivateAddr).

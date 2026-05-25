@@ -195,6 +195,7 @@ const (
 	EventSourceEndpointAutoscaler       EventSource = "endpoint.autoscaler"
 	EventSourceWorkerEventBus           EventSource = "worker.event_bus"
 	EventSourceWorkerLogger             EventSource = "worker.logger"
+	EventSourceWorkerNetwork            EventSource = "worker.network"
 	EventSourceWorkerRuntime            EventSource = "worker.runtime"
 	EventSourceWorkerStatusHeartbeat    EventSource = "worker.status_heartbeat"
 	EventSourceRunnerStdout             EventSource = "runner.stdout"
@@ -269,6 +270,8 @@ const (
 	EventAttrTaskID             = "task_id"
 	EventAttrTimeoutSeconds     = "timeout_seconds"
 	EventAttrTotalRequests      = "total_requests"
+	EventAttrDurationUs         = "duration_us"
+	EventAttrDurationNs         = "duration_ns"
 )
 
 const (
@@ -337,12 +340,23 @@ const (
 	ContainerLifecycleSetAddressMap               ContainerLifecycleID = "worker.set_address_map"
 	ContainerLifecycleOverlaySetup                ContainerLifecycleID = "mount.overlay_setup"
 	ContainerLifecycleNetworkSetup                ContainerLifecycleID = "network.setup"
+	ContainerLifecycleNetworkCreateVeth           ContainerLifecycleID = "network.create_veth"
+	ContainerLifecycleNetworkSetupBridge          ContainerLifecycleID = "network.setup_bridge"
+	ContainerLifecycleNetworkCreateNamespace      ContainerLifecycleID = "network.create_namespace"
+	ContainerLifecycleNetworkConfigureNamespace   ContainerLifecycleID = "network.configure_namespace"
+	ContainerLifecycleNetworkIPLock               ContainerLifecycleID = "network.ip_lock"
+	ContainerLifecycleNetworkIPScan               ContainerLifecycleID = "network.ip_scan"
+	ContainerLifecycleNetworkIPAssign             ContainerLifecycleID = "network.ip_assign"
+	ContainerLifecycleNetworkSetContainerIP       ContainerLifecycleID = "network.set_container_ip"
+	ContainerLifecycleNetworkRestrictions         ContainerLifecycleID = "network.restrictions"
 	ContainerLifecycleGPUAssignment               ContainerLifecycleID = "worker.gpu_assignment"
 	ContainerLifecycleNetworkExpose               ContainerLifecycleID = "network.expose_ports"
 	ContainerLifecycleRuntimePrepare              ContainerLifecycleID = "runtime.prepare"
 	ContainerLifecycleConfigWrite                 ContainerLifecycleID = "runtime.config_write"
 	ContainerLifecycleStartQueueWait              ContainerLifecycleID = "worker.start_queue_wait"
 	ContainerLifecycleRuntimeStartToPID           ContainerLifecycleID = "runtime.start_to_pid"
+	ContainerLifecycleSandboxApplyCPUQuota        ContainerLifecycleID = "sandbox.apply_cpu_quota"
+	ContainerLifecycleSandboxProcessManagerReady  ContainerLifecycleID = "sandbox.process_manager_ready"
 	ContainerLifecycleServeReady                  ContainerLifecycleID = "serve.ready"
 	ContainerLifecycleResultDelivery              ContainerLifecycleID = "result.delivery"
 	ContainerLifecycleContainerRequestToStartTask ContainerLifecycleID = "function.container_request_to_start_task"
@@ -395,12 +409,23 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleSetAddressMap:               {ID: ContainerLifecycleSetAddressMap, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set address map"},
 	ContainerLifecycleOverlaySetup:                {ID: ContainerLifecycleOverlaySetup, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Overlay setup"},
 	ContainerLifecycleNetworkSetup:                {ID: ContainerLifecycleNetworkSetup, Domain: EventDomainNetwork, ParentID: ContainerLifecycleStartup, Label: "Network setup"},
+	ContainerLifecycleNetworkCreateVeth:           {ID: ContainerLifecycleNetworkCreateVeth, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Create veth pair"},
+	ContainerLifecycleNetworkSetupBridge:          {ID: ContainerLifecycleNetworkSetupBridge, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Setup bridge"},
+	ContainerLifecycleNetworkCreateNamespace:      {ID: ContainerLifecycleNetworkCreateNamespace, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Create namespace"},
+	ContainerLifecycleNetworkConfigureNamespace:   {ID: ContainerLifecycleNetworkConfigureNamespace, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Configure namespace"},
+	ContainerLifecycleNetworkIPLock:               {ID: ContainerLifecycleNetworkIPLock, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Acquire IP lock"},
+	ContainerLifecycleNetworkIPScan:               {ID: ContainerLifecycleNetworkIPScan, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Scan allocated IPs"},
+	ContainerLifecycleNetworkIPAssign:             {ID: ContainerLifecycleNetworkIPAssign, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Assign container IP"},
+	ContainerLifecycleNetworkSetContainerIP:       {ID: ContainerLifecycleNetworkSetContainerIP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Persist container IP"},
+	ContainerLifecycleNetworkRestrictions:         {ID: ContainerLifecycleNetworkRestrictions, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Network restrictions"},
 	ContainerLifecycleGPUAssignment:               {ID: ContainerLifecycleGPUAssignment, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "GPU assignment"},
 	ContainerLifecycleNetworkExpose:               {ID: ContainerLifecycleNetworkExpose, Domain: EventDomainNetwork, ParentID: ContainerLifecycleStartup, Label: "Expose ports"},
 	ContainerLifecycleRuntimePrepare:              {ID: ContainerLifecycleRuntimePrepare, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime prepare"},
 	ContainerLifecycleConfigWrite:                 {ID: ContainerLifecycleConfigWrite, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Config write"},
 	ContainerLifecycleStartQueueWait:              {ID: ContainerLifecycleStartQueueWait, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker start queue wait"},
 	ContainerLifecycleRuntimeStartToPID:           {ID: ContainerLifecycleRuntimeStartToPID, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime start to PID", Required: true},
+	ContainerLifecycleSandboxApplyCPUQuota:        {ID: ContainerLifecycleSandboxApplyCPUQuota, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Apply sandbox CPU quota"},
+	ContainerLifecycleSandboxProcessManagerReady:  {ID: ContainerLifecycleSandboxProcessManagerReady, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Sandbox process manager ready"},
 	ContainerLifecycleServeReady:                  {ID: ContainerLifecycleServeReady, Domain: EventDomainServe, ParentID: ContainerLifecycleStartup, Label: "Serve ready"},
 	ContainerLifecycleResultDelivery:              {ID: ContainerLifecycleResultDelivery, Domain: EventDomainResult, ParentID: ContainerLifecycleStartup, Label: "Result delivery"},
 	ContainerLifecycleContainerRequestToStartTask: {ID: ContainerLifecycleContainerRequestToStartTask, Domain: EventDomainTask, Label: "Container request to runner start"},

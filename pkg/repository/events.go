@@ -111,6 +111,14 @@ func (r *EventClientRepo) PushContainerLifecycleEvent(lifecycle types.EventConta
 	if lifecycle.DurationMs == 0 && !lifecycle.StartTime.IsZero() && !lifecycle.EndTime.Before(lifecycle.StartTime) {
 		lifecycle.DurationMs = lifecycle.EndTime.Sub(lifecycle.StartTime).Milliseconds()
 	}
+	if !lifecycle.StartTime.IsZero() && !lifecycle.EndTime.Before(lifecycle.StartTime) {
+		if lifecycle.Attrs == nil {
+			lifecycle.Attrs = map[string]string{}
+		}
+		if _, ok := lifecycle.Attrs[types.EventAttrDurationUs]; !ok {
+			lifecycle.Attrs[types.EventAttrDurationUs] = fmt.Sprintf("%d", lifecycle.EndTime.Sub(lifecycle.StartTime).Microseconds())
+		}
+	}
 
 	r.pushEvent(types.EventContainerLifecycle, types.EventContainerLifecycleSchemaVersion, lifecycle)
 }

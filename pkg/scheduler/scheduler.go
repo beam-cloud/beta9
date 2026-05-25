@@ -307,9 +307,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
-		for _, request := range requests {
-			s.processRequest(request, workers)
-		}
+		s.processRequestBatch(requests, workers)
 	}
 }
 
@@ -688,8 +686,10 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 
 	// Select the worker with the highest score
 	sort.Slice(scoredWorkers, func(i, j int) bool {
-		// TODO: Figure out a short way to randomize order of workers with the same score
-		return scoredWorkers[i].score > scoredWorkers[j].score
+		if scoredWorkers[i].score != scoredWorkers[j].score {
+			return scoredWorkers[i].score > scoredWorkers[j].score
+		}
+		return workerFreeCapacityScore(scoredWorkers[i].worker, request) > workerFreeCapacityScore(scoredWorkers[j].worker, request)
 	})
 
 	return scoredWorkers[0].worker, nil
@@ -719,6 +719,18 @@ func gpuPriorityModifier(request *types.ContainerRequest, gpu string) int {
 		}
 	}
 	return 0
+}
+
+func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerRequest) int64 {
+	if worker == nil {
+		return 0
+	}
+
+	score := worker.FreeCpu + worker.FreeMemory
+	if request.RequiresGPU() {
+		score += int64(worker.FreeGpuCount) * 1_000_000
+	}
+	return score
 }
 
 const maxScheduleRetryCount = 120

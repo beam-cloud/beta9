@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -288,6 +289,10 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 		}
 		if query.StubID == "" {
 			query.StubID = state.StubId
+		}
+	} else if query.StubID == "" {
+		if stubID, ok := common.ExtractStubIdFromStubScopedContainerId(containerID); ok {
+			query.StubID = stubID
 		}
 	}
 
@@ -606,10 +611,10 @@ func mergeClipAccessMetric(rollups map[string]*ClipAccessMetric, metric ClipAcce
 
 func containerEventDurationUs(event types.ContainerEventRecord) int64 {
 	if event.Attrs != nil {
-		if durationUs, err := strconv.ParseInt(event.Attrs["duration_us"], 10, 64); err == nil && durationUs > 0 {
+		if durationUs, err := strconv.ParseInt(event.Attrs[types.EventAttrDurationUs], 10, 64); err == nil && durationUs > 0 {
 			return durationUs
 		}
-		if durationNs, err := strconv.ParseInt(event.Attrs["duration_ns"], 10, 64); err == nil && durationNs > 0 {
+		if durationNs, err := strconv.ParseInt(event.Attrs[types.EventAttrDurationNs], 10, 64); err == nil && durationNs > 0 {
 			return durationNs / 1000
 		}
 	}

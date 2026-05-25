@@ -31,9 +31,12 @@ func getContainerNetworkInfo(ctx context.Context, workerRepoClient pb.WorkerRepo
 		return nil, err
 	}
 
+	return containerNetworkInfoFromIP(containerId, containerIpResponse.IpAddress, ipv6Enabled)
+}
+
+func containerNetworkInfoFromIP(containerId string, containerIp string, ipv6Enabled bool) (*containerNetworkInfo, error) {
 	vethHost, _ := containerVethNames(containerId)
 	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
-	containerIp := containerIpResponse.IpAddress
 
 	info := &containerNetworkInfo{
 		ContainerIp: containerIp,

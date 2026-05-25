@@ -35,6 +35,7 @@ const (
 	WorkerRepositoryService_SetNetworkLock_FullMethodName            = "/WorkerRepositoryService/SetNetworkLock"
 	WorkerRepositoryService_RemoveNetworkLock_FullMethodName         = "/WorkerRepositoryService/RemoveNetworkLock"
 	WorkerRepositoryService_SetContainerIp_FullMethodName            = "/WorkerRepositoryService/SetContainerIp"
+	WorkerRepositoryService_MoveContainerIp_FullMethodName           = "/WorkerRepositoryService/MoveContainerIp"
 	WorkerRepositoryService_GetContainerIp_FullMethodName            = "/WorkerRepositoryService/GetContainerIp"
 	WorkerRepositoryService_GetContainerIps_FullMethodName           = "/WorkerRepositoryService/GetContainerIps"
 	WorkerRepositoryService_RemoveContainerIp_FullMethodName         = "/WorkerRepositoryService/RemoveContainerIp"
@@ -60,6 +61,7 @@ type WorkerRepositoryServiceClient interface {
 	SetNetworkLock(ctx context.Context, in *SetNetworkLockRequest, opts ...grpc.CallOption) (*SetNetworkLockResponse, error)
 	RemoveNetworkLock(ctx context.Context, in *RemoveNetworkLockRequest, opts ...grpc.CallOption) (*RemoveNetworkLockResponse, error)
 	SetContainerIp(ctx context.Context, in *SetContainerIpRequest, opts ...grpc.CallOption) (*SetContainerIpResponse, error)
+	MoveContainerIp(ctx context.Context, in *MoveContainerIpRequest, opts ...grpc.CallOption) (*MoveContainerIpResponse, error)
 	GetContainerIp(ctx context.Context, in *GetContainerIpRequest, opts ...grpc.CallOption) (*GetContainerIpResponse, error)
 	GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error)
 	RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error)
@@ -240,6 +242,15 @@ func (c *workerRepositoryServiceClient) SetContainerIp(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) MoveContainerIp(ctx context.Context, in *MoveContainerIpRequest, opts ...grpc.CallOption) (*MoveContainerIpResponse, error) {
+	out := new(MoveContainerIpResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_MoveContainerIp_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerRepositoryServiceClient) GetContainerIp(ctx context.Context, in *GetContainerIpRequest, opts ...grpc.CallOption) (*GetContainerIpResponse, error) {
 	out := new(GetContainerIpResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerIp_FullMethodName, in, out, opts...)
@@ -287,6 +298,7 @@ type WorkerRepositoryServiceServer interface {
 	SetNetworkLock(context.Context, *SetNetworkLockRequest) (*SetNetworkLockResponse, error)
 	RemoveNetworkLock(context.Context, *RemoveNetworkLockRequest) (*RemoveNetworkLockResponse, error)
 	SetContainerIp(context.Context, *SetContainerIpRequest) (*SetContainerIpResponse, error)
+	MoveContainerIp(context.Context, *MoveContainerIpRequest) (*MoveContainerIpResponse, error)
 	GetContainerIp(context.Context, *GetContainerIpRequest) (*GetContainerIpResponse, error)
 	GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error)
 	RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error)
@@ -344,6 +356,9 @@ func (UnimplementedWorkerRepositoryServiceServer) RemoveNetworkLock(context.Cont
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetContainerIp(context.Context, *SetContainerIpRequest) (*SetContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetContainerIp not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) MoveContainerIp(context.Context, *MoveContainerIpRequest) (*MoveContainerIpResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MoveContainerIp not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) GetContainerIp(context.Context, *GetContainerIpRequest) (*GetContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetContainerIp not implemented")
@@ -659,6 +674,24 @@ func _WorkerRepositoryService_SetContainerIp_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_MoveContainerIp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MoveContainerIpRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).MoveContainerIp(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_MoveContainerIp_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).MoveContainerIp(ctx, req.(*MoveContainerIpRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerRepositoryService_GetContainerIp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetContainerIpRequest)
 	if err := dec(in); err != nil {
@@ -779,6 +812,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetContainerIp",
 			Handler:    _WorkerRepositoryService_SetContainerIp_Handler,
+		},
+		{
+			MethodName: "MoveContainerIp",
+			Handler:    _WorkerRepositoryService_MoveContainerIp_Handler,
 		},
 		{
 			MethodName: "GetContainerIp",

@@ -14,6 +14,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -720,16 +722,27 @@ func isTransientSandboxConnectFailure(err error) bool {
 		return false
 	}
 
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	}
+
 	var stateNotFound *types.ErrContainerStateNotFound
 	if errors.As(err, &stateNotFound) {
 		return true
 	}
 
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "failed to schedule container") ||
 		strings.Contains(msg, "context cancelled while trying to get worker addr") ||
 		strings.Contains(msg, "context deadline exceeded") ||
-		strings.Contains(msg, "deadline exceeded")
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "transport") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "eof") ||
+		strings.Contains(msg, "unavailable")
 }
 
 func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSandboxUpdateTTLRequest) (*pb.PodSandboxUpdateTTLResponse, error) {

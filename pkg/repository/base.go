@@ -33,6 +33,7 @@ type WorkerRepository interface {
 	RemoveImagePullLock(workerId, imageId, token string) error
 	GetContainerIp(networkPrefix string, containerId string) (string, error)
 	SetContainerIp(networkPrefix string, containerId, containerIp string) error
+	MoveContainerIp(networkPrefix, fromContainerId, toContainerId, containerIp string) error
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)

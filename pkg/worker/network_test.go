@@ -4,6 +4,8 @@ import (
 	"net"
 	"os"
 	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func TestGetIPFromEnv(t *testing.T) {
@@ -75,6 +77,62 @@ func TestContainerVethNamesAvoidBurstCollisions(t *testing.T) {
 	}
 }
 
+func TestContainerNetworkPrefixIsNodeScoped(t *testing.T) {
+	nodePrefix := "k3d-beta9-agent-0"
+
+	first := containerNetworkPrefix(nodePrefix, "worker-a")
+	second := containerNetworkPrefix(nodePrefix, "worker-b")
+
+	if first != nodePrefix {
+		t.Fatalf("expected node-scoped network prefix %q, got %q", nodePrefix, first)
+	}
+	if second != first {
+		t.Fatalf("workers on the same node must share network prefix: %q != %q", second, first)
+	}
+}
+
+func TestContainerNetworkSlotPoolSizeDisabledByDefault(t *testing.T) {
+	t.Setenv(containerNetworkSlotPoolEnv, "")
+
+	if got := containerNetworkSlotPoolSizeForPool(types.WorkerPoolConfig{}, 128); got != 0 {
+		t.Fatalf("expected slot pool to be disabled by default, got %d", got)
+	}
+}
+
+func TestContainerNetworkSlotPoolSizeUsesStartLimit(t *testing.T) {
+	t.Setenv(containerNetworkSlotPoolEnv, "")
+
+	poolConfig := types.WorkerPoolConfig{NetworkPreallocation: true}
+
+	if got := containerNetworkSlotPoolSizeForPool(poolConfig, 128); got != 128 {
+		t.Fatalf("expected slot pool to match start limit, got %d", got)
+	}
+	if got := containerNetworkSlotPoolSizeForPool(poolConfig, 0); got != defaultContainerNetworkSlotPoolSize {
+		t.Fatalf("expected default slot pool, got %d", got)
+	}
+}
+
+func TestContainerNetworkSlotPoolSizeUsesPoolConfig(t *testing.T) {
+	t.Setenv(containerNetworkSlotPoolEnv, "")
+
+	poolConfig := types.WorkerPoolConfig{
+		NetworkPreallocation: true,
+		NetworkSlotPoolSize:  64,
+	}
+
+	if got := containerNetworkSlotPoolSizeForPool(poolConfig, 128); got != 64 {
+		t.Fatalf("expected configured slot pool, got %d", got)
+	}
+}
+
+func TestContainerNetworkSlotPoolSizeEnvOverride(t *testing.T) {
+	t.Setenv(containerNetworkSlotPoolEnv, "256")
+
+	if got := containerNetworkSlotPoolSizeForPool(types.WorkerPoolConfig{}, 128); got != 256 {
+		t.Fatalf("expected env override slot pool, got %d", got)
+	}
+}
+
 func TestExposePortsWithNoBindingsSkipsNetworkLookup(t *testing.T) {
 	manager := &ContainerNetworkManager{}
 
@@ -102,6 +160,38 @@ func TestContainerSubnetSupportsThousandContainerBurst(t *testing.T) {
 	}
 
 	t.Fatalf("container subnet only has %d usable addresses, need at least 1000", usable)
+}
+
+func TestContainerNetworkManagerReusesReleasedLocalIP(t *testing.T) {
+	manager := &ContainerNetworkManager{
+		allocatedIPsLoaded: true,
+		allocatedIPs:       map[string]struct{}{},
+		containerIPs:       map[string]string{},
+	}
+
+	first := manager.nextAvailableContainerIPLocked()
+	if first == nil {
+		t.Fatal("expected an available container IP")
+	}
+	manager.rememberContainerIPLocked("container-1", first.IP.String())
+
+	second := manager.nextAvailableContainerIPLocked()
+	if second == nil {
+		t.Fatal("expected a second available container IP")
+	}
+	if first.IP.Equal(second.IP) {
+		t.Fatalf("expected second allocation to skip %s", first.IP)
+	}
+
+	manager.forgetContainerIPLocked("container-1", "")
+
+	reused := manager.nextAvailableContainerIPLocked()
+	if reused == nil {
+		t.Fatal("expected released IP to be available")
+	}
+	if !first.IP.Equal(reused.IP) {
+		t.Fatalf("expected released IP %s to be reusable, got %s", first.IP, reused.IP)
+	}
 }
 
 func TestContainerIPv6AddressUsesFullIPv4HostOffset(t *testing.T) {

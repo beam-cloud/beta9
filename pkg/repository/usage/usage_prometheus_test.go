@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	vmetrics "github.com/VictoriaMetrics/metrics"
@@ -23,4 +24,29 @@ func TestMetricsHandlerIncludesVictoriaMetricsSet(t *testing.T) {
 	body := response.Body.String()
 	require.Contains(t, body, "usage_prometheus_test_counter")
 	require.Contains(t, body, "usage_prometheus_test_victoria_counter_total")
+}
+
+func TestConcurrentCounterVecRegistration(t *testing.T) {
+	repo := NewPrometheusUsageMetricsRepository(types.PrometheusConfig{}).(*PrometheusUsageMetricsRepository)
+	metadata := map[string]interface{}{
+		"container_id": "container",
+		"worker_id":    "worker",
+	}
+
+	errs := make(chan error, 100)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- repo.IncrementCounter("usage_prometheus_concurrent_counter", metadata, 1)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, repo.counterVecs.Len())
 }

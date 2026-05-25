@@ -31,6 +31,8 @@ service WorkerRepositoryService {
   rpc RemoveNetworkLock(RemoveNetworkLockRequest)
       returns (RemoveNetworkLockResponse) {}
   rpc SetContainerIp(SetContainerIpRequest) returns (SetContainerIpResponse) {}
+  rpc MoveContainerIp(MoveContainerIpRequest)
+      returns (MoveContainerIpResponse) {}
   rpc GetContainerIp(GetContainerIpRequest) returns (GetContainerIpResponse) {}
   rpc GetContainerIps(GetContainerIpsRequest)
       returns (GetContainerIpsResponse) {}
@@ -208,6 +210,18 @@ message SetContainerIpRequest {
 }
 
 message SetContainerIpResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message MoveContainerIpRequest {
+  string network_prefix = 1;
+  string from_container_id = 2;
+  string to_container_id = 3;
+  string ip_address = 4;
+}
+
+message MoveContainerIpResponse {
   bool ok = 1;
   string error_msg = 2;
 }

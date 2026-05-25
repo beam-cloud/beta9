@@ -22,6 +22,101 @@ type WorkerRedisRepository struct {
 	config types.WorkerConfig
 }
 
+var setWorkerNetworkContainerIPScript = redis.NewScript(`
+local container_key = KEYS[1]
+local index_key = KEYS[2]
+local ref_counts_key = KEYS[3]
+local owner_key = KEYS[4]
+local ip = ARGV[1]
+local container_id = ARGV[2]
+local owner_key_prefix = ARGV[3]
+
+local old_ip = redis.call("GET", container_key)
+if old_ip == ip then
+	redis.call("SADD", index_key, ip)
+	redis.call("HSET", ref_counts_key, ip, 1)
+	redis.call("SET", owner_key, container_id)
+	return 1
+end
+
+local existing_owner = redis.call("GET", owner_key)
+if existing_owner and existing_owner ~= false and existing_owner ~= "" and existing_owner ~= container_id then
+	return redis.error_reply("ip address already reserved by " .. existing_owner)
+end
+
+if old_ip and old_ip ~= false and old_ip ~= "" then
+	local old_owner_key = owner_key_prefix .. old_ip
+	local old_owner = redis.call("GET", old_owner_key)
+	if old_owner == container_id then
+		redis.call("DEL", old_owner_key)
+	end
+	redis.call("HDEL", ref_counts_key, old_ip)
+	redis.call("SREM", index_key, old_ip)
+end
+
+redis.call("SET", container_key, ip)
+redis.call("SADD", index_key, ip)
+redis.call("HSET", ref_counts_key, ip, 1)
+redis.call("SET", owner_key, container_id)
+return 1
+`)
+
+var removeWorkerNetworkContainerIPScript = redis.NewScript(`
+local container_key = KEYS[1]
+local index_key = KEYS[2]
+local ref_counts_key = KEYS[3]
+local container_id = ARGV[1]
+local owner_key_prefix = ARGV[2]
+
+local ip = redis.call("GET", container_key)
+if not ip or ip == false or ip == "" then
+	return 0
+end
+
+redis.call("DEL", container_key)
+local owner_key = owner_key_prefix .. ip
+local owner = redis.call("GET", owner_key)
+if owner == container_id then
+	redis.call("DEL", owner_key)
+	redis.call("HDEL", ref_counts_key, ip)
+	redis.call("SREM", index_key, ip)
+end
+return 1
+`)
+
+var moveWorkerNetworkContainerIPScript = redis.NewScript(`
+local from_key = KEYS[1]
+local to_key = KEYS[2]
+local index_key = KEYS[3]
+local ref_counts_key = KEYS[4]
+local owner_key = KEYS[5]
+local ip = ARGV[1]
+local from_container_id = ARGV[2]
+local to_container_id = ARGV[3]
+
+local current_ip = redis.call("GET", from_key)
+if current_ip ~= ip then
+	return redis.error_reply("source container does not own requested ip")
+end
+
+local owner = redis.call("GET", owner_key)
+if owner ~= from_container_id then
+	return redis.error_reply("ip owner mismatch")
+end
+
+local to_ip = redis.call("GET", to_key)
+if to_ip and to_ip ~= false and to_ip ~= "" and to_ip ~= ip then
+	return redis.error_reply("destination container already has a different ip")
+end
+
+redis.call("DEL", from_key)
+redis.call("SET", to_key, ip)
+redis.call("SET", owner_key, to_container_id)
+redis.call("SADD", index_key, ip)
+redis.call("HSET", ref_counts_key, ip, 1)
+return 1
+`)
+
 func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
 	lock := common.NewRedisLock(r)
 	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
@@ -634,17 +729,36 @@ func (r *WorkerRedisRepository) GetContainerIp(networkPrefix string, containerId
 }
 
 func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId, containerIp string) error {
-	err := r.rdb.Set(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId), containerIp, 0).Err()
-	if err != nil {
-		return err
-	}
+	return setWorkerNetworkContainerIPScript.Run(
+		context.TODO(),
+		r.rdb,
+		[]string{
+			common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId),
+			common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
+			common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
+			common.RedisKeys.WorkerNetworkIpOwner(networkPrefix, containerIp),
+		},
+		containerIp,
+		containerId,
+		common.RedisKeys.WorkerNetworkIpOwnerPrefix(networkPrefix),
+	).Err()
+}
 
-	err = r.rdb.SAdd(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix), containerIp).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
+func (r *WorkerRedisRepository) MoveContainerIp(networkPrefix, fromContainerId, toContainerId, containerIp string) error {
+	return moveWorkerNetworkContainerIPScript.Run(
+		context.TODO(),
+		r.rdb,
+		[]string{
+			common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, fromContainerId),
+			common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, toContainerId),
+			common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
+			common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
+			common.RedisKeys.WorkerNetworkIpOwner(networkPrefix, containerIp),
+		},
+		containerIp,
+		fromContainerId,
+		toContainerId,
+	).Err()
 }
 
 func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) (string, error) {
@@ -668,20 +782,15 @@ func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string, token st
 }
 
 func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containerId string) error {
-	containerIp, err := r.rdb.Get(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId)).Result()
-	if err != nil {
-		return err
-	}
-
-	err = r.rdb.Del(context.TODO(), common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId), containerIp).Err()
-	if err != nil {
-		return err
-	}
-
-	err = r.rdb.SRem(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix), containerIp).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return removeWorkerNetworkContainerIPScript.Run(
+		context.TODO(),
+		r.rdb,
+		[]string{
+			common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId),
+			common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
+			common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
+		},
+		containerId,
+		common.RedisKeys.WorkerNetworkIpOwnerPrefix(networkPrefix),
+	).Err()
 }

@@ -186,6 +186,15 @@ func (s *WorkerRepositoryService) SetContainerIp(ctx context.Context, req *pb.Se
 	return &pb.SetContainerIpResponse{Ok: true}, nil
 }
 
+func (s *WorkerRepositoryService) MoveContainerIp(ctx context.Context, req *pb.MoveContainerIpRequest) (*pb.MoveContainerIpResponse, error) {
+	err := s.workerRepo.MoveContainerIp(req.NetworkPrefix, req.FromContainerId, req.ToContainerId, req.IpAddress)
+	if err != nil {
+		return &pb.MoveContainerIpResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.MoveContainerIpResponse{Ok: true}, nil
+}
+
 func (s *WorkerRepositoryService) GetContainerIp(ctx context.Context, req *pb.GetContainerIpRequest) (*pb.GetContainerIpResponse, error) {
 	ip, err := s.workerRepo.GetContainerIp(req.NetworkPrefix, req.ContainerId)
 	if err != nil {

@@ -3,8 +3,11 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
+	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/rs/zerolog/log"
 )
 
@@ -15,10 +18,10 @@ const (
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout             = 30 * time.Second
-	goprocInitialBackoff           = 25 * time.Millisecond
-	goprocMaxBackoff               = 250 * time.Millisecond
+	goprocReadyProbeTimeout        = 50 * time.Millisecond
+	goprocInitialBackoff           = 10 * time.Millisecond
+	goprocMaxBackoff               = 50 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5
-	goprocCommandCompletionWait    = 10 * time.Millisecond
 	cgroupSetupCompletionWait      = 500 * time.Millisecond
 	dockerDaemonStartupTimeout     = 30 * time.Second
 	dockerDaemonReadyPollInterval  = 1 * time.Second
@@ -120,34 +123,29 @@ func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, i
 // waitForProcessManager waits for the goproc process manager to be ready to accept commands
 // Uses exponential backoff to efficiently wait for goproc startup
 // This should be called ONCE during container initialization, not on every exec
-func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) bool {
+func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, bool) {
 	start := time.Now()
 	backoff := goprocInitialBackoff
+	var lastErr error
 
 	for time.Since(start) < goprocReadyTimeout {
 		select {
 		case <-ctx.Done():
-			return false
+			return nil, false
 		default:
 		}
 
-		// Try a simple echo command to check if goproc is ready
-		pid, err := instance.SandboxProcessManager.Exec(
-			[]string{"echo", "ready"},
-			"/",
-			[]string{},
-			false,
-		)
-
-		if err == nil {
-			// Successfully executed - goproc is ready
-			time.Sleep(goprocCommandCompletionWait)
-			instance.SandboxProcessManager.Status(pid)
-			log.Info().
-				Str("container_id", containerId).
-				Dur("wait_time", time.Since(start)).
-				Msg("process manager is ready")
-			return true
+		if probeProcessManager(ctx, instance) {
+			client, err := newProcessManagerClient(ctx, instance)
+			if err != nil {
+				lastErr = err
+			} else {
+				log.Info().
+					Str("container_id", containerId).
+					Dur("wait_time", time.Since(start)).
+					Msg("process manager is ready")
+				return client, true
+			}
 		}
 
 		// Not ready yet - wait with exponential backoff
@@ -159,11 +157,38 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		}
 	}
 
-	log.Error().
-		Str("container_id", containerId).
-		Msg("process manager did not become ready within timeout")
+	logEvent := log.Error().Str("container_id", containerId)
+	if lastErr != nil {
+		logEvent = logEvent.Err(lastErr)
+	}
+	logEvent.Msg("process manager did not become ready within timeout")
 
-	return false
+	return nil, false
+}
+
+func probeProcessManager(ctx context.Context, instance *ContainerInstance) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+	defer cancel()
+
+	if instance == nil || instance.ContainerIp == "" {
+		return false
+	}
+
+	address := fmt.Sprintf("%s:%d", instance.ContainerIp, types.WorkerSandboxProcessManagerPort)
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(probeCtx, "tcp", address)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	if instance == nil || instance.ContainerIp == "" {
+		return nil, fmt.Errorf("sandbox process manager address unavailable")
+	}
+	return goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
 }
 
 // waitForDockerDaemon waits for the Docker daemon to be ready to accept commands

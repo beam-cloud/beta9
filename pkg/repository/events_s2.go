@@ -775,10 +775,10 @@ func incrementCount(summary map[string]int64, key string) {
 
 func containerEventRecordDurationUs(event types.ContainerEventRecord) int64 {
 	if event.Attrs != nil {
-		if durationUs, err := strconv.ParseInt(event.Attrs["duration_us"], 10, 64); err == nil && durationUs > 0 {
+		if durationUs, err := strconv.ParseInt(event.Attrs[types.EventAttrDurationUs], 10, 64); err == nil && durationUs > 0 {
 			return durationUs
 		}
-		if durationNs, err := strconv.ParseInt(event.Attrs["duration_ns"], 10, 64); err == nil && durationNs > 0 {
+		if durationNs, err := strconv.ParseInt(event.Attrs[types.EventAttrDurationNs], 10, 64); err == nil && durationNs > 0 {
 			return durationNs / 1000
 		}
 	}

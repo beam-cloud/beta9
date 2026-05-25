@@ -91,6 +91,34 @@ func TestContainerStartLimitForPoolRuntimeUsesPoolConfig(t *testing.T) {
 	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
 }
 
+func TestContainerStartLimitForPoolRuntimeCapsByWorkerCPU(t *testing.T) {
+	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+
+	poolConfig := types.WorkerPoolConfig{
+		ContainerStartConcurrency: 128,
+		PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{
+			DefaultWorkerCPU: "1000m",
+		},
+	}
+
+	require.Equal(t, 16, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
+	require.Equal(t, 4, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+}
+
+func TestContainerStartLimitForPoolRuntimeScalesWithWorkerCPU(t *testing.T) {
+	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+
+	poolConfig := types.WorkerPoolConfig{
+		ContainerStartConcurrency: 128,
+		PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{
+			DefaultWorkerCPU: "8000m",
+		},
+	}
+
+	require.Equal(t, 128, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
+	require.Equal(t, 32, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+}
+
 func TestContainerStartLimitForPoolRuntimeAllowsEnvOverride(t *testing.T) {
 	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "8")
 

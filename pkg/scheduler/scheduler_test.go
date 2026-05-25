@@ -782,6 +782,190 @@ func TestProcessRequestUpdatesBatchWorkerCapacity(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	worker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    200,
+		TotalMemory: 250,
+		FreeCpu:     200,
+		FreeMemory:  250,
+		PoolName:    "beta9-cpu",
+	}
+	err = wb.workerRepo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(workers))
+
+	requests := []*types.ContainerRequest{
+		{
+			ContainerId: uuid.New().String(),
+			Cpu:         100,
+			Memory:      100,
+			Timestamp:   time.Now(),
+		},
+		{
+			ContainerId: uuid.New().String(),
+			Cpu:         100,
+			Memory:      100,
+			Timestamp:   time.Now(),
+		},
+		{
+			ContainerId: uuid.New().String(),
+			Cpu:         100,
+			Memory:      100,
+			Timestamp:   time.Now(),
+		},
+	}
+
+	wb.processRequestBatch(requests, workers)
+
+	queued := map[string]struct{}{}
+	for i := 0; i < 2; i++ {
+		request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+		assert.Nil(t, err)
+		assert.NotNil(t, request)
+		queued[request.ContainerId] = struct{}{}
+	}
+	extraRequest, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.Nil(t, extraRequest)
+
+	assert.Equal(t, 2, len(queued))
+	updatedWorker, err := wb.workerRepo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
+}
+
+func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	firstWorker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    200,
+		TotalMemory: 250,
+		FreeCpu:     200,
+		FreeMemory:  250,
+		PoolName:    "beta9-cpu",
+	}
+	err = wb.workerRepo.AddWorker(firstWorker)
+	assert.Nil(t, err)
+
+	secondWorker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    200,
+		TotalMemory: 250,
+		FreeCpu:     200,
+		FreeMemory:  250,
+		PoolName:    "beta9-cpu",
+	}
+	err = wb.workerRepo.AddWorker(secondWorker)
+	assert.Nil(t, err)
+
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+
+	requests := []*types.ContainerRequest{
+		{
+			ContainerId: uuid.New().String(),
+			Cpu:         100,
+			Memory:      100,
+			Timestamp:   time.Now(),
+		},
+		{
+			ContainerId: uuid.New().String(),
+			Cpu:         100,
+			Memory:      100,
+			Timestamp:   time.Now(),
+		},
+	}
+
+	wb.processRequestBatch(requests, workers)
+
+	firstQueued, err := wb.workerRepo.GetNextContainerRequest(firstWorker.Id)
+	assert.Nil(t, err)
+	secondQueued, err := wb.workerRepo.GetNextContainerRequest(secondWorker.Id)
+	assert.Nil(t, err)
+
+	assert.NotNil(t, firstQueued)
+	assert.NotNil(t, secondQueued)
+	assert.NotEqual(t, firstQueued.ContainerId, secondQueued.ContainerId)
+}
+
+func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	cpuWorker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    100,
+		TotalMemory: 125,
+		FreeCpu:     100,
+		FreeMemory:  125,
+		PoolName:    "beta9-cpu",
+	}
+	err = wb.workerRepo.AddWorker(cpuWorker)
+	assert.Nil(t, err)
+
+	gpuWorker := &types.Worker{
+		Id:            uuid.New().String(),
+		Status:        types.WorkerStatusAvailable,
+		TotalCpu:      100,
+		TotalMemory:   125,
+		TotalGpuCount: 1,
+		FreeCpu:       100,
+		FreeMemory:    125,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+		PoolName:      "beta9-a10g",
+	}
+	err = wb.workerRepo.AddWorker(gpuWorker)
+	assert.Nil(t, err)
+
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+
+	cpuRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         100,
+		Memory:      100,
+		Timestamp:   time.Now(),
+	}
+	gpuRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         100,
+		Memory:      100,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+
+	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest, cpuRequest}, workers)
+
+	queuedCPURequest, err := wb.workerRepo.GetNextContainerRequest(cpuWorker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedCPURequest)
+	assert.Equal(t, cpuRequest.ContainerId, queuedCPURequest.ContainerId)
+	assert.Equal(t, "", queuedCPURequest.Gpu)
+
+	queuedGPURequest, err := wb.workerRepo.GetNextContainerRequest(gpuWorker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedGPURequest)
+	assert.Equal(t, gpuRequest.ContainerId, queuedGPURequest.ContainerId)
+	assert.Equal(t, "A10G", queuedGPURequest.Gpu)
+	assert.Equal(t, uint32(1), queuedGPURequest.GpuCount)
+}
+
 func TestProcessRequestKeepsCPUAndGPUWorkersSeparate(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -964,9 +1148,22 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
 
-	assert.Equal(t, int64(1), firstScheduler.requestBacklog.Len())
-	requeuedRequest, err := firstScheduler.requestBacklog.Pop()
-	assert.Nil(t, err)
+	deadline := time.After(time.Second)
+	var requeuedRequest *types.ContainerRequest
+	for requeuedRequest == nil {
+		var err error
+		requeuedRequest, err = firstScheduler.requestBacklog.Pop()
+		if err == nil {
+			break
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("expected stale reservation to be requeued")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
 	assert.Equal(t, secondRequest.ContainerId, requeuedRequest.ContainerId)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
 	assert.Equal(t, "A10G", requeuedRequest.Gpu)
@@ -1059,6 +1256,57 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 	assert.Equal(t, 1, len(workers))
 	assert.Equal(t, expectedMemory, workers[0].TotalMemory)
 	assert.Equal(t, expectedMemory, workers[0].FreeMemory)
+}
+
+func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	poolConfig := types.WorkerPoolConfig{
+		PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{
+			DefaultWorkerCPU:      "16000m",
+			DefaultWorkerMemory:   "16Gi",
+			DefaultWorkerGpuCount: "0",
+		},
+	}
+	wb.workerPoolManager.SetPool("beta9-cpu", poolConfig, &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "beta9-cpu",
+		config:     wb.config,
+		workerRepo: wb.workerRepo,
+	})
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+
+	controllers, err := wb.getControllers(request)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(controllers))
+
+	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	wb.provisioning.mu.Lock()
+	reservation := wb.provisioning.reservations[reservationID]
+	assert.NotNil(t, reservation)
+	assert.Equal(t, int64(16000), reservation.worker.TotalCpu)
+	assert.Equal(t, int64(15900), reservation.worker.FreeCpu)
+	assert.Equal(t, int64(16384), reservation.worker.TotalMemory)
+	assert.Equal(t, int64(16384-capacityMemoryForScheduling(request)), reservation.worker.FreeMemory)
+	wb.provisioning.mu.Unlock()
+
+	newWorkerProvisioningAttempt(wb, request, controllers, reservationID).run()
+
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(workers))
+	assert.Equal(t, int64(16000), workers[0].TotalCpu)
+	assert.Equal(t, int64(16000), workers[0].FreeCpu)
+	assert.Equal(t, int64(16384), workers[0].TotalMemory)
+	assert.Equal(t, int64(16384), workers[0].FreeMemory)
 }
 
 func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
