@@ -141,14 +141,14 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 		metadataStore,
 		localReaderCacheConfig(cacheConfig),
 	); err != nil {
-		log.Warn().Err(err).Str("locality", m.locality).Str("node_id", m.nodeID).Msg("failed to attach local cache reader store")
+		log.Warn().Err(err).Str("locality", m.locality).Str("node_id", m.nodeID).Msg("Failed to attach local cache reader")
 	} else {
 		client.AttachLocalStore(localStore)
 		log.Info().
 			Str("cache_dir", cacheConfig.Server.DiskCacheDir).
 			Str("locality", m.locality).
 			Str("node_id", m.nodeID).
-			Msg("attached local cache reader store")
+			Msg("Attached local cache reader")
 	}
 
 	m.client = client

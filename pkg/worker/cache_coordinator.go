@@ -114,11 +114,11 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		TtlSeconds: int32(cacheRegistrationTTL(r.cacheConfig) / time.Second),
 	}))
 	if err == nil {
-		log.Debug().
+		log.Info().
 			Str("logical_host_id", host.LogicalHostId).
 			Str("registration_id", host.RegistrationId).
 			Str("addr", host.PrivateAddr).
-			Msg("registered embedded cache host")
+			Msg("Registered cache host")
 	}
 	return err
 }

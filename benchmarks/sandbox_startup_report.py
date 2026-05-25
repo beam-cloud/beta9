@@ -62,6 +62,12 @@ SERVER_PHASES = (
         "Image mounted FUSE hit after local lock",
         False,
     ),
+    (
+        "image_clip_mounted_fuse_hit_after_lock_ms",
+        "image.clip_mounted_fuse_hit_after_lock",
+        "Image mounted FUSE hit after remote lock",
+        False,
+    ),
     ("image_embedded_cache_metadata_copy_ms", "image.embedded_cache_metadata_copy", "Image embedded cache metadata copy", False),
     ("image_embedded_cache_store_ms", "image.embedded_cache_store", "Image embedded cache store", False),
     ("image_embedded_cache_restore_ms", "image.embedded_cache_restore", "Image embedded cache restore", False),
