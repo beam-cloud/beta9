@@ -1,0 +1,17 @@
+name: clip-runtime
+kind: clip
+runner: startup
+description: CLIP/image runtime latency suite using startup event instrumentation.
+defaults:
+  iterations: 5
+  warmup: 1
+  reset_workers: false
+  port_forward: true
+  bootstrap_stub: true
+scenarios:
+  - name: clip-v2-runtime-hot-load
+    operation: read
+    cache_state: hot
+    probes: [startup_events, clip_events, image_cache_events]
+    tags:
+      image_mode: clip_v2

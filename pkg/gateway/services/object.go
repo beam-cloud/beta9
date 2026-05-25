@@ -3,8 +3,10 @@ package gatewayservices
 import (
 	"context"
 	"io"
+	"net/url"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -134,11 +136,50 @@ func (gws *GatewayService) defaultWorkspacePresignEndpointUrl(workspaceStorage *
 		return ""
 	}
 
-	if *workspaceStorage.EndpointUrl != storageConfig.DefaultEndpointUrl {
+	if !sameStorageEndpoint(*workspaceStorage.EndpointUrl, storageConfig.DefaultEndpointUrl) {
 		return ""
 	}
 
 	return storageConfig.DefaultPresignedEndpointUrl
+}
+
+func sameStorageEndpoint(a, b string) bool {
+	a = strings.TrimRight(strings.TrimSpace(a), "/")
+	b = strings.TrimRight(strings.TrimSpace(b), "/")
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+
+	aURL, aErr := url.Parse(a)
+	bURL, bErr := url.Parse(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+
+	if !strings.EqualFold(aURL.Scheme, bURL.Scheme) {
+		return false
+	}
+
+	return strings.EqualFold(aURL.Hostname(), bURL.Hostname()) &&
+		effectiveURLPort(aURL) == effectiveURLPort(bURL)
+}
+
+func effectiveURLPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
 }
 
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {

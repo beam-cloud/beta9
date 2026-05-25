@@ -29,6 +29,9 @@ const (
 	WorkerRepositoryService_RemoveWorker_FullMethodName              = "/WorkerRepositoryService/RemoveWorker"
 	WorkerRepositoryService_UpdateWorkerCapacity_FullMethodName      = "/WorkerRepositoryService/UpdateWorkerCapacity"
 	WorkerRepositoryService_SetWorkerKeepAlive_FullMethodName        = "/WorkerRepositoryService/SetWorkerKeepAlive"
+	WorkerRepositoryService_RegisterCacheHost_FullMethodName         = "/WorkerRepositoryService/RegisterCacheHost"
+	WorkerRepositoryService_UnregisterCacheHost_FullMethodName       = "/WorkerRepositoryService/UnregisterCacheHost"
+	WorkerRepositoryService_ListCacheHosts_FullMethodName            = "/WorkerRepositoryService/ListCacheHosts"
 	WorkerRepositoryService_SetNetworkLock_FullMethodName            = "/WorkerRepositoryService/SetNetworkLock"
 	WorkerRepositoryService_RemoveNetworkLock_FullMethodName         = "/WorkerRepositoryService/RemoveNetworkLock"
 	WorkerRepositoryService_SetContainerIp_FullMethodName            = "/WorkerRepositoryService/SetContainerIp"
@@ -51,6 +54,9 @@ type WorkerRepositoryServiceClient interface {
 	RemoveWorker(ctx context.Context, in *RemoveWorkerRequest, opts ...grpc.CallOption) (*RemoveWorkerResponse, error)
 	UpdateWorkerCapacity(ctx context.Context, in *UpdateWorkerCapacityRequest, opts ...grpc.CallOption) (*UpdateWorkerCapacityResponse, error)
 	SetWorkerKeepAlive(ctx context.Context, in *SetWorkerKeepAliveRequest, opts ...grpc.CallOption) (*SetWorkerKeepAliveResponse, error)
+	RegisterCacheHost(ctx context.Context, in *RegisterCacheHostRequest, opts ...grpc.CallOption) (*RegisterCacheHostResponse, error)
+	UnregisterCacheHost(ctx context.Context, in *UnregisterCacheHostRequest, opts ...grpc.CallOption) (*UnregisterCacheHostResponse, error)
+	ListCacheHosts(ctx context.Context, in *ListCacheHostsRequest, opts ...grpc.CallOption) (*ListCacheHostsResponse, error)
 	SetNetworkLock(ctx context.Context, in *SetNetworkLockRequest, opts ...grpc.CallOption) (*SetNetworkLockResponse, error)
 	RemoveNetworkLock(ctx context.Context, in *RemoveNetworkLockRequest, opts ...grpc.CallOption) (*RemoveNetworkLockResponse, error)
 	SetContainerIp(ctx context.Context, in *SetContainerIpRequest, opts ...grpc.CallOption) (*SetContainerIpResponse, error)
@@ -180,6 +186,33 @@ func (c *workerRepositoryServiceClient) SetWorkerKeepAlive(ctx context.Context, 
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) RegisterCacheHost(ctx context.Context, in *RegisterCacheHostRequest, opts ...grpc.CallOption) (*RegisterCacheHostResponse, error) {
+	out := new(RegisterCacheHostResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RegisterCacheHost_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) UnregisterCacheHost(ctx context.Context, in *UnregisterCacheHostRequest, opts ...grpc.CallOption) (*UnregisterCacheHostResponse, error) {
+	out := new(UnregisterCacheHostResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_UnregisterCacheHost_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) ListCacheHosts(ctx context.Context, in *ListCacheHostsRequest, opts ...grpc.CallOption) (*ListCacheHostsResponse, error) {
+	out := new(ListCacheHostsResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ListCacheHosts_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerRepositoryServiceClient) SetNetworkLock(ctx context.Context, in *SetNetworkLockRequest, opts ...grpc.CallOption) (*SetNetworkLockResponse, error) {
 	out := new(SetNetworkLockResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetNetworkLock_FullMethodName, in, out, opts...)
@@ -248,6 +281,9 @@ type WorkerRepositoryServiceServer interface {
 	RemoveWorker(context.Context, *RemoveWorkerRequest) (*RemoveWorkerResponse, error)
 	UpdateWorkerCapacity(context.Context, *UpdateWorkerCapacityRequest) (*UpdateWorkerCapacityResponse, error)
 	SetWorkerKeepAlive(context.Context, *SetWorkerKeepAliveRequest) (*SetWorkerKeepAliveResponse, error)
+	RegisterCacheHost(context.Context, *RegisterCacheHostRequest) (*RegisterCacheHostResponse, error)
+	UnregisterCacheHost(context.Context, *UnregisterCacheHostRequest) (*UnregisterCacheHostResponse, error)
+	ListCacheHosts(context.Context, *ListCacheHostsRequest) (*ListCacheHostsResponse, error)
 	SetNetworkLock(context.Context, *SetNetworkLockRequest) (*SetNetworkLockResponse, error)
 	RemoveNetworkLock(context.Context, *RemoveNetworkLockRequest) (*RemoveNetworkLockResponse, error)
 	SetContainerIp(context.Context, *SetContainerIpRequest) (*SetContainerIpResponse, error)
@@ -290,6 +326,15 @@ func (UnimplementedWorkerRepositoryServiceServer) UpdateWorkerCapacity(context.C
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetWorkerKeepAlive(context.Context, *SetWorkerKeepAliveRequest) (*SetWorkerKeepAliveResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerKeepAlive not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) RegisterCacheHost(context.Context, *RegisterCacheHostRequest) (*RegisterCacheHostResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RegisterCacheHost not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) UnregisterCacheHost(context.Context, *UnregisterCacheHostRequest) (*UnregisterCacheHostResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UnregisterCacheHost not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) ListCacheHosts(context.Context, *ListCacheHostsRequest) (*ListCacheHostsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListCacheHosts not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetNetworkLock(context.Context, *SetNetworkLockRequest) (*SetNetworkLockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetNetworkLock not implemented")
@@ -506,6 +551,60 @@ func _WorkerRepositoryService_SetWorkerKeepAlive_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_RegisterCacheHost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterCacheHostRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).RegisterCacheHost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_RegisterCacheHost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).RegisterCacheHost(ctx, req.(*RegisterCacheHostRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_UnregisterCacheHost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnregisterCacheHostRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).UnregisterCacheHost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_UnregisterCacheHost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).UnregisterCacheHost(ctx, req.(*UnregisterCacheHostRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_ListCacheHosts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListCacheHostsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).ListCacheHosts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_ListCacheHosts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).ListCacheHosts(ctx, req.(*ListCacheHostsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerRepositoryService_SetNetworkLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetNetworkLockRequest)
 	if err := dec(in); err != nil {
@@ -656,6 +755,18 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerKeepAlive",
 			Handler:    _WorkerRepositoryService_SetWorkerKeepAlive_Handler,
+		},
+		{
+			MethodName: "RegisterCacheHost",
+			Handler:    _WorkerRepositoryService_RegisterCacheHost_Handler,
+		},
+		{
+			MethodName: "UnregisterCacheHost",
+			Handler:    _WorkerRepositoryService_UnregisterCacheHost_Handler,
+		},
+		{
+			MethodName: "ListCacheHosts",
+			Handler:    _WorkerRepositoryService_ListCacheHosts_Handler,
 		},
 		{
 			MethodName: "SetNetworkLock",

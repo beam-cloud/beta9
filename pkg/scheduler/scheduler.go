@@ -53,7 +53,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
-	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	eventRepo := repo.NewEventClientRepo(config)
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
@@ -145,7 +145,6 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	requestedEvent := cloneContainerRequest(request)
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
-	go s.eventRepo.PushContainerRequestedEvent(requestedEvent)
 
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
@@ -157,7 +156,12 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		return err
 	}
 
-	if err := s.addRequestToBacklog(request); err != nil {
+	queueStart := time.Now()
+	err = s.addRequestToBacklog(request)
+	s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerQueuePush, queueStart, time.Now(), err == nil, map[string]string{
+		"retry_count": fmt.Sprintf("%d", request.RetryCount),
+	})
+	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to add request to backlog")
 		newSchedulingAttempt(s, request, nil).fail("backlog_push_failed")
 		return err
@@ -194,6 +198,25 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
+	reason := types.NormalizeEventReason(string(stopArgs.Reason))
+	stopArgs.Reason = types.StopContainerReason(reason)
+	state, _ := s.containerRepo.GetContainerState(stopArgs.ContainerId)
+	event := types.EventContainerEventSchema{
+		ID:          types.ContainerEventSchedulerStopRequested,
+		ContainerID: stopArgs.ContainerId,
+		Reason:      reason,
+		Source:      types.EventSourceSchedulerStop.String(),
+		Message:     types.EventMessageSchedulerStopRequested.String(),
+		Attrs: map[string]string{
+			types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
+		},
+	}
+	if state != nil {
+		event.StubID = state.StubId
+		event.WorkspaceID = state.WorkspaceId
+		event.Attrs[types.EventAttrPreviousStatus] = string(state.Status)
+	}
+	s.eventRepo.PushContainerEvent(event)
 
 	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {
@@ -321,13 +344,14 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 			Msg("failed to attach build registry credentials to request")
 	}
 
-	if err := s.workerRepo.ScheduleContainerRequest(worker, request); err != nil {
+	workerRequest := cloneContainerRequest(request)
+	workerRequest.Timestamp = time.Now()
+	if err := s.workerRepo.ScheduleContainerRequest(worker, workerRequest); err != nil {
 		return err
 	}
 
-	scheduledEvent := cloneContainerRequest(request)
+	scheduledEvent := cloneContainerRequest(workerRequest)
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
-	go s.eventRepo.PushContainerScheduledEvent(scheduledEvent.ContainerId, worker.Id, scheduledEvent)
 	return nil
 }
 
@@ -344,6 +368,41 @@ func cloneContainerRequest(request *types.ContainerRequest) *types.ContainerRequ
 	cloned.Ports = append([]uint32(nil), request.Ports...)
 	cloned.AllowList = append([]string(nil), request.AllowList...)
 	return &cloned
+}
+
+func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, attrs map[string]string) {
+	if s.eventRepo == nil || request == nil || request.ContainerId == "" || start.IsZero() || end.Before(start) {
+		return
+	}
+	if attrs == nil {
+		attrs = map[string]string{}
+	}
+	def := types.ContainerLifecycleDefinitionFor(lifecycleID)
+	s.eventRepo.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:          lifecycleID,
+		Domain:      def.Domain,
+		ParentID:    def.ParentID,
+		StartTime:   start.UTC(),
+		EndTime:     end.UTC(),
+		DurationMs:  end.Sub(start).Milliseconds(),
+		ContainerID: request.ContainerId,
+		StubID:      request.StubId,
+		StubType:    string(request.Stub.Type.Kind()),
+		TaskID:      taskIDFromRequestEnv(request.Env),
+		WorkspaceID: request.WorkspaceId,
+		Success:     &success,
+		Source:      types.EventSourceScheduler.String(),
+		Attrs:       attrs,
+	})
+}
+
+func taskIDFromRequestEnv(env []string) string {
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "TASK_ID="); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // attachImageCredentials fetches and attaches OCI credentials to a container request

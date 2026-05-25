@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_RAW="${BENCH_SDK_PYTHON:-uv run --project ./sdk --no-sync python}"
+read -r -a PYTHON_CMD <<< "$PYTHON_RAW"
+
+export PYTHONPATH="$ROOT:$ROOT/benchmarks:$ROOT/sdk/src:${PYTHONPATH:-}"
+# The benchmark runner shells out to kubectl/docker/go while also using the
+# beta9 SDK, which opens grpc-python C-core threads. On macOS, grpc's fork
+# handlers can block subprocess creation after those threads exist; disable
+# grpc fork support for this CLI so probes remain bounded and deterministic.
+export GRPC_ENABLE_FORK_SUPPORT="${GRPC_ENABLE_FORK_SUPPORT:-0}"
+cd "$ROOT"
+exec "${PYTHON_CMD[@]}" -m benchmarks.b9bench "$@"

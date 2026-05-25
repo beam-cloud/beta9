@@ -1,19 +1,164 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 
+	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
-func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *testing.T) {
-	registry := &failFirstUnlockRegistry{MockRegistry: NewMockRegistry()}
+type orderedTestHasher struct {
+	hosts []*Host
+}
+
+func (h *orderedTestHasher) Add(hosts ...*Host) {
+	h.hosts = append(h.hosts, hosts...)
+}
+
+func (h *orderedTestHasher) Remove(host *Host) {
+	filtered := h.hosts[:0]
+	for _, existing := range h.hosts {
+		if existing == nil || host == nil || existing.HostId != host.HostId {
+			filtered = append(filtered, existing)
+		}
+	}
+	h.hosts = filtered
+}
+
+func (h *orderedTestHasher) GetN(n int, key string) []*Host {
+	if n > len(h.hosts) {
+		n = len(h.hosts)
+	}
+	return h.hosts[:n]
+}
+
+func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("local-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
 	client := &Client{
-		ctx:         context.Background(),
-		locality:    "test",
-		coordinator: registry,
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	dst := make([]byte, len(content))
+	_, err = client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.ErrorIs(t, err, ErrContentNotFound)
+
+	client.removeLocalHostCache(hash)
+	client.hasher = &orderedTestHasher{hosts: []*Host{localHost}}
+	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("local-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestClientLocalPageFileViewsReturnsSelectedClientLocalPageFiles(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijkl")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{localHost}},
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
+	require.NoError(t, err)
+	require.Len(t, regions, 2)
+	require.Equal(t, int64(3), regions[0].Offset)
+	require.Equal(t, 2, regions[0].Length)
+	require.Equal(t, int64(0), regions[1].Offset)
+	require.Equal(t, 4, regions[1].Length)
+	require.FileExists(t, regions[0].Path)
+	require.FileExists(t, regions[1].Path)
+}
+
+func TestClientLocalPageFileViewsPrefersAttachedLocalReplica(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijkl")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
+	require.NoError(t, err)
+	require.Len(t, regions, 2)
+	require.Equal(t, int64(3), regions[0].Offset)
+	require.Equal(t, 2, regions[0].Length)
+	require.Equal(t, int64(0), regions[1].Offset)
+	require.Equal(t, 4, regions[1].Length)
+}
+
+func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *testing.T) {
+	registry := &failFirstUnlockRegistry{MockCacheMetadataStore: NewMockCacheMetadataStore()}
+	client := &Client{
+		ctx:           context.Background(),
+		locality:      "test",
+		metadataStore: registry,
 	}
 
 	hash, err := client.withStoreFromContentLock(context.Background(), "/source", true, func() (string, error) {
@@ -27,7 +172,7 @@ func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *
 }
 
 type failFirstUnlockRegistry struct {
-	*MockRegistry
+	*MockCacheMetadataStore
 	removeCalls int
 }
 
@@ -36,5 +181,5 @@ func (r *failFirstUnlockRegistry) RemoveStoreFromContentLock(ctx context.Context
 	if r.removeCalls == 1 {
 		return errors.New("unlock failed")
 	}
-	return r.MockRegistry.RemoveStoreFromContentLock(ctx, locality, sourcePath)
+	return r.MockCacheMetadataStore.RemoveStoreFromContentLock(ctx, locality, sourcePath)
 }

@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	FunctionPhaseContainerRequestReady = "container_request_ready"
-	FunctionPhaseStartTask             = "start_task"
-	FunctionPhaseGetArgs               = "get_args"
-	FunctionPhaseSetResult             = "set_result"
+	FunctionPhaseContainerRequestReady = types.FunctionLifecycleCheckpointContainerRequestReady
+	FunctionPhaseStartTask             = types.FunctionLifecycleCheckpointStartTask
+	FunctionPhaseGetArgs               = types.FunctionLifecycleCheckpointGetArgs
+	FunctionPhaseSetResult             = types.FunctionLifecycleCheckpointSetResult
 
 	functionPhaseMetricTTL = 15 * time.Minute
 )

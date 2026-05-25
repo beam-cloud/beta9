@@ -22,6 +22,11 @@ service WorkerRepositoryService {
       returns (UpdateWorkerCapacityResponse) {}
   rpc SetWorkerKeepAlive(SetWorkerKeepAliveRequest)
       returns (SetWorkerKeepAliveResponse) {}
+  rpc RegisterCacheHost(RegisterCacheHostRequest)
+      returns (RegisterCacheHostResponse) {}
+  rpc UnregisterCacheHost(UnregisterCacheHostRequest)
+      returns (UnregisterCacheHostResponse) {}
+  rpc ListCacheHosts(ListCacheHostsRequest) returns (ListCacheHostsResponse) {}
   rpc SetNetworkLock(SetNetworkLockRequest) returns (SetNetworkLockResponse) {}
   rpc RemoveNetworkLock(RemoveNetworkLockRequest)
       returns (RemoveNetworkLockResponse) {}
@@ -125,6 +130,53 @@ message SetWorkerKeepAliveRequest { string worker_id = 1; }
 message SetWorkerKeepAliveResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message CacheCoordinatorHost {
+  reserved 7;
+
+  string logical_host_id = 1;
+  string registration_id = 2;
+  string pool_name = 3;
+  string locality = 4;
+  string node_id = 5;
+  string cache_path_id = 6;
+  string addr = 8;
+  string private_addr = 9;
+  float capacity_usage_pct = 10;
+}
+
+message RegisterCacheHostRequest {
+  CacheCoordinatorHost host = 1;
+  int32 ttl_seconds = 2;
+}
+
+message RegisterCacheHostResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message UnregisterCacheHostRequest {
+  string logical_host_id = 1;
+  string registration_id = 2;
+  string pool_name = 3;
+  string locality = 4;
+}
+
+message UnregisterCacheHostResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message ListCacheHostsRequest {
+  string pool_name = 1;
+  string locality = 2;
+}
+
+message ListCacheHostsResponse {
+  bool ok = 1;
+  repeated CacheCoordinatorHost hosts = 2;
+  string error_msg = 3;
 }
 
 message SetNetworkLockRequest {

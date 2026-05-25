@@ -35,6 +35,7 @@ const (
 	containerInnerPort        int    = 8001 // Use a fixed port inside the container
 	markRunningRetryTimeout          = 3 * time.Second
 	markRunningRetryInterval         = 100 * time.Millisecond
+	runtimeDeleteTimeout             = 30 * time.Second
 )
 
 // handleStopContainerEvent used by the event bus to stop a container.
@@ -45,11 +46,25 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
 		return false
 	}
+	reason := types.StopContainerReason(types.NormalizeEventReason(string(stopArgs.Reason)))
+	if stopArgs.Reason == "" {
+		stopArgs.Reason = reason
+	}
 
 	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
-		containerInstance.StopReason = stopArgs.Reason
+		containerInstance.StopReason = reason
 		s.containerInstances.Set(stopArgs.ContainerId, containerInstance)
+		s.recordContainerEvent(context.Background(), containerInstance.Request, types.EventContainerEventSchema{
+			ID:          types.ContainerEventWorkerStopEventReceived,
+			ContainerID: stopArgs.ContainerId,
+			Reason:      string(reason),
+			Source:      types.EventSourceWorkerEventBus.String(),
+			Message:     types.EventMessageWorkerStopEventReceived.String(),
+			Attrs: map[string]string{
+				types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
+			},
+		})
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -239,12 +254,19 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		Address:     hostname,
 	}))
 	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, phaseStart, err == nil, nil)
 	if err != nil {
 		return err
 	}
 
 	logChan := make(chan common.LogRecord, 1000)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
+	logCaptureClosed := false
+	defer func() {
+		if !logCaptureClosed {
+			outputLogger.Info("", "done", true, "success", false)
+		}
+	}()
 
 	// Handle stdout/stderr
 	go s.containerLogger.CaptureLogs(request, logChan)
@@ -270,6 +292,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		go func() {
 			s.finalizeContainer(containerId, request, &exitCode)
 		}()
+		outputLogger.Info("", "done", true, "success", true)
+		logCaptureClosed = true
 		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
 		return nil
 	}
@@ -284,6 +308,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 	metrics.RecordWorkerStartupPhase("port_allocation", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecyclePortAllocation, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
 
 	// Read spec from bundle; guard against empty image IDs
 	if request.ImageId == "" {
@@ -292,6 +317,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	phaseStart = time.Now()
 	initialBundleSpec, _ := s.readBundleConfig(request)
 	metrics.RecordWorkerStartupPhase("read_bundle_config", time.Since(phaseStart), request, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleReadBundleConfig, phaseStart, true, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
 
 	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
@@ -309,6 +335,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		"mount_count": fmt.Sprintf("%d", len(request.Mounts)),
 		"success":     fmt.Sprintf("%t", err == nil),
 	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
@@ -317,6 +344,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	phaseStart = time.Now()
 	spec, err := s.specFromRequest(request, opts)
 	metrics.RecordWorkerStartupPhase("spec_from_request", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSpecFromRequest, phaseStart, err == nil, nil)
 	if err != nil {
 		return err
 	}
@@ -332,6 +360,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			Address:     containerAddr,
 		}))
 		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, phaseStart, err == nil, nil)
 		if err != nil {
 			return err
 		}
@@ -348,6 +377,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		AddressMap:  addressMap,
 	}))
 	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
 	if err != nil {
 		return err
 	}
@@ -367,6 +397,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
+	logCaptureClosed = true
 	return nil
 }
 
@@ -407,6 +438,15 @@ func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.Contain
 	phaseStart := time.Now()
 	elapsed, err := s.imageClient.PullLazy(ctx, request)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	spanID := types.ContainerLifecycleImageLoad
+	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
+		spanID = types.ContainerLifecycleID("image." + phase)
+	}
+	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(spanID, request, phaseStart, time.Since(phaseStart), err == nil, map[string]string{
+		types.EventAttrLifecycle: phase,
+		"image_id":               request.ImageId,
+		"elapsed_raw":            elapsed.String(),
+	}))
 	return elapsed, err
 }
 
@@ -613,20 +653,19 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
-	if throttlingEnabled && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
-		spec.Linux.Resources.Unified = cgroupV2Parameters
-
-		if s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced {
-			resources, err := s.getContainerResources(request)
-			if err != nil {
-				return nil, err
-			}
-			if resources.CPU != nil {
-				spec.Linux.Resources.CPU = resources.CPU
-			}
-			if resources.Memory != nil {
-				spec.Linux.Resources.Memory = resources.Memory
-			}
+	cpuEnforced := s.config.Worker.ContainerResourceLimits.CPUEnforced
+	memoryEnforced := s.config.Worker.ContainerResourceLimits.MemoryEnforced
+	if throttlingEnabled && (cpuEnforced || memoryEnforced) {
+		resources, err := s.getContainerResources(request)
+		if err != nil {
+			return nil, err
+		}
+		if cpuEnforced && resources.CPU != nil {
+			spec.Linux.Resources.CPU = resources.CPU
+		}
+		if memoryEnforced && resources.Memory != nil {
+			spec.Linux.Resources.Unified = cgroupV2Parameters
+			spec.Linux.Resources.Memory = resources.Memory
 		}
 	}
 
@@ -827,10 +866,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		PoolName:    s.poolName,
 		PodHostname: s.podHostName,
 	})
-	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
-		WorkerId:    s.workerId,
-		ContainerId: request.ContainerId,
-	})
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+
+		s.workerRepoClient.RemoveContainerFromWorker(cleanupCtx, &pb.RemoveContainerFromWorkerRequest{
+			WorkerId:    s.workerId,
+			ContainerId: request.ContainerId,
+		})
+	}()
 
 	defer cancel()
 
@@ -867,6 +911,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleOverlaySetup, phaseStart, err == nil, nil)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -880,6 +925,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	phaseStart = time.Now()
 	err = s.containerNetworkManager.Setup(containerId, spec, request)
 	metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, phaseStart, err == nil, nil)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
@@ -891,6 +937,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		phaseStart = time.Now()
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
 			return
@@ -926,6 +973,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
 			"success":    "false",
 		})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, false, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 		return
 	}
@@ -933,6 +981,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
 		"success":    "true",
 	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -984,6 +1033,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			"runtime": s.runtime.Name(),
 			"success": "false",
 		})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, false, map[string]string{"runtime": s.runtime.Name()})
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
 	}
@@ -991,6 +1041,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"runtime": s.runtime.Name(),
 		"success": "true",
 	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, true, map[string]string{"runtime": s.runtime.Name()})
 
 	// Write container config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -1002,6 +1053,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	phaseStart = time.Now()
 	err = os.WriteFile(configPath, configContents, 0644)
 	metrics.RecordWorkerStartupPhase("config_write", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleConfigWrite, phaseStart, err == nil, nil)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to write container config: %v", err)
 		return
@@ -1012,8 +1064,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
-	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
 
 	phaseStart = time.Now()
 	releaseStartupSlot := func() {}
@@ -1030,6 +1080,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
 		"limit": fmt.Sprintf("%d", s.containerStartLimit),
 	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
@@ -1089,50 +1140,114 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
-	if exists {
+	if exists && containerInstance.StopReason != "" {
 		stopReason = types.StopContainerReason(containerInstance.StopReason)
 	}
+	rawExitCode := exitCode
 
+	exitCode = normalizeContainerExitCode(exitCode, stopReason, isOOMKilled.Load())
+	exitReason := containerExitReason(exitCode, stopReason, isOOMKilled.Load())
+
+	logEvent := log.Info().
+		Str("container_id", containerId).
+		Int("exit_code", exitCode).
+		Str("exit_reason", exitReason)
+	if stopReason != types.StopContainerReasonUnknown {
+		logEvent = logEvent.Str("stop_reason", string(stopReason))
+	}
+	logEvent.Msg("container process exited")
+	s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+		ID:          types.ContainerEventRuntimeExited,
+		ContainerID: containerId,
+		Reason:      eventStopReason(stopReason),
+		Source:      types.EventSourceWorkerRuntime.String(),
+		Message:     types.EventMessageRuntimeExited.String(),
+		Attrs: map[string]string{
+			types.EventAttrRawExitCode:    fmt.Sprintf("%d", rawExitCode),
+			types.EventAttrMappedExitCode: fmt.Sprintf("%d", exitCode),
+			types.EventAttrOOMKilled:      fmt.Sprintf("%t", isOOMKilled.Load()),
+			types.EventAttrExitReason:     exitReason,
+			types.EventAttrReason:         string(stopReason),
+		},
+	})
+	outputLogger.Info("", "done", true, "success", exitCode == 0)
+	if err := s.deleteRuntimeContainer(containerId); err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
+	}
+}
+
+func (s *Worker) deleteRuntimeContainer(containerId string) error {
+	if containerId == "" {
+		return nil
+	}
+
+	instance, exists := s.containerInstances.Get(containerId)
+	rt := s.runtime
+	if exists && instance.Runtime != nil {
+		rt = instance.Runtime
+	}
+	if rt == nil {
+		return fmt.Errorf("runtime unavailable")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeDeleteTimeout)
+	defer cancel()
+
+	return rt.Delete(ctx, containerId, &runtime.DeleteOpts{Force: true})
+}
+
+func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReason, oomKilled bool) int {
 	switch stopReason {
 	case types.StopContainerReasonScheduler:
-		exitCode = int(types.ContainerExitCodeScheduler)
+		return int(types.ContainerExitCodeScheduler)
 	case types.StopContainerReasonTtl:
-		exitCode = int(types.ContainerExitCodeTtl)
+		return int(types.ContainerExitCodeTtl)
 	case types.StopContainerReasonUser:
-		exitCode = int(types.ContainerExitCodeUser)
+		return int(types.ContainerExitCodeUser)
 	case types.StopContainerReasonAdmin:
-		exitCode = int(types.ContainerExitCodeAdmin)
+		return int(types.ContainerExitCodeAdmin)
+	}
+
+	if oomKilled {
+		return int(types.ContainerExitCodeOomKill)
+	}
+	if exitCode < 0 {
+		return int(types.ContainerExitCodeUnknownError)
+	}
+	return exitCode
+}
+
+func containerExitReason(exitCode int, stopReason types.StopContainerReason, oomKilled bool) string {
+	if stopReason != types.StopContainerReasonUnknown {
+		return string(stopReason)
+	}
+	if oomKilled {
+		return "OOM"
+	}
+	switch exitCode {
+	case int(types.ContainerExitCodeSuccess):
+		return "COMPLETED"
+	case int(types.ContainerExitCodeOomKill):
+		return "SIGKILL"
 	default:
-		// Check for OOM kill and ensure exit code is 137 for both runc and gVisor
-		if isOOMKilled.Load() {
-			exitCode = int(types.ContainerExitCodeOomKill) // 137
-			log.Info().Str("container_id", containerId).Int("exit_code", exitCode).Msg("overriding exit code to 137 for OOM kill")
-		} else if exitCode == int(types.ContainerExitCodeOomKill) || exitCode == -1 {
-			// Exit code will match OOM kill exit code, but container was not OOM killed so override it
-			exitCode = 0
-		}
+		return "ERROR"
 	}
+}
 
-	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d, stop reason: %s", exitCode, stopReason)
-	outputLogger.Info("", "done", true, "success", exitCode == 0)
-	if containerId != "" {
-		instance, exists := s.containerInstances.Get(containerId)
-		rt := s.runtime
-		if exists && instance.Runtime != nil {
-			rt = instance.Runtime
-		}
-
-		err = rt.Delete(s.ctx, containerId, &runtime.DeleteOpts{Force: true})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
-		}
+func eventStopReason(stopReason types.StopContainerReason) string {
+	if stopReason == types.StopContainerReasonUnknown {
+		return ""
 	}
+	return string(stopReason)
 }
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
+	}
+	if s.imageClient != nil {
+		defer s.imageClient.untrackContainer(request.ContainerId)
 	}
 
 	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
@@ -1189,10 +1304,17 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			instance.RuntimeStartedAt = time.Now().Unix()
 			s.containerInstances.Set(request.ContainerId, instance)
 		}
+		if s.imageClient != nil {
+			s.imageClient.trackContainerRuntimePID(request, pid)
+		}
 
 		metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
 			"runtime": instance.Runtime.Name(),
 		})
+		s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleRuntimeStartToPID, request, runtimeStart, time.Since(runtimeStart), true, map[string]string{
+			"runtime": instance.Runtime.Name(),
+			"pid":     fmt.Sprintf("%d", pid),
+		}))
 		select {
 		case startedChan <- pid:
 		case <-ctx.Done():
@@ -1206,7 +1328,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
 	}()
 
-	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
+	select {
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	default:
+	}
+
+	exitCode, err := instance.Runtime.Run(context.WithoutCancel(ctx), request.ContainerId, bundlePath, &runtime.RunOpts{
 		OutputWriter:  outputWriter,
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
@@ -1248,7 +1376,11 @@ func (s *Worker) markContainerRunning(ctx context.Context, request *types.Contai
 		return
 	}
 	if !startupStartedAt.IsZero() {
-		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
+		startupLatency := time.Since(startupStartedAt)
+		metrics.RecordWorkerStartupLatency(startupLatency, request)
+		s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleStartup, request, startupStartedAt, startupLatency, true, map[string]string{
+			"status": string(types.ContainerStatusRunning),
+		}))
 	}
 }
 

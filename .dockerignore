@@ -1,10 +1,14 @@
 *
 !cmd
+!cmd/**
 !pkg
+!pkg/**
 !proto
+!proto/**
 !go.mod
 !go.sum
 !sdk
+!sdk/**
 !bin/volume_cache_*
 !bin/ipbind_*
 !bin/beta9-cli

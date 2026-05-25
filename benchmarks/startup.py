@@ -66,7 +66,7 @@ def parse_args():
     parser.add_argument("--stub-id", default=os.getenv("BENCH_STUB_ID") or os.getenv("STUB_ID") or "")
     parser.add_argument("--image-id", default=os.getenv("BENCH_IMAGE_ID") or os.getenv("IMAGE_ID") or "")
     parser.add_argument("--checkpoint-id", default=os.getenv("BENCH_CHECKPOINT_ID") or os.getenv("CHECKPOINT_ID") or "")
-    parser.add_argument("--bootstrap-image-uri", default=os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "k3d-registry.localhost:5000/beta9-bench-alpine:latest"))
+    parser.add_argument("--bootstrap-image-uri", default=os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "registry.localhost:5000/beta9-bench-alpine:latest"))
     parser.add_argument("--bootstrap-source-image", default=os.getenv("BENCH_BOOTSTRAP_SOURCE_IMAGE", "alpine:latest"))
     parser.add_argument("--bootstrap-entrypoint", default=os.getenv("BENCH_BOOTSTRAP_ENTRYPOINT", "sh -c 'sleep 3600'"))
     parser.add_argument("--iterations", type=int, default=env_int("BENCH_ITERATIONS", 10))
@@ -124,6 +124,14 @@ class CommandError(RuntimeError):
 
 
 def run(cmd, *, input_text=None, check=True, timeout=None):
+    popen_kwargs = {}
+    if sys.platform == "darwin":
+        # Prefer posix_spawn over fork on macOS. grpc-python installs fork
+        # handlers once the SDK is imported; forking after that can block while
+        # grpc waits for C-core worker threads. The benchmark runner executes
+        # many local kubectl/go/docker probes after SDK use, so keep subprocess
+        # creation out of grpc's atfork path.
+        popen_kwargs["close_fds"] = False
     proc = subprocess.run(
         cmd,
         cwd=REPO_ROOT,
@@ -132,6 +140,7 @@ def run(cmd, *, input_text=None, check=True, timeout=None):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=timeout,
+        **popen_kwargs,
     )
     if check and proc.returncode != 0:
         raise CommandError(cmd, proc.returncode, proc.stdout, proc.stderr)
@@ -276,7 +285,14 @@ def prepare_local_image(args):
         host_image_uri = "localhost:5001/" + image_uri.split("/", 1)[1]
 
     log(f"Publishing benchmark source image {host_image_uri}")
-    run(["docker", "image", "inspect", args.bootstrap_source_image], timeout=30)
+    inspect = run(
+        ["docker", "image", "inspect", args.bootstrap_source_image],
+        check=False,
+        timeout=30,
+    )
+    if inspect.returncode != 0:
+        log(f"Pulling benchmark source image {args.bootstrap_source_image}")
+        run(["docker", "pull", args.bootstrap_source_image], timeout=300)
     run(["docker", "tag", args.bootstrap_source_image, host_image_uri], timeout=30)
     run(["docker", "push", host_image_uri], timeout=120)
 

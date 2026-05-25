@@ -1,10 +1,12 @@
 package endpoint
 
 import (
+	"fmt"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type endpointAutoscalerSample struct {
@@ -85,10 +87,48 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 
 	if exists == 0 {
 		desiredContainers = 0
+		recordEndpointScaleDecisionAsync(i, sample, desiredContainers, "SERVE_LOCK_MISSING")
 	}
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
+	}
+}
+
+func recordEndpointScaleDecisionAsync(i *endpointInstance, sample *endpointAutoscalerSample, desiredContainers int, reason string) {
+	if i == nil || i.EventRepo == nil || sample == nil {
+		return
+	}
+	sampleCopy := *sample
+	go recordEndpointScaleDecision(i, &sampleCopy, desiredContainers, reason)
+}
+
+func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscalerSample, desiredContainers int, reason string) {
+	if i == nil || i.EventRepo == nil {
+		return
+	}
+
+	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
+	if err != nil {
+		return
+	}
+
+	for _, container := range containers {
+		i.EventRepo.PushContainerEvent(types.EventContainerEventSchema{
+			ID:          types.ContainerEventAutoscalerScaleDecision,
+			ContainerID: container.ContainerId,
+			StubID:      container.StubId,
+			StubType:    string(i.Stub.Type.Kind()),
+			WorkspaceID: container.WorkspaceId,
+			Reason:      reason,
+			Source:      types.EventSourceEndpointAutoscaler.String(),
+			Message:     types.EventMessageAutoscalerScaleDecision.String(),
+			Attrs: map[string]string{
+				types.EventAttrDesiredContainers: fmt.Sprintf("%d", desiredContainers),
+				types.EventAttrCurrentContainers: fmt.Sprintf("%d", sample.CurrentContainers),
+				types.EventAttrTotalRequests:     fmt.Sprintf("%d", sample.TotalRequests),
+			},
+		})
 	}
 }

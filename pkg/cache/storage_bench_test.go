@@ -43,7 +43,7 @@ func setupBenchmarkCAS(b *testing.B) (*Store, func()) {
 		RTT:    0,
 	}
 
-	mockCoordinator := NewMockRegistry()
+	mockCoordinator := NewMockCacheMetadataStore()
 	cas, err := NewStore(ctx, currentHost, "local", mockCoordinator, config)
 	if err != nil {
 		b.Fatalf("Failed to create CAS: %v", err)

@@ -11,11 +11,15 @@ dev:
         go build -o /workspace/bin/gateway /workspace/cmd/gateway/main.go
         go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
       BUILD_BINARY_PATH: /workspace/bin/gateway
+      CONFIG_PATH: /workspace/config.local.yaml
+      GONOSUMDB: github.com/beam-cloud/*
+      GOTOOLCHAIN: auto
     forward:
     - 1993:1993
     - 1994:1994
     - 5432:postgresql:5432
     - 6379:redis-master:6379
+    - 4566:localstack:4566
     persistentVolume:
       enabled: false
       # size: 10Gi

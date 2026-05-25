@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	pkgcommon "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -220,12 +221,37 @@ type TailscaleRepository interface {
 }
 
 type EventRepository interface {
-	PushContainerRequestedEvent(request *types.ContainerRequest)
-	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
-	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
-	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int)
-	PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest)
+	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
+	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)
+	PushContainerEvent(event types.EventContainerEventSchema)
+	PushContainerLogEvent(entry types.EventContainerLogSchema)
+	PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions)
+	PushContainerRequestLifecycle(workerID string, request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerTaskEvent(task *types.TaskWithRelated, eventID types.ContainerEventID, opts types.ContainerEventOptions)
+	PushContainerFunctionTaskEvent(workspaceID string, task types.TaskInterface, eventID types.ContainerEventID, opts types.ContainerEventOptions)
+	PushContainerTaskLifecycle(task *types.TaskWithRelated, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerFunctionTaskLifecycle(workspaceID string, task types.TaskInterface, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerTaskLifecycleSince(ctx context.Context, rdb *pkgcommon.RedisClient, task *types.TaskWithRelated, lifecycleID types.ContainerLifecycleID, sincePhase string, end time.Time, success bool, opts types.ContainerLifecycleOptions)
+	PushContainerRequestLogLine(workerID string, request *types.ContainerRequest, taskID string, stream string, line string)
+	PushContainerRunnerEvent(workerID string, request *types.ContainerRequest, event *types.ContainerRunnerEvent)
+	PushFunctionResultLoaded(workspaceID string, task types.TaskInterface, exitCode int32, byteCount int)
+	PushFunctionResultSent(workspaceID string, task types.TaskInterface, exitCode int32, byteCount int)
+	PushFunctionResultDelivery(workspaceID string, task types.TaskInterface, startedAt time.Time, exitCode int32, byteCount int)
+	PushFunctionStreamCancelRequested(workspaceID string, task types.TaskInterface)
+	PushFunctionStreamCancelApplied(workspaceID string, task types.TaskInterface)
+	PushFunctionGetArgs(ctx context.Context, rdb *pkgcommon.RedisClient, task *types.TaskWithRelated, at time.Time, byteCount int)
+	PushFunctionSetResult(ctx context.Context, rdb *pkgcommon.RedisClient, task *types.TaskWithRelated, at time.Time, byteCount int)
+	PushTaskStartEvents(ctx context.Context, rdb *pkgcommon.RedisClient, task *types.TaskWithRelated, containerID string, startedAt time.Time)
+	PushTaskEndEvents(ctx context.Context, rdb *pkgcommon.RedisClient, task *types.TaskWithRelated, endedAt time.Time)
+	PushTaskEndPersisted(task *types.TaskWithRelated)
+	PushContainerRunningToStartTask(task *types.TaskWithRelated, runningAt time.Time, startedAt time.Time, status types.ContainerStatus)
+	PushTaskCancelRequested(task *types.TaskWithRelated, source types.EventSource, message types.EventMessage)
+	PushTaskCancelApplied(task *types.TaskWithRelated, source types.EventSource, message types.EventMessage)
+	PushContainerLogFlushCompleted(workerID string, request *types.ContainerRequest)
+	PushContainerLogDropped(workerID string, request *types.ContainerRequest, message types.EventMessage, taskID string)
+	PushContainerLogFirstByte(workerID string, request *types.ContainerRequest, taskID string)
+	PushContainerLogLastByte(workerID string, request *types.ContainerRequest)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)

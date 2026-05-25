@@ -3,8 +3,11 @@ package cache
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,6 +30,123 @@ type FSNode struct {
 	filesystem *CacheFS
 	bfsNode    *CacheFSNode
 	attr       fuse.Attr
+}
+
+type cacheFileHandle struct {
+	client      *Client
+	hash        string
+	sourcePath  string
+	size        uint64
+	fdCacheSize int
+	mu          sync.Mutex
+	files       map[string]*os.File
+	order       []string
+}
+
+func newCacheFileHandle(client *Client, node *CacheFSNode, fdCacheSize int) *cacheFileHandle {
+	if fdCacheSize <= 0 {
+		fdCacheSize = 64
+	}
+	return &cacheFileHandle{
+		client:      client,
+		hash:        node.Hash,
+		sourcePath:  node.Path,
+		size:        node.Attr.Size,
+		fdCacheSize: fdCacheSize,
+		files:       make(map[string]*os.File),
+	}
+}
+
+func (h *cacheFileHandle) file(path string) (*os.File, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if file := h.files[path]; file != nil {
+		h.touchFileLocked(path)
+		return file, nil
+	}
+
+	for len(h.files) >= h.fdCacheSize {
+		h.evictOldestFileLocked()
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	h.files[path] = file
+	h.order = append(h.order, path)
+	return file, nil
+}
+
+func (h *cacheFileHandle) touchFileLocked(path string) {
+	for i, existing := range h.order {
+		if existing != path {
+			continue
+		}
+
+		copy(h.order[i:], h.order[i+1:])
+		h.order[len(h.order)-1] = path
+		return
+	}
+
+	h.order = append(h.order, path)
+}
+
+func (h *cacheFileHandle) evictOldestFileLocked() {
+	if len(h.order) == 0 {
+		for path, file := range h.files {
+			_ = file.Close()
+			delete(h.files, path)
+			return
+		}
+		return
+	}
+
+	path := h.order[0]
+	copy(h.order, h.order[1:])
+	h.order = h.order[:len(h.order)-1]
+
+	if file := h.files[path]; file != nil {
+		_ = file.Close()
+		delete(h.files, path)
+	}
+}
+
+type readResultFdWithClose struct {
+	fuse.ReadResult
+	fd int
+}
+
+func newReadResultFdWithClose(file *os.File, off int64, n int) (fuse.ReadResult, error) {
+	fd, err := syscall.Dup(int(file.Fd()))
+	if err != nil {
+		return nil, err
+	}
+
+	return &readResultFdWithClose{
+		ReadResult: fuse.ReadResultFd(uintptr(fd), off, n),
+		fd:         fd,
+	}, nil
+}
+
+func (r *readResultFdWithClose) Done() {
+	r.ReadResult.Done()
+	_ = syscall.Close(r.fd)
+}
+
+func (h *cacheFileHandle) Release(ctx context.Context) syscall.Errno {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for path, file := range h.files {
+		_ = file.Close()
+		delete(h.files, path)
+	}
+	h.order = nil
+	return fs.OK
+}
+
+func (h *cacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	return readCacheContent(ctx, h.client, h.hash, h.sourcePath, h.size, dest, off, h)
 }
 
 func (n *FSNode) log(format string, v ...interface{}) {
@@ -84,7 +204,7 @@ func metaToAttr(metadata *FSMetadata) fuse.Attr {
 }
 
 func (n *FSNode) inodeFromFsId(ctx context.Context, fsId string) (*fs.Inode, *fuse.Attr, error) {
-	metadata, err := n.filesystem.Registry.GetFsNode(ctx, fsId)
+	metadata, err := n.filesystem.MetadataStore.GetFsNode(ctx, fsId)
 	if err != nil {
 		return nil, nil, syscall.ENOENT
 	}
@@ -158,65 +278,88 @@ func (n *FSNode) Opendir(ctx context.Context) syscall.Errno {
 func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	n.log("Open called with flags: %v", flags)
 
+	handle := newCacheFileHandle(n.filesystem.Client, n.bfsNode, n.filesystem.Config.PageFDCacheSize)
+
 	// Enable DirectIO if specified
 	if n.filesystem.Config.CacheFS.DirectIO {
 		fuseFlags |= fuse.FOPEN_DIRECT_IO
 		fuseFlags &= ^uint32(fuse.FOPEN_KEEP_CACHE)
-		return nil, fuseFlags, fs.OK
+		return handle, fuseFlags, fs.OK
 	}
 
-	return nil, 0, fs.OK
+	return handle, 0, fs.OK
 }
 
 func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n.log("Read called with offset: %v, length: %v", off, len(dest))
 
-	length := cacheFSReadLength(n.bfsNode.Attr.Size, off, len(dest))
+	if handle, ok := f.(*cacheFileHandle); ok && handle != nil {
+		return handle.Read(ctx, dest, off)
+	}
+
+	return readCacheContent(ctx, n.filesystem.Client, n.bfsNode.Hash, n.bfsNode.Path, n.bfsNode.Attr.Size, dest, off, nil)
+}
+
+func readCacheContent(ctx context.Context, client *Client, hash string, sourcePath string, size uint64, dest []byte, off int64, handle *cacheFileHandle) (fuse.ReadResult, syscall.Errno) {
+	length := cacheFSReadLength(size, off, len(dest))
+	atomic.AddInt64(&cachePathStats.cacheFSReads, 1)
+	atomic.AddInt64(&cachePathStats.cacheFSReadBytes, length)
 	if length == 0 {
 		return fuse.ReadResultData(dest[:0]), fs.OK
 	}
 
-	sourcePath := n.bfsNode.Path
+	if handle != nil {
+		pagePath, pageOffset, n, ok, err := client.ClientLocalPageFileView(hash, off, length, ClientOptions{RoutingKey: sourcePath})
+		if err == nil && ok && int64(n) == length {
+			file, err := handle.file(pagePath)
+			if err == nil {
+				readResult, err := newReadResultFdWithClose(file, pageOffset, n)
+				if err == nil {
+					cacheReadLocalFDTotal.Inc()
+					atomic.AddInt64(&cachePathStats.cacheFSLocalFDHits, 1)
+					return readResult, fs.OK
+				}
+			}
+		}
+	}
 
-	buffer, err := n.filesystem.Client.GetContent(n.bfsNode.Hash, off, length, struct {
-		RoutingKey string
-	}{
-		RoutingKey: sourcePath,
-	})
+	n, err := client.ReadContentInto(ctx, hash, off, dest[:length], ClientOptions{RoutingKey: sourcePath})
 	if err != nil {
 		if err == ErrContentNotFound {
-
+			atomic.AddInt64(&cachePathStats.cacheFSMissStoreRetries, 1)
 			cacheSource := LocalContentSource{
 				Path: sourcePath,
 			}
-			_, err = n.filesystem.Client.StoreContentFromLocalFile(cacheSource, StoreContentOptions{
+			_, err = client.StoreContentFromLocalFile(cacheSource, StoreContentOptions{
 				RoutingKey: sourcePath,
 				Lock:       true,
 			})
 			// If multiple clients try to store the same file, some may get ErrUnableToAcquireLock
 			// In this case, we should tell the client to retry the Read instead of returning an error
 			if err != nil && err == ErrUnableToAcquireLock {
+				atomic.AddInt64(&cachePathStats.cacheFSStoreRetryErrors, 1)
 				return nil, syscall.EAGAIN
 			} else if err != nil {
+				atomic.AddInt64(&cachePathStats.cacheFSStoreRetryErrors, 1)
 				return nil, syscall.EIO
 			}
 
-			buffer, err = n.filesystem.Client.GetContent(n.bfsNode.Hash, off, length, struct {
-				RoutingKey string
-			}{
-				RoutingKey: sourcePath,
-			})
+			n, err = client.ReadContentInto(ctx, hash, off, dest[:length], ClientOptions{RoutingKey: sourcePath})
 			if err != nil {
+				atomic.AddInt64(&cachePathStats.cacheFSReadContentErrors, 1)
 				return nil, syscall.EIO
 			}
 
-			return fuse.ReadResultData(buffer), fs.OK
+			atomic.AddInt64(&cachePathStats.cacheFSDataReads, 1)
+			return fuse.ReadResultData(dest[:n]), fs.OK
 		}
 
+		atomic.AddInt64(&cachePathStats.cacheFSReadContentErrors, 1)
 		return nil, syscall.EIO
 	}
 
-	return fuse.ReadResultData(buffer), fs.OK
+	atomic.AddInt64(&cachePathStats.cacheFSDataReads, 1)
+	return fuse.ReadResultData(dest[:n]), fs.OK
 }
 
 func cacheFSReadLength(fileSize uint64, off int64, requested int) int64 {
@@ -249,7 +392,7 @@ func (n *FSNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 func (n *FSNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	n.log("Readdir called")
 
-	children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, GenerateFsID(n.bfsNode.Path))
+	children, err := n.filesystem.MetadataStore.GetFsNodeChildren(ctx, GenerateFsID(n.bfsNode.Path))
 	if err != nil {
 		return nil, fs.ENOATTR
 	}
@@ -307,12 +450,12 @@ func (n *FSNode) createChildNode(ctx context.Context, name string, mode uint32, 
 		Hash:      "",
 	}
 
-	if err := n.filesystem.Registry.SetFsNode(ctx, newFsId, metadata); err != nil {
+	if err := n.filesystem.MetadataStore.SetFsNode(ctx, newFsId, metadata); err != nil {
 		return nil, syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.AddFsNodeChild(ctx, n.bfsNode.ID, newFsId); err != nil {
-		_ = n.filesystem.Registry.RemoveFsNode(ctx, newFsId)
+	if err := n.filesystem.MetadataStore.AddFsNodeChild(ctx, n.bfsNode.ID, newFsId); err != nil {
+		_ = n.filesystem.MetadataStore.RemoveFsNode(ctx, newFsId)
 		return nil, syscall.EIO
 	}
 
@@ -340,7 +483,7 @@ func (n *FSNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	fsId := GenerateFsID(fullPath)
 
 	// Check if the directory is empty
-	children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, fsId)
+	children, err := n.filesystem.MetadataStore.GetFsNodeChildren(ctx, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -348,14 +491,14 @@ func (n *FSNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.ENOTEMPTY
 	}
 
-	// Remove the directory from the coordinator
-	err = n.filesystem.Registry.RemoveFsNode(ctx, fsId)
+	// Remove the directory from the metadataStore
+	err = n.filesystem.MetadataStore.RemoveFsNode(ctx, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
 
 	// Remove the directory from the parent's children
-	err = n.filesystem.Registry.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
+	err = n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -372,14 +515,14 @@ func (n *FSNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Generate the FsID for the file
 	fsId := GenerateFsID(fullPath)
 
-	// Remove the file from the coordinator
-	err := n.filesystem.Registry.RemoveFsNode(ctx, fsId)
+	// Remove the file from the metadataStore
+	err := n.filesystem.MetadataStore.RemoveFsNode(ctx, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
 
 	// Remove the file from the parent's children
-	err = n.filesystem.Registry.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
+	err = n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -404,12 +547,12 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 		return fs.OK
 	}
 
-	metadata, err := n.filesystem.Registry.GetFsNode(ctx, oldFsId)
+	metadata, err := n.filesystem.MetadataStore.GetFsNode(ctx, oldFsId)
 	if err != nil {
 		return syscall.ENOENT
 	}
 
-	if existingMetadata, err := n.filesystem.Registry.GetFsNode(ctx, newFsId); err == nil {
+	if existingMetadata, err := n.filesystem.MetadataStore.GetFsNode(ctx, newFsId); err == nil {
 		sourceIsDir := fsMetadataIsDir(metadata)
 		targetIsDir := fsMetadataIsDir(existingMetadata)
 		if sourceIsDir && !targetIsDir {
@@ -419,7 +562,7 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 			return syscall.EISDIR
 		}
 		if targetIsDir {
-			children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, newFsId)
+			children, err := n.filesystem.MetadataStore.GetFsNodeChildren(ctx, newFsId)
 			if err != nil {
 				return syscall.EIO
 			}
@@ -428,10 +571,10 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 			}
 		}
 
-		if err := n.filesystem.Registry.RemoveFsNode(ctx, newFsId); err != nil {
+		if err := n.filesystem.MetadataStore.RemoveFsNode(ctx, newFsId); err != nil {
 			return syscall.EIO
 		}
-		if err := n.filesystem.Registry.RemoveFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
+		if err := n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
 			return syscall.EIO
 		}
 	}
@@ -441,19 +584,19 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 	metadata.Name = newName
 	metadata.Path = newFullPath
 
-	if err := n.filesystem.Registry.SetFsNode(ctx, newFsId, metadata); err != nil {
+	if err := n.filesystem.MetadataStore.SetFsNode(ctx, newFsId, metadata); err != nil {
 		return syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.AddFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
+	if err := n.filesystem.MetadataStore.AddFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
 		return syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.RemoveFsNodeChild(ctx, n.bfsNode.ID, oldFsId); err != nil {
+	if err := n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, n.bfsNode.ID, oldFsId); err != nil {
 		return syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.RemoveFsNode(ctx, oldFsId); err != nil {
+	if err := n.filesystem.MetadataStore.RemoveFsNode(ctx, oldFsId); err != nil {
 		return syscall.EIO
 	}
 

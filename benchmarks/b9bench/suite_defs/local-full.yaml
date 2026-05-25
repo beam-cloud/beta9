@@ -1,0 +1,9 @@
+name: local-full
+kind: full
+runner: composite
+description: Local full proof suite for cache, filesystem, CLIP, and startup.
+includes:
+  - cache-default
+  - fs-default
+  - clip-runtime
+  - startup-default

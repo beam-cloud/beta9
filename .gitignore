@@ -20,6 +20,7 @@ event.json
 config.yaml
 config.yaml.local
 config.local.yaml
+config.local.yaml.bak
 config.stage.yaml
 *.tgz
 test
@@ -32,3 +33,10 @@ okteto.yaml
 .vscode/launch.json
 pyrightconfig.json
 .go-version
+docs/*.md
+.beta9ignore
+/benchmarks/runs/
+/artifacts/
+/metrics.jsonl
+/summary.json
+/summary.md

@@ -2386,8 +2386,15 @@ func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, ima
 }
 
 func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error) {
-	query := `INSERT INTO image (image_id, clip_version) VALUES ($1, $2);`
-	if _, err := r.client.ExecContext(ctx, query, imageId, clipVersion); err != nil {
+	query := `
+		INSERT INTO image (image_id, clip_version)
+		VALUES ($1, $2)
+		ON CONFLICT (image_id) DO UPDATE
+		SET clip_version = EXCLUDED.clip_version,
+		    updated_at = CURRENT_TIMESTAMP
+		RETURNING clip_version;
+	`
+	if err := r.client.QueryRowContext(ctx, query, imageId, clipVersion).Scan(&clipVersion); err != nil {
 		return 0, err
 	}
 

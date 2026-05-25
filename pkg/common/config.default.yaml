@@ -18,6 +18,10 @@ database:
     enableTLS: false
     insecureSkipVerify: false
     dialTimeout: 3s
+  s2:
+    apiKey: ""
+    basin: beta9-events
+    streamPrefix: events
 storage:
   mode: juicefs
   fsName: beta9-fs
@@ -39,7 +43,7 @@ storage:
     defaultAccessKey: test
     defaultSecretKey: test
     defaultEndpointUrl: http://localstack:4566
-    defaultPresignedEndpointUrl:
+    defaultPresignedEndpointUrl: http://127.0.0.1:4566
     defaultRegion: us-east-1
     alluxio:
       debug: false
@@ -47,8 +51,9 @@ storage:
       debug: false
       fsyncOnClose: true
       memoryLimit: 2048
-      maxFlushers: 64
-      maxParallelParts: 64
+      maxFlushers: 16
+      maxParallelParts: 8
+      httpTimeout: 15m
       dirMode: 0777
       fileMode: 0666
       listType: 1
@@ -57,11 +62,12 @@ storage:
       fuseReadAheadKB: 32768
       readAheadParallelKB: 4096
       mountOptions: []
-      stagedWriteModeEnabled: true
+      stagedWriteModeEnabled: false
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false
-      cacheThroughModeEnabled: true
+      cacheDirectIO: false
+      cacheThroughEnabled: true
 gateway:
   host: beta9-gateway
   invokeURLType: path
@@ -101,8 +107,8 @@ imageService:
   # In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
   # That gives 1200 / 1e+10 = 120 ns per byte.
   archiveNanosecondsPerByte: 120
-  # Default to clip v2 (index-only OCI archives). Set to 1 to force legacy.
-  clipVersion: 1
+  # Default to clip v2. Set to 1 to force legacy image format. NOTE: This only applies to new images.
+  clipVersion: 2
   registryStore: local
   registryCredentialProvider: docker
   buildRegistry: registry.localhost:5000
@@ -166,6 +172,11 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+        # Keep gVisor rootfs propagation and external modification detection
+        # defaults config-driven so pool-specific overrides stay explicit.
+        gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
       # Optional per-pool cache disk override for nodes with different storage layouts.
       # cache:
       #   disk:
@@ -191,6 +202,9 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+        gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
       # Optional per-pool cache disk override.
       # cache:
       #   disk:
@@ -260,33 +274,6 @@ worker:
     storage:
       mode: local
       mountPath: /data/checkpoints
-    cedana:
-      # Can be unix, tcp, vsock
-      protocol: unix
-      address: /run/cedana.sock
-      log_level: debug
-      # Connection details to your cedana endpoint
-      connection:
-        url: ""
-        auth_token: ""
-      checkpoint:
-        # Default dir to write/stream checkpoints to
-        dir: /data/checkpoints
-        # Can be one of: none, tar, lz4, gzip, zlib
-        compression: lz4
-        # Number of parallel streams for streaming checkpoints (0 = off)
-        # TODO: usable only in next release
-        # stream: 4
-      db:
-        # Use remote DB on the cedana endpoint
-        remote: true
-      profiling:
-        # Receive profiling info in the gRPC trailer
-        enabled: false
-        precision: auto
-      criu:
-        # Keep the job running after checkpoint
-        leave_running: true
 
 cache:
   enabled: true
@@ -298,16 +285,11 @@ cache:
   memory:
     enabled: false
     maxCachePct: 0
-  embedded:
-    # active-active runs a small Redis-lease elected replica set per node, backed by the same hostPath CAS.
-    # single-primary keeps the one-server-per-node mode.
-    mode: active-active
-    replicasPerNode: 2
-    leaseTTLSeconds: 15
-    leaseRefreshSeconds: 5
-    leaseRetrySeconds: 2
+  coordinator:
+    registrationTTLSeconds: 30
+    heartbeatIntervalSeconds: 10
+    hostWatchIntervalSeconds: 5
   global:
-    coordinatorHost:
     defaultLocality: default
     serverPort: 2049
     discoveryIntervalS: 5
@@ -326,12 +308,7 @@ cache:
     debugMode: false
     prettyLogs: true
   server:
-    mode: node
-    diskCacheDir:
-    diskCacheMaxUsagePct: 0.95
-    enableMemoryCache: false
-    maxCachePct: 0
-    pageSizeBytes: 4000000
+    pageSizeBytes: 4194304
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000
@@ -340,9 +317,8 @@ cache:
       redisInsecureSkipVerify: false
   client:
     nTopHosts: 3
-    minRetryLengthBytes: 0 # 0 retries all cache reads; increase to retry only larger reads.
+    minRetryLengthBytes: 0 # 0 means retry all cache reads; increase to retry only larger reads.
     maxGetContentAttempts: 3
-    token:
     cachefs:
       maxBackgroundTasks: 256
       maxReadAheadKB: 1024
@@ -356,9 +332,9 @@ cache:
 
 providers:
   ec2:
-    accessKey:
-    secretkey:
-    region: us-east-1
+    awsAccessKey:
+    awsSecretKey:
+    awsRegion: us-east-1
     # If you want workers nodes to land in your default vpc, you can omit subnetId
     subnetId:
     ami: ami-052c704a7f82c38b1
@@ -381,17 +357,6 @@ monitoring:
     meterInterval: 3s
     traceInterval: 3s
     traceSampleRatio: 1.0
-  fluentbit:
-    events:
-      endpoint: http://fluent-bit.monitoring:9880
-      maxConns: 0
-      maxIdleConns: 30
-      idleConnTimeout: 10s
-      dialTimeout: 2s
-      keepAlive: 30s
-      # mapping:
-      # - name: container.lifecycle
-      #   tag: internal_api
   openmeter:
     serverUrl: ""
     apiKey: ""

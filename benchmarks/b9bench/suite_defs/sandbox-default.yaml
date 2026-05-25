@@ -1,0 +1,12 @@
+name: sandbox-default
+kind: sandbox
+runner: sandbox
+description: Parallel sandbox create/start/readiness benchmark.
+defaults:
+  count: 10
+  parallelism: 4
+  warmup: 1
+  wait_running: true
+  wait_exec_complete: true
+  reset_workers: false
+  port_forward: false

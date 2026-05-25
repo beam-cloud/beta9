@@ -41,7 +41,11 @@ func (a *schedulingAttempt) run() {
 }
 
 func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
+	selectionStart := time.Now()
 	worker, err := a.scheduler.selectWorkerFromWorkers(a.workers, a.request)
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
+		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
+	})
 	if err != nil || worker == nil {
 		return false
 	}
@@ -52,19 +56,26 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 			Str("worker_id", worker.Id).
 			Err(err).
 			Msg("unable to schedule request on existing worker")
+		a.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "schedule_failed")
 		a.retry("schedule_failed")
 		return true
 	}
 
 	duration := time.Since(a.request.Timestamp)
+	a.recordBacklogWait(true, "scheduled")
 	metrics.RecordRequestSchedulingDuration(duration, a.request)
 	metrics.RecordSchedulerWorkerWait(duration, a.request, "scheduled")
 	return true
 }
 
 func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
-	if !a.scheduler.provisioning.reserveCapacity(a.scheduler, a.workers, a.request) {
+	reservationStart := time.Now()
+	reserved := a.scheduler.provisioning.reserveCapacity(a.scheduler, a.workers, a.request)
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerReservation, reservationStart, time.Now(), reserved, map[string]string{
+		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
+	})
+	if !reserved {
 		return false
 	}
 
@@ -118,6 +129,8 @@ func (a *schedulingAttempt) fail(reason string) {
 		Int("retry_count", a.request.RetryCount).
 		Msg("giving up on request")
 
+	a.recordBacklogWait(false, reason)
+
 	if err := a.scheduler.containerRepo.DeleteContainerState(a.request.ContainerId); err != nil {
 		log.Error().Str("container_id", a.request.ContainerId).Err(err).Msg("failed to delete container state after scheduling failure")
 	}
@@ -125,6 +138,17 @@ func (a *schedulingAttempt) fail(reason string) {
 		log.Error().Str("container_id", a.request.ContainerId).Err(err).Msg("failed to record container request scheduling failure")
 	}
 	metrics.RecordRequestScheduleFailure(a.request)
+}
+
+func (a *schedulingAttempt) recordBacklogWait(success bool, reason string) {
+	if a.request.Timestamp.IsZero() {
+		return
+	}
+
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerBacklogWait, a.request.Timestamp, time.Now(), success, map[string]string{
+		"reason":      reason,
+		"retry_count": fmt.Sprintf("%d", a.request.RetryCount),
+	})
 }
 
 type workerProvisioningAttempt struct {
@@ -163,11 +187,15 @@ func (a *workerProvisioningAttempt) run() {
 		default:
 		}
 
+		provisionStart := time.Now()
 		newWorker, err := controller.AddWorker(
 			a.scheduler.workerCPUForRequest(a.request),
 			a.scheduler.workerMemoryForRequest(a.request),
 			a.scheduler.workerGPUCountForRequest(a.request),
 		)
+		a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
+			"pool_name": controller.Name(),
+		})
 		if err != nil {
 			addWorkerErr = err
 			continue

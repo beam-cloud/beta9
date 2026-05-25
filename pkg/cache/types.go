@@ -14,19 +14,18 @@ const (
 
 const (
 	defaultHostStorageCapacityThresholdPct float64 = 0.95
-	defaultHostKeepAliveIntervalS          int     = 10
 	defaultHostKeepAliveTimeoutS           int     = 60
 )
 
 type Config struct {
-	Enabled  bool           `key:"enabled" json:"enabled"`
-	Disk     DiskConfig     `key:"disk" json:"disk"`
-	Memory   MemoryConfig   `key:"memory" json:"memory"`
-	Embedded EmbeddedConfig `key:"embedded" json:"embedded"`
-	Server   ServerConfig   `key:"server" json:"server"`
-	Client   ClientConfig   `key:"client" json:"client"`
-	Global   GlobalConfig   `key:"global" json:"global"`
-	Metrics  MetricsConfig  `key:"metrics" json:"metrics"`
+	Enabled     bool              `key:"enabled" json:"enabled"`
+	Disk        DiskConfig        `key:"disk" json:"disk"`
+	Memory      MemoryConfig      `key:"memory" json:"memory"`
+	Coordinator CoordinatorConfig `key:"coordinator" json:"coordinator"`
+	Server      ServerConfig      `key:"server" json:"server"`
+	Client      ClientConfig      `key:"client" json:"client"`
+	Global      GlobalConfig      `key:"global" json:"global"`
+	Metrics     MetricsConfig     `key:"metrics" json:"metrics"`
 }
 
 type DiskConfig struct {
@@ -48,24 +47,14 @@ type MetricsConfig struct {
 	Password      string `key:"password" json:"password"`
 }
 
-type EmbeddedMode string
-
-const (
-	EmbeddedModeActiveActive  EmbeddedMode = "active-active"
-	EmbeddedModeSinglePrimary EmbeddedMode = "single-primary"
-)
-
-type EmbeddedConfig struct {
-	Mode                EmbeddedMode `key:"mode" json:"mode"`
-	ReplicasPerNode     int          `key:"replicasPerNode" json:"replicas_per_node"`
-	LeaseTTLSeconds     int          `key:"leaseTTLSeconds" json:"lease_ttl_seconds"`
-	LeaseRefreshSeconds int          `key:"leaseRefreshSeconds" json:"lease_refresh_seconds"`
-	LeaseRetrySeconds   int          `key:"leaseRetrySeconds" json:"lease_retry_seconds"`
+type CoordinatorConfig struct {
+	RegistrationTTLSeconds   int `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
+	HeartbeatIntervalSeconds int `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
+	HostWatchIntervalSeconds int `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
 }
 
 type GlobalConfig struct {
 	DefaultLocality                 string  `key:"defaultLocality" json:"default_locality"`
-	CoordinatorHost                 string  `key:"coordinatorHost" json:"coordinator_host"`
 	ServerPort                      uint    `key:"serverPort" json:"server_port"`
 	DiscoveryIntervalS              int     `key:"discoveryIntervalS" json:"discovery_interval_s"`
 	DiscoveryJitterS                int     `key:"discoveryJitterS" json:"discovery_jitter_s"`
@@ -81,6 +70,8 @@ type GlobalConfig struct {
 	GRPCReadBufferSize              int     `key:"grpcReadBufferSize" json:"grpc_read_buffer_size"`
 	GRPCMaxConcurrentStreams        int     `key:"grpcMaxConcurrentStreams" json:"grpc_max_concurrent_streams"`
 	GRPCNumStreamWorkers            int     `key:"grpcNumStreamWorkers" json:"grpc_num_stream_workers"`
+	GRPCPayloadCodecV2              bool    `key:"grpcPayloadCodecV2" json:"grpc_payload_codec_v2"`
+	GRPCPayloadCodecMinBytes        int     `key:"grpcPayloadCodecMinBytes" json:"grpc_payload_codec_min_bytes"`
 	DebugMode                       bool    `key:"debugMode" json:"debug_mode"`
 	PrettyLogs                      bool    `key:"prettyLogs" json:"pretty_logs"`
 }
@@ -94,151 +85,50 @@ func (c *GlobalConfig) GetLocality() string {
 	return c.DefaultLocality
 }
 
-type ServerMode string
-
-const (
-	ServerModeCoordinator ServerMode = "coordinator"
-	ServerModeNode        ServerMode = "node"
-)
-
 type ServerConfig struct {
-	Mode                  ServerMode     `key:"mode" json:"mode"`
-	DiskCacheDir          string         `key:"diskCacheDir" json:"disk_cache_dir"`
-	DiskCacheMaxUsagePct  float64        `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
-	EnableMemoryCache     bool           `key:"enableMemoryCache" json:"enable_memory_cache"`
-	Token                 string         `key:"token" json:"token"`
-	PrettyLogs            bool           `key:"prettyLogs" json:"pretty_logs"`
-	ObjectTtlS            int            `key:"objectTtlS" json:"object_ttl_s"`
-	MaxCachePct           int64          `key:"maxCachePct" json:"max_cache_pct"`
-	PageSizeBytes         int64          `key:"pageSizeBytes" json:"page_size_bytes"`
-	Metadata              MetadataConfig `key:"metadata" json:"metadata"`
-	Sources               []SourceConfig `key:"sources" json:"sources"`
-	S3DownloadConcurrency int64          `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
-	S3DownloadChunkSize   int64          `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
-
-	// Allows a coordinator to override a slave server's config for a specific locality/region
-	Regions map[string]RegionConfig `key:"regions" json:"regions"`
+	DiskCacheDir                 string                    `key:"diskCacheDir" json:"disk_cache_dir"`
+	DiskCacheMaxUsagePct         float64                   `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
+	ObjectTtlS                   int                       `key:"objectTtlS" json:"object_ttl_s"`
+	MaxCachePct                  int64                     `key:"maxCachePct" json:"max_cache_pct"`
+	PageSizeBytes                int64                     `key:"pageSizeBytes" json:"page_size_bytes"`
+	PageFileBuckets              int                       `key:"pageFileBuckets" json:"page_file_buckets"`
+	SmallRangeCopyThresholdBytes int64                     `key:"smallRangeCopyThresholdBytes" json:"small_range_copy_threshold_bytes"`
+	ReadTransport                ServerReadTransportConfig `key:"readTransport" json:"read_transport"`
+	Metadata                     MetadataConfig            `key:"metadata" json:"metadata"`
+	Sources                      []SourceConfig            `key:"sources" json:"sources"`
+	S3DownloadConcurrency        int64                     `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
+	S3DownloadChunkSize          int64                     `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
 }
 
-func (c *ServerConfig) ToProto() *proto.CacheServerConfig {
-	protoConfig := &proto.CacheServerConfig{
-		Mode:                  string(c.Mode),
-		DiskCacheDir:          c.DiskCacheDir,
-		DiskCacheMaxUsagePct:  float32(c.DiskCacheMaxUsagePct),
-		MaxCachePct:           c.MaxCachePct,
-		PageSizeBytes:         c.PageSizeBytes,
-		ObjectTtlS:            int64(c.ObjectTtlS),
-		PrettyLogs:            c.PrettyLogs,
-		Token:                 c.Token,
-		Sources:               make([]*proto.CacheSourceConfig, 0),
-		S3DownloadConcurrency: c.S3DownloadConcurrency,
-		S3DownloadChunkSize:   c.S3DownloadChunkSize,
-	}
-
-	for _, source := range c.Sources {
-		protoSource := &proto.CacheSourceConfig{
-			Mode:           string(source.Mode),
-			FilesystemName: source.FilesystemName,
-			FilesystemPath: source.FilesystemPath,
-		}
-
-		switch source.Mode {
-		case SourceModeMountPoint:
-			protoSource.Mountpoint = &proto.CacheMountPointConfig{
-				BucketName:     source.MountPoint.BucketName,
-				AccessKey:      source.MountPoint.AccessKey,
-				SecretKey:      source.MountPoint.SecretKey,
-				Region:         source.MountPoint.Region,
-				EndpointUrl:    source.MountPoint.EndpointURL,
-				ForcePathStyle: source.MountPoint.ForcePathStyle,
-			}
-
-		case SourceModeJuiceFS:
-			protoSource.Juicefs = &proto.CacheJuiceFSConfig{
-				RedisUri:  source.JuiceFS.RedisURI,
-				Bucket:    source.JuiceFS.Bucket,
-				AccessKey: source.JuiceFS.AccessKey,
-				SecretKey: source.JuiceFS.SecretKey,
-			}
-
-		}
-
-		protoConfig.Sources = append(protoConfig.Sources, protoSource)
-	}
-
-	return protoConfig
-}
-
-func ServerConfigFromProto(protoConfig *proto.CacheServerConfig) ServerConfig {
-	if protoConfig == nil {
-		return ServerConfig{}
-	}
-
-	cfg := ServerConfig{
-		Mode:                  ServerMode(protoConfig.Mode),
-		DiskCacheDir:          protoConfig.DiskCacheDir,
-		DiskCacheMaxUsagePct:  float64(protoConfig.DiskCacheMaxUsagePct),
-		MaxCachePct:           protoConfig.MaxCachePct,
-		PageSizeBytes:         protoConfig.PageSizeBytes,
-		ObjectTtlS:            int(protoConfig.ObjectTtlS),
-		PrettyLogs:            protoConfig.PrettyLogs,
-		Token:                 protoConfig.Token,
-		Sources:               make([]SourceConfig, len(protoConfig.Sources)),
-		S3DownloadConcurrency: protoConfig.S3DownloadConcurrency,
-		S3DownloadChunkSize:   protoConfig.S3DownloadChunkSize,
-	}
-
-	for i, protoSource := range protoConfig.Sources {
-		if protoSource == nil {
-			continue
-		}
-
-		localSource := SourceConfig{
-			Mode:           protoSource.Mode,
-			FilesystemName: protoSource.FilesystemName,
-			FilesystemPath: protoSource.FilesystemPath,
-		}
-
-		switch protoSource.Mode {
-		case SourceModeMountPoint:
-			if protoSource.Mountpoint != nil {
-				localSource.MountPoint = MountPointConfig{
-					BucketName:     protoSource.Mountpoint.BucketName,
-					AccessKey:      protoSource.Mountpoint.AccessKey,
-					SecretKey:      protoSource.Mountpoint.SecretKey,
-					Region:         protoSource.Mountpoint.Region,
-					EndpointURL:    protoSource.Mountpoint.EndpointUrl,
-					ForcePathStyle: protoSource.Mountpoint.ForcePathStyle,
-				}
-			}
-
-		case SourceModeJuiceFS:
-			if protoSource.Juicefs != nil {
-				localSource.JuiceFS = JuiceFSConfig{
-					RedisURI:  protoSource.Juicefs.RedisUri,
-					Bucket:    protoSource.Juicefs.Bucket,
-					AccessKey: protoSource.Juicefs.AccessKey,
-					SecretKey: protoSource.Juicefs.SecretKey,
-				}
-			}
-		}
-
-		cfg.Sources[i] = localSource
-	}
-
-	return cfg
-}
-
-type RegionConfig struct {
-	ServerConfig ServerConfig `key:"server" json:"server"`
+type ServerReadTransportConfig struct {
+	Enabled  bool `key:"enabled" json:"enabled"`
+	Sendfile bool `key:"sendfile" json:"sendfile"`
 }
 
 type ClientConfig struct {
-	Token                 string   `key:"token" json:"token"`
-	MinRetryLengthBytes   int64    `key:"minRetryLengthBytes" json:"min_retry_length_bytes"`
-	MaxGetContentAttempts int      `key:"maxGetContentAttempts" json:"max_get_content_attempts"`
-	NTopHosts             int      `key:"nTopHosts" json:"n_top_hosts"`
-	CacheFS               FSConfig `key:"cachefs" json:"cachefs"`
+	Token                 string                    `key:"token" json:"token"`
+	MinRetryLengthBytes   int64                     `key:"minRetryLengthBytes" json:"min_retry_length_bytes"`
+	MaxGetContentAttempts int                       `key:"maxGetContentAttempts" json:"max_get_content_attempts"`
+	NTopHosts             int                       `key:"nTopHosts" json:"n_top_hosts"`
+	CacheFS               FSConfig                  `key:"cachefs" json:"cachefs"`
+	PreferLocalCacheHost  bool                      `key:"preferLocalCacheHost" json:"prefer_local_cache_host"`
+	PageFDCacheSize       int                       `key:"pageFDCacheSize" json:"page_fd_cache_size"`
+	ReadTransport         ClientReadTransportConfig `key:"readTransport" json:"read_transport"`
+	Prefetch              ReadPrefetchConfig        `key:"prefetch" json:"prefetch"`
+}
+
+type ClientReadTransportConfig struct {
+	Enabled               bool `key:"enabled" json:"enabled"`
+	MaxActiveConnsPerHost int  `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
+	MaxIdleConnsPerHost   int  `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
+}
+
+type ReadPrefetchConfig struct {
+	Enabled         bool  `key:"enabled" json:"enabled"`
+	AheadBytes      int64 `key:"aheadBytes" json:"ahead_bytes"`
+	Workers         int   `key:"workers" json:"workers"`
+	PartLengthBytes int64 `key:"partLengthBytes" json:"part_length_bytes"`
+	MaxPartsPerRead int   `key:"maxPartsPerRead" json:"max_parts_per_read"`
 }
 
 type MetadataMode string
@@ -408,15 +298,6 @@ type Host struct {
 // Bytes is needed for the rendezvous hasher
 func (h *Host) Bytes() []byte {
 	return []byte(h.HostId)
-}
-
-func (h *Host) ToProto() *proto.CacheHost {
-	return &proto.CacheHost{
-		HostId:           h.HostId,
-		Addr:             h.Addr,
-		PrivateIpAddr:    h.PrivateAddr,
-		CapacityUsagePct: float32(h.CapacityUsagePct),
-	}
 }
 
 type ClientRequest struct {

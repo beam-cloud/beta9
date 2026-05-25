@@ -36,17 +36,19 @@ type TaskGroup struct {
 	backendRepo        repository.BackendRepository
 	taskRepo           repository.TaskRepository
 	containerRepo      repository.ContainerRepository
+	eventRepo          repository.EventRepository
 	redisClient        *common.RedisClient
 	taskDispatcher     *task.Dispatcher
 	scheduler          *scheduler.Scheduler
 	storageClientCache sync.Map
 }
 
-func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo:        backendRepo,
 		taskRepo:           taskRepo,
 		containerRepo:      containerRepo,
+		eventRepo:          eventRepo,
 		config:             config,
 		redisClient:        redisClient,
 		taskDispatcher:     taskDispatcher,
@@ -358,6 +360,9 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 		return nil
 	}
 
+	if g.eventRepo != nil {
+		g.eventRepo.PushTaskCancelRequested(task, types.EventSourceAPITaskStop, types.EventMessageHTTPTaskStopRequested)
+	}
 	err := g.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
@@ -384,6 +389,9 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	task.EndedAt = types.NullTime{}.Now()
 	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
+	}
+	if g.eventRepo != nil {
+		g.eventRepo.PushTaskCancelApplied(task, types.EventSourceAPITaskStop, types.EventMessageHTTPTaskCancellationApplied)
 	}
 
 	return nil

@@ -1,0 +1,60 @@
+name: cache-default
+kind: cache
+runner: cache
+description: Embedded cache correctness and throughput suite with strict path evidence.
+defaults:
+  verify_reads: true
+  require_remote_read: true
+  require_read_path_proof: true
+  direct_cache_disk_probe: true
+  require_direct_cache_disk_probe: true
+  worker_dd_reads: true
+  sandbox_dd_reads: true
+  cleanup_cache_before_run: true
+  cleanup_cache_after_run: true
+  reset_workers: false
+  reset_workers_after_prepare: true
+  min_hot_file_read_mbps: 2000
+  min_remote_cache_socket_mbps: 2000
+  min_throughput_size_mb: 1024
+scenarios:
+  - name: volume-strict-sequential-1024
+    access: volume_mount
+    operation: read
+    pattern: sequential
+    size_mib: 1024
+    cache_state: strict_disk
+    probes: [sandbox_read, worker_dd, sandbox_dd, remote_cache_socket, cache_path]
+    thresholds:
+      python_file_read_min_mbps: 2000
+      remote_cache_socket_read_min_mbps: 2000
+  - name: volume-strict-sequential-4096
+    access: volume_mount
+    operation: read
+    pattern: sequential
+    size_mib: 4096
+    cache_state: strict_disk
+    probes: [sandbox_read, worker_dd, sandbox_dd, remote_cache_socket, cache_path]
+    thresholds:
+      python_file_read_min_mbps: 2000
+      remote_cache_socket_read_min_mbps: 2000
+  - name: workspace-strict-sequential-1024
+    access: workspace_fuse
+    operation: read
+    pattern: sequential
+    size_mib: 1024
+    cache_state: strict_disk
+    probes: [sandbox_read, worker_dd, sandbox_dd, remote_cache_socket, cache_path]
+    thresholds:
+      python_file_read_min_mbps: 2000
+      remote_cache_socket_read_min_mbps: 2000
+  - name: workspace-strict-sequential-4096
+    access: workspace_fuse
+    operation: read
+    pattern: sequential
+    size_mib: 4096
+    cache_state: strict_disk
+    probes: [sandbox_read, worker_dd, sandbox_dd, remote_cache_socket, cache_path]
+    thresholds:
+      python_file_read_min_mbps: 2000
+      remote_cache_socket_read_min_mbps: 2000

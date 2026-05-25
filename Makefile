@@ -4,8 +4,12 @@ workerTag := latest
 runnerTag := latest
 runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 BENCH_SDK_PYTHON ?= uv run --project ./sdk --no-sync python
+CACHE_BENCHMARK_FILE_PLAN ?=
+CACHE_BENCH_PROFILE ?=
+CACHE_BENCH_CONFIG ?=
+TOKEN ?=
 
-.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark cache-benchmark
+.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark cache-benchmark bench-cache-smoke
 
 setup:
 	bash bin/setup.sh
@@ -14,7 +18,9 @@ setup:
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
 startup-benchmark:
-	python3 "$(CURDIR)/benchmarks/startup.py" $(ARGS)
+	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	"$(CURDIR)/bin/bench" startup $(ARGS)
 
 startup-benchmark-build:
 	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
@@ -25,11 +31,22 @@ startup-benchmark-build:
 
 sandbox-parallel-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
-	$(BENCH_SDK_PYTHON) "$(CURDIR)/benchmarks/sandbox_parallel.py" $(ARGS)
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	"$(CURDIR)/bin/bench" sandbox $(ARGS)
 
 cache-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
-	$(BENCH_SDK_PYTHON) "$(CURDIR)/benchmarks/cache.py" $(ARGS)
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	CACHE_BENCHMARK_FILE_PLAN="$(CACHE_BENCHMARK_FILE_PLAN)" \
+	CACHE_BENCH_PROFILE="$(CACHE_BENCH_PROFILE)" \
+	CACHE_BENCH_CONFIG="$(CACHE_BENCH_CONFIG)" \
+	TOKEN="$(TOKEN)" \
+	"$(CURDIR)/bin/bench" cache $(ARGS)
+
+bench-cache-smoke:
+	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	"$(CURDIR)/bin/bench" cache --suite cache-smoke $(ARGS)
 
 setup-sdk:
 	@if ! command -v uv &> /dev/null; then \

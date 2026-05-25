@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,9 @@ const (
 	defaultGeeseFSFuseReadAheadKb  = 32768
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
+	defaultGeeseFSMaxReadBytes     = 1048576
+	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
+	defaultGeeseFSHashMinFileKb    = 1024
 )
 
 type GeeseStorage struct {
@@ -31,6 +35,81 @@ type GeeseStorage struct {
 	fs          *core.Goofys
 	mu          sync.Mutex
 	cacheClient *cache.Client
+}
+
+type geeseContentCache struct {
+	client *cache.Client
+}
+
+var _ cfg.ContentCache = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheReadInto = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheStoreLocalPath = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheClientLocalPageFileViews = (*geeseContentCache)(nil)
+
+func newGeeseContentCache(client *cache.Client) *geeseContentCache {
+	if client == nil {
+		return nil
+	}
+	return &geeseContentCache{client: client}
+}
+
+func (c *geeseContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
+	return c.client.GetContent(hash, offset, length, opts)
+}
+
+func (c *geeseContentCache) GetContentStream(hash string, offset int64, length int64, opts struct {
+	RoutingKey string
+}) (chan []byte, error) {
+	return c.client.GetContentStream(hash, offset, length, opts)
+}
+
+func (c *geeseContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {
+	return c.client.StoreContent(chunks, hash, opts)
+}
+
+func (c *geeseContentCache) StoreContentFromS3(source struct {
+	Path        string
+	BucketName  string
+	Region      string
+	EndpointURL string
+	AccessKey   string
+	SecretKey   string
+}, opts struct {
+	RoutingKey string
+	Lock       bool
+}) (string, error) {
+	return c.client.StoreContentFromS3(source, opts)
+}
+
+func (c *geeseContentCache) ReadContentInto(ctx context.Context, hash string, offset int64, dst []byte, opts struct{ RoutingKey string }) (int64, error) {
+	return c.client.ReadContentInto(ctx, hash, offset, dst, opts)
+}
+
+func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
+	Path      string
+	CachePath string
+}, opts struct {
+	RoutingKey string
+	Lock       bool
+}) (string, error) {
+	return c.client.StoreContentFromLocalPath(source, opts)
+}
+
+func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]cfg.ClientLocalPageFileView, error) {
+	views, err := c.client.ClientLocalPageFileViews(hash, offset, length, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]cfg.ClientLocalPageFileView, 0, len(views))
+	for _, view := range views {
+		out = append(out, cfg.ClientLocalPageFileView{
+			Path:   view.Path,
+			Offset: view.Offset,
+			Length: view.Length,
+		})
+	}
+	return out, nil
 }
 
 func NewGeeseStorage(config types.GeeseConfig, cacheClient *cache.Client) (Storage, error) {
@@ -77,20 +156,35 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
+	if s.config.HTTPTimeout > 0 {
+		flags.HTTPTimeout = s.config.HTTPTimeout
+	}
 	flags.NoPreloadDir = true
+	if s.config.Debug {
+		flags.StatsInterval = 5 * time.Second
+	}
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
-	flags.MountOptions = s.config.MountOptions
+	flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
+	flags.PartSizes = []cfg.PartSizeConfig{
+		{PartSize: defaultGeeseFSPartSizeBytes, PartCount: 1000},
+		{PartSize: 128 * 1024 * 1024, PartCount: 8000},
+	}
 
-	// Staged write mode config
+	// Staged writes route large writes through local temp files before flushing.
+	// Keep them disabled for workspace storage so benchmark and production reads
+	// validate the normal geesefs/S3/cache path instead of temp-file side effects.
 	flags.StagedWriteModeEnabled = s.config.StagedWriteModeEnabled
 	flags.StagedWritePath = s.config.StagedWritePath
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
-		log.Info().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
+		log.Debug().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
 	}
 
 	// Cache through mode config
-	flags.CacheThroughModeEnabled = s.config.CacheThroughModeEnabled || s.config.CacheThroughEnabled
+	flags.CacheThroughModeEnabled = s.config.CacheThroughEnabled
+	if s.cacheClient != nil && !s.config.DisableVolumeCaching {
+		flags.MinFileSizeForHashKB = defaultGeeseFSHashMinFileKb
+	}
 
 	if s.config.DisableVolumeCaching {
 		flags.HashAttr = ""
@@ -112,10 +206,25 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.ReadAheadParallelKB = uint64(s.config.ReadAheadParallelKB)
 	}
 
+	log.Debug().
+		Str("local_path", localPath).
+		Int64("memory_limit_mb", s.config.MemoryLimit).
+		Int("max_flushers", int(flags.MaxFlushers)).
+		Int("max_parallel_parts", flags.MaxParallelParts).
+		Dur("http_timeout", flags.HTTPTimeout).
+		Uint64("multipart_part_size_bytes", flags.PartSizes[0].PartSize).
+		Uint64("min_file_size_for_hash_kb", flags.MinFileSizeForHashKB).
+		Bool("cache_through", flags.CacheThroughModeEnabled).
+		Bool("external_cache", s.cacheClient != nil).
+		Bool("cache_direct_io", s.config.CacheDirectIO).
+		Bool("staged_write", flags.StagedWriteModeEnabled).
+		Msg("geesefs mount performance config")
+
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
-		flags.ExternalCacheClient = s.cacheClient
+		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
+		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
 	}
 
 	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
@@ -163,6 +272,24 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 func (s *GeeseStorage) Mode() string {
 	return StorageModeGeese
+}
+
+func withDefaultMountOption(options []string, key, value string) []string {
+	for _, option := range options {
+		for _, part := range strings.Split(option, ",") {
+			name := part
+			if idx := strings.IndexByte(name, '='); idx >= 0 {
+				name = name[:idx]
+			}
+			if name == key {
+				return options
+			}
+		}
+	}
+	out := make([]string, 0, len(options)+1)
+	out = append(out, options...)
+	out = append(out, fmt.Sprintf("%s=%s", key, value))
+	return out
 }
 
 func (s *GeeseStorage) Unmount(localPath string) error {

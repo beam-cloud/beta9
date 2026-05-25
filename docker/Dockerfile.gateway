@@ -1,4 +1,6 @@
-FROM golang:1.22.10-bullseye AS base
+# syntax=docker/dockerfile:1.7-labs
+
+FROM golang:1.23-bullseye AS base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3
@@ -14,14 +16,6 @@ RUN apt-get install -y libfuse2 libfuse-dev bash-completion && \
     curl -sSf -o mountpoint.deb https://s3.amazonaws.com/mountpoint-s3-release/1.5.0/${ARCH}/mount-s3-1.5.0-${ARCH}.deb && \
     dpkg -i mountpoint.deb && \
     rm -vf mountpoint.deb
-
-RUN if [ "$(uname -m)" = "x86_64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    elif [ "$(uname -m)" = "aarch64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    fi
 
 # skopeo
 # ========================
@@ -46,6 +40,7 @@ EOT
 FROM base AS build
 
 WORKDIR /workspace
+ENV GONOSUMDB="github.com/beam-cloud/*"
 
 RUN apt-get install -y libfuse3-dev libbtrfs-dev libgpgme-dev && \
     go install github.com/cosmtrek/air@v1.49.0

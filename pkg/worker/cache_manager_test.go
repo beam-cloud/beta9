@@ -59,3 +59,12 @@ func TestWorkerCacheManagerDisabledWhenPoolDiskCacheDisabled(t *testing.T) {
 
 	require.False(t, manager.enabled())
 }
+
+func TestCacheLogicalHostIDDeduplicatesSharedNodeCachePath(t *testing.T) {
+	first := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	second := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	otherPath := cacheLogicalHostID("default", "default", "node-a", "/mnt/cache/default/node-a")
+
+	require.Equal(t, first, second)
+	require.NotEqual(t, first, otherPath)
+}

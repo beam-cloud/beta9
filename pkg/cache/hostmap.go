@@ -25,9 +25,13 @@ type HostMap struct {
 }
 
 func (hm *HostMap) Set(host *Host) {
+	if host == nil || host.HostId == "" {
+		return
+	}
+
 	hm.mu.Lock()
-	_, exists := hm.hosts[host.HostId]
-	if exists {
+	existing, exists := hm.hosts[host.HostId]
+	if exists && existing.Addr == host.Addr && existing.PrivateAddr == host.PrivateAddr && existing.CapacityUsagePct == host.CapacityUsagePct {
 		hm.mu.Unlock()
 		return
 	}
@@ -39,10 +43,20 @@ func (hm *HostMap) Set(host *Host) {
 		return
 	}
 
-	Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
+	if exists {
+		Logger.Infof("Updated host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
+	} else {
+		Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
+	}
 	if err := hm.onHostAdded(host); err != nil {
 		Logger.Warnf("failed to initialize cache host %s: %v", host.HostId, err)
-		hm.Remove(host)
+		hm.mu.Lock()
+		if exists {
+			hm.hosts[host.HostId] = existing
+		} else {
+			delete(hm.hosts, host.HostId)
+		}
+		hm.mu.Unlock()
 	}
 }
 

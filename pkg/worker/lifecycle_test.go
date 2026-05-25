@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -91,6 +93,156 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 		{HostPort: 30001, ContainerPort: containerInnerPort},
 		{HostPort: 30002, ContainerPort: int(types.WorkerShellPort)},
 	}, bindings)
+}
+
+func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
+	tests := []struct {
+		name           string
+		cpuEnforced    bool
+		memoryEnforced bool
+		wantCPU        bool
+		wantMemory     bool
+		wantUnified    bool
+	}{
+		{name: "cpu only", cpuEnforced: true, wantCPU: true},
+		{name: "memory only", memoryEnforced: true, wantMemory: true, wantUnified: true},
+		{name: "cpu and memory", cpuEnforced: true, memoryEnforced: true, wantCPU: true, wantMemory: true, wantUnified: true},
+		{name: "neither"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRuntime := &mockRuntime{name: types.ContainerRuntimeGvisor.String()}
+			containerInstances := common.NewSafeMap[*ContainerInstance]()
+			containerInstances.Set("container-1", &ContainerInstance{Runtime: mockRuntime})
+
+			worker := &Worker{
+				config: types.AppConfig{
+					Worker: types.WorkerConfig{
+						ContainerResourceLimits: types.ContainerResourceLimitsConfig{
+							CPUEnforced:    tt.cpuEnforced,
+							MemoryEnforced: tt.memoryEnforced,
+						},
+					},
+				},
+				runtime:            mockRuntime,
+				containerInstances: containerInstances,
+			}
+
+			spec, err := worker.specFromRequest(&types.ContainerRequest{
+				ContainerId: "container-1",
+				EntryPoint:  []string{"python3", "-c", "print('ok')"},
+				Cpu:         500,
+				Memory:      128,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Type: types.StubType(types.StubTypeFunction),
+				}},
+			}, &ContainerOptions{BindPorts: []int{8001}})
+			require.NoError(t, err)
+			require.NotNil(t, spec.Linux)
+			require.NotNil(t, spec.Linux.Resources)
+
+			assert.Equal(t, tt.wantCPU, spec.Linux.Resources.CPU != nil)
+			assert.Equal(t, tt.wantMemory, spec.Linux.Resources.Memory != nil)
+			assert.Equal(t, tt.wantUnified, spec.Linux.Resources.Unified != nil)
+		})
+	}
+}
+
+func TestNormalizeContainerExitCodePreservesUnexpectedSigkill(t *testing.T) {
+	assert.Equal(t,
+		int(types.ContainerExitCodeOomKill),
+		normalizeContainerExitCode(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false),
+	)
+}
+
+func TestNormalizeContainerExitCodeMapsExplicitStopReasons(t *testing.T) {
+	tests := []struct {
+		name     string
+		reason   types.StopContainerReason
+		wantExit int
+	}{
+		{name: "scheduler", reason: types.StopContainerReasonScheduler, wantExit: int(types.ContainerExitCodeScheduler)},
+		{name: "ttl", reason: types.StopContainerReasonTtl, wantExit: int(types.ContainerExitCodeTtl)},
+		{name: "user", reason: types.StopContainerReasonUser, wantExit: int(types.ContainerExitCodeUser)},
+		{name: "admin", reason: types.StopContainerReasonAdmin, wantExit: int(types.ContainerExitCodeAdmin)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantExit, normalizeContainerExitCode(0, tt.reason, false))
+		})
+	}
+}
+
+func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {
+	require.Equal(t, "COMPLETED", containerExitReason(0, types.StopContainerReasonUnknown, false))
+	require.Equal(t, "SIGKILL", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false))
+	require.Equal(t, "OOM", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, true))
+	require.Equal(t, string(types.StopContainerReasonUser), containerExitReason(0, types.StopContainerReasonUser, false))
+}
+
+func TestEventStopReasonOmitsUnknown(t *testing.T) {
+	require.Empty(t, eventStopReason(types.StopContainerReasonUnknown))
+	require.Equal(t, string(types.StopContainerReasonScheduler), eventStopReason(types.StopContainerReasonScheduler))
+}
+
+func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
+	workerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	rt := &deleteContextRuntime{mockRuntime: mockRuntime{name: "runc"}}
+	worker := &Worker{
+		ctx:                workerCtx,
+		runtime:            rt,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+
+	require.NoError(t, worker.deleteRuntimeContainer("container-1"))
+	require.True(t, rt.deleteCalled)
+	require.NoError(t, rt.deleteCtxErr)
+}
+
+func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
+	outerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &runContextRuntime{
+		mockRuntime: mockRuntime{name: "runc"},
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+		ctxErr:      make(chan error, 1),
+	}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{ContainerId: "container-1"}
+	worker.containerInstances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		Runtime: rt,
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := worker.runContainer(
+			outerCtx,
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			time.Now(),
+		)
+		result <- err
+	}()
+
+	<-rt.entered
+	cancel()
+	close(rt.release)
+
+	require.NoError(t, <-rt.ctxErr)
+	require.NoError(t, <-result)
 }
 
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
@@ -484,7 +636,7 @@ func TestPullImageFromRegistryKeepsPersistentLockFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(archivePath, []byte("clip"), 0644))
 
 	imageClient := &ImageClient{}
-	_, err := imageClient.pullImageFromRegistry(context.Background(), archivePath, "image")
+	_, err := imageClient.pullImageFromRegistry(context.Background(), archivePath, &types.ContainerRequest{ImageId: "image"})
 	require.NoError(t, err)
 
 	_, err = os.Stat(lockPath)
@@ -582,4 +734,30 @@ func (m *mockRuntime) Restore(ctx context.Context, containerID string, opts *run
 
 func (m *mockRuntime) Close() error {
 	return nil
+}
+
+type deleteContextRuntime struct {
+	mockRuntime
+	deleteCalled bool
+	deleteCtxErr error
+}
+
+func (m *deleteContextRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
+	m.deleteCalled = true
+	m.deleteCtxErr = ctx.Err()
+	return nil
+}
+
+type runContextRuntime struct {
+	mockRuntime
+	entered chan struct{}
+	release chan struct{}
+	ctxErr  chan error
+}
+
+func (m *runContextRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
+	close(m.entered)
+	<-m.release
+	m.ctxErr <- ctx.Err()
+	return 0, nil
 }
