@@ -4,9 +4,9 @@ package cache
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
-	"runtime"
 
 	"golang.org/x/sys/unix"
 )
@@ -69,8 +69,7 @@ func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (i
 			return sent, sendErr
 		}
 		if !progressed {
-			runtime.Gosched()
-			continue
+			return sent, io.ErrUnexpectedEOF
 		}
 	}
 
