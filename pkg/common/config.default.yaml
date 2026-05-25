@@ -107,7 +107,7 @@ imageService:
   # In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
   # That gives 1200 / 1e+10 = 120 ns per byte.
   archiveNanosecondsPerByte: 120
-  # Default to clip v2.
+  # Default to clip v2. Set to 1 to force legacy image format. NOTE: This only applies to new images.
   clipVersion: 2
   registryStore: local
   registryCredentialProvider: docker

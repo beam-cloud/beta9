@@ -37,6 +37,15 @@ from startup import (
     start_http_port_forward_if_needed,
     wait_http,
 )
+from sandbox_startup_report import (
+    DEFAULT_EVENT_LIMIT,
+    DEFAULT_EVENT_POLL_MS,
+    DEFAULT_EVENT_WAIT_SECONDS,
+    DEFAULT_TOP_LIFECYCLE,
+    default_markdown_path,
+    render_console_summary,
+    write_startup_report,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -55,14 +64,19 @@ def parse_args():
         description="Benchmark many local beta9 sandboxes created concurrently via the SDK Sandbox abstraction."
     )
     parser.add_argument("--namespace", default=os.getenv("BENCH_NAMESPACE", "beta9"))
-    parser.add_argument("--gateway-url", default=os.getenv("BENCH_GATEWAY_URL", "http://127.0.0.1:11994"))
-    parser.add_argument("--grpc-addr", default=os.getenv("BENCH_GRPC_ADDR", "127.0.0.1:11993"))
+    parser.add_argument("--gateway-url", default=os.getenv("BENCH_GATEWAY_URL", "http://127.0.0.1:1994"))
+    parser.add_argument("--grpc-addr", default=os.getenv("BENCH_GRPC_ADDR", "127.0.0.1:1993"))
     parser.add_argument("--token", default=os.getenv("BENCH_TOKEN") or os.getenv("BETA9_TOKEN") or "")
     parser.add_argument("--token-cache", default=os.getenv("BENCH_TOKEN_CACHE", ""))
     parser.add_argument("--timeout-seconds", type=float, default=env_float("BENCH_TIMEOUT_SECONDS", 240))
     parser.add_argument("--poll-interval-ms", type=int, default=env_int("BENCH_POLL_INTERVAL_MS", 50))
     parser.add_argument("--cleanup-ttl-seconds", type=int, default=env_int("BENCH_CLEANUP_TTL_SECONDS", 5))
     parser.add_argument("--output", default=os.getenv("BENCH_OUTPUT", "/tmp/beta9-sandbox-parallel-benchmark.json"))
+    parser.add_argument("--report", default=os.getenv("BENCH_REPORT", ""))
+    parser.add_argument("--event-wait-seconds", type=float, default=env_float("BENCH_EVENT_WAIT_SECONDS", DEFAULT_EVENT_WAIT_SECONDS))
+    parser.add_argument("--event-poll-ms", type=int, default=env_int("BENCH_EVENT_POLL_MS", DEFAULT_EVENT_POLL_MS))
+    parser.add_argument("--event-limit", type=int, default=env_int("BENCH_EVENT_LIMIT", DEFAULT_EVENT_LIMIT))
+    parser.add_argument("--event-top-lifecycle", type=int, default=env_int("BENCH_EVENT_TOP_LIFECYCLE", DEFAULT_TOP_LIFECYCLE))
 
     parser.add_argument("--count", type=int, default=env_int("BENCH_SANDBOX_COUNT", 100))
     parser.add_argument("--parallelism", type=int, default=env_int("BENCH_SANDBOX_PARALLELISM", env_int("BENCH_SANDBOX_COUNT", 100)))
@@ -139,6 +153,8 @@ def parse_args():
     if args.prewarm_idle_timeout_seconds <= 0:
         raise SystemExit("BENCH_SANDBOX_PREWARM_IDLE_TIMEOUT_SECONDS must be greater than 0")
     args.bootstrap_image_uri = args.sandbox_image_uri
+    if not args.report:
+        args.report = str(default_markdown_path(args.output))
     return args
 
 
@@ -699,6 +715,19 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     log(f"Wrote sandbox benchmark report to {output_path}")
+
+    startup_report = write_startup_report(
+        output_path,
+        markdown_path=args.report,
+        gateway_url=args.gateway_url,
+        token=args.token,
+        workspace_id=workspace_id,
+        event_wait_seconds=args.event_wait_seconds,
+        event_poll_ms=args.event_poll_ms,
+        event_limit=args.event_limit,
+        top_lifecycle=args.event_top_lifecycle,
+    )
+    print(render_console_summary(startup_report), flush=True)
 
     failures = measured_failed_samples(samples)
     if failures:

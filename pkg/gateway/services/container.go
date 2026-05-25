@@ -254,10 +254,6 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			}
 		}
 
-		defer gws.recordAttachEvent(container, stub, types.ContainerEventGatewayServeLockPreserved, types.EventMessageServeLockPreserved, map[string]string{
-			types.EventAttrLockKey:        serveLockKey,
-			types.EventAttrTimeoutSeconds: fmt.Sprintf("%.0f", serveTimeout.Seconds()),
-		})
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
@@ -351,39 +347,9 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	// Wait for the container stream or the client message loop to finish
 	select {
 	case err := <-streamErrCh:
-		gws.recordAttachEvent(container, stub, types.ContainerEventGatewayAttachDisconnected, types.EventMessageAttachStreamEnded, map[string]string{
-			types.EventAttrError:  fmt.Sprintf("%v", err),
-			types.EventAttrSource: types.EventStreamSourceContainer,
-		})
 		return err
 	case err := <-clientMsgErrCh:
-		gws.recordAttachEvent(container, stub, types.ContainerEventGatewayAttachDisconnected, types.EventMessageAttachClientDisconnected, map[string]string{
-			types.EventAttrError:  fmt.Sprintf("%v", err),
-			types.EventAttrSource: types.EventStreamSourceClient,
-		})
 		cancel()
 		return err
 	}
-}
-
-func (gws *GatewayService) recordAttachEvent(container *types.ContainerState, stub *types.StubWithRelated, eventID types.ContainerEventID, message types.EventMessage, attrs map[string]string) {
-	if container == nil {
-		return
-	}
-	event := types.EventContainerEventSchema{
-		ID:          eventID,
-		ContainerID: container.ContainerId,
-		StubID:      container.StubId,
-		WorkspaceID: container.WorkspaceId,
-		Source:      types.EventSourceGatewayAttach.String(),
-		Message:     message.String(),
-		Attrs:       attrs,
-	}
-	if stub != nil {
-		event.StubType = string(stub.Type.Kind())
-	}
-	if gws.eventRepo == nil {
-		return
-	}
-	gws.eventRepo.PushContainerEvent(event)
 }

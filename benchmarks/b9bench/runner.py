@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from .model import Measurement, RunConfig, ScenarioSpec, SuiteSpec, slug, utc_now
@@ -389,11 +390,19 @@ class ScriptSuiteProbe(ScriptProbeBase):
         start = time.perf_counter()
         proc = self._run_python_script(suite, self.script, args)
         elapsed_ms = (time.perf_counter() - start) * 1000
-        evidence: dict[str, Any] = {"artifact_output": str(output), "script": self.script}
-        if output.exists():
+        effective_output = self._effective_output_path(output)
+        evidence: dict[str, Any] = {"artifact_output": str(effective_output), "script": self.script}
+        if effective_output.exists():
             try:
-                payload = json.loads(output.read_text(encoding="utf-8"))
+                payload = json.loads(effective_output.read_text(encoding="utf-8"))
                 evidence["summary"] = payload.get("summary") or payload.get("aggregate") or {}
+                startup_report = payload.get("startupReport") or {}
+                if startup_report:
+                    evidence["startup_report"] = startup_report.get("markdownPath")
+                    evidence["startup_verdict"] = startup_report.get("verdict", {}).get("text")
+                    evidence["time_to_interactive"] = startup_report.get("timeToInteractive")
+                    evidence["primary_bottleneck"] = startup_report.get("primaryBottleneck")
+                    evidence["event_coverage"] = startup_report.get("eventCoverage")
             except json.JSONDecodeError as exc:
                 evidence["parse_error"] = str(exc)
         self.sink.emit(
@@ -410,3 +419,22 @@ class ScriptSuiteProbe(ScriptProbeBase):
                 evidence=evidence,
             )
         )
+
+    def _effective_output_path(self, default: os.PathLike[str] | str) -> Path:
+        output = str(default)
+        args = list(self.config.passthrough_args)
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--output" and index + 1 < len(args):
+                output = args[index + 1]
+                index += 2
+                continue
+            if arg.startswith("--output="):
+                output = arg.split("=", 1)[1]
+            index += 1
+
+        path = Path(output)
+        if path.is_absolute():
+            return path
+        return self.config.root / path
