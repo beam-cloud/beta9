@@ -44,7 +44,6 @@ const (
 	cacheDefaultGRPCPayloadCodecMin     = 64 * 1024
 	cacheDefaultS3Concurrency           = 16
 	cacheDefaultS3ChunkSize             = 64_000_000
-	cacheDefaultSlotsPerNode            = 1
 	cacheDefaultRegistrationTTL         = 30 * time.Second
 	cacheDefaultRegistrationHeartbeat   = 10 * time.Second
 	cacheDefaultHostWatchInterval       = 5 * time.Second
@@ -66,7 +65,7 @@ type WorkerCacheManager struct {
 	metadataStore cache.CacheMetadataStore
 	client        *cache.Client
 	server        *cache.Server
-	registrations []*gatewayCacheRegistration
+	registration  *gatewayCacheRegistration
 	mu            sync.Mutex
 	wg            sync.WaitGroup
 }
@@ -104,24 +103,24 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cacheConfig.Global, cacheConfig.Server, m.redis.UniversalClient)
 	m.metadataStore = metadataStore
 
-	hostID := cacheLogicalHostID(m.poolName, m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir, 0)
+	hostID := cacheLogicalHostID(m.poolName, m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
 	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
 	if err != nil {
 		m.cancel()
 		return nil, err
 	}
 
-	registrations := newGatewayCacheRegistrations(m, server, cacheConfig, advertisedAddr)
-	if err := registerGatewayCacheHosts(m.ctx, registrations); err != nil {
+	registration := newGatewayCacheRegistration(m, server, cacheConfig, advertisedAddr)
+	if err := registration.registerOnce(m.ctx); err != nil {
 		_ = server.Close()
 		m.cancel()
 		return nil, err
 	}
-	m.registrations = registrations
+	m.registration = registration
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		runGatewayCacheRegistrations(m.ctx, registrations)
+		runGatewayCacheRegistration(m.ctx, registration)
 	}()
 
 	hostDirectory := &gatewayCacheHostDirectory{
@@ -130,7 +129,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
-		_ = unregisterGatewayCacheHosts(context.Background(), registrations)
+		_ = registration.unregister(context.Background())
 		_ = server.Close()
 		m.cancel()
 		return nil, err
@@ -173,10 +172,12 @@ func (m *WorkerCacheManager) Close() error {
 	m.mu.Lock()
 	server := m.server
 	client := m.client
-	registrations := append([]*gatewayCacheRegistration(nil), m.registrations...)
+	registration := m.registration
 	m.mu.Unlock()
 
-	errs = errors.Join(errs, unregisterGatewayCacheHosts(context.Background(), registrations))
+	if registration != nil {
+		errs = errors.Join(errs, registration.unregister(context.Background()))
+	}
 	if client != nil {
 		errs = errors.Join(errs, client.Cleanup())
 	}
@@ -287,10 +288,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Coordinator.HostWatchIntervalSeconds == 0 {
 		cacheConfig.Coordinator.HostWatchIntervalSeconds = int(cacheDefaultHostWatchInterval / time.Second)
 	}
-	if cacheConfig.Embedded.SlotsPerNode == 0 {
-		cacheConfig.Embedded.SlotsPerNode = cacheDefaultSlotsPerNode
-	}
-
 	if cacheConfig.Disk.MountPath == "" {
 		cacheConfig.Disk.MountPath = cacheDefaultDiskPath
 	}
@@ -383,9 +380,6 @@ func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.W
 	}
 	if poolConfig.Cache.Disk.MaxUsagePct > 0 {
 		cacheConfig.Disk.MaxUsagePct = poolConfig.Cache.Disk.MaxUsagePct
-	}
-	if poolConfig.Cache.SlotsPerNode > 0 {
-		cacheConfig.Embedded.SlotsPerNode = poolConfig.Cache.SlotsPerNode
 	}
 	if poolConfig.Cache.Enabled != nil && !*poolConfig.Cache.Enabled {
 		cacheConfig.Disk.Enabled = false

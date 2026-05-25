@@ -173,7 +173,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	// Staged writes route large writes through local temp files before flushing.
 	// Keep them disabled for workspace storage so benchmark and production reads
 	// validate the normal geesefs/S3/cache path instead of temp-file side effects.
-	flags.StagedWriteModeEnabled = false
+	flags.StagedWriteModeEnabled = s.config.StagedWriteModeEnabled
 	flags.StagedWritePath = s.config.StagedWritePath
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
@@ -181,7 +181,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	}
 
 	// Cache through mode config
-	flags.CacheThroughModeEnabled = s.config.CacheThroughModeEnabled || s.config.CacheThroughEnabled
+	flags.CacheThroughModeEnabled = s.config.CacheThroughEnabled
 	if s.cacheClient != nil && !s.config.DisableVolumeCaching {
 		flags.MinFileSizeForHashKB = defaultGeeseFSHashMinFileKb
 	}
@@ -216,7 +216,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		Uint64("min_file_size_for_hash_kb", flags.MinFileSizeForHashKB).
 		Bool("cache_through", flags.CacheThroughModeEnabled).
 		Bool("external_cache", s.cacheClient != nil).
-		Bool("external_cache_direct_io", s.config.ExternalCacheDirectIO).
+		Bool("cache_direct_io", s.config.CacheDirectIO).
 		Bool("staged_write", flags.StagedWriteModeEnabled).
 		Msg("geesefs mount performance config")
 
@@ -224,7 +224,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if s.cacheClient != nil {
 		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
-		flags.ExternalCacheDirectIO = s.config.ExternalCacheDirectIO
+		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
 	}
 
 	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)

@@ -66,8 +66,8 @@ storage:
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false
-      externalCacheDirectIO: false
-      cacheThroughModeEnabled: true
+      cacheDirectIO: false
+      cacheThroughEnabled: true
 gateway:
   host: beta9-gateway
   invokeURLType: path
@@ -172,12 +172,13 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
-        # Additional runsc flags are intentionally opt-in. Keep filesystem
-        # tuning experiments out of the production default until benchmarked.
-        gvisorExtraArgs: []
+        # Keep gVisor rootfs propagation and external modification detection
+        # defaults config-driven so pool-specific overrides stay explicit.
+        gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
       # Optional per-pool cache disk override for nodes with different storage layouts.
       # cache:
-      #   slotsPerNode: 1
       #   disk:
       #     hostPath: /mnt/nvme/beta9/cache
       #     mountPath: /var/lib/beta9/cache
@@ -201,7 +202,9 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
-        gvisorExtraArgs: []
+        gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
       # Optional per-pool cache disk override.
       # cache:
       #   disk:
@@ -287,10 +290,6 @@ cache:
     registrationTTLSeconds: 30
     heartbeatIntervalSeconds: 10
     hostWatchIntervalSeconds: 5
-  embedded:
-    # Gateway registration deduplicates many workers on the same node/cache path
-    # into logical HRW targets. Keep one slot per shared hostPath by default.
-    slotsPerNode: 1
   global:
     defaultLocality: default
     serverPort: 2049

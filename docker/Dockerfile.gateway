@@ -17,14 +17,6 @@ RUN apt-get install -y libfuse2 libfuse-dev bash-completion && \
     dpkg -i mountpoint.deb && \
     rm -vf mountpoint.deb
 
-RUN if [ "$(uname -m)" = "x86_64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    elif [ "$(uname -m)" = "aarch64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    fi
-
 # skopeo
 # ========================
 FROM golang AS skopeo
@@ -53,9 +45,6 @@ RUN apt-get install -y libfuse3-dev libbtrfs-dev libgpgme-dev && \
     go install github.com/cosmtrek/air@v1.49.0
 
 COPY go.mod go.sum ./
-COPY --from=geesefs . /geesefs
-COPY --from=clip . /clip
-COPY --from=gofuse . /gofuse
 RUN go mod download && go mod verify
 
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo

@@ -128,10 +128,16 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.30.1/go.mod h1:jiNR3JqT15Dm+QWq2SRgh
 github.com/aws/smithy-go v1.22.2 h1:6D9hW43xKFrRx/tXXfAlIZc4JI+yQe6snnWcQyxSyLQ=
 github.com/aws/smithy-go v1.22.2/go.mod h1:irrKGvNn1InZwb2d7fkIRNucdfwR8R+Ts3wxYa/cJHg=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
+github.com/beam-cloud/clip v0.0.0-20260525145906-8ac056a77639 h1:GwUeD28SMgmUjnbYkvkQCCQFljgBG6aadUkqjvhE1+8=
+github.com/beam-cloud/clip v0.0.0-20260525145906-8ac056a77639/go.mod h1:Tt5HW/Mp3twQHzal5RE3FYACcxaMaT+QyTBo8aGbsyI=
+github.com/beam-cloud/geesefs v0.0.0-20260525143315-5bfbf8cc65c2 h1:3s8tZF1NJCppGc7bv+nG3YvDpjdOO5sMngDRNXoNEl0=
+github.com/beam-cloud/geesefs v0.0.0-20260525143315-5bfbf8cc65c2/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
 github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1 h1:EUB/gApGrZW0SzPdyk0jQILJk4Q8wUsWevTHGMkWU58=
 github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
+github.com/beam-cloud/gofuse v0.0.0-20260524202825-ee695e692747 h1:OZJmeUHKMeejeznwdFNt254KZIxtADnyHuRZiUV8AoI=
+github.com/beam-cloud/gofuse v0.0.0-20260524202825-ee695e692747/go.mod h1:JYi9iIxdYNgxmMgLwtSHO/hmVnP2kfX1oc+mtx+XWLA=
 github.com/beam-cloud/goproc v0.1.5 h1:FDldQgLn5AbfEJ4Ais70xxmbQhfl2Cmx1IqupJYF11M=
 github.com/beam-cloud/goproc v0.1.5/go.mod h1:eis19sZHSHNCmj8PjiRCdHwp3kkc31wdW3hrynKZq8k=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=

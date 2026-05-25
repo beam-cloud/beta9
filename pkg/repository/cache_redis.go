@@ -24,7 +24,6 @@ type cacheCoordinatorHostRecord struct {
 	Locality         string  `json:"locality"`
 	NodeID           string  `json:"node_id"`
 	CachePathID      string  `json:"cache_path_id"`
-	Slot             int32   `json:"slot"`
 	Addr             string  `json:"addr"`
 	PrivateAddr      string  `json:"private_addr"`
 	CapacityUsagePct float64 `json:"capacity_usage_pct"`

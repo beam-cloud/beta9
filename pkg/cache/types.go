@@ -22,7 +22,6 @@ type Config struct {
 	Disk        DiskConfig        `key:"disk" json:"disk"`
 	Memory      MemoryConfig      `key:"memory" json:"memory"`
 	Coordinator CoordinatorConfig `key:"coordinator" json:"coordinator"`
-	Embedded    EmbeddedConfig    `key:"embedded" json:"embedded"`
 	Server      ServerConfig      `key:"server" json:"server"`
 	Client      ClientConfig      `key:"client" json:"client"`
 	Global      GlobalConfig      `key:"global" json:"global"`
@@ -53,10 +52,6 @@ type CoordinatorConfig struct {
 	RegistrationTTLSeconds   int  `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
 	HeartbeatIntervalSeconds int  `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
 	HostWatchIntervalSeconds int  `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
-}
-
-type EmbeddedConfig struct {
-	SlotsPerNode int `key:"slotsPerNode" json:"slots_per_node"`
 }
 
 type GlobalConfig struct {

@@ -133,9 +133,6 @@ FROM golang AS worker
 WORKDIR /workspace
 
 COPY go.mod go.sum ./
-COPY --from=geesefs . /geesefs
-COPY --from=clip . /clip
-COPY --from=gofuse . /gofuse
 RUN go mod download
 COPY --exclude=sdk . .
 

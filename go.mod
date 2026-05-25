@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
-	github.com/beam-cloud/clip v0.0.0-20260524135146-a240b2dfd717
+	github.com/beam-cloud/clip v0.0.0-20260525145906-8ac056a77639
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
 	github.com/beam-cloud/goproc v0.1.5
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -133,7 +133,6 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/opencontainers/runc v1.2.3 // indirect
 	github.com/opencontainers/selinux v1.11.1 // indirect
-	github.com/s2-streamstore/s2-sdk-go v0.18.0 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/vbatts/tar-split v0.11.6 // indirect
@@ -328,12 +327,10 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-replace github.com/yandex-cloud/geesefs => ../geesefs
-
-replace github.com/beam-cloud/clip => ../clip
+replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20260525143315-5bfbf8cc65c2
 
 replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
-replace github.com/jacobsa/fuse => ../gofuse
+replace github.com/jacobsa/fuse => github.com/beam-cloud/gofuse v0.0.0-20260524202825-ee695e692747

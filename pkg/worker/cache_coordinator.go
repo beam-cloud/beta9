@@ -55,64 +55,32 @@ type gatewayCacheRegistration struct {
 	server         *cache.Server
 	cacheConfig    cache.Config
 	advertisedAddr string
-	slot           int
 	logicalHostID  string
 	registrationID string
 	cachePathID    string
 }
 
-func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string, slot int) *gatewayCacheRegistration {
+func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) *gatewayCacheRegistration {
 	cachePathID := cachePathID(cacheConfig.Server.DiskCacheDir)
-	logicalHostID := cacheLogicalHostID(manager.poolName, manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir, slot)
+	logicalHostID := cacheLogicalHostID(manager.poolName, manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
 
 	return &gatewayCacheRegistration{
 		manager:        manager,
 		server:         server,
 		cacheConfig:    cacheConfig,
 		advertisedAddr: advertisedAddr,
-		slot:           slot,
 		logicalHostID:  logicalHostID,
 		registrationID: cacheRegistrationID(manager.workerID, manager.instanceID),
 		cachePathID:    cachePathID,
 	}
 }
 
-func newGatewayCacheRegistrations(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) []*gatewayCacheRegistration {
-	slots := cacheConfig.Embedded.SlotsPerNode
-	if slots <= 0 {
-		slots = cacheDefaultSlotsPerNode
-	}
-
-	registrations := make([]*gatewayCacheRegistration, 0, slots)
-	for slot := 0; slot < slots; slot++ {
-		registrations = append(registrations, newGatewayCacheRegistration(manager, server, cacheConfig, advertisedAddr, slot))
-	}
-	return registrations
-}
-
-func registerGatewayCacheHosts(ctx context.Context, registrations []*gatewayCacheRegistration) error {
-	for _, registration := range registrations {
-		if err := registration.registerOnce(ctx); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func unregisterGatewayCacheHosts(ctx context.Context, registrations []*gatewayCacheRegistration) error {
-	var err error
-	for _, registration := range registrations {
-		err = errors.Join(err, registration.unregister(ctx))
-	}
-	return err
-}
-
-func runGatewayCacheRegistrations(ctx context.Context, registrations []*gatewayCacheRegistration) {
-	if len(registrations) == 0 {
+func runGatewayCacheRegistration(ctx context.Context, registration *gatewayCacheRegistration) {
+	if registration == nil {
 		return
 	}
 
-	interval := cacheRegistrationHeartbeat(registrations[0].cacheConfig)
+	interval := cacheRegistrationHeartbeat(registration.cacheConfig)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -121,14 +89,12 @@ func runGatewayCacheRegistrations(ctx context.Context, registrations []*gatewayC
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, registration := range registrations {
-				if err := registration.registerOnce(ctx); err != nil {
-					log.Warn().
-						Err(err).
-						Str("logical_host_id", registration.logicalHostID).
-						Str("registration_id", registration.registrationID).
-						Msg("failed to refresh cache registration")
-				}
+			if err := registration.registerOnce(ctx); err != nil {
+				log.Warn().
+					Err(err).
+					Str("logical_host_id", registration.logicalHostID).
+					Str("registration_id", registration.registrationID).
+					Msg("failed to refresh cache registration")
 			}
 		}
 	}
@@ -197,7 +163,6 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 		Locality:         r.manager.locality,
 		NodeId:           r.manager.nodeID,
 		CachePathId:      r.cachePathID,
-		Slot:             int32(r.slot),
 		Addr:             addr,
 		PrivateAddr:      privateAddr,
 		CapacityUsagePct: capacityUsagePct,
@@ -205,17 +170,16 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 }
 
 // cacheLogicalHostID is the stable routing identity for one cache placement
-// target. It is intentionally based on pool, locality, node, cache path, and
-// slot, not the worker process ID; restarted or colocated cache servers register
-// under this same logical host when they serve the same disk cache target.
-func cacheLogicalHostID(poolName, locality, nodeID, diskCacheDir string, slot int) string {
+// target. It is intentionally based on pool, locality, node, and cache path,
+// not the worker process ID; restarted or colocated cache servers register under
+// this same logical host when they serve the same disk cache target.
+func cacheLogicalHostID(poolName, locality, nodeID, diskCacheDir string) string {
 	return fmt.Sprintf(
-		"cache-host-%s-%s-%s-%s-%d",
+		"cache-host-%s-%s-%s-%s",
 		safeCacheName(poolName),
 		safeCacheName(locality),
 		safeCacheName(nodeID),
 		cachePathID(diskCacheDir),
-		slot,
 	)
 }
 

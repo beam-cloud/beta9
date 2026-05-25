@@ -109,7 +109,6 @@ func TestCoordinatorDeduplicatesLogicalHostsAndPromotesRegistrations(t *testing.
 			Locality:       "default",
 			NodeID:         "node-a",
 			CachePathID:    "path",
-			Slot:           0,
 			Addr:           registration.addr,
 			PrivateAddr:    registration.addr,
 		}, 30*time.Second)

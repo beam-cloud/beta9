@@ -61,12 +61,10 @@ func TestWorkerCacheManagerDisabledWhenPoolDiskCacheDisabled(t *testing.T) {
 }
 
 func TestCacheLogicalHostIDDeduplicatesSharedNodeCachePath(t *testing.T) {
-	first := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a", 0)
-	second := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a", 0)
-	otherSlot := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a", 1)
-	otherPath := cacheLogicalHostID("default", "default", "node-a", "/mnt/cache/default/node-a", 0)
+	first := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	second := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	otherPath := cacheLogicalHostID("default", "default", "node-a", "/mnt/cache/default/node-a")
 
 	require.Equal(t, first, second)
-	require.NotEqual(t, first, otherSlot)
 	require.NotEqual(t, first, otherPath)
 }

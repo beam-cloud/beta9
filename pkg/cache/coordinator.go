@@ -26,7 +26,6 @@ type CoordinatorHost struct {
 	Locality         string
 	NodeID           string
 	CachePathID      string
-	Slot             int32
 	Addr             string
 	PrivateAddr      string
 	CapacityUsagePct float64

@@ -288,33 +288,32 @@ type JuiceFSConfig struct {
 }
 
 type GeeseConfig struct {
-	Debug                   bool          `key:"debug" json:"debug"`                                // --debug
-	FsyncOnClose            bool          `key:"fsyncOnClose" json:"fsync_on_close"`                // --fsync-on-close
-	MountOptions            []string      `key:"mountOptions" json:"mount_options"`                 // --mount-options
-	MemoryLimit             int64         `key:"memoryLimit" json:"memory_limit"`                   // --memory-limit
-	MaxFlushers             int           `key:"maxFlushers" json:"max_flushers"`                   // --max-flushers
-	MaxParallelParts        int           `key:"maxParallelParts" json:"max_parallel_parts"`        // --max-parallel-parts
-	HTTPTimeout             time.Duration `key:"httpTimeout" json:"http_timeout"`                   // --http-timeout
-	ReadAheadKB             int           `key:"readAheadKB" json:"read_ahead_kb"`                  // --read-ahead-kb
-	ReadAheadLargeKB        int           `key:"readAheadLargeKB" json:"read_ahead_large_kb"`       // --read-ahead-large-kb
-	ReadAheadParallelKB     int           `key:"readAheadParallelKB" json:"read_ahead_parallel_kb"` // --read-ahead-parallel-kb
-	FuseReadAheadKB         int           `key:"fuseReadAheadKB" json:"fuse_read_ahead_kb"`         // --fuse-read-ahead-kb
-	DirMode                 string        `key:"dirMode" json:"dir_mode"`                           // --dir-mode, e.g., "0777"
-	FileMode                string        `key:"fileMode" json:"file_mode"`                         // --file-mode, e.g., "0666"
-	ListType                int           `key:"listType" json:"list_type"`                         // --list-type
-	AccessKey               string        `key:"accessKey" json:"access_key"`
-	SecretKey               string        `key:"secretKey" json:"secret_key"`
-	EndpointUrl             string        `key:"endpointURL" json:"endpoint_url"` // --endpoint
-	BucketName              string        `key:"bucketName" json:"bucket_name"`
-	Region                  string        `key:"region" json:"region"`
-	DisableVolumeCaching    bool          `key:"disableVolumeCaching" json:"disable_volume_caching"`
-	StagedWriteModeEnabled  bool          `key:"stagedWriteModeEnabled" json:"staged_write_mode_enabled"`
-	StagedWritePath         string        `key:"stagedWritePath" json:"staged_write_path"`
-	StagedWriteDebounce     time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
-	CacheStreamingEnabled   bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
-	ExternalCacheDirectIO   bool          `key:"externalCacheDirectIO" json:"external_cache_direct_io"`
-	CacheThroughEnabled     bool          `key:"cacheThroughEnabled" json:"cache_through_enabled"`
-	CacheThroughModeEnabled bool          `key:"cacheThroughModeEnabled" json:"cache_through_mode_enabled"`
+	Debug                  bool          `key:"debug" json:"debug"`                                // --debug
+	FsyncOnClose           bool          `key:"fsyncOnClose" json:"fsync_on_close"`                // --fsync-on-close
+	MountOptions           []string      `key:"mountOptions" json:"mount_options"`                 // --mount-options
+	MemoryLimit            int64         `key:"memoryLimit" json:"memory_limit"`                   // --memory-limit
+	MaxFlushers            int           `key:"maxFlushers" json:"max_flushers"`                   // --max-flushers
+	MaxParallelParts       int           `key:"maxParallelParts" json:"max_parallel_parts"`        // --max-parallel-parts
+	HTTPTimeout            time.Duration `key:"httpTimeout" json:"http_timeout"`                   // --http-timeout
+	ReadAheadKB            int           `key:"readAheadKB" json:"read_ahead_kb"`                  // --read-ahead-kb
+	ReadAheadLargeKB       int           `key:"readAheadLargeKB" json:"read_ahead_large_kb"`       // --read-ahead-large-kb
+	ReadAheadParallelKB    int           `key:"readAheadParallelKB" json:"read_ahead_parallel_kb"` // --read-ahead-parallel-kb
+	FuseReadAheadKB        int           `key:"fuseReadAheadKB" json:"fuse_read_ahead_kb"`         // --fuse-read-ahead-kb
+	DirMode                string        `key:"dirMode" json:"dir_mode"`                           // --dir-mode, e.g., "0777"
+	FileMode               string        `key:"fileMode" json:"file_mode"`                         // --file-mode, e.g., "0666"
+	ListType               int           `key:"listType" json:"list_type"`                         // --list-type
+	AccessKey              string        `key:"accessKey" json:"access_key"`
+	SecretKey              string        `key:"secretKey" json:"secret_key"`
+	EndpointUrl            string        `key:"endpointURL" json:"endpoint_url"` // --endpoint
+	BucketName             string        `key:"bucketName" json:"bucket_name"`
+	Region                 string        `key:"region" json:"region"`
+	DisableVolumeCaching   bool          `key:"disableVolumeCaching" json:"disable_volume_caching"`
+	StagedWriteModeEnabled bool          `key:"stagedWriteModeEnabled" json:"staged_write_mode_enabled"`
+	StagedWritePath        string        `key:"stagedWritePath" json:"staged_write_path"`
+	StagedWriteDebounce    time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
+	CacheStreamingEnabled  bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
+	CacheDirectIO          bool          `key:"cacheDirectIO" json:"cache_direct_io"`
+	CacheThroughEnabled    bool          `key:"cacheThroughEnabled" json:"cache_through_enabled"`
 }
 
 type AlluxioConfig struct {
@@ -440,9 +439,8 @@ type WorkerPoolConfig struct {
 }
 
 type WorkerPoolCacheConfig struct {
-	Enabled      *bool                     `key:"enabled" json:"enabled"`
-	Disk         WorkerPoolCacheDiskConfig `key:"disk" json:"disk"`
-	SlotsPerNode int                       `key:"slotsPerNode" json:"slots_per_node"`
+	Enabled *bool                     `key:"enabled" json:"enabled"`
+	Disk    WorkerPoolCacheDiskConfig `key:"disk" json:"disk"`
 }
 
 type WorkerPoolCacheDiskConfig struct {
@@ -456,7 +454,7 @@ type RuntimeConfig struct {
 	// gVisor-specific configuration
 	GVisorPlatform  string   `key:"gvisorPlatform" json:"gvisor_platform"`    // "kvm", "systrap", or "ptrace"
 	GVisorRoot      string   `key:"gvisorRoot" json:"gvisor_root"`            // Root directory for gVisor state (default: "/run/gvisor")
-	GVisorExtraArgs []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"` // Additional runsc flags for controlled experiments
+	GVisorExtraArgs []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"` // Additional runsc flags appended for this pool
 }
 
 type WorkerPoolJobSpecConfig struct {

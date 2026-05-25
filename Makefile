@@ -23,9 +23,9 @@ startup-benchmark:
 	"$(CURDIR)/bin/bench" startup $(ARGS)
 
 startup-benchmark-build:
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	$(MAKE) startup-benchmark BENCH_INSTALL=1
 
@@ -68,11 +68,11 @@ k3d-rebuild:
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
 gateway:
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
 

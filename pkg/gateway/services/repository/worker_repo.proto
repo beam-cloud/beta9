@@ -133,13 +133,14 @@ message SetWorkerKeepAliveResponse {
 }
 
 message CacheCoordinatorHost {
+  reserved 7;
+
   string logical_host_id = 1;
   string registration_id = 2;
   string pool_name = 3;
   string locality = 4;
   string node_id = 5;
   string cache_path_id = 6;
-  int32 slot = 7;
   string addr = 8;
   string private_addr = 9;
   float capacity_usage_pct = 10;
