@@ -259,17 +259,7 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 		return "", err
 	}
 
-	advertiseAddr := cs.cas.currentHost.PrivateAddr
-	if tcpAddr, ok := localListener.Addr().(*net.TCPAddr); ok {
-		port := fmt.Sprintf("%d", tcpAddr.Port)
-		if advertiseHost != "" {
-			advertiseAddr = net.JoinHostPort(normalizeAdvertiseHost(advertiseHost), port)
-		} else if cs.privateIpAddr != "" {
-			advertiseAddr = net.JoinHostPort(cs.privateIpAddr, port)
-		} else {
-			advertiseAddr = localListener.Addr().String()
-		}
-	}
+	advertiseAddr := cs.advertiseAddr(localListener.Addr(), advertiseHost)
 
 	if advertiseAddr != "" {
 		cs.cas.currentHost.Addr = advertiseAddr
@@ -299,6 +289,37 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 	}()
 
 	return advertiseAddr, nil
+}
+
+func (cs *Server) advertiseAddr(listenerAddr net.Addr, advertiseHost string) string {
+	advertiseAddr := cs.cas.currentHost.PrivateAddr
+	tcpAddr, ok := listenerAddr.(*net.TCPAddr)
+	if !ok {
+		if advertiseAddr != "" {
+			return advertiseAddr
+		}
+		return listenerAddr.String()
+	}
+
+	port := fmt.Sprintf("%d", tcpAddr.Port)
+	if advertiseHost != "" {
+		return net.JoinHostPort(normalizeAdvertiseHost(advertiseHost), port)
+	}
+
+	// If the listener is bound to a concrete host, advertise that same host.
+	// Advertising a discovered private IP for a loopback-bound listener makes
+	// tests and local-only callers dial an address the server is not listening on.
+	if tcpAddr.IP != nil && !tcpAddr.IP.IsUnspecified() {
+		return net.JoinHostPort(tcpAddr.IP.String(), port)
+	}
+
+	if cs.privateIpAddr != "" {
+		return net.JoinHostPort(cs.privateIpAddr, port)
+	}
+	if advertiseAddr != "" {
+		return advertiseAddr
+	}
+	return listenerAddr.String()
 }
 
 func normalizeAdvertiseHost(host string) string {
