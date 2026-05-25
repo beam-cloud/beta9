@@ -57,6 +57,7 @@ require (
 	github.com/prometheus/procfs v0.15.1
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.34.0
+	github.com/s2-streamstore/s2-sdk-go v0.18.0
 	github.com/sashabaranov/go-openai v1.35.7
 	github.com/shirou/gopsutil/v4 v4.24.11
 	github.com/sirupsen/logrus v1.9.3
@@ -335,4 +336,4 @@ replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
-replace github.com/jacobsa/fuse => ../geesefs/internal/fusego
+replace github.com/jacobsa/fuse => ../gofuse

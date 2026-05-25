@@ -9,7 +9,7 @@ CACHE_BENCH_PROFILE ?=
 CACHE_BENCH_CONFIG ?=
 TOKEN ?=
 
-.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark cache-benchmark
+.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark cache-benchmark bench-cache-smoke
 
 setup:
 	bash bin/setup.sh
@@ -18,18 +18,21 @@ setup:
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
 startup-benchmark:
-	python3 "$(CURDIR)/benchmarks/startup.py" $(ARGS)
+	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	"$(CURDIR)/bin/bench" startup $(ARGS)
 
 startup-benchmark-build:
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	$(MAKE) startup-benchmark BENCH_INSTALL=1
 
 sandbox-parallel-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
-	$(BENCH_SDK_PYTHON) "$(CURDIR)/benchmarks/sandbox_parallel.py" $(ARGS)
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	"$(CURDIR)/bin/bench" sandbox $(ARGS)
 
 cache-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
@@ -38,7 +41,12 @@ cache-benchmark:
 	CACHE_BENCH_PROFILE="$(CACHE_BENCH_PROFILE)" \
 	CACHE_BENCH_CONFIG="$(CACHE_BENCH_CONFIG)" \
 	TOKEN="$(TOKEN)" \
-	"$(CURDIR)/scripts/cache-benchmark" $(ARGS)
+	"$(CURDIR)/bin/bench" cache $(ARGS)
+
+bench-cache-smoke:
+	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
+	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
+	"$(CURDIR)/bin/bench" cache --suite cache-smoke $(ARGS)
 
 setup-sdk:
 	@if ! command -v uv &> /dev/null; then \
@@ -60,11 +68,11 @@ k3d-rebuild:
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
 gateway:
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --build-context geesefs=../geesefs --build-context clip=../clip --build-context gofuse=../gofuse --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
 
