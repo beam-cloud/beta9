@@ -308,9 +308,6 @@ cache:
     debugMode: false
     prettyLogs: true
   server:
-    diskCacheDir:
-    diskCacheMaxUsagePct: 0.95
-    maxCachePct: 0
     pageSizeBytes: 4194304
     objectTtlS: 0
     s3DownloadConcurrency: 16
@@ -335,9 +332,9 @@ cache:
 
 providers:
   ec2:
-    accessKey:
-    secretkey:
-    region: us-east-1
+    awsAccessKey:
+    awsSecretKey:
+    awsRegion: us-east-1
     # If you want workers nodes to land in your default vpc, you can omit subnetId
     subnetId:
     ami: ami-052c704a7f82c38b1
