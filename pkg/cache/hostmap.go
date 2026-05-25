@@ -50,7 +50,13 @@ func (hm *HostMap) Set(host *Host) {
 	}
 	if err := hm.onHostAdded(host); err != nil {
 		Logger.Warnf("failed to initialize cache host %s: %v", host.HostId, err)
-		hm.Remove(host)
+		hm.mu.Lock()
+		if exists {
+			hm.hosts[host.HostId] = existing
+		} else {
+			delete(hm.hosts, host.HostId)
+		}
+		hm.mu.Unlock()
 	}
 }
 

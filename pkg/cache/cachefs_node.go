@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -15,8 +14,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
-
-var errPageFDCacheFull = errors.New("page fd cache is full")
 
 type CacheFSNode struct {
 	Path     string
@@ -64,11 +61,14 @@ func (h *cacheFileHandle) file(path string) (*os.File, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if file := h.files[path]; file != nil {
+		h.touchFileLocked(path)
 		return file, nil
 	}
-	if len(h.files) >= h.fdCacheSize {
-		return nil, errPageFDCacheFull
+
+	for len(h.files) >= h.fdCacheSize {
+		h.evictOldestFileLocked()
 	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -76,6 +76,62 @@ func (h *cacheFileHandle) file(path string) (*os.File, error) {
 	h.files[path] = file
 	h.order = append(h.order, path)
 	return file, nil
+}
+
+func (h *cacheFileHandle) touchFileLocked(path string) {
+	for i, existing := range h.order {
+		if existing != path {
+			continue
+		}
+
+		copy(h.order[i:], h.order[i+1:])
+		h.order[len(h.order)-1] = path
+		return
+	}
+
+	h.order = append(h.order, path)
+}
+
+func (h *cacheFileHandle) evictOldestFileLocked() {
+	if len(h.order) == 0 {
+		for path, file := range h.files {
+			_ = file.Close()
+			delete(h.files, path)
+			return
+		}
+		return
+	}
+
+	path := h.order[0]
+	copy(h.order, h.order[1:])
+	h.order = h.order[:len(h.order)-1]
+
+	if file := h.files[path]; file != nil {
+		_ = file.Close()
+		delete(h.files, path)
+	}
+}
+
+type readResultFdWithClose struct {
+	fuse.ReadResult
+	fd int
+}
+
+func newReadResultFdWithClose(file *os.File, off int64, n int) (fuse.ReadResult, error) {
+	fd, err := syscall.Dup(int(file.Fd()))
+	if err != nil {
+		return nil, err
+	}
+
+	return &readResultFdWithClose{
+		ReadResult: fuse.ReadResultFd(uintptr(fd), off, n),
+		fd:         fd,
+	}, nil
+}
+
+func (r *readResultFdWithClose) Done() {
+	r.ReadResult.Done()
+	_ = syscall.Close(r.fd)
 }
 
 func (h *cacheFileHandle) Release(ctx context.Context) syscall.Errno {
@@ -257,9 +313,12 @@ func readCacheContent(ctx context.Context, client *Client, hash string, sourcePa
 		if err == nil && ok && int64(n) == length {
 			file, err := handle.file(pagePath)
 			if err == nil {
-				cacheReadLocalFDTotal.Inc()
-				atomic.AddInt64(&cachePathStats.cacheFSLocalFDHits, 1)
-				return fuse.ReadResultFd(file.Fd(), pageOffset, n), fs.OK
+				readResult, err := newReadResultFdWithClose(file, pageOffset, n)
+				if err == nil {
+					cacheReadLocalFDTotal.Inc()
+					atomic.AddInt64(&cachePathStats.cacheFSLocalFDHits, 1)
+					return readResult, fs.OK
+				}
 			}
 		}
 	}

@@ -3,7 +3,6 @@ package gatewayservices
 import (
 	"context"
 	"io"
-	"net"
 	"net/url"
 	"os"
 	"path"
@@ -160,22 +159,27 @@ func sameStorageEndpoint(a, b string) bool {
 		return false
 	}
 
-	aHost, aPort, _ := net.SplitHostPort(aURL.Host)
-	bHost, bPort, _ := net.SplitHostPort(bURL.Host)
-	if aHost == "" {
-		aHost = aURL.Hostname()
-	}
-	if bHost == "" {
-		bHost = bURL.Hostname()
-	}
-	if aPort == "" {
-		aPort = aURL.Port()
-	}
-	if bPort == "" {
-		bPort = bURL.Port()
+	if !strings.EqualFold(aURL.Scheme, bURL.Scheme) {
+		return false
 	}
 
-	return aURL.Scheme == bURL.Scheme && aHost == bHost && aPort == bPort
+	return strings.EqualFold(aURL.Hostname(), bURL.Hostname()) &&
+		effectiveURLPort(aURL) == effectiveURLPort(bURL)
+}
+
+func effectiveURLPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
 }
 
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {

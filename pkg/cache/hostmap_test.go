@@ -1,11 +1,16 @@
 package cache
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	InitLogger(false, false)
+}
 
 func TestClosestWithCapacity(t *testing.T) {
 	hostMap := &HostMap{
@@ -46,4 +51,27 @@ func TestHostMapSetUpdatesExistingHostEndpoint(t *testing.T) {
 	require.Len(t, hostMap.GetAll(), 1)
 	require.Equal(t, "10.0.0.2:2049", hostMap.Get("logical-host").PrivateAddr)
 	require.Len(t, added, 2)
+}
+
+func TestHostMapSetRestoresExistingHostWhenUpdateFails(t *testing.T) {
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.1:2049"})
+
+	hostMap.onHostAdded = func(host *Host) error {
+		return errors.New("dial failed")
+	}
+	hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.2:2049"})
+
+	require.Len(t, hostMap.GetAll(), 1)
+	require.Equal(t, "10.0.0.1:2049", hostMap.Get("logical-host").PrivateAddr)
+}
+
+func TestHostMapSetRemovesNewHostWhenInitialAddFails(t *testing.T) {
+	hostMap := NewHostMap(GlobalConfig{}, func(host *Host) error {
+		return errors.New("dial failed")
+	})
+
+	hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.1:2049"})
+
+	require.Empty(t, hostMap.GetAll())
 }

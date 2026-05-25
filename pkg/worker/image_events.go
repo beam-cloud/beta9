@@ -432,7 +432,11 @@ func (c *ImageClient) resolveClipReadContainerID(pid int) string {
 		if ok {
 			if !processStartTimesEqual(currentStartTime, ref.StartTime) {
 				c.deleteClipRuntimePIDEntry(current, ref)
-				return ""
+				if parent <= 0 || parent == current {
+					return ""
+				}
+				current = parent
+				continue
 			}
 			ref = clipPIDReference{ContainerID: ref.ContainerID, StartTime: originalStartTime}
 			c.clipRuntimeMu.Lock()
@@ -460,7 +464,9 @@ func processStartTime(pid int) (uint64, error) {
 	return startTime, err
 }
 
-func processStartTimeAndParent(pid int) (uint64, int, error) {
+var processStartTimeAndParent = readProcessStartTimeAndParent
+
+func readProcessStartTimeAndParent(pid int) (uint64, int, error) {
 	proc, err := procfs.NewProc(pid)
 	if err != nil {
 		return 0, 0, fmt.Errorf("open proc %d: %w", pid, err)
