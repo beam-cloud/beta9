@@ -83,20 +83,15 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		return errors.New("container not found")
 	}
 	defer instance.LogBuffer.Close()
-	pushLogEvent := func(eventID types.ContainerEventID, opts types.ContainerEventOptions) {
-		if r.eventRepo != nil {
-			r.eventRepo.PushContainerRequestEvent(r.workerID, request, eventID, opts)
-		}
-	}
 	pushLogLine := func(taskID string, line string) {
 		if r.eventRepo != nil {
 			r.eventRepo.PushContainerRequestLogLine(r.workerID, request, taskID, types.EventLogStreamStdout, line)
 		}
 	}
-	defer pushLogEvent(types.ContainerEventLogsFlushCompleted, types.ContainerEventOptions{
-		Source:  types.EventSourceWorkerLogger,
-		Message: types.EventMessageLogCaptureFlushed,
-	})
+	eventsEnabled := r.eventRepo != nil
+	if eventsEnabled {
+		defer r.eventRepo.PushContainerLogFlushCompleted(r.workerID, request)
+	}
 
 	limiter := rate.NewLimiter(rate.Limit(float64(r.logLinesPerHour)/3600.0), r.logLinesPerHour)
 	rateLimitMessageLogged := false
@@ -111,21 +106,17 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					"container_id": request.ContainerId,
 					"stub_id":      instance.StubId,
 				}).Info(rateLimitMsg)
-				if !instance.LogBuffer.Write([]byte(rateLimitMsg + "\n")) {
-					pushLogEvent(types.ContainerEventLogsDropped, types.ContainerEventOptions{
-						Source:  types.EventSourceWorkerLogger,
-						Message: types.EventMessageLogBufferDroppedRateLimit,
-					})
+				if !instance.LogBuffer.Write([]byte(rateLimitMsg+"\n")) && eventsEnabled {
+					r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedRateLimit, "")
 				}
 				for _, line := range strings.Split(rateLimitMsg, "\n") {
 					pushLogLine("", line)
 				}
 				if !firstByteRecorded {
 					firstByteRecorded = true
-					pushLogEvent(types.ContainerEventLogsFirstByte, types.ContainerEventOptions{
-						Source:  types.EventSourceWorkerLogger,
-						Message: types.EventMessageLogCaptureReceivedFirstByte,
-					})
+					if eventsEnabled {
+						r.eventRepo.PushContainerLogFirstByte(r.workerID, request, "")
+					}
 				}
 				rateLimitMessageLogged = true
 			}
@@ -171,23 +162,17 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 
 			// Write logs to in-memory log buffer as well
 			if msg.Message != "" {
-				if !instance.LogBuffer.Write([]byte(msg.Message)) {
-					pushLogEvent(types.ContainerEventLogsDropped, types.ContainerEventOptions{
-						Source:  types.EventSourceWorkerLogger,
-						Message: types.EventMessageLogBufferDroppedMessage,
-						TaskID:  stringPtrValue(msg.TaskID),
-					})
+				if !instance.LogBuffer.Write([]byte(msg.Message)) && eventsEnabled {
+					r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedMessage, stringPtrValue(msg.TaskID))
 				}
 				for _, line := range strings.Split(msg.Message, "\n") {
 					pushLogLine(stringPtrValue(msg.TaskID), line)
 				}
 				if !firstByteRecorded {
 					firstByteRecorded = true
-					pushLogEvent(types.ContainerEventLogsFirstByte, types.ContainerEventOptions{
-						Source:  types.EventSourceWorkerLogger,
-						Message: types.EventMessageLogCaptureReceivedFirstByte,
-						TaskID:  stringPtrValue(msg.TaskID),
-					})
+					if eventsEnabled {
+						r.eventRepo.PushContainerLogFirstByte(r.workerID, request, stringPtrValue(msg.TaskID))
+					}
 				}
 			}
 
@@ -224,21 +209,17 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 			}
 
 			// Write logs to in-memory log buffer as well
-			if !instance.LogBuffer.Write([]byte(o.Message)) {
-				pushLogEvent(types.ContainerEventLogsDropped, types.ContainerEventOptions{
-					Source:  types.EventSourceWorkerLogger,
-					Message: types.EventMessageLogBufferDroppedRawMessage,
-				})
+			if !instance.LogBuffer.Write([]byte(o.Message)) && eventsEnabled {
+				r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedRawMessage, "")
 			}
 			for _, line := range strings.Split(o.Message, "\n") {
 				pushLogLine("", line)
 			}
 			if !firstByteRecorded {
 				firstByteRecorded = true
-				pushLogEvent(types.ContainerEventLogsFirstByte, types.ContainerEventOptions{
-					Source:  types.EventSourceWorkerLogger,
-					Message: types.EventMessageLogCaptureReceivedFirstByte,
-				})
+				if eventsEnabled {
+					r.eventRepo.PushContainerLogFirstByte(r.workerID, request, "")
+				}
 			}
 		}
 
@@ -247,11 +228,8 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		}
 	}
 
-	if firstByteRecorded {
-		pushLogEvent(types.ContainerEventLogsLastByte, types.ContainerEventOptions{
-			Source:  types.EventSourceWorkerLogger,
-			Message: types.EventMessageLogCaptureReceivedFinalByte,
-		})
+	if firstByteRecorded && eventsEnabled {
+		r.eventRepo.PushContainerLogLastByte(r.workerID, request)
 	}
 	return nil
 }

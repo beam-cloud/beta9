@@ -361,11 +361,7 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	}
 
 	if g.eventRepo != nil {
-		g.eventRepo.PushContainerTaskEvent(task, types.ContainerEventTaskCancelRequested, types.ContainerEventOptions{
-			Source:  types.EventSourceAPITaskStop,
-			Message: types.EventMessageHTTPTaskStopRequested,
-			Reason:  string(types.StopContainerReasonUser),
-		})
+		g.eventRepo.PushTaskCancelRequested(task, types.EventSourceAPITaskStop, types.EventMessageHTTPTaskStopRequested)
 	}
 	err := g.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
@@ -395,11 +391,7 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 		return errors.New("failed to update task")
 	}
 	if g.eventRepo != nil {
-		g.eventRepo.PushContainerTaskEvent(task, types.ContainerEventTaskCancelApplied, types.ContainerEventOptions{
-			Source:  types.EventSourceAPITaskStop,
-			Message: types.EventMessageHTTPTaskCancellationApplied,
-			Reason:  string(types.StopContainerReasonUser),
-		})
+		g.eventRepo.PushTaskCancelApplied(task, types.EventSourceAPITaskStop, types.EventMessageHTTPTaskCancellationApplied)
 	}
 
 	return nil

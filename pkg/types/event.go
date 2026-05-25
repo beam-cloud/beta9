@@ -280,6 +280,13 @@ const (
 	RunnerEventTypeEvent        = "event"
 )
 
+const (
+	FunctionLifecycleCheckpointContainerRequestReady = "container_request_ready"
+	FunctionLifecycleCheckpointStartTask             = "start_task"
+	FunctionLifecycleCheckpointGetArgs               = "get_args"
+	FunctionLifecycleCheckpointSetResult             = "set_result"
+)
+
 type ContainerEventOptions struct {
 	Source  EventSource
 	Message EventMessage

@@ -6,6 +6,7 @@ import re
 import shlex
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1344,9 +1345,27 @@ class SandboxRunner:
             sample["error"] = str(exc)
             raise
         finally:
-            cleanup_sandbox(self.config, instance, sample)
+            self._cleanup_sandbox_bounded(instance, sample)
             sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
             sample["finishedAt"] = now_rfc3339()
+
+    def _cleanup_sandbox_bounded(self, instance, sample: dict[str, Any]) -> None:
+        cleanup_error: list[str] = []
+
+        def cleanup() -> None:
+            try:
+                cleanup_sandbox(self.config, instance, sample)
+            except Exception as exc:  # defensive: cleanup must not hide benchmark evidence
+                cleanup_error.append(str(exc))
+
+        thread = threading.Thread(target=cleanup, daemon=True)
+        thread.start()
+        thread.join(min(60.0, max(5.0, self.config.sandbox_ready_timeout_seconds)))
+        if thread.is_alive():
+            sample["cleanupError"] = "sandbox cleanup timed out after bounded wait"
+            return
+        if cleanup_error:
+            sample["cleanupError"] = cleanup_error[-1]
 
     def sandbox_dd(
         self, sandbox, token: str, root: str, entry: dict[str, Any]
@@ -1886,6 +1905,13 @@ class CacheBenchmark:
                 if value and not resolved.get(key):
                     resolved[key] = value
                     resolved["source"] = "local_config"
+        else:
+            local_config = self._load_default_workspace_storage_config()
+
+        host_endpoint = local_config.get("host_endpoint_url", "")
+        if host_endpoint and self._endpoint_needs_host_alias(resolved.get("endpoint_url", "")):
+            resolved["endpoint_url"] = host_endpoint
+            resolved["source"] = resolved.get("source", "workspace_api") + "+host_endpoint"
 
         if not resolved.get("bucket_name") and resolved.get("bucket_prefix"):
             workspace_external_id = str(
@@ -1905,6 +1931,10 @@ class CacheBenchmark:
             for key in ("region", "bucket_name", "access_key", "secret_key")
         )
 
+    @staticmethod
+    def _endpoint_needs_host_alias(endpoint: str) -> bool:
+        return "://localstack" in endpoint or endpoint.startswith("localstack:")
+
     def _load_default_workspace_storage_config(self) -> dict[str, str]:
         path = Path(self.config.workspace_storage_config).expanduser()
         if not path.exists():
@@ -1920,8 +1950,10 @@ class CacheBenchmark:
         )
         if not isinstance(storage, dict):
             return {}
+        host_endpoint = str(storage.get("defaultPresignedEndpointUrl") or "")
         return {
             "endpoint_url": str(storage.get("defaultEndpointUrl") or ""),
+            "host_endpoint_url": host_endpoint,
             "region": str(storage.get("defaultRegion") or ""),
             "bucket_prefix": str(storage.get("defaultBucketPrefix") or ""),
             "access_key": str(storage.get("defaultAccessKey") or ""),

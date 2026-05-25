@@ -123,7 +123,7 @@ func TestPushContainerTaskLifecycleSinceSkipsMissingTimestamp(t *testing.T) {
 			ExternalId: "workspace-1",
 			Name:       "workspace-name",
 		},
-	}, types.ContainerLifecycleRunnerStartToGetArgs, "start_task", time.Now(), true, types.ContainerLifecycleOptions{
+	}, types.ContainerLifecycleRunnerStartToGetArgs, types.FunctionLifecycleCheckpointStartTask, time.Now(), true, types.ContainerLifecycleOptions{
 		Source: types.EventSourceGatewayFunctionGetArgs,
 	})
 

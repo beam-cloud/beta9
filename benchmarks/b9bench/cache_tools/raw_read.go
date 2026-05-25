@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -139,7 +138,7 @@ func main() {
 	}
 
 	taskCh := make(chan task)
-	resultCh := make(chan result, len(tasks))
+	resultCh := make(chan result, max(1, *concurrency*2))
 	var readWaitNS int64
 	var wg sync.WaitGroup
 	started := time.Now()
@@ -173,7 +172,10 @@ func main() {
 		close(resultCh)
 	}()
 
-	var results []result
+	h := sha256.New()
+	pending := make(map[int64][]byte, max(1, *concurrency*2))
+	nextOffset := int64(0)
+	var readWallNS int64
 	for r := range resultCh {
 		if r.err != nil {
 			out := map[string]any{"ok": false, "error": r.err.Error(), "addr": *addr}
@@ -182,14 +184,29 @@ func main() {
 			fmt.Println(string(b))
 			return
 		}
-		results = append(results, r)
-	}
-	sort.Slice(results, func(i, j int) bool { return results[i].offset < results[j].offset })
-	h := sha256.New()
-	var readWallNS int64
-	for _, r := range results {
-		h.Write(r.body)
+		pending[r.offset] = r.body
 		readWallNS += r.readNS
+		for {
+			body, ok := pending[nextOffset]
+			if !ok {
+				break
+			}
+			h.Write(body)
+			delete(pending, nextOffset)
+			nextOffset += int64(len(body))
+		}
+	}
+	if nextOffset != *size {
+		out := map[string]any{
+			"ok":        false,
+			"error":     fmt.Sprintf("incomplete ordered read got=%d want=%d pending=%d", nextOffset, *size, len(pending)),
+			"addr":      *addr,
+			"bytes":     *size,
+			"readBytes": nextOffset,
+		}
+		b, _ := json.Marshal(out)
+		fmt.Println(string(b))
+		return
 	}
 	digest := hex.EncodeToString(h.Sum(nil))
 	durationMs := float64(time.Since(started).Nanoseconds()) / 1_000_000

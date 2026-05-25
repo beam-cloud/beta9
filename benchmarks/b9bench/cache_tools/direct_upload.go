@@ -50,6 +50,12 @@ func main() {
 	cleanupRemote := flag.Bool("cleanup-remote", true, "delete uploaded object after HEAD proof")
 	timeout := flag.Duration("timeout", 30*time.Minute, "probe timeout")
 	flag.Parse()
+	if *accessKey == "" {
+		*accessKey = os.Getenv("AWS_ACCESS_KEY_ID")
+	}
+	if *secretKey == "" {
+		*secretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+	}
 
 	started := time.Now()
 	out := directUploadResult{

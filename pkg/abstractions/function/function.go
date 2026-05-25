@@ -188,30 +188,14 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		resultLoadStart := time.Now()
 		result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskId)).Bytes()
 		if fs.eventRepo != nil {
-			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventResultLoadedByGateway, types.ContainerEventOptions{
-				Source:  types.EventSourceGatewayFunctionStream,
-				Message: types.EventMessageFunctionResultLoadedByGateway,
-				Attrs: map[string]string{
-					types.EventAttrExitCode: fmt.Sprintf("%d", exitCode),
-					types.EventAttrBytes:    fmt.Sprintf("%d", len(result)),
-				},
-			})
+			fs.eventRepo.PushFunctionResultLoaded(authInfo.Workspace.ExternalId, task, exitCode, len(result))
 		}
 		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
 			return err
 		}
 		if fs.eventRepo != nil {
-			fs.eventRepo.PushContainerFunctionTaskLifecycle(authInfo.Workspace.ExternalId, task, types.ContainerLifecycleResultDelivery, resultLoadStart, time.Now(), true, types.ContainerLifecycleOptions{
-				Source: types.EventSourceGatewayFunctionStream,
-			})
-			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventResultSentToClient, types.ContainerEventOptions{
-				Source:  types.EventSourceGatewayFunctionStream,
-				Message: types.EventMessageFunctionResultSentToClient,
-				Attrs: map[string]string{
-					types.EventAttrExitCode: fmt.Sprintf("%d", exitCode),
-					types.EventAttrBytes:    fmt.Sprintf("%d", len(result)),
-				},
-			})
+			fs.eventRepo.PushFunctionResultDelivery(authInfo.Workspace.ExternalId, task, resultLoadStart, exitCode, len(result))
+			fs.eventRepo.PushFunctionResultSent(authInfo.Workspace.ExternalId, task, exitCode, len(result))
 		}
 		return nil
 	}
@@ -244,26 +228,12 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		}
 
 		if fs.eventRepo != nil {
-			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventTaskCancelRequested, types.ContainerEventOptions{
-				Source:  types.EventSourceGatewayFunctionStream,
-				Message: types.EventMessageFunctionStreamCancelRequested,
-				Reason:  string(types.TaskRequestCancelled),
-				Attrs: map[string]string{
-					types.EventAttrCause: types.EventCauseClientContextDone,
-				},
-			})
+			fs.eventRepo.PushFunctionStreamCancelRequested(authInfo.Workspace.ExternalId, task)
 		}
 		if err := task.Cancel(context.Background(), types.TaskRequestCancelled); err != nil {
 			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error cancelling task")
 		} else if fs.eventRepo != nil {
-			fs.eventRepo.PushContainerFunctionTaskEvent(authInfo.Workspace.ExternalId, task, types.ContainerEventTaskCancelApplied, types.ContainerEventOptions{
-				Source:  types.EventSourceGatewayFunctionStream,
-				Message: types.EventMessageFunctionStreamCancelApplied,
-				Reason:  string(types.TaskRequestCancelled),
-				Attrs: map[string]string{
-					types.EventAttrReason: string(types.TaskRequestCancelled),
-				},
-			})
+			fs.eventRepo.PushFunctionStreamCancelApplied(authInfo.Workspace.ExternalId, task)
 		}
 
 		if err := fs.taskDispatcher.Complete(context.Background(), authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId); err != nil {
@@ -310,15 +280,7 @@ func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.
 	}
 	if fs.eventRepo != nil {
 		if taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, in.TaskId); err == nil && taskWithRelated != nil {
-			fs.eventRepo.PushContainerTaskLifecycleSince(ctx, fs.rdb, taskWithRelated, types.ContainerLifecycleRunnerStartToGetArgs, task.FunctionPhaseStartTask, now, true, types.ContainerLifecycleOptions{
-				Source: types.EventSourceGatewayFunctionGetArgs,
-				Attrs:  map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(value))},
-			})
-			fs.eventRepo.PushContainerTaskEvent(taskWithRelated, types.ContainerEventRunnerGetArgs, types.ContainerEventOptions{
-				Source:  types.EventSourceGatewayFunctionGetArgs,
-				Message: types.EventMessageRunnerLoadedFunctionArgs,
-				Attrs:   map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(value))},
-			})
+			fs.eventRepo.PushFunctionGetArgs(ctx, fs.rdb, taskWithRelated, now, len(value))
 		}
 	}
 
@@ -351,19 +313,7 @@ func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *p
 	}
 	if fs.eventRepo != nil {
 		if taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, in.TaskId); err == nil && taskWithRelated != nil {
-			fs.eventRepo.PushContainerTaskLifecycleSince(ctx, fs.rdb, taskWithRelated, types.ContainerLifecycleRunnerGetArgsToSetResult, task.FunctionPhaseGetArgs, now, true, types.ContainerLifecycleOptions{
-				Source: types.EventSourceGatewayFunctionSetResult,
-				Attrs:  map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(in.Result))},
-			})
-			fs.eventRepo.PushContainerTaskLifecycleSince(ctx, fs.rdb, taskWithRelated, types.ContainerLifecycleRunnerStartToSetResult, task.FunctionPhaseStartTask, now, true, types.ContainerLifecycleOptions{
-				Source: types.EventSourceGatewayFunctionSetResult,
-				Attrs:  map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(in.Result))},
-			})
-			fs.eventRepo.PushContainerTaskEvent(taskWithRelated, types.ContainerEventResultSetResult, types.ContainerEventOptions{
-				Source:  types.EventSourceGatewayFunctionSetResult,
-				Message: types.EventMessageFunctionResultStored,
-				Attrs:   map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", len(in.Result))},
-			})
+			fs.eventRepo.PushFunctionSetResult(ctx, fs.rdb, taskWithRelated, now, len(in.Result))
 		}
 	}
 

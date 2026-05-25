@@ -83,7 +83,7 @@ func TestS2StreamDeletionPendingErrorIsTransient(t *testing.T) {
 	}
 }
 
-func TestAugmentContainerEventResponseBuildsWaterfallSummary(t *testing.T) {
+func TestAugmentContainerEventResponseBuildsLifecycleSummary(t *testing.T) {
 	now := time.Now().UTC()
 	response := &types.ContainerEventsResponse{
 		ContainerID: "container-1",

@@ -380,6 +380,165 @@ func (r *EventClientRepo) PushContainerRunnerEvent(workerID string, request *typ
 	}
 }
 
+func (r *EventClientRepo) PushFunctionResultLoaded(workspaceID string, task types.TaskInterface, exitCode int32, byteCount int) {
+	r.PushContainerFunctionTaskEvent(workspaceID, task, types.ContainerEventResultLoadedByGateway, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayFunctionStream,
+		Message: types.EventMessageFunctionResultLoadedByGateway,
+		Attrs:   resultEventAttrs(exitCode, byteCount),
+	})
+}
+
+func (r *EventClientRepo) PushFunctionResultSent(workspaceID string, task types.TaskInterface, exitCode int32, byteCount int) {
+	r.PushContainerFunctionTaskEvent(workspaceID, task, types.ContainerEventResultSentToClient, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayFunctionStream,
+		Message: types.EventMessageFunctionResultSentToClient,
+		Attrs:   resultEventAttrs(exitCode, byteCount),
+	})
+}
+
+func (r *EventClientRepo) PushFunctionResultDelivery(workspaceID string, task types.TaskInterface, startedAt time.Time, exitCode int32, byteCount int) {
+	r.PushContainerFunctionTaskLifecycle(workspaceID, task, types.ContainerLifecycleResultDelivery, startedAt, time.Now(), true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayFunctionStream,
+		Attrs:  resultEventAttrs(exitCode, byteCount),
+	})
+}
+
+func (r *EventClientRepo) PushFunctionStreamCancelRequested(workspaceID string, task types.TaskInterface) {
+	r.PushContainerFunctionTaskEvent(workspaceID, task, types.ContainerEventTaskCancelRequested, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayFunctionStream,
+		Message: types.EventMessageFunctionStreamCancelRequested,
+		Reason:  string(types.TaskRequestCancelled),
+		Attrs:   map[string]string{types.EventAttrCause: types.EventCauseClientContextDone},
+	})
+}
+
+func (r *EventClientRepo) PushFunctionStreamCancelApplied(workspaceID string, task types.TaskInterface) {
+	r.PushContainerFunctionTaskEvent(workspaceID, task, types.ContainerEventTaskCancelApplied, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayFunctionStream,
+		Message: types.EventMessageFunctionStreamCancelApplied,
+		Reason:  string(types.TaskRequestCancelled),
+		Attrs:   map[string]string{types.EventAttrReason: string(types.TaskRequestCancelled)},
+	})
+}
+
+func (r *EventClientRepo) PushFunctionGetArgs(ctx context.Context, rdb *common.RedisClient, task *types.TaskWithRelated, at time.Time, byteCount int) {
+	r.PushContainerTaskLifecycleSince(ctx, rdb, task, types.ContainerLifecycleRunnerStartToGetArgs, types.FunctionLifecycleCheckpointStartTask, at, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayFunctionGetArgs,
+		Attrs:  bytesEventAttrs(byteCount),
+	})
+	r.PushContainerTaskEvent(task, types.ContainerEventRunnerGetArgs, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayFunctionGetArgs,
+		Message: types.EventMessageRunnerLoadedFunctionArgs,
+		Attrs:   bytesEventAttrs(byteCount),
+	})
+}
+
+func (r *EventClientRepo) PushFunctionSetResult(ctx context.Context, rdb *common.RedisClient, task *types.TaskWithRelated, at time.Time, byteCount int) {
+	r.PushContainerTaskLifecycleSince(ctx, rdb, task, types.ContainerLifecycleRunnerGetArgsToSetResult, types.FunctionLifecycleCheckpointGetArgs, at, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayFunctionSetResult,
+		Attrs:  bytesEventAttrs(byteCount),
+	})
+	r.PushContainerTaskLifecycleSince(ctx, rdb, task, types.ContainerLifecycleRunnerStartToSetResult, types.FunctionLifecycleCheckpointStartTask, at, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayFunctionSetResult,
+		Attrs:  bytesEventAttrs(byteCount),
+	})
+	r.PushContainerTaskEvent(task, types.ContainerEventResultSetResult, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayFunctionSetResult,
+		Message: types.EventMessageFunctionResultStored,
+		Attrs:   bytesEventAttrs(byteCount),
+	})
+}
+
+func (r *EventClientRepo) PushTaskStartEvents(ctx context.Context, rdb *common.RedisClient, task *types.TaskWithRelated, containerID string, startedAt time.Time) {
+	r.PushContainerTaskLifecycleSince(ctx, rdb, task, types.ContainerLifecycleContainerRequestToStartTask, types.FunctionLifecycleCheckpointContainerRequestReady, startedAt, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayStartTask,
+	})
+	r.PushContainerTaskEvent(task, types.ContainerEventRunnerStartTask, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayStartTask,
+		Message: types.EventMessageRunnerCalledStartTask,
+		Attrs:   map[string]string{types.EventAttrContainerID: containerID},
+	})
+}
+
+func (r *EventClientRepo) PushTaskEndEvents(ctx context.Context, rdb *common.RedisClient, task *types.TaskWithRelated, endedAt time.Time) {
+	if task == nil {
+		return
+	}
+	attrs := map[string]string{types.EventAttrStatus: string(task.Status)}
+	r.PushContainerTaskLifecycleSince(ctx, rdb, task, types.ContainerLifecycleResultSetToEndTask, types.FunctionLifecycleCheckpointSetResult, endedAt, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayEndTask,
+		Attrs:  attrs,
+	})
+	r.PushContainerTaskLifecycleSince(ctx, rdb, task, types.ContainerLifecycleRunnerStartToEndTask, types.FunctionLifecycleCheckpointStartTask, endedAt, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayEndTask,
+		Attrs:  attrs,
+	})
+}
+
+func (r *EventClientRepo) PushTaskEndPersisted(task *types.TaskWithRelated) {
+	if task == nil {
+		return
+	}
+	r.PushContainerTaskEvent(task, types.ContainerEventResultEndTask, types.ContainerEventOptions{
+		Source:  types.EventSourceGatewayEndTask,
+		Message: types.EventMessageTaskEndStatePersisted,
+		Attrs:   map[string]string{types.EventAttrStatus: string(task.Status)},
+	})
+}
+
+func (r *EventClientRepo) PushContainerRunningToStartTask(task *types.TaskWithRelated, runningAt time.Time, startedAt time.Time, status types.ContainerStatus) {
+	r.PushContainerTaskLifecycle(task, types.ContainerLifecycleContainerRunningToStartTask, runningAt, startedAt, true, types.ContainerLifecycleOptions{
+		Source: types.EventSourceGatewayStartTask,
+		Attrs:  map[string]string{types.EventAttrContainerStatus: string(status)},
+	})
+}
+
+func (r *EventClientRepo) PushTaskCancelRequested(task *types.TaskWithRelated, source types.EventSource, message types.EventMessage) {
+	r.PushContainerTaskEvent(task, types.ContainerEventTaskCancelRequested, types.ContainerEventOptions{
+		Source:  source,
+		Message: message,
+		Reason:  string(types.StopContainerReasonUser),
+	})
+}
+
+func (r *EventClientRepo) PushTaskCancelApplied(task *types.TaskWithRelated, source types.EventSource, message types.EventMessage) {
+	r.PushContainerTaskEvent(task, types.ContainerEventTaskCancelApplied, types.ContainerEventOptions{
+		Source:  source,
+		Message: message,
+		Reason:  string(types.StopContainerReasonUser),
+	})
+}
+
+func (r *EventClientRepo) PushContainerLogFlushCompleted(workerID string, request *types.ContainerRequest) {
+	r.PushContainerRequestEvent(workerID, request, types.ContainerEventLogsFlushCompleted, types.ContainerEventOptions{
+		Source:  types.EventSourceWorkerLogger,
+		Message: types.EventMessageLogCaptureFlushed,
+	})
+}
+
+func (r *EventClientRepo) PushContainerLogDropped(workerID string, request *types.ContainerRequest, message types.EventMessage, taskID string) {
+	r.PushContainerRequestEvent(workerID, request, types.ContainerEventLogsDropped, types.ContainerEventOptions{
+		Source:  types.EventSourceWorkerLogger,
+		Message: message,
+		TaskID:  taskID,
+	})
+}
+
+func (r *EventClientRepo) PushContainerLogFirstByte(workerID string, request *types.ContainerRequest, taskID string) {
+	r.PushContainerRequestEvent(workerID, request, types.ContainerEventLogsFirstByte, types.ContainerEventOptions{
+		Source:  types.EventSourceWorkerLogger,
+		Message: types.EventMessageLogCaptureReceivedFirstByte,
+		TaskID:  taskID,
+	})
+}
+
+func (r *EventClientRepo) PushContainerLogLastByte(workerID string, request *types.ContainerRequest) {
+	r.PushContainerRequestEvent(workerID, request, types.ContainerEventLogsLastByte, types.ContainerEventOptions{
+		Source:  types.EventSourceWorkerLogger,
+		Message: types.EventMessageLogCaptureReceivedFinalByte,
+	})
+}
+
 func (r *EventClientRepo) PushWorkerStartedEvent(workerID string) {
 	r.pushEvent(
 		types.EventWorkerLifecycle,
@@ -640,6 +799,17 @@ func copyEventAttrs(attrs map[string]string) map[string]string {
 		copied[key] = value
 	}
 	return copied
+}
+
+func bytesEventAttrs(byteCount int) map[string]string {
+	return map[string]string{types.EventAttrBytes: fmt.Sprintf("%d", byteCount)}
+}
+
+func resultEventAttrs(exitCode int32, byteCount int) map[string]string {
+	return map[string]string{
+		types.EventAttrExitCode: fmt.Sprintf("%d", exitCode),
+		types.EventAttrBytes:    fmt.Sprintf("%d", byteCount),
+	}
 }
 
 func parseRunnerEventTime(value string) (time.Time, bool) {

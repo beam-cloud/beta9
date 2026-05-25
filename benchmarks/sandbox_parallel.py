@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument("--sandbox-cpu", default=os.getenv("BENCH_SANDBOX_CPU", "0.1"))
     parser.add_argument("--sandbox-memory", default=os.getenv("BENCH_SANDBOX_MEMORY", "192"))
     parser.add_argument("--sandbox-keep-warm-seconds", type=int, default=env_int("BENCH_SANDBOX_KEEP_WARM_SECONDS", 600))
-    parser.add_argument("--sandbox-image-uri", default=os.getenv("BENCH_SANDBOX_IMAGE_URI", os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "k3d-registry.localhost:5000/beta9-bench-alpine:latest")))
+    parser.add_argument("--sandbox-image-uri", default=os.getenv("BENCH_SANDBOX_IMAGE_URI", os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "registry.localhost:5000/beta9-bench-alpine:latest")))
     parser.add_argument("--sandbox-exec", default=os.getenv("BENCH_SANDBOX_EXEC", "true"))
     parser.add_argument("--sandbox-exec-cwd", default=os.getenv("BENCH_SANDBOX_EXEC_CWD", "/"))
     parser.add_argument("--sandbox-create-retries", type=int, default=env_int("BENCH_SANDBOX_CREATE_RETRIES", 20))
