@@ -133,10 +133,6 @@ func (gws *GatewayService) defaultWorkspacePresignEndpointUrl(workspaceStorage *
 	}
 
 	storageConfig := gws.appConfig.Storage.WorkspaceStorage
-	if isLocalstackEndpoint(*workspaceStorage.EndpointUrl) {
-		return "http://127.0.0.1:4566"
-	}
-
 	if storageConfig.DefaultPresignedEndpointUrl == "" {
 		return ""
 	}
@@ -180,15 +176,6 @@ func sameStorageEndpoint(a, b string) bool {
 	}
 
 	return aURL.Scheme == bURL.Scheme && aHost == bHost && aPort == bPort
-}
-
-func isLocalstackEndpoint(endpoint string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil {
-		return false
-	}
-	host := parsed.Hostname()
-	return host == "localstack" || strings.HasPrefix(host, "localstack.")
 }
 
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
