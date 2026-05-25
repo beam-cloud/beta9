@@ -48,10 +48,9 @@ type MetricsConfig struct {
 }
 
 type CoordinatorConfig struct {
-	Enabled                  bool `key:"enabled" json:"enabled"`
-	RegistrationTTLSeconds   int  `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
-	HeartbeatIntervalSeconds int  `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
-	HostWatchIntervalSeconds int  `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
+	RegistrationTTLSeconds   int `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
+	HeartbeatIntervalSeconds int `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
+	HostWatchIntervalSeconds int `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
 }
 
 type GlobalConfig struct {
@@ -86,19 +85,9 @@ func (c *GlobalConfig) GetLocality() string {
 	return c.DefaultLocality
 }
 
-type ServerMode string
-
-const (
-	ServerModeNode ServerMode = "node"
-)
-
 type ServerConfig struct {
-	Mode                         ServerMode                `key:"mode" json:"mode"`
 	DiskCacheDir                 string                    `key:"diskCacheDir" json:"disk_cache_dir"`
 	DiskCacheMaxUsagePct         float64                   `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
-	EnableMemoryCache            bool                      `key:"enableMemoryCache" json:"enable_memory_cache"`
-	Token                        string                    `key:"token" json:"token"`
-	PrettyLogs                   bool                      `key:"prettyLogs" json:"pretty_logs"`
 	ObjectTtlS                   int                       `key:"objectTtlS" json:"object_ttl_s"`
 	MaxCachePct                  int64                     `key:"maxCachePct" json:"max_cache_pct"`
 	PageSizeBytes                int64                     `key:"pageSizeBytes" json:"page_size_bytes"`
@@ -123,7 +112,6 @@ type ClientConfig struct {
 	NTopHosts             int                       `key:"nTopHosts" json:"n_top_hosts"`
 	CacheFS               FSConfig                  `key:"cachefs" json:"cachefs"`
 	PreferLocalCacheHost  bool                      `key:"preferLocalCacheHost" json:"prefer_local_cache_host"`
-	ReadIntoEnabled       bool                      `key:"readIntoEnabled" json:"read_into_enabled"`
 	PageFDCacheSize       int                       `key:"pageFDCacheSize" json:"page_fd_cache_size"`
 	ReadTransport         ClientReadTransportConfig `key:"readTransport" json:"read_transport"`
 	Prefetch              ReadPrefetchConfig        `key:"prefetch" json:"prefetch"`

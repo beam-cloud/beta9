@@ -276,9 +276,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Global.GRPCPayloadCodecMinBytes == 0 {
 		cacheConfig.Global.GRPCPayloadCodecMinBytes = cacheDefaultGRPCPayloadCodecMin
 	}
-	if !cacheConfig.Coordinator.Enabled {
-		cacheConfig.Coordinator.Enabled = true
-	}
 	if cacheConfig.Coordinator.RegistrationTTLSeconds == 0 {
 		cacheConfig.Coordinator.RegistrationTTLSeconds = int(cacheDefaultRegistrationTTL / time.Second)
 	}
@@ -299,9 +296,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	applyWorkerPoolCacheOverrides(&cacheConfig, poolConfig)
 
-	if cacheConfig.Server.Mode == "" {
-		cacheConfig.Server.Mode = cache.ServerModeNode
-	}
 	if cacheConfig.Server.DiskCacheDir == "" {
 		cacheConfig.Server.DiskCacheDir = filepath.Join(cacheConfig.Disk.MountPath, safeCacheName(locality), safeCacheName(nodeID))
 	}
@@ -339,7 +333,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 		cacheConfig.Client.MaxGetContentAttempts = cacheDefaultGetAttempts
 	}
 	cacheConfig.Client.PreferLocalCacheHost = true
-	cacheConfig.Client.ReadIntoEnabled = true
 	if cacheConfig.Client.PageFDCacheSize == 0 {
 		cacheConfig.Client.PageFDCacheSize = cacheDefaultPageFDCacheSize
 	}
@@ -420,7 +413,6 @@ func cacheLocalReaderHostID(locality, nodeID, workerID, instanceID string) strin
 
 func localReaderCacheConfig(cacheConfig cache.Config) cache.Config {
 	cacheConfig.Server.MaxCachePct = 0
-	cacheConfig.Server.EnableMemoryCache = false
 	cacheConfig.Memory.Enabled = false
 	cacheConfig.Client.Prefetch.Enabled = false
 	cacheConfig.Metrics.URL = ""

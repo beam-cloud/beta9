@@ -286,7 +286,6 @@ cache:
     enabled: false
     maxCachePct: 0
   coordinator:
-    enabled: true
     registrationTTLSeconds: 30
     heartbeatIntervalSeconds: 10
     hostWatchIntervalSeconds: 5
@@ -309,10 +308,8 @@ cache:
     debugMode: false
     prettyLogs: true
   server:
-    mode: node
     diskCacheDir:
     diskCacheMaxUsagePct: 0.95
-    enableMemoryCache: false
     maxCachePct: 0
     pageSizeBytes: 4194304
     objectTtlS: 0
@@ -323,9 +320,8 @@ cache:
       redisInsecureSkipVerify: false
   client:
     nTopHosts: 3
-    minRetryLengthBytes: 0 # 0 retries all cache reads; increase to retry only larger reads.
+    minRetryLengthBytes: 0 # 0 means retry all cache reads; increase to retry only larger reads.
     maxGetContentAttempts: 3
-    token:
     cachefs:
       maxBackgroundTasks: 256
       maxReadAheadKB: 1024

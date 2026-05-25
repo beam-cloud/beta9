@@ -40,7 +40,6 @@ type ServerOption func(*ServerOpts)
 type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	mode   ServerMode
 	proto.UnimplementedCacheServer
 	hostId        string
 	locality      string
@@ -96,7 +95,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 	if hostId == "" {
 		hostId = getHostId(cfg.Server)
 	}
-	Logger.Infof("Server<%s> started in %s mode", hostId, cfg.Server.Mode)
+	Logger.Infof("Server<%s> started", hostId)
 
 	publicIpAddr, _ := GetPublicIpAddr()
 	if publicIpAddr != "" {
@@ -138,7 +137,6 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 	cs := &Server{
 		ctx:           serverCtx,
 		cancel:        cancel,
-		mode:          cfg.Server.Mode,
 		hostId:        hostId,
 		locality:      locality,
 		cas:           cas,
