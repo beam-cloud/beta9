@@ -910,6 +910,8 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
+	s.waitForActiveContainersBeforeShutdown()
+
 	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
 		WorkerId: s.workerId,
 	})); err != nil {
@@ -958,4 +960,19 @@ func (s *Worker) shutdown() error {
 	}
 
 	return errs
+}
+
+func (s *Worker) waitForActiveContainersBeforeShutdown() {
+	if s.containerInstances == nil || s.containerInstances.Len() == 0 {
+		return
+	}
+
+	log.Info().Int("containers", s.containerInstances.Len()).Msg("waiting for active containers before worker shutdown")
+	for s.containerInstances.Len() > 0 {
+		s.containerWg.Wait()
+		if s.containerInstances.Len() == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

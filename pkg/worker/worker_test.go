@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -151,6 +153,34 @@ func TestUpdateContainerStatusOnceReconcilesStartedPendingContainer(t *testing.T
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
+}
+
+func TestWaitForActiveContainersBeforeShutdownWaitsForInstanceDrain(t *testing.T) {
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerWg:        sync.WaitGroup{},
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1"})
+
+	done := make(chan struct{})
+	go func() {
+		worker.waitForActiveContainersBeforeShutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("shutdown wait returned before active instance drained")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	worker.containerInstances.Delete("container-1")
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown wait did not return after active instance drained")
+	}
 }
 
 func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {

@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -183,6 +185,64 @@ func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {
 func TestEventStopReasonOmitsUnknown(t *testing.T) {
 	require.Empty(t, eventStopReason(types.StopContainerReasonUnknown))
 	require.Equal(t, string(types.StopContainerReasonScheduler), eventStopReason(types.StopContainerReasonScheduler))
+}
+
+func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
+	workerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	rt := &deleteContextRuntime{mockRuntime: mockRuntime{name: "runc"}}
+	worker := &Worker{
+		ctx:                workerCtx,
+		runtime:            rt,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+
+	require.NoError(t, worker.deleteRuntimeContainer("container-1"))
+	require.True(t, rt.deleteCalled)
+	require.NoError(t, rt.deleteCtxErr)
+}
+
+func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
+	outerCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &runContextRuntime{
+		mockRuntime: mockRuntime{name: "runc"},
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+		ctxErr:      make(chan error, 1),
+	}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{ContainerId: "container-1"}
+	worker.containerInstances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		Runtime: rt,
+	})
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := worker.runContainer(
+			outerCtx,
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			time.Now(),
+		)
+		result <- err
+	}()
+
+	<-rt.entered
+	cancel()
+	close(rt.release)
+
+	require.NoError(t, <-rt.ctxErr)
+	require.NoError(t, <-result)
 }
 
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
@@ -674,4 +734,30 @@ func (m *mockRuntime) Restore(ctx context.Context, containerID string, opts *run
 
 func (m *mockRuntime) Close() error {
 	return nil
+}
+
+type deleteContextRuntime struct {
+	mockRuntime
+	deleteCalled bool
+	deleteCtxErr error
+}
+
+func (m *deleteContextRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
+	m.deleteCalled = true
+	m.deleteCtxErr = ctx.Err()
+	return nil
+}
+
+type runContextRuntime struct {
+	mockRuntime
+	entered chan struct{}
+	release chan struct{}
+	ctxErr  chan error
+}
+
+func (m *runContextRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
+	close(m.entered)
+	<-m.release
+	m.ctxErr <- ctx.Err()
+	return 0, nil
 }

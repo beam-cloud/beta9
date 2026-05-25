@@ -35,6 +35,7 @@ const (
 	containerInnerPort        int    = 8001 // Use a fixed port inside the container
 	markRunningRetryTimeout          = 3 * time.Second
 	markRunningRetryInterval         = 100 * time.Millisecond
+	runtimeDeleteTimeout             = 30 * time.Second
 )
 
 // handleStopContainerEvent used by the event bus to stop a container.
@@ -865,10 +866,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		PoolName:    s.poolName,
 		PodHostname: s.podHostName,
 	})
-	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
-		WorkerId:    s.workerId,
-		ContainerId: request.ContainerId,
-	})
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+
+		s.workerRepoClient.RemoveContainerFromWorker(cleanupCtx, &pb.RemoveContainerFromWorkerRequest{
+			WorkerId:    s.workerId,
+			ContainerId: request.ContainerId,
+		})
+	}()
 
 	defer cancel()
 
@@ -1165,18 +1171,29 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		},
 	})
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
-	if containerId != "" {
-		instance, exists := s.containerInstances.Get(containerId)
-		rt := s.runtime
-		if exists && instance.Runtime != nil {
-			rt = instance.Runtime
-		}
-
-		err = rt.Delete(s.ctx, containerId, &runtime.DeleteOpts{Force: true})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
-		}
+	if err := s.deleteRuntimeContainer(containerId); err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 	}
+}
+
+func (s *Worker) deleteRuntimeContainer(containerId string) error {
+	if containerId == "" {
+		return nil
+	}
+
+	instance, exists := s.containerInstances.Get(containerId)
+	rt := s.runtime
+	if exists && instance.Runtime != nil {
+		rt = instance.Runtime
+	}
+	if rt == nil {
+		return fmt.Errorf("runtime unavailable")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeDeleteTimeout)
+	defer cancel()
+
+	return rt.Delete(ctx, containerId, &runtime.DeleteOpts{Force: true})
 }
 
 func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReason, oomKilled bool) int {
@@ -1311,7 +1328,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
 	}()
 
-	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
+	select {
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	default:
+	}
+
+	exitCode, err := instance.Runtime.Run(context.WithoutCancel(ctx), request.ContainerId, bundlePath, &runtime.RunOpts{
 		OutputWriter:  outputWriter,
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,

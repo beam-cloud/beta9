@@ -242,11 +242,10 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	}
 
 	serveTimeout := types.DefaultServeContainerTimeout
-	serveLockKey := ""
 
 	if types.StubType(stub.Type).IsServe() {
-		serveLockKey = common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId)
-		timeoutValue, err := gws.redisClient.Get(context.Background(), serveLockKey).Result()
+		lockKey := common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId)
+		timeoutValue, err := gws.redisClient.Get(context.Background(), lockKey).Result()
 		if err == nil {
 			serveTimeout, _ = time.ParseDuration(timeoutValue)
 			if serveTimeout <= 0 {
@@ -254,6 +253,10 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			}
 		}
 
+		// Delete the serve lock key when we detach from the container
+		defer func() {
+			gws.redisClient.Del(context.Background(), lockKey)
+		}()
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
@@ -335,7 +338,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			switch payload := inMsg.Payload.(type) {
 			case *pb.ContainerStreamMessage_SyncContainerWorkspace:
 				if types.StubType(stub.Type).IsServe() {
-					gws.redisClient.Expire(ctx, serveLockKey, serveTimeout)
+					gws.redisClient.Expire(ctx, common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId), serveTimeout)
 				}
 
 				syncQueue <- payload.SyncContainerWorkspace
