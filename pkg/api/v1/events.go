@@ -25,17 +25,31 @@ type EventGroup struct {
 }
 
 type ContainerEventsBatchRequest struct {
-	ContainerIDs  []string `json:"container_ids"`
-	TaskIDs       []string `json:"task_ids"`
-	Limit         uint64   `json:"limit,omitempty"`
-	IncludeEvents bool     `json:"include_events,omitempty"`
-	TopLifecycle  int      `json:"top_lifecycle,omitempty"`
+	ContainerIDs         []string                     `json:"container_ids"`
+	TaskIDs              []string                     `json:"task_ids"`
+	Targets              []ContainerEventsBatchTarget `json:"targets,omitempty"`
+	Limit                uint64                       `json:"limit,omitempty"`
+	IncludeEvents        bool                         `json:"include_events,omitempty"`
+	TopLifecycle         int                          `json:"top_lifecycle,omitempty"`
+	RequiredLifecycleIDs []string                     `json:"required_lifecycle_ids,omitempty"`
+	RequiredMetrics      []string                     `json:"required_metrics,omitempty"`
+}
+
+type ContainerEventsBatchTarget struct {
+	ContainerID string `json:"container_id,omitempty"`
+	TaskID      string `json:"task_id,omitempty"`
+	StubID      string `json:"stub_id,omitempty"`
 }
 
 type ContainerEventsBatchResponse struct {
-	Count   int                               `json:"count"`
-	Items   []ContainerEventSummary           `json:"items"`
-	Summary map[string]ContainerMetricSummary `json:"summary"`
+	Count             int                               `json:"count"`
+	Items             []ContainerEventSummary           `json:"items"`
+	Summary           map[string]ContainerMetricSummary `json:"summary"`
+	Coverage          ContainerEventsCoverage           `json:"coverage"`
+	Stages            []ContainerPhaseSummary           `json:"stages"`
+	Phases            []ContainerPhaseSummary           `json:"phases"`
+	TopBottlenecks    []ContainerPhaseSummary           `json:"top_bottlenecks"`
+	PrimaryBottleneck *ContainerPhaseSummary            `json:"primary_bottleneck,omitempty"`
 }
 
 type ContainerEventSummary struct {
@@ -48,13 +62,23 @@ type ContainerEventSummary struct {
 	RootCauseEvent   string                       `json:"root_cause_event,omitempty"`
 	EventCount       int                          `json:"event_count"`
 	Summary          map[string]int64             `json:"summary"`
+	Stages           []ContainerStageSummary      `json:"stages,omitempty"`
 	Lifecycle        []ContainerLifecycleMetric   `json:"lifecycle,omitempty"`
 	SlowestLifecycle []ContainerLifecycleMetric   `json:"slowest_lifecycle,omitempty"`
 	ClipAccesses     []ClipAccessMetric           `json:"clip_accesses,omitempty"`
 	Missing          []string                     `json:"missing,omitempty"`
 	Streams          []string                     `json:"streams,omitempty"`
+	CanonicalStream  string                       `json:"canonical_stream,omitempty"`
 	Events           []types.ContainerEventRecord `json:"events,omitempty"`
 	Error            string                       `json:"error,omitempty"`
+}
+
+type ContainerStageSummary struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	MetricKey   string `json:"metric_key"`
+	DurationMs  int64  `json:"duration_ms"`
+	Description string `json:"description,omitempty"`
 }
 
 type ContainerLifecycleMetric struct {
@@ -95,6 +119,56 @@ type ContainerMetricSummary struct {
 	Total int64   `json:"total_ms"`
 }
 
+type ContainerEventsCoverage struct {
+	RequestedContainers      int            `json:"requested_containers"`
+	Items                    int            `json:"items"`
+	ContainersWithEvents     int            `json:"containers_with_events"`
+	EventErrors              int            `json:"event_errors"`
+	MissingContainers        []string       `json:"missing_containers,omitempty"`
+	RequiredLifecyclePresent int            `json:"required_lifecycle_present"`
+	RequiredLifecycleTotal   int            `json:"required_lifecycle_total"`
+	RequiredLifecycleMissing map[string]int `json:"required_lifecycle_missing"`
+	RequiredMetricPresent    int            `json:"required_metric_present"`
+	RequiredMetricTotal      int            `json:"required_metric_total"`
+	RequiredMetricMissing    map[string]int `json:"required_metric_missing"`
+}
+
+type ContainerPhaseSummary struct {
+	MetricKey      string  `json:"metric_key"`
+	EventID        string  `json:"event_id"`
+	Label          string  `json:"label,omitempty"`
+	Domain         string  `json:"domain,omitempty"`
+	ParentID       string  `json:"parent_id,omitempty"`
+	Count          int     `json:"count"`
+	Coverage       float64 `json:"coverage"`
+	CoverageStatus string  `json:"coverage_status"`
+	Rollup         bool    `json:"rollup,omitempty"`
+	Min            int64   `json:"min_ms"`
+	Avg            float64 `json:"avg_ms"`
+	P50            float64 `json:"p50_ms"`
+	P90            float64 `json:"p90_ms"`
+	P95            float64 `json:"p95_ms"`
+	P99            float64 `json:"p99_ms"`
+	Max            int64   `json:"max_ms"`
+	Total          int64   `json:"total_ms"`
+}
+
+type eventPhaseDefinition struct {
+	MetricKey string
+	EventID   string
+	Label     string
+	Domain    string
+	ParentID  string
+	Rollup    bool
+}
+
+type containerStageDefinition struct {
+	ID          string
+	Label       string
+	MetricKey   string
+	Description string
+}
+
 func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository) *EventGroup {
 	group := &EventGroup{
 		routerGroup:   g,
@@ -105,6 +179,8 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 
 	g.GET("/:workspaceId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
 	g.GET("/:workspaceId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
+	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
+	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
 
@@ -123,8 +199,7 @@ func (g *EventGroup) GetContainerEvents(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid event limit")
 	}
 
-	query := types.EventQuery{Limit: limit}
-	query.WorkspaceID = requestedEventWorkspaceID(ctx, authInfoFromContext(cc))
+	query := eventQueryFromContext(ctx, authInfoFromContext(cc), limit)
 
 	events, err := g.loadContainerEvents(ctx, containerID, query)
 	if err != nil {
@@ -151,8 +226,7 @@ func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid top lifecycle")
 	}
 
-	query := types.EventQuery{Limit: limit}
-	query.WorkspaceID = requestedEventWorkspaceID(ctx, authInfoFromContext(cc))
+	query := eventQueryFromContext(ctx, authInfoFromContext(cc), limit)
 
 	events, err := g.loadContainerEvents(ctx, containerID, query)
 	if err != nil {
@@ -169,10 +243,11 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to decode event request")
 	}
 
-	if len(req.ContainerIDs) == 0 && len(req.TaskIDs) == 0 {
+	targets := normalizeContainerEventsBatchTargets(req)
+	if len(targets) == 0 {
 		return HTTPBadRequest("Missing container_ids or task_ids")
 	}
-	if len(req.ContainerIDs)+len(req.TaskIDs) > 500 {
+	if len(targets) > 500 {
 		return HTTPBadRequest("Too many event targets")
 	}
 	if req.TopLifecycle <= 0 {
@@ -189,49 +264,82 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 	authInfo := authInfoFromContext(cc)
 	workspaceID = requestedEventWorkspaceID(ctx, authInfo)
 
-	items := make([]ContainerEventSummary, 0, len(req.ContainerIDs)+len(req.TaskIDs))
-	for _, containerID := range uniqueStrings(req.ContainerIDs) {
-		events, err := g.loadContainerEvents(ctx, containerID, types.EventQuery{
+	items := make([]ContainerEventSummary, 0, len(targets))
+	for _, target := range targets {
+		if target.TaskID != "" {
+			task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), target.TaskID)
+			if err != nil || task == nil || !hasWorkspaceTaskAccess(task, authInfo, workspaceID) || task.ContainerId == "" {
+				items = append(items, ContainerEventSummary{TaskID: target.TaskID, ContainerID: target.ContainerID, StubID: target.StubID, Error: "task not found"})
+				continue
+			}
+
+			events, err := g.loadContainerEvents(ctx, task.ContainerId, types.EventQuery{
+				Limit:       req.Limit,
+				WorkspaceID: task.Workspace.ExternalId,
+				StubID:      task.Stub.ExternalId,
+				TaskID:      task.ExternalId,
+			})
+			if err != nil {
+				items = append(items, ContainerEventSummary{ContainerID: task.ContainerId, TaskID: target.TaskID, Error: err.Error()})
+				continue
+			}
+			summary := summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents)
+			summary.TaskID = task.ExternalId
+			if summary.ContainerID == "" {
+				summary.ContainerID = task.ContainerId
+			}
+			items = append(items, summary)
+			continue
+		}
+
+		events, err := g.loadContainerEvents(ctx, target.ContainerID, types.EventQuery{
 			Limit:       req.Limit,
 			WorkspaceID: workspaceID,
+			StubID:      target.StubID,
 		})
 		if err != nil {
-			items = append(items, ContainerEventSummary{ContainerID: containerID, Error: err.Error()})
+			items = append(items, ContainerEventSummary{ContainerID: target.ContainerID, StubID: target.StubID, Error: err.Error()})
 			continue
 		}
 		items = append(items, summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents))
 	}
 
-	for _, taskID := range uniqueStrings(req.TaskIDs) {
-		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskID)
-		if err != nil || task == nil || !hasWorkspaceTaskAccess(task, authInfo, workspaceID) || task.ContainerId == "" {
-			items = append(items, ContainerEventSummary{TaskID: taskID, Error: "task not found"})
-			continue
-		}
+	return ctx.JSON(http.StatusOK, summarizeContainerEventsBatch(
+		items,
+		req.TopLifecycle,
+		requiredLifecycleIDs(req.RequiredLifecycleIDs),
+		requiredMetricKeys(req.RequiredMetrics),
+	))
+}
 
-		events, err := g.loadContainerEvents(ctx, task.ContainerId, types.EventQuery{
-			Limit:       req.Limit,
-			WorkspaceID: task.Workspace.ExternalId,
-			StubID:      task.Stub.ExternalId,
-			TaskID:      task.ExternalId,
-		})
-		if err != nil {
-			items = append(items, ContainerEventSummary{ContainerID: task.ContainerId, TaskID: taskID, Error: err.Error()})
-			continue
+func normalizeContainerEventsBatchTargets(req ContainerEventsBatchRequest) []ContainerEventsBatchTarget {
+	targets := make([]ContainerEventsBatchTarget, 0, len(req.Targets)+len(req.ContainerIDs)+len(req.TaskIDs))
+	seen := map[string]struct{}{}
+	appendTarget := func(target ContainerEventsBatchTarget) {
+		target.ContainerID = strings.TrimSpace(target.ContainerID)
+		target.TaskID = strings.TrimSpace(target.TaskID)
+		target.StubID = strings.TrimSpace(target.StubID)
+		if target.ContainerID == "" && target.TaskID == "" {
+			return
 		}
-		summary := summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents)
-		summary.TaskID = task.ExternalId
-		if summary.ContainerID == "" {
-			summary.ContainerID = task.ContainerId
+		key := target.TaskID + "\x00" + target.ContainerID + "\x00" + target.StubID
+		if _, ok := seen[key]; ok {
+			return
 		}
-		items = append(items, summary)
+		seen[key] = struct{}{}
+		targets = append(targets, target)
 	}
 
-	return ctx.JSON(http.StatusOK, ContainerEventsBatchResponse{
-		Count:   len(items),
-		Items:   items,
-		Summary: summarizeMetricMaps(items),
-	})
+	for _, target := range req.Targets {
+		appendTarget(target)
+	}
+	for _, containerID := range req.ContainerIDs {
+		appendTarget(ContainerEventsBatchTarget{ContainerID: containerID})
+	}
+	for _, taskID := range req.TaskIDs {
+		appendTarget(ContainerEventsBatchTarget{TaskID: taskID})
+	}
+	return targets
 }
 
 func (g *EventGroup) GetTaskEvents(ctx echo.Context) error {
@@ -362,6 +470,15 @@ func requestedEventWorkspaceID(ctx echo.Context, authInfo *auth.AuthInfo) string
 	return ctx.Param("workspaceId")
 }
 
+func eventQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo, limit uint64) types.EventQuery {
+	return types.EventQuery{
+		Limit:       limit,
+		WorkspaceID: requestedEventWorkspaceID(ctx, authInfo),
+		StubID:      firstNonEmpty(ctx.Param("stubId"), ctx.QueryParam("stub_id")),
+		TaskID:      ctx.QueryParam("task_id"),
+	}
+}
+
 func isClusterAdmin(authInfo *auth.AuthInfo) bool {
 	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeClusterAdmin
 }
@@ -418,8 +535,10 @@ func summarizeContainerEvents(events *types.ContainerEventsResponse, topLifecycl
 		RootCauseEvent:   events.RootCauseEvent,
 		EventCount:       len(events.Events),
 		Summary:          events.Summary,
+		Stages:           containerStages(events.Summary),
 		Missing:          events.Missing,
 		Streams:          events.Streams,
+		CanonicalStream:  firstString(events.Streams),
 		Lifecycle:        containerLifecyclesInOrder(events.Events),
 		SlowestLifecycle: slowestContainerLifecycles(events.Events, topLifecycle),
 		ClipAccesses:     slowestClipAccesses(events.Events, topLifecycle),
@@ -434,6 +553,40 @@ func summarizeContainerEvents(events *types.ContainerEventsResponse, topLifecycl
 		summary.Events = events.Events
 	}
 	return summary
+}
+
+func containerStages(summary map[string]int64) []ContainerStageSummary {
+	stages := make([]ContainerStageSummary, 0, len(containerStageDefinitions()))
+	for _, def := range containerStageDefinitions() {
+		durationMs, ok := summary[def.MetricKey]
+		if !ok {
+			continue
+		}
+		stages = append(stages, ContainerStageSummary{
+			ID:          def.ID,
+			Label:       def.Label,
+			MetricKey:   def.MetricKey,
+			DurationMs:  durationMs,
+			Description: def.Description,
+		})
+	}
+	return stages
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func containerLifecyclesInOrder(events []types.ContainerEventRecord) []ContainerLifecycleMetric {
@@ -626,6 +779,425 @@ func durationUsToMs(durationUs int64) int64 {
 		return 0
 	}
 	return (durationUs + 999) / 1000
+}
+
+func summarizeContainerEventsBatch(items []ContainerEventSummary, topLifecycle int, requiredLifecycleIDs []string, requiredMetrics []string) ContainerEventsBatchResponse {
+	metricSummary := summarizeMetricMaps(items)
+	stages := summarizeEventStages(metricSummary, len(items))
+	phases := summarizeEventPhases(metricSummary, len(items))
+	topBottlenecks := topContainerBottlenecks(phases, topLifecycle)
+
+	var primary *ContainerPhaseSummary
+	if len(topBottlenecks) > 0 {
+		copy := topBottlenecks[0]
+		primary = &copy
+	}
+
+	return ContainerEventsBatchResponse{
+		Count:             len(items),
+		Items:             items,
+		Summary:           metricSummary,
+		Coverage:          summarizeContainerEventCoverage(items, requiredLifecycleIDs, requiredMetrics),
+		Stages:            stages,
+		Phases:            phases,
+		TopBottlenecks:    topBottlenecks,
+		PrimaryBottleneck: primary,
+	}
+}
+
+func summarizeEventStages(summary map[string]ContainerMetricSummary, measuredCount int) []ContainerPhaseSummary {
+	stages := make([]ContainerPhaseSummary, 0, len(containerStageDefinitions()))
+	for _, def := range containerStageDefinitions() {
+		metric, ok := summary[def.MetricKey]
+		if !ok {
+			continue
+		}
+		stages = append(stages, newContainerPhaseSummary(eventPhaseDefinition{
+			MetricKey: def.MetricKey,
+			EventID:   def.ID,
+			Label:     def.Label,
+			Rollup:    true,
+		}, metric, measuredCount))
+	}
+	return stages
+}
+
+func summarizeEventPhases(summary map[string]ContainerMetricSummary, measuredCount int) []ContainerPhaseSummary {
+	seen := map[string]struct{}{}
+	phases := make([]ContainerPhaseSummary, 0, len(summary))
+	for _, def := range eventPhaseDefinitions() {
+		metric, ok := summary[def.MetricKey]
+		if !ok {
+			continue
+		}
+		seen[def.MetricKey] = struct{}{}
+		phases = append(phases, newContainerPhaseSummary(def, metric, measuredCount))
+	}
+
+	extraKeys := make([]string, 0)
+	for key := range summary {
+		if _, ok := seen[key]; !ok {
+			if key == "to_running_ms" || !strings.HasSuffix(key, "_ms") {
+				continue
+			}
+			extraKeys = append(extraKeys, key)
+		}
+	}
+	sort.Strings(extraKeys)
+	for _, key := range extraKeys {
+		def := eventPhaseDefinition{
+			MetricKey: key,
+			EventID:   strings.TrimSuffix(key, "_ms"),
+			Label:     key,
+		}
+		phases = append(phases, newContainerPhaseSummary(def, summary[key], measuredCount))
+	}
+
+	return phases
+}
+
+func containerStageDefinitions() []containerStageDefinition {
+	return []containerStageDefinition{
+		{
+			ID:          "scheduling",
+			Label:       "Scheduling",
+			MetricKey:   "scheduler_queue_to_worker_receive_ms",
+			Description: "Request queued until the worker receives it.",
+		},
+		{
+			ID:          "worker_queue",
+			Label:       "Worker queue",
+			MetricKey:   "worker_queue_ms",
+			Description: "Worker request pickup delay.",
+		},
+		{
+			ID:          "image",
+			Label:       "Image load",
+			MetricKey:   "image_ms",
+			Description: "Image metadata, cache, CLIP mount, and archive load.",
+		},
+		{
+			ID:          "mount",
+			Label:       "Mounts",
+			MetricKey:   "mount_ms",
+			Description: "Container filesystem and workspace mount setup.",
+		},
+		{
+			ID:          "network",
+			Label:       "Network",
+			MetricKey:   "network_ms",
+			Description: "Network namespace, IP assignment, restrictions, and port exposure.",
+		},
+		{
+			ID:          "container_start",
+			Label:       "Container start",
+			MetricKey:   "runtime_ms",
+			Description: "Runtime prepare through process start.",
+		},
+		{
+			ID:          "sandbox_ready",
+			Label:       "Sandbox ready",
+			MetricKey:   "sandbox_process_manager_ready_ms",
+			Description: "Sandbox process manager readiness after runtime start.",
+		},
+		{
+			ID:          "runner",
+			Label:       "Runner",
+			MetricKey:   "runner_ms",
+			Description: "Runner task execution path.",
+		},
+		{
+			ID:          "result",
+			Label:       "Result",
+			MetricKey:   "result_ms",
+			Description: "Result persistence and delivery.",
+		},
+		{
+			ID:          "time_to_running",
+			Label:       "Time to running",
+			MetricKey:   "container_request_to_running_ms",
+			Description: "First lifecycle event through RUNNING.",
+		},
+		{
+			ID:          "running_to_first_log",
+			Label:       "Running to first log",
+			MetricKey:   "running_to_first_log_ms",
+			Description: "RUNNING to first persisted stdout or stderr byte.",
+		},
+	}
+}
+
+func newContainerPhaseSummary(def eventPhaseDefinition, metric ContainerMetricSummary, measuredCount int) ContainerPhaseSummary {
+	coverage := float64(0)
+	if measuredCount > 0 {
+		coverage = float64(metric.Count) / float64(measuredCount)
+	}
+	return ContainerPhaseSummary{
+		MetricKey:      def.MetricKey,
+		EventID:        def.EventID,
+		Label:          def.Label,
+		Domain:         def.Domain,
+		ParentID:       def.ParentID,
+		Count:          metric.Count,
+		Coverage:       coverage,
+		CoverageStatus: eventCoverageStatus(coverage),
+		Rollup:         def.Rollup,
+		Min:            metric.Min,
+		Avg:            metric.Avg,
+		P50:            metric.P50,
+		P90:            metric.P90,
+		P95:            metric.P95,
+		P99:            metric.P99,
+		Max:            metric.Max,
+		Total:          metric.Total,
+	}
+}
+
+func topContainerBottlenecks(phases []ContainerPhaseSummary, limit int) []ContainerPhaseSummary {
+	if limit <= 0 {
+		return nil
+	}
+
+	candidates := make([]ContainerPhaseSummary, 0, len(phases))
+	for _, phase := range phases {
+		if phase.Rollup || phase.Count == 0 {
+			continue
+		}
+		candidates = append(candidates, phase)
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		leftReliable := candidates[i].Coverage >= 0.5
+		rightReliable := candidates[j].Coverage >= 0.5
+		if leftReliable != rightReliable {
+			return leftReliable
+		}
+		if candidates[i].P95 != candidates[j].P95 {
+			return candidates[i].P95 > candidates[j].P95
+		}
+		if candidates[i].Max != candidates[j].Max {
+			return candidates[i].Max > candidates[j].Max
+		}
+		return candidates[i].Count > candidates[j].Count
+	})
+
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates
+}
+
+func summarizeContainerEventCoverage(items []ContainerEventSummary, requiredLifecycleIDs []string, requiredMetrics []string) ContainerEventsCoverage {
+	missingLifecycle := make(map[string]int, len(requiredLifecycleIDs))
+	for _, id := range requiredLifecycleIDs {
+		missingLifecycle[id] = 0
+	}
+	missingMetrics := make(map[string]int, len(requiredMetrics))
+	for _, key := range requiredMetrics {
+		missingMetrics[key] = 0
+	}
+
+	coverage := ContainerEventsCoverage{
+		RequestedContainers:      len(items),
+		Items:                    len(items),
+		RequiredLifecycleTotal:   len(items) * len(requiredLifecycleIDs),
+		RequiredLifecycleMissing: missingLifecycle,
+		RequiredMetricTotal:      len(items) * len(requiredMetrics),
+		RequiredMetricMissing:    missingMetrics,
+	}
+
+	for _, item := range items {
+		if item.Error != "" {
+			coverage.EventErrors++
+		}
+		if item.ContainerID != "" && (item.Error != "" || item.EventCount == 0) {
+			coverage.MissingContainers = append(coverage.MissingContainers, item.ContainerID)
+		}
+		if item.Error == "" && item.EventCount > 0 {
+			coverage.ContainersWithEvents++
+		}
+
+		missing := map[string]struct{}{}
+		for _, id := range item.Missing {
+			missing[id] = struct{}{}
+		}
+		for _, id := range requiredLifecycleIDs {
+			if item.Error != "" || item.EventCount == 0 {
+				coverage.RequiredLifecycleMissing[id]++
+				continue
+			}
+			if _, ok := missing[id]; ok {
+				coverage.RequiredLifecycleMissing[id]++
+			}
+		}
+
+		for _, key := range requiredMetrics {
+			if item.Error != "" || item.EventCount == 0 || item.Summary == nil {
+				coverage.RequiredMetricMissing[key]++
+				continue
+			}
+			if _, ok := item.Summary[key]; !ok {
+				coverage.RequiredMetricMissing[key]++
+			}
+		}
+	}
+
+	coverage.RequiredLifecyclePresent = coverage.RequiredLifecycleTotal - sumIntMap(coverage.RequiredLifecycleMissing)
+	coverage.RequiredMetricPresent = coverage.RequiredMetricTotal - sumIntMap(coverage.RequiredMetricMissing)
+	return coverage
+}
+
+func requiredLifecycleIDs(overrides []string) []string {
+	if len(overrides) > 0 {
+		return uniqueStrings(overrides)
+	}
+
+	ids := make([]string, 0)
+	for id, def := range types.ContainerLifecycleDefinitions {
+		if def.Required {
+			ids = append(ids, string(id))
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func requiredMetricKeys(overrides []string) []string {
+	if len(overrides) > 0 {
+		return uniqueStrings(overrides)
+	}
+	return []string{
+		"scheduler_queue_to_worker_receive_ms",
+		"worker_queue_ms",
+		"worker_receive_to_running_ms",
+		"image_ms",
+		"network_ms",
+		"runtime_ms",
+		"running_to_first_log_ms",
+	}
+}
+
+func eventCoverageStatus(coverage float64) string {
+	switch {
+	case coverage >= 0.95:
+		return "full"
+	case coverage >= 0.50:
+		return "partial"
+	case coverage > 0:
+		return "low"
+	default:
+		return "missing"
+	}
+}
+
+func sumIntMap(values map[string]int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func eventPhaseDefinitions() []eventPhaseDefinition {
+	definitions := make([]eventPhaseDefinition, 0, len(orderedContainerLifecycleIDs())+8)
+	for _, id := range orderedContainerLifecycleIDs() {
+		def := types.ContainerLifecycleDefinitionFor(id)
+		definitions = append(definitions, eventPhaseDefinition{
+			MetricKey: types.EventSummaryKeyForLifecycle(id),
+			EventID:   string(id),
+			Label:     def.Label,
+			Domain:    string(def.Domain),
+			ParentID:  string(def.ParentID),
+			Rollup:    id == types.ContainerLifecycleStartup,
+		})
+	}
+
+	definitions = append(definitions,
+		eventPhaseDefinition{MetricKey: "scheduler_ms", EventID: "scheduler", Label: "Scheduler total", Domain: string(types.EventDomainScheduler), Rollup: true},
+		eventPhaseDefinition{MetricKey: "worker_ms", EventID: "worker", Label: "Worker total", Domain: string(types.EventDomainWorker), Rollup: true},
+		eventPhaseDefinition{MetricKey: "mount_ms", EventID: "mount", Label: "Mount total", Domain: string(types.EventDomainMount), Rollup: true},
+		eventPhaseDefinition{MetricKey: "network_ms", EventID: "network", Label: "Network total", Domain: string(types.EventDomainNetwork), Rollup: true},
+		eventPhaseDefinition{MetricKey: "runtime_ms", EventID: "runtime", Label: "Runtime total", Domain: string(types.EventDomainRuntime), Rollup: true},
+		eventPhaseDefinition{MetricKey: "clip_ms", EventID: "clip", Label: "CLIP total", Domain: string(types.EventDomainClip), Rollup: true},
+		eventPhaseDefinition{MetricKey: "runner_ms", EventID: "runner", Label: "Runner total", Domain: string(types.EventDomainRunner), Rollup: true},
+		eventPhaseDefinition{MetricKey: "result_ms", EventID: "result", Label: "Result total", Domain: string(types.EventDomainResult), Rollup: true},
+		eventPhaseDefinition{MetricKey: "to_running_ms", EventID: "container.request_to_running", Label: "Request to running", Rollup: true},
+		eventPhaseDefinition{MetricKey: "container_request_to_running_ms", EventID: "container.request_to_running", Label: "Request to running", Rollup: true},
+		eventPhaseDefinition{MetricKey: "scheduler_queue_to_worker_receive_ms", EventID: "scheduler.queue_to_worker_receive", Label: "Scheduler queue to worker receive", Domain: string(types.EventDomainScheduler)},
+		eventPhaseDefinition{MetricKey: "scheduler_queue_to_running_ms", EventID: "scheduler.queue_to_running", Label: "Scheduler queue to running", Domain: string(types.EventDomainScheduler), Rollup: true},
+		eventPhaseDefinition{MetricKey: "worker_receive_to_running_ms", EventID: "worker.receive_to_running", Label: "Worker receive to running", Domain: string(types.EventDomainWorker), Rollup: true},
+		eventPhaseDefinition{MetricKey: "running_to_first_log_ms", EventID: "logs.first_byte", Label: "Running to first log", Domain: string(types.EventDomainLogs)},
+		eventPhaseDefinition{MetricKey: "start_task_to_first_log_ms", EventID: "logs.first_byte", Label: "Start task to first log", Domain: string(types.EventDomainLogs)},
+		eventPhaseDefinition{MetricKey: "running_to_runner_process_started_ms", EventID: string(types.ContainerEventRunnerProcessStarted), Label: "Running to runner process", Domain: string(types.EventDomainRunner)},
+		eventPhaseDefinition{MetricKey: "running_to_runner_main_ms", EventID: string(types.ContainerEventRunnerMainEntered), Label: "Running to runner main", Domain: string(types.EventDomainRunner)},
+		eventPhaseDefinition{MetricKey: "runner_process_to_module_loaded_ms", EventID: string(types.ContainerEventRunnerModuleLoaded), Label: "Runner process to module loaded", Domain: string(types.EventDomainRunner)},
+		eventPhaseDefinition{MetricKey: "runner_module_loaded_to_main_ms", EventID: string(types.ContainerEventRunnerMainEntered), Label: "Runner module loaded to main", Domain: string(types.EventDomainRunner)},
+		eventPhaseDefinition{MetricKey: "runner_main_to_start_task_ms", EventID: string(types.ContainerEventRunnerStartTask), Label: "Runner main to StartTask", Domain: string(types.EventDomainRunner)},
+	)
+	return definitions
+}
+
+func orderedContainerLifecycleIDs() []types.ContainerLifecycleID {
+	return []types.ContainerLifecycleID{
+		types.ContainerLifecycleSchedulerQueuePush,
+		types.ContainerLifecycleSchedulerBacklogWait,
+		types.ContainerLifecycleSchedulerWorkerSelection,
+		types.ContainerLifecycleSchedulerReservation,
+		types.ContainerLifecycleSchedulerProvisionWorker,
+		types.ContainerLifecycleWorkerQueueReceive,
+		types.ContainerLifecycleStartup,
+		types.ContainerLifecycleSetWorkerAddress,
+		types.ContainerLifecycleImageLoad,
+		types.ContainerLifecyclePortAllocation,
+		types.ContainerLifecycleReadBundleConfig,
+		types.ContainerLifecycleSetupMounts,
+		types.ContainerLifecycleSpecFromRequest,
+		types.ContainerLifecycleSetContainerAddr,
+		types.ContainerLifecycleSetAddressMap,
+		types.ContainerLifecycleOverlaySetup,
+		types.ContainerLifecycleNetworkSetup,
+		types.ContainerLifecycleNetworkCreateVeth,
+		types.ContainerLifecycleNetworkSetupBridge,
+		types.ContainerLifecycleNetworkCreateNamespace,
+		types.ContainerLifecycleNetworkConfigureNamespace,
+		types.ContainerLifecycleNetworkIPLock,
+		types.ContainerLifecycleNetworkIPScan,
+		types.ContainerLifecycleNetworkIPAssign,
+		types.ContainerLifecycleNetworkSetContainerIP,
+		types.ContainerLifecycleNetworkRestrictions,
+		types.ContainerLifecycleNetworkExpose,
+		types.ContainerLifecycleRuntimePrepare,
+		types.ContainerLifecycleConfigWrite,
+		types.ContainerLifecycleStartQueueWait,
+		types.ContainerLifecycleRuntimeStartToPID,
+		types.ContainerLifecycleSandboxProcessManagerTCP,
+		types.ContainerLifecycleSandboxProcessManagerReady,
+		types.ContainerLifecycleSandboxApplyCPUQuota,
+		types.ContainerLifecycleServeReady,
+		types.ContainerLifecycleContainerRequestToStartTask,
+		types.ContainerLifecycleContainerRunningToStartTask,
+		types.ContainerLifecycleRunnerGatewayChannelOpen,
+		types.ContainerLifecycleRunnerStartTaskRPC,
+		types.ContainerLifecycleRunnerStartToGetArgs,
+		types.ContainerLifecycleRunnerGetArgsRPC,
+		types.ContainerLifecycleRunnerGetArgsToSetResult,
+		types.ContainerLifecycleRunnerUserCodeImport,
+		types.ContainerLifecycleRunnerHandlerExecution,
+		types.ContainerLifecycleRunnerSetResultRPC,
+		types.ContainerLifecycleRunnerStartToSetResult,
+		types.ContainerLifecycleResultSetToEndTask,
+		types.ContainerLifecycleRunnerEndTaskRPC,
+		types.ContainerLifecycleRunnerStartToEndTask,
+		types.ContainerLifecycleResultDelivery,
+		types.ContainerLifecycleClipRead,
+		types.ContainerLifecycleClipOCIRead,
+		types.ContainerLifecycleClipArchiveRead,
+		types.ContainerLifecycleClipDiskCacheRead,
+		types.ContainerLifecycleClipContentCacheRead,
+		types.ContainerLifecycleClipCheckpointRead,
+		types.ContainerLifecycleClipLayerDecompress,
+		types.ContainerLifecycleClipLayerDecompressWait,
+	}
 }
 
 func summarizeMetricMaps(items []ContainerEventSummary) map[string]ContainerMetricSummary {

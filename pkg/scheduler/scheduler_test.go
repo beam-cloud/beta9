@@ -351,6 +351,30 @@ func TestRunContainer(t *testing.T) {
 	}
 }
 
+func TestStopDeletesPendingBuildContainerState(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	containerId := types.BuildContainerPrefix + "pending"
+	err = wb.containerRepo.SetContainerState(containerId, &types.ContainerState{
+		ContainerId: containerId,
+		Status:      types.ContainerStatusPending,
+		WorkspaceId: "workspace-1",
+		ScheduledAt: time.Now().Unix(),
+	})
+	assert.Nil(t, err)
+
+	err = wb.Stop(&types.StopContainerArgs{
+		ContainerId: containerId,
+		Reason:      types.StopContainerReasonUser,
+	})
+	assert.Nil(t, err)
+
+	_, err = wb.containerRepo.GetContainerState(containerId)
+	notFound := &types.ErrContainerStateNotFound{}
+	assert.True(t, notFound.From(err), "expected deleted pending build state, got %v", err)
+}
+
 func TestRunCleansContainerStateWhenBacklogPushFails(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)

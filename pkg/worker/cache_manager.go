@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -54,7 +53,6 @@ type WorkerCacheManager struct {
 	cancel        context.CancelFunc
 	config        types.AppConfig
 	poolConfig    types.WorkerPoolConfig
-	redis         *common.RedisClient
 	workerRepo    pb.WorkerRepositoryServiceClient
 	workerID      string
 	instanceID    string
@@ -70,7 +68,7 @@ type WorkerCacheManager struct {
 	wg            sync.WaitGroup
 }
 
-func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, redisClient *common.RedisClient, workerRepo pb.WorkerRepositoryServiceClient, workerID, poolName, podAddr string) *WorkerCacheManager {
+func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, workerRepo pb.WorkerRepositoryServiceClient, workerID, poolName, podAddr string) *WorkerCacheManager {
 	cacheCtx, cancel := context.WithCancel(ctx)
 	locality := cacheLocality(config, poolConfig)
 	nodeID := cacheNodeID()
@@ -80,7 +78,6 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		cancel:     cancel,
 		config:     config,
 		poolConfig: poolConfig,
-		redis:      redisClient,
 		workerRepo: workerRepo,
 		workerID:   workerID,
 		instanceID: cacheWorkerInstanceID(workerID),
@@ -100,7 +97,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
-	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cacheConfig.Global, cacheConfig.Server, m.redis.UniversalClient)
+	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
 
 	hostID := cacheLogicalHostID(m.poolName, m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
@@ -357,7 +354,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 		cacheConfig.Client.Prefetch.MaxPartsPerRead = cacheDefaultPrefetchMaxParts
 	}
 
-	applyCacheRedisConfig(&cacheConfig, config.Database.Redis)
 	return cacheConfig
 }
 
@@ -376,21 +372,6 @@ func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.W
 	}
 	if poolConfig.Cache.Enabled != nil && !*poolConfig.Cache.Enabled {
 		cacheConfig.Disk.Enabled = false
-	}
-}
-
-func applyCacheRedisConfig(cacheConfig *cache.Config, redisConfig types.RedisConfig) {
-	if len(redisConfig.Addrs) > 0 {
-		cacheConfig.Server.Metadata.RedisAddr = redisConfig.Addrs[0]
-	}
-
-	cacheConfig.Server.Metadata.RedisPasswd = redisConfig.Password
-	cacheConfig.Server.Metadata.RedisTLSEnabled = redisConfig.EnableTLS
-	switch redisConfig.Mode {
-	case types.RedisModeCluster:
-		cacheConfig.Server.Metadata.RedisMode = cache.RedisModeCluster
-	default:
-		cacheConfig.Server.Metadata.RedisMode = cache.RedisModeSingle
 	}
 }
 

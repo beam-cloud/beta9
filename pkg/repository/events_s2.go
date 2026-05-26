@@ -230,6 +230,7 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	}
 
 	sortContainerEventRecords(response.Events)
+	setContainerStopCause(response)
 	response.Summary = summarizeContainerLifecycleDurations(response.Events)
 	response.Missing = requiredContainerLifecycleIDs(response.Events)
 	return response, nil
@@ -253,22 +254,18 @@ func (r *S2EventRepository) resolveContainerStreams(ctx context.Context, contain
 	}
 
 	prefix := r.workspaceStubPrefix(query.WorkspaceID)
-	limit := 1000
-	resp, err := r.basin.Streams.List(ctx, &s2.ListStreamsArgs{
-		Prefix: prefix,
-		Limit:  &limit,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list s2 container event streams for workspace %q: %w", query.WorkspaceID, err)
-	}
-
 	suffix := "/containers/" + eventStreamPart(containerID)
 	streams := make([]s2.StreamName, 0, 1)
-	for _, stream := range resp.Streams {
+	iter := r.basin.Streams.Iter(ctx, &s2.ListStreamsArgs{Prefix: prefix})
+	for iter.Next() {
+		stream := iter.Value()
 		name := string(stream.Name)
 		if strings.HasSuffix(name, suffix) {
 			streams = append(streams, stream.Name)
 		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("list s2 container event streams for workspace %q: %w", query.WorkspaceID, err)
 	}
 
 	return streams, nil
@@ -426,6 +423,8 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 		return r.stubStreamName(metadata.WorkspaceID, metadata.StubID)
 	case metadata.WorkspaceID != "":
 		return r.workspaceStreamName(metadata.WorkspaceID)
+	case metadata.PoolName != "":
+		return r.workerPoolStreamName(metadata.PoolName)
 	default:
 		return r.typeStreamName(eventType)
 	}
@@ -451,6 +450,10 @@ func (r *S2EventRepository) taskStreamName(taskID string) s2.StreamName {
 
 func (r *S2EventRepository) workerStreamName(workerID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workers/%s", r.streamPrefix, workerID))
+}
+
+func (r *S2EventRepository) workerPoolStreamName(poolName string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/worker-pools/%s", r.streamPrefix, eventStreamPart(poolName)))
 }
 
 func (r *S2EventRepository) workspaceStreamName(workspaceID string) s2.StreamName {
@@ -479,6 +482,7 @@ func eventMetadataFromCloudEvent(event cloudevents.Event) eventMetadata {
 		TaskID:      extensionString(extensions, "taskid"),
 		StubID:      extensionString(extensions, "stubid"),
 		WorkerID:    extensionString(extensions, "workerid"),
+		PoolName:    extensionString(extensions, "poolname"),
 	}
 }
 
@@ -508,6 +512,9 @@ func s2HeadersForEvent(event cloudevents.Event, metadata eventMetadata) []s2.Hea
 	}
 	if metadata.WorkerID != "" {
 		headers = append(headers, s2.NewHeader("worker_id", metadata.WorkerID))
+	}
+	if metadata.PoolName != "" {
+		headers = append(headers, s2.NewHeader("pool_name", metadata.PoolName))
 	}
 	return headers
 }
@@ -564,12 +571,6 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		if response.StubID == "" {
 			response.StubID = event.StubID
 		}
-		if event.Reason != "" && event.Reason != "UNKNOWN" {
-			response.StopReason = event.Reason
-		}
-		if response.RootCauseEvent == "" && types.IsContainerRootCauseCandidate(event.ID) {
-			response.RootCauseEvent = string(event.ID)
-		}
 	case types.EventContainerLog:
 		var entry types.EventContainerLogSchema
 		if err := json.Unmarshal(record.Data, &entry); err != nil {
@@ -589,6 +590,22 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		}
 		if response.StubID == "" {
 			response.StubID = entry.StubID
+		}
+	}
+}
+
+func setContainerStopCause(response *types.ContainerEventsResponse) {
+	response.StopReason = ""
+	response.RootCauseEvent = ""
+	for _, event := range response.Events {
+		if event.Type != types.EventContainerEvent {
+			continue
+		}
+		if event.Reason != "" && event.Reason != "UNKNOWN" {
+			response.StopReason = event.Reason
+		}
+		if response.RootCauseEvent == "" && types.IsContainerRootCauseCandidate(types.ContainerEventID(event.EventID)) {
+			response.RootCauseEvent = event.EventID
 		}
 	}
 }
@@ -626,7 +643,7 @@ func summarizeContainerLifecycleDurations(events []types.ContainerEventRecord) m
 			durationUs := containerEventRecordDurationUs(event)
 			durationMs := event.DurationMs
 			if durationMs <= 0 && durationUs > 0 {
-				durationMs = durationUs / 1000
+				durationMs = durationUsToMilliseconds(durationUs)
 			}
 			if event.EventID == "" || (durationMs <= 0 && durationUs <= 0) {
 				continue
@@ -730,6 +747,7 @@ func summarizeContainerLifecycleDurations(events []types.ContainerEventRecord) m
 		setPositiveDuration(summary, "running_to_runner_process_started_ms", runningAt, runnerProcessStartedAt)
 		setPositiveDuration(summary, "running_to_runner_main_ms", runningAt, runnerMainEnteredAt)
 	}
+	setPositiveDuration(summary, "scheduler_queue_to_worker_receive_ms", queueStartAt, workerReceiveAt)
 	setPositiveDuration(summary, "runner_process_to_module_loaded_ms", runnerProcessStartedAt, runnerModuleLoadedAt)
 	setPositiveDuration(summary, "runner_module_loaded_to_main_ms", runnerModuleLoadedAt, runnerMainEnteredAt)
 	setPositiveDuration(summary, "runner_main_to_start_task_ms", runnerMainEnteredAt, startTaskAt)
@@ -747,7 +765,7 @@ func setPositiveDuration(summary map[string]int64, key string, start time.Time, 
 	if start.IsZero() || end.IsZero() || end.Before(start) {
 		return
 	}
-	setMaxDuration(summary, key, end.Sub(start).Milliseconds())
+	setMaxDuration(summary, key, durationToMilliseconds(end.Sub(start)))
 }
 
 func setMaxDuration(summary map[string]int64, key string, duration int64) {
@@ -790,6 +808,13 @@ func durationUsToMilliseconds(durationUs int64) int64 {
 		return 0
 	}
 	return (durationUs + 999) / 1000
+}
+
+func durationToMilliseconds(duration time.Duration) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	return (duration.Nanoseconds() + int64(time.Millisecond) - 1) / int64(time.Millisecond)
 }
 
 func setSummedDuration(summary map[string]int64, key string, parts ...string) {

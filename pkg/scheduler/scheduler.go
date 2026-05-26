@@ -218,9 +218,15 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 	s.eventRepo.PushContainerEvent(event)
 
-	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
-	if err != nil {
-		return err
+	if state != nil && strings.HasPrefix(stopArgs.ContainerId, types.BuildContainerPrefix) && types.ContainerStatus(state.Status) == types.ContainerStatusPending {
+		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {
+			return err
+		}
+	} else {
+		err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+		if err != nil {
+			return err
+		}
 	}
 
 	eventArgs, err := stopArgs.ToMap()

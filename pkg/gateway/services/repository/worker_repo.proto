@@ -6,6 +6,8 @@ import "types.proto";
 service WorkerRepositoryService {
   rpc GetNextContainerRequest(GetNextContainerRequestRequest)
       returns (stream GetNextContainerRequestResponse) {}
+  rpc StreamWorkerEvents(StreamWorkerEventsRequest)
+      returns (stream WorkerEvent) {}
   rpc SetImagePullLock(SetImagePullLockRequest)
       returns (SetImagePullLockResponse) {}
   rpc RemoveImagePullLock(RemoveImagePullLockRequest)
@@ -27,6 +29,26 @@ service WorkerRepositoryService {
   rpc UnregisterCacheHost(UnregisterCacheHostRequest)
       returns (UnregisterCacheHostResponse) {}
   rpc ListCacheHosts(ListCacheHostsRequest) returns (ListCacheHostsResponse) {}
+  rpc SetCacheClientLock(SetCacheClientLockRequest)
+      returns (SetCacheClientLockResponse) {}
+  rpc RemoveCacheClientLock(RemoveCacheClientLockRequest)
+      returns (RemoveCacheClientLockResponse) {}
+  rpc SetCacheStoreFromContentLock(SetCacheStoreFromContentLockRequest)
+      returns (SetCacheStoreFromContentLockResponse) {}
+  rpc RemoveCacheStoreFromContentLock(RemoveCacheStoreFromContentLockRequest)
+      returns (RemoveCacheStoreFromContentLockResponse) {}
+  rpc RefreshCacheStoreFromContentLock(RefreshCacheStoreFromContentLockRequest)
+      returns (RefreshCacheStoreFromContentLockResponse) {}
+  rpc SetCacheFsNode(SetCacheFsNodeRequest) returns (SetCacheFsNodeResponse) {}
+  rpc GetCacheFsNode(GetCacheFsNodeRequest) returns (GetCacheFsNodeResponse) {}
+  rpc AddCacheFsNodeChild(AddCacheFsNodeChildRequest)
+      returns (AddCacheFsNodeChildResponse) {}
+  rpc RemoveCacheFsNode(RemoveCacheFsNodeRequest)
+      returns (RemoveCacheFsNodeResponse) {}
+  rpc RemoveCacheFsNodeChild(RemoveCacheFsNodeChildRequest)
+      returns (RemoveCacheFsNodeChildResponse) {}
+  rpc GetCacheFsNodeChildren(GetCacheFsNodeChildrenRequest)
+      returns (GetCacheFsNodeChildrenResponse) {}
   rpc SetNetworkLock(SetNetworkLockRequest) returns (SetNetworkLockResponse) {}
   rpc RemoveNetworkLock(RemoveNetworkLockRequest)
       returns (RemoveNetworkLockResponse) {}
@@ -49,6 +71,25 @@ message GetNextContainerRequestResponse {
   types.ContainerRequest container_request = 2;
   string error_msg = 3;
 }
+
+message StreamWorkerEventsRequest { string worker_id = 1; }
+
+message WorkerEvent {
+  string event_id = 1;
+
+  oneof event {
+    StopContainerEvent stop_container = 2;
+    StopBuildEvent stop_build = 3;
+  }
+}
+
+message StopContainerEvent {
+  string container_id = 1;
+  bool force = 2;
+  string reason = 3;
+}
+
+message StopBuildEvent { string container_id = 1; }
 
 message SetImagePullLockRequest {
   string worker_id = 1;
@@ -180,6 +221,134 @@ message ListCacheHostsRequest {
 message ListCacheHostsResponse {
   bool ok = 1;
   repeated CacheCoordinatorHost hosts = 2;
+  string error_msg = 3;
+}
+
+message SetCacheClientLockRequest {
+  string hash = 1;
+  string host_id = 2;
+}
+
+message SetCacheClientLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveCacheClientLockRequest {
+  string hash = 1;
+  string host_id = 2;
+}
+
+message RemoveCacheClientLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetCacheStoreFromContentLockRequest {
+  string locality = 1;
+  string source_path = 2;
+}
+
+message SetCacheStoreFromContentLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveCacheStoreFromContentLockRequest {
+  string locality = 1;
+  string source_path = 2;
+}
+
+message RemoveCacheStoreFromContentLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RefreshCacheStoreFromContentLockRequest {
+  string locality = 1;
+  string source_path = 2;
+}
+
+message RefreshCacheStoreFromContentLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message WorkerCacheFSMetadata {
+  string pid = 1;
+  string id = 2;
+  string name = 3;
+  string path = 4;
+  string hash = 5;
+  uint64 ino = 6;
+  uint64 size = 7;
+  uint64 blocks = 8;
+  uint64 atime = 9;
+  uint64 mtime = 10;
+  uint64 ctime = 11;
+  uint32 atimensec = 12;
+  uint32 mtimensec = 13;
+  uint32 ctimensec = 14;
+  uint32 mode = 15;
+  uint32 nlink = 16;
+  uint32 rdev = 17;
+  uint32 blksize = 18;
+  uint32 padding = 19;
+  uint32 uid = 20;
+  uint32 gid = 21;
+  uint64 gen = 22;
+}
+
+message SetCacheFsNodeRequest {
+  string id = 1;
+  WorkerCacheFSMetadata metadata = 2;
+}
+
+message SetCacheFsNodeResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetCacheFsNodeRequest { string id = 1; }
+
+message GetCacheFsNodeResponse {
+  bool ok = 1;
+  WorkerCacheFSMetadata metadata = 2;
+  string error_msg = 3;
+}
+
+message AddCacheFsNodeChildRequest {
+  string pid = 1;
+  string id = 2;
+}
+
+message AddCacheFsNodeChildResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveCacheFsNodeRequest { string id = 1; }
+
+message RemoveCacheFsNodeResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveCacheFsNodeChildRequest {
+  string pid = 1;
+  string id = 2;
+}
+
+message RemoveCacheFsNodeChildResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetCacheFsNodeChildrenRequest { string id = 1; }
+
+message GetCacheFsNodeChildrenResponse {
+  bool ok = 1;
+  repeated WorkerCacheFSMetadata children = 2;
   string error_msg = 3;
 }
 

@@ -42,14 +42,8 @@ type containerResourceUpdater interface {
 	UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error
 }
 
-// handleStopContainerEvent used by the event bus to stop a container.
-// Containers are stopped by sending a stop container event to stopContainerChan.
-func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
-	stopArgs, err := types.ToStopContainerArgs(event.Args)
-	if err != nil {
-		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
-		return false
-	}
+// handleStopContainerArgs queues a stop for a locally owned container.
+func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, source types.EventSource) bool {
 	reason := types.StopContainerReason(types.NormalizeEventReason(string(stopArgs.Reason)))
 	if stopArgs.Reason == "" {
 		stopArgs.Reason = reason
@@ -63,7 +57,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 			ID:          types.ContainerEventWorkerStopEventReceived,
 			ContainerID: stopArgs.ContainerId,
 			Reason:      string(reason),
-			Source:      types.EventSourceWorkerEventBus.String(),
+			Source:      source.String(),
 			Message:     types.EventMessageWorkerStopEventReceived.String(),
 			Attrs: map[string]string{
 				types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
