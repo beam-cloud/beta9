@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -97,6 +100,39 @@ func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
 	require.Equal(t, content, dst)
 }
 
+func TestContentReadHotPathDoesNotUseCacheFSMetadata(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("local-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	metadataStore := &failOnGetFsNodeMetadataStore{MockCacheMetadataStore: NewMockCacheMetadataStore(), t: t}
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalStore(store)
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{RoutingKey: "/images/test.clip"})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+
+	views, err := client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{RoutingKey: "/images/test.clip"})
+	require.NoError(t, err)
+	require.NotEmpty(t, views)
+}
+
 func TestClientLocalPageFileViewsReturnsSelectedClientLocalPageFiles(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("abcdefghijkl")
@@ -171,6 +207,87 @@ func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *
 	require.False(t, registry.locks["store-lock:test:/source"])
 }
 
+func TestAddHostClearsCachedRoutingForReplacedHost(t *testing.T) {
+	client := &Client{
+		ctx:          context.Background(),
+		clientConfig: ClientConfig{NTopHosts: 1},
+		globalConfig: GlobalConfig{
+			GRPCMessageSizeBytes: 4 * 1024 * 1024,
+		},
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{},
+	}
+	defer client.Cleanup()
+
+	oldHost := &Host{HostId: "host-a", Addr: "127.0.0.1:1"}
+	client.localHostCache["content-hash"] = &localClientCache{
+		host:      oldHost,
+		timestamp: time.Now(),
+	}
+
+	err := client.addHost(&Host{HostId: "host-a", Addr: "127.0.0.1:1"})
+	require.NoError(t, err)
+
+	_, exists := client.localHostCache["content-hash"]
+	require.False(t, exists)
+}
+
+func TestStoreContentFromLocalFileUsesMatchingCacheMetadata(t *testing.T) {
+	ctx := context.Background()
+	content := []byte("already cached local content")
+
+	sourcePath := filepath.Join(t.TempDir(), "source.txt")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+	info, err := os.Stat(sourcePath)
+	require.NoError(t, err)
+
+	store := newTestStore(t, 5)
+	hash, _, err := store.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	cachePath := "/workspace/source.txt"
+	metadataStore := NewMockCacheMetadataStore()
+	require.NoError(t, metadataStore.SetFsNode(ctx, GenerateFsID(cachePath), &FSMetadata{
+		Path:      cachePath,
+		Hash:      hash,
+		Size:      uint64(info.Size()),
+		Mtime:     uint64(info.ModTime().Unix()),
+		Mtimensec: uint32(info.ModTime().Nanosecond()),
+	}))
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          GlobalConfig{GRPCMessageSizeBytes: 4 * 1024 * 1024},
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		localPromotionSem:     make(chan struct{}, 1),
+		hasher:                &orderedTestHasher{},
+		maxGetContentAttempts: 1,
+	}
+	defer client.Cleanup()
+	client.AttachLocalStore(store)
+
+	got, err := client.StoreContentFromLocalFile(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: cachePath,
+	}, StoreContentOptions{
+		RoutingKey: cachePath,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, hash, got)
+	require.Empty(t, metadataStore.locks)
+}
+
 type failFirstUnlockRegistry struct {
 	*MockCacheMetadataStore
 	removeCalls int
@@ -182,4 +299,14 @@ func (r *failFirstUnlockRegistry) RemoveStoreFromContentLock(ctx context.Context
 		return errors.New("unlock failed")
 	}
 	return r.MockCacheMetadataStore.RemoveStoreFromContentLock(ctx, locality, sourcePath)
+}
+
+type failOnGetFsNodeMetadataStore struct {
+	*MockCacheMetadataStore
+	t *testing.T
+}
+
+func (m *failOnGetFsNodeMetadataStore) GetFsNode(ctx context.Context, id string) (*FSMetadata, error) {
+	m.t.Fatalf("content read hot path must not use cachefs metadata: %s", id)
+	return nil, errors.New("unexpected cachefs metadata lookup")
 }

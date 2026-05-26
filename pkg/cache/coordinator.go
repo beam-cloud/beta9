@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -69,21 +70,12 @@ func (c *Coordinator) RegisterHost(ctx context.Context, host CoordinatorHost, tt
 		return err
 	}
 
-	activeRegistrationID, found, err := c.repository.GetActiveCacheRegistration(ctx, host.LogicalHostID)
-	if err != nil {
-		return err
-	}
-	if !found || activeRegistrationID == host.RegistrationID {
-		return c.repository.SetActiveCacheRegistration(ctx, host.LogicalHostID, host.RegistrationID, ttl)
-	}
-
-	if _, activeFound, err := c.repository.GetCacheRegistration(ctx, host.LogicalHostID, activeRegistrationID); err != nil {
-		return err
-	} else if !activeFound {
-		return c.repository.SetActiveCacheRegistration(ctx, host.LogicalHostID, host.RegistrationID, ttl)
-	}
-
-	return nil
+	// A logical host represents one node-local cache path, not one worker
+	// process. Any live registration for that logical host can serve the same
+	// disk cache, so prefer the freshest registration. This avoids a worker
+	// cycle leaving clients routed to a dead pod until the previous active lease
+	// expires.
+	return c.repository.SetActiveCacheRegistration(ctx, host.LogicalHostID, host.RegistrationID, ttl)
 }
 
 func (c *Coordinator) UnregisterHost(ctx context.Context, poolName, locality, logicalHostID, registrationID string) error {
@@ -118,52 +110,78 @@ func (c *Coordinator) ListHosts(ctx context.Context, poolName, locality string) 
 
 	hosts := make([]CoordinatorHost, 0, len(logicalHostIDs))
 	for _, logicalHostID := range logicalHostIDs {
-		host, ok, err := c.activeHost(ctx, poolName, locality, logicalHostID)
+		logicalHosts, err := c.logicalHosts(ctx, poolName, locality, logicalHostID)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			hosts = append(hosts, host)
-		}
+		hosts = append(hosts, logicalHosts...)
 	}
 	return hosts, nil
 }
 
-func (c *Coordinator) activeHost(ctx context.Context, poolName, locality, logicalHostID string) (CoordinatorHost, bool, error) {
+func (c *Coordinator) logicalHosts(ctx context.Context, poolName, locality, logicalHostID string) ([]CoordinatorHost, error) {
 	activeRegistrationID, found, err := c.repository.GetActiveCacheRegistration(ctx, logicalHostID)
 	if err != nil {
-		return CoordinatorHost{}, false, err
-	}
-	if found && activeRegistrationID != "" {
-		if host, ok, err := c.getRegistration(ctx, logicalHostID, activeRegistrationID); err != nil || ok {
-			return host, ok, err
-		}
+		return nil, err
 	}
 
 	registrationIDs, err := c.repository.ListCacheRegistrations(ctx, logicalHostID)
 	if err != nil {
-		return CoordinatorHost{}, false, err
+		return nil, err
 	}
 
+	registrationIDs = orderedCacheRegistrations(registrationIDs, activeRegistrationID)
+	hosts := make([]CoordinatorHost, 0, len(registrationIDs))
 	for _, registrationID := range registrationIDs {
 		host, ok, err := c.getRegistration(ctx, logicalHostID, registrationID)
 		if err != nil {
-			return CoordinatorHost{}, false, err
+			return nil, err
 		}
 		if !ok {
 			_ = c.repository.RemoveCacheRegistration(ctx, logicalHostID, registrationID)
 			continue
 		}
 
-		_ = c.repository.SetActiveCacheRegistration(ctx, logicalHostID, registrationID, defaultCoordinatorHostRegistrationTTL)
-		return host, true, nil
+		hosts = append(hosts, host)
 	}
 
-	return CoordinatorHost{}, false, c.pruneLogicalHost(ctx, poolName, locality, logicalHostID)
+	if len(hosts) == 0 {
+		return nil, c.pruneLogicalHost(ctx, poolName, locality, logicalHostID)
+	}
+
+	if !found || activeRegistrationID == "" || hosts[0].RegistrationID != activeRegistrationID {
+		_ = c.repository.SetActiveCacheRegistration(ctx, logicalHostID, hosts[0].RegistrationID, defaultCoordinatorHostRegistrationTTL)
+	}
+
+	return hosts, nil
 }
 
 func (c *Coordinator) getRegistration(ctx context.Context, logicalHostID, registrationID string) (CoordinatorHost, bool, error) {
 	return c.repository.GetCacheRegistration(ctx, logicalHostID, registrationID)
+}
+
+func orderedCacheRegistrations(registrationIDs []string, activeRegistrationID string) []string {
+	ordered := make([]string, 0, len(registrationIDs))
+	seen := make(map[string]struct{}, len(registrationIDs))
+
+	if activeRegistrationID != "" {
+		for _, registrationID := range registrationIDs {
+			if registrationID == activeRegistrationID {
+				ordered = append(ordered, registrationID)
+				seen[registrationID] = struct{}{}
+				break
+			}
+		}
+	}
+
+	sort.Strings(registrationIDs)
+	for _, registrationID := range registrationIDs {
+		if _, ok := seen[registrationID]; ok {
+			continue
+		}
+		ordered = append(ordered, registrationID)
+	}
+	return ordered
 }
 
 func (c *Coordinator) pruneLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error {
