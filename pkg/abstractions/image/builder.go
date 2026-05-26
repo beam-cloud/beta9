@@ -528,24 +528,24 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 }
 
 func (b *Builder) stopBuild(containerId string) error {
-	_, err := b.eventBus.Send(&common.Event{
-		Type:          common.EventTypeStopBuild,
-		Args:          map[string]any{"container_id": containerId},
-		LockAndDelete: false,
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("failed to send stop build event")
-		return err
+	events := []struct {
+		eventType common.EventType
+		errorMsg  string
+	}{
+		{eventType: common.EventTypeStopBuild, errorMsg: "failed to send stop build event"},
+		{eventType: common.StopBuildEventType(containerId), errorMsg: "failed to send legacy stop build event"},
 	}
 
-	_, err = b.eventBus.Send(&common.Event{
-		Type:          common.StopBuildEventType(containerId),
-		Args:          map[string]any{"container_id": containerId},
-		LockAndDelete: false,
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("failed to send legacy stop build event")
-		return err
+	for _, event := range events {
+		_, err := b.eventBus.Send(&common.Event{
+			Type:          event.eventType,
+			Args:          map[string]any{"container_id": containerId},
+			LockAndDelete: false,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg(event.errorMsg)
+			return err
+		}
 	}
 
 	log.Info().Str("container_id", containerId).Msg("sent stop build event")

@@ -41,7 +41,7 @@ func (s *gatewayCacheMetadataStore) RefreshStoreFromContentLock(ctx context.Cont
 }
 
 func (s *gatewayCacheMetadataStore) SetFsNode(ctx context.Context, id string, metadata *cache.FSMetadata) error {
-	_, err := handleGRPCResponse(s.client.SetCacheFsNode(ctx, &pb.SetCacheFsNodeRequest{Id: id, Metadata: workerCacheFSMetadataToProto(metadata)}))
+	_, err := handleGRPCResponse(s.client.SetCacheFsNode(ctx, &pb.SetCacheFsNodeRequest{Id: id, Metadata: metadata.ToWorkerCacheProto()}))
 	return err
 }
 
@@ -50,7 +50,7 @@ func (s *gatewayCacheMetadataStore) GetFsNode(ctx context.Context, id string) (*
 	if err != nil {
 		return nil, err
 	}
-	return workerCacheFSMetadataFromProto(resp.Metadata), nil
+	return cache.FSMetadataFromWorkerCacheProto(resp.Metadata), nil
 }
 
 func (s *gatewayCacheMetadataStore) RemoveFsNode(ctx context.Context, id string) error {
@@ -70,7 +70,7 @@ func (s *gatewayCacheMetadataStore) GetFsNodeChildren(ctx context.Context, id st
 	}
 	children := make([]*cache.FSMetadata, 0, len(resp.Children))
 	for _, child := range resp.Children {
-		children = append(children, workerCacheFSMetadataFromProto(child))
+		children = append(children, cache.FSMetadataFromWorkerCacheProto(child))
 	}
 	return children, nil
 }
@@ -78,64 +78,4 @@ func (s *gatewayCacheMetadataStore) GetFsNodeChildren(ctx context.Context, id st
 func (s *gatewayCacheMetadataStore) AddFsNodeChild(ctx context.Context, pid, id string) error {
 	_, err := handleGRPCResponse(s.client.AddCacheFsNodeChild(ctx, &pb.AddCacheFsNodeChildRequest{Pid: pid, Id: id}))
 	return err
-}
-
-func workerCacheFSMetadataToProto(metadata *cache.FSMetadata) *pb.WorkerCacheFSMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &pb.WorkerCacheFSMetadata{
-		Id:        metadata.ID,
-		Pid:       metadata.PID,
-		Name:      metadata.Name,
-		Path:      metadata.Path,
-		Hash:      metadata.Hash,
-		Ino:       metadata.Ino,
-		Size:      metadata.Size,
-		Blocks:    metadata.Blocks,
-		Atime:     metadata.Atime,
-		Mtime:     metadata.Mtime,
-		Ctime:     metadata.Ctime,
-		Atimensec: metadata.Atimensec,
-		Mtimensec: metadata.Mtimensec,
-		Ctimensec: metadata.Ctimensec,
-		Mode:      metadata.Mode,
-		Nlink:     metadata.Nlink,
-		Rdev:      metadata.Rdev,
-		Blksize:   metadata.Blksize,
-		Padding:   metadata.Padding,
-		Uid:       metadata.Uid,
-		Gid:       metadata.Gid,
-		Gen:       metadata.Gen,
-	}
-}
-
-func workerCacheFSMetadataFromProto(metadata *pb.WorkerCacheFSMetadata) *cache.FSMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &cache.FSMetadata{
-		ID:        metadata.Id,
-		PID:       metadata.Pid,
-		Name:      metadata.Name,
-		Path:      metadata.Path,
-		Hash:      metadata.Hash,
-		Ino:       metadata.Ino,
-		Size:      metadata.Size,
-		Blocks:    metadata.Blocks,
-		Atime:     metadata.Atime,
-		Mtime:     metadata.Mtime,
-		Ctime:     metadata.Ctime,
-		Atimensec: metadata.Atimensec,
-		Mtimensec: metadata.Mtimensec,
-		Ctimensec: metadata.Ctimensec,
-		Mode:      metadata.Mode,
-		Nlink:     metadata.Nlink,
-		Rdev:      metadata.Rdev,
-		Blksize:   metadata.Blksize,
-		Padding:   metadata.Padding,
-		Uid:       metadata.Uid,
-		Gid:       metadata.Gid,
-		Gen:       metadata.Gen,
-	}
 }

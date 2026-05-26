@@ -64,7 +64,7 @@ func (s *WorkerRepositoryService) SetCacheFsNode(ctx context.Context, req *pb.Se
 	if req == nil || req.Metadata == nil {
 		return &pb.SetCacheFsNodeResponse{Ok: false, ErrorMsg: "metadata is required"}, nil
 	}
-	if err := s.cacheMetadata.SetFsNode(ctx, req.Id, workerCacheFSMetadataFromProto(req.Metadata)); err != nil {
+	if err := s.cacheMetadata.SetFsNode(ctx, req.Id, cache.FSMetadataFromWorkerCacheProto(req.Metadata)); err != nil {
 		return &pb.SetCacheFsNodeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.SetCacheFsNodeResponse{Ok: true}, nil
@@ -78,7 +78,7 @@ func (s *WorkerRepositoryService) GetCacheFsNode(ctx context.Context, req *pb.Ge
 	if err != nil {
 		return &pb.GetCacheFsNodeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	return &pb.GetCacheFsNodeResponse{Ok: true, Metadata: workerCacheFSMetadataToProto(metadata)}, nil
+	return &pb.GetCacheFsNodeResponse{Ok: true, Metadata: metadata.ToWorkerCacheProto()}, nil
 }
 
 func (s *WorkerRepositoryService) AddCacheFsNodeChild(ctx context.Context, req *pb.AddCacheFsNodeChildRequest) (*pb.AddCacheFsNodeChildResponse, error) {
@@ -121,67 +121,7 @@ func (s *WorkerRepositoryService) GetCacheFsNodeChildren(ctx context.Context, re
 	}
 	resp := &pb.GetCacheFsNodeChildrenResponse{Ok: true, Children: make([]*pb.WorkerCacheFSMetadata, 0, len(children))}
 	for _, child := range children {
-		resp.Children = append(resp.Children, workerCacheFSMetadataToProto(child))
+		resp.Children = append(resp.Children, child.ToWorkerCacheProto())
 	}
 	return resp, nil
-}
-
-func workerCacheFSMetadataFromProto(metadata *pb.WorkerCacheFSMetadata) *cache.FSMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &cache.FSMetadata{
-		ID:        metadata.Id,
-		PID:       metadata.Pid,
-		Name:      metadata.Name,
-		Path:      metadata.Path,
-		Hash:      metadata.Hash,
-		Ino:       metadata.Ino,
-		Size:      metadata.Size,
-		Blocks:    metadata.Blocks,
-		Atime:     metadata.Atime,
-		Mtime:     metadata.Mtime,
-		Ctime:     metadata.Ctime,
-		Atimensec: metadata.Atimensec,
-		Mtimensec: metadata.Mtimensec,
-		Ctimensec: metadata.Ctimensec,
-		Mode:      metadata.Mode,
-		Nlink:     metadata.Nlink,
-		Rdev:      metadata.Rdev,
-		Blksize:   metadata.Blksize,
-		Padding:   metadata.Padding,
-		Uid:       metadata.Uid,
-		Gid:       metadata.Gid,
-		Gen:       metadata.Gen,
-	}
-}
-
-func workerCacheFSMetadataToProto(metadata *cache.FSMetadata) *pb.WorkerCacheFSMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &pb.WorkerCacheFSMetadata{
-		Id:        metadata.ID,
-		Pid:       metadata.PID,
-		Name:      metadata.Name,
-		Path:      metadata.Path,
-		Hash:      metadata.Hash,
-		Ino:       metadata.Ino,
-		Size:      metadata.Size,
-		Blocks:    metadata.Blocks,
-		Atime:     metadata.Atime,
-		Mtime:     metadata.Mtime,
-		Ctime:     metadata.Ctime,
-		Atimensec: metadata.Atimensec,
-		Mtimensec: metadata.Mtimensec,
-		Ctimensec: metadata.Ctimensec,
-		Mode:      metadata.Mode,
-		Nlink:     metadata.Nlink,
-		Rdev:      metadata.Rdev,
-		Blksize:   metadata.Blksize,
-		Padding:   metadata.Padding,
-		Uid:       metadata.Uid,
-		Gid:       metadata.Gid,
-		Gen:       metadata.Gen,
-	}
 }

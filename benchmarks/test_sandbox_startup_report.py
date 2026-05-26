@@ -1,9 +1,11 @@
 import unittest
 
+import benchmarks.sandbox_startup_report as startup_report
 from benchmarks.sandbox_startup_report import (
     build_startup_report,
     container_event_targets,
     event_batch_score,
+    fetch_event_batch_with_poll,
     first_slowest_phase,
     render_markdown,
     select_primary_bottleneck,
@@ -290,6 +292,88 @@ class SandboxStartupReportTests(unittest.TestCase):
         self.assertEqual(report["eventCoverage"]["requiredMetricPresent"], 7)
         self.assertEqual(report["serverPhases"][0]["metricKey"], "network_setup_ms")
         self.assertEqual(len(report["serverPhases"]), 1)
+
+    def test_report_falls_back_to_summary_when_api_phases_are_filtered_out(self):
+        benchmark = {
+            "summary": {},
+            "samples": [
+                {
+                    "warmup": False,
+                    "ok": True,
+                    "containerId": "container-1",
+                    "execCompleteMs": 100,
+                    "execExitCode": 0,
+                }
+            ],
+        }
+        events = {
+            "items": [{"container_id": "container-1", "event_count": 4, "summary": {}}],
+            "phases": [
+                {"metric_key": "to_running_ms", "event_id": "legacy.to_running", "count": 1},
+                {"metric_key": "clip_read_total_us", "event_id": "clip.read", "count": 1},
+            ],
+            "summary": {
+                "scheduler_backlog_ms": {
+                    "count": 1,
+                    "min_ms": 50,
+                    "p50_ms": 50,
+                    "p90_ms": 50,
+                    "p95_ms": 50,
+                    "max_ms": 50,
+                    "total_ms": 50,
+                }
+            },
+        }
+
+        report = build_startup_report(benchmark, events=events)
+
+        self.assertEqual(report["serverPhases"][0]["metricKey"], "scheduler_backlog_ms")
+
+    def test_event_poll_allows_target_only_batches(self):
+        calls = []
+
+        def fake_fetch_event_batch(
+            gateway_url,
+            workspace_id,
+            token,
+            container_ids,
+            *,
+            targets=None,
+            limit=0,
+            top_lifecycle=0,
+        ):
+            calls.append(
+                {
+                    "container_ids": container_ids,
+                    "targets": targets,
+                    "limit": limit,
+                    "top_lifecycle": top_lifecycle,
+                }
+            )
+            return {"items": [{"container_id": "container-1", "event_count": 1}]}
+
+        original_fetch = startup_report.fetch_event_batch
+        startup_report.fetch_event_batch = fake_fetch_event_batch
+        try:
+            events, error = fetch_event_batch_with_poll(
+                "http://gateway",
+                "workspace-1",
+                "token-1",
+                [],
+                targets=[{"container_id": "container-1", "stub_id": "stub-1"}],
+                wait_seconds=0,
+                limit=25,
+                top_lifecycle=4,
+            )
+        finally:
+            startup_report.fetch_event_batch = original_fetch
+
+        self.assertEqual(error, "")
+        self.assertEqual(events["items"][0]["container_id"], "container-1")
+        self.assertEqual(calls[0]["container_ids"], [])
+        self.assertEqual(calls[0]["targets"], [{"container_id": "container-1", "stub_id": "stub-1"}])
+        self.assertEqual(calls[0]["limit"], 25)
+        self.assertEqual(calls[0]["top_lifecycle"], 4)
 
     def test_slowest_phase_uses_per_container_derived_summary(self):
         phase = first_slowest_phase(

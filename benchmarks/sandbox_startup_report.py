@@ -231,7 +231,7 @@ def fetch_event_batch_with_poll(
     wait_seconds: float = DEFAULT_EVENT_WAIT_SECONDS,
     poll_ms: int = DEFAULT_EVENT_POLL_MS,
 ) -> tuple[dict[str, Any] | None, str]:
-    if not container_ids:
+    if not container_ids and not targets:
         return None, "no measured container IDs"
     if not workspace_id:
         return None, "workspace ID unavailable"
@@ -351,7 +351,9 @@ def build_server_phases(events: dict[str, Any] | None, measured_count: int) -> l
 
     api_phases = events.get("phases") or []
     if api_phases:
-        return [phase for phase in (normalize_api_phase(row) for row in api_phases) if phase]
+        phases = [phase for phase in (normalize_api_phase(row) for row in api_phases) if phase]
+        if phases:
+            return phases
 
     summary = events.get("summary") or {}
     phases: list[dict[str, Any]] = []
