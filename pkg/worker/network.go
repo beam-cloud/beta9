@@ -258,25 +258,90 @@ func containerIPv6Address(ip net.IP, ipv6Net *net.IPNet) (net.IP, error) {
 	return ipv6, nil
 }
 
-func containerIdFromIptablesRule(rule string) (string, bool) {
+type containerNetworkRuleInfo struct {
+	ContainerID string
+	Namespace   string
+	VethHost    string
+	IPv4        string
+	IPv6        string
+}
+
+func containerNetworkComment(vethHost, containerId, namespace string) string {
+	if namespace == "" {
+		namespace = containerId
+	}
+	return fmt.Sprintf("%s:%s:%s", vethHost, containerId, namespace)
+}
+
+func containerNetworkRuleInfoFromIptablesRule(rule string) (containerNetworkRuleInfo, bool) {
 	idx := strings.LastIndex(rule, containerVethHostPrefix)
 	if idx == -1 {
 		idx = strings.LastIndex(rule, legacyContainerVethHostPrefix)
 	}
 	if idx == -1 {
-		return "", false
+		return containerNetworkRuleInfo{}, false
 	}
 
 	comment := rule[idx:]
-	parts := strings.SplitN(comment, ":", 2)
-	if len(parts) != 2 {
-		return "", false
+	comment = strings.Fields(comment)[0]
+	comment = strings.Trim(comment, `"`)
+	comment = strings.TrimRight(comment, `\`)
+	comment = strings.TrimSuffix(comment, "*/")
+
+	parts := strings.Split(comment, ":")
+	if len(parts) < 2 {
+		return containerNetworkRuleInfo{}, false
 	}
 
-	containerId := strings.Fields(parts[1])[0]
-	containerId = strings.Trim(containerId, `"`)
-	containerId = strings.TrimRight(containerId, `\`)
-	return strings.TrimSuffix(containerId, "*/"), true
+	info := containerNetworkRuleInfo{
+		VethHost:    parts[0],
+		ContainerID: parts[1],
+		Namespace:   parts[1],
+	}
+	if len(parts) >= 3 && parts[2] != "" {
+		info.Namespace = parts[2]
+	}
+
+	if ip, ok := iptablesRuleDestinationIP(rule); ok {
+		if strings.Contains(ip, ":") {
+			info.IPv6 = ip
+		} else {
+			info.IPv4 = ip
+		}
+	}
+
+	return info, info.ContainerID != ""
+}
+
+func containerIdFromIptablesRule(rule string) (string, bool) {
+	info, ok := containerNetworkRuleInfoFromIptablesRule(rule)
+	return info.ContainerID, ok
+}
+
+func iptablesRuleDestinationIP(rule string) (string, bool) {
+	fields := strings.Fields(rule)
+	for i, field := range fields {
+		if field != "--to-destination" || i+1 >= len(fields) {
+			continue
+		}
+		destination := strings.Trim(fields[i+1], `"`)
+		if strings.HasPrefix(destination, "[") {
+			end := strings.Index(destination, "]")
+			if end > 1 {
+				return destination[1:end], true
+			}
+			return "", false
+		}
+		host, _, err := net.SplitHostPort(destination)
+		if err == nil {
+			return host, true
+		}
+		if idx := strings.LastIndex(destination, ":"); idx > 0 {
+			return destination[:idx], true
+		}
+		return destination, destination != ""
+	}
+	return "", false
 }
 
 func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
@@ -397,6 +462,15 @@ func (m *ContainerNetworkManager) lockContainerNetwork(containerId string) func(
 
 func isRedisLockNotObtained(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "redislock: not obtained")
+}
+
+func isMissingNetworkReservation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "redis: nil") ||
+		strings.Contains(msg, "source container does not own requested ip")
 }
 
 func (m *ContainerNetworkManager) maintainNetworkSlotPool() {
@@ -986,10 +1060,21 @@ func (m *ContainerNetworkManager) recordNetworkLifecycle(request *types.Containe
 }
 
 func (m *ContainerNetworkManager) getContainerNetworkInfo(containerId string) (*containerNetworkInfo, error) {
+	if slot := m.containerNetworkSlot(containerId); slot != nil {
+		return containerNetworkInfoFromSlot(containerId, slot, m.ipt6 != nil)
+	}
 	if instance, exists := m.containerInstances.Get(containerId); exists && instance.ContainerIp != "" {
 		return containerNetworkInfoFromIP(containerId, instance.ContainerIp, m.ipt6 != nil)
 	}
-	return getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
+	if err == nil {
+		return info, nil
+	}
+	if fallback, fallbackErr := m.getContainerNetworkInfoFromIptables(containerId); fallbackErr == nil {
+		log.Debug().Str("container_id", containerId).Err(err).Msg("recovered container network info from iptables")
+		return fallback, nil
+	}
+	return nil, err
 }
 
 func taskIDFromContainerRequestEnv(env []string) string {
@@ -1818,8 +1903,6 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return err
 	}
 
-	namespace := containerId
-
 	hostVeth, err := netlink.LinkByName(info.VethHost)
 	if err == nil {
 		// Remove the veth from the bridge
@@ -1850,7 +1933,9 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 
 	// Delete container namespace don't bother handling
 	// the error because the namespace is likely to be gone at this point
-	netns.DeleteNamed(namespace)
+	if info.Namespace != "" {
+		netns.DeleteNamed(info.Namespace)
+	}
 
 	_, err = handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(m.ctx, &pb.RemoveContainerIpRequest{
 		NetworkPrefix: m.networkPrefix,
@@ -1878,6 +1963,10 @@ func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId st
 
 	if err := m.releasePreallocatedNetworkSlot(containerId, slot); err != nil {
 		m.discardNetworkSlot(containerId, slot)
+		if isMissingNetworkReservation(err) {
+			log.Debug().Str("container_id", containerId).Str("network_slot", slot.id).Err(err).Msg("discarded preallocated network slot with missing reservation")
+			return nil
+		}
 		return err
 	}
 
@@ -2203,6 +2292,100 @@ func (m *ContainerNetworkManager) listContainerIdsFromIptables() ([]string, erro
 	}
 
 	return containerIds, nil
+}
+
+func (m *ContainerNetworkManager) getContainerNetworkInfoFromIptables(containerId string) (*containerNetworkInfo, error) {
+	ruleInfo, err := m.findContainerNetworkRuleInfo(containerId)
+	if err != nil {
+		return nil, err
+	}
+	if ruleInfo.IPv4 == "" {
+		return nil, fmt.Errorf("container %s has no IPv4 iptables destination", containerId)
+	}
+
+	info := &containerNetworkInfo{
+		ContainerIp:   ruleInfo.IPv4,
+		ContainerIpv6: ruleInfo.IPv6,
+		Namespace:     ruleInfo.Namespace,
+		VethHost:      ruleInfo.VethHost,
+		Comment:       containerNetworkComment(ruleInfo.VethHost, ruleInfo.ContainerID, ruleInfo.Namespace),
+	}
+	if info.Namespace == "" {
+		info.Namespace = containerId
+	}
+	if info.VethHost == "" {
+		info.VethHost, _ = containerVethNames(info.Namespace)
+	}
+	if m.ipt6 != nil && info.ContainerIpv6 == "" {
+		ip := net.ParseIP(info.ContainerIp)
+		if ip == nil || ip.To4() == nil {
+			return nil, fmt.Errorf("invalid IPv4 address from iptables: %s", info.ContainerIp)
+		}
+		_, ipv6Net, err := net.ParseCIDR(containerSubnetIPv6)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse IPv6 subnet: %w", err)
+		}
+		ipv6Address, err := containerIPv6Address(ip, ipv6Net)
+		if err != nil {
+			return nil, err
+		}
+		info.ContainerIpv6 = ipv6Address.String()
+	}
+
+	return info, nil
+}
+
+func (m *ContainerNetworkManager) findContainerNetworkRuleInfo(containerId string) (containerNetworkRuleInfo, error) {
+	var found containerNetworkRuleInfo
+
+	rules, err := m.ipt.List("nat", "PREROUTING")
+	if err != nil {
+		return containerNetworkRuleInfo{}, err
+	}
+	for _, rule := range rules {
+		info, ok := containerNetworkRuleInfoFromIptablesRule(rule)
+		if !ok || info.ContainerID != containerId {
+			continue
+		}
+		if found.ContainerID == "" {
+			found = info
+		}
+		if info.IPv4 != "" {
+			found.IPv4 = info.IPv4
+			found.VethHost = info.VethHost
+			found.Namespace = info.Namespace
+		}
+	}
+
+	if m.ipt6 != nil {
+		rules6, err := m.ipt6.List("nat", "PREROUTING")
+		if err != nil {
+			return containerNetworkRuleInfo{}, err
+		}
+		for _, rule := range rules6 {
+			info, ok := containerNetworkRuleInfoFromIptablesRule(rule)
+			if !ok || info.ContainerID != containerId {
+				continue
+			}
+			if found.ContainerID == "" {
+				found = info
+			}
+			if info.IPv6 != "" {
+				found.IPv6 = info.IPv6
+			}
+			if found.VethHost == "" {
+				found.VethHost = info.VethHost
+			}
+			if found.Namespace == "" {
+				found.Namespace = info.Namespace
+			}
+		}
+	}
+
+	if found.ContainerID == "" {
+		return containerNetworkRuleInfo{}, fmt.Errorf("container %s not found in iptables", containerId)
+	}
+	return found, nil
 }
 
 // generateUniqueMAC generates a random MAC address with a specific OUI (Organizationally Unique Identifier).

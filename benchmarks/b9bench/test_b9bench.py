@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from benchmarks.b9bench.config import resolve_run_config
+from benchmarks.b9bench.config import http_url_from_gateway
 from benchmarks.b9bench.model import Measurement, ScenarioSpec
 from benchmarks.b9bench.payload import deterministic_payload_range, deterministic_sha256
 from benchmarks.b9bench.reports import MetricSink
@@ -91,6 +92,48 @@ class B9BenchTests(unittest.TestCase):
         self.assertEqual(config.out_dir.parent.name, "runs")
         self.assertIn("sandbox", config.out_dir.name)
         self.assertIn("sandbox-default", config.out_dir.name)
+
+    def test_stage_gateway_profile_maps_to_stage_http_host(self):
+        self.assertEqual(
+            http_url_from_gateway("gateway.stage.beam.cloud", "443"),
+            "https://app.stage.beam.cloud",
+        )
+
+    def test_profile_can_define_explicit_http_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.ini"
+            config_path.write_text(
+                "\n".join(
+                    (
+                        "[staging]",
+                        "token = token-1",
+                        "gateway_host = gateway.stage.beam.cloud",
+                        "gateway_port = 443",
+                        "gateway_http_url = https://custom.stage.example.com",
+                        "",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            args = SimpleNamespace(
+                command="sandbox",
+                suite="sandbox-default",
+                profile="staging",
+                config=str(config_path),
+                token=None,
+                gateway_url=None,
+                grpc_addr=None,
+                namespace=None,
+                out_dir=None,
+                dry_run=True,
+                param=[],
+                script_arg=[],
+            )
+
+            config = resolve_run_config(args)
+
+            self.assertEqual(config.gateway_url, "https://custom.stage.example.com")
+            self.assertEqual(config.grpc_addr, "gateway.stage.beam.cloud:443")
 
     def test_scenario_tags_include_core_dimensions(self):
         scenario = ScenarioSpec(

@@ -1,0 +1,25 @@
+name: sandbox-stage-warm
+kind: sandbox
+runner: sandbox
+description: Staging 100-way warm sandbox startup benchmark after prewarming workers and image.
+defaults:
+  count: 100
+  parallelism: 100
+  prewarm_count: 100
+  prewarm_parallelism: 100
+  prewarm_cooldown_seconds: 20
+  prewarm_wait_idle: false
+  warmup: 0
+  wait_running: true
+  wait_exec_complete: true
+  reset_workers: false
+  install: false
+  port_forward: false
+  bootstrap_local_image: false
+  sandbox_image_uri: public.ecr.aws/docker/library/alpine:latest
+  sandbox_cpu: "0.1"
+  sandbox_memory: "192"
+  sandbox_ready_timeout_seconds: 240
+  timeout_seconds: 420
+  event_wait_seconds: 60
+  event_top_lifecycle: 200

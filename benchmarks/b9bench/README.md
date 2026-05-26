@@ -23,6 +23,10 @@ flowchart TD
 bin/bench cache --suite cache-smoke --dry-run
 bin/bench cache --profile local --suite cache-default --out-dir /tmp/beta9-cache-run
 bin/bench full --profile local --suite local-full
+bin/bench sandbox --profile staging --suite sandbox-stage-cold
+bin/bench sandbox --profile staging --suite sandbox-stage-warm
+make sandbox-stage-cold-benchmark
+make sandbox-stage-warm-benchmark
 ```
 
 Use `--param key=value` for suite/script overrides, for example:
