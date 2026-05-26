@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -162,26 +164,8 @@ func (c *ContainerMountManager) extractStubCode(ctx context.Context, request *ty
 }
 
 func stubCodeCacheKey(workspaceName, objectID string) string {
-	return safeCachePathComponent(workspaceName) + "-" + safeCachePathComponent(objectID)
-}
-
-func safeCachePathComponent(value string) string {
-	var b strings.Builder
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r)
-		case r >= '0' && r <= '9':
-			b.WriteRune(r)
-		case r == '-', r == '_', r == '.':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	return b.String()
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%d:%s", len(workspaceName), workspaceName, len(objectID), objectID)))
+	return hex.EncodeToString(sum[:])
 }
 
 func pathExists(path string) bool {

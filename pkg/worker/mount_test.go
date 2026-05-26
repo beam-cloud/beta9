@@ -58,6 +58,15 @@ func TestSetupContainerMountsCachesStubCodeWithoutSharingContainerWorkspaces(t *
 	require.Equal(t, "print('hello')\n", string(workspace2Bytes))
 }
 
+func TestStubCodeCacheKeyDoesNotCollideAcrossWorkspaceObjectPairs(t *testing.T) {
+	key1 := stubCodeCacheKey("workspace-a", "b-c")
+	key2 := stubCodeCacheKey("workspace-a-b", "c")
+
+	require.NotEqual(t, key1, key2)
+	require.NotContains(t, key1, string(filepath.Separator))
+	require.NotContains(t, key2, string(filepath.Separator))
+}
+
 func stubCodeMountRequest(containerID, workspaceName, objectID string) *types.ContainerRequest {
 	storageID := uint(1)
 	return &types.ContainerRequest{
