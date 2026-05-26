@@ -288,18 +288,32 @@ func TestFillNetworkSlotPoolSkipsClosedPool(t *testing.T) {
 	}
 }
 
-func TestContainerNetworkSlotPoolSizeDisabledByDefault(t *testing.T) {
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestContainerNetworkSlotPoolSizeEnabledByDefault(t *testing.T) {
 	t.Setenv(containerNetworkSlotPoolEnv, "")
 
-	if got := containerNetworkSlotPoolSizeForPool(types.WorkerPoolConfig{}, 128); got != 0 {
-		t.Fatalf("expected slot pool to be disabled by default, got %d", got)
+	if got := containerNetworkSlotPoolSizeForPool(types.WorkerPoolConfig{}, 128); got != 128 {
+		t.Fatalf("expected slot pool to match start limit by default, got %d", got)
+	}
+}
+
+func TestContainerNetworkSlotPoolSizeCanBeDisabled(t *testing.T) {
+	t.Setenv(containerNetworkSlotPoolEnv, "")
+
+	poolConfig := types.WorkerPoolConfig{NetworkPreallocation: boolPtr(false)}
+
+	if got := containerNetworkSlotPoolSizeForPool(poolConfig, 128); got != 0 {
+		t.Fatalf("expected slot pool to be disabled, got %d", got)
 	}
 }
 
 func TestContainerNetworkSlotPoolSizeUsesStartLimit(t *testing.T) {
 	t.Setenv(containerNetworkSlotPoolEnv, "")
 
-	poolConfig := types.WorkerPoolConfig{NetworkPreallocation: true}
+	poolConfig := types.WorkerPoolConfig{NetworkPreallocation: boolPtr(true)}
 
 	if got := containerNetworkSlotPoolSizeForPool(poolConfig, 128); got != 128 {
 		t.Fatalf("expected slot pool to match start limit, got %d", got)
@@ -313,7 +327,7 @@ func TestContainerNetworkSlotPoolSizeUsesPoolConfig(t *testing.T) {
 	t.Setenv(containerNetworkSlotPoolEnv, "")
 
 	poolConfig := types.WorkerPoolConfig{
-		NetworkPreallocation: true,
+		NetworkPreallocation: boolPtr(true),
 		NetworkSlotPoolSize:  64,
 	}
 

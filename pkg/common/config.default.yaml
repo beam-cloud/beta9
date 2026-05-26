@@ -212,8 +212,8 @@ worker:
       #   disk:
       #     hostPath: /mnt/build-cache/beta9/cache
       #     mountPath: /var/lib/beta9/cache
-      networkPreallocation: false
-      networkSlotPoolSize: 0
+      networkPreallocation: true
+      networkSlotPoolSize: 32
       tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}

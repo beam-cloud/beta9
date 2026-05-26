@@ -35,9 +35,11 @@ import (
 )
 
 const (
-	gRPCMaxRecvMsgSize        = 1024 * 1024 * 16
-	gRPCMaxSendMsgSize        = 1024 * 1024 * 16
-	sandboxExecDialRetryDelay = 25 * time.Millisecond
+	gRPCMaxRecvMsgSize                  = 1024 * 1024 * 16
+	gRPCMaxSendMsgSize                  = 1024 * 1024 * 16
+	sandboxExecDialRetryDelay           = 25 * time.Millisecond
+	sandboxProcessManagerReadyTimeout   = 10 * time.Second
+	sandboxProcessManagerReadyPollDelay = 25 * time.Millisecond
 )
 
 // ContainerRuntimeServer is a runtime-agnostic container server that works with any OCI runtime
@@ -674,9 +676,10 @@ func isProcessManagerDialFailure(err error) bool {
 }
 
 func (s *ContainerRuntimeServer) waitForSandboxProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) (*ContainerInstance, error) {
-	timeout := time.NewTimer(10 * time.Second)
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer timeout.Stop()
+	ctx, cancel := context.WithTimeout(ctx, sandboxProcessManagerReadyTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(sandboxProcessManagerReadyPollDelay)
 	defer ticker.Stop()
 
 	for {
@@ -685,32 +688,28 @@ func (s *ContainerRuntimeServer) waitForSandboxProcessManager(ctx context.Contex
 			return instance, nil
 		}
 
-		if instance.ProcessManagerReadyChan != nil {
-			select {
-			case <-instance.ProcessManagerReadyChan:
-				instance = s.refreshContainerInstance(containerId, instance)
-				if !instance.SandboxProcessManagerReady {
-					return instance, errors.New("Process manager failed to become ready")
-				}
-				return instance, nil
-			case <-timeout.C:
-				return instance, errors.New("Process manager not ready within timeout")
-			case <-ctx.Done():
-				return instance, errors.New("Request cancelled")
-			}
-		}
-
 		select {
-		case <-timeout.C:
-			return instance, errors.New("Process manager not ready within timeout")
-		case <-ctx.Done():
-			return instance, errors.New("Request cancelled")
-		case <-ticker.C:
+		case <-instance.ProcessManagerReadyChan:
 			instance = s.refreshContainerInstance(containerId, instance)
+			if instance.SandboxProcessManagerReady {
+				return instance, nil
+			}
+			return instance, errors.New("Process manager failed to become ready")
+		case <-ticker.C:
+		case <-ctx.Done():
+			return instance, sandboxProcessManagerWaitError(ctx.Err())
 		}
 	}
+}
 
-	return instance, nil
+func sandboxProcessManagerWaitError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("Process manager not ready within timeout")
+	}
+	if errors.Is(err, context.Canceled) {
+		return errors.New("Request cancelled")
+	}
+	return err
 }
 
 func (s *ContainerRuntimeServer) refreshContainerInstance(containerId string, fallback *ContainerInstance) *ContainerInstance {

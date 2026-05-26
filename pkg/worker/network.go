@@ -178,13 +178,13 @@ func containerIPv4AddressCount() int {
 
 func containerNetworkSlotPoolSizeForPool(poolConfig types.WorkerPoolConfig, startLimit int) int {
 	poolSize := 0
-	if poolConfig.NetworkPreallocation {
+	if containerNetworkPreallocationEnabled(poolConfig) {
 		poolSize = poolConfig.NetworkSlotPoolSize
 		if poolSize <= 0 {
 			poolSize = startLimit
 		}
 	}
-	if poolSize <= 0 && poolConfig.NetworkPreallocation {
+	if poolSize <= 0 && containerNetworkPreallocationEnabled(poolConfig) {
 		poolSize = defaultContainerNetworkSlotPoolSize
 	}
 	if raw := os.Getenv(containerNetworkSlotPoolEnv); raw != "" {
@@ -196,6 +196,13 @@ func containerNetworkSlotPoolSizeForPool(poolConfig types.WorkerPoolConfig, star
 		return containerIPv4AddressCount() - 2
 	}
 	return poolSize
+}
+
+func containerNetworkPreallocationEnabled(poolConfig types.WorkerPoolConfig) bool {
+	if poolConfig.NetworkPreallocation == nil {
+		return true
+	}
+	return *poolConfig.NetworkPreallocation
 }
 
 func containerIdHashSuffix(containerId string, length int) string {

@@ -419,7 +419,7 @@ type WorkerPoolConfig struct {
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc" or "gvisor"
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
 	ContainerStartConcurrency int                               `key:"containerStartConcurrency" json:"container_start_concurrency"`
-	NetworkPreallocation      bool                              `key:"networkPreallocation" json:"network_preallocation"`
+	NetworkPreallocation      *bool                             `key:"networkPreallocation" json:"network_preallocation"`
 	NetworkSlotPoolSize       int                               `key:"networkSlotPoolSize" json:"network_slot_pool_size"`
 	Mode                      PoolMode                          `key:"mode" json:"mode"`
 	Provider                  *MachineProvider                  `key:"provider" json:"provider"`
