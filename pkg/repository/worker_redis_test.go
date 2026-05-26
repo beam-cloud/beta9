@@ -700,6 +700,27 @@ func TestWorkerNetworkIPIndexMovesPreallocatedReservation(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestGetContainerIpAssignments(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	networkPrefix := "node-assignments"
+
+	err = repo.SetContainerIp(networkPrefix, "network-slot:slot-a", "192.168.0.2")
+	assert.Nil(t, err)
+	err = repo.SetContainerIp(networkPrefix, "container-a", "192.168.0.3")
+	assert.Nil(t, err)
+
+	assignments, err := repo.GetContainerIpAssignments(networkPrefix)
+	assert.Nil(t, err)
+	assert.Equal(t, []types.ContainerIpAssignment{
+		{ContainerID: "container-a", IPAddress: "192.168.0.3"},
+		{ContainerID: "network-slot:slot-a", IPAddress: "192.168.0.2"},
+	}, assignments)
+}
+
 func TestRemoveContainerIpCleansLegacyIndexWithoutOwnerKey(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

@@ -213,6 +213,23 @@ func (s *WorkerRepositoryService) GetContainerIps(ctx context.Context, req *pb.G
 	return &pb.GetContainerIpsResponse{Ok: true, Ips: ips}, nil
 }
 
+func (s *WorkerRepositoryService) GetContainerIpAssignments(ctx context.Context, req *pb.GetContainerIpAssignmentsRequest) (*pb.GetContainerIpAssignmentsResponse, error) {
+	assignments, err := s.workerRepo.GetContainerIpAssignments(req.NetworkPrefix)
+	if err != nil {
+		return &pb.GetContainerIpAssignmentsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	responseAssignments := make([]*pb.ContainerIpAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		responseAssignments = append(responseAssignments, &pb.ContainerIpAssignment{
+			ContainerId: assignment.ContainerID,
+			IpAddress:   assignment.IPAddress,
+		})
+	}
+
+	return &pb.GetContainerIpAssignmentsResponse{Ok: true, Assignments: responseAssignments}, nil
+}
+
 func (s *WorkerRepositoryService) RemoveContainerIp(ctx context.Context, req *pb.RemoveContainerIpRequest) (*pb.RemoveContainerIpResponse, error) {
 	err := s.workerRepo.RemoveContainerIp(req.NetworkPrefix, req.ContainerId)
 	if err != nil {

@@ -83,6 +83,7 @@ type ContainerNetworkManager struct {
 	containerSlots      map[string]*containerNetworkSlot
 	totalSlots          int
 	slotFillRunning     bool
+	slotPoolClosed      bool
 }
 
 type PortBinding struct {
@@ -96,12 +97,13 @@ type containerNetworkLock struct {
 }
 
 type containerNetworkSlot struct {
-	id        string
-	namespace string
-	vethHost  string
-	ip        string
-	ipv6      string
-	netnsPath string
+	id            string
+	reservationID string
+	namespace     string
+	vethHost      string
+	ip            string
+	ipv6          string
+	netnsPath     string
 }
 
 func containerVethNames(containerId string) (string, string) {
@@ -122,6 +124,50 @@ func containerNetworkPrefix(clusterName, namespace, poolName, baseNetworkPrefix 
 
 func containerNetworkSlotReservationID(slotID string) string {
 	return fmt.Sprintf("%s:%s", containerNetworkSlotPrefix, slotID)
+}
+
+func containerNetworkSlotReservationIDForWorker(workerID, slotID string) string {
+	if workerID == "" {
+		return containerNetworkSlotReservationID(slotID)
+	}
+	return fmt.Sprintf("%s:%s:%s", containerNetworkSlotPrefix, workerID, slotID)
+}
+
+func containerNetworkSlotReservationParts(reservationID string) (string, string, bool) {
+	prefix := containerNetworkSlotPrefix + ":"
+	value, ok := strings.CutPrefix(reservationID, prefix)
+	if !ok || value == "" {
+		return "", "", false
+	}
+
+	parts := strings.Split(value, ":")
+	slotID := parts[len(parts)-1]
+	if slotID == "" {
+		return "", "", false
+	}
+	if len(parts) == 1 {
+		return "", slotID, true
+	}
+	return parts[0], slotID, true
+}
+
+func containerNetworkSlotIDFromReservationID(reservationID string) (string, bool) {
+	_, slotID, ok := containerNetworkSlotReservationParts(reservationID)
+	return slotID, ok
+}
+
+func (m *ContainerNetworkManager) containerNetworkSlotReservationID(slotID string) string {
+	return containerNetworkSlotReservationIDForWorker(m.workerId, slotID)
+}
+
+func (m *ContainerNetworkManager) containerNetworkSlotReservation(slot *containerNetworkSlot) string {
+	if slot == nil {
+		return ""
+	}
+	if slot.reservationID != "" {
+		return slot.reservationID
+	}
+	return m.containerNetworkSlotReservationID(slot.id)
 }
 
 func containerIPv4AddressCount() int {
@@ -307,6 +353,13 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 
 	go m.cleanupOrphanedNamespaces()
 	if m.slotPoolSize > 0 {
+		if err := m.cleanupStaleNetworkSlots(); err != nil {
+			if isRedisLockNotObtained(err) {
+				log.Debug().Err(err).Msg("skipped stale preallocated network slot cleanup because another worker holds the cleanup lock")
+			} else {
+				log.Warn().Err(err).Msg("failed to clean up stale preallocated network slots")
+			}
+		}
 		go m.maintainNetworkSlotPool()
 	}
 
@@ -338,21 +391,8 @@ func (m *ContainerNetworkManager) lockContainerNetwork(containerId string) func(
 	}
 }
 
-func (m *ContainerNetworkManager) withNodeNetworkLock(ttl, retries int, fn func() error) error {
-	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix,
-		Ttl:           int32(ttl),
-		Retries:       int32(retries),
-	}))
-	if err != nil {
-		return err
-	}
-	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix,
-		Token:         lockResponse.Token,
-	})
-
-	return fn()
+func isRedisLockNotObtained(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "redislock: not obtained")
 }
 
 func (m *ContainerNetworkManager) maintainNetworkSlotPool() {
@@ -373,7 +413,7 @@ func (m *ContainerNetworkManager) maintainNetworkSlotPool() {
 
 func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 	m.slotMu.Lock()
-	if m.slotFillRunning {
+	if m.slotPoolClosed || m.slotFillRunning {
 		m.slotMu.Unlock()
 		return
 	}
@@ -388,6 +428,10 @@ func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 
 	for {
 		m.slotMu.Lock()
+		if m.slotPoolClosed {
+			m.slotMu.Unlock()
+			return
+		}
 		needed := m.slotPoolSize - m.totalSlots
 		m.slotMu.Unlock()
 		if needed <= 0 {
@@ -401,10 +445,190 @@ func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 		}
 
 		m.slotMu.Lock()
+		if m.slotPoolClosed {
+			m.slotMu.Unlock()
+			if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+				log.Debug().Str("network_slot", slot.id).Err(err).Msg("failed to release network slot created during shutdown")
+			}
+			return
+		}
 		m.freeSlots = append(m.freeSlots, slot)
 		m.totalSlots++
 		m.slotMu.Unlock()
 	}
+}
+
+func (m *ContainerNetworkManager) withNetworkSlotPoolLock(fn func() error) error {
+	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix + ":slot_pool",
+		Ttl:           30,
+		Retries:       3,
+	}))
+	if err != nil {
+		return err
+	}
+	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix + ":slot_pool",
+		Token:         lockResponse.Token,
+	})
+
+	return fn()
+}
+
+func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
+	return m.withNetworkSlotPoolLock(func() error {
+		response, err := handleGRPCResponse(m.workerRepoClient.GetContainerIpAssignments(m.ctx, &pb.GetContainerIpAssignmentsRequest{
+			NetworkPrefix: m.networkPrefix,
+		}))
+		if err != nil {
+			return err
+		}
+
+		removed := 0
+		workerExists := map[string]bool{m.workerId: true}
+		for _, assignment := range response.Assignments {
+			slotWorkerID, slotID, ok := containerNetworkSlotReservationParts(assignment.ContainerId)
+			if !ok {
+				continue
+			}
+			shouldCleanup, err := shouldCleanupNetworkSlotReservation(
+				m.workerId,
+				slotWorkerID,
+				m.networkSlotResourcesExist(slotID),
+				func(workerID string) (bool, error) {
+					return m.workerExistsCached(workerID, workerExists)
+				},
+			)
+			if err != nil {
+				log.Debug().Str("network_slot", slotID).Str("reservation_id", assignment.ContainerId).Err(err).Msg("skipping stale network slot cleanup because worker liveness is unknown")
+				continue
+			}
+			if !shouldCleanup {
+				continue
+			}
+			m.deleteNetworkSlotResources(slotID)
+
+			if err := m.removeContainerIPFromRepository(assignment.ContainerId); err != nil {
+				log.Debug().Str("network_slot", slotID).Str("reservation_id", assignment.ContainerId).Err(err).Msg("failed to remove stale network slot reservation")
+				continue
+			}
+			removed++
+		}
+
+		if removed > 0 {
+			m.ipMu.Lock()
+			m.allocatedIPsLoaded = false
+			m.ipMu.Unlock()
+			log.Info().Int("removed", removed).Str("network_prefix", m.networkPrefix).Msg("removed stale preallocated network slot reservations")
+		}
+
+		return nil
+	})
+}
+
+func shouldCleanupNetworkSlotReservation(currentWorkerID, slotWorkerID string, resourcesExist bool, workerExists func(string) (bool, error)) (bool, error) {
+	if slotWorkerID == "" || slotWorkerID == currentWorkerID {
+		return !resourcesExist, nil
+	}
+
+	alive, err := workerExists(slotWorkerID)
+	if err != nil {
+		return false, err
+	}
+	return !alive, nil
+}
+
+func (m *ContainerNetworkManager) workerExistsCached(workerID string, cache map[string]bool) (bool, error) {
+	alive, cached := cache[workerID]
+	if cached {
+		return alive, nil
+	}
+
+	alive, err := m.workerExists(workerID)
+	if err != nil {
+		return false, err
+	}
+	cache[workerID] = alive
+	return alive, nil
+}
+
+func (m *ContainerNetworkManager) workerExists(workerID string) (bool, error) {
+	_, err := handleGRPCResponse(m.workerRepoClient.GetWorkerById(m.ctx, &pb.GetWorkerByIdRequest{
+		WorkerId: workerID,
+	}))
+	if err == nil {
+		return true, nil
+	}
+
+	notFoundErr := &types.ErrWorkerNotFound{}
+	if notFoundErr.From(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (m *ContainerNetworkManager) networkSlotResourcesExist(slotID string) bool {
+	if _, err := os.Stat(filepath.Join("/var/run/netns", slotID)); err != nil {
+		return false
+	}
+
+	vethHost, _ := containerVethNames(slotID)
+	if _, err := netlink.LinkByName(vethHost); err != nil {
+		return false
+	}
+
+	return true
+}
+
+func (m *ContainerNetworkManager) deleteNetworkSlotResources(slotID string) {
+	vethHost, _ := containerVethNames(slotID)
+	if hostVeth, err := netlink.LinkByName(vethHost); err == nil {
+		if err := netlink.LinkDel(hostVeth); err != nil {
+			log.Debug().Str("network_slot", slotID).Err(err).Msg("failed to delete stale network slot veth")
+		}
+	}
+	if err := netns.DeleteNamed(slotID); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Debug().Str("network_slot", slotID).Err(err).Msg("failed to delete stale network slot namespace")
+	}
+}
+
+func (m *ContainerNetworkManager) Close() error {
+	slots := m.drainFreeNetworkSlots()
+	var errs error
+	for _, slot := range slots {
+		if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	return errs
+}
+
+func (m *ContainerNetworkManager) drainFreeNetworkSlots() []*containerNetworkSlot {
+	m.slotMu.Lock()
+	defer m.slotMu.Unlock()
+
+	m.slotPoolClosed = true
+	slots := m.freeSlots
+	m.freeSlots = nil
+	if m.totalSlots >= len(slots) {
+		m.totalSlots -= len(slots)
+	} else {
+		m.totalSlots = 0
+	}
+	return slots
+}
+
+func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetworkSlot) error {
+	if slot == nil {
+		return nil
+	}
+
+	m.deleteNetworkSlotResources(slot.id)
+	if err := m.removeContainerIPFromRepositoryWithContext(context.Background(), m.containerNetworkSlotReservation(slot)); err != nil {
+		return fmt.Errorf("failed to release preallocated network slot %s: %w", slot.id, err)
+	}
+	m.forgetContainerIP(m.containerNetworkSlotReservation(slot), slot.ip)
+	return nil
 }
 
 func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
@@ -418,7 +642,7 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 	metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil), "mode": "preallocated"})
 	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkSetContainerIP, phaseStart, err == nil, map[string]string{"mode": "preallocated"})
 	if err != nil {
-		m.returnNetworkSlot("", slot)
+		m.discardNetworkSlot(containerId, slot)
 		return true, err
 	}
 
@@ -436,8 +660,9 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 		m.containerInstances.Set(containerId, containerInstance)
 	}
 
-	log.Info().Str("container_id", containerId).Str("ip_address", slot.ip).Str("network_slot", slot.id).Msg("container preallocated network slot assigned")
+	log.Debug().Str("container_id", containerId).Str("ip_address", slot.ip).Str("network_slot", slot.id).Msg("container preallocated network slot assigned")
 	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
+		m.rollbackPreallocatedNetworkSlotAssignment(containerId, slot)
 		return true, err
 	}
 
@@ -446,7 +671,7 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 }
 
 func (m *ContainerNetworkManager) assignPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
-	reservationID := containerNetworkSlotReservationID(slot.id)
+	reservationID := m.containerNetworkSlotReservation(slot)
 	_, err := handleGRPCResponse(m.workerRepoClient.MoveContainerIp(m.ctx, &pb.MoveContainerIpRequest{
 		NetworkPrefix:   m.networkPrefix,
 		FromContainerId: reservationID,
@@ -493,6 +718,74 @@ func (m *ContainerNetworkManager) returnNetworkSlot(containerId string, slot *co
 	m.slotMu.Unlock()
 }
 
+func (m *ContainerNetworkManager) rollbackPreallocatedNetworkSlotAssignment(containerId string, slot *containerNetworkSlot) {
+	if err := m.removePreallocatedNetworkSlotRules(slot); err != nil {
+		log.Warn().Str("container_id", containerId).Str("network_slot", slot.id).Err(err).Msg("failed to remove preallocated network slot rules after setup error")
+		m.discardNetworkSlot(containerId, slot)
+		return
+	}
+
+	if err := m.releasePreallocatedNetworkSlot(containerId, slot); err != nil {
+		log.Warn().Str("container_id", containerId).Str("network_slot", slot.id).Err(err).Msg("failed to release preallocated network slot after setup error")
+		m.discardNetworkSlot(containerId, slot)
+		return
+	}
+
+	m.clearContainerInstanceIP(containerId)
+	m.returnNetworkSlot(containerId, slot)
+}
+
+func (m *ContainerNetworkManager) discardNetworkSlot(containerId string, slot *containerNetworkSlot) {
+	if slot == nil {
+		return
+	}
+
+	m.slotMu.Lock()
+	if containerId != "" {
+		delete(m.containerSlots, containerId)
+	}
+	if m.totalSlots > 0 {
+		m.totalSlots--
+	}
+	m.slotMu.Unlock()
+
+	m.clearContainerInstanceIP(containerId)
+
+	if hostVeth, err := netlink.LinkByName(slot.vethHost); err == nil {
+		if err := netlink.LinkDel(hostVeth); err != nil {
+			log.Debug().Str("network_slot", slot.id).Err(err).Msg("failed to delete discarded network slot veth")
+		}
+	}
+	if err := netns.DeleteNamed(slot.namespace); err != nil {
+		log.Debug().Str("network_slot", slot.id).Err(err).Msg("failed to delete discarded network slot namespace")
+	}
+
+	if containerId != "" && m.workerRepoClient != nil {
+		if err := m.removeContainerIPFromRepository(containerId); err != nil {
+			log.Debug().Str("container_id", containerId).Str("network_slot", slot.id).Err(err).Msg("failed to remove container ip while discarding network slot")
+		}
+	}
+	if m.workerRepoClient != nil {
+		if err := m.removeContainerIPFromRepository(m.containerNetworkSlotReservation(slot)); err != nil {
+			log.Debug().Str("network_slot", slot.id).Err(err).Msg("failed to remove slot ip while discarding network slot")
+		}
+	}
+
+	m.forgetContainerIP(containerId, slot.ip)
+	m.forgetContainerIP(m.containerNetworkSlotReservation(slot), slot.ip)
+}
+
+func (m *ContainerNetworkManager) clearContainerInstanceIP(containerId string) {
+	if containerId == "" || m.containerInstances == nil {
+		return
+	}
+
+	if containerInstance, exists := m.containerInstances.Get(containerId); exists {
+		containerInstance.ContainerIp = ""
+		m.containerInstances.Set(containerId, containerInstance)
+	}
+}
+
 func (m *ContainerNetworkManager) containerNetworkSlot(containerId string) *containerNetworkSlot {
 	m.slotMu.Lock()
 	defer m.slotMu.Unlock()
@@ -500,10 +793,24 @@ func (m *ContainerNetworkManager) containerNetworkSlot(containerId string) *cont
 }
 
 func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, error) {
+	var slot *containerNetworkSlot
+	err := m.withNetworkSlotPoolLock(func() error {
+		created, err := m.createNetworkSlotLocked()
+		if err != nil {
+			return err
+		}
+		slot = created
+		return nil
+	})
+	return slot, err
+}
+
+func (m *ContainerNetworkManager) createNetworkSlotLocked() (*containerNetworkSlot, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	slotID := randomNetworkSlotID()
+	reservationID := m.containerNetworkSlotReservationID(slotID)
 	namespace := slotID
 	vethHost, vethContainer := containerVethNames(slotID)
 	slotReady := false
@@ -523,7 +830,7 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 	}
 	defer hostNS.Close()
 
-	ipAddr, err := m.reserveNetworkSlotIP(slotID)
+	ipAddr, err := m.reserveNetworkSlotIP(reservationID)
 	if err != nil {
 		return nil, err
 	}
@@ -531,10 +838,10 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 		if slotReady {
 			return
 		}
-		if err := m.removeContainerIPFromRepository(containerNetworkSlotReservationID(slotID)); err != nil {
+		if err := m.removeContainerIPFromRepository(reservationID); err != nil {
 			log.Debug().Str("network_slot", slotID).Err(err).Msg("failed to release preallocated network slot reservation")
 		}
-		m.forgetContainerIP(containerNetworkSlotReservationID(slotID), ipAddr.IP.String())
+		m.forgetContainerIP(reservationID, ipAddr.IP.String())
 	}
 	defer releaseIP()
 
@@ -597,17 +904,17 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 
 	slotReady = true
 	return &containerNetworkSlot{
-		id:        slotID,
-		namespace: namespace,
-		vethHost:  vethHost,
-		ip:        ipAddr.IP.String(),
-		ipv6:      ipv6,
-		netnsPath: filepath.Join("/var/run/netns", namespace),
+		id:            slotID,
+		reservationID: reservationID,
+		namespace:     namespace,
+		vethHost:      vethHost,
+		ip:            ipAddr.IP.String(),
+		ipv6:          ipv6,
+		netnsPath:     filepath.Join("/var/run/netns", namespace),
 	}, nil
 }
 
-func (m *ContainerNetworkManager) reserveNetworkSlotIP(slotID string) (*netlink.Addr, error) {
-	reservationID := containerNetworkSlotReservationID(slotID)
+func (m *ContainerNetworkManager) reserveNetworkSlotIP(reservationID string) (*netlink.Addr, error) {
 	m.ipMu.Lock()
 	defer m.ipMu.Unlock()
 
@@ -615,10 +922,14 @@ func (m *ContainerNetworkManager) reserveNetworkSlotIP(slotID string) (*netlink.
 		return nil, err
 	}
 
+	var lastErr error
 	for attempts := 0; attempts < containerIPv4AddressCount(); attempts++ {
 		ipAddr := m.nextAvailableContainerIPLocked()
 		if ipAddr == nil {
-			return nil, errors.New("unable to assign IP address to preallocated network slot")
+			if lastErr != nil {
+				return nil, fmt.Errorf("unable to assign IP address to preallocated network slot: no available addresses after reservation conflicts: %w", lastErr)
+			}
+			return nil, errors.New("unable to assign IP address to preallocated network slot: no available addresses")
 		}
 
 		_, err := handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
@@ -627,6 +938,7 @@ func (m *ContainerNetworkManager) reserveNetworkSlotIP(slotID string) (*netlink.
 			IpAddress:     ipAddr.IP.String(),
 		}))
 		if err != nil {
+			lastErr = err
 			m.allocatedIPs[ipAddr.IP.String()] = struct{}{}
 			continue
 		}
@@ -635,6 +947,9 @@ func (m *ContainerNetworkManager) reserveNetworkSlotIP(slotID string) (*netlink.
 		return ipAddr, nil
 	}
 
+	if lastErr != nil {
+		return nil, fmt.Errorf("unable to reserve unique IP address for preallocated network slot: %w", lastErr)
+	}
 	return nil, errors.New("unable to reserve unique IP address for preallocated network slot")
 }
 
@@ -703,6 +1018,10 @@ func detectIptablesMode() string {
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
+	if spec == nil || spec.Linux == nil {
+		return errors.New("container network setup requires a Linux runtime spec")
+	}
+
 	unlockContainer := m.lockContainerNetwork(containerId)
 	defer unlockContainer()
 
@@ -1033,10 +1352,14 @@ func (m *ContainerNetworkManager) reserveContainerIP(opts *containerNetworkConfi
 
 	var ipAddr *netlink.Addr
 	reserved := false
+	var lastErr error
 	for attempts := 0; attempts < containerIPv4AddressCount(); attempts++ {
 		ipAddr = m.nextAvailableContainerIPLocked()
 		if ipAddr == nil {
-			return nil, errors.New("unable to assign IP address to container")
+			if lastErr != nil {
+				return nil, fmt.Errorf("unable to assign IP address to container: no available addresses after reservation conflicts: %w", lastErr)
+			}
+			return nil, errors.New("unable to assign IP address to container: no available addresses")
 		}
 
 		phaseStart = time.Now()
@@ -1048,6 +1371,7 @@ func (m *ContainerNetworkManager) reserveContainerIP(opts *containerNetworkConfi
 		metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		m.recordNetworkLifecycle(opts.request, types.ContainerLifecycleNetworkSetContainerIP, phaseStart, err == nil, nil)
 		if err != nil {
+			lastErr = err
 			m.allocatedIPs[ipAddr.IP.String()] = struct{}{}
 			continue
 		}
@@ -1057,10 +1381,13 @@ func (m *ContainerNetworkManager) reserveContainerIP(opts *containerNetworkConfi
 		break
 	}
 	if !reserved {
+		if lastErr != nil {
+			return nil, fmt.Errorf("unable to reserve unique IP address for container: %w", lastErr)
+		}
 		return nil, errors.New("unable to reserve unique IP address for container")
 	}
 
-	log.Info().Str("container_id", opts.containerId).Str("ip_address", ipAddr.IP.String()).Msg("container ip address set")
+	log.Debug().Str("container_id", opts.containerId).Str("ip_address", ipAddr.IP.String()).Msg("container ip address set")
 
 	containerInstance, exists := m.containerInstances.Get(opts.containerId)
 	if exists {
@@ -1098,13 +1425,6 @@ func (m *ContainerNetworkManager) reloadAllocatedIPsLocked() error {
 	}
 	m.allocatedIPsLoaded = true
 	return nil
-}
-
-func (m *ContainerNetworkManager) allocatedIPScanSource() string {
-	if m.allocatedIPsLoaded {
-		return "memory"
-	}
-	return "redis"
 }
 
 func (m *ContainerNetworkManager) nextAvailableContainerIPLocked() *netlink.Addr {
@@ -1222,7 +1542,11 @@ func (m *ContainerNetworkManager) releaseReservedContainerIP(containerId string)
 }
 
 func (m *ContainerNetworkManager) removeContainerIPFromRepository(containerId string) error {
-	_, err := handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(m.ctx, &pb.RemoveContainerIpRequest{
+	return m.removeContainerIPFromRepositoryWithContext(m.ctx, containerId)
+}
+
+func (m *ContainerNetworkManager) removeContainerIPFromRepositoryWithContext(ctx context.Context, containerId string) error {
+	_, err := handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(ctx, &pb.RemoveContainerIpRequest{
 		NetworkPrefix: m.networkPrefix,
 		ContainerId:   containerId,
 	}))
@@ -1544,39 +1868,44 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 }
 
 func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
-	info, err := containerNetworkInfoFromIP(containerId, slot.ip, m.ipt6 != nil)
-	if err != nil {
+	if err := m.removePreallocatedNetworkSlotRules(slot); err != nil {
 		return err
 	}
-
-	m.iptablesMu.Lock()
-	if err := m.removeIPTablesRules(info.ContainerIp, m.ipt); err != nil {
-		m.iptablesMu.Unlock()
-		return err
-	}
-	if m.ipt6 != nil && info.ContainerIpv6 != "" {
-		if err := m.removeIPTablesRules(info.ContainerIpv6, m.ipt6); err != nil {
-			m.iptablesMu.Unlock()
-			return err
-		}
-	}
-	m.iptablesMu.Unlock()
 
 	if err := m.releasePreallocatedNetworkSlot(containerId, slot); err != nil {
+		m.discardNetworkSlot(containerId, slot)
 		return err
 	}
 
-	if containerInstance, exists := m.containerInstances.Get(containerId); exists {
-		containerInstance.ContainerIp = ""
-		m.containerInstances.Set(containerId, containerInstance)
-	}
+	m.clearContainerInstanceIP(containerId)
 
 	m.returnNetworkSlot(containerId, slot)
 	return nil
 }
 
+func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {
+	info, err := containerNetworkInfoFromIP(slot.id, slot.ip, m.ipt6 != nil)
+	if err != nil {
+		return err
+	}
+
+	m.iptablesMu.Lock()
+	defer m.iptablesMu.Unlock()
+
+	if err := m.removeIPTablesRules(info.ContainerIp, m.ipt); err != nil {
+		return err
+	}
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		if err := m.removeIPTablesRules(info.ContainerIpv6, m.ipt6); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (m *ContainerNetworkManager) releasePreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
-	reservationID := containerNetworkSlotReservationID(slot.id)
+	reservationID := m.containerNetworkSlotReservation(slot)
 	_, err := handleGRPCResponse(m.workerRepoClient.MoveContainerIp(m.ctx, &pb.MoveContainerIpRequest{
 		NetworkPrefix:   m.networkPrefix,
 		FromContainerId: containerId,

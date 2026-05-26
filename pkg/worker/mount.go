@@ -331,11 +331,6 @@ func checkpointSignalDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/criu", containerId)
 }
 
-// getAndExtractStubCode downloads the object from storage and extracts it to the temp location that will be mounted
-func getAndExtractStubCode(ctx context.Context, request *types.ContainerRequest) error {
-	return getAndExtractStubCodeToPath(ctx, request, types.TempContainerWorkspace(request.ContainerId))
-}
-
 func getAndExtractStubCodeToPath(ctx context.Context, request *types.ContainerRequest, destPath string) error {
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {

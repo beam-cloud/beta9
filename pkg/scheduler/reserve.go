@@ -116,14 +116,7 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 }
 
 func (a *schedulingAttempt) retry(reason string) {
-	if err := a.scheduler.addRequestToBacklog(a.request); err != nil {
-		log.Error().
-			Str("container_id", a.request.ContainerId).
-			Str("reason", reason).
-			Err(err).
-			Msg("failed to requeue request")
-		a.fail(reason + "_requeue_failed")
-	}
+	a.retrySoon(reason)
 }
 
 func (a *schedulingAttempt) retrySoon(reason string) {

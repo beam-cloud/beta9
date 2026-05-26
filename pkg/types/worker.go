@@ -42,6 +42,11 @@ type ContainerResourceUsage struct {
 	GpuType           string `json:"GpuType"`
 }
 
+type ContainerIpAssignment struct {
+	ContainerID string `json:"container_id"`
+	IPAddress   string `json:"ip_address"`
+}
+
 // @go2proto
 type Mount struct {
 	LocalPath        string            `json:"local_path"`

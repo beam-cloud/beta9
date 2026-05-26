@@ -38,6 +38,7 @@ const (
 	WorkerRepositoryService_MoveContainerIp_FullMethodName           = "/WorkerRepositoryService/MoveContainerIp"
 	WorkerRepositoryService_GetContainerIp_FullMethodName            = "/WorkerRepositoryService/GetContainerIp"
 	WorkerRepositoryService_GetContainerIps_FullMethodName           = "/WorkerRepositoryService/GetContainerIps"
+	WorkerRepositoryService_GetContainerIpAssignments_FullMethodName = "/WorkerRepositoryService/GetContainerIpAssignments"
 	WorkerRepositoryService_RemoveContainerIp_FullMethodName         = "/WorkerRepositoryService/RemoveContainerIp"
 )
 
@@ -64,6 +65,7 @@ type WorkerRepositoryServiceClient interface {
 	MoveContainerIp(ctx context.Context, in *MoveContainerIpRequest, opts ...grpc.CallOption) (*MoveContainerIpResponse, error)
 	GetContainerIp(ctx context.Context, in *GetContainerIpRequest, opts ...grpc.CallOption) (*GetContainerIpResponse, error)
 	GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error)
+	GetContainerIpAssignments(ctx context.Context, in *GetContainerIpAssignmentsRequest, opts ...grpc.CallOption) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error)
 }
 
@@ -269,6 +271,15 @@ func (c *workerRepositoryServiceClient) GetContainerIps(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) GetContainerIpAssignments(ctx context.Context, in *GetContainerIpAssignmentsRequest, opts ...grpc.CallOption) (*GetContainerIpAssignmentsResponse, error) {
+	out := new(GetContainerIpAssignmentsResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerIpAssignments_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error) {
 	out := new(RemoveContainerIpResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveContainerIp_FullMethodName, in, out, opts...)
@@ -301,6 +312,7 @@ type WorkerRepositoryServiceServer interface {
 	MoveContainerIp(context.Context, *MoveContainerIpRequest) (*MoveContainerIpResponse, error)
 	GetContainerIp(context.Context, *GetContainerIpRequest) (*GetContainerIpResponse, error)
 	GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error)
+	GetContainerIpAssignments(context.Context, *GetContainerIpAssignmentsRequest) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error)
 	mustEmbedUnimplementedWorkerRepositoryServiceServer()
 }
@@ -365,6 +377,9 @@ func (UnimplementedWorkerRepositoryServiceServer) GetContainerIp(context.Context
 }
 func (UnimplementedWorkerRepositoryServiceServer) GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetContainerIps not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) GetContainerIpAssignments(context.Context, *GetContainerIpAssignmentsRequest) (*GetContainerIpAssignmentsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetContainerIpAssignments not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerIp not implemented")
@@ -728,6 +743,24 @@ func _WorkerRepositoryService_GetContainerIps_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_GetContainerIpAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetContainerIpAssignmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetContainerIpAssignments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetContainerIpAssignments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetContainerIpAssignments(ctx, req.(*GetContainerIpAssignmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerRepositoryService_RemoveContainerIp_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RemoveContainerIpRequest)
 	if err := dec(in); err != nil {
@@ -824,6 +857,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetContainerIps",
 			Handler:    _WorkerRepositoryService_GetContainerIps_Handler,
+		},
+		{
+			MethodName: "GetContainerIpAssignments",
+			Handler:    _WorkerRepositoryService_GetContainerIpAssignments_Handler,
 		},
 		{
 			MethodName: "RemoveContainerIp",

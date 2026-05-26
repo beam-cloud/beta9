@@ -912,6 +912,12 @@ func (s *Worker) shutdown() error {
 	var errs error
 	s.waitForActiveContainersBeforeShutdown()
 
+	if s.containerNetworkManager != nil {
+		if err := s.containerNetworkManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup preallocated container networks: %v", err))
+		}
+	}
+
 	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
 		WorkerId: s.workerId,
 	})); err != nil {

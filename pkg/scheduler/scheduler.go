@@ -539,7 +539,7 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
-func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, workerConfig types.WorkerConfig) []*types.Worker {
+func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
@@ -669,10 +669,10 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)                      // Filter workers by pool selector
-	filteredWorkers = filterWorkersByResources(filteredWorkers, request, s.config.Worker) // Filter workers resource requirements
-	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)                      // Filter workers by flags
-	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...)                 // Filter workers by lifecycle status
+	filteredWorkers := filterWorkersByPoolSelector(workers, request)      // Filter workers by pool selector
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
+	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
+	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}

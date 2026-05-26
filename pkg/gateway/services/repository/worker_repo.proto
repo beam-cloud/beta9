@@ -36,6 +36,8 @@ service WorkerRepositoryService {
   rpc GetContainerIp(GetContainerIpRequest) returns (GetContainerIpResponse) {}
   rpc GetContainerIps(GetContainerIpsRequest)
       returns (GetContainerIpsResponse) {}
+  rpc GetContainerIpAssignments(GetContainerIpAssignmentsRequest)
+      returns (GetContainerIpAssignmentsResponse) {}
   rpc RemoveContainerIp(RemoveContainerIpRequest)
       returns (RemoveContainerIpResponse) {}
 }
@@ -242,6 +244,19 @@ message GetContainerIpsRequest { string network_prefix = 1; }
 message GetContainerIpsResponse {
   bool ok = 1;
   repeated string ips = 2;
+  string error_msg = 3;
+}
+
+message ContainerIpAssignment {
+  string container_id = 1;
+  string ip_address = 2;
+}
+
+message GetContainerIpAssignmentsRequest { string network_prefix = 1; }
+
+message GetContainerIpAssignmentsResponse {
+  bool ok = 1;
+  repeated ContainerIpAssignment assignments = 2;
   string error_msg = 3;
 }
 

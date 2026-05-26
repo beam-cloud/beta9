@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -718,6 +719,47 @@ func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string,
 	}
 
 	return containerIps, nil
+}
+
+func (r *WorkerRedisRepository) GetContainerIpAssignments(networkPrefix string) ([]types.ContainerIpAssignment, error) {
+	ctx := context.TODO()
+	keyPrefix := common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, "")
+	pattern := common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, "*")
+	assignments := []types.ContainerIpAssignment{}
+
+	keys, err := r.rdb.Scan(ctx, pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(keys) > 0 {
+		values, err := r.rdb.MGet(ctx, keys...).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		for i, value := range values {
+			ip, ok := value.(string)
+			if !ok || ip == "" {
+				continue
+			}
+
+			containerId := strings.TrimPrefix(keys[i], keyPrefix)
+			if containerId == "" || containerId == keys[i] {
+				continue
+			}
+
+			assignments = append(assignments, types.ContainerIpAssignment{
+				ContainerID: containerId,
+				IPAddress:   ip,
+			})
+		}
+	}
+
+	sort.Slice(assignments, func(i, j int) bool {
+		return assignments[i].ContainerID < assignments[j].ContainerID
+	})
+	return assignments, nil
 }
 
 func (r *WorkerRedisRepository) GetContainerIp(networkPrefix string, containerId string) (string, error) {

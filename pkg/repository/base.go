@@ -36,6 +36,7 @@ type WorkerRepository interface {
 	MoveContainerIp(networkPrefix, fromContainerId, toContainerId, containerIp string) error
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
+	GetContainerIpAssignments(networkPrefix string) ([]types.ContainerIpAssignment, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
 	GetGpuCounts() (map[string]int, error)
