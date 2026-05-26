@@ -259,6 +259,66 @@ func (m *FSMetadata) ToProto() *proto.CacheFSMetadata {
 	}
 }
 
+func (m *FSMetadata) ToWorkerCacheProto() *proto.WorkerCacheFSMetadata {
+	if m == nil {
+		return nil
+	}
+	return &proto.WorkerCacheFSMetadata{
+		Id:        m.ID,
+		Pid:       m.PID,
+		Name:      m.Name,
+		Path:      m.Path,
+		Hash:      m.Hash,
+		Ino:       m.Ino,
+		Size:      m.Size,
+		Blocks:    m.Blocks,
+		Atime:     m.Atime,
+		Mtime:     m.Mtime,
+		Ctime:     m.Ctime,
+		Atimensec: m.Atimensec,
+		Mtimensec: m.Mtimensec,
+		Ctimensec: m.Ctimensec,
+		Mode:      m.Mode,
+		Nlink:     m.Nlink,
+		Rdev:      m.Rdev,
+		Blksize:   m.Blksize,
+		Padding:   m.Padding,
+		Uid:       m.Uid,
+		Gid:       m.Gid,
+		Gen:       m.Gen,
+	}
+}
+
+func FSMetadataFromWorkerCacheProto(metadata *proto.WorkerCacheFSMetadata) *FSMetadata {
+	if metadata == nil {
+		return nil
+	}
+	return &FSMetadata{
+		ID:        metadata.Id,
+		PID:       metadata.Pid,
+		Name:      metadata.Name,
+		Path:      metadata.Path,
+		Hash:      metadata.Hash,
+		Ino:       metadata.Ino,
+		Size:      metadata.Size,
+		Blocks:    metadata.Blocks,
+		Atime:     metadata.Atime,
+		Mtime:     metadata.Mtime,
+		Ctime:     metadata.Ctime,
+		Atimensec: metadata.Atimensec,
+		Mtimensec: metadata.Mtimensec,
+		Ctimensec: metadata.Ctimensec,
+		Mode:      metadata.Mode,
+		Nlink:     metadata.Nlink,
+		Rdev:      metadata.Rdev,
+		Blksize:   metadata.Blksize,
+		Padding:   metadata.Padding,
+		Uid:       metadata.Uid,
+		Gid:       metadata.Gid,
+		Gen:       metadata.Gen,
+	}
+}
+
 type SourceConfig struct {
 	Mode           string           `key:"mode" json:"mode"`
 	FilesystemName string           `key:"fsName" json:"filesystem_name"`

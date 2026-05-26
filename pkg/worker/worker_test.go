@@ -223,15 +223,73 @@ func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {
 	require.Equal(t, int64(types.ContainerStateTtlSWhilePending), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
+func TestDropCancelledContainerRequestDeletesStoppingStateAndReleasesCapacity(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{
+			ContainerId: "build-1",
+			Status:      string(types.ContainerStatusStopping),
+		},
+	}
+	request := &types.ContainerRequest{ContainerId: "build-1"}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		completedRequests:   make(chan *types.ContainerRequest, 1),
+	}
+
+	require.True(t, worker.dropCancelledContainerRequest(request))
+	require.Equal(t, 1, repoClient.getStateCalls)
+	require.Equal(t, 1, repoClient.deleteStateCalls)
+	require.Equal(t, "build-1", repoClient.lastDeleteContainerID)
+
+	select {
+	case got := <-worker.completedRequests:
+		require.Equal(t, request, got)
+	default:
+		t.Fatal("expected skipped request to release capacity")
+	}
+}
+
+func TestDropCancelledContainerRequestReleasesCapacityForMissingState(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{
+		getStateErrorMsg: (&types.ErrContainerStateNotFound{ContainerId: "build-1"}).Error(),
+	}
+	request := &types.ContainerRequest{ContainerId: "build-1"}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		completedRequests:   make(chan *types.ContainerRequest, 1),
+	}
+
+	require.True(t, worker.dropCancelledContainerRequest(request))
+	require.Equal(t, 1, repoClient.getStateCalls)
+	require.Equal(t, 0, repoClient.deleteStateCalls)
+
+	select {
+	case got := <-worker.completedRequests:
+		require.Equal(t, request, got)
+	default:
+		t.Fatal("expected skipped request to release capacity")
+	}
+}
+
 type fakeContainerRepoClient struct {
-	state             *pb.ContainerState
-	getStateCalls     int
-	updateStatusCalls int
-	lastUpdateStatus  *pb.UpdateContainerStatusRequest
+	state                 *pb.ContainerState
+	getStateErrorMsg      string
+	getStateCalls         int
+	deleteStateCalls      int
+	lastDeleteContainerID string
+	updateStatusCalls     int
+	lastUpdateStatus      *pb.UpdateContainerStatusRequest
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
 	f.getStateCalls++
+	if f.getStateErrorMsg != "" {
+		return &pb.GetContainerStateResponse{
+			Ok:       false,
+			ErrorMsg: f.getStateErrorMsg,
+		}, nil
+	}
+
 	return &pb.GetContainerStateResponse{
 		Ok:          true,
 		ContainerId: in.ContainerId,
@@ -240,6 +298,8 @@ func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.
 }
 
 func (f *fakeContainerRepoClient) DeleteContainerState(ctx context.Context, in *pb.DeleteContainerStateRequest, opts ...grpc.CallOption) (*pb.DeleteContainerStateResponse, error) {
+	f.deleteStateCalls++
+	f.lastDeleteContainerID = in.ContainerId
 	return &pb.DeleteContainerStateResponse{Ok: true}, nil
 }
 

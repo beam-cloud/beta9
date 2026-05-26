@@ -528,14 +528,24 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 }
 
 func (b *Builder) stopBuild(containerId string) error {
-	_, err := b.eventBus.Send(&common.Event{
-		Type:          common.StopBuildEventType(containerId),
-		Args:          map[string]any{"container_id": containerId},
-		LockAndDelete: false,
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("failed to send stop build event")
-		return err
+	events := []struct {
+		eventType common.EventType
+		errorMsg  string
+	}{
+		{eventType: common.EventTypeStopBuild, errorMsg: "failed to send stop build event"},
+		{eventType: common.StopBuildEventType(containerId), errorMsg: "failed to send legacy stop build event"},
+	}
+
+	for _, event := range events {
+		_, err := b.eventBus.Send(&common.Event{
+			Type:          event.eventType,
+			Args:          map[string]any{"container_id": containerId},
+			LockAndDelete: false,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg(event.errorMsg)
+			return err
+		}
 	}
 
 	log.Info().Str("container_id", containerId).Msg("sent stop build event")
@@ -552,7 +562,14 @@ func (b *Builder) handleBuildCancellation(ctx context.Context, build *Build) {
 		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 	}
 
-	err = b.containerRepo.UpdateContainerStatus(build.containerID, types.ContainerStatusStopping, time.Now().Unix())
+	if build.containerClient == nil {
+		if err := b.containerRepo.DeleteContainerState(build.containerID); err != nil {
+			log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to delete pending build container state")
+		}
+		return
+	}
+
+	err = b.containerRepo.UpdateContainerStatus(build.containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {
 		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to update container status")
 	}

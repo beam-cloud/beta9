@@ -25,7 +25,7 @@ REQUIRED_LIFECYCLE_IDS = (
 )
 
 REQUIRED_SUMMARY_KEYS = (
-    "scheduler_backlog_ms",
+    "scheduler_queue_to_worker_receive_ms",
     "worker_queue_ms",
     "worker_receive_to_running_ms",
     "image_ms",
@@ -48,9 +48,10 @@ SERVER_PHASES = (
     ("scheduler_worker_selection_ms", "scheduler.worker_selection", "Worker selection", False),
     ("scheduler_reservation_ms", "scheduler.reservation", "Capacity reservation", False),
     ("scheduler_provision_worker_ms", "scheduler.provision_worker", "Worker provisioning", False),
+    ("scheduler_queue_to_worker_receive_ms", "scheduler.queue_to_worker_receive", "Scheduler queue to worker receive", False),
     ("worker_ms", "worker", "Worker total", True),
     ("worker_queue_ms", "worker.queue_receive", "Worker queue receive", False),
-    ("worker_receive_to_running_ms", "worker.receive_to_running", "Worker receive to running", False),
+    ("worker_receive_to_running_ms", "worker.receive_to_running", "Worker receive to running", True),
     ("worker_set_worker_address_ms", "worker.set_worker_address", "Set worker address", False),
     ("worker_port_allocation_ms", "worker.port_allocation", "Port allocation", False),
     ("worker_read_bundle_config_ms", "worker.read_bundle_config", "Read bundle config", False),
@@ -191,16 +192,20 @@ def fetch_event_batch(
     token: str,
     container_ids: list[str],
     *,
+    targets: list[dict[str, str]] | None = None,
     limit: int = DEFAULT_EVENT_LIMIT,
     top_lifecycle: int = DEFAULT_TOP_LIFECYCLE,
     timeout: int = 20,
 ) -> dict[str, Any]:
     body = {
-        "container_ids": container_ids,
         "include_events": False,
         "top_lifecycle": top_lifecycle,
         "limit": limit,
     }
+    if targets:
+        body["targets"] = targets
+    else:
+        body["container_ids"] = container_ids
     status, payload, raw, _ = http_json(
         "POST",
         api_url(gateway_url, f"{EVENTS_API_PREFIX}/{workspace_id}/containers/batch"),
@@ -220,12 +225,13 @@ def fetch_event_batch_with_poll(
     token: str,
     container_ids: list[str],
     *,
+    targets: list[dict[str, str]] | None = None,
     limit: int = DEFAULT_EVENT_LIMIT,
     top_lifecycle: int = DEFAULT_TOP_LIFECYCLE,
     wait_seconds: float = DEFAULT_EVENT_WAIT_SECONDS,
     poll_ms: int = DEFAULT_EVENT_POLL_MS,
 ) -> tuple[dict[str, Any] | None, str]:
-    if not container_ids:
+    if not container_ids and not targets:
         return None, "no measured container IDs"
     if not workspace_id:
         return None, "workspace ID unavailable"
@@ -244,6 +250,7 @@ def fetch_event_batch_with_poll(
                 workspace_id,
                 token,
                 container_ids,
+                targets=targets,
                 limit=limit,
                 top_lifecycle=top_lifecycle,
             )
@@ -296,7 +303,9 @@ def build_startup_report(
     event_items = events.get("items", []) if events else []
     event_by_container = {item.get("container_id"): item for item in event_items if item.get("container_id")}
     server_phases = build_server_phases(events, len(samples))
-    bottleneck = select_primary_bottleneck(server_phases, len(samples))
+    bottleneck = normalize_api_phase(events.get("primary_bottleneck")) if events else None
+    if not bottleneck:
+        bottleneck = select_primary_bottleneck(server_phases, len(samples))
     coverage = build_event_coverage(samples, events, event_items)
     image_drilldown = build_image_drilldown(event_items, server_phases, len(samples))
     slowest = build_slowest_containers(samples, event_by_container)
@@ -340,6 +349,12 @@ def build_server_phases(events: dict[str, Any] | None, measured_count: int) -> l
     if not events:
         return []
 
+    api_phases = events.get("phases") or []
+    if api_phases:
+        phases = [phase for phase in (normalize_api_phase(row) for row in api_phases) if phase]
+        if phases:
+            return phases
+
     summary = events.get("summary") or {}
     phases: list[dict[str, Any]] = []
     for metric_key, event_id, label, rollup in SERVER_PHASES:
@@ -349,6 +364,33 @@ def build_server_phases(events: dict[str, Any] | None, measured_count: int) -> l
         phases.append(phase_record(metric_key, event_id, label, metric, measured_count, rollup))
 
     return phases
+
+
+def normalize_api_phase(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    metric_key = row.get("metric_key") or row.get("metricKey")
+    if metric_key and (metric_key == "to_running_ms" or not str(metric_key).endswith("_ms")):
+        return None
+    return {
+        "metricKey": metric_key,
+        "eventId": row.get("event_id") or row.get("eventId"),
+        "label": row.get("label") or row.get("event_id") or row.get("eventId") or row.get("metric_key"),
+        "domain": row.get("domain"),
+        "parentId": row.get("parent_id") or row.get("parentId"),
+        "count": int(row.get("count") or 0),
+        "coverage": float(row.get("coverage") or 0),
+        "coverageStatus": row.get("coverage_status") or row.get("coverageStatus") or coverage_status(float(row.get("coverage") or 0)),
+        "rollup": bool(row.get("rollup")),
+        "minMs": row.get("min_ms") if "min_ms" in row else row.get("minMs"),
+        "avgMs": row.get("avg_ms") if "avg_ms" in row else row.get("avgMs"),
+        "p50Ms": row.get("p50_ms") if "p50_ms" in row else row.get("p50Ms"),
+        "p90Ms": row.get("p90_ms") if "p90_ms" in row else row.get("p90Ms"),
+        "p95Ms": row.get("p95_ms") if "p95_ms" in row else row.get("p95Ms"),
+        "p99Ms": row.get("p99_ms") if "p99_ms" in row else row.get("p99Ms"),
+        "maxMs": row.get("max_ms") if "max_ms" in row else row.get("maxMs"),
+        "totalMs": row.get("total_ms") if "total_ms" in row else row.get("totalMs"),
+    }
 
 
 def build_image_drilldown(
@@ -541,6 +583,9 @@ def build_event_coverage(
     events: dict[str, Any] | None,
     event_items: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    if events and events.get("coverage"):
+        return normalize_api_coverage(events["coverage"])
+
     requested = len([sample for sample in samples if sample.get("containerId")])
     item_by_container = {item.get("container_id"): item for item in event_items if item.get("container_id")}
     missing_containers = [
@@ -595,6 +640,23 @@ def build_event_coverage(
     }
 
 
+def normalize_api_coverage(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "requestedContainers": int(row.get("requested_containers") or row.get("requestedContainers") or 0),
+        "items": int(row.get("items") or 0),
+        "containersWithEvents": int(row.get("containers_with_events") or row.get("containersWithEvents") or 0),
+        "eventErrors": int(row.get("event_errors") or row.get("eventErrors") or 0),
+        "missingContainers": row.get("missing_containers") or row.get("missingContainers") or [],
+        "requiredLifecyclePresent": int(row.get("required_lifecycle_present") or row.get("requiredLifecyclePresent") or 0),
+        "requiredLifecycleTotal": int(row.get("required_lifecycle_total") or row.get("requiredLifecycleTotal") or 0),
+        "requiredLifecycleMissing": row.get("required_lifecycle_missing") or row.get("requiredLifecycleMissing") or {},
+        "requiredMetricPresent": int(row.get("required_metric_present") or row.get("requiredMetricPresent") or 0),
+        "requiredMetricTotal": int(row.get("required_metric_total") or row.get("requiredMetricTotal") or 0),
+        "requiredMetricMissing": row.get("required_metric_missing") or row.get("requiredMetricMissing") or {},
+        "eventsAvailable": True,
+    }
+
+
 def build_slowest_containers(
     samples: list[dict[str, Any]],
     event_by_container: dict[str, dict[str, Any]],
@@ -633,6 +695,21 @@ def build_slowest_containers(
 
 
 def first_slowest_phase(item: dict[str, Any]) -> dict[str, Any] | None:
+    summary = item.get("summary") or {}
+    candidates = []
+    for metric_key, event_id, _label, rollup in SERVER_PHASES:
+        if rollup or metric_key not in summary:
+            continue
+        candidates.append(
+            {
+                "eventId": event_id,
+                "durationMs": summary.get(metric_key),
+                "coverage": "present",
+            }
+        )
+    if candidates:
+        return max(candidates, key=lambda value: value.get("durationMs") or 0)
+
     phases = item.get("slowest_lifecycle") or item.get("lifecycle") or []
     if not phases:
         return None
@@ -965,12 +1042,14 @@ def write_startup_report(
         for sample in measured_samples(benchmark)
         if sample.get("containerId")
     ]
+    event_targets = container_event_targets(measured_samples(benchmark))
 
     events, event_error = fetch_event_batch_with_poll(
         gateway_url or benchmark.get("config", {}).get("gatewayUrl", ""),
         workspace_id,
         token,
         container_ids,
+        targets=event_targets,
         limit=event_limit,
         top_lifecycle=top_lifecycle,
         wait_seconds=event_wait_seconds,
@@ -988,3 +1067,22 @@ def write_startup_report(
     benchmark["startupReport"] = report
     benchmark_path.write_text(json.dumps(benchmark, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
+
+
+def container_event_targets(samples: list[dict[str, Any]]) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for sample in samples:
+        container_id = str(sample.get("containerId") or "").strip()
+        if not container_id:
+            continue
+        stub_id = str(sample.get("stubId") or "").strip()
+        key = (container_id, stub_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        target = {"container_id": container_id}
+        if stub_id:
+            target["stub_id"] = stub_id
+        targets.append(target)
+    return targets

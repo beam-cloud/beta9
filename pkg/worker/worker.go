@@ -33,11 +33,10 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
+	workerEventStreamReconnectMin  time.Duration = time.Second
+	workerEventStreamReconnectMax  time.Duration = 5 * time.Second
 	defaultRuncStartConcurrency    int           = types.DefaultRuncStartConcurrency
 	defaultGvisorStartConcurrency  int           = types.DefaultGvisorStartConcurrency
-	workerRedisConnectTimeout      time.Duration = 45 * time.Second
-	workerRedisConnectBaseDelay    time.Duration = 250 * time.Millisecond
-	workerRedisConnectMaxDelay     time.Duration = 2 * time.Second
 )
 
 type Worker struct {
@@ -62,10 +61,9 @@ type Worker struct {
 	containerNetworkManager *ContainerNetworkManager
 	containerGPUManager     GPUManager
 	containerMountManager   *ContainerMountManager
-	redisClient             *common.RedisClient
 	imageClient             *ImageClient
-	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
+	buildCancels            *common.SafeMap[context.CancelFunc]
 	containerLock           sync.Mutex
 	containerStartSem       chan struct{}
 	containerStartLimit     int
@@ -138,39 +136,6 @@ type stopContainerEvent struct {
 	Kill        bool
 }
 
-func newWorkerRedisClient(ctx context.Context, config types.AppConfig) (*common.RedisClient, error) {
-	deadline := time.Now().Add(workerRedisConnectTimeout)
-	delay := workerRedisConnectBaseDelay
-	attempt := 0
-
-	for {
-		attempt++
-		redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
-		if err == nil {
-			return redisClient, nil
-		}
-
-		if time.Now().After(deadline) {
-			return nil, err
-		}
-
-		log.Warn().Err(err).Int("attempt", attempt).Msg("redis unavailable during worker startup, retrying")
-		jitter := time.Duration((time.Now().UnixNano() + int64(attempt)*137) % int64(workerRedisConnectBaseDelay))
-		timer := time.NewTimer(delay + jitter)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-
-		delay *= 2
-		if delay > workerRedisConnectMaxDelay {
-			delay = workerRedisConnectMaxDelay
-		}
-	}
-}
-
 func NewWorker() (*Worker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -208,11 +173,6 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := newWorkerRedisClient(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-
 	containerRepoClient, err := NewContainerRepositoryClient(context.TODO(), config, workerToken)
 	if err != nil {
 		return nil, err
@@ -238,7 +198,7 @@ func NewWorker() (*Worker, error) {
 	var cacheManager *WorkerCacheManager
 	var cacheClient *cache.Client
 	if config.Cache.Enabled && config.Worker.CacheEnabled {
-		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, redisClient, workerRepoClient, workerId, workerPoolName, podAddr)
+		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, workerId, workerPoolName, podAddr)
 		cacheClient, err = cacheManager.Start()
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
@@ -369,13 +329,12 @@ func NewWorker() (*Worker, error) {
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config),
-		redisClient:             redisClient,
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		criuManager:             criuManager,
 		podHostName:             podHostName,
-		eventBus:                nil,
 		containerInstances:      containerInstances,
+		buildCancels:            common.NewSafeMap[context.CancelFunc](),
 		containerLock:           sync.Mutex{},
 		containerStartSem:       make(chan struct{}, containerStartLimit),
 		containerStartLimit:     containerStartLimit,
@@ -540,8 +499,48 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 	return true
 }
 
+func (s *Worker) dropCancelledContainerRequest(request *types.ContainerRequest) bool {
+	if s.containerRepoClient == nil {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(ctx, &pb.GetContainerStateRequest{
+		ContainerId: request.ContainerId,
+	}))
+	if err != nil {
+		notFoundErr := &types.ErrContainerStateNotFound{}
+		if notFoundErr.From(err) {
+			log.Info().Str("container_id", request.ContainerId).Msg("dropping container request because state is missing")
+			s.completedRequests <- request
+			return true
+		}
+
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("unable to check container state before start")
+		return false
+	}
+
+	if resp.State == nil || types.ContainerStatus(resp.State.Status) != types.ContainerStatusStopping {
+		return false
+	}
+
+	log.Info().Str("container_id", request.ContainerId).Msg("dropping container request because state is already stopping")
+	if _, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: request.ContainerId})); err != nil {
+		log.Debug().Str("container_id", request.ContainerId).Err(err).Msg("failed to remove stopping container state")
+	}
+
+	s.completedRequests <- request
+	return true
+}
+
 // handleContainerRequest handles an individual container request.
 func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
+	if s.dropCancelledContainerRequest(request) {
+		return
+	}
+
 	if !s.reserveContainerInstance(request) {
 		return
 	}
@@ -557,7 +556,9 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	defer cancel()
 
 	if request.IsBuildRequest() {
-		go s.checkForStoppedBuilds(ctx, cancel, containerId)
+		s.registerBuildCancel(containerId, cancel)
+		defer s.unregisterBuildCancel(containerId)
+		go s.cancelBuildIfAlreadyStopping(ctx, cancel, containerId)
 	}
 
 	// If isolated workspace storage is available, mount it
@@ -599,9 +600,8 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	s.clearContainer(containerId, request, exitCode)
 }
 
-// checkForStoppedBuilds checks if a build has been cancelled and cancels the context if it has.
-// If not it will listen for a stop build event.
-func (s *Worker) checkForStoppedBuilds(ctx context.Context, cancel context.CancelFunc, containerId string) {
+// cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.
+func (s *Worker) cancelBuildIfAlreadyStopping(ctx context.Context, cancel context.CancelFunc, containerId string) {
 	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")
@@ -613,14 +613,6 @@ func (s *Worker) checkForStoppedBuilds(ctx context.Context, cancel context.Cance
 		cancel()
 		return
 	}
-
-	eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.StopBuildEventType(containerId), Callback: func(e *common.Event) bool {
-		log.Info().Str("container_id", containerId).Msg("received stop build event")
-		cancel()
-		return true
-	}})
-
-	go eventbus.ReceiveEvents(ctx)
 }
 
 // listenForShutdown listens for SIGINT and SIGTERM signals and cancels the worker context
@@ -884,13 +876,7 @@ func (s *Worker) startup() error {
 		return err
 	}
 
-	eventBus := common.NewEventBus(
-		s.redisClient,
-		common.EventBusSubscriber{Type: common.EventTypeStopContainer, Callback: s.handleStopContainerEvent},
-	)
-
-	s.eventBus = eventBus
-	go s.eventBus.ReceiveEvents(s.ctx)
+	go s.listenForWorkerEvents()
 	go s.keepalive()
 
 	err = os.MkdirAll(containerLogsPath, os.ModePerm)

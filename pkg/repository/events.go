@@ -35,6 +35,7 @@ type eventMetadata struct {
 	TaskID      string
 	StubID      string
 	WorkerID    string
+	PoolName    string
 }
 
 func NewEventClientRepo(config types.AppConfig) EventRepository {
@@ -854,6 +855,14 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID}
 	case types.EventStubSchema:
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
+	case types.EventStubStateSchema:
+		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
+	case types.EventWorkerLifecycleSchema:
+		return eventMetadata{WorkerID: d.WorkerID, PoolName: d.PoolName}
+	case types.EventWorkerPoolStateSchema:
+		return eventMetadata{PoolName: d.PoolName}
+	case types.EventGatewayEndpointSchema:
+		return eventMetadata{WorkspaceID: d.WorkspaceID}
 	default:
 		return eventMetadata{}
 	}
@@ -874,5 +883,8 @@ func setEventExtensions(event *cloudevents.Event, metadata eventMetadata) {
 	}
 	if metadata.WorkerID != "" {
 		event.SetExtension("workerid", metadata.WorkerID)
+	}
+	if metadata.PoolName != "" {
+		event.SetExtension("poolname", metadata.PoolName)
 	}
 }

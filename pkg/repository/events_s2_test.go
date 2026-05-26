@@ -38,6 +38,51 @@ func TestS2ContainerScopedEventsDoNotFallbackToNonCanonicalStreams(t *testing.T)
 	}
 }
 
+func TestS2PlatformEventStreamsUseEntityMetadata(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	tests := []struct {
+		name      string
+		eventType string
+		metadata  eventMetadata
+		want      string
+	}{
+		{
+			name:      "worker lifecycle",
+			eventType: types.EventWorkerLifecycle,
+			metadata:  eventMetadata{WorkerID: "worker-1", PoolName: "default"},
+			want:      "events/workers/worker-1",
+		},
+		{
+			name:      "worker pool state",
+			eventType: types.EventWorkerPoolDegraded,
+			metadata:  eventMetadata{PoolName: "gpu/default"},
+			want:      "events/worker-pools/gpu_default",
+		},
+		{
+			name:      "gateway endpoint",
+			eventType: types.EventGatewayEndpointCalled,
+			metadata:  eventMetadata{WorkspaceID: "workspace-1"},
+			want:      "events/workspaces/workspace-1",
+		},
+		{
+			name:      "stub state",
+			eventType: "stub.state.degraded",
+			metadata:  eventMetadata{WorkspaceID: "workspace-1", StubID: "stub-1"},
+			want:      "events/workspaces/workspace-1/stubs/stub-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := repo.streamNameForEvent(tt.eventType, tt.metadata)
+			if got := string(stream); got != tt.want {
+				t.Fatalf("unexpected stream name: got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 	repo := &EventClientRepo{}
 	event, err := repo.createEventObject(types.EventContainerEvent, types.EventContainerEventSchemaVersion, types.EventContainerEventSchema{
@@ -59,6 +104,22 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)
+	}
+}
+
+func TestEventMetadataPoolNameRoundTrip(t *testing.T) {
+	repo := &EventClientRepo{}
+	event, err := repo.createEventObject(types.EventWorkerPoolDegraded, types.EventWorkerPoolStateSchemaVersion, types.EventWorkerPoolStateSchema{
+		PoolName: "default",
+		Status:   string(types.WorkerPoolStatusDegraded),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := eventMetadataFromCloudEvent(event)
+	if got, want := metadata.PoolName, "default"; got != want {
+		t.Fatalf("unexpected pool metadata: got %q want %q", got, want)
 	}
 }
 
@@ -214,6 +275,13 @@ func TestSummaryIncludesLogTimingCheckpoints(t *testing.T) {
 			DurationMs: 1000,
 		},
 		{
+			Type:       types.EventContainerLifecycle,
+			EventID:    string(types.ContainerLifecycleWorkerQueueReceive),
+			StartTime:  now.Add(-100 * time.Millisecond),
+			EndTime:    now.Add(-50 * time.Millisecond),
+			DurationMs: 50,
+		},
+		{
 			Type:      types.EventContainerEvent,
 			EventID:   string(types.ContainerEventRunnerProcessStarted),
 			Timestamp: now.Add(2 * time.Second),
@@ -250,6 +318,9 @@ func TestSummaryIncludesLogTimingCheckpoints(t *testing.T) {
 	}
 	if got, want := summary["scheduler_queue_to_running_ms"], int64(1500); got != want {
 		t.Fatalf("unexpected scheduler queue to running summary: got %d want %d", got, want)
+	}
+	if got, want := summary["scheduler_queue_to_worker_receive_ms"], int64(400); got != want {
+		t.Fatalf("unexpected scheduler queue to worker receive summary: got %d want %d", got, want)
 	}
 	if got, want := summary["running_to_runner_process_started_ms"], int64(1000); got != want {
 		t.Fatalf("unexpected running to process summary: got %d want %d", got, want)

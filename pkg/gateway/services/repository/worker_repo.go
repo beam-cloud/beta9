@@ -15,6 +15,8 @@ import (
 type WorkerRepositoryService struct {
 	ctx              context.Context
 	cacheCoordinator *cache.Coordinator
+	cacheMetadata    cache.CacheMetadataStore
+	workerEvents     *workerEventBroker
 	workerRepo       repository.WorkerRepository
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
@@ -27,6 +29,8 @@ func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.Worke
 	service := &WorkerRepositoryService{ctx: ctx, workerRepo: workerRepo}
 	if rdb != nil {
 		service.cacheCoordinator = cache.NewCoordinator(repository.NewCacheRedisRepository(rdb))
+		service.cacheMetadata = cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb.UniversalClient)
+		service.workerEvents = newWorkerEventBroker(ctx, rdb)
 	}
 	return service
 }

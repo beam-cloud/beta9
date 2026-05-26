@@ -46,11 +46,16 @@ type Event struct {
 
 const (
 	EventTypeStopContainer  EventType = "STOP_CONTAINER"
+	EventTypeStopBuild      EventType = "STOP_BUILD"
 	EventTypeReloadInstance EventType = "RELOAD_INSTANCE"
 )
 
 func StopBuildEventType(containerId string) EventType {
 	return EventType("stop-build-" + containerId)
+}
+
+func EventChannelKey(eventType EventType) string {
+	return fmt.Sprintf("%s/%s", eventChannelPrefix, eventType)
 }
 
 // Send an event over the bus
@@ -65,7 +70,7 @@ func (eb *EventBus) Send(event *Event) (string, error) {
 	eventId := base64.URLEncoding.EncodeToString(h.Sum(nil))
 
 	eventKey := fmt.Sprintf("%s:%s", eventPrefix, eventId)
-	eventChannelKey := fmt.Sprintf("%s/%s", eventChannelPrefix, event.Type)
+	eventChannelKey := EventChannelKey(event.Type)
 
 	res, err := eb.rdb.Exists(context.TODO(), eventKey).Result()
 	if err != nil {
@@ -153,7 +158,7 @@ func (eb *EventBus) receive(ctx context.Context, wg *sync.WaitGroup, eventType s
 
 	log.Info().Msgf("receiving %s events", eventType)
 
-	eventChannelKey := fmt.Sprintf("%s/%s", eventChannelPrefix, eventType)
+	eventChannelKey := EventChannelKey(EventType(eventType))
 	messages, errs := eb.rdb.Subscribe(ctx, eventChannelKey)
 
 retry:
@@ -188,7 +193,7 @@ retry:
 
 // Handle events in a go-routine so as not to block event channel
 func (eb *EventBus) handleEvent(eventId string, event *Event, lock *RedisLock) {
-	eventChannelKey := fmt.Sprintf("%s/%s", eventChannelPrefix, event.Type)
+	eventChannelKey := EventChannelKey(event.Type)
 	lockKey := fmt.Sprintf("%s:%s:%s", eventPrefix, eventId, eventLockSuffix)
 	if lock != nil {
 		defer lock.Release(lockKey)

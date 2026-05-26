@@ -194,6 +194,7 @@ const (
 	EventSourceAPITaskStop              EventSource = "api.task.stop"
 	EventSourceEndpointAutoscaler       EventSource = "endpoint.autoscaler"
 	EventSourceWorkerEventBus           EventSource = "worker.event_bus"
+	EventSourceWorkerEventStream        EventSource = "worker.event_stream"
 	EventSourceWorkerLogger             EventSource = "worker.logger"
 	EventSourceWorkerNetwork            EventSource = "worker.network"
 	EventSourceWorkerRuntime            EventSource = "worker.runtime"
