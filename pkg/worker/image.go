@@ -38,10 +38,12 @@ import (
 )
 
 const (
-	imageBundlePath    string = "/dev/shm/images"
-	imageTmpDir        string = "/tmp"
-	metricsSourceLabel        = "image_client"
-	pullLazyBackoff           = 1000 * time.Millisecond
+	imageBundlePath                string = "/dev/shm/images"
+	imageTmpDir                    string = "/tmp"
+	metricsSourceLabel                    = "image_client"
+	pullLazyBackoff                       = 1000 * time.Millisecond
+	embeddedImageCacheWaitTimeout         = 2 * time.Minute
+	embeddedImageCacheWaitInterval        = 250 * time.Millisecond
 )
 
 var (
@@ -847,13 +849,13 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 
 	metadataStart := time.Now()
 	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
-		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), true, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, nil)
 		return true, nil
 	} else if err != nil {
-		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), false, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), false, nil)
 		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive content cache metadata unavailable")
 	} else {
-		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_metadata_copy"), metadataStart, time.Since(metadataStart), true, map[string]string{"hit": "false"})
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, map[string]string{"hit": "false"})
 	}
 
 	cachePath := c.imageArchiveCachePath(imageId)
@@ -896,26 +898,68 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
 	}
 	if err != nil {
-		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_store"), storeStart, time.Since(storeStart), false, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheStore, storeStart, time.Since(storeStart), false, nil)
+		if errors.Is(err, cache.ErrUnableToAcquireLock) {
+			waitStart := time.Now()
+			if ok, waitErr := c.waitForImageArchiveContentCache(ctx, archivePath, imageId); ok {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), true, map[string]string{
+					"reason": "store_lock_contended",
+				})
+				return true, nil
+			} else if waitErr != nil {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), false, map[string]string{
+					"reason": "store_lock_contended",
+				})
+				return false, waitErr
+			}
+		}
 		return false, err
 	}
-	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_store"), storeStart, time.Since(storeStart), true, map[string]string{
+	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheStore, storeStart, time.Since(storeStart), true, map[string]string{
 		"registry_store": c.config.ImageService.RegistryStore,
 	})
 
 	restoreStart := time.Now()
 	size, err := c.registry.Size(ctx, imageId)
 	if err != nil {
-		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), false, nil)
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, nil)
 		return false, err
 	}
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size, routingKey); err != nil {
-		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), false, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
 		return false, err
 	}
-	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.embedded_cache_restore"), restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
+	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
 
 	return true, nil
+}
+
+func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archivePath, imageId string) (bool, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, embeddedImageCacheWaitTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(embeddedImageCacheWaitInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		ok, err := c.copyImageArchiveFromContentCacheMetadata(waitCtx, archivePath, imageId)
+		if ok {
+			return true, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+
+		select {
+		case <-waitCtx.Done():
+			if lastErr != nil {
+				return false, lastErr
+			}
+			return false, waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Context, archivePath, imageId string) (bool, error) {

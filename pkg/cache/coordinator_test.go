@@ -88,7 +88,7 @@ func (r *memoryCoordinatorRepository) RemoveCacheLogicalHost(ctx context.Context
 	return nil
 }
 
-func TestCoordinatorDeduplicatesLogicalHostsAndPromotesRegistrations(t *testing.T) {
+func TestCoordinatorListsLiveRegistrationsWithActiveFirst(t *testing.T) {
 	repo := newMemoryCoordinatorRepository()
 	coordinator := NewCoordinator(repo)
 
@@ -117,9 +117,13 @@ func TestCoordinatorDeduplicatesLogicalHostsAndPromotesRegistrations(t *testing.
 
 	hosts, err := coordinator.ListHosts(ctx, "default", "default")
 	require.NoError(t, err)
-	require.Len(t, hosts, 1)
+	require.Len(t, hosts, 2)
 	require.Equal(t, logicalHostID, hosts[0].LogicalHostID)
-	require.Equal(t, "worker-a", hosts[0].RegistrationID)
+	require.Equal(t, "worker-b", hosts[0].RegistrationID)
+	require.Equal(t, "10.0.0.2:2049", hosts[0].PrivateAddr)
+	require.Equal(t, logicalHostID, hosts[1].LogicalHostID)
+	require.Equal(t, "worker-a", hosts[1].RegistrationID)
+	require.Equal(t, "10.0.0.1:2049", hosts[1].PrivateAddr)
 
 	err = coordinator.UnregisterHost(ctx, "default", "default", logicalHostID, "worker-a")
 	require.NoError(t, err)
@@ -130,6 +134,40 @@ func TestCoordinatorDeduplicatesLogicalHostsAndPromotesRegistrations(t *testing.
 	require.Equal(t, logicalHostID, hosts[0].LogicalHostID)
 	require.Equal(t, "worker-b", hosts[0].RegistrationID)
 	require.Equal(t, "10.0.0.2:2049", hosts[0].PrivateAddr)
+}
+
+func TestCoordinatorListsBackupRegistrationWhenActiveRegistrationStillExists(t *testing.T) {
+	repo := newMemoryCoordinatorRepository()
+	coordinator := NewCoordinator(repo)
+	ctx := context.Background()
+
+	logicalHostID := "cache-host-default-node-a-path-0"
+	for _, registration := range []struct {
+		id   string
+		addr string
+	}{
+		{id: "worker-a", addr: "10.0.0.1:2049"},
+		{id: "worker-b", addr: "10.0.0.2:2049"},
+	} {
+		require.NoError(t, coordinator.RegisterHost(ctx, CoordinatorHost{
+			LogicalHostID:  logicalHostID,
+			RegistrationID: registration.id,
+			PoolName:       "default",
+			Locality:       "default",
+			NodeID:         "node-a",
+			CachePathID:    "path",
+			Addr:           registration.addr,
+			PrivateAddr:    registration.addr,
+		}, 30*time.Second))
+	}
+
+	require.NoError(t, repo.SetActiveCacheRegistration(ctx, logicalHostID, "worker-a", 30*time.Second))
+
+	hosts, err := coordinator.ListHosts(ctx, "default", "default")
+	require.NoError(t, err)
+	require.Len(t, hosts, 2)
+	require.Equal(t, "worker-a", hosts[0].RegistrationID)
+	require.Equal(t, "worker-b", hosts[1].RegistrationID)
 }
 
 func TestCoordinatorPromotesRegisteringRegistrationWhenActiveRegistrationIsGone(t *testing.T) {

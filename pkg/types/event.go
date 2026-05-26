@@ -339,6 +339,10 @@ const (
 	ContainerLifecycleSchedulerProvisionWorker    ContainerLifecycleID = "scheduler.provision_worker"
 	ContainerLifecycleWorkerQueueReceive          ContainerLifecycleID = "worker.queue_receive"
 	ContainerLifecycleImageLoad                   ContainerLifecycleID = "image.load"
+	ContainerLifecycleImageEmbeddedCacheMetadata  ContainerLifecycleID = "image.embedded_cache_metadata_copy"
+	ContainerLifecycleImageEmbeddedCacheStore     ContainerLifecycleID = "image.embedded_cache_store"
+	ContainerLifecycleImageEmbeddedCacheWait      ContainerLifecycleID = "image.embedded_cache_wait"
+	ContainerLifecycleImageEmbeddedCacheRestore   ContainerLifecycleID = "image.embedded_cache_restore"
 	ContainerLifecycleSetWorkerAddress            ContainerLifecycleID = "worker.set_worker_address"
 	ContainerLifecyclePortAllocation              ContainerLifecycleID = "worker.port_allocation"
 	ContainerLifecycleReadBundleConfig            ContainerLifecycleID = "worker.read_bundle_config"
@@ -409,6 +413,10 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleSchedulerProvisionWorker:    {ID: ContainerLifecycleSchedulerProvisionWorker, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker provisioning"},
 	ContainerLifecycleWorkerQueueReceive:          {ID: ContainerLifecycleWorkerQueueReceive, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker queue receive"},
 	ContainerLifecycleImageLoad:                   {ID: ContainerLifecycleImageLoad, Domain: EventDomainImage, ParentID: ContainerLifecycleStartup, Label: "Image load", Required: true},
+	ContainerLifecycleImageEmbeddedCacheMetadata:  {ID: ContainerLifecycleImageEmbeddedCacheMetadata, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache metadata copy"},
+	ContainerLifecycleImageEmbeddedCacheStore:     {ID: ContainerLifecycleImageEmbeddedCacheStore, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache store"},
+	ContainerLifecycleImageEmbeddedCacheWait:      {ID: ContainerLifecycleImageEmbeddedCacheWait, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Wait for embedded image cache"},
+	ContainerLifecycleImageEmbeddedCacheRestore:   {ID: ContainerLifecycleImageEmbeddedCacheRestore, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache restore"},
 	ContainerLifecycleSetWorkerAddress:            {ID: ContainerLifecycleSetWorkerAddress, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set worker address"},
 	ContainerLifecyclePortAllocation:              {ID: ContainerLifecyclePortAllocation, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Port allocation"},
 	ContainerLifecycleReadBundleConfig:            {ID: ContainerLifecycleReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Read bundle config"},

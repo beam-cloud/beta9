@@ -375,6 +375,11 @@ func (c *Client) addHost(host *Host) error {
 	c.grpcClients[host.HostId] = proto.NewCacheClient(conn)
 	c.grpcConns[host.HostId] = conn
 	c.hasher.Add(host)
+	for hash, entry := range c.localHostCache {
+		if entry.host != nil && entry.host.HostId == host.HostId {
+			delete(c.localHostCache, hash)
+		}
+	}
 
 	go c.monitorHost(host)
 	return nil
@@ -585,6 +590,43 @@ func (c *Client) CacheFSMetadata(ctx context.Context, path string) (*FSMetadata,
 		return nil, ErrClientNotFound
 	}
 	return c.metadataStore.GetFsNode(ctx, GenerateFsID(path))
+}
+
+func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info os.FileInfo, routingKey string) (string, bool) {
+	if c == nil || cachePath == "" || info == nil || info.IsDir() {
+		return "", false
+	}
+
+	metadata, err := c.CacheFSMetadata(ctx, cachePath)
+	if err != nil || !cacheFSMetadataMatchesFileInfo(metadata, info) {
+		return "", false
+	}
+
+	for _, store := range c.localStoresSnapshot() {
+		if store.Exists(metadata.Hash) {
+			return metadata.Hash, true
+		}
+	}
+
+	if routingKey == "" {
+		routingKey = cachePath
+	}
+	exists, err := c.IsCachedNearby(metadata.Hash, routingKey)
+	if err != nil || !exists {
+		return "", false
+	}
+	return metadata.Hash, true
+}
+
+func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool {
+	if metadata == nil || metadata.Hash == "" || info == nil || info.IsDir() || info.Size() < 0 {
+		return false
+	}
+
+	modTime := info.ModTime()
+	return metadata.Size == uint64(info.Size()) &&
+		metadata.Mtime == uint64(modTime.Unix()) &&
+		metadata.Mtimensec == uint32(modTime.Nanosecond())
 }
 
 func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
@@ -1374,12 +1416,7 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 		opts.RoutingKey = source.CachePath
 	}
 
-	file, err := os.Open(source.Path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	info, err := file.Stat()
+	info, err := os.Stat(source.Path)
 	if err != nil {
 		return "", err
 	}
@@ -1388,7 +1425,23 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
+	if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
+		return hash, nil
+	}
+
+	file, err := os.Open(source.Path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
 	hash, err := c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, func() (string, error) {
+		if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
+			return hash, nil
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
 		return c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
 	})
 	if err != nil {
