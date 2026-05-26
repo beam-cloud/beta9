@@ -25,6 +25,13 @@ const (
 )
 
 const (
+	DefaultRuncStartConcurrency   int   = 32
+	DefaultGvisorStartConcurrency int   = 32
+	RuncStartConcurrencyPerCPU    int64 = 2
+	GvisorStartConcurrencyPerCPU  int64 = 4
+)
+
+const (
 	StubStateDegraded = "degraded"
 	StubStateWarning  = "warning"
 	StubStateHealthy  = "healthy"
@@ -83,6 +90,7 @@ func (w *Worker) ToProto() *pb.Worker {
 		Preemptable:          w.Preemptable,
 		BuildVersion:         w.BuildVersion,
 		ActiveContainers:     containers,
+		Runtime:              w.Runtime,
 	}
 }
 
@@ -110,6 +118,7 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		Preemptable:          in.Preemptable,
 		BuildVersion:         in.BuildVersion,
 		ActiveContainers:     containers,
+		Runtime:              in.Runtime,
 	}
 }
 
@@ -235,6 +244,50 @@ type ContainerRequest struct {
 
 func (c *ContainerRequest) RequiresGPU() bool {
 	return len(c.GpuRequest) > 0 || c.Gpu != ""
+}
+
+func WorkerStartConcurrencyForPool(poolConfig WorkerPoolConfig, globalRuntime, runtimeType string, workerCPU int64) int {
+	if runtimeType == "" {
+		runtimeType = poolConfig.ContainerRuntime
+	}
+	if runtimeType == "" {
+		runtimeType = globalRuntime
+	}
+	if runtimeType == "" {
+		runtimeType = ContainerRuntimeRunc.String()
+	}
+
+	limit := DefaultRuncStartConcurrency
+	perCPU := RuncStartConcurrencyPerCPU
+	if runtimeType == ContainerRuntimeGvisor.String() {
+		limit = DefaultGvisorStartConcurrency
+		perCPU = GvisorStartConcurrencyPerCPU
+	}
+	if poolConfig.ContainerStartConcurrency > 0 {
+		limit = poolConfig.ContainerStartConcurrency
+	}
+
+	if workerCPU <= 0 {
+		return limit
+	}
+
+	maxStarts := int((workerCPU*perCPU + 999) / 1000)
+	if maxStarts < 1 {
+		maxStarts = 1
+	}
+	if limit > maxStarts {
+		return maxStarts
+	}
+	return limit
+}
+
+func WorkerStartConcurrency(workerConfig WorkerConfig, worker *Worker) int {
+	if worker == nil {
+		return DefaultRuncStartConcurrency
+	}
+
+	poolConfig := workerConfig.Pools[worker.PoolName]
+	return WorkerStartConcurrencyForPool(poolConfig, workerConfig.ContainerRuntime, worker.Runtime, worker.TotalCpu)
 }
 
 // IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container

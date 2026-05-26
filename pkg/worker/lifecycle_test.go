@@ -149,6 +149,105 @@ func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
 	}
 }
 
+func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.T) {
+	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+
+	worker := &Worker{
+		config: types.AppConfig{
+			Worker: types.WorkerConfig{
+				ContainerResourceLimits: types.ContainerResourceLimitsConfig{
+					CPUEnforced:    true,
+					MemoryEnforced: true,
+				},
+			},
+		},
+		runtime:            rt,
+		containerInstances: containerInstances,
+	}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         100,
+		Memory:      128,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeSandbox),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.NotNil(t, spec.Linux.Resources)
+	require.Nil(t, spec.Linux.Resources.CPU)
+	require.NotNil(t, spec.Linux.Resources.Memory)
+
+	instance, exists := containerInstances.Get("container-1")
+	require.True(t, exists)
+	require.NotNil(t, instance.DeferredCPUQuota)
+}
+
+func TestSpecFromRequestKeepsSandboxCPUThrottleWhenRuntimeCannotUpdate(t *testing.T) {
+	rt := &mockRuntime{name: types.ContainerRuntimeGvisor.String()}
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+
+	worker := &Worker{
+		config: types.AppConfig{
+			Worker: types.WorkerConfig{
+				ContainerResourceLimits: types.ContainerResourceLimitsConfig{
+					CPUEnforced: true,
+				},
+			},
+		},
+		runtime:            rt,
+		containerInstances: containerInstances,
+	}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         100,
+		Memory:      128,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeSandbox),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.NotNil(t, spec.Linux.Resources)
+	require.NotNil(t, spec.Linux.Resources.CPU)
+
+	instance, exists := containerInstances.Get("container-1")
+	require.True(t, exists)
+	require.Nil(t, instance.DeferredCPUQuota)
+}
+
+func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing.T) {
+	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
+	cpuQuota := int64(10000)
+	period := uint64(100000)
+	instance := &ContainerInstance{
+		Id: "container-1",
+		DeferredCPUQuota: &specs.LinuxCPU{
+			Quota:  &cpuQuota,
+			Period: &period,
+		},
+		Runtime: rt,
+	}
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	containerInstances.Set("container-1", instance)
+
+	worker := &Worker{containerInstances: containerInstances}
+	err := worker.applyDeferredSandboxCPUThrottle(&types.ContainerRequest{ContainerId: "container-1"}, instance)
+	require.NoError(t, err)
+	require.Equal(t, "container-1", rt.updateContainerID)
+	require.NotNil(t, rt.updatedResources)
+	require.Equal(t, cpuQuota, *rt.updatedResources.CPU.Quota)
+
+	updated, exists := containerInstances.Get("container-1")
+	require.True(t, exists)
+	require.Nil(t, updated.DeferredCPUQuota)
+}
+
 func TestNormalizeContainerExitCodePreservesUnexpectedSigkill(t *testing.T) {
 	assert.Equal(t,
 		int(types.ContainerExitCodeOomKill),
@@ -734,6 +833,19 @@ func (m *mockRuntime) Restore(ctx context.Context, containerID string, opts *run
 
 func (m *mockRuntime) Close() error {
 	return nil
+}
+
+type mockResourceRuntime struct {
+	mockRuntime
+	updateContainerID string
+	updatedResources  *specs.LinuxResources
+	updateErr         error
+}
+
+func (m *mockResourceRuntime) UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error {
+	m.updateContainerID = containerID
+	m.updatedResources = resources
+	return m.updateErr
 }
 
 type deleteContextRuntime struct {

@@ -1971,6 +1971,132 @@ func (x *SetContainerIpResponse) GetErrorMsg() string {
 	return ""
 }
 
+type MoveContainerIpRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	NetworkPrefix   string `protobuf:"bytes,1,opt,name=network_prefix,json=networkPrefix,proto3" json:"network_prefix,omitempty"`
+	FromContainerId string `protobuf:"bytes,2,opt,name=from_container_id,json=fromContainerId,proto3" json:"from_container_id,omitempty"`
+	ToContainerId   string `protobuf:"bytes,3,opt,name=to_container_id,json=toContainerId,proto3" json:"to_container_id,omitempty"`
+	IpAddress       string `protobuf:"bytes,4,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+}
+
+func (x *MoveContainerIpRequest) Reset() {
+	*x = MoveContainerIpRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_repo_proto_msgTypes[33]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *MoveContainerIpRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveContainerIpRequest) ProtoMessage() {}
+
+func (x *MoveContainerIpRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_repo_proto_msgTypes[33]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveContainerIpRequest.ProtoReflect.Descriptor instead.
+func (*MoveContainerIpRequest) Descriptor() ([]byte, []int) {
+	return file_worker_repo_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *MoveContainerIpRequest) GetNetworkPrefix() string {
+	if x != nil {
+		return x.NetworkPrefix
+	}
+	return ""
+}
+
+func (x *MoveContainerIpRequest) GetFromContainerId() string {
+	if x != nil {
+		return x.FromContainerId
+	}
+	return ""
+}
+
+func (x *MoveContainerIpRequest) GetToContainerId() string {
+	if x != nil {
+		return x.ToContainerId
+	}
+	return ""
+}
+
+func (x *MoveContainerIpRequest) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+type MoveContainerIpResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok       bool   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrorMsg string `protobuf:"bytes,2,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+}
+
+func (x *MoveContainerIpResponse) Reset() {
+	*x = MoveContainerIpResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_repo_proto_msgTypes[34]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *MoveContainerIpResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MoveContainerIpResponse) ProtoMessage() {}
+
+func (x *MoveContainerIpResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_repo_proto_msgTypes[34]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MoveContainerIpResponse.ProtoReflect.Descriptor instead.
+func (*MoveContainerIpResponse) Descriptor() ([]byte, []int) {
+	return file_worker_repo_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *MoveContainerIpResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *MoveContainerIpResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
 type GetContainerIpRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1983,7 +2109,7 @@ type GetContainerIpRequest struct {
 func (x *GetContainerIpRequest) Reset() {
 	*x = GetContainerIpRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_worker_repo_proto_msgTypes[33]
+		mi := &file_worker_repo_proto_msgTypes[35]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1996,7 +2122,7 @@ func (x *GetContainerIpRequest) String() string {
 func (*GetContainerIpRequest) ProtoMessage() {}
 
 func (x *GetContainerIpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_repo_proto_msgTypes[33]
+	mi := &file_worker_repo_proto_msgTypes[35]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2009,7 +2135,7 @@ func (x *GetContainerIpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerIpRequest.ProtoReflect.Descriptor instead.
 func (*GetContainerIpRequest) Descriptor() ([]byte, []int) {
-	return file_worker_repo_proto_rawDescGZIP(), []int{33}
+	return file_worker_repo_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetContainerIpRequest) GetNetworkPrefix() string {
@@ -2039,7 +2165,7 @@ type GetContainerIpResponse struct {
 func (x *GetContainerIpResponse) Reset() {
 	*x = GetContainerIpResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_worker_repo_proto_msgTypes[34]
+		mi := &file_worker_repo_proto_msgTypes[36]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2052,7 +2178,7 @@ func (x *GetContainerIpResponse) String() string {
 func (*GetContainerIpResponse) ProtoMessage() {}
 
 func (x *GetContainerIpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_repo_proto_msgTypes[34]
+	mi := &file_worker_repo_proto_msgTypes[36]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2065,7 +2191,7 @@ func (x *GetContainerIpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerIpResponse.ProtoReflect.Descriptor instead.
 func (*GetContainerIpResponse) Descriptor() ([]byte, []int) {
-	return file_worker_repo_proto_rawDescGZIP(), []int{34}
+	return file_worker_repo_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *GetContainerIpResponse) GetOk() bool {
@@ -2100,7 +2226,7 @@ type GetContainerIpsRequest struct {
 func (x *GetContainerIpsRequest) Reset() {
 	*x = GetContainerIpsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_worker_repo_proto_msgTypes[35]
+		mi := &file_worker_repo_proto_msgTypes[37]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2113,7 +2239,7 @@ func (x *GetContainerIpsRequest) String() string {
 func (*GetContainerIpsRequest) ProtoMessage() {}
 
 func (x *GetContainerIpsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_repo_proto_msgTypes[35]
+	mi := &file_worker_repo_proto_msgTypes[37]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2126,7 +2252,7 @@ func (x *GetContainerIpsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerIpsRequest.ProtoReflect.Descriptor instead.
 func (*GetContainerIpsRequest) Descriptor() ([]byte, []int) {
-	return file_worker_repo_proto_rawDescGZIP(), []int{35}
+	return file_worker_repo_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetContainerIpsRequest) GetNetworkPrefix() string {
@@ -2149,7 +2275,7 @@ type GetContainerIpsResponse struct {
 func (x *GetContainerIpsResponse) Reset() {
 	*x = GetContainerIpsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_worker_repo_proto_msgTypes[36]
+		mi := &file_worker_repo_proto_msgTypes[38]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2162,7 +2288,7 @@ func (x *GetContainerIpsResponse) String() string {
 func (*GetContainerIpsResponse) ProtoMessage() {}
 
 func (x *GetContainerIpsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_repo_proto_msgTypes[36]
+	mi := &file_worker_repo_proto_msgTypes[38]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2175,7 +2301,7 @@ func (x *GetContainerIpsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetContainerIpsResponse.ProtoReflect.Descriptor instead.
 func (*GetContainerIpsResponse) Descriptor() ([]byte, []int) {
-	return file_worker_repo_proto_rawDescGZIP(), []int{36}
+	return file_worker_repo_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *GetContainerIpsResponse) GetOk() bool {
@@ -2199,6 +2325,171 @@ func (x *GetContainerIpsResponse) GetErrorMsg() string {
 	return ""
 }
 
+type ContainerIpAssignment struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	IpAddress   string `protobuf:"bytes,2,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+}
+
+func (x *ContainerIpAssignment) Reset() {
+	*x = ContainerIpAssignment{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_repo_proto_msgTypes[39]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ContainerIpAssignment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerIpAssignment) ProtoMessage() {}
+
+func (x *ContainerIpAssignment) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_repo_proto_msgTypes[39]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerIpAssignment.ProtoReflect.Descriptor instead.
+func (*ContainerIpAssignment) Descriptor() ([]byte, []int) {
+	return file_worker_repo_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ContainerIpAssignment) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *ContainerIpAssignment) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+type GetContainerIpAssignmentsRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	NetworkPrefix string `protobuf:"bytes,1,opt,name=network_prefix,json=networkPrefix,proto3" json:"network_prefix,omitempty"`
+}
+
+func (x *GetContainerIpAssignmentsRequest) Reset() {
+	*x = GetContainerIpAssignmentsRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_repo_proto_msgTypes[40]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetContainerIpAssignmentsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetContainerIpAssignmentsRequest) ProtoMessage() {}
+
+func (x *GetContainerIpAssignmentsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_repo_proto_msgTypes[40]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetContainerIpAssignmentsRequest.ProtoReflect.Descriptor instead.
+func (*GetContainerIpAssignmentsRequest) Descriptor() ([]byte, []int) {
+	return file_worker_repo_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *GetContainerIpAssignmentsRequest) GetNetworkPrefix() string {
+	if x != nil {
+		return x.NetworkPrefix
+	}
+	return ""
+}
+
+type GetContainerIpAssignmentsResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok          bool                     `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	Assignments []*ContainerIpAssignment `protobuf:"bytes,2,rep,name=assignments,proto3" json:"assignments,omitempty"`
+	ErrorMsg    string                   `protobuf:"bytes,3,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+}
+
+func (x *GetContainerIpAssignmentsResponse) Reset() {
+	*x = GetContainerIpAssignmentsResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_repo_proto_msgTypes[41]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetContainerIpAssignmentsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetContainerIpAssignmentsResponse) ProtoMessage() {}
+
+func (x *GetContainerIpAssignmentsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_repo_proto_msgTypes[41]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetContainerIpAssignmentsResponse.ProtoReflect.Descriptor instead.
+func (*GetContainerIpAssignmentsResponse) Descriptor() ([]byte, []int) {
+	return file_worker_repo_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *GetContainerIpAssignmentsResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *GetContainerIpAssignmentsResponse) GetAssignments() []*ContainerIpAssignment {
+	if x != nil {
+		return x.Assignments
+	}
+	return nil
+}
+
+func (x *GetContainerIpAssignmentsResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
 type RemoveContainerIpRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -2211,7 +2502,7 @@ type RemoveContainerIpRequest struct {
 func (x *RemoveContainerIpRequest) Reset() {
 	*x = RemoveContainerIpRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_worker_repo_proto_msgTypes[37]
+		mi := &file_worker_repo_proto_msgTypes[42]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2224,7 +2515,7 @@ func (x *RemoveContainerIpRequest) String() string {
 func (*RemoveContainerIpRequest) ProtoMessage() {}
 
 func (x *RemoveContainerIpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_repo_proto_msgTypes[37]
+	mi := &file_worker_repo_proto_msgTypes[42]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2237,7 +2528,7 @@ func (x *RemoveContainerIpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveContainerIpRequest.ProtoReflect.Descriptor instead.
 func (*RemoveContainerIpRequest) Descriptor() ([]byte, []int) {
-	return file_worker_repo_proto_rawDescGZIP(), []int{37}
+	return file_worker_repo_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RemoveContainerIpRequest) GetNetworkPrefix() string {
@@ -2266,7 +2557,7 @@ type RemoveContainerIpResponse struct {
 func (x *RemoveContainerIpResponse) Reset() {
 	*x = RemoveContainerIpResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_worker_repo_proto_msgTypes[38]
+		mi := &file_worker_repo_proto_msgTypes[43]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2279,7 +2570,7 @@ func (x *RemoveContainerIpResponse) String() string {
 func (*RemoveContainerIpResponse) ProtoMessage() {}
 
 func (x *RemoveContainerIpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_worker_repo_proto_msgTypes[38]
+	mi := &file_worker_repo_proto_msgTypes[43]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2292,7 +2583,7 @@ func (x *RemoveContainerIpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveContainerIpResponse.ProtoReflect.Descriptor instead.
 func (*RemoveContainerIpResponse) Descriptor() ([]byte, []int) {
-	return file_worker_repo_proto_rawDescGZIP(), []int{38}
+	return file_worker_repo_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *RemoveContainerIpResponse) GetOk() bool {
@@ -2525,27 +2816,62 @@ var file_worker_repo_proto_rawDesc = []byte{
 	0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18,
 	0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72,
 	0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72,
-	0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x61, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e,
-	0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12,
-	0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69,
-	0x78, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b,
-	0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69,
-	0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f,
-	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x22, 0x64, 0x0a, 0x16, 0x47, 0x65, 0x74,
-	0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f,
-	0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52,
-	0x02, 0x6f, 0x6b, 0x12, 0x1d, 0x0a, 0x0a, 0x69, 0x70, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73,
+	0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0xb2, 0x01, 0x0a, 0x16, 0x4d, 0x6f, 0x76, 0x65, 0x43,
+	0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x12, 0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x70, 0x72, 0x65,
+	0x66, 0x69, 0x78, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65, 0x74, 0x77, 0x6f,
+	0x72, 0x6b, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x12, 0x2a, 0x0a, 0x11, 0x66, 0x72, 0x6f, 0x6d,
+	0x5f, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0f, 0x66, 0x72, 0x6f, 0x6d, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e,
+	0x65, 0x72, 0x49, 0x64, 0x12, 0x26, 0x0a, 0x0f, 0x74, 0x6f, 0x5f, 0x63, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x74,
+	0x6f, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a,
+	0x69, 0x70, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x09, 0x69, 0x70, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x22, 0x46, 0x0a, 0x17, 0x4d,
+	0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65,
+	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f,
+	0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72,
+	0x4d, 0x73, 0x67, 0x22, 0x61, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69,
+	0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x25, 0x0a, 0x0e,
+	0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x50, 0x72, 0x65,
+	0x66, 0x69, 0x78, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72,
+	0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x22, 0x64, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e,
+	0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b,
+	0x12, 0x1d, 0x0a, 0x0a, 0x69, 0x70, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x69, 0x70, 0x41, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x12,
+	0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x03, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x3f, 0x0a, 0x16,
+	0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x73, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72,
+	0x6b, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d,
+	0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x22, 0x58, 0x0a,
+	0x17, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x73,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x10, 0x0a, 0x03, 0x69, 0x70, 0x73, 0x18,
+	0x02, 0x20, 0x03, 0x28, 0x09, 0x52, 0x03, 0x69, 0x70, 0x73, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72,
+	0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65,
+	0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x59, 0x0a, 0x15, 0x43, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74,
+	0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65,
+	0x72, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x69, 0x70, 0x5f, 0x61, 0x64, 0x64, 0x72, 0x65, 0x73,
 	0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x69, 0x70, 0x41, 0x64, 0x64, 0x72, 0x65,
-	0x73, 0x73, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18,
-	0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22,
-	0x3f, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49,
-	0x70, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74,
-	0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x01, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x0d, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78,
-	0x22, 0x58, 0x0a, 0x17, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72,
-	0x49, 0x70, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f,
-	0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x10, 0x0a, 0x03, 0x69,
-	0x70, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x09, 0x52, 0x03, 0x69, 0x70, 0x73, 0x12, 0x1b, 0x0a,
+	0x73, 0x73, 0x22, 0x49, 0x0a, 0x20, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e,
+	0x65, 0x72, 0x49, 0x70, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72,
+	0x6b, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d,
+	0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x22, 0x8a, 0x01,
+	0x0a, 0x21, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70,
+	0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52,
+	0x02, 0x6f, 0x6b, 0x12, 0x38, 0x0a, 0x0b, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e,
+	0x74, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x16, 0x2e, 0x43, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74,
+	0x52, 0x0b, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x1b, 0x0a,
 	0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
 	0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x64, 0x0a, 0x18, 0x52, 0x65,
 	0x6d, 0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52,
@@ -2558,7 +2884,7 @@ var file_worker_repo_proto_rawDesc = []byte{
 	0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a,
 	0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1b, 0x0a,
 	0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x32, 0xf4, 0x0b, 0x0a, 0x17, 0x57,
+	0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x32, 0xa2, 0x0d, 0x0a, 0x17, 0x57,
 	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x70, 0x6f, 0x73, 0x69, 0x74, 0x6f, 0x72, 0x79, 0x53,
 	0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x60, 0x0a, 0x17, 0x47, 0x65, 0x74, 0x4e, 0x65, 0x78,
 	0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
@@ -2640,23 +2966,34 @@ var file_worker_repo_proto_rawDesc = []byte{
 	0x72, 0x49, 0x70, 0x12, 0x16, 0x2e, 0x53, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e,
 	0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x53, 0x65,
 	0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70,
-	0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x43, 0x0a, 0x0e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e,
-	0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x12, 0x16, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f,
-	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x17, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49,
-	0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x46, 0x0a, 0x0f, 0x47,
-	0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x73, 0x12, 0x17,
-	0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x73,
-	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e,
-	0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x22, 0x00, 0x12, 0x4c, 0x0a, 0x11, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e,
-	0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x12, 0x19, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76,
-	0x65, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e, 0x74,
-	0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
-	0x00, 0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
-	0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39,
-	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x46, 0x0a, 0x0f, 0x4d, 0x6f, 0x76, 0x65, 0x43, 0x6f,
+	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x12, 0x17, 0x2e, 0x4d, 0x6f, 0x76, 0x65,
+	0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x18, 0x2e, 0x4d, 0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e,
+	0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x43,
+	0x0a, 0x0e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70,
+	0x12, 0x16, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49,
+	0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x17, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f,
+	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x22, 0x00, 0x12, 0x46, 0x0a, 0x0f, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69,
+	0x6e, 0x65, 0x72, 0x49, 0x70, 0x73, 0x12, 0x17, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74,
+	0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
+	0x18, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70,
+	0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x64, 0x0a, 0x19, 0x47,
+	0x65, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x41, 0x73, 0x73,
+	0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x21, 0x2e, 0x47, 0x65, 0x74, 0x43, 0x6f,
+	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d,
+	0x65, 0x6e, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x47, 0x65,
+	0x74, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x41, 0x73, 0x73, 0x69,
+	0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
+	0x00, 0x12, 0x4c, 0x0a, 0x11, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x12, 0x19, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x43,
+	0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1a, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69,
+	0x6e, 0x65, 0x72, 0x49, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x42,
+	0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65,
+	0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f, 0x70,
+	0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -2671,7 +3008,7 @@ func file_worker_repo_proto_rawDescGZIP() []byte {
 	return file_worker_repo_proto_rawDescData
 }
 
-var file_worker_repo_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
+var file_worker_repo_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_worker_repo_proto_goTypes = []interface{}{
 	(*GetNextContainerRequestRequest)(nil),    // 0: GetNextContainerRequestRequest
 	(*GetNextContainerRequestResponse)(nil),   // 1: GetNextContainerRequestResponse
@@ -2706,64 +3043,74 @@ var file_worker_repo_proto_goTypes = []interface{}{
 	(*RemoveNetworkLockResponse)(nil),         // 30: RemoveNetworkLockResponse
 	(*SetContainerIpRequest)(nil),             // 31: SetContainerIpRequest
 	(*SetContainerIpResponse)(nil),            // 32: SetContainerIpResponse
-	(*GetContainerIpRequest)(nil),             // 33: GetContainerIpRequest
-	(*GetContainerIpResponse)(nil),            // 34: GetContainerIpResponse
-	(*GetContainerIpsRequest)(nil),            // 35: GetContainerIpsRequest
-	(*GetContainerIpsResponse)(nil),           // 36: GetContainerIpsResponse
-	(*RemoveContainerIpRequest)(nil),          // 37: RemoveContainerIpRequest
-	(*RemoveContainerIpResponse)(nil),         // 38: RemoveContainerIpResponse
-	(*ContainerRequest)(nil),                  // 39: types.ContainerRequest
-	(*Worker)(nil),                            // 40: types.Worker
+	(*MoveContainerIpRequest)(nil),            // 33: MoveContainerIpRequest
+	(*MoveContainerIpResponse)(nil),           // 34: MoveContainerIpResponse
+	(*GetContainerIpRequest)(nil),             // 35: GetContainerIpRequest
+	(*GetContainerIpResponse)(nil),            // 36: GetContainerIpResponse
+	(*GetContainerIpsRequest)(nil),            // 37: GetContainerIpsRequest
+	(*GetContainerIpsResponse)(nil),           // 38: GetContainerIpsResponse
+	(*ContainerIpAssignment)(nil),             // 39: ContainerIpAssignment
+	(*GetContainerIpAssignmentsRequest)(nil),  // 40: GetContainerIpAssignmentsRequest
+	(*GetContainerIpAssignmentsResponse)(nil), // 41: GetContainerIpAssignmentsResponse
+	(*RemoveContainerIpRequest)(nil),          // 42: RemoveContainerIpRequest
+	(*RemoveContainerIpResponse)(nil),         // 43: RemoveContainerIpResponse
+	(*ContainerRequest)(nil),                  // 44: types.ContainerRequest
+	(*Worker)(nil),                            // 45: types.Worker
 }
 var file_worker_repo_proto_depIdxs = []int32{
-	39, // 0: GetNextContainerRequestResponse.container_request:type_name -> types.ContainerRequest
-	40, // 1: GetWorkerByIdResponse.worker:type_name -> types.Worker
-	39, // 2: UpdateWorkerCapacityRequest.container_request:type_name -> types.ContainerRequest
+	44, // 0: GetNextContainerRequestResponse.container_request:type_name -> types.ContainerRequest
+	45, // 1: GetWorkerByIdResponse.worker:type_name -> types.Worker
+	44, // 2: UpdateWorkerCapacityRequest.container_request:type_name -> types.ContainerRequest
 	20, // 3: RegisterCacheHostRequest.host:type_name -> CacheCoordinatorHost
 	20, // 4: ListCacheHostsResponse.hosts:type_name -> CacheCoordinatorHost
-	0,  // 5: WorkerRepositoryService.GetNextContainerRequest:input_type -> GetNextContainerRequestRequest
-	2,  // 6: WorkerRepositoryService.SetImagePullLock:input_type -> SetImagePullLockRequest
-	4,  // 7: WorkerRepositoryService.RemoveImagePullLock:input_type -> RemoveImagePullLockRequest
-	6,  // 8: WorkerRepositoryService.AddContainerToWorker:input_type -> AddContainerToWorkerRequest
-	8,  // 9: WorkerRepositoryService.RemoveContainerFromWorker:input_type -> RemoveContainerFromWorkerRequest
-	10, // 10: WorkerRepositoryService.GetWorkerById:input_type -> GetWorkerByIdRequest
-	12, // 11: WorkerRepositoryService.ToggleWorkerAvailable:input_type -> ToggleWorkerAvailableRequest
-	14, // 12: WorkerRepositoryService.RemoveWorker:input_type -> RemoveWorkerRequest
-	16, // 13: WorkerRepositoryService.UpdateWorkerCapacity:input_type -> UpdateWorkerCapacityRequest
-	18, // 14: WorkerRepositoryService.SetWorkerKeepAlive:input_type -> SetWorkerKeepAliveRequest
-	21, // 15: WorkerRepositoryService.RegisterCacheHost:input_type -> RegisterCacheHostRequest
-	23, // 16: WorkerRepositoryService.UnregisterCacheHost:input_type -> UnregisterCacheHostRequest
-	25, // 17: WorkerRepositoryService.ListCacheHosts:input_type -> ListCacheHostsRequest
-	27, // 18: WorkerRepositoryService.SetNetworkLock:input_type -> SetNetworkLockRequest
-	29, // 19: WorkerRepositoryService.RemoveNetworkLock:input_type -> RemoveNetworkLockRequest
-	31, // 20: WorkerRepositoryService.SetContainerIp:input_type -> SetContainerIpRequest
-	33, // 21: WorkerRepositoryService.GetContainerIp:input_type -> GetContainerIpRequest
-	35, // 22: WorkerRepositoryService.GetContainerIps:input_type -> GetContainerIpsRequest
-	37, // 23: WorkerRepositoryService.RemoveContainerIp:input_type -> RemoveContainerIpRequest
-	1,  // 24: WorkerRepositoryService.GetNextContainerRequest:output_type -> GetNextContainerRequestResponse
-	3,  // 25: WorkerRepositoryService.SetImagePullLock:output_type -> SetImagePullLockResponse
-	5,  // 26: WorkerRepositoryService.RemoveImagePullLock:output_type -> RemoveImagePullLockResponse
-	7,  // 27: WorkerRepositoryService.AddContainerToWorker:output_type -> AddContainerToWorkerResponse
-	9,  // 28: WorkerRepositoryService.RemoveContainerFromWorker:output_type -> RemoveContainerFromWorkerResponse
-	11, // 29: WorkerRepositoryService.GetWorkerById:output_type -> GetWorkerByIdResponse
-	13, // 30: WorkerRepositoryService.ToggleWorkerAvailable:output_type -> ToggleWorkerAvailableResponse
-	15, // 31: WorkerRepositoryService.RemoveWorker:output_type -> RemoveWorkerResponse
-	17, // 32: WorkerRepositoryService.UpdateWorkerCapacity:output_type -> UpdateWorkerCapacityResponse
-	19, // 33: WorkerRepositoryService.SetWorkerKeepAlive:output_type -> SetWorkerKeepAliveResponse
-	22, // 34: WorkerRepositoryService.RegisterCacheHost:output_type -> RegisterCacheHostResponse
-	24, // 35: WorkerRepositoryService.UnregisterCacheHost:output_type -> UnregisterCacheHostResponse
-	26, // 36: WorkerRepositoryService.ListCacheHosts:output_type -> ListCacheHostsResponse
-	28, // 37: WorkerRepositoryService.SetNetworkLock:output_type -> SetNetworkLockResponse
-	30, // 38: WorkerRepositoryService.RemoveNetworkLock:output_type -> RemoveNetworkLockResponse
-	32, // 39: WorkerRepositoryService.SetContainerIp:output_type -> SetContainerIpResponse
-	34, // 40: WorkerRepositoryService.GetContainerIp:output_type -> GetContainerIpResponse
-	36, // 41: WorkerRepositoryService.GetContainerIps:output_type -> GetContainerIpsResponse
-	38, // 42: WorkerRepositoryService.RemoveContainerIp:output_type -> RemoveContainerIpResponse
-	24, // [24:43] is the sub-list for method output_type
-	5,  // [5:24] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	39, // 5: GetContainerIpAssignmentsResponse.assignments:type_name -> ContainerIpAssignment
+	0,  // 6: WorkerRepositoryService.GetNextContainerRequest:input_type -> GetNextContainerRequestRequest
+	2,  // 7: WorkerRepositoryService.SetImagePullLock:input_type -> SetImagePullLockRequest
+	4,  // 8: WorkerRepositoryService.RemoveImagePullLock:input_type -> RemoveImagePullLockRequest
+	6,  // 9: WorkerRepositoryService.AddContainerToWorker:input_type -> AddContainerToWorkerRequest
+	8,  // 10: WorkerRepositoryService.RemoveContainerFromWorker:input_type -> RemoveContainerFromWorkerRequest
+	10, // 11: WorkerRepositoryService.GetWorkerById:input_type -> GetWorkerByIdRequest
+	12, // 12: WorkerRepositoryService.ToggleWorkerAvailable:input_type -> ToggleWorkerAvailableRequest
+	14, // 13: WorkerRepositoryService.RemoveWorker:input_type -> RemoveWorkerRequest
+	16, // 14: WorkerRepositoryService.UpdateWorkerCapacity:input_type -> UpdateWorkerCapacityRequest
+	18, // 15: WorkerRepositoryService.SetWorkerKeepAlive:input_type -> SetWorkerKeepAliveRequest
+	21, // 16: WorkerRepositoryService.RegisterCacheHost:input_type -> RegisterCacheHostRequest
+	23, // 17: WorkerRepositoryService.UnregisterCacheHost:input_type -> UnregisterCacheHostRequest
+	25, // 18: WorkerRepositoryService.ListCacheHosts:input_type -> ListCacheHostsRequest
+	27, // 19: WorkerRepositoryService.SetNetworkLock:input_type -> SetNetworkLockRequest
+	29, // 20: WorkerRepositoryService.RemoveNetworkLock:input_type -> RemoveNetworkLockRequest
+	31, // 21: WorkerRepositoryService.SetContainerIp:input_type -> SetContainerIpRequest
+	33, // 22: WorkerRepositoryService.MoveContainerIp:input_type -> MoveContainerIpRequest
+	35, // 23: WorkerRepositoryService.GetContainerIp:input_type -> GetContainerIpRequest
+	37, // 24: WorkerRepositoryService.GetContainerIps:input_type -> GetContainerIpsRequest
+	40, // 25: WorkerRepositoryService.GetContainerIpAssignments:input_type -> GetContainerIpAssignmentsRequest
+	42, // 26: WorkerRepositoryService.RemoveContainerIp:input_type -> RemoveContainerIpRequest
+	1,  // 27: WorkerRepositoryService.GetNextContainerRequest:output_type -> GetNextContainerRequestResponse
+	3,  // 28: WorkerRepositoryService.SetImagePullLock:output_type -> SetImagePullLockResponse
+	5,  // 29: WorkerRepositoryService.RemoveImagePullLock:output_type -> RemoveImagePullLockResponse
+	7,  // 30: WorkerRepositoryService.AddContainerToWorker:output_type -> AddContainerToWorkerResponse
+	9,  // 31: WorkerRepositoryService.RemoveContainerFromWorker:output_type -> RemoveContainerFromWorkerResponse
+	11, // 32: WorkerRepositoryService.GetWorkerById:output_type -> GetWorkerByIdResponse
+	13, // 33: WorkerRepositoryService.ToggleWorkerAvailable:output_type -> ToggleWorkerAvailableResponse
+	15, // 34: WorkerRepositoryService.RemoveWorker:output_type -> RemoveWorkerResponse
+	17, // 35: WorkerRepositoryService.UpdateWorkerCapacity:output_type -> UpdateWorkerCapacityResponse
+	19, // 36: WorkerRepositoryService.SetWorkerKeepAlive:output_type -> SetWorkerKeepAliveResponse
+	22, // 37: WorkerRepositoryService.RegisterCacheHost:output_type -> RegisterCacheHostResponse
+	24, // 38: WorkerRepositoryService.UnregisterCacheHost:output_type -> UnregisterCacheHostResponse
+	26, // 39: WorkerRepositoryService.ListCacheHosts:output_type -> ListCacheHostsResponse
+	28, // 40: WorkerRepositoryService.SetNetworkLock:output_type -> SetNetworkLockResponse
+	30, // 41: WorkerRepositoryService.RemoveNetworkLock:output_type -> RemoveNetworkLockResponse
+	32, // 42: WorkerRepositoryService.SetContainerIp:output_type -> SetContainerIpResponse
+	34, // 43: WorkerRepositoryService.MoveContainerIp:output_type -> MoveContainerIpResponse
+	36, // 44: WorkerRepositoryService.GetContainerIp:output_type -> GetContainerIpResponse
+	38, // 45: WorkerRepositoryService.GetContainerIps:output_type -> GetContainerIpsResponse
+	41, // 46: WorkerRepositoryService.GetContainerIpAssignments:output_type -> GetContainerIpAssignmentsResponse
+	43, // 47: WorkerRepositoryService.RemoveContainerIp:output_type -> RemoveContainerIpResponse
+	27, // [27:48] is the sub-list for method output_type
+	6,  // [6:27] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_worker_repo_proto_init() }
@@ -3170,7 +3517,7 @@ func file_worker_repo_proto_init() {
 			}
 		}
 		file_worker_repo_proto_msgTypes[33].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetContainerIpRequest); i {
+			switch v := v.(*MoveContainerIpRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3182,7 +3529,7 @@ func file_worker_repo_proto_init() {
 			}
 		}
 		file_worker_repo_proto_msgTypes[34].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetContainerIpResponse); i {
+			switch v := v.(*MoveContainerIpResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3194,7 +3541,7 @@ func file_worker_repo_proto_init() {
 			}
 		}
 		file_worker_repo_proto_msgTypes[35].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetContainerIpsRequest); i {
+			switch v := v.(*GetContainerIpRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3206,7 +3553,7 @@ func file_worker_repo_proto_init() {
 			}
 		}
 		file_worker_repo_proto_msgTypes[36].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetContainerIpsResponse); i {
+			switch v := v.(*GetContainerIpResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3218,7 +3565,7 @@ func file_worker_repo_proto_init() {
 			}
 		}
 		file_worker_repo_proto_msgTypes[37].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RemoveContainerIpRequest); i {
+			switch v := v.(*GetContainerIpsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3230,6 +3577,66 @@ func file_worker_repo_proto_init() {
 			}
 		}
 		file_worker_repo_proto_msgTypes[38].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetContainerIpsResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_repo_proto_msgTypes[39].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ContainerIpAssignment); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_repo_proto_msgTypes[40].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetContainerIpAssignmentsRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_repo_proto_msgTypes[41].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetContainerIpAssignmentsResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_repo_proto_msgTypes[42].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*RemoveContainerIpRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_repo_proto_msgTypes[43].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*RemoveContainerIpResponse); i {
 			case 0:
 				return &v.state
@@ -3248,7 +3655,7 @@ func file_worker_repo_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_worker_repo_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   39,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

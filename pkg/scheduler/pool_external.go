@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -515,7 +516,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "NETWORK_PREFIX",
-			Value: machineId,
+			Value: common.WorkerNetworkPrefix(wpc.config.ClusterName, machineId),
 		},
 		{
 			Name:  "CACHE_NODE_ID",

@@ -40,6 +40,8 @@ var (
 	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
 	workerNetworkLock            string = "worker:network:%s:lock"
 	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
+	workerNetworkIpRefCounts     string = "worker:network:%s:ip_ref_counts"
+	workerNetworkIpOwner         string = "worker:network:%s:ip_owner:%s"
 	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
 )
 
@@ -217,6 +219,18 @@ func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {
 
 func (rk *redisKeys) WorkerNetworkIpIndex(networkPrefix string) string {
 	return fmt.Sprintf(workerNetworkIpIndex, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerNetworkIpRefCounts(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkIpRefCounts, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerNetworkIpOwner(networkPrefix, ip string) string {
+	return fmt.Sprintf(workerNetworkIpOwner, networkPrefix, ip)
+}
+
+func (rk *redisKeys) WorkerNetworkIpOwnerPrefix(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkIpOwner, networkPrefix, "")
 }
 
 func (rk *redisKeys) WorkerNetworkContainerIp(networkPrefix, containerId string) string {

@@ -20,7 +20,6 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	goproc "github.com/beam-cloud/goproc/pkg"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -28,15 +27,20 @@ import (
 )
 
 const (
-	baseConfigPath            string = "/tmp"
-	defaultContainerDirectory string = types.WorkerUserCodeVolume
-	specBaseName              string = "config.json"
-	initialSpecBaseName       string = "initial_config.json"
-	containerInnerPort        int    = 8001 // Use a fixed port inside the container
-	markRunningRetryTimeout          = 3 * time.Second
-	markRunningRetryInterval         = 100 * time.Millisecond
-	runtimeDeleteTimeout             = 30 * time.Second
+	baseConfigPath              string = "/tmp"
+	defaultContainerDirectory   string = types.WorkerUserCodeVolume
+	specBaseName                string = "config.json"
+	initialSpecBaseName         string = "initial_config.json"
+	containerInnerPort          int    = 8001 // Use a fixed port inside the container
+	markRunningRetryTimeout            = 3 * time.Second
+	markRunningRetryInterval           = 100 * time.Millisecond
+	runtimeDeleteTimeout               = 30 * time.Second
+	sandboxCPUQuotaApplyTimeout        = 2 * time.Second
 )
+
+type containerResourceUpdater interface {
+	UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error
+}
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -382,7 +386,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 
-	log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
+	log.Info().
+		Str("container_id", containerId).
+		Str("stub_type", request.Stub.Type.Kind()).
+		Int("port_count", len(addressMap)).
+		Interface("address_map", addressMap).
+		Msg("set container address map")
 
 	s.containerWg.Add(1)
 
@@ -661,7 +670,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 		if cpuEnforced && resources.CPU != nil {
-			spec.Linux.Resources.CPU = resources.CPU
+			if !s.deferSandboxCPUThrottle(request, resources.CPU) {
+				spec.Linux.Resources.CPU = resources.CPU
+			}
 		}
 		if memoryEnforced && resources.Memory != nil {
 			spec.Linux.Resources.Unified = cgroupV2Parameters
@@ -991,14 +1002,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		phaseStart = time.Now()
-		instance.SandboxProcessManager, err = goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
-		metrics.RecordWorkerStartupPhase("sandbox_process_manager_client", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to create sandbox process manager client: %v", err)
-			return
-		}
-
+		instance.SandboxProcessManager = nil
 		instance.SandboxProcessManagerReady = false
 		instance.ProcessManagerReadyChan = make(chan struct{})
 		s.containerInstances.Set(containerId, instance)
@@ -1044,7 +1048,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, true, map[string]string{"runtime": s.runtime.Name()})
 
 	// Write container config spec to disk
-	configContents, err := json.MarshalIndent(spec, "", " ")
+	configContents, err := json.Marshal(spec)
 	if err != nil {
 		return
 	}
@@ -1107,14 +1111,33 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance, exists := s.containerInstances.Get(containerId)
-			if !exists || instance.SandboxProcessManager == nil {
+			if !exists {
 				return
 			}
 
 			phaseStart := time.Now()
-			processManagerReady := s.waitForProcessManager(ctx, containerId, instance)
+			processManagerClient, processManagerReady, processManagerStats := s.waitForProcessManager(ctx, containerId, instance)
 			metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxProcessManagerReady, phaseStart, processManagerReady, processManagerStats.attrs())
 
+			if fresh, exists := s.containerInstances.Get(containerId); exists {
+				instance = fresh
+			}
+			if processManagerReady {
+				phaseStart = time.Now()
+				err := s.applyDeferredSandboxCPUThrottle(request, instance)
+				metrics.RecordWorkerStartupPhase("sandbox_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
+					"success": fmt.Sprintf("%t", err == nil),
+				})
+				s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxApplyCPUQuota, phaseStart, err == nil, nil)
+				if err != nil {
+					log.Error().Err(err).Str("container_id", containerId).Msg("failed to apply sandbox CPU quota")
+					processManagerReady = false
+				} else if fresh, exists := s.containerInstances.Get(containerId); exists {
+					instance = fresh
+				}
+			}
+			instance.SandboxProcessManager = processManagerClient
 			instance.signalProcessManagerReadiness(processManagerReady)
 			s.containerInstances.Set(containerId, instance)
 
@@ -1482,4 +1505,48 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 		CPU:    resources.GetCPU(request),
 		Memory: resources.GetMemory(request),
 	}, nil
+}
+
+func (s *Worker) deferSandboxCPUThrottle(request *types.ContainerRequest, cpu *specs.LinuxCPU) bool {
+	if cpu == nil || request.Stub.Type.Kind() != types.StubTypeSandbox {
+		return false
+	}
+
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || instance.Runtime == nil {
+		return false
+	}
+	if _, ok := instance.Runtime.(containerResourceUpdater); !ok {
+		return false
+	}
+
+	instance.DeferredCPUQuota = cpu
+	s.containerInstances.Set(request.ContainerId, instance)
+	return true
+}
+
+func (s *Worker) applyDeferredSandboxCPUThrottle(request *types.ContainerRequest, instance *ContainerInstance) error {
+	if instance == nil || instance.DeferredCPUQuota == nil {
+		return nil
+	}
+
+	updater, ok := instance.Runtime.(containerResourceUpdater)
+	if !ok {
+		if instance.Runtime == nil {
+			return fmt.Errorf("runtime is nil")
+		}
+		return fmt.Errorf("runtime %s does not support resource updates", instance.Runtime.Name())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), sandboxCPUQuotaApplyTimeout)
+	defer cancel()
+
+	resources := &specs.LinuxResources{CPU: instance.DeferredCPUQuota}
+	if err := updater.UpdateResources(ctx, request.ContainerId, resources); err != nil {
+		return err
+	}
+
+	instance.DeferredCPUQuota = nil
+	s.containerInstances.Set(request.ContainerId, instance)
+	return nil
 }

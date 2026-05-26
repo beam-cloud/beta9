@@ -2,6 +2,7 @@ import unittest
 
 from benchmarks.sandbox_startup_report import (
     build_startup_report,
+    event_batch_score,
     render_markdown,
     select_primary_bottleneck,
     summarize_values,
@@ -199,6 +200,30 @@ class SandboxStartupReportTests(unittest.TestCase):
         self.assertEqual(access["totalMs"], 4)
         self.assertIn("## Image And CLIP Drilldown", markdown)
         self.assertIn("/usr/local/lib/python.py", markdown)
+
+    def test_event_batch_score_prefers_richer_complete_payload(self):
+        early = {
+            "items": [
+                {
+                    "container_id": "container-1",
+                    "event_count": 3,
+                    "missing": [],
+                    "summary": {"image_ms": 1},
+                }
+            ]
+        }
+        later = {
+            "items": [
+                {
+                    "container_id": "container-1",
+                    "event_count": 8,
+                    "missing": [],
+                    "summary": {"image_ms": 1, "scheduler_backlog_ms": 10},
+                }
+            ]
+        }
+
+        self.assertGreater(event_batch_score(later), event_batch_score(early))
 
 
 if __name__ == "__main__":

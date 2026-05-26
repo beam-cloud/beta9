@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -473,6 +475,147 @@ func TestScheduleContainerRequestUsesCurrentCapacityForStaleWorkerReservation(t 
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 }
 
+type concurrentReservationTestCase struct {
+	worker     *types.Worker
+	attempts   int
+	requestFor func(int) *types.ContainerRequest
+}
+
+func runConcurrentReservationTest(t *testing.T, tc concurrentReservationTestCase) (*common.RedisClient, WorkerRepository, int64) {
+	t.Helper()
+
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	err = repo.AddWorker(tc.worker)
+	assert.Nil(t, err)
+
+	var successCount int64
+	var wg sync.WaitGroup
+	wg.Add(tc.attempts)
+
+	for i := 0; i < tc.attempts; i++ {
+		workerCopy, err := repo.GetWorkerById(tc.worker.Id)
+		assert.Nil(t, err)
+
+		go func(i int, workerCopy *types.Worker) {
+			defer wg.Done()
+			if err := repo.ScheduleContainerRequest(workerCopy, tc.requestFor(i)); err == nil {
+				atomic.AddInt64(&successCount, 1)
+			}
+		}(i, workerCopy)
+	}
+
+	wg.Wait()
+	return rdb, repo, successCount
+}
+
+func TestScheduleContainerRequestConcurrentCPUReservationsDoNotOverSchedule(t *testing.T) {
+	worker := &types.Worker{
+		Id:         "worker-concurrent-cpu-reservation",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    500,
+		FreeMemory: 625,
+	}
+
+	rdb, repo, successCount := runConcurrentReservationTest(t, concurrentReservationTestCase{
+		worker:   worker,
+		attempts: 20,
+		requestFor: func(i int) *types.ContainerRequest {
+			return &types.ContainerRequest{
+				ContainerId: fmt.Sprintf("container-concurrent-cpu-%d", i),
+				Cpu:         100,
+				Memory:      100,
+			}
+		},
+	})
+
+	assert.Equal(t, int64(5), successCount)
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(5), updatedWorker.ResourceVersion)
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(5), queueDepth)
+}
+
+func TestScheduleContainerRequestConcurrentSandboxReservationsUseRequestedCapacity(t *testing.T) {
+	worker := &types.Worker{
+		Id:         "worker-concurrent-sandbox-reservation",
+		Status:     types.WorkerStatusAvailable,
+		TotalCpu:   16000,
+		FreeCpu:    500,
+		FreeMemory: 625,
+		PoolName:   "default",
+		Runtime:    types.ContainerRuntimeRunc.String(),
+	}
+
+	_, repo, successCount := runConcurrentReservationTest(t, concurrentReservationTestCase{
+		worker:   worker,
+		attempts: 40,
+		requestFor: func(i int) *types.ContainerRequest {
+			return &types.ContainerRequest{
+				ContainerId: fmt.Sprintf("container-concurrent-sandbox-%d", i),
+				Cpu:         100,
+				Memory:      100,
+				Stub: types.StubWithRelated{
+					Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+				},
+			}
+		},
+	})
+
+	assert.Equal(t, int64(5), successCount)
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(5), updatedWorker.ResourceVersion)
+}
+
+func TestScheduleContainerRequestConcurrentGPUReservationsDoNotOverSchedule(t *testing.T) {
+	worker := &types.Worker{
+		Id:            "worker-concurrent-gpu-reservation",
+		Status:        types.WorkerStatusAvailable,
+		FreeCpu:       1000,
+		FreeMemory:    1250,
+		Gpu:           "A10G",
+		FreeGpuCount:  1,
+		TotalGpuCount: 1,
+	}
+
+	rdb, repo, successCount := runConcurrentReservationTest(t, concurrentReservationTestCase{
+		worker:   worker,
+		attempts: 20,
+		requestFor: func(i int) *types.ContainerRequest {
+			return &types.ContainerRequest{
+				ContainerId: fmt.Sprintf("container-concurrent-gpu-%d", i),
+				Cpu:         100,
+				Memory:      100,
+				Gpu:         "A10G",
+				GpuCount:    1,
+			}
+		},
+	})
+
+	assert.Equal(t, int64(1), successCount)
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(900), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(1125), updatedWorker.FreeMemory)
+	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
+	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), queueDepth)
+}
+
 func TestUpdateWorkerCapacityRejectsGPUOverReservation(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
@@ -511,6 +654,97 @@ func TestUpdateWorkerCapacityRejectsGPUOverReservation(t *testing.T) {
 	assert.Equal(t, int64(1250), unchangedWorker.FreeMemory)
 	assert.Equal(t, uint32(0), unchangedWorker.FreeGpuCount)
 	assert.Equal(t, int64(0), unchangedWorker.ResourceVersion)
+}
+
+func TestWorkerNetworkIPIndexMovesPreallocatedReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	networkPrefix := "node-a"
+	ip := "192.168.0.2"
+
+	err = repo.SetContainerIp(networkPrefix, "network-slot:slot-a", ip)
+	assert.Nil(t, err)
+
+	err = repo.MoveContainerIp(networkPrefix, "network-slot:slot-a", "container-a", ip)
+	assert.Nil(t, err)
+
+	ips, err := repo.GetContainerIps(networkPrefix)
+	assert.Nil(t, err)
+	assert.Contains(t, ips, ip)
+
+	err = repo.RemoveContainerIp(networkPrefix, "network-slot:slot-a")
+	assert.Nil(t, err)
+
+	ips, err = repo.GetContainerIps(networkPrefix)
+	assert.Nil(t, err)
+	assert.Contains(t, ips, ip)
+
+	containerIP, err := repo.GetContainerIp(networkPrefix, "container-a")
+	assert.Nil(t, err)
+	assert.Equal(t, ip, containerIP)
+
+	err = repo.SetContainerIp(networkPrefix, "container-b", ip)
+	assert.Error(t, err)
+
+	err = repo.RemoveContainerIp(networkPrefix, "container-a")
+	assert.Nil(t, err)
+
+	ips, err = repo.GetContainerIps(networkPrefix)
+	assert.Nil(t, err)
+	assert.NotContains(t, ips, ip)
+
+	err = repo.RemoveContainerIp(networkPrefix, "container-a")
+	assert.Nil(t, err)
+}
+
+func TestGetContainerIpAssignments(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	networkPrefix := "node-assignments"
+
+	err = repo.SetContainerIp(networkPrefix, "network-slot:slot-a", "192.168.0.2")
+	assert.Nil(t, err)
+	err = repo.SetContainerIp(networkPrefix, "container-a", "192.168.0.3")
+	assert.Nil(t, err)
+
+	assignments, err := repo.GetContainerIpAssignments(networkPrefix)
+	assert.Nil(t, err)
+	assert.Equal(t, []types.ContainerIpAssignment{
+		{ContainerID: "container-a", IPAddress: "192.168.0.3"},
+		{ContainerID: "network-slot:slot-a", IPAddress: "192.168.0.2"},
+	}, assignments)
+}
+
+func TestRemoveContainerIpCleansLegacyIndexWithoutOwnerKey(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	networkPrefix := "node-legacy"
+	ip := "192.168.0.12"
+
+	err = repo.SetContainerIp(networkPrefix, "container-a", ip)
+	assert.Nil(t, err)
+
+	err = rdb.Del(context.TODO(), common.RedisKeys.WorkerNetworkIpOwner(networkPrefix, ip)).Err()
+	assert.Nil(t, err)
+
+	err = repo.RemoveContainerIp(networkPrefix, "container-a")
+	assert.Nil(t, err)
+
+	ips, err := repo.GetContainerIps(networkPrefix)
+	assert.Nil(t, err)
+	assert.NotContains(t, ips, ip)
+
+	err = repo.SetContainerIp(networkPrefix, "container-b", ip)
+	assert.Nil(t, err)
 }
 
 func BenchmarkGetAllWorkers(b *testing.B) {

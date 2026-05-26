@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -519,12 +520,16 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: wpc.config.Worker.Namespace,
 		},
 		{
-			Name: "NETWORK_PREFIX",
+			Name: "NETWORK_NODE_NAME",
 			ValueFrom: &corev1.EnvVarSource{
 				FieldRef: &corev1.ObjectFieldSelector{
 					FieldPath: "spec.nodeName",
 				},
 			},
+		},
+		{
+			Name:  "NETWORK_PREFIX",
+			Value: common.WorkerNetworkPrefix(wpc.config.ClusterName, "$(NETWORK_NODE_NAME)"),
 		},
 		{
 			Name: "CACHE_NODE_ID",

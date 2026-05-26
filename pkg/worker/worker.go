@@ -33,8 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
-	defaultRuncStartConcurrency    int           = 128
-	defaultGvisorStartConcurrency  int           = 32
+	defaultRuncStartConcurrency    int           = types.DefaultRuncStartConcurrency
+	defaultGvisorStartConcurrency  int           = types.DefaultGvisorStartConcurrency
 	workerRedisConnectTimeout      time.Duration = 45 * time.Second
 	workerRedisConnectBaseDelay    time.Duration = 250 * time.Millisecond
 	workerRedisConnectMaxDelay     time.Duration = 2 * time.Second
@@ -104,6 +104,7 @@ type ContainerInstance struct {
 	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	DeferredCPUQuota           *specs.LinuxCPU
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
@@ -112,6 +113,9 @@ type ContainerInstance struct {
 }
 
 func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
+	if i.SandboxProcessManagerReady && !ready {
+		return
+	}
 	i.SandboxProcessManagerReady = ready
 	if i.ProcessManagerReadyChan != nil {
 		i.ProcessManagerReadyOnce.Do(func() {
@@ -309,7 +313,7 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
-	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, defaultRuntime.Name())
+	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, config.Worker.ContainerRuntime, defaultRuntime.Name(), cpuLimit)
 
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
@@ -337,7 +341,7 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config, containerInstances)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -494,12 +498,8 @@ func defaultContainerStartLimitForRuntime(runtimeType string, runcLimit, gvisorL
 	return limit
 }
 
-func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, runtimeType string) int {
-	limit := defaultContainerStartLimitForRuntime(runtimeType, defaultRuncStartConcurrency, defaultGvisorStartConcurrency)
-	if poolConfig.ContainerStartConcurrency > 0 {
-		limit = poolConfig.ContainerStartConcurrency
-	}
-
+func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, globalRuntime, runtimeType string, workerCPU int64) int {
+	limit := types.WorkerStartConcurrencyForPool(poolConfig, globalRuntime, runtimeType, workerCPU)
 	return containerStartLimitWithEnvOverride(limit)
 }
 
@@ -911,6 +911,12 @@ func (s *Worker) shutdown() error {
 
 	var errs error
 	s.waitForActiveContainersBeforeShutdown()
+
+	if s.containerNetworkManager != nil {
+		if err := s.containerNetworkManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup preallocated container networks: %v", err))
+		}
+	}
 
 	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
 		WorkerId: s.workerId,

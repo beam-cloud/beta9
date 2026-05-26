@@ -61,7 +61,7 @@ func (r *Runc) Prepare(ctx context.Context, spec *specs.Spec) error {
 
 func (r *Runc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
 	runcOpts := &runc.CreateOpts{}
-	
+
 	if opts != nil {
 		if opts.OutputWriter != nil {
 			runcOpts.OutputWriter = opts.OutputWriter
@@ -76,7 +76,7 @@ func (r *Runc) Run(ctx context.Context, containerID, bundlePath string, opts *Ru
 
 func (r *Runc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
 	runcOpts := &runc.ExecOpts{}
-	
+
 	if opts != nil {
 		if opts.OutputWriter != nil {
 			runcOpts.OutputWriter = opts.OutputWriter
@@ -89,9 +89,17 @@ func (r *Runc) Exec(ctx context.Context, containerID string, proc specs.Process,
 	return r.handle.Exec(ctx, containerID, proc, runcOpts)
 }
 
+func (r *Runc) UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error {
+	if resources == nil {
+		return fmt.Errorf("resources cannot be nil")
+	}
+
+	return r.handle.Update(ctx, containerID, resources)
+}
+
 func (r *Runc) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
 	runcOpts := &runc.KillOpts{}
-	
+
 	if opts != nil {
 		runcOpts.All = opts.All
 	}
@@ -101,7 +109,7 @@ func (r *Runc) Kill(ctx context.Context, containerID string, sig syscall.Signal,
 
 func (r *Runc) Delete(ctx context.Context, containerID string, opts *DeleteOpts) error {
 	runcOpts := &runc.DeleteOpts{}
-	
+
 	if opts != nil {
 		runcOpts.Force = opts.Force
 	}

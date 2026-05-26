@@ -2,9 +2,17 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
+	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/rs/zerolog/log"
 )
 
@@ -15,16 +23,58 @@ const (
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout             = 30 * time.Second
-	goprocInitialBackoff           = 25 * time.Millisecond
-	goprocMaxBackoff               = 250 * time.Millisecond
+	goprocReadyProbeTimeout        = 50 * time.Millisecond
+	goprocInitialBackoff           = 10 * time.Millisecond
+	goprocMaxBackoff               = 50 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5
-	goprocCommandCompletionWait    = 10 * time.Millisecond
 	cgroupSetupCompletionWait      = 500 * time.Millisecond
 	dockerDaemonStartupTimeout     = 30 * time.Second
 	dockerDaemonReadyPollInterval  = 1 * time.Second
 	dockerInfoCommandTimeout       = 2 * time.Second
 	dockerInfoCommandCheckInterval = 100 * time.Millisecond
 )
+
+type tcpProbeResult struct {
+	Connected  bool
+	RouteReady bool
+	Class      string
+	Err        error
+	Duration   time.Duration
+}
+
+type processManagerWaitStats struct {
+	TCPAttempts         int
+	TCPFailures         int
+	TCPFailureClasses   map[string]int
+	FirstTCPReadyAfter  time.Duration
+	LastTCPFailureClass string
+	LastError           string
+}
+
+func (s processManagerWaitStats) attrs() map[string]string {
+	attrs := map[string]string{
+		types.EventAttrAttempts:     strconv.Itoa(s.TCPAttempts),
+		types.EventAttrFailureCount: strconv.Itoa(s.TCPFailures),
+	}
+	if s.FirstTCPReadyAfter > 0 {
+		attrs[types.EventAttrFirstTCPReadyMs] = strconv.FormatInt(s.FirstTCPReadyAfter.Milliseconds(), 10)
+	}
+	if s.LastTCPFailureClass != "" {
+		attrs[types.EventAttrFailureClass] = s.LastTCPFailureClass
+	}
+	if s.LastError != "" {
+		attrs[types.EventAttrLastError] = s.LastError
+	}
+	if len(s.TCPFailureClasses) > 0 {
+		parts := make([]string, 0, len(s.TCPFailureClasses))
+		for class, count := range s.TCPFailureClasses {
+			parts = append(parts, fmt.Sprintf("%s=%d", class, count))
+		}
+		sort.Strings(parts)
+		attrs[types.EventAttrFailureClasses] = strings.Join(parts, ",")
+	}
+	return attrs
+}
 
 // startDockerDaemon starts the Docker daemon inside a sandbox container
 func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
@@ -120,34 +170,56 @@ func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, i
 // waitForProcessManager waits for the goproc process manager to be ready to accept commands
 // Uses exponential backoff to efficiently wait for goproc startup
 // This should be called ONCE during container initialization, not on every exec
-func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) bool {
+func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, bool, processManagerWaitStats) {
 	start := time.Now()
 	backoff := goprocInitialBackoff
+	var lastErr error
+	stats := processManagerWaitStats{TCPFailureClasses: map[string]int{}}
+	tcpReadyRecorded := false
 
 	for time.Since(start) < goprocReadyTimeout {
 		select {
 		case <-ctx.Done():
-			return false
+			stats.LastError = ctx.Err().Error()
+			return nil, false, stats
 		default:
 		}
 
-		// Try a simple echo command to check if goproc is ready
-		pid, err := instance.SandboxProcessManager.Exec(
-			[]string{"echo", "ready"},
-			"/",
-			[]string{},
-			false,
-		)
+		stats.TCPAttempts++
+		probe := probeProcessManager(ctx, instance)
+		if probe.Connected {
+			if !tcpReadyRecorded {
+				stats.FirstTCPReadyAfter = time.Since(start)
+				s.recordContainerLifecycle(ctx, instance.Request, containerLifecycleFromDuration(
+					types.ContainerLifecycleSandboxProcessManagerTCP,
+					instance.Request,
+					start,
+					stats.FirstTCPReadyAfter,
+					true,
+					stats.attrs(),
+				))
+				tcpReadyRecorded = true
+			}
 
-		if err == nil {
-			// Successfully executed - goproc is ready
-			time.Sleep(goprocCommandCompletionWait)
-			instance.SandboxProcessManager.Status(pid)
-			log.Info().
-				Str("container_id", containerId).
-				Dur("wait_time", time.Since(start)).
-				Msg("process manager is ready")
-			return true
+			client, err := newProcessManagerClient(ctx, instance)
+			if err != nil {
+				lastErr = err
+				stats.LastError = err.Error()
+			} else {
+				log.Info().
+					Str("container_id", containerId).
+					Dur("wait_time", time.Since(start)).
+					Int("tcp_attempts", stats.TCPAttempts).
+					Msg("process manager is ready")
+				return client, true, stats
+			}
+		} else {
+			stats.TCPFailures++
+			stats.TCPFailureClasses[probe.Class]++
+			stats.LastTCPFailureClass = probe.Class
+			if probe.Err != nil {
+				stats.LastError = probe.Err.Error()
+			}
 		}
 
 		// Not ready yet - wait with exponential backoff
@@ -159,11 +231,91 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		}
 	}
 
-	log.Error().
-		Str("container_id", containerId).
-		Msg("process manager did not become ready within timeout")
+	logEvent := log.Error().Str("container_id", containerId)
+	if lastErr != nil {
+		logEvent = logEvent.Err(lastErr)
+	}
+	logEvent.Msg("process manager did not become ready within timeout")
 
-	return false
+	if !tcpReadyRecorded {
+		s.recordContainerLifecycle(ctx, instance.Request, containerLifecycleFromDuration(
+			types.ContainerLifecycleSandboxProcessManagerTCP,
+			instance.Request,
+			start,
+			time.Since(start),
+			false,
+			stats.attrs(),
+		))
+	}
+
+	return nil, false, stats
+}
+
+func probeProcessManager(ctx context.Context, instance *ContainerInstance) tcpProbeResult {
+	if instance == nil || instance.ContainerIp == "" {
+		return tcpProbeResult{Class: "address_unavailable"}
+	}
+
+	return probeTCP(ctx, instance.ContainerIp, int(types.WorkerSandboxProcessManagerPort), goprocReadyProbeTimeout)
+}
+
+func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	if instance == nil || instance.ContainerIp == "" {
+		return nil, fmt.Errorf("sandbox process manager address unavailable")
+	}
+	return goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
+}
+
+func probeTCP(ctx context.Context, ip string, port int, timeout time.Duration) tcpProbeResult {
+	start := time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	address := fmt.Sprintf("%s:%d", ip, port)
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(probeCtx, "tcp", address)
+	result := tcpProbeResult{
+		Class:    classifyTCPProbeError(err),
+		Err:      err,
+		Duration: time.Since(start),
+	}
+	if err == nil {
+		_ = conn.Close()
+		result.Connected = true
+		result.RouteReady = true
+		return result
+	}
+	if result.Class == "connection_refused" {
+		result.RouteReady = true
+	}
+	return result
+}
+
+func classifyTCPProbeError(err error) string {
+	if err == nil {
+		return "connected"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connection_refused"
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return "no_route"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return "connection_refused"
+	case strings.Contains(msg, "no route") || strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "host is unreachable"):
+		return "no_route"
+	case strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "timeout"
+	default:
+		return "other"
+	}
 }
 
 // waitForDockerDaemon waits for the Docker daemon to be ready to accept commands

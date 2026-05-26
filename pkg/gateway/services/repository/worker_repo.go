@@ -186,6 +186,15 @@ func (s *WorkerRepositoryService) SetContainerIp(ctx context.Context, req *pb.Se
 	return &pb.SetContainerIpResponse{Ok: true}, nil
 }
 
+func (s *WorkerRepositoryService) MoveContainerIp(ctx context.Context, req *pb.MoveContainerIpRequest) (*pb.MoveContainerIpResponse, error) {
+	err := s.workerRepo.MoveContainerIp(req.NetworkPrefix, req.FromContainerId, req.ToContainerId, req.IpAddress)
+	if err != nil {
+		return &pb.MoveContainerIpResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.MoveContainerIpResponse{Ok: true}, nil
+}
+
 func (s *WorkerRepositoryService) GetContainerIp(ctx context.Context, req *pb.GetContainerIpRequest) (*pb.GetContainerIpResponse, error) {
 	ip, err := s.workerRepo.GetContainerIp(req.NetworkPrefix, req.ContainerId)
 	if err != nil {
@@ -202,6 +211,23 @@ func (s *WorkerRepositoryService) GetContainerIps(ctx context.Context, req *pb.G
 	}
 
 	return &pb.GetContainerIpsResponse{Ok: true, Ips: ips}, nil
+}
+
+func (s *WorkerRepositoryService) GetContainerIpAssignments(ctx context.Context, req *pb.GetContainerIpAssignmentsRequest) (*pb.GetContainerIpAssignmentsResponse, error) {
+	assignments, err := s.workerRepo.GetContainerIpAssignments(req.NetworkPrefix)
+	if err != nil {
+		return &pb.GetContainerIpAssignmentsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	responseAssignments := make([]*pb.ContainerIpAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		responseAssignments = append(responseAssignments, &pb.ContainerIpAssignment{
+			ContainerId: assignment.ContainerID,
+			IpAddress:   assignment.IPAddress,
+		})
+	}
+
+	return &pb.GetContainerIpAssignmentsResponse{Ok: true, Assignments: responseAssignments}, nil
 }
 
 func (s *WorkerRepositoryService) RemoveContainerIp(ctx context.Context, req *pb.RemoveContainerIpRequest) (*pb.RemoveContainerIpResponse, error) {

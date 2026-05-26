@@ -168,7 +168,7 @@ worker:
       priority: 1
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
       containerRuntime: gvisor  # Pool-specific container runtime: "runc" or "gvisor"
-      containerStartConcurrency: 128
+      containerStartConcurrency: 32
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
@@ -183,15 +183,17 @@ worker:
       #     hostPath: /mnt/nvme/beta9/cache
       #     mountPath: /var/lib/beta9/cache
       #     maxUsagePct: 0.95
+      networkPreallocation: true
+      networkSlotPoolSize: 32
       jobSpec:
         nodeSelector: {}
       criuEnabled: true
       checkpointPath: /data/checkpoints
       poolSizing:
-        defaultWorkerCpu: 1000m
+        defaultWorkerCpu: 2000m
         defaultWorkerGpuType: ""
         defaultWorkerMemory: 1Gi
-        minFreeCpu: 1000m
+        minFreeCpu: 2000m
         minFreeGpu: 0
         minFreeMemory: 1Gi
     build:
@@ -210,6 +212,8 @@ worker:
       #   disk:
       #     hostPath: /mnt/build-cache/beta9/cache
       #     mountPath: /var/lib/beta9/cache
+      networkPreallocation: true
+      networkSlotPoolSize: 32
       tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}

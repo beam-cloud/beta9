@@ -24,6 +24,16 @@ REQUIRED_LIFECYCLE_IDS = (
     "runtime.start_to_pid",
 )
 
+REQUIRED_SUMMARY_KEYS = (
+    "scheduler_backlog_ms",
+    "worker_queue_ms",
+    "worker_receive_to_running_ms",
+    "image_ms",
+    "network_ms",
+    "runtime_ms",
+    "running_to_first_log_ms",
+)
+
 CLIENT_TIMINGS = (
     ("acceptedMs", "SDK create returned"),
     ("runningObservedMs", "Observed RUNNING"),
@@ -85,10 +95,21 @@ SERVER_PHASES = (
     ("mount_overlay_setup_ms", "mount.overlay_setup", "Overlay setup", False),
     ("network_ms", "network", "Network total", True),
     ("network_setup_ms", "network.setup", "Network setup", False),
+    ("network_create_veth_ms", "network.create_veth", "Create veth pair", False),
+    ("network_setup_bridge_ms", "network.setup_bridge", "Setup bridge", False),
+    ("network_create_namespace_ms", "network.create_namespace", "Create namespace", False),
+    ("network_configure_namespace_ms", "network.configure_namespace", "Configure namespace", False),
+    ("network_ip_lock_ms", "network.ip_lock", "Acquire IP lock", False),
+    ("network_ip_scan_ms", "network.ip_scan", "Scan allocated IPs", False),
+    ("network_ip_assign_ms", "network.ip_assign", "Assign container IP", False),
+    ("network_set_container_ip_ms", "network.set_container_ip", "Persist container IP", False),
+    ("network_restrictions_ms", "network.restrictions", "Network restrictions", False),
     ("network_expose_ports_ms", "network.expose_ports", "Expose ports", False),
     ("runtime_ms", "container.startup", "Runtime/container startup", False),
     ("runtime_config_write_ms", "runtime.config_write", "Runtime config write", False),
     ("runtime_start_to_pid_ms", "runtime.start_to_pid", "Runtime start to PID", False),
+    ("sandbox_process_manager_tcp_ready_ms", "sandbox.process_manager_tcp_ready", "Sandbox process manager TCP ready", False),
+    ("sandbox_process_manager_ready_ms", "sandbox.process_manager_ready", "Sandbox process manager ready", False),
     ("running_to_first_log_ms", "logs.first_byte", "RUNNING to first log", False),
     ("running_to_runner_process_started_ms", "runner.process_started", "RUNNING to runner process", False),
     ("running_to_runner_main_ms", "runner.main_entered", "RUNNING to runner main", False),
@@ -238,20 +259,27 @@ def fetch_event_batch_with_poll(
         time.sleep(max(0.05, poll_ms / 1000))
 
 
-def event_batch_score(payload: dict[str, Any]) -> tuple[int, int, int]:
+def event_batch_score(payload: dict[str, Any]) -> tuple[int, int, int, int, int]:
     eventful = 0
     present_required = 0
     missing_required = 0
+    total_events = 0
+    total_summaries = 0
     for item in payload.get("items", []):
         if item.get("error") or item.get("event_count", 0) <= 0:
-            missing_required += len(REQUIRED_LIFECYCLE_IDS)
+            missing_required += len(REQUIRED_LIFECYCLE_IDS) + len(REQUIRED_SUMMARY_KEYS)
             continue
         if item.get("event_count", 0) > 0:
             eventful += 1
+            total_events += int(item.get("event_count") or 0)
+            total_summaries += len(item.get("summary") or {})
         missing = set(item.get("missing") or [])
+        summary = item.get("summary") or {}
         missing_required += sum(1 for event_id in REQUIRED_LIFECYCLE_IDS if event_id in missing)
         present_required += sum(1 for event_id in REQUIRED_LIFECYCLE_IDS if event_id not in missing)
-    return eventful, present_required, missing_required
+        missing_required += sum(1 for key in REQUIRED_SUMMARY_KEYS if key not in summary)
+        present_required += sum(1 for key in REQUIRED_SUMMARY_KEYS if key in summary)
+    return eventful, present_required, -missing_required, total_events, total_summaries
 
 
 def build_startup_report(
@@ -523,22 +551,33 @@ def build_event_coverage(
     event_errors = [item for item in event_items if item.get("error")]
     eventful = len([item for item in event_items if item.get("event_count", 0) > 0 and not item.get("error")])
     missing_required_by_id = {event_id: 0 for event_id in REQUIRED_LIFECYCLE_IDS}
+    missing_required_by_metric = {key: 0 for key in REQUIRED_SUMMARY_KEYS}
 
     for container_id in missing_containers:
         if container_id:
             for event_id in REQUIRED_LIFECYCLE_IDS:
                 missing_required_by_id[event_id] += 1
+            for key in REQUIRED_SUMMARY_KEYS:
+                missing_required_by_metric[key] += 1
     for item in event_items:
         missing = set(item.get("missing") or [])
+        summary = item.get("summary") or {}
         if item.get("error") or item.get("event_count", 0) <= 0:
             missing = set(REQUIRED_LIFECYCLE_IDS)
+            summary = {}
         for event_id in REQUIRED_LIFECYCLE_IDS:
             if event_id in missing:
                 missing_required_by_id[event_id] += 1
+        for key in REQUIRED_SUMMARY_KEYS:
+            if key not in summary:
+                missing_required_by_metric[key] += 1
 
     total_required = requested * len(REQUIRED_LIFECYCLE_IDS)
     missing_required = sum(missing_required_by_id.values())
     present_required = max(0, total_required - missing_required)
+    total_required_metrics = requested * len(REQUIRED_SUMMARY_KEYS)
+    missing_required_metrics = sum(missing_required_by_metric.values())
+    present_required_metrics = max(0, total_required_metrics - missing_required_metrics)
 
     return {
         "requestedContainers": requested,
@@ -549,6 +588,9 @@ def build_event_coverage(
         "requiredLifecyclePresent": present_required,
         "requiredLifecycleTotal": total_required,
         "requiredLifecycleMissing": missing_required_by_id,
+        "requiredMetricPresent": present_required_metrics,
+        "requiredMetricTotal": total_required_metrics,
+        "requiredMetricMissing": missing_required_by_metric,
         "eventsAvailable": bool(events),
     }
 
@@ -625,13 +667,18 @@ def build_data_quality(
             "Required lifecycle span coverage is "
             f"{coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}."
         )
+    if coverage.get("requiredMetricPresent") != coverage.get("requiredMetricTotal"):
+        notes.append(
+            "Required timing metric coverage is "
+            f"{coverage.get('requiredMetricPresent', 0)}/{coverage.get('requiredMetricTotal', 0)}."
+        )
     if bottleneck and bottleneck.get("coverageStatus") not in {"full"}:
         notes.append(
             f"Primary bottleneck {bottleneck['eventId']} has {bottleneck['coverageStatus']} coverage "
             f"({bottleneck['count']}/{len(samples)} containers)."
         )
     if not notes:
-        notes.append("Event coverage is complete for the required lifecycle spans.")
+        notes.append("Event coverage is complete for the required lifecycle spans and timing metrics.")
     return notes
 
 
@@ -657,7 +704,9 @@ def render_console_summary(report: dict[str, Any]) -> str:
         "  Event coverage: "
         f"{coverage.get('containersWithEvents', 0)}/{coverage.get('requestedContainers', 0)} containers, "
         "required lifecycle spans "
-        f"{coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}"
+        f"{coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}, "
+        "required timing metrics "
+        f"{coverage.get('requiredMetricPresent', 0)}/{coverage.get('requiredMetricTotal', 0)}"
     )
     image = report.get("imageDrilldown") or {}
     image_phase = image.get("slowestPhase")
@@ -697,7 +746,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         ),
         "Event coverage: "
         f"{coverage.get('containersWithEvents', 0)}/{coverage.get('requestedContainers', 0)} containers, "
-        f"required lifecycle spans {coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}",
+        f"required lifecycle spans {coverage.get('requiredLifecyclePresent', 0)}/{coverage.get('requiredLifecycleTotal', 0)}, "
+        f"required timing metrics {coverage.get('requiredMetricPresent', 0)}/{coverage.get('requiredMetricTotal', 0)}",
         "",
         "## Client Timings",
         "",

@@ -307,9 +307,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
-		for _, request := range requests {
-			s.processRequest(request, workers)
-		}
+		s.processRequestBatch(requests, workers)
 	}
 }
 
@@ -545,7 +543,6 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
-	memory := capacityMemoryForScheduling(request)
 	gpuCount := gpuCountForScheduling(request)
 
 	gpuRequests := gpuRequestsForScheduling(request)
@@ -560,9 +557,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 	for _, worker := range workers {
 		isGpuWorker := worker.Gpu != ""
+		cpu := request.Cpu
+		memory := capacityMemoryForScheduling(request)
 
 		// Check if the worker has enough free cpu and memory to run the container
-		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < memory {
+		if worker.FreeCpu < cpu || worker.FreeMemory < memory {
 			continue
 		}
 
@@ -688,8 +687,10 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 
 	// Select the worker with the highest score
 	sort.Slice(scoredWorkers, func(i, j int) bool {
-		// TODO: Figure out a short way to randomize order of workers with the same score
-		return scoredWorkers[i].score > scoredWorkers[j].score
+		if scoredWorkers[i].score != scoredWorkers[j].score {
+			return scoredWorkers[i].score > scoredWorkers[j].score
+		}
+		return workerFreeCapacityScore(scoredWorkers[i].worker, request) > workerFreeCapacityScore(scoredWorkers[j].worker, request)
 	})
 
 	return scoredWorkers[0].worker, nil
@@ -719,6 +720,18 @@ func gpuPriorityModifier(request *types.ContainerRequest, gpu string) int {
 		}
 	}
 	return 0
+}
+
+func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerRequest) int64 {
+	if worker == nil {
+		return 0
+	}
+
+	score := worker.FreeCpu + worker.FreeMemory
+	if request.RequiresGPU() {
+		score += int64(worker.FreeGpuCount) * 1_000_000
+	}
+	return score
 }
 
 const maxScheduleRetryCount = 120
