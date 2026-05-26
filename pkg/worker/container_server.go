@@ -580,12 +580,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	err = s.waitForContainer(ctx, in.ContainerId)
+	instance, err = s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	env := instance.Spec.Process.Env
+	if instance.Spec == nil || instance.Spec.Process == nil {
+		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "Container spec not ready"}, nil
+	}
+
+	env := append([]string{}, instance.Spec.Process.Env...)
 	formattedEnv := []string{}
 	for key, value := range in.Env {
 		formattedEnv = append(formattedEnv, fmt.Sprintf("%s=%s", key, value))
@@ -597,11 +601,6 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	instance, err := s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
-	if err != nil {
-		return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: err.Error()}, nil
-	}
-
 	pid, err := s.execSandboxProcess(ctx, in.ContainerId, instance, cmd, cwd, env)
 	if err != nil {
 		log.Warn().
@@ -675,26 +674,34 @@ func isProcessManagerDialFailure(err error) bool {
 }
 
 func (s *ContainerRuntimeServer) waitForSandboxProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) (*ContainerInstance, error) {
-	if instance.ProcessManagerReadyChan != nil {
-		select {
-		case <-instance.ProcessManagerReadyChan:
-			instance = s.refreshContainerInstance(containerId, instance)
-			if !instance.SandboxProcessManagerReady {
-				return instance, errors.New("Process manager failed to become ready")
-			}
-			return instance, nil
-		case <-ctx.Done():
-			return instance, errors.New("Request cancelled")
-		}
-	}
-
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(50 * time.Millisecond)
+	timeout := time.NewTimer(10 * time.Second)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer timeout.Stop()
 	defer ticker.Stop()
 
-	for !instance.SandboxProcessManagerReady {
+	for {
+		instance = s.refreshContainerInstance(containerId, instance)
+		if instance.SandboxProcessManagerReady {
+			return instance, nil
+		}
+
+		if instance.ProcessManagerReadyChan != nil {
+			select {
+			case <-instance.ProcessManagerReadyChan:
+				instance = s.refreshContainerInstance(containerId, instance)
+				if !instance.SandboxProcessManagerReady {
+					return instance, errors.New("Process manager failed to become ready")
+				}
+				return instance, nil
+			case <-timeout.C:
+				return instance, errors.New("Process manager not ready within timeout")
+			case <-ctx.Done():
+				return instance, errors.New("Request cancelled")
+			}
+		}
+
 		select {
-		case <-timeout:
+		case <-timeout.C:
 			return instance, errors.New("Process manager not ready within timeout")
 		case <-ctx.Done():
 			return instance, errors.New("Request cancelled")

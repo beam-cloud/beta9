@@ -127,11 +127,17 @@ func (a *schedulingAttempt) retry(reason string) {
 }
 
 func (a *schedulingAttempt) retrySoon(reason string) {
+	if a.request.RetryCount >= maxScheduleRetryCount {
+		a.fail("retry_limit")
+		return
+	}
+
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
 		a.fail("worker_capacity_timeout")
 		return
 	}
 
+	a.request.RetryCount++
 	metrics.RecordRequestRetry(a.request)
 	if err := a.scheduler.requestBacklog.PushAfter(a.request, requestProcessingInterval); err != nil {
 		log.Error().

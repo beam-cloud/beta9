@@ -66,6 +66,7 @@ type ContainerNetworkManager struct {
 	bridgeMu            sync.Mutex
 	ipMu                sync.Mutex
 	iptablesMu          sync.Mutex
+	containerLocksMu    sync.Mutex
 	containerLocks      sync.Map
 	config              types.AppConfig
 	containerInstances  *common.SafeMap[*ContainerInstance]
@@ -89,6 +90,11 @@ type PortBinding struct {
 	ContainerPort int
 }
 
+type containerNetworkLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type containerNetworkSlot struct {
 	id        string
 	namespace string
@@ -107,8 +113,11 @@ func containerVethNames(containerId string) (string, string) {
 	return containerVethHostPrefix + suffix, containerVethContainerPrefix + suffix
 }
 
-func containerNetworkPrefix(baseNetworkPrefix, _ string) string {
-	return baseNetworkPrefix
+func containerNetworkPrefix(clusterName, namespace, poolName, baseNetworkPrefix string) string {
+	if common.IsScopedWorkerNetworkPrefix(baseNetworkPrefix) {
+		return baseNetworkPrefix
+	}
+	return common.WorkerNetworkPrefix(clusterName, namespace, poolName, baseNetworkPrefix)
 }
 
 func containerNetworkSlotReservationID(slotID string) string {
@@ -220,7 +229,7 @@ func containerIdFromIptablesRule(rule string) (string, bool) {
 	return strings.TrimSuffix(containerId, "*/"), true
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -267,7 +276,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	if baseNetworkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
 	}
-	networkPrefix := containerNetworkPrefix(baseNetworkPrefix, workerId)
+	networkPrefix := containerNetworkPrefix(config.ClusterName, config.Worker.Namespace, poolName, baseNetworkPrefix)
 
 	m := &ContainerNetworkManager{
 		ctx:                 ctx,
@@ -305,10 +314,28 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 }
 
 func (m *ContainerNetworkManager) lockContainerNetwork(containerId string) func() {
-	lockValue, _ := m.containerLocks.LoadOrStore(containerId, &sync.Mutex{})
-	lock := lockValue.(*sync.Mutex)
-	lock.Lock()
-	return lock.Unlock
+	m.containerLocksMu.Lock()
+	lockValue, exists := m.containerLocks.Load(containerId)
+	if !exists {
+		lockValue = &containerNetworkLock{}
+		m.containerLocks.Store(containerId, lockValue)
+	}
+	lock := lockValue.(*containerNetworkLock)
+	lock.refs++
+	m.containerLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+
+		m.containerLocksMu.Lock()
+		defer m.containerLocksMu.Unlock()
+
+		lock.refs--
+		if lock.refs == 0 {
+			m.containerLocks.Delete(containerId)
+		}
+	}
 }
 
 func (m *ContainerNetworkManager) withNodeNetworkLock(ttl, retries int, fn func() error) error {
@@ -410,6 +437,10 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 	}
 
 	log.Info().Str("container_id", containerId).Str("ip_address", slot.ip).Str("network_slot", slot.id).Msg("container preallocated network slot assigned")
+	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
+		return true, err
+	}
+
 	go m.fillNetworkSlotPool()
 	return true, nil
 }
@@ -774,30 +805,45 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		return err
 	}
 
-	// Setup network restrictions in host namespace (must be done in host namespace to affect forwarding)
-	if len(request.AllowList) > 0 {
-		// Use allowlist (which internally blocks all other traffic)
-		phaseStart = time.Now()
-		if err := m.setupAllowList(containerId, request, request.AllowList); err != nil {
-			metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "allowlist", "success": "false"})
-			m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkRestrictions, phaseStart, false, map[string]string{"mode": "allowlist"})
-			return err
-		}
-		metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "allowlist", "success": "true"})
-		m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkRestrictions, phaseStart, true, map[string]string{"mode": "allowlist"})
-	} else if request.BlockNetwork {
-		// Block all network if no allowlist is specified
-		phaseStart = time.Now()
-		if err := m.setupBlockNetwork(containerId, request); err != nil {
-			metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "block", "success": "false"})
-			m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkRestrictions, phaseStart, false, map[string]string{"mode": "block"})
-			return err
-		}
-		metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "block", "success": "true"})
-		m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkRestrictions, phaseStart, true, map[string]string{"mode": "block"})
+	if err := m.setupNetworkRestrictions(containerId, request); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func (m *ContainerNetworkManager) setupNetworkRestrictions(containerId string, request *types.ContainerRequest) error {
+	mode, apply := m.networkRestriction(containerId, request)
+	if apply == nil {
+		return nil
+	}
+
+	phaseStart := time.Now()
+	err := apply()
+	success := err == nil
+	metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{
+		"mode":    mode,
+		"success": fmt.Sprintf("%t", success),
+	})
+	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkRestrictions, phaseStart, success, map[string]string{"mode": mode})
+	return err
+}
+
+func (m *ContainerNetworkManager) networkRestriction(containerId string, request *types.ContainerRequest) (string, func() error) {
+	if request == nil {
+		return "", nil
+	}
+	if len(request.AllowList) > 0 {
+		return "allowlist", func() error {
+			return m.setupAllowList(containerId, request, request.AllowList)
+		}
+	}
+	if request.BlockNetwork {
+		return "block", func() error {
+			return m.setupBlockNetwork(containerId, request)
+		}
+	}
+	return "", nil
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {

@@ -341,7 +341,7 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
 		cancel()
 		return nil, err

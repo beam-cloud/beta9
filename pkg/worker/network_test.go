@@ -3,7 +3,10 @@ package worker
 import (
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -80,14 +83,50 @@ func TestContainerVethNamesAvoidBurstCollisions(t *testing.T) {
 func TestContainerNetworkPrefixIsNodeScoped(t *testing.T) {
 	nodePrefix := "k3d-beta9-agent-0"
 
-	first := containerNetworkPrefix(nodePrefix, "worker-a")
-	second := containerNetworkPrefix(nodePrefix, "worker-b")
+	first := containerNetworkPrefix("beta9", "default", "cpu", nodePrefix)
+	second := containerNetworkPrefix("beta9", "default", "cpu", nodePrefix)
 
-	if first != nodePrefix {
-		t.Fatalf("expected node-scoped network prefix %q, got %q", nodePrefix, first)
-	}
 	if second != first {
 		t.Fatalf("workers on the same node must share network prefix: %q != %q", second, first)
+	}
+}
+
+func TestContainerNetworkPrefixIncludesPoolScope(t *testing.T) {
+	nodePrefix := "node-a"
+
+	cpu := containerNetworkPrefix("beta9", "default", "cpu", nodePrefix)
+	gpu := containerNetworkPrefix("beta9", "default", "gpu", nodePrefix)
+
+	if cpu == gpu {
+		t.Fatalf("workers from different pools with the same node name must not share network prefix: %q", cpu)
+	}
+}
+
+func TestContainerNetworkPrefixIncludesClusterScope(t *testing.T) {
+	nodePrefix := "node-a"
+
+	first := containerNetworkPrefix("cluster-a", "default", "cpu", nodePrefix)
+	second := containerNetworkPrefix("cluster-b", "default", "cpu", nodePrefix)
+
+	if first == second {
+		t.Fatalf("workers from different clusters with the same node name must not share network prefix: %q", first)
+	}
+}
+
+func TestContainerNetworkPrefixSanitizesParts(t *testing.T) {
+	got := containerNetworkPrefix("beta9:dev", "beta9/default", "cpu pool", "node/a")
+	want := "cluster:beta9_dev:namespace:beta9_default:pool:cpu_pool:node:node_a"
+
+	if got != want {
+		t.Fatalf("unexpected sanitized network prefix: got %q want %q", got, want)
+	}
+}
+
+func TestContainerNetworkPrefixPreservesScopedPrefix(t *testing.T) {
+	scoped := "cluster:beta9:namespace:default:pool:cpu:node:node-a"
+
+	if got := containerNetworkPrefix("other", "other", "other", scoped); got != scoped {
+		t.Fatalf("expected scoped network prefix to pass through unchanged: got %q want %q", got, scoped)
 	}
 }
 
@@ -138,6 +177,75 @@ func TestExposePortsWithNoBindingsSkipsNetworkLookup(t *testing.T) {
 
 	if err := manager.ExposePorts("missing-container", nil); err != nil {
 		t.Fatalf("ExposePorts with no bindings should not touch network state: %v", err)
+	}
+}
+
+func TestLockContainerNetworkRemovesReleasedEntry(t *testing.T) {
+	manager := &ContainerNetworkManager{}
+
+	unlock := manager.lockContainerNetwork("container-a")
+	if _, exists := manager.containerLocks.Load("container-a"); !exists {
+		t.Fatal("expected container lock entry while lock is held")
+	}
+
+	unlock()
+	if _, exists := manager.containerLocks.Load("container-a"); exists {
+		t.Fatal("expected container lock entry to be removed after release")
+	}
+}
+
+func TestLockContainerNetworkSerializesConcurrentUsers(t *testing.T) {
+	manager := &ContainerNetworkManager{}
+	var active int32
+	errs := make(chan string, 32)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			unlock := manager.lockContainerNetwork("container-a")
+			defer unlock()
+
+			if current := atomic.AddInt32(&active, 1); current != 1 {
+				errs <- "container lock allowed concurrent access"
+			}
+			time.Sleep(time.Millisecond)
+			atomic.AddInt32(&active, -1)
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if _, exists := manager.containerLocks.Load("container-a"); exists {
+		t.Fatal("expected container lock entry to be removed after concurrent users finish")
+	}
+}
+
+func TestNetworkRestrictionSelection(t *testing.T) {
+	manager := &ContainerNetworkManager{}
+
+	mode, apply := manager.networkRestriction("container-a", &types.ContainerRequest{})
+	if mode != "" || apply != nil {
+		t.Fatalf("expected unrestricted request to skip restrictions, got mode %q", mode)
+	}
+
+	mode, apply = manager.networkRestriction("container-a", &types.ContainerRequest{BlockNetwork: true})
+	if mode != "block" || apply == nil {
+		t.Fatalf("expected block restriction, got mode %q", mode)
+	}
+
+	mode, apply = manager.networkRestriction("container-a", &types.ContainerRequest{
+		BlockNetwork: true,
+		AllowList:    []string{"10.0.0.0/8"},
+	})
+	if mode != "allowlist" || apply == nil {
+		t.Fatalf("expected allowlist restriction to take precedence, got mode %q", mode)
 	}
 }
 

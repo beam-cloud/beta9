@@ -76,7 +76,7 @@ end
 redis.call("DEL", container_key)
 local owner_key = owner_key_prefix .. ip
 local owner = redis.call("GET", owner_key)
-if owner == container_id then
+if not owner or owner == false or owner == "" or owner == container_id then
 	redis.call("DEL", owner_key)
 	redis.call("HDEL", ref_counts_key, ip)
 	redis.call("SREM", index_key, ip)
