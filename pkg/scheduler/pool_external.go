@@ -516,7 +516,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "NETWORK_PREFIX",
-			Value: common.WorkerNetworkPrefix(wpc.config.ClusterName, wpc.config.Worker.Namespace, wpc.name, machineId),
+			Value: common.WorkerNetworkPrefix(wpc.config.ClusterName, machineId),
 		},
 		{
 			Name:  "CACHE_NODE_ID",

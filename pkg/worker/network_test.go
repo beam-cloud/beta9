@@ -85,30 +85,31 @@ func TestContainerVethNamesAvoidBurstCollisions(t *testing.T) {
 func TestContainerNetworkPrefixIsNodeScoped(t *testing.T) {
 	nodePrefix := "k3d-beta9-agent-0"
 
-	first := containerNetworkPrefix("beta9", "default", "cpu", nodePrefix)
-	second := containerNetworkPrefix("beta9", "default", "cpu", nodePrefix)
+	first := containerNetworkPrefix("beta9", nodePrefix)
+	second := containerNetworkPrefix("beta9", nodePrefix)
 
 	if second != first {
 		t.Fatalf("workers on the same node must share network prefix: %q != %q", second, first)
 	}
 }
 
-func TestContainerNetworkPrefixIncludesPoolScope(t *testing.T) {
-	nodePrefix := "node-a"
+func TestContainerNetworkPrefixIsPoolAgnosticForNodeScopedNetworking(t *testing.T) {
+	cpuPoolPrefix := common.WorkerNetworkPrefix("beta9", "node-a")
+	buildPoolPrefix := common.WorkerNetworkPrefix("beta9", "node-a")
 
-	cpu := containerNetworkPrefix("beta9", "default", "cpu", nodePrefix)
-	gpu := containerNetworkPrefix("beta9", "default", "gpu", nodePrefix)
+	cpu := containerNetworkPrefix("beta9", cpuPoolPrefix)
+	build := containerNetworkPrefix("beta9", buildPoolPrefix)
 
-	if cpu == gpu {
-		t.Fatalf("workers from different pools with the same node name must not share network prefix: %q", cpu)
+	if cpu != build {
+		t.Fatalf("workers from different pools on the same node must share network prefix: %q != %q", cpu, build)
 	}
 }
 
 func TestContainerNetworkPrefixIncludesClusterScope(t *testing.T) {
 	nodePrefix := "node-a"
 
-	first := containerNetworkPrefix("cluster-a", "default", "cpu", nodePrefix)
-	second := containerNetworkPrefix("cluster-b", "default", "cpu", nodePrefix)
+	first := containerNetworkPrefix("cluster-a", nodePrefix)
+	second := containerNetworkPrefix("cluster-b", nodePrefix)
 
 	if first == second {
 		t.Fatalf("workers from different clusters with the same node name must not share network prefix: %q", first)
@@ -116,8 +117,8 @@ func TestContainerNetworkPrefixIncludesClusterScope(t *testing.T) {
 }
 
 func TestContainerNetworkPrefixSanitizesParts(t *testing.T) {
-	got := containerNetworkPrefix("beta9:dev", "beta9/default", "cpu pool", "node/a")
-	want := "cluster:beta9_dev:namespace:beta9_default:pool:cpu_pool:node:node_a"
+	got := containerNetworkPrefix("beta9:dev", "node/a")
+	want := "cluster:beta9_dev:node:node_a"
 
 	if got != want {
 		t.Fatalf("unexpected sanitized network prefix: got %q want %q", got, want)
@@ -125,10 +126,19 @@ func TestContainerNetworkPrefixSanitizesParts(t *testing.T) {
 }
 
 func TestContainerNetworkPrefixPreservesScopedPrefix(t *testing.T) {
-	scoped := "cluster:beta9:namespace:default:pool:cpu:node:node-a"
+	scoped := "cluster:beta9:node:node-a"
 
-	if got := containerNetworkPrefix("other", "other", "other", scoped); got != scoped {
+	if got := containerNetworkPrefix("other", scoped); got != scoped {
 		t.Fatalf("expected scoped network prefix to pass through unchanged: got %q want %q", got, scoped)
+	}
+}
+
+func TestContainerNetworkPrefixCanonicalizesLegacyPoolScopedPrefix(t *testing.T) {
+	legacy := "cluster:beta9:namespace:default:pool:cpu:node:node-a"
+	want := "cluster:beta9:node:node-a"
+
+	if got := containerNetworkPrefix("other", legacy); got != want {
+		t.Fatalf("expected legacy pool-scoped network prefix to canonicalize: got %q want %q", got, want)
 	}
 }
 

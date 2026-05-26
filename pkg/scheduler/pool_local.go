@@ -529,7 +529,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		},
 		{
 			Name:  "NETWORK_PREFIX",
-			Value: common.WorkerNetworkPrefix(wpc.config.ClusterName, wpc.config.Worker.Namespace, wpc.name, "$(NETWORK_NODE_NAME)"),
+			Value: common.WorkerNetworkPrefix(wpc.config.ClusterName, "$(NETWORK_NODE_NAME)"),
 		},
 		{
 			Name: "CACHE_NODE_ID",

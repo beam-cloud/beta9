@@ -115,11 +115,8 @@ func containerVethNames(containerId string) (string, string) {
 	return containerVethHostPrefix + suffix, containerVethContainerPrefix + suffix
 }
 
-func containerNetworkPrefix(clusterName, namespace, poolName, baseNetworkPrefix string) string {
-	if common.IsScopedWorkerNetworkPrefix(baseNetworkPrefix) {
-		return baseNetworkPrefix
-	}
-	return common.WorkerNetworkPrefix(clusterName, namespace, poolName, baseNetworkPrefix)
+func containerNetworkPrefix(clusterName, baseNetworkPrefix string) string {
+	return common.NormalizeWorkerNetworkPrefix(clusterName, baseNetworkPrefix)
 }
 
 func containerNetworkSlotReservationID(slotID string) string {
@@ -322,7 +319,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	if baseNetworkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
 	}
-	networkPrefix := containerNetworkPrefix(config.ClusterName, config.Worker.Namespace, poolName, baseNetworkPrefix)
+	networkPrefix := containerNetworkPrefix(config.ClusterName, baseNetworkPrefix)
 
 	m := &ContainerNetworkManager{
 		ctx:                 ctx,

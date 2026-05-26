@@ -2,20 +2,48 @@ package common
 
 import "strings"
 
-const workerNetworkPrefixMarker = "cluster:"
+const (
+	workerNetworkPrefixClusterKey = "cluster"
+	workerNetworkPrefixNodeKey    = "node"
+)
 
-func WorkerNetworkPrefix(clusterName, namespace, poolName, nodeName string) string {
+type WorkerNetworkScope struct {
+	ClusterName string
+	NodeName    string
+}
+
+func WorkerNetworkPrefix(clusterName, nodeName string) string {
 	parts := []string{
-		"cluster", workerNetworkPrefixPart(clusterName),
-		"namespace", workerNetworkPrefixPart(namespace),
-		"pool", workerNetworkPrefixPart(poolName),
-		"node", workerNetworkPrefixPart(nodeName),
+		workerNetworkPrefixClusterKey, workerNetworkPrefixPart(clusterName),
+		workerNetworkPrefixNodeKey, workerNetworkPrefixPart(nodeName),
 	}
 	return strings.Join(parts, ":")
 }
 
-func IsScopedWorkerNetworkPrefix(prefix string) bool {
-	return strings.HasPrefix(strings.TrimSpace(prefix), workerNetworkPrefixMarker)
+func ParseWorkerNetworkPrefix(prefix string) (WorkerNetworkScope, bool) {
+	parts := strings.Split(strings.TrimSpace(prefix), ":")
+	if len(parts) < 4 || len(parts)%2 != 0 || parts[0] != workerNetworkPrefixClusterKey {
+		return WorkerNetworkScope{}, false
+	}
+
+	scope := WorkerNetworkScope{}
+	for i := 0; i < len(parts)-1; i += 2 {
+		switch parts[i] {
+		case workerNetworkPrefixClusterKey:
+			scope.ClusterName = parts[i+1]
+		case workerNetworkPrefixNodeKey:
+			scope.NodeName = parts[i+1]
+		}
+	}
+
+	return scope, scope.ClusterName != "" && scope.NodeName != ""
+}
+
+func NormalizeWorkerNetworkPrefix(clusterName, networkPrefix string) string {
+	if scope, ok := ParseWorkerNetworkPrefix(networkPrefix); ok {
+		return WorkerNetworkPrefix(scope.ClusterName, scope.NodeName)
+	}
+	return WorkerNetworkPrefix(clusterName, networkPrefix)
 }
 
 func workerNetworkPrefixPart(value string) string {
