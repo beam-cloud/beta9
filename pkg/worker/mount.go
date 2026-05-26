@@ -2,17 +2,12 @@ package worker
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/singleflight"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -21,17 +16,14 @@ import (
 )
 
 type ContainerMountManager struct {
-	mountPointPaths   *common.SafeMap[[]string]
-	storageConfig     types.StorageConfig
-	stubExtractGroup  singleflight.Group
-	stubCodeCacheRoot string
+	mountPointPaths *common.SafeMap[[]string]
+	storageConfig   types.StorageConfig
 }
 
 func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 	return &ContainerMountManager{
-		mountPointPaths:   common.NewSafeMap[[]string](),
-		storageConfig:     config.Storage,
-		stubCodeCacheRoot: filepath.Join(types.DefaultExtractedObjectPath, "_stub-cache"),
+		mountPointPaths: common.NewSafeMap[[]string](),
+		storageConfig:   config.Storage,
 	}
 }
 
@@ -39,13 +31,23 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
-			localPath, err := c.setupUserCodeMount(ctx, request)
-			if err != nil {
-				return err
+			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
+
+			if !request.StorageAvailable() {
+				objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
+
+				err := common.ExtractObjectFile(ctx, objectPath, m.LocalPath)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				if err := getAndExtractStubCode(ctx, request); err != nil {
+					return err
+				}
 			}
 
-			m.LocalPath = localPath
-			request.Mounts[i].LocalPath = localPath
+			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
 		// NOTE: The following adjustments to local paths are part of a migration to use WorkspaceStorage and can be removed once all existing workspaces are migrated.
@@ -81,80 +83,6 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 	}
 
 	return nil
-}
-
-func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	destPath := types.TempContainerWorkspace(request.ContainerId)
-	if directoryExists(destPath) {
-		return destPath, nil
-	}
-
-	cachePath := c.stubCodeCachePath(request)
-	_, err, _ := c.stubExtractGroup.Do(cachePath, func() (any, error) {
-		return nil, c.ensureStubCodeCache(ctx, request, cachePath)
-	})
-	if err != nil {
-		return "", err
-	}
-
-	if err := os.MkdirAll(destPath, 0755); err != nil {
-		return "", err
-	}
-	if err := copyDirectory(cachePath, destPath, nil); err != nil {
-		return "", err
-	}
-	return destPath, nil
-}
-
-func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request *types.ContainerRequest, cachePath string) error {
-	if directoryExists(cachePath) {
-		return nil
-	}
-
-	parent := filepath.Dir(cachePath)
-	if err := os.MkdirAll(parent, 0755); err != nil {
-		return err
-	}
-
-	tmpPath, err := os.MkdirTemp(parent, ".extract-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpPath)
-
-	if !request.StorageAvailable() {
-		objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
-		if err := common.ExtractObjectFile(ctx, objectPath, tmpPath); err != nil {
-			return err
-		}
-	} else if err := downloadAndExtractStubCode(ctx, request, tmpPath); err != nil {
-		return err
-	}
-
-	if err := os.RemoveAll(cachePath); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, cachePath)
-}
-
-func (c *ContainerMountManager) stubCodeCachePath(request *types.ContainerRequest) string {
-	cacheID := strings.Join([]string{
-		request.Workspace.Name,
-		request.Stub.Object.ExternalId,
-		request.Stub.Object.Hash,
-		fmt.Sprintf("%d", request.Stub.Object.Size),
-	}, ":")
-	sum := sha1.Sum([]byte(cacheID))
-	objectID := request.Stub.Object.ExternalId
-	if objectID == "" {
-		objectID = "object"
-	}
-	return filepath.Join(c.stubCodeCacheRoot, request.Workspace.Name, fmt.Sprintf("%s-%s", objectID, hex.EncodeToString(sum[:8])))
-}
-
-func directoryExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }
 
 // RemoveContainerMounts removes all mounts for a container
@@ -205,8 +133,8 @@ func checkpointSignalDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/criu", containerId)
 }
 
-// downloadAndExtractStubCode downloads the object from storage and extracts it to the target path.
-func downloadAndExtractStubCode(ctx context.Context, request *types.ContainerRequest, destPath string) error {
+// getAndExtractStubCode downloads the object from storage and extracts it to the temp location that will be mounted
+func getAndExtractStubCode(ctx context.Context, request *types.ContainerRequest) error {
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
@@ -219,5 +147,6 @@ func downloadAndExtractStubCode(ctx context.Context, request *types.ContainerReq
 		return err
 	}
 
+	destPath := types.TempContainerWorkspace(request.ContainerId)
 	return common.UnzipBytesToPath(destPath, objBytes, request)
 }

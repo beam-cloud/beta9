@@ -251,15 +251,24 @@ const (
 	EventAttrContainerStatus    = "container_status"
 	EventAttrCurrentContainers  = "current_containers"
 	EventAttrDesiredContainers  = "desired_containers"
+	EventAttrAttempts           = "attempts"
 	EventAttrExitCode           = "exit_code"
 	EventAttrError              = "error"
+	EventAttrFailureClass       = "failure_class"
+	EventAttrFailureClasses     = "failure_classes"
+	EventAttrFailureCount       = "failure_count"
+	EventAttrFirstTCPReadyMs    = "first_tcp_ready_ms"
 	EventAttrForce              = "force"
 	EventAttrGracePeriodSeconds = "grace_period_seconds"
 	EventAttrLifecycle          = "lifecycle"
+	EventAttrLastError          = "last_error"
 	EventAttrLockKey            = "lock_key"
+	EventAttrMode               = "mode"
 	EventAttrPreviousStatus     = "previous_status"
 	EventAttrMappedExitCode     = "mapped_exit_code"
 	EventAttrOOMKilled          = "oom_killed"
+	EventAttrPort               = "port"
+	EventAttrProbeResult        = "probe_result"
 	EventAttrRawExitCode        = "raw_exit_code"
 	EventAttrReason             = "reason"
 	EventAttrRuntime            = "runtime"
@@ -348,6 +357,7 @@ const (
 	ContainerLifecycleNetworkIPScan               ContainerLifecycleID = "network.ip_scan"
 	ContainerLifecycleNetworkIPAssign             ContainerLifecycleID = "network.ip_assign"
 	ContainerLifecycleNetworkSetContainerIP       ContainerLifecycleID = "network.set_container_ip"
+	ContainerLifecycleNetworkRouteProbe           ContainerLifecycleID = "network.route_probe"
 	ContainerLifecycleNetworkRestrictions         ContainerLifecycleID = "network.restrictions"
 	ContainerLifecycleGPUAssignment               ContainerLifecycleID = "worker.gpu_assignment"
 	ContainerLifecycleNetworkExpose               ContainerLifecycleID = "network.expose_ports"
@@ -356,6 +366,7 @@ const (
 	ContainerLifecycleStartQueueWait              ContainerLifecycleID = "worker.start_queue_wait"
 	ContainerLifecycleRuntimeStartToPID           ContainerLifecycleID = "runtime.start_to_pid"
 	ContainerLifecycleSandboxApplyCPUQuota        ContainerLifecycleID = "sandbox.apply_cpu_quota"
+	ContainerLifecycleSandboxProcessManagerTCP    ContainerLifecycleID = "sandbox.process_manager_tcp_ready"
 	ContainerLifecycleSandboxProcessManagerReady  ContainerLifecycleID = "sandbox.process_manager_ready"
 	ContainerLifecycleServeReady                  ContainerLifecycleID = "serve.ready"
 	ContainerLifecycleResultDelivery              ContainerLifecycleID = "result.delivery"
@@ -417,6 +428,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleNetworkIPScan:               {ID: ContainerLifecycleNetworkIPScan, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Scan allocated IPs"},
 	ContainerLifecycleNetworkIPAssign:             {ID: ContainerLifecycleNetworkIPAssign, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Assign container IP"},
 	ContainerLifecycleNetworkSetContainerIP:       {ID: ContainerLifecycleNetworkSetContainerIP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Persist container IP"},
+	ContainerLifecycleNetworkRouteProbe:           {ID: ContainerLifecycleNetworkRouteProbe, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Probe container route"},
 	ContainerLifecycleNetworkRestrictions:         {ID: ContainerLifecycleNetworkRestrictions, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Network restrictions"},
 	ContainerLifecycleGPUAssignment:               {ID: ContainerLifecycleGPUAssignment, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "GPU assignment"},
 	ContainerLifecycleNetworkExpose:               {ID: ContainerLifecycleNetworkExpose, Domain: EventDomainNetwork, ParentID: ContainerLifecycleStartup, Label: "Expose ports"},
@@ -425,6 +437,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleStartQueueWait:              {ID: ContainerLifecycleStartQueueWait, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker start queue wait"},
 	ContainerLifecycleRuntimeStartToPID:           {ID: ContainerLifecycleRuntimeStartToPID, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime start to PID", Required: true},
 	ContainerLifecycleSandboxApplyCPUQuota:        {ID: ContainerLifecycleSandboxApplyCPUQuota, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Apply sandbox CPU quota"},
+	ContainerLifecycleSandboxProcessManagerTCP:    {ID: ContainerLifecycleSandboxProcessManagerTCP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleSandboxProcessManagerReady, Label: "Sandbox process manager TCP ready"},
 	ContainerLifecycleSandboxProcessManagerReady:  {ID: ContainerLifecycleSandboxProcessManagerReady, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Sandbox process manager ready"},
 	ContainerLifecycleServeReady:                  {ID: ContainerLifecycleServeReady, Domain: EventDomainServe, ParentID: ContainerLifecycleStartup, Label: "Serve ready"},
 	ContainerLifecycleResultDelivery:              {ID: ContainerLifecycleResultDelivery, Domain: EventDomainResult, ParentID: ContainerLifecycleStartup, Label: "Result delivery"},

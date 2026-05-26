@@ -597,15 +597,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	if !instance.SandboxProcessManagerReady {
-		var err error
-		instance, err = s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
-		if err != nil {
-			return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: err.Error()}, nil
-		}
-	}
-	if !instance.SandboxProcessManagerReady {
-		return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Sandbox process manager is not ready"}, nil
+	instance, err := s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
+	if err != nil {
+		return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: err.Error()}, nil
 	}
 
 	pid, err := s.execSandboxProcess(ctx, in.ContainerId, instance, cmd, cwd, env)

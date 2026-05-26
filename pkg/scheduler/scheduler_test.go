@@ -902,6 +902,73 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 	assert.NotEqual(t, firstQueued.ContainerId, secondQueued.ContainerId)
 }
 
+func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	wb.config.Worker.Pools["beta9-cpu"] = types.WorkerPoolConfig{
+		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		ContainerStartConcurrency: 32,
+	}
+
+	workers := []*types.Worker{
+		{
+			Id:          uuid.New().String(),
+			Status:      types.WorkerStatusAvailable,
+			TotalCpu:    16000,
+			TotalMemory: 32000,
+			FreeCpu:     16000,
+			FreeMemory:  32000,
+			PoolName:    "beta9-cpu",
+			Runtime:     types.ContainerRuntimeRunc.String(),
+		},
+		{
+			Id:          uuid.New().String(),
+			Status:      types.WorkerStatusAvailable,
+			TotalCpu:    16000,
+			TotalMemory: 32000,
+			FreeCpu:     16000,
+			FreeMemory:  32000,
+			PoolName:    "beta9-cpu",
+			Runtime:     types.ContainerRuntimeRunc.String(),
+		},
+	}
+	for _, worker := range workers {
+		err = wb.workerRepo.AddWorker(worker)
+		assert.Nil(t, err)
+	}
+
+	requests := make([]*types.ContainerRequest, 70)
+	for i := range requests {
+		requests[i] = &types.ContainerRequest{
+			ContainerId: uuid.New().String(),
+			Cpu:         100,
+			Memory:      100,
+			Timestamp:   time.Now(),
+			Stub: types.StubWithRelated{
+				Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+			},
+		}
+	}
+
+	workerSnapshot, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	wb.processRequestBatch(requests, workerSnapshot)
+
+	for _, worker := range workers {
+		queued := 0
+		for {
+			request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+			assert.Nil(t, err)
+			if request == nil {
+				break
+			}
+			queued++
+		}
+		assert.Equal(t, 35, queued)
+	}
+}
+
 func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)

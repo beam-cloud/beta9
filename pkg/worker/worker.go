@@ -16,7 +16,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -34,10 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
-	defaultRuncStartConcurrency    int           = 128
-	defaultGvisorStartConcurrency  int           = 32
-	runcStartConcurrencyPerCPU     int64         = 16
-	gvisorStartConcurrencyPerCPU   int64         = 4
+	defaultRuncStartConcurrency    int           = types.DefaultRuncStartConcurrency
+	defaultGvisorStartConcurrency  int           = types.DefaultGvisorStartConcurrency
 	workerRedisConnectTimeout      time.Duration = 45 * time.Second
 	workerRedisConnectBaseDelay    time.Duration = 250 * time.Millisecond
 	workerRedisConnectMaxDelay     time.Duration = 2 * time.Second
@@ -316,7 +313,7 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
-	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, defaultRuntime.Name())
+	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, config.Worker.ContainerRuntime, defaultRuntime.Name(), cpuLimit)
 
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
@@ -501,45 +498,9 @@ func defaultContainerStartLimitForRuntime(runtimeType string, runcLimit, gvisorL
 	return limit
 }
 
-func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, runtimeType string) int {
-	limit := defaultContainerStartLimitForRuntime(runtimeType, defaultRuncStartConcurrency, defaultGvisorStartConcurrency)
-	if poolConfig.ContainerStartConcurrency > 0 {
-		limit = poolConfig.ContainerStartConcurrency
-	}
-
-	limit = capContainerStartLimitForPoolCPU(limit, runtimeType, poolConfig.PoolSizing.DefaultWorkerCPU)
+func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, globalRuntime, runtimeType string, workerCPU int64) int {
+	limit := types.WorkerStartConcurrencyForPool(poolConfig, globalRuntime, runtimeType, workerCPU)
 	return containerStartLimitWithEnvOverride(limit)
-}
-
-func capContainerStartLimitForPoolCPU(limit int, runtimeType, workerCPU string) int {
-	if limit <= 0 || workerCPU == "" {
-		return limit
-	}
-
-	cpu, err := resource.ParseQuantity(workerCPU)
-	if err != nil {
-		log.Warn().Str("value", workerCPU).Err(err).Msg("invalid worker CPU for container start concurrency cap")
-		return limit
-	}
-
-	milliCPU := cpu.MilliValue()
-	if milliCPU <= 0 {
-		return limit
-	}
-
-	perCPU := runcStartConcurrencyPerCPU
-	if runtimeType == types.ContainerRuntimeGvisor.String() {
-		perCPU = gvisorStartConcurrencyPerCPU
-	}
-	maxStarts := int((milliCPU*perCPU + 999) / 1000)
-	if maxStarts < 1 {
-		maxStarts = 1
-	}
-	if limit > maxStarts {
-		return maxStarts
-	}
-
-	return limit
 }
 
 func containerStartLimitWithEnvOverride(limit int) int {

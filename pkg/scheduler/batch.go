@@ -58,7 +58,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 	}
 
 	workerForSchedule := cloneWorker(worker)
-	if !reserveWorkerCapacity(worker, request) {
+	if !b.scheduler.reserveWorkerCapacity(worker, request) {
 		newSchedulingAttempt(b.scheduler, request, b.workers).runWaitingOrProvisioning()
 		return
 	}

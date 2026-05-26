@@ -526,6 +526,59 @@ func TestScheduleContainerRequestConcurrentCPUReservationsDoNotOverSchedule(t *t
 	assert.Equal(t, int64(5), queueDepth)
 }
 
+func TestScheduleContainerRequestConcurrentSandboxReservationsUseRequestedCapacity(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-concurrent-sandbox-reservation",
+		Status:     types.WorkerStatusAvailable,
+		TotalCpu:   16000,
+		FreeCpu:    500,
+		FreeMemory: 625,
+		PoolName:   "default",
+		Runtime:    types.ContainerRuntimeRunc.String(),
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	const attempts = 40
+	var successCount int64
+	var wg sync.WaitGroup
+	wg.Add(attempts)
+
+	for i := 0; i < attempts; i++ {
+		workerCopy, err := repo.GetWorkerById(worker.Id)
+		assert.Nil(t, err)
+
+		go func(i int, workerCopy *types.Worker) {
+			defer wg.Done()
+			err := repo.ScheduleContainerRequest(workerCopy, &types.ContainerRequest{
+				ContainerId: fmt.Sprintf("container-concurrent-sandbox-%d", i),
+				Cpu:         100,
+				Memory:      100,
+				Stub: types.StubWithRelated{
+					Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+				},
+			})
+			if err == nil {
+				atomic.AddInt64(&successCount, 1)
+			}
+		}(i, workerCopy)
+	}
+
+	wg.Wait()
+
+	assert.Equal(t, int64(5), successCount)
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(5), updatedWorker.ResourceVersion)
+}
+
 func TestScheduleContainerRequestConcurrentGPUReservationsDoNotOverSchedule(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

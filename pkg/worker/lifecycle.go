@@ -386,7 +386,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 
-	log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
+	log.Info().
+		Str("container_id", containerId).
+		Str("stub_type", request.Stub.Type.Kind()).
+		Int("port_count", len(addressMap)).
+		Interface("address_map", addressMap).
+		Msg("set container address map")
 
 	s.containerWg.Add(1)
 
@@ -936,6 +941,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
 	}
+	if instance, exists := s.containerInstances.Get(containerId); exists && instance.ContainerIp != "" {
+		phaseStart = time.Now()
+		routeProbe := probeContainerRoute(ctx, instance.ContainerIp, int(types.WorkerSandboxProcessManagerPort))
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkRouteProbe, phaseStart, routeProbe.RouteReady, map[string]string{
+			types.EventAttrPort:        fmt.Sprintf("%d", types.WorkerSandboxProcessManagerPort),
+			types.EventAttrProbeResult: routeProbe.Class,
+		})
+	}
 
 	// Only inject GPU devices if runtime supports GPU
 	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
@@ -1111,9 +1124,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 
 			phaseStart := time.Now()
-			processManagerClient, processManagerReady := s.waitForProcessManager(ctx, containerId, instance)
+			processManagerClient, processManagerReady, processManagerStats := s.waitForProcessManager(ctx, containerId, instance)
 			metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
-			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxProcessManagerReady, phaseStart, processManagerReady, nil)
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSandboxProcessManagerReady, phaseStart, processManagerReady, processManagerStats.attrs())
 
 			if fresh, exists := s.containerInstances.Get(containerId); exists {
 				instance = fresh

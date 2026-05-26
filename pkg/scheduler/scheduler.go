@@ -539,11 +539,10 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
-func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, workerConfig types.WorkerConfig) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
-	memory := capacityMemoryForScheduling(request)
 	gpuCount := gpuCountForScheduling(request)
 
 	gpuRequests := gpuRequestsForScheduling(request)
@@ -558,9 +557,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 	for _, worker := range workers {
 		isGpuWorker := worker.Gpu != ""
+		cpu := request.Cpu
+		memory := capacityMemoryForScheduling(request)
 
 		// Check if the worker has enough free cpu and memory to run the container
-		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < memory {
+		if worker.FreeCpu < cpu || worker.FreeMemory < memory {
 			continue
 		}
 
@@ -668,10 +669,10 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)      // Filter workers by pool selector
-	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
-	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
-	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
+	filteredWorkers := filterWorkersByPoolSelector(workers, request)                      // Filter workers by pool selector
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request, s.config.Worker) // Filter workers resource requirements
+	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)                      // Filter workers by flags
+	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...)                 // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}

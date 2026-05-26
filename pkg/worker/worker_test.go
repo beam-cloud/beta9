@@ -87,8 +87,8 @@ func TestContainerStartLimitForPoolRuntimeUsesPoolConfig(t *testing.T) {
 
 	poolConfig := types.WorkerPoolConfig{ContainerStartConcurrency: 64}
 
-	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
-	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
+	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeGvisor.String(), 0))
+	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeRunc.String(), 0))
 }
 
 func TestContainerStartLimitForPoolRuntimeCapsByWorkerCPU(t *testing.T) {
@@ -101,8 +101,8 @@ func TestContainerStartLimitForPoolRuntimeCapsByWorkerCPU(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, 16, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
-	require.Equal(t, 4, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+	require.Equal(t, 2, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeRunc.String(), 1000))
+	require.Equal(t, 4, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeGvisor.String(), 1000))
 }
 
 func TestContainerStartLimitForPoolRuntimeScalesWithWorkerCPU(t *testing.T) {
@@ -115,8 +115,8 @@ func TestContainerStartLimitForPoolRuntimeScalesWithWorkerCPU(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, 128, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
-	require.Equal(t, 32, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+	require.Equal(t, 16, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeRunc.String(), 8000))
+	require.Equal(t, 32, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeGvisor.String(), 8000))
 }
 
 func TestContainerStartLimitForPoolRuntimeAllowsEnvOverride(t *testing.T) {
@@ -124,7 +124,7 @@ func TestContainerStartLimitForPoolRuntimeAllowsEnvOverride(t *testing.T) {
 
 	poolConfig := types.WorkerPoolConfig{ContainerStartConcurrency: 64}
 
-	require.Equal(t, 8, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+	require.Equal(t, 8, containerStartLimitForPoolRuntime(poolConfig, "", types.ContainerRuntimeGvisor.String(), 0))
 }
 
 func TestUpdateContainerStatusOnceStopsHeartbeatForExitedInstance(t *testing.T) {

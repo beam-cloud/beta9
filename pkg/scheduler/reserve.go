@@ -265,7 +265,7 @@ func (p *provisioningTracker) reserveCapacity(s *Scheduler, workers []*types.Wor
 	}
 
 	if worker := p.selectInFlightWorkerLocked(s, request); worker != nil {
-		if reserveWorkerCapacity(worker, request) {
+		if s.reserveWorkerCapacity(worker, request) {
 			p.trackRequestLocked(worker.Id, request.ContainerId)
 			return true
 		}
@@ -276,7 +276,7 @@ func (p *provisioningTracker) reserveCapacity(s *Scheduler, workers []*types.Wor
 		return false
 	}
 
-	if !reserveWorkerCapacity(worker, request) {
+	if !s.reserveWorkerCapacity(worker, request) {
 		return false
 	}
 
@@ -291,7 +291,7 @@ func (p *provisioningTracker) addReservation(s *Scheduler, request *types.Contai
 	normalizeGPURequest(request)
 
 	reservation := s.newProvisioningReservation(request, controller)
-	reserveWorkerCapacity(reservation.worker, request)
+	s.reserveWorkerCapacity(reservation.worker, request)
 	reservation.requestIDs[request.ContainerId] = struct{}{}
 
 	p.reservations[reservation.worker.Id] = reservation
@@ -505,11 +505,12 @@ func gpuCountForScheduling(request *types.ContainerRequest) uint32 {
 	return request.GpuCount
 }
 
-func reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest) bool {
+func (s *Scheduler) reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest) bool {
 	normalizeGPURequest(request)
 
+	cpu := request.Cpu
 	memory := capacityMemoryForScheduling(request)
-	if worker.FreeCpu < request.Cpu || worker.FreeMemory < memory {
+	if worker.FreeCpu < cpu || worker.FreeMemory < memory {
 		return false
 	}
 
@@ -520,7 +521,7 @@ func reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest
 		worker.FreeGpuCount -= request.GpuCount
 	}
 
-	worker.FreeCpu -= request.Cpu
+	worker.FreeCpu -= cpu
 	worker.FreeMemory -= memory
 	return true
 }
