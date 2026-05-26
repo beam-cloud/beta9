@@ -21,6 +21,7 @@ type WorkerPoolSizer struct {
 }
 
 func NewWorkerPoolSizer(controller WorkerPoolController,
+	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
 	workerPoolRepo repository.WorkerPoolRepository,
@@ -29,6 +30,7 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 	if err != nil {
 		return nil, err
 	}
+	applyBuildPoolSizingMinimums(controller.Name(), config, poolSizingConfig)
 
 	return &WorkerPoolSizer{
 		controller:             controller,
@@ -210,4 +212,19 @@ func parsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*typ
 	}
 
 	return c, nil
+}
+
+func applyBuildPoolSizingMinimums(poolName string, config types.AppConfig, sizing *types.WorkerPoolSizingConfig) {
+	if sizing == nil || poolName == "" || poolName != config.ImageService.BuildContainerPoolSelector {
+		return
+	}
+
+	if config.ImageService.BuildContainerCpu > sizing.DefaultWorkerCpu {
+		sizing.DefaultWorkerCpu = config.ImageService.BuildContainerCpu
+	}
+
+	buildMemory := capacityMemoryForScheduling(&types.ContainerRequest{Memory: config.ImageService.BuildContainerMemory})
+	if buildMemory > sizing.DefaultWorkerMemory {
+		sizing.DefaultWorkerMemory = buildMemory
+	}
 }
