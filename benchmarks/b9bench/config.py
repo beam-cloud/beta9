@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .model import RunConfig, slug
@@ -21,6 +22,9 @@ def normalize_local_host(host: str) -> str:
 def http_url_from_gateway(host: str, port: str) -> str:
     if host.startswith(("http://", "https://")):
         return host
+    if port == "443" and host.startswith("gateway.") and host.endswith(".beam.cloud"):
+        http_host = "app." + host[len("gateway."):]
+        return f"https://{http_host}"
     if port == "1993":
         return f"http://{host}:1994"
     if port == "80":
@@ -30,16 +34,31 @@ def http_url_from_gateway(host: str, port: str) -> str:
     return f"http://{host}:{port}"
 
 
-def read_profile(config_path: Path, profile: str) -> tuple[str, str, str]:
+@dataclass(frozen=True)
+class ProfileConfig:
+    token: str = ""
+    gateway_host: str = ""
+    gateway_port: str = ""
+    http_url: str = ""
+
+
+def read_profile(config_path: Path, profile: str) -> ProfileConfig:
     parser = configparser.ConfigParser()
     parser.read(config_path.expanduser())
     if not parser.has_section(profile):
-        return "", "", ""
+        return ProfileConfig()
     section = parser[profile]
-    return (
-        section.get("token", ""),
-        section.get("gateway_host", ""),
-        section.get("gateway_port", ""),
+    http_url = section.get("gateway_http_url", "") or section.get("http_url", "")
+    http_host = section.get("gateway_http_host", "") or section.get("http_host", "")
+    http_port = section.get("gateway_http_port", "") or section.get("http_port", "")
+    if not http_url and http_host:
+        http_url = http_url_from_gateway(normalize_local_host(http_host), http_port or "443")
+
+    return ProfileConfig(
+        token=section.get("token", ""),
+        gateway_host=section.get("gateway_host", ""),
+        gateway_port=section.get("gateway_port", ""),
+        http_url=http_url.strip(),
     )
 
 
@@ -107,23 +126,23 @@ def resolve_run_config(args) -> RunConfig:
         or "~/.beta9/config.ini"
     ).expanduser()
 
-    config_token = config_host = config_port = ""
+    profile_config = ProfileConfig()
     if config_path.exists():
-        config_token, config_host, config_port = read_profile(config_path, profile)
+        profile_config = read_profile(config_path, profile)
 
     token = (
         args.token
         or os.getenv("BENCH_TOKEN")
         or os.getenv("TOKEN")
         or os.getenv("BETA9_TOKEN")
-        or config_token
+        or profile_config.token
     )
     grpc_addr = args.grpc_addr or os.getenv("BENCH_GRPC_ADDR")
     gateway_url = args.gateway_url or os.getenv("BENCH_GATEWAY_URL")
-    if config_host and config_port:
-        host = normalize_local_host(config_host)
-        grpc_addr = grpc_addr or f"{host}:{config_port}"
-        gateway_url = gateway_url or http_url_from_gateway(host, config_port)
+    if profile_config.gateway_host and profile_config.gateway_port:
+        host = normalize_local_host(profile_config.gateway_host)
+        grpc_addr = grpc_addr or f"{host}:{profile_config.gateway_port}"
+        gateway_url = gateway_url or profile_config.http_url or http_url_from_gateway(host, profile_config.gateway_port)
 
     raw_out_dir = args.out_dir or os.getenv("BENCH_OUT_DIR")
     out_dir = (

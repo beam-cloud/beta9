@@ -551,6 +551,50 @@ func TestContainerIdFromIptablesRuleHandlesIPv6Colons(t *testing.T) {
 	}
 }
 
+func TestContainerNetworkRuleInfoFromIptablesRule(t *testing.T) {
+	rule := `-A PREROUTING -p tcp -m tcp --dport 12345 -j DNAT --to-destination 192.168.0.44:8080 -m comment --comment "b9habcdef123456:sandbox-123:network-slot-abc"`
+
+	info, ok := containerNetworkRuleInfoFromIptablesRule(rule)
+	if !ok {
+		t.Fatal("expected container network info in iptables rule")
+	}
+	if info.ContainerID != "sandbox-123" {
+		t.Fatalf("expected sandbox-123, got %s", info.ContainerID)
+	}
+	if info.Namespace != "network-slot-abc" {
+		t.Fatalf("expected network-slot-abc namespace, got %s", info.Namespace)
+	}
+	if info.VethHost != "b9habcdef123456" {
+		t.Fatalf("expected b9habcdef123456 veth, got %s", info.VethHost)
+	}
+	if info.IPv4 != "192.168.0.44" {
+		t.Fatalf("expected IPv4 destination, got %s", info.IPv4)
+	}
+}
+
+func TestContainerNetworkInfoFromSlotUsesSlotResources(t *testing.T) {
+	slot := &containerNetworkSlot{
+		id:        "network-slot-abc",
+		namespace: "network-slot-abc",
+		vethHost:  "b9hslotabc",
+		ip:        "192.168.0.44",
+	}
+
+	info, err := containerNetworkInfoFromSlot("sandbox-123", slot, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Namespace != slot.namespace {
+		t.Fatalf("expected namespace %s, got %s", slot.namespace, info.Namespace)
+	}
+	if info.VethHost != slot.vethHost {
+		t.Fatalf("expected veth %s, got %s", slot.vethHost, info.VethHost)
+	}
+	if info.Comment != "b9hslotabc:sandbox-123:network-slot-abc" {
+		t.Fatalf("unexpected comment: %s", info.Comment)
+	}
+}
+
 func containerNetworkAddress() string {
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	return ipNet.IP.String()

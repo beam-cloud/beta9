@@ -16,6 +16,7 @@ func validateCIDR(entry string) (string, bool, error) {
 type containerNetworkInfo struct {
 	ContainerIp   string
 	ContainerIpv6 string // empty if IPv6 is not enabled
+	Namespace     string
 	VethHost      string
 	Comment       string
 }
@@ -36,12 +37,12 @@ func getContainerNetworkInfo(ctx context.Context, workerRepoClient pb.WorkerRepo
 
 func containerNetworkInfoFromIP(containerId string, containerIp string, ipv6Enabled bool) (*containerNetworkInfo, error) {
 	vethHost, _ := containerVethNames(containerId)
-	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
 
 	info := &containerNetworkInfo{
 		ContainerIp: containerIp,
+		Namespace:   containerId,
 		VethHost:    vethHost,
-		Comment:     comment,
+		Comment:     containerNetworkComment(vethHost, containerId, containerId),
 	}
 
 	if ipv6Enabled {
@@ -58,6 +59,50 @@ func containerNetworkInfoFromIP(containerId string, containerIp string, ipv6Enab
 			return nil, err
 		}
 		info.ContainerIpv6 = ipv6Address.String()
+	}
+
+	return info, nil
+}
+
+func containerNetworkInfoFromSlot(containerId string, slot *containerNetworkSlot, ipv6Enabled bool) (*containerNetworkInfo, error) {
+	if slot == nil {
+		return nil, fmt.Errorf("missing network slot for container %s", containerId)
+	}
+
+	namespace := slot.namespace
+	if namespace == "" {
+		namespace = slot.id
+	}
+	vethHost := slot.vethHost
+	if vethHost == "" {
+		vethHost, _ = containerVethNames(namespace)
+	}
+
+	info := &containerNetworkInfo{
+		ContainerIp: slot.ip,
+		Namespace:   namespace,
+		VethHost:    vethHost,
+		Comment:     containerNetworkComment(vethHost, containerId, namespace),
+	}
+
+	if ipv6Enabled {
+		if slot.ipv6 != "" {
+			info.ContainerIpv6 = slot.ipv6
+		} else {
+			ip := net.ParseIP(slot.ip)
+			if ip == nil || ip.To4() == nil {
+				return nil, fmt.Errorf("invalid IPv4 address: %s", slot.ip)
+			}
+			_, ipv6Net, err := net.ParseCIDR(containerSubnetIPv6)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse IPv6 subnet: %w", err)
+			}
+			ipv6Address, err := containerIPv6Address(ip, ipv6Net)
+			if err != nil {
+				return nil, err
+			}
+			info.ContainerIpv6 = ipv6Address.String()
+		}
 	}
 
 	return info, nil

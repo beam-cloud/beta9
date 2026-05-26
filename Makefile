@@ -9,7 +9,7 @@ CACHE_BENCH_PROFILE ?=
 CACHE_BENCH_CONFIG ?=
 TOKEN ?=
 
-.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark cache-benchmark bench-cache-smoke
+.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke
 
 setup:
 	bash bin/setup.sh
@@ -33,6 +33,12 @@ sandbox-parallel-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
 	BENCH_SDK_PYTHON="$(BENCH_SDK_PYTHON)" \
 	"$(CURDIR)/bin/bench" sandbox $(ARGS)
+
+sandbox-stage-cold-benchmark:
+	$(MAKE) sandbox-parallel-benchmark ARGS="--profile staging --suite sandbox-stage-cold $(ARGS)"
+
+sandbox-stage-warm-benchmark:
+	$(MAKE) sandbox-parallel-benchmark ARGS="--profile staging --suite sandbox-stage-warm $(ARGS)"
 
 cache-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
