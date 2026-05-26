@@ -941,14 +941,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
 	}
-	if instance, exists := s.containerInstances.Get(containerId); exists && instance.ContainerIp != "" {
-		phaseStart = time.Now()
-		routeProbe := probeContainerRoute(ctx, instance.ContainerIp, int(types.WorkerSandboxProcessManagerPort))
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkRouteProbe, phaseStart, routeProbe.RouteReady, map[string]string{
-			types.EventAttrPort:        fmt.Sprintf("%d", types.WorkerSandboxProcessManagerPort),
-			types.EventAttrProbeResult: routeProbe.Class,
-		})
-	}
 
 	// Only inject GPU devices if runtime supports GPU
 	if request.RequiresGPU() && s.runtime.Capabilities().GPU {

@@ -103,7 +103,6 @@ SERVER_PHASES = (
     ("network_ip_scan_ms", "network.ip_scan", "Scan allocated IPs", False),
     ("network_ip_assign_ms", "network.ip_assign", "Assign container IP", False),
     ("network_set_container_ip_ms", "network.set_container_ip", "Persist container IP", False),
-    ("network_route_probe_ms", "network.route_probe", "Probe container route", False),
     ("network_restrictions_ms", "network.restrictions", "Network restrictions", False),
     ("network_expose_ports_ms", "network.expose_ports", "Expose ports", False),
     ("runtime_ms", "container.startup", "Runtime/container startup", False),

@@ -267,8 +267,6 @@ const (
 	EventAttrPreviousStatus     = "previous_status"
 	EventAttrMappedExitCode     = "mapped_exit_code"
 	EventAttrOOMKilled          = "oom_killed"
-	EventAttrPort               = "port"
-	EventAttrProbeResult        = "probe_result"
 	EventAttrRawExitCode        = "raw_exit_code"
 	EventAttrReason             = "reason"
 	EventAttrRuntime            = "runtime"
@@ -357,7 +355,6 @@ const (
 	ContainerLifecycleNetworkIPScan               ContainerLifecycleID = "network.ip_scan"
 	ContainerLifecycleNetworkIPAssign             ContainerLifecycleID = "network.ip_assign"
 	ContainerLifecycleNetworkSetContainerIP       ContainerLifecycleID = "network.set_container_ip"
-	ContainerLifecycleNetworkRouteProbe           ContainerLifecycleID = "network.route_probe"
 	ContainerLifecycleNetworkRestrictions         ContainerLifecycleID = "network.restrictions"
 	ContainerLifecycleGPUAssignment               ContainerLifecycleID = "worker.gpu_assignment"
 	ContainerLifecycleNetworkExpose               ContainerLifecycleID = "network.expose_ports"
@@ -428,7 +425,6 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleNetworkIPScan:               {ID: ContainerLifecycleNetworkIPScan, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Scan allocated IPs"},
 	ContainerLifecycleNetworkIPAssign:             {ID: ContainerLifecycleNetworkIPAssign, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Assign container IP"},
 	ContainerLifecycleNetworkSetContainerIP:       {ID: ContainerLifecycleNetworkSetContainerIP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Persist container IP"},
-	ContainerLifecycleNetworkRouteProbe:           {ID: ContainerLifecycleNetworkRouteProbe, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Probe container route"},
 	ContainerLifecycleNetworkRestrictions:         {ID: ContainerLifecycleNetworkRestrictions, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Network restrictions"},
 	ContainerLifecycleGPUAssignment:               {ID: ContainerLifecycleGPUAssignment, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "GPU assignment"},
 	ContainerLifecycleNetworkExpose:               {ID: ContainerLifecycleNetworkExpose, Domain: EventDomainNetwork, ParentID: ContainerLifecycleStartup, Label: "Expose ports"},

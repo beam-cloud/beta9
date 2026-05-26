@@ -24,7 +24,6 @@ const (
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout             = 30 * time.Second
 	goprocReadyProbeTimeout        = 50 * time.Millisecond
-	containerRouteProbeTimeout     = 25 * time.Millisecond
 	goprocInitialBackoff           = 10 * time.Millisecond
 	goprocMaxBackoff               = 50 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5
@@ -265,10 +264,6 @@ func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (
 		return nil, fmt.Errorf("sandbox process manager address unavailable")
 	}
 	return goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
-}
-
-func probeContainerRoute(ctx context.Context, ip string, port int) tcpProbeResult {
-	return probeTCP(ctx, ip, port, containerRouteProbeTimeout)
 }
 
 func probeTCP(ctx context.Context, ip string, port int, timeout time.Duration) tcpProbeResult {
