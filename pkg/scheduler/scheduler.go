@@ -470,25 +470,39 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 		return nil
 	}
 
-	// Check if we have credentials configured for the build registry
+	// Check if we have credentials configured for the build registry.
 	buildRegistryCredentials := s.config.ImageService.BuildRegistryCredentials
-	if buildRegistryCredentials.Type == "" || len(buildRegistryCredentials.Credentials) == 0 {
-		return nil
-	}
-
-	// Build a dummy image reference for the build registry
 	dummyImageRef := fmt.Sprintf("%s/%s:dummy", buildRegistry, s.config.ImageService.BuildRepositoryName)
 
-	// Generate fresh token using the credentials from config
-	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", request.ContainerId).
-			Str("build_registry", buildRegistry).
-			Str("cred_type", buildRegistryCredentials.Type).
-			Msg("failed to generate build registry token, will use ambient auth")
-		return nil // Don't fail the request, just log and continue
+	var token string
+	authSource := "ambient"
+	if buildRegistryCredentials.Type != "" && len(buildRegistryCredentials.Credentials) > 0 {
+		var err error
+		token, err = reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container_id", request.ContainerId).
+				Str("build_registry", buildRegistry).
+				Str("cred_type", buildRegistryCredentials.Type).
+				Msg("failed to generate build registry token from configured credentials")
+		}
+		if token != "" {
+			authSource = buildRegistryCredentials.Type
+		}
+	}
+
+	if token == "" {
+		var err error
+		token, err = reg.GetAmbientECRTokenForImage(context.TODO(), dummyImageRef)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container_id", request.ContainerId).
+				Str("build_registry", buildRegistry).
+				Msg("failed to generate build registry token from ambient credentials")
+			return nil
+		}
 	}
 
 	if token == "" {
@@ -505,7 +519,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	log.Info().
 		Str("container_id", request.ContainerId).
 		Str("build_registry", buildRegistry).
-		Str("cred_type", buildRegistryCredentials.Type).
+		Str("auth_source", authSource).
 		Msg("attached build registry credentials to request")
 
 	return nil

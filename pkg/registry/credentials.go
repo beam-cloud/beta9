@@ -501,11 +501,50 @@ func GetECRToken(creds map[string]string) (string, error) {
 		return "", fmt.Errorf("failed to get ECR token: %w", err)
 	}
 
+	return decodeECRAuthorizationToken(output)
+}
+
+func GetAmbientECRTokenForImage(ctx context.Context, imageURI string) (string, error) {
+	registry := ParseRegistry(imageURI)
+	registryID, region, ok := parseECRRegistry(registry)
+	if !ok {
+		return "", fmt.Errorf("image is not an ECR registry: %s", registry)
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return "", fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	output, err := ecr.NewFromConfig(cfg).GetAuthorizationToken(ctx, &ecr.GetAuthorizationTokenInput{
+		RegistryIds: []string{registryID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get ambient ECR token: %w", err)
+	}
+
+	return decodeECRAuthorizationToken(output)
+}
+
+func parseECRRegistry(registry string) (registryID string, region string, ok bool) {
+	registry = strings.TrimPrefix(registry, "https://")
+	registry = strings.TrimPrefix(registry, "http://")
+	registry = strings.Split(registry, "/")[0]
+	registry = strings.Split(registry, ":")[0]
+
+	parts := strings.Split(registry, ".")
+	if len(parts) < 6 || parts[1] != "dkr" || parts[2] != "ecr" {
+		return "", "", false
+	}
+
+	return parts[0], parts[3], true
+}
+
+func decodeECRAuthorizationToken(output *ecr.GetAuthorizationTokenOutput) (string, error) {
 	if len(output.AuthorizationData) == 0 || output.AuthorizationData[0].AuthorizationToken == nil {
 		return "", fmt.Errorf("no authorization data returned from ECR")
 	}
 
-	// Decode base64 token (format: username:password)
 	base64Token := aws.ToString(output.AuthorizationData[0].AuthorizationToken)
 	decodedToken, err := base64.StdEncoding.DecodeString(base64Token)
 	if err != nil {
@@ -613,7 +652,7 @@ func GetDockerHubToken(creds map[string]string) (string, error) {
 	if hasAuth {
 		return buildBasicAuthToken(username, password), nil
 	}
-	
+
 	// Fall back to generic USERNAME/PASSWORD for non-Docker Hub registries
 	username, password, hasAuth, err = validateOptionalCredentials(creds, "USERNAME", "PASSWORD")
 	if err != nil {
@@ -622,7 +661,7 @@ func GetDockerHubToken(creds map[string]string) (string, error) {
 	if hasAuth {
 		return buildBasicAuthToken(username, password), nil
 	}
-	
+
 	// Also try REGISTRY_USERNAME/REGISTRY_PASSWORD
 	username, password, hasAuth, err = validateOptionalCredentials(creds, "REGISTRY_USERNAME", "REGISTRY_PASSWORD")
 	if err != nil {
@@ -631,7 +670,7 @@ func GetDockerHubToken(creds map[string]string) (string, error) {
 	if hasAuth {
 		return buildBasicAuthToken(username, password), nil
 	}
-	
+
 	return "", nil // Public access
 }
 

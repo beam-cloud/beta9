@@ -66,6 +66,52 @@ func TestParseRegistry(t *testing.T) {
 	}
 }
 
+func TestParseECRRegistry(t *testing.T) {
+	tests := []struct {
+		name       string
+		registry   string
+		registryID string
+		region     string
+		ok         bool
+	}{
+		{
+			name:       "plain ecr registry",
+			registry:   "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+			registryID: "123456789012",
+			region:     "us-east-1",
+			ok:         true,
+		},
+		{
+			name:       "ecr registry with port",
+			registry:   "123456789012.dkr.ecr.us-west-2.amazonaws.com:443",
+			registryID: "123456789012",
+			region:     "us-west-2",
+			ok:         true,
+		},
+		{
+			name:       "ecr registry with scheme and path",
+			registry:   "https://123456789012.dkr.ecr.eu-central-1.amazonaws.com/repo/image:tag",
+			registryID: "123456789012",
+			region:     "eu-central-1",
+			ok:         true,
+		},
+		{
+			name:     "non ecr registry",
+			registry: "registry.example.com:5000",
+			ok:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registryID, region, ok := parseECRRegistry(tt.registry)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.registryID, registryID)
+			assert.Equal(t, tt.region, region)
+		})
+	}
+}
+
 func TestParseCredentialsFromEnv(t *testing.T) {
 	tests := []struct {
 		name     string
