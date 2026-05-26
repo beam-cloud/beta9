@@ -371,7 +371,10 @@ class SandboxStartupReportTests(unittest.TestCase):
         self.assertEqual(error, "")
         self.assertEqual(events["items"][0]["container_id"], "container-1")
         self.assertEqual(calls[0]["container_ids"], [])
-        self.assertEqual(calls[0]["targets"], [{"container_id": "container-1", "stub_id": "stub-1"}])
+        self.assertEqual(
+            calls[0]["targets"],
+            [{"container_id": "container-1", "stub_id": "stub-1"}],
+        )
         self.assertEqual(calls[0]["limit"], 25)
         self.assertEqual(calls[0]["top_lifecycle"], 4)
 
