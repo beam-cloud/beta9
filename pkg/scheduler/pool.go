@@ -123,11 +123,12 @@ func workerCacheMountPath(config types.AppConfig, poolConfig types.WorkerPoolCon
 }
 
 func MonitorPoolSize(wpc WorkerPoolController,
+	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
 	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
 	if err != nil {
 		return err
 	}

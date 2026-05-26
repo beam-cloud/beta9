@@ -93,7 +93,7 @@ func NewExternalWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPo
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPoolConfig, wpc.workerRepo, wpc.workerPoolRepo, opts.ProviderRepo)
+	err = MonitorPoolSize(wpc, opts.Config, &workerPoolConfig, wpc.workerRepo, wpc.workerPoolRepo, opts.ProviderRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}

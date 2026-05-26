@@ -229,6 +229,44 @@ func TestParsePoolSizingConfig(t *testing.T) {
 	}
 }
 
+func TestApplyBuildPoolSizingMinimums(t *testing.T) {
+	config := types.AppConfig{}
+	config.ImageService.BuildContainerPoolSelector = "build"
+	config.ImageService.BuildContainerCpu = 14000
+	config.ImageService.BuildContainerMemory = 54000
+
+	sizing := &types.WorkerPoolSizingConfig{
+		MinFreeCpu:          14000,
+		MinFreeMemory:       55296,
+		DefaultWorkerCpu:    1000,
+		DefaultWorkerMemory: 55296,
+	}
+
+	applyBuildPoolSizingMinimums("build", config, sizing)
+
+	assert.Equal(t, int64(14000), sizing.DefaultWorkerCpu)
+	assert.Equal(t, int64(67500), sizing.DefaultWorkerMemory)
+	assert.Equal(t, int64(14000), sizing.MinFreeCpu)
+	assert.Equal(t, int64(55296), sizing.MinFreeMemory)
+}
+
+func TestApplyBuildPoolSizingMinimumsOnlyAppliesToBuildPool(t *testing.T) {
+	config := types.AppConfig{}
+	config.ImageService.BuildContainerPoolSelector = "build"
+	config.ImageService.BuildContainerCpu = 14000
+	config.ImageService.BuildContainerMemory = 54000
+
+	sizing := &types.WorkerPoolSizingConfig{
+		DefaultWorkerCpu:    1000,
+		DefaultWorkerMemory: 1024,
+	}
+
+	applyBuildPoolSizingMinimums("default", config, sizing)
+
+	assert.Equal(t, int64(1000), sizing.DefaultWorkerCpu)
+	assert.Equal(t, int64(1024), sizing.DefaultWorkerMemory)
+}
+
 func TestOccupyAvailableMachines(t *testing.T) {
 	s, err := miniredis.Run()
 	assert.NotNil(t, s)
