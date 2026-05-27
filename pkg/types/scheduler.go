@@ -243,7 +243,12 @@ type ContainerRequest struct {
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
-	return len(c.GpuRequest) > 0 || c.Gpu != ""
+	for _, gpu := range c.GpuRequest {
+		if gpu != "" && gpu != string(NO_GPU) {
+			return true
+		}
+	}
+	return c.Gpu != "" && c.Gpu != string(NO_GPU)
 }
 
 func WorkerStartConcurrencyForPool(poolConfig WorkerPoolConfig, globalRuntime, runtimeType string, workerCPU int64) int {

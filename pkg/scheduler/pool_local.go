@@ -310,15 +310,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 
 	volumes := []corev1.Volume{
 		{
-			Name: logVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: defaultWorkerLogPath,
-					Type: &hostPathType,
-				},
-			},
-		},
-		{
 			Name: "dshm",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{
@@ -417,11 +408,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		{
 			Name:      imagesVolumeName,
 			MountPath: defaultImagesPath,
-			ReadOnly:  false,
-		},
-		{
-			Name:      logVolumeName,
-			MountPath: defaultWorkerLogPath,
 			ReadOnly:  false,
 		},
 		{

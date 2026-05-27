@@ -22,7 +22,7 @@ const (
 	defaultGeeseFSFileMode         = 0644
 	defaultGeeseFSMountTimeout     = 30 * time.Second
 	defaultGeeseFSRequestTimeout   = 60 * time.Second
-	defaultGeeseFSUnmountTimeout   = 2 * defaultGeeseFSRequestTimeout
+	defaultGeeseFSUnmountTimeout   = 10 * time.Second
 	defaultGeeseFSFuseReadAheadKb  = 32768
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072

@@ -39,11 +39,3 @@ dependencies:
   version: 0.9.17
   repository: https://victoriametrics.github.io/helm-charts
   condition: metrics.enabled
-- name: victoria-logs-single
-  version: 0.3.4
-  repository: https://victoriametrics.github.io/helm-charts
-  condition: metrics.enabled
-- name: fluent-bit
-  version: 0.43.0
-  repository: https://fluent.github.io/helm-charts
-  condition: metrics.enabled

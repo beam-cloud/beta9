@@ -1436,6 +1436,12 @@ func TestGetController(t *testing.T) {
 			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
+		noGPURequest := &types.ContainerRequest{Gpu: string(types.NO_GPU)}
+		noGPUController, err := wb.getControllers(noGPURequest)
+		if err != nil || noGPUController[0].Name() != "default" {
+			t.Errorf("Expected default controller for NO_GPU request, got %v, error: %v", noGPUController, err)
+		}
+
 		a10gRequest := &types.ContainerRequest{GpuRequest: []string{"A10G"}}
 		a10gController, err := wb.getControllers(a10gRequest)
 		if err != nil || a10gController[0].Name() != "beta9-a10g" {

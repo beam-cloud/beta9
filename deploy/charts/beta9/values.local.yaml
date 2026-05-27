@@ -16,18 +16,6 @@ metrics:
 
 manifests:
   resources:
-  - apiVersion: v1
-    kind: Secret
-    metadata:
-      name: fluent-bit
-    type: Opaque
-    stringData:
-      AWS_S3_BUCKET_NAME: logs
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-      AWS_ENDPOINT_URL: http://localstack:4566
-      VICTORIA_LOGS_HOST: victoria-logs-single
-      VICTORIA_LOGS_PORT: "9428"
   - apiVersion: helm.cattle.io/v1
     kind: HelmChart
     metadata:
@@ -45,7 +33,6 @@ manifests:
         startupScriptContent: |
           #!/bin/bash
           awslocal s3 mb s3://juicefs
-          awslocal s3 mb s3://logs
           awslocal s3 mb s3://beta9-images
         persistence:
           enabled: true

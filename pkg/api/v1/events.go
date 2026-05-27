@@ -185,6 +185,9 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
 	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
+	g.GET("/:workspaceId/tasks/:taskId/stream", auth.WithWorkspaceAuth(group.StreamTaskEvents))
+	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppEvents))
+	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamWorkspaceEvents))
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
 
@@ -268,7 +271,11 @@ func (g *EventGroup) writeEventStream(ctx echo.Context, stream repository.EventS
 		if err != nil {
 			continue
 		}
-		if err := writeSSEEvent(response.Writer, "event", strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
+		eventName := record.Type
+		if eventName == "" {
+			eventName = "event"
+		}
+		if err := writeSSEEvent(response.Writer, eventName, strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
 			return nil
 		}
 		if flusher != nil {
@@ -310,6 +317,103 @@ func (g *EventGroup) StreamStubEvents(ctx echo.Context) error {
 			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
 		}
 		return HTTPInternalServerError("Failed to stream stub events")
+	}
+	defer stream.Close()
+
+	return g.writeEventStream(ctx, stream)
+}
+
+func (g *EventGroup) StreamTaskEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	taskID := ctx.Param("taskId")
+	if taskID == "" {
+		return HTTPBadRequest("Missing task ID")
+	}
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve task")
+	}
+	authInfo := authInfoFromContext(cc)
+	if task == nil || !hasWorkspaceTaskAccess(task, authInfo, requestedEventWorkspaceID(ctx, authInfo)) {
+		return HTTPNotFound()
+	}
+
+	query, err := eventStreamQueryFromContext(ctx, authInfo)
+	if err != nil {
+		return HTTPBadRequest("Invalid event stream query")
+	}
+	query.TaskID = task.ExternalId
+	query.StubID = task.Stub.ExternalId
+	query.WorkspaceID = task.Workspace.ExternalId
+	query.AppID = task.App.ExternalId
+
+	stream, err := g.eventRepo.StreamTaskEvents(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
+		}
+		return HTTPInternalServerError("Failed to stream task events")
+	}
+	defer stream.Close()
+
+	return g.writeEventStream(ctx, stream)
+}
+
+func (g *EventGroup) StreamWorkspaceEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := eventStreamQueryFromContext(ctx, authInfoFromContext(cc))
+	if err != nil {
+		return HTTPBadRequest("Invalid event stream query")
+	}
+	if query.WorkspaceID == "" {
+		return HTTPNotFound()
+	}
+
+	stream, err := g.eventRepo.StreamWorkspaceEvents(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
+		}
+		return HTTPInternalServerError("Failed to stream workspace events")
+	}
+	defer stream.Close()
+
+	return g.writeEventStream(ctx, stream)
+}
+
+func (g *EventGroup) StreamAppEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	appID := ctx.Param("appId")
+	if appID == "" {
+		return HTTPBadRequest("Missing app ID")
+	}
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := eventStreamQueryFromContext(ctx, authInfoFromContext(cc))
+	if err != nil {
+		return HTTPBadRequest("Invalid event stream query")
+	}
+	query.AppID = appID
+	if query.WorkspaceID == "" {
+		return HTTPNotFound()
+	}
+
+	stream, err := g.eventRepo.StreamAppEvents(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
+		}
+		return HTTPInternalServerError("Failed to stream app events")
 	}
 	defer stream.Close()
 
@@ -623,6 +727,15 @@ func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (typ
 		startSelectors++
 	}
 
+	if raw := firstNonEmpty(ctx.QueryParam("timestamp"), ctx.QueryParam("start_time")); raw != "" {
+		timestamp, err := parseEventStreamTimestamp(raw)
+		if err != nil {
+			return types.EventQuery{}, err
+		}
+		query.Timestamp = &timestamp
+		startSelectors++
+	}
+
 	if raw := ctx.QueryParam("tail_offset"); raw != "" {
 		tailOffset, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || tailOffset < 0 {
@@ -636,7 +749,7 @@ func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (typ
 		return types.EventQuery{}, fmt.Errorf("multiple stream start selectors")
 	}
 
-	if raw := ctx.Request().Header.Get("Last-Event-ID"); query.SeqNum == nil && query.TailOffset == nil && raw != "" {
+	if raw := ctx.Request().Header.Get("Last-Event-ID"); query.SeqNum == nil && query.Timestamp == nil && query.TailOffset == nil && raw != "" {
 		lastSeqNum, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			return types.EventQuery{}, err
@@ -661,12 +774,31 @@ func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (typ
 		}
 		query.Clamp = &clamp
 	}
-	if query.SeqNum != nil && query.Clamp == nil {
+	if raw := ctx.QueryParam("until"); raw != "" {
+		until, err := parseEventStreamTimestamp(raw)
+		if err != nil {
+			return types.EventQuery{}, err
+		}
+		query.Until = &until
+	}
+
+	if (query.SeqNum != nil || query.Timestamp != nil) && query.Clamp == nil {
 		clamp := true
 		query.Clamp = &clamp
 	}
 
 	return query, nil
+}
+
+func parseEventStreamTimestamp(raw string) (uint64, error) {
+	if value, err := strconv.ParseUint(raw, 10, 64); err == nil {
+		return value, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(parsed.UnixMilli()), nil
 }
 
 func eventQueryTypesFromParam(raw string) []string {

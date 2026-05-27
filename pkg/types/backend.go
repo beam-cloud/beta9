@@ -544,7 +544,12 @@ type SchemaField struct {
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {
-	return len(c.Runtime.Gpus) > 0 || c.Runtime.Gpu != ""
+	for _, gpu := range c.Runtime.Gpus {
+		if gpu != "" && gpu != NO_GPU {
+			return true
+		}
+	}
+	return c.Runtime.Gpu != "" && c.Runtime.Gpu != NO_GPU
 }
 
 type AutoscalerType string

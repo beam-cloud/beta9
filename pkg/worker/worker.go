@@ -39,7 +39,9 @@ const (
 	defaultGvisorStartConcurrency  int           = types.DefaultGvisorStartConcurrency
 	defaultWorkerStopGracePeriodS  int64         = 30
 	shutdownDrainPollInterval      time.Duration = 100 * time.Millisecond
-	shutdownForceWait              time.Duration = 30 * time.Second
+	shutdownDrainMax               time.Duration = 5 * time.Second
+	shutdownForceWait              time.Duration = 5 * time.Second
+	shutdownCleanupReserve         time.Duration = 5 * time.Second
 )
 
 type Worker struct {
@@ -1069,9 +1071,25 @@ func workerContainerStopGrace(configuredSeconds int64) time.Duration {
 	if configuredSeconds <= 0 {
 		configuredSeconds = defaultWorkerStopGracePeriodS
 	}
-	return time.Duration(configuredSeconds) * time.Second
+	budget := time.Duration(configuredSeconds) * time.Second
+	grace := budget - workerShutdownDrainTimeout(configuredSeconds) - shutdownForceWait - shutdownCleanupReserve
+	if grace <= 0 {
+		return budget
+	}
+	return grace
 }
 
 func workerShutdownDrainTimeout(configuredSeconds int64) time.Duration {
-	return workerContainerStopGrace(configuredSeconds) + shutdownForceWait
+	if configuredSeconds <= 0 {
+		configuredSeconds = defaultWorkerStopGracePeriodS
+	}
+	budget := time.Duration(configuredSeconds) * time.Second
+	if budget <= 10*time.Second {
+		return 0
+	}
+	drain := budget / 6
+	if drain > shutdownDrainMax {
+		return shutdownDrainMax
+	}
+	return drain
 }

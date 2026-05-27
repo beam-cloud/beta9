@@ -28,6 +28,7 @@ var (
 	EventContainerMetrics   = "container.metrics"
 	EventContainerEvent     = "container.event"
 	EventContainerLog       = "container.log"
+	EventPlatformLog        = "platform.log"
 	EventWorkerLifecycle    = "worker.lifecycle"
 	EventStubDeploy         = "stub.deploy"
 	EventStubServe          = "stub.serve"
@@ -56,10 +57,13 @@ type EventContainerMetricsSchema struct {
 	WorkspaceID      string                    `json:"workspace_id"`
 	StubID           string                    `json:"stub_id"`
 	StubType         string                    `json:"stub_type,omitempty"`
+	CPU              int64                     `json:"cpu,omitempty"`
+	GPUCount         uint32                    `json:"gpu_count,omitempty"`
 	ContainerMetrics EventContainerMetricsData `json:"metrics"`
 }
 
 type EventContainerMetricsData struct {
+	SampleIntervalMs   int64   `json:"sample_interval_ms,omitempty"`
 	CPUUsed            uint64  `json:"cpu_used"`
 	CPUTotal           uint64  `json:"cpu_total"`
 	CPUPercent         float32 `json:"cpu_pct"`
@@ -569,6 +573,8 @@ type EventContainerEventSchema struct {
 	TaskID      string            `json:"task_id,omitempty"`
 	WorkspaceID string            `json:"workspace_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
+	CPU         int64             `json:"cpu,omitempty"`
+	GPUCount    uint32            `json:"gpu_count,omitempty"`
 	Reason      string            `json:"reason,omitempty"`
 	Source      string            `json:"source,omitempty"`
 	Message     string            `json:"message,omitempty"`
@@ -584,21 +590,117 @@ type EventContainerLogSchema struct {
 	StubType    string    `json:"stub_type,omitempty"`
 	TaskID      string    `json:"task_id,omitempty"`
 	WorkspaceID string    `json:"workspace_id,omitempty"`
+	AppID       string    `json:"app_id,omitempty"`
 	WorkerID    string    `json:"worker_id,omitempty"`
 	Stream      string    `json:"stream,omitempty"`
 	Line        string    `json:"line"`
+}
+
+var EventPlatformLogSchemaVersion = "1.0"
+
+type EventPlatformLogSchema struct {
+	Timestamp  time.Time `json:"timestamp"`
+	Service    string    `json:"service,omitempty"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	WorkerID   string    `json:"worker_id,omitempty"`
+	Level      string    `json:"level,omitempty"`
+	Line       string    `json:"line"`
 }
 
 type EventQuery struct {
 	Limit       uint64   `json:"limit,omitempty"`
 	WorkspaceID string   `json:"workspace_id,omitempty"`
 	StubID      string   `json:"stub_id,omitempty"`
+	AppID       string   `json:"app_id,omitempty"`
 	TaskID      string   `json:"task_id,omitempty"`
 	EventTypes  []string `json:"event_types,omitempty"`
 	SeqNum      *uint64  `json:"seq_num,omitempty"`
+	Timestamp   *uint64  `json:"timestamp,omitempty"`
 	TailOffset  *int64   `json:"tail_offset,omitempty"`
+	Until       *uint64  `json:"until,omitempty"`
 	WaitSeconds *int32   `json:"wait,omitempty"`
 	Clamp       *bool    `json:"clamp,omitempty"`
+}
+
+type LogQuery struct {
+	Limit       uint64     `json:"limit,omitempty"`
+	Page        uint64     `json:"page,omitempty"`
+	ObjectID    string     `json:"object_id,omitempty"`
+	ObjectType  string     `json:"object_type,omitempty"`
+	WorkspaceID string     `json:"workspace_id,omitempty"`
+	StubID      string     `json:"stub_id,omitempty"`
+	AppID       string     `json:"app_id,omitempty"`
+	TaskID      string     `json:"task_id,omitempty"`
+	ContainerID string     `json:"container_id,omitempty"`
+	Query       string     `json:"query,omitempty"`
+	StartTime   *time.Time `json:"start_time,omitempty"`
+	EndTime     *time.Time `json:"end_time,omitempty"`
+	SeqNum      *uint64    `json:"seq_num,omitempty"`
+	TailOffset  *int64     `json:"tail_offset,omitempty"`
+	WaitSeconds *int32     `json:"wait,omitempty"`
+	Clamp       *bool      `json:"clamp,omitempty"`
+}
+
+type LogRecord struct {
+	SeqNum      uint64    `json:"seq_num"`
+	StoredAtNs  uint64    `json:"stored_at_ns,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+	Message     string    `json:"message"`
+	Stream      string    `json:"stream,omitempty"`
+	ContainerID string    `json:"container_id,omitempty"`
+	StubID      string    `json:"stub_id,omitempty"`
+	StubType    string    `json:"stub_type,omitempty"`
+	TaskID      string    `json:"task_id,omitempty"`
+	WorkspaceID string    `json:"workspace_id,omitempty"`
+	AppID       string    `json:"app_id,omitempty"`
+	WorkerID    string    `json:"worker_id,omitempty"`
+}
+
+type LogsResponse struct {
+	ObjectID      string      `json:"object_id,omitempty"`
+	ObjectType    string      `json:"object_type,omitempty"`
+	Logs          []LogRecord `json:"logs"`
+	TotalExpected int         `json:"total_expected"`
+	NextCursor    string      `json:"next_cursor,omitempty"`
+	Streams       []string    `json:"streams,omitempty"`
+}
+
+type MetricAverage struct {
+	Value float64 `json:"value"`
+}
+
+type MetricsAggregationBucket struct {
+	Key                     int64         `json:"key"`
+	KeyAsString             string        `json:"key_as_string"`
+	DocCount                int           `json:"doc_count"`
+	ContainerCount          MetricAverage `json:"container_count"`
+	CPUConcurrency          MetricAverage `json:"cpu_concurrency"`
+	GPUConcurrency          MetricAverage `json:"gpu_concurrency"`
+	DiskReadBytesRateAvg    MetricAverage `json:"disk_read_bytes_per_second_avg"`
+	DiskWriteBytesRateAvg   MetricAverage `json:"disk_write_bytes_per_second_avg"`
+	NetworkRecvBytesRateAvg MetricAverage `json:"network_recv_bytes_per_second_avg"`
+	NetworkSentBytesRateAvg MetricAverage `json:"network_sent_bytes_per_second_avg"`
+	CPUPercentAvg           MetricAverage `json:"cpu_pct_avg"`
+	CPUTotalAvg             MetricAverage `json:"cpu_total_avg"`
+	CPUUsedAvg              MetricAverage `json:"cpu_used_avg"`
+	DiskReadBytesAvg        MetricAverage `json:"disk_read_bytes_avg"`
+	DiskWriteBytesAvg       MetricAverage `json:"disk_write_bytes_avg"`
+	GPUMemoryTotalBytesAvg  MetricAverage `json:"gpu_memory_total_bytes_avg"`
+	GPUMemoryUsedBytesAvg   MetricAverage `json:"gpu_memory_used_bytes_avg"`
+	MemoryRSSBytesAvg       MetricAverage `json:"memory_rss_bytes_avg"`
+	MemoryTotalBytesAvg     MetricAverage `json:"memory_total_bytes_avg"`
+	MemoryVMSBytesAvg       MetricAverage `json:"memory_vms_bytes_avg"`
+	MemorySwapBytesAvg      MetricAverage `json:"memory_swap_bytes_avg"`
+	NetworkRecvBytesAvg     MetricAverage `json:"network_recv_bytes_avg"`
+	NetworkSentBytesAvg     MetricAverage `json:"network_sent_bytes_avg"`
+	NetworkRecvPacketsAvg   MetricAverage `json:"network_recv_packets_avg"`
+	NetworkSentPacketsAvg   MetricAverage `json:"network_sent_packets_avg"`
+}
+
+type MetricsTimeseriesResponse struct {
+	Timeseries struct {
+		AggregationBuckets []MetricsAggregationBucket `json:"aggregation_buckets"`
+	} `json:"timeseries"`
 }
 
 type ContainerEventRecord struct {
@@ -626,6 +728,7 @@ type ContainerEventRecord struct {
 	StubType    string            `json:"stub_type,omitempty"`
 	TaskID      string            `json:"task_id,omitempty"`
 	WorkspaceID string            `json:"workspace_id,omitempty"`
+	AppID       string            `json:"app_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
 }
 

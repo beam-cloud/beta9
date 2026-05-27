@@ -4,8 +4,6 @@ import os
 import time
 from pathlib import Path
 
-FSYNC_FILE_THRESHOLD = 1024 * 1024 * 1024
-
 try:
     deterministic_payload_range
 except NameError:  # pragma: no cover - used when this helper runs standalone.
@@ -27,18 +25,16 @@ def write_generated_file(path, nonce, label, size):
     path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic_ns()
     written = 0
-    fsynced = size <= FSYNC_FILE_THRESHOLD
     with path.open("wb", buffering=0) as handle:
         while written < size:
             length = min(4 * 1024 * 1024, size - written)
             handle.write(deterministic_payload_range(nonce, label, written, length))
             written += length
         handle.flush()
-        if fsynced:
-            os.fsync(handle.fileno())
+        os.fsync(handle.fileno())
     return {
         "writeMs": (time.monotonic_ns() - started) / 1_000_000,
-        "fsynced": fsynced,
+        "fsynced": True,
     }
 
 

@@ -33,7 +33,7 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 		ContainerID: "container-789",
 	})
 
-	if got, want := len(streams), 2; got != want {
+	if got, want := len(streams), 3; got != want {
 		t.Fatalf("unexpected stream count: got %d want %d: %#v", got, want, streams)
 	}
 	if got, want := string(streams[0]), "events/workspaces/workspace-123/stubs/stub-456/containers/container-789"; got != want {
@@ -41,6 +41,138 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	}
 	if got, want := string(streams[1]), "events/workspaces/workspace-123/stubs/stub-456"; got != want {
 		t.Fatalf("unexpected stub stream name: got %q want %q", got, want)
+	}
+	if got, want := string(streams[2]), "events/workspaces/workspace-123"; got != want {
+		t.Fatalf("unexpected workspace stream name: got %q want %q", got, want)
+	}
+}
+
+func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerMetrics, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456/containers/container-789",
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected metric stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected metric stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+		TaskID:      "task-123",
+		AppID:       "app-123",
+	})
+
+	want := []s2.StreamName{
+		"events/logs/workspaces/workspace-123/stubs/stub-456/containers/container-789",
+		"events/logs/workspaces/workspace-123/stubs/stub-456",
+		"events/logs/workspaces/workspace-123/tasks/task-123",
+		"events/logs/workspaces/workspace-123/apps/app-123",
+		"events/logs/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected log stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected log stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2TaskEventsUseWorkspaceAndAppAggregateStreams(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		TaskID:      "task-123",
+		AppID:       "app-123",
+	})
+
+	want := []s2.StreamName{
+		"events/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+		"events/workspaces/workspace-123/apps/app-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected task stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected task stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventTaskUpdated, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+		TaskID:      "task-123",
+		AppID:       "app-123",
+	})
+
+	want := []s2.StreamName{
+		"events/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/stub-456/containers/container-789",
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+		"events/workspaces/workspace-123/apps/app-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected task stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected task stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventPlatformLog, eventMetadata{
+		WorkerID: "worker-123",
+	})
+
+	if got, want := len(streams), 1; got != want {
+		t.Fatalf("unexpected platform log stream count: got %d want %d", got, want)
+	}
+	if got, want := streams[0], s2.StreamName("events/logs/platform/workers/worker-123"); got != want {
+		t.Fatalf("unexpected platform log stream: got %q want %q", got, want)
+	}
+
+	serviceStream := repo.streamNamesForEvent(types.EventPlatformLog, eventMetadata{
+		ServiceName: "gateway",
+		InstanceID:  "pod/1",
+	})
+	if got, want := serviceStream[0], s2.StreamName("events/logs/platform/services/gateway/pod_1"); got != want {
+		t.Fatalf("unexpected platform service log stream: got %q want %q", got, want)
 	}
 }
 
@@ -154,6 +286,84 @@ func TestEventMetadataPoolNameRoundTrip(t *testing.T) {
 	metadata := eventMetadataFromCloudEvent(event)
 	if got, want := metadata.PoolName, "default"; got != want {
 		t.Fatalf("unexpected pool metadata: got %q want %q", got, want)
+	}
+}
+
+func TestMetricsBucketCalculatesIORatesFromSampleInterval(t *testing.T) {
+	acc := &metricsBucketAccumulator{key: time.Unix(0, 0).UnixMilli()}
+	acc.add(types.EventContainerMetricsSchema{
+		ContainerID: "container-1",
+		ContainerMetrics: types.EventContainerMetricsData{
+			SampleIntervalMs: 5000,
+			DiskReadBytes:    10 * 1024 * 1024,
+			DiskWriteBytes:   5 * 1024 * 1024,
+			NetworkBytesRecv: 100 * 1024,
+			NetworkBytesSent: 50 * 1024,
+		},
+	})
+
+	bucket := acc.bucket()
+	if got, want := bucket.DiskReadBytesRateAvg.Value, float64(2*1024*1024); got != want {
+		t.Fatalf("unexpected disk read rate: got %f want %f", got, want)
+	}
+	if got, want := bucket.DiskWriteBytesRateAvg.Value, float64(1024*1024); got != want {
+		t.Fatalf("unexpected disk write rate: got %f want %f", got, want)
+	}
+	if got, want := bucket.NetworkRecvBytesRateAvg.Value, float64(20*1024); got != want {
+		t.Fatalf("unexpected network recv rate: got %f want %f", got, want)
+	}
+	if got, want := bucket.NetworkSentBytesRateAvg.Value, float64(10*1024); got != want {
+		t.Fatalf("unexpected network sent rate: got %f want %f", got, want)
+	}
+}
+
+func TestMetricsBucketSumsContainerIORates(t *testing.T) {
+	acc := &metricsBucketAccumulator{key: time.Unix(0, 0).UnixMilli()}
+	acc.add(types.EventContainerMetricsSchema{
+		ContainerID: "container-1",
+		ContainerMetrics: types.EventContainerMetricsData{
+			SampleIntervalMs: 1000,
+			NetworkBytesRecv: 10 * 1024,
+		},
+	})
+	acc.add(types.EventContainerMetricsSchema{
+		ContainerID: "container-2",
+		ContainerMetrics: types.EventContainerMetricsData{
+			SampleIntervalMs: 1000,
+			NetworkBytesRecv: 20 * 1024,
+		},
+	})
+
+	bucket := acc.bucket()
+	if got, want := bucket.NetworkRecvBytesRateAvg.Value, float64(30*1024); got != want {
+		t.Fatalf("unexpected total network recv rate: got %f want %f", got, want)
+	}
+}
+
+func TestMetricsBucketCountsUniqueContainers(t *testing.T) {
+	acc := &metricsBucketAccumulator{key: time.Unix(0, 0).UnixMilli()}
+	acc.add(types.EventContainerMetricsSchema{
+		ContainerID: "container-1",
+		ContainerMetrics: types.EventContainerMetricsData{
+			CPUTotal: 1000,
+		},
+	})
+	acc.add(types.EventContainerMetricsSchema{
+		ContainerID: "container-1",
+		ContainerMetrics: types.EventContainerMetricsData{
+			CPUTotal: 1000,
+		},
+	})
+	acc.add(types.EventContainerMetricsSchema{
+		ContainerID: "container-2",
+		ContainerMetrics: types.EventContainerMetricsData{
+			CPUTotal: 1000,
+		},
+	})
+
+	bucket := acc.bucket()
+	if got, want := bucket.ContainerCount.Value, float64(2); got != want {
+		t.Fatalf("unexpected container count: got %f want %f", got, want)
 	}
 }
 
