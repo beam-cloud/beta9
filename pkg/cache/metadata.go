@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	storeFromContentLockTtlS = 5
+	storeFromContentLockTtlS = 30
 )
 
 type Metadata struct {

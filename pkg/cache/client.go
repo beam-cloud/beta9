@@ -1646,8 +1646,7 @@ func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string
 	}
 	lockReleased := false
 	releaseLock := func() error {
-		if err := c.metadataStore.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
-			Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
+		if err := removeStoreFromContentLock(ctx, c.metadataStore, c.locality, sourcePath, "StoreContent"); err != nil {
 			return err
 		}
 		lockReleased = true
@@ -1671,9 +1670,7 @@ func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string
 			case <-storeContext.Done():
 				return
 			case <-ticker.C:
-				if err := c.metadataStore.RefreshStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
-					Logger.Errorf("StoreContent[ERR] - error refreshing lock: %v", err)
-				}
+				refreshStoreFromContentLock(storeContext, c.metadataStore, c.locality, sourcePath, "StoreContent")
 			}
 		}
 	}()

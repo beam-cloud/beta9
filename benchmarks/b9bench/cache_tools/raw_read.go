@@ -113,15 +113,15 @@ func main() {
 	hash := flag.String("hash", "", "content hash")
 	size := flag.Int64("size", 0, "bytes to read")
 	expected := flag.String("expected-sha256", "", "expected sha256")
-	chunkBytes := flag.Int("chunk-bytes", 16*1024*1024, "chunk size")
-	concurrency := flag.Int("concurrency", 16, "concurrency")
+	chunkBytes := flag.Int("chunk-bytes", 1024*1024, "chunk size")
+	concurrency := flag.Int("concurrency", 1, "concurrency")
 	connectTimeout := flag.Duration("connect-timeout", 10*time.Second, "connect timeout")
 	flag.Parse()
 	if *addr == "" || *hash == "" || *size <= 0 {
 		panic("addr, hash, and size are required")
 	}
 	if *chunkBytes <= 0 {
-		*chunkBytes = 16 * 1024 * 1024
+		*chunkBytes = 1024 * 1024
 	}
 	if *concurrency <= 0 {
 		*concurrency = 1

@@ -908,9 +908,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		if lockReleased {
 			return
 		}
-		if err := cs.metadataStore.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
-			Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
-		}
+		_ = removeStoreFromContentLock(ctx, cs.metadataStore, cs.locality, sourcePath, "StoreContentFromSourceWithLock")
 	}()
 
 	storeContext, cancel := context.WithCancel(ctx)
@@ -925,7 +923,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 				return
 			case <-ticker.C:
 				Logger.Debugf("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
-				cs.metadataStore.RefreshStoreFromContentLock(ctx, cs.locality, sourcePath)
+				refreshStoreFromContentLock(storeContext, cs.metadataStore, cs.locality, sourcePath, "StoreContentFromSourceWithLock")
 			}
 		}
 	}()
@@ -944,9 +942,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
 	}
 
-	if err := cs.metadataStore.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
-		Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
-	}
+	_ = removeStoreFromContentLock(ctx, cs.metadataStore, cs.locality, sourcePath, "StoreContentFromSourceWithLock")
 	lockReleased = true
 
 	Logger.Debugf("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))

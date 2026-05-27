@@ -10,6 +10,8 @@ defaults:
   require_direct_cache_disk_probe: false
   worker_dd_reads: true
   sandbox_dd_reads: true
+  sandbox_cpu: "2"
+  sandbox_memory: "2048"
   cleanup_cache_before_run: true
   cleanup_cache_after_run: true
   reset_workers_after_prepare: true

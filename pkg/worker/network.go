@@ -1908,6 +1908,12 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 
 	info, err := m.getContainerNetworkInfo(containerId)
 	if err != nil {
+		if isMissingNetworkReservation(err) {
+			m.clearContainerInstanceIP(containerId)
+			m.forgetContainerIP(containerId, "")
+			log.Debug().Str("container_id", containerId).Err(err).Msg("container network reservation already removed")
+			return nil
+		}
 		return err
 	}
 
@@ -1950,6 +1956,12 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		ContainerId:   containerId,
 	}))
 	if err != nil {
+		if isMissingNetworkReservation(err) {
+			m.clearContainerInstanceIP(containerId)
+			m.forgetContainerIP(containerId, info.ContainerIp)
+			log.Debug().Str("container_id", containerId).Err(err).Msg("container network reservation already removed during teardown")
+			return nil
+		}
 		return err
 	}
 	m.forgetContainerIP(containerId, info.ContainerIp)

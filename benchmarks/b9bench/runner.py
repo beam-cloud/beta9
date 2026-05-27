@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -105,24 +106,71 @@ class ScriptProbeBase:
 
         log_path = self.sink.artifact_dir / f"{slug(suite.name)}.log"
         start = time.perf_counter()
-        proc = subprocess.run(
+        env = self._env()
+        env["PYTHONUNBUFFERED"] = "1"
+        popen_kwargs: dict[str, Any] = {}
+        if sys.platform == "darwin":
+            popen_kwargs["close_fds"] = False
+        proc = subprocess.Popen(
             cmd,
             cwd=self.config.root,
             text=True,
-            capture_output=True,
-            timeout=float(args.get("timeout_seconds", 2400)) + 120,
-            env=self._env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+            env=env,
+            **popen_kwargs,
         )
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+
+        def stream(pipe, parts: list[str], dest) -> None:
+            if pipe is None:
+                return
+            try:
+                for line in pipe:
+                    parts.append(line)
+                    print(line, end="", file=dest, flush=True)
+            finally:
+                pipe.close()
+
+        stdout_thread = threading.Thread(
+            target=stream, args=(proc.stdout, stdout_parts, sys.stdout), daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=stream, args=(proc.stderr, stderr_parts, sys.stderr), daemon=True
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+        timeout = float(args.get("timeout_seconds", 2400)) + 120
+        timed_out = False
+        try:
+            returncode = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            returncode = proc.wait()
+            stderr_parts.append(f"\nscript timed out after {timeout:.0f}s\n")
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
         elapsed_ms = (time.perf_counter() - start) * 1000
+        stdout = "".join(stdout_parts)
+        stderr = "".join(stderr_parts)
+        completed = subprocess.CompletedProcess(
+            cmd,
+            returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
         log_path.write_text(
             "$ " + " ".join(cmd) + "\n\n"
             + "## stdout\n"
-            + proc.stdout
+            + stdout
             + "\n## stderr\n"
-            + proc.stderr,
+            + stderr,
             encoding="utf-8",
         )
-        if proc.returncode != 0:
+        if timed_out or completed.returncode != 0:
             self.sink.emit(
                 Measurement(
                     run_id=self.run_id,
@@ -132,11 +180,15 @@ class ScriptProbeBase:
                     timestamp=utc_now(),
                     duration_ms=elapsed_ms,
                     status="failed",
-                    error=(proc.stderr or proc.stdout)[-1000:],
-                    evidence={"log": str(log_path), "script": script},
+                    error=(completed.stderr or completed.stdout)[-1000:],
+                    evidence={
+                        "log": str(log_path),
+                        "script": script,
+                        "timed_out": timed_out,
+                    },
                 )
             )
-        return proc
+        return completed
 
     def _env(self) -> dict[str, str]:
         env = dict(os.environ)
