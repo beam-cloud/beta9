@@ -20,6 +20,9 @@ type eventSink interface {
 
 type eventReader interface {
 	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
+	GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error)
+	GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
+	GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
 }
 
 type EventStream interface {
@@ -32,12 +35,17 @@ type EventStream interface {
 type eventStreamer interface {
 	StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error)
 	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error)
 }
 
 type EventClientRepo struct {
-	sinks    []eventSink
-	reader   eventReader
-	streamer eventStreamer
+	storageSinks  []eventSink
+	callbackSinks []eventSink
+	reader        eventReader
+	streamer      eventStreamer
 }
 
 var ErrEventReadUnsupported = errors.New("event read unsupported")
@@ -47,19 +55,23 @@ type eventMetadata struct {
 	WorkspaceID string
 	TaskID      string
 	StubID      string
+	AppID       string
 	WorkerID    string
+	ServiceName string
+	InstanceID  string
 	PoolName    string
 }
 
 func NewEventClientRepo(config types.AppConfig) EventRepository {
-	sinks := []eventSink{}
+	storageSinks := []eventSink{}
+	callbackSinks := []eventSink{}
 
 	var reader eventReader
 	var streamer eventStreamer
 	if s2Sink, err := NewS2EventRepository(config.Database.S2); err != nil {
 		log.Warn().Err(err).Msg("s2 event repository unavailable")
 	} else if s2Sink != nil {
-		sinks = append(sinks, s2Sink)
+		storageSinks = append(storageSinks, s2Sink)
 		reader = s2Sink
 		streamer = s2Sink
 	}
@@ -68,10 +80,10 @@ func NewEventClientRepo(config types.AppConfig) EventRepository {
 		if strings.TrimSpace(callback.URL) == "" {
 			continue
 		}
-		sinks = append(sinks, newEventHTTPSink(callback))
+		callbackSinks = append(callbackSinks, newEventHTTPSink(callback))
 	}
 
-	return &EventClientRepo{sinks: sinks, reader: reader, streamer: streamer}
+	return &EventClientRepo{storageSinks: storageSinks, callbackSinks: callbackSinks, reader: reader, streamer: streamer}
 }
 
 func (r *EventClientRepo) createEventObject(eventName string, schemaVersion string, data interface{}) (cloudevents.Event, error) {
@@ -96,7 +108,7 @@ func (r *EventClientRepo) createEventObject(eventName string, schemaVersion stri
 }
 
 func (r *EventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
-	if len(r.sinks) == 0 {
+	if len(r.storageSinks) == 0 && len(r.callbackSinks) == 0 {
 		return
 	}
 
@@ -106,9 +118,17 @@ func (r *EventClientRepo) pushEvent(eventName string, schemaVersion string, data
 		return
 	}
 
-	for _, sink := range r.sinks {
+	for _, sink := range r.storageSinks {
 		if err := sink.PushEvent(event); err != nil {
 			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to push event")
+		}
+	}
+	if event.Type() == types.EventContainerLog || event.Type() == types.EventPlatformLog {
+		return
+	}
+	for _, sink := range r.callbackSinks {
+		if err := sink.PushEvent(event); err != nil {
+			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to push event callback")
 		}
 	}
 }
@@ -118,6 +138,27 @@ func (r *EventClientRepo) GetContainerEvents(ctx context.Context, containerID st
 		return nil, ErrEventReadUnsupported
 	}
 	return r.reader.GetContainerEvents(ctx, containerID, query)
+}
+
+func (r *EventClientRepo) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.GetLogs(ctx, query)
+}
+
+func (r *EventClientRepo) GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.GetStubMetricsTimeseries(ctx, query, start, end, interval)
+}
+
+func (r *EventClientRepo) GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.GetWorkspaceMetricsTimeseries(ctx, query, start, end, interval)
 }
 
 func (r *EventClientRepo) StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error) {
@@ -132,6 +173,34 @@ func (r *EventClientRepo) StreamStubEvents(ctx context.Context, query types.Even
 		return nil, ErrEventReadUnsupported
 	}
 	return r.streamer.StreamStubEvents(ctx, query)
+}
+
+func (r *EventClientRepo) StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if r.streamer == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.streamer.StreamTaskEvents(ctx, query)
+}
+
+func (r *EventClientRepo) StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if r.streamer == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.streamer.StreamWorkspaceEvents(ctx, query)
+}
+
+func (r *EventClientRepo) StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if r.streamer == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.streamer.StreamAppEvents(ctx, query)
+}
+
+func (r *EventClientRepo) StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error) {
+	if r.streamer == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.streamer.StreamLogs(ctx, query)
 }
 
 func (r *EventClientRepo) PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema) {
@@ -180,6 +249,17 @@ func (r *EventClientRepo) PushContainerLogEvent(entry types.EventContainerLogSch
 	r.pushEvent(types.EventContainerLog, types.EventContainerLogSchemaVersion, entry)
 }
 
+func (r *EventClientRepo) PushPlatformLogEvent(entry types.EventPlatformLogSchema) {
+	if entry.Line == "" {
+		return
+	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+
+	r.pushEvent(types.EventPlatformLog, types.EventPlatformLogSchemaVersion, entry)
+}
+
 func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions) {
 	if request == nil || request.ContainerId == "" {
 		return
@@ -194,6 +274,8 @@ func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *ty
 		TaskID:      taskID,
 		WorkspaceID: request.WorkspaceId,
 		WorkerID:    workerID,
+		CPU:         request.Cpu,
+		GPUCount:    request.GpuCount,
 		Reason:      opts.Reason,
 		Source:      opts.Source.String(),
 		Message:     opts.Message.String(),
@@ -351,6 +433,7 @@ func (r *EventClientRepo) PushContainerRequestLogLine(workerID string, request *
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      firstNonEmpty(taskID, taskIDFromRequestEnv(request)),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		WorkerID:    workerID,
 		Stream:      stream,
 		Line:        line,
@@ -630,6 +713,8 @@ func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, req
 			WorkspaceID:      request.WorkspaceId,
 			StubID:           request.StubId,
 			StubType:         string(request.Stub.Type.Kind()),
+			CPU:              request.Cpu,
+			GPUCount:         request.GpuCount,
 			ContainerMetrics: metrics,
 		},
 	)
@@ -886,9 +971,11 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 	case types.EventContainerEventSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
 	case types.EventContainerLogSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
+	case types.EventPlatformLogSchema:
+		return eventMetadata{WorkerID: d.WorkerID, ServiceName: d.Service, InstanceID: d.InstanceID}
 	case types.EventTaskSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventStubSchema:
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
 	case types.EventStubStateSchema:
@@ -919,6 +1006,15 @@ func setEventExtensions(event *cloudevents.Event, metadata eventMetadata) {
 	}
 	if metadata.WorkerID != "" {
 		event.SetExtension("workerid", metadata.WorkerID)
+	}
+	if metadata.ServiceName != "" {
+		event.SetExtension("servicename", metadata.ServiceName)
+	}
+	if metadata.InstanceID != "" {
+		event.SetExtension("instanceid", metadata.InstanceID)
+	}
+	if metadata.AppID != "" {
+		event.SetExtension("appid", metadata.AppID)
 	}
 	if metadata.PoolName != "" {
 		event.SetExtension("poolname", metadata.PoolName)

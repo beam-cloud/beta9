@@ -109,7 +109,7 @@ func TestEventHTTPSinkSkipsUnmatchedEvents(t *testing.T) {
 
 func TestPushContainerTaskEventBuildsCanonicalEvent(t *testing.T) {
 	sink := &captureEventSink{}
-	repo := &EventClientRepo{sinks: []eventSink{sink}}
+	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
 	task := &types.TaskWithRelated{
 		Task: types.Task{
 			ExternalId:  "task-1",
@@ -157,7 +157,7 @@ func TestPushContainerTaskEventBuildsCanonicalEvent(t *testing.T) {
 
 func TestPushContainerRunnerEventFallbacksToRunnerDomain(t *testing.T) {
 	sink := &captureEventSink{}
-	repo := &EventClientRepo{sinks: []eventSink{sink}}
+	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
 	request := &types.ContainerRequest{
 		ContainerId: "container-1",
 		StubId:      "stub-1",
@@ -194,9 +194,43 @@ func TestPushContainerRunnerEventFallbacksToRunnerDomain(t *testing.T) {
 	}
 }
 
+func TestPushContainerResourceMetricsEventIncludesReservedResources(t *testing.T) {
+	sink := &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		StubId:      "stub-1",
+		WorkspaceId: "workspace-1",
+		Cpu:         2500,
+		GpuCount:    2,
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)},
+		},
+	}
+
+	repo.PushContainerResourceMetricsEvent("worker-1", request, types.EventContainerMetricsData{
+		CPUTotal: uint64(request.Cpu),
+	})
+
+	if got, want := len(sink.events), 1; got != want {
+		t.Fatalf("unexpected event count: got %d want %d", got, want)
+	}
+
+	var event types.EventContainerMetricsSchema
+	if err := json.Unmarshal(sink.events[0].Data(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := event.CPU, request.Cpu; got != want {
+		t.Fatalf("unexpected cpu: got %d want %d", got, want)
+	}
+	if got, want := event.GPUCount, request.GpuCount; got != want {
+		t.Fatalf("unexpected gpu count: got %d want %d", got, want)
+	}
+}
+
 func TestPushContainerTaskLifecycleSinceSkipsMissingTimestamp(t *testing.T) {
 	sink := &captureEventSink{}
-	repo := &EventClientRepo{sinks: []eventSink{sink}}
+	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
 
 	repo.PushContainerTaskLifecycleSince(context.Background(), nil, &types.TaskWithRelated{
 		Task: types.Task{
@@ -217,5 +251,49 @@ func TestPushContainerTaskLifecycleSinceSkipsMissingTimestamp(t *testing.T) {
 
 	if len(sink.events) != 0 {
 		t.Fatalf("expected missing lifecycle timestamp to skip event, got %d events", len(sink.events))
+	}
+}
+
+func TestPushContainerLogSkipsCallbackSinks(t *testing.T) {
+	storageSink := &captureEventSink{}
+	callbackSink := &captureEventSink{}
+	repo := &EventClientRepo{
+		storageSinks:  []eventSink{storageSink},
+		callbackSinks: []eventSink{callbackSink},
+	}
+
+	repo.PushContainerLogEvent(types.EventContainerLogSchema{
+		ContainerID: "container-1",
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Line:        "hello",
+	})
+
+	if got, want := len(storageSink.events), 1; got != want {
+		t.Fatalf("unexpected storage event count: got %d want %d", got, want)
+	}
+	if got := len(callbackSink.events); got != 0 {
+		t.Fatalf("expected log event to skip callbacks, got %d callback events", got)
+	}
+}
+
+func TestPushPlatformLogSkipsCallbackSinks(t *testing.T) {
+	storageSink := &captureEventSink{}
+	callbackSink := &captureEventSink{}
+	repo := &EventClientRepo{
+		storageSinks:  []eventSink{storageSink},
+		callbackSinks: []eventSink{callbackSink},
+	}
+
+	repo.PushPlatformLogEvent(types.EventPlatformLogSchema{
+		WorkerID: "worker-1",
+		Line:     "worker ready",
+	})
+
+	if got, want := len(storageSink.events), 1; got != want {
+		t.Fatalf("unexpected storage event count: got %d want %d", got, want)
+	}
+	if got := len(callbackSink.events); got != 0 {
+		t.Fatalf("expected platform log event to skip callbacks, got %d callback events", got)
 	}
 }

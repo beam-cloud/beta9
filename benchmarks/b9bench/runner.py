@@ -353,6 +353,7 @@ class CacheSuiteProbe(ScriptProbeBase):
                     "target_worker": payload.get("targetPod"),
                 },
                 requires_remote=requires_remote,
+                source_key=source_key,
             )
         )
 
@@ -368,22 +369,49 @@ class CacheSuiteProbe(ScriptProbeBase):
         error: str = "",
         extra_evidence: dict[str, Any] | None = None,
         requires_remote: bool = False,
+        source_key: str = "",
     ) -> Measurement:
-        read_path = row.get("readPathProof") or {}
+        read_path = (
+            row.get("ddReadPathProof")
+            if source_key in {"sandboxDD", "workerDD"} and row.get("ddReadPathProof")
+            else row.get("readPathProof")
+        ) or {}
         summary = read_path.get("geesefsSummary") or {}
+        cache_summary = read_path.get("cacheSummary") or {}
         cloud_req = int(summary.get("cloudReq") or 0)
         external_page_hits = int(read_path.get("externalPageHitLines") or 0)
-        cache_hit = bool(
+        raw_hits = int(cache_summary.get("clientRawHits") or 0)
+        grpc_hits = int(cache_summary.get("clientGRPCHits") or 0)
+        local_hits = int(cache_summary.get("clientLocalHits") or 0)
+        embedded_disk_hit = bool(
             summary.get("mmapHits", 0)
             or summary.get("readIntoHits", 0)
             or external_page_hits
+            or local_hits
         )
+        buffer_hit = bool(summary.get("bufferHits", 0))
+        cache_hit = embedded_disk_hit or buffer_hit or raw_hits > 0 or grpc_hits > 0
+        cache_source = "unknown"
+        if embedded_disk_hit:
+            cache_source = "embedded_disk"
+        elif raw_hits > 0:
+            cache_source = "raw_remote"
+        elif grpc_hits > 0:
+            cache_source = "grpc_remote"
+        elif buffer_hit:
+            cache_source = "geesefs_buffer"
+        elif cloud_req > 0:
+            cache_source = "cloud"
         evidence = {
             "sha_ok": bool(row.get("shaOK")),
             "cache_hit": cache_hit,
-            "cache_source": "embedded_disk" if cache_hit else "unknown",
+            "cache_source": cache_source,
             "cloud_read": cloud_req > 0,
             "external_page_hits": external_page_hits,
+            "buffer_hits": int(summary.get("bufferHits") or 0),
+            "raw_remote_hits": raw_hits,
+            "grpc_remote_hits": grpc_hits,
+            "local_cache_hits": local_hits,
             "hash": row.get("hash"),
             "artifact_output": str(self.sink.artifact_dir / f"{slug(suite.name)}.json"),
         }

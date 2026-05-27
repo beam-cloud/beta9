@@ -22,7 +22,7 @@ const (
 	defaultS2EventReadLimit    = 10000
 	s2EventQueueSize           = 16384
 	s2EventBatchSize           = 256
-	s2EventRetentionSeconds    = int64(7 * 24 * 60 * 60)
+	s2EventRetentionSeconds    = int64(30 * 24 * 60 * 60)
 	s2EventWriteTimeout        = 5 * time.Second
 	s2EventFlushInterval       = 100 * time.Millisecond
 )
@@ -256,6 +256,33 @@ func (r *S2EventRepository) StreamStubEvents(ctx context.Context, query types.Ev
 	return r.streamEvents(ctx, streamName, "", query)
 }
 
+func (r *S2EventRepository) StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if query.TaskID == "" {
+		return nil, fmt.Errorf("task id is required to stream task events")
+	}
+
+	streamName := r.taskStreamName(query.TaskID)
+	return r.streamEvents(ctx, streamName, "", query)
+}
+
+func (r *S2EventRepository) StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if query.WorkspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required to stream workspace events")
+	}
+
+	streamName := r.workspaceStreamName(query.WorkspaceID)
+	return r.streamEvents(ctx, streamName, "", query)
+}
+
+func (r *S2EventRepository) StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if query.WorkspaceID == "" || query.AppID == "" {
+		return nil, fmt.Errorf("workspace id and app id are required to stream app events")
+	}
+
+	streamName := r.appStreamName(query.WorkspaceID, query.AppID)
+	return r.streamEvents(ctx, streamName, "", query)
+}
+
 func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.StreamName, containerID string, query types.EventQuery) (EventStream, error) {
 	if err := r.ensureBasin(ctx); err != nil {
 		return nil, err
@@ -266,8 +293,10 @@ func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.Stre
 
 	opts := &s2.ReadOptions{
 		SeqNum:     query.SeqNum,
+		Timestamp:  query.Timestamp,
 		TailOffset: query.TailOffset,
 		Count:      countOption(query.Limit),
+		Until:      query.Until,
 		Wait:       query.WaitSeconds,
 		Clamp:      query.Clamp,
 	}
@@ -407,6 +436,7 @@ func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuer
 		WorkspaceID string          `json:"workspaceid"`
 		TaskID      string          `json:"taskid"`
 		StubID      string          `json:"stubid"`
+		AppID       string          `json:"appid"`
 		WorkerID    string          `json:"workerid"`
 	}
 	if err := json.Unmarshal(record.Body, &envelope); err != nil {
@@ -424,6 +454,7 @@ func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuer
 	eventRecord.WorkspaceID = envelope.WorkspaceID
 	eventRecord.TaskID = envelope.TaskID
 	eventRecord.StubID = envelope.StubID
+	eventRecord.AppID = envelope.AppID
 	eventRecord.WorkerID = envelope.WorkerID
 	if !eventQueryAllowsType(query, eventRecord.Type) {
 		return types.ContainerEventRecord{}, false
@@ -440,6 +471,9 @@ func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuer
 	}
 	if eventRecord.StubID == "" {
 		eventRecord.StubID = envelope.StubID
+	}
+	if eventRecord.AppID == "" {
+		eventRecord.AppID = envelope.AppID
 	}
 	if eventRecord.WorkerID == "" {
 		eventRecord.WorkerID = envelope.WorkerID
@@ -547,7 +581,16 @@ func isS2EventStreamDeletionPending(err error) bool {
 }
 
 func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventMetadata) s2.StreamName {
+	if eventType == types.EventContainerLog {
+		return r.primaryLogStreamName(metadata)
+	}
+	if eventType == types.EventPlatformLog {
+		return r.platformLogStreamName(metadata)
+	}
+
 	switch {
+	case isTaskEvent(eventType) && metadata.TaskID != "":
+		return r.taskStreamName(metadata.TaskID)
 	case metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "":
 		return r.containerStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID)
 	case strings.HasPrefix(eventType, "container.") && metadata.ContainerID != "":
@@ -568,6 +611,17 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 }
 
 func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata eventMetadata) []s2.StreamName {
+	if eventType == types.EventContainerLog {
+		return r.logStreamNamesForEvent(metadata)
+	}
+	if eventType == types.EventPlatformLog {
+		stream := r.platformLogStreamName(metadata)
+		if stream == "" {
+			return nil
+		}
+		return []s2.StreamName{stream}
+	}
+
 	streams := []s2.StreamName{}
 	add := func(stream s2.StreamName) {
 		if stream == "" {
@@ -582,9 +636,81 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	}
 
 	add(r.streamNameForEvent(eventType, metadata))
+	if isTaskEvent(eventType) && metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "" {
+		add(r.containerStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID))
+	}
 	if metadata.WorkspaceID != "" && metadata.StubID != "" {
 		add(r.stubStreamName(metadata.WorkspaceID, metadata.StubID))
 	}
+	if isWorkspaceContainerRealtimeEvent(eventType) && metadata.WorkspaceID != "" {
+		add(r.workspaceStreamName(metadata.WorkspaceID))
+	}
+	if isTaskEvent(eventType) && metadata.WorkspaceID != "" {
+		add(r.workspaceStreamName(metadata.WorkspaceID))
+		if metadata.AppID != "" {
+			add(r.appStreamName(metadata.WorkspaceID, metadata.AppID))
+		}
+	}
+	return streams
+}
+
+func isTaskEvent(eventType string) bool {
+	return eventType == types.EventTaskCreated || eventType == types.EventTaskUpdated
+}
+
+func isWorkspaceContainerRealtimeEvent(eventType string) bool {
+	return eventType == types.EventContainerMetrics ||
+		eventType == types.EventContainerEvent ||
+		eventType == types.EventContainerLifecycle
+}
+
+func (r *S2EventRepository) primaryLogStreamName(metadata eventMetadata) s2.StreamName {
+	switch {
+	case metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "":
+		return r.containerLogStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID)
+	case metadata.TaskID != "" && metadata.WorkspaceID != "":
+		return r.taskLogStreamName(metadata.WorkspaceID, metadata.TaskID)
+	case metadata.StubID != "" && metadata.WorkspaceID != "":
+		return r.stubLogStreamName(metadata.WorkspaceID, metadata.StubID)
+	case metadata.AppID != "" && metadata.WorkspaceID != "":
+		return r.appLogStreamName(metadata.WorkspaceID, metadata.AppID)
+	case metadata.WorkspaceID != "":
+		return r.workspaceLogStreamName(metadata.WorkspaceID)
+	default:
+		return ""
+	}
+}
+
+func (r *S2EventRepository) logStreamNamesForEvent(metadata eventMetadata) []s2.StreamName {
+	streams := []s2.StreamName{}
+	add := func(stream s2.StreamName) {
+		if stream == "" {
+			return
+		}
+		for _, existing := range streams {
+			if existing == stream {
+				return
+			}
+		}
+		streams = append(streams, stream)
+	}
+
+	if metadata.WorkspaceID == "" {
+		return streams
+	}
+	if metadata.ContainerID != "" && metadata.StubID != "" {
+		add(r.containerLogStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID))
+	}
+	if metadata.StubID != "" {
+		add(r.stubLogStreamName(metadata.WorkspaceID, metadata.StubID))
+	}
+	if metadata.TaskID != "" {
+		add(r.taskLogStreamName(metadata.WorkspaceID, metadata.TaskID))
+	}
+	if metadata.AppID != "" {
+		add(r.appLogStreamName(metadata.WorkspaceID, metadata.AppID))
+	}
+	add(r.workspaceLogStreamName(metadata.WorkspaceID))
 	return streams
 }
 
@@ -600,6 +726,10 @@ func (r *S2EventRepository) containerStreamName(workspaceID, stubID, containerID
 
 func (r *S2EventRepository) workspaceStubPrefix(workspaceID string) string {
 	return fmt.Sprintf("%s/workspaces/%s/stubs/", r.streamPrefix, eventStreamPart(workspaceID))
+}
+
+func (r *S2EventRepository) workspaceLogStubPrefix(workspaceID string) string {
+	return fmt.Sprintf("%s/logs/workspaces/%s/stubs/", r.streamPrefix, eventStreamPart(workspaceID))
 }
 
 func (r *S2EventRepository) taskStreamName(taskID string) s2.StreamName {
@@ -622,6 +752,49 @@ func (r *S2EventRepository) stubStreamName(workspaceID, stubID string) s2.Stream
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/stubs/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
 }
 
+func (r *S2EventRepository) appStreamName(workspaceID, appID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/apps/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(appID)))
+}
+
+func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containerID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf(
+		"%s/logs/workspaces/%s/stubs/%s/containers/%s",
+		r.streamPrefix,
+		eventStreamPart(workspaceID),
+		eventStreamPart(stubID),
+		eventStreamPart(containerID),
+	))
+}
+
+func (r *S2EventRepository) stubLogStreamName(workspaceID, stubID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s/stubs/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
+}
+
+func (r *S2EventRepository) taskLogStreamName(workspaceID, taskID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s/tasks/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(taskID)))
+}
+
+func (r *S2EventRepository) appLogStreamName(workspaceID, appID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s/apps/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(appID)))
+}
+
+func (r *S2EventRepository) workspaceLogStreamName(workspaceID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s", r.streamPrefix, eventStreamPart(workspaceID)))
+}
+
+func (r *S2EventRepository) platformLogStreamName(metadata eventMetadata) s2.StreamName {
+	switch {
+	case metadata.WorkerID != "":
+		return s2.StreamName(fmt.Sprintf("%s/logs/platform/workers/%s", r.streamPrefix, eventStreamPart(metadata.WorkerID)))
+	case metadata.ServiceName != "" && metadata.InstanceID != "":
+		return s2.StreamName(fmt.Sprintf("%s/logs/platform/services/%s/%s", r.streamPrefix, eventStreamPart(metadata.ServiceName), eventStreamPart(metadata.InstanceID)))
+	case metadata.ServiceName != "":
+		return s2.StreamName(fmt.Sprintf("%s/logs/platform/services/%s", r.streamPrefix, eventStreamPart(metadata.ServiceName)))
+	default:
+		return ""
+	}
+}
+
 func (r *S2EventRepository) typeStreamName(eventType string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/types/%s", r.streamPrefix, strings.ReplaceAll(eventType, ".", "-")))
 }
@@ -640,6 +813,9 @@ func eventMetadataFromCloudEvent(event cloudevents.Event) eventMetadata {
 		TaskID:      extensionString(extensions, "taskid"),
 		StubID:      extensionString(extensions, "stubid"),
 		WorkerID:    extensionString(extensions, "workerid"),
+		AppID:       extensionString(extensions, "appid"),
+		ServiceName: extensionString(extensions, "servicename"),
+		InstanceID:  extensionString(extensions, "instanceid"),
 		PoolName:    extensionString(extensions, "poolname"),
 	}
 }
@@ -670,6 +846,15 @@ func s2HeadersForEvent(event cloudevents.Event, metadata eventMetadata) []s2.Hea
 	}
 	if metadata.WorkerID != "" {
 		headers = append(headers, s2.NewHeader("worker_id", metadata.WorkerID))
+	}
+	if metadata.ServiceName != "" {
+		headers = append(headers, s2.NewHeader("service", metadata.ServiceName))
+	}
+	if metadata.InstanceID != "" {
+		headers = append(headers, s2.NewHeader("instance_id", metadata.InstanceID))
+	}
+	if metadata.AppID != "" {
+		headers = append(headers, s2.NewHeader("app_id", metadata.AppID))
 	}
 	if metadata.PoolName != "" {
 		headers = append(headers, s2.NewHeader("pool_name", metadata.PoolName))
@@ -740,6 +925,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.StubType = entry.StubType
 		record.TaskID = entry.TaskID
 		record.WorkspaceID = entry.WorkspaceID
+		record.AppID = entry.AppID
 		record.WorkerID = entry.WorkerID
 		record.Stream = entry.Stream
 		record.Line = entry.Line
@@ -748,6 +934,22 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		}
 		if response.StubID == "" {
 			response.StubID = entry.StubID
+		}
+	case types.EventContainerMetrics:
+		var metrics types.EventContainerMetricsSchema
+		if err := json.Unmarshal(record.Data, &metrics); err != nil {
+			return
+		}
+		record.ContainerID = metrics.ContainerID
+		record.StubID = metrics.StubID
+		record.StubType = metrics.StubType
+		record.WorkspaceID = metrics.WorkspaceID
+		record.WorkerID = metrics.WorkerID
+		if response.WorkspaceID == "" {
+			response.WorkspaceID = metrics.WorkspaceID
+		}
+		if response.StubID == "" {
+			response.StubID = metrics.StubID
 		}
 	}
 }
@@ -823,6 +1025,14 @@ func summarizeContainerLifecycleDurations(events []types.ContainerEventRecord) m
 		case types.EventContainerEvent:
 			if event.EventID == string(types.ContainerEventRunnerStartTask) && !event.Timestamp.IsZero() {
 				startTaskAt = event.Timestamp
+			}
+			if event.EventID == string(types.ContainerEventLogsFirstByte) && !event.Timestamp.IsZero() {
+				if !runningAt.IsZero() && event.Timestamp.After(runningAt) && firstLogAfterRunning.IsZero() {
+					firstLogAfterRunning = event.Timestamp
+				}
+				if !startTaskAt.IsZero() && event.Timestamp.After(startTaskAt) && firstLogAfterStartTask.IsZero() {
+					firstLogAfterStartTask = event.Timestamp
+				}
 			}
 			if event.EventID == string(types.ContainerEventRunnerProcessStarted) && !event.Timestamp.IsZero() {
 				runnerProcessStartedAt = event.Timestamp

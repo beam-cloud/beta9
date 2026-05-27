@@ -555,15 +555,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 
 	volumes := []corev1.Volume{
 		{
-			Name: logVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: defaultWorkerLogPath,
-					Type: &hostPathType,
-				},
-			},
-		},
-		{
 			Name: "dshm",
 			VolumeSource: corev1.VolumeSource{
 				EmptyDir: &corev1.EmptyDirVolumeSource{
@@ -656,11 +647,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		{
 			Name:      imagesVolumeName,
 			MountPath: "/images",
-			ReadOnly:  false,
-		},
-		{
-			Name:      logVolumeName,
-			MountPath: defaultWorkerLogPath,
 			ReadOnly:  false,
 		},
 		{

@@ -50,6 +50,12 @@ func populateContainerEventFromRequest(event *types.EventContainerEventSchema, r
 	if event.TaskID == "" {
 		event.TaskID = taskIDFromEnv(request.Env)
 	}
+	if event.CPU == 0 {
+		event.CPU = request.Cpu
+	}
+	if event.GPUCount == 0 {
+		event.GPUCount = request.GpuCount
+	}
 }
 
 func populateContainerLifecycleFromRequest(lifecycle *types.EventContainerLifecycleSchema, request *types.ContainerRequest) {

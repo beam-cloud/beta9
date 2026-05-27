@@ -2,13 +2,12 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/shirou/gopsutil/v4/net"
+	gopsutilnet "github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
@@ -17,6 +16,8 @@ func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *ty
 	defer ticker.Stop()
 
 	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, w.containerGPUManager.GetContainerGPUDevices(request.ContainerId))
+	monitor.Prime()
+	lastCollectedAt := time.Now()
 
 	for {
 		select {
@@ -24,6 +25,10 @@ func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *ty
 			return
 
 		case <-ticker.C:
+			now := time.Now()
+			sampleInterval := now.Sub(lastCollectedAt)
+			lastCollectedAt = now
+
 			stats, err := monitor.GetStatistics()
 			if err != nil {
 				return
@@ -33,9 +38,10 @@ func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *ty
 				w.workerId,
 				request,
 				types.EventContainerMetricsData{
+					SampleIntervalMs:   sampleInterval.Milliseconds(),
 					CPUUsed:            stats.CPU,
 					CPUTotal:           uint64(request.Cpu),
-					CPUPercent:         float32((float64(stats.CPU) * 100 / float64(request.Cpu))),
+					CPUPercent:         cpuPercent(stats.CPU, request.Cpu),
 					MemoryRSS:          stats.Memory.RSS,
 					MemoryVMS:          stats.Memory.VMS,
 					MemorySwap:         stats.Memory.Swap,
@@ -59,7 +65,7 @@ type ProcessStats struct {
 	CPU    uint64 // in millicores
 	Memory process.MemoryInfoStat
 	IO     process.IOCountersStat
-	NetIO  net.IOCountersStat
+	NetIO  gopsutilnet.IOCountersStat
 	GPU    GPUInfoStat
 }
 
@@ -71,14 +77,28 @@ type GPUInfoStat struct {
 type ProcessMonitor struct {
 	pid           int32
 	devices       []specs.LinuxDeviceCgroup
-	lastIO        process.IOCountersStat
-	lastNetIO     net.IOCountersStat
+	lastIOByPID   map[int32]process.IOCountersStat
+	lastNetIO     gopsutilnet.IOCountersStat
+	hasLastNetIO  bool
 	gpuInfoClient GPUInfoClient
 	gpuDeviceIds  []int
 }
 
 func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup, gpuDeviceIds []int) *ProcessMonitor {
-	return &ProcessMonitor{pid: int32(pid), devices: devices, gpuInfoClient: &NvidiaInfoClient{}, gpuDeviceIds: gpuDeviceIds}
+	return &ProcessMonitor{
+		pid:           int32(pid),
+		devices:       devices,
+		lastIOByPID:   map[int32]process.IOCountersStat{},
+		gpuInfoClient: &NvidiaInfoClient{},
+		gpuDeviceIds:  gpuDeviceIds,
+	}
+}
+
+func (m *ProcessMonitor) Prime() {
+	if processes, err := m.findProcesses(); err == nil {
+		_, _ = m.fetchIO(processes)
+	}
+	_, _ = m.fetchNetworkIO()
 }
 
 func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
@@ -124,59 +144,73 @@ func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 	return stat
 }
 
-// fetchNetworkIO gets network IO for all NICs globally, regardless of process.
-// Avoid using this data for external purposes.
-// TODO: Look into per-process network IO
-func (m *ProcessMonitor) fetchNetworkIO() (*net.IOCountersStat, error) {
-	// net.IOCountersByFile() does exist, but the proc files for all PIDs have the same
-	// data as in /proc/net/dev which is where net.IOCounters() gets its data from on linux.
-	counters, err := net.IOCounters(false)
+func (m *ProcessMonitor) fetchNetworkIO() (*gopsutilnet.IOCountersStat, error) {
+	currentNetIO, err := networkCountersForPID(m.pid)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(counters) != 1 {
-		return nil, errors.New("failed to get network io counter")
+	if !m.hasLastNetIO {
+		m.lastNetIO = currentNetIO
+		m.hasLastNetIO = true
+		return &gopsutilnet.IOCountersStat{}, nil
 	}
-	currentNetIO := counters[0]
 
-	deltaIO := net.IOCountersStat{
-		BytesSent:   currentNetIO.BytesSent - m.lastNetIO.BytesSent,
-		BytesRecv:   currentNetIO.BytesRecv - m.lastNetIO.BytesRecv,
-		PacketsSent: currentNetIO.PacketsSent - m.lastNetIO.PacketsSent,
-		PacketsRecv: currentNetIO.PacketsRecv - m.lastNetIO.PacketsRecv,
-	}
+	deltaIO := networkIODelta(currentNetIO, m.lastNetIO)
 
 	m.lastNetIO = currentNetIO
 
 	return &deltaIO, nil
 }
 
-func (m *ProcessMonitor) fetchIO(proceses []*process.Process) (*process.IOCountersStat, error) {
-	var currentIO = process.IOCountersStat{}
-	for _, p := range proceses {
+func networkCountersForPID(pid int32) (gopsutilnet.IOCountersStat, error) {
+	counters, err := gopsutilnet.IOCountersByFile(true, fmt.Sprintf("/proc/%d/net/dev", pid))
+	if err != nil {
+		return gopsutilnet.IOCountersStat{}, err
+	}
+	return aggregateNetworkCounters(counters), nil
+}
+
+func aggregateNetworkCounters(counters []gopsutilnet.IOCountersStat) gopsutilnet.IOCountersStat {
+	total := gopsutilnet.IOCountersStat{}
+	for _, counter := range counters {
+		if counter.Name == "lo" {
+			continue
+		}
+		total.BytesSent += counter.BytesSent
+		total.BytesRecv += counter.BytesRecv
+		total.PacketsSent += counter.PacketsSent
+		total.PacketsRecv += counter.PacketsRecv
+		total.Errin += counter.Errin
+		total.Errout += counter.Errout
+		total.Dropin += counter.Dropin
+		total.Dropout += counter.Dropout
+		total.Fifoin += counter.Fifoin
+		total.Fifoout += counter.Fifoout
+	}
+	return total
+}
+
+func (m *ProcessMonitor) fetchIO(processes []*process.Process) (*process.IOCountersStat, error) {
+	deltaIO := process.IOCountersStat{}
+	currentPIDs := map[int32]struct{}{}
+	for _, p := range processes {
 		pio, err := p.IOCounters()
 		if err != nil {
 			continue
 		}
-		currentIO.ReadCount += pio.ReadCount
-		currentIO.WriteCount += pio.WriteCount
-		currentIO.ReadBytes += pio.ReadBytes
-		currentIO.WriteBytes += pio.WriteBytes
-		currentIO.DiskReadBytes += pio.DiskReadBytes
-		currentIO.DiskWriteBytes += pio.DiskWriteBytes
+		currentPIDs[p.Pid] = struct{}{}
+		if last, ok := m.lastIOByPID[p.Pid]; ok {
+			addProcessIOCounters(&deltaIO, processIODelta(*pio, last))
+		}
+		m.lastIOByPID[p.Pid] = *pio
 	}
 
-	deltaIO := process.IOCountersStat{
-		ReadCount:      currentIO.ReadCount - m.lastIO.ReadCount,
-		WriteCount:     currentIO.WriteCount - m.lastIO.WriteCount,
-		ReadBytes:      currentIO.ReadBytes - m.lastIO.ReadBytes,
-		WriteBytes:     currentIO.WriteBytes - m.lastIO.WriteBytes,
-		DiskReadBytes:  currentIO.DiskReadBytes - m.lastIO.DiskReadBytes,
-		DiskWriteBytes: currentIO.DiskWriteBytes - m.lastIO.DiskWriteBytes,
+	for pid := range m.lastIOByPID {
+		if _, ok := currentPIDs[pid]; !ok {
+			delete(m.lastIOByPID, pid)
+		}
 	}
-
-	m.lastIO = currentIO
 
 	return &deltaIO, nil
 }
@@ -186,7 +220,7 @@ func (m *ProcessMonitor) fetchCPU(processes []*process.Process) float64 {
 	for _, p := range processes {
 		cpuPercent, err := p.CPUPercent()
 		if err != nil {
-			return 0
+			continue
 		}
 		millicores += (cpuPercent / 100.0) * 1000.0
 	}
@@ -217,30 +251,78 @@ func (m *ProcessMonitor) findProcesses() ([]*process.Process, error) {
 
 	for _, p := range processes {
 		if p.Pid == m.pid {
-			return m.findChildProcesses(p), nil
+			return m.findProcessTree(p), nil
 		}
 	}
 
 	return nil, fmt.Errorf("failed to find processes for pid %v", m.pid)
 }
 
-func (m *ProcessMonitor) findChildProcesses(p *process.Process) []*process.Process {
+func (m *ProcessMonitor) findProcessTree(p *process.Process) []*process.Process {
+	processes := []*process.Process{p}
+
 	children, err := p.Children()
 	if err != nil {
 		// An error will occur when there are no children (pgrep -P <pid>)
-		return nil
+		return processes
 	}
 
-	processes := []*process.Process{}
-	processes = append(processes, children...)
-
 	for _, child := range children {
-		grandChildren := m.findChildProcesses(child)
-		if grandChildren == nil {
+		childProcesses := m.findProcessTree(child)
+		if childProcesses == nil {
 			continue
 		}
-		processes = append(processes, grandChildren...)
+		processes = append(processes, childProcesses...)
 	}
 
 	return processes
+}
+
+func cpuPercent(cpuUsedMillicores uint64, cpuTotalMillicores int64) float32 {
+	if cpuTotalMillicores <= 0 {
+		return 0
+	}
+	return float32(float64(cpuUsedMillicores) * 100 / float64(cpuTotalMillicores))
+}
+
+func addProcessIOCounters(total *process.IOCountersStat, delta process.IOCountersStat) {
+	total.ReadCount += delta.ReadCount
+	total.WriteCount += delta.WriteCount
+	total.ReadBytes += delta.ReadBytes
+	total.WriteBytes += delta.WriteBytes
+	total.DiskReadBytes += delta.DiskReadBytes
+	total.DiskWriteBytes += delta.DiskWriteBytes
+}
+
+func processIODelta(current process.IOCountersStat, previous process.IOCountersStat) process.IOCountersStat {
+	return process.IOCountersStat{
+		ReadCount:      counterDelta(current.ReadCount, previous.ReadCount),
+		WriteCount:     counterDelta(current.WriteCount, previous.WriteCount),
+		ReadBytes:      counterDelta(current.ReadBytes, previous.ReadBytes),
+		WriteBytes:     counterDelta(current.WriteBytes, previous.WriteBytes),
+		DiskReadBytes:  counterDelta(current.DiskReadBytes, previous.DiskReadBytes),
+		DiskWriteBytes: counterDelta(current.DiskWriteBytes, previous.DiskWriteBytes),
+	}
+}
+
+func networkIODelta(current gopsutilnet.IOCountersStat, previous gopsutilnet.IOCountersStat) gopsutilnet.IOCountersStat {
+	return gopsutilnet.IOCountersStat{
+		BytesSent:   counterDelta(current.BytesSent, previous.BytesSent),
+		BytesRecv:   counterDelta(current.BytesRecv, previous.BytesRecv),
+		PacketsSent: counterDelta(current.PacketsSent, previous.PacketsSent),
+		PacketsRecv: counterDelta(current.PacketsRecv, previous.PacketsRecv),
+		Errin:       counterDelta(current.Errin, previous.Errin),
+		Errout:      counterDelta(current.Errout, previous.Errout),
+		Dropin:      counterDelta(current.Dropin, previous.Dropin),
+		Dropout:     counterDelta(current.Dropout, previous.Dropout),
+		Fifoin:      counterDelta(current.Fifoin, previous.Fifoin),
+		Fifoout:     counterDelta(current.Fifoout, previous.Fifoout),
+	}
+}
+
+func counterDelta(current uint64, previous uint64) uint64 {
+	if current < previous {
+		return 0
+	}
+	return current - previous
 }

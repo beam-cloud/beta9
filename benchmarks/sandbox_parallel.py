@@ -282,6 +282,7 @@ def prepare_sandbox_runtime(args):
         image=image,
         cpu=parse_sdk_cpu(args.sandbox_cpu),
         memory=parse_sdk_memory(args.sandbox_memory),
+        gpu="",
         keep_warm_seconds=args.sandbox_keep_warm_seconds,
         authorized=False,
         sync_local_dir=False,

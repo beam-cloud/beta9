@@ -23,11 +23,5 @@ dependencies:
 - name: victoria-metrics-agent
   repository: https://victoriametrics.github.io/helm-charts
   version: 0.9.17
-- name: victoria-logs-single
-  repository: https://victoriametrics.github.io/helm-charts
-  version: 0.3.4
-- name: fluent-bit
-  repository: https://fluent.github.io/helm-charts
-  version: 0.43.0
-digest: sha256:dc432b87ab30e7560e1993ac54acdbefa0ac733d7f1e398bde7b1c82571b96e2
-generated: "2024-09-09T10:17:33.899378-04:00"
+digest: sha256:b4adfbc1a1ddea3a896f3d880468d6e58a88dd4ae769786f77b577b6929c79cd
+generated: "2026-05-27T13:39:46.548822-04:00"

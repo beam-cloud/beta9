@@ -66,6 +66,19 @@ GEESEFS_SUMMARY_RE = re.compile(
     r"unary\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"cloud\(req=(\d+) ([0-9.]+)MiB\)"
 )
+GEESEFS_BUFFER_RE = re.compile(
+    r"geesefs read path summary: .*?buffer_hit=(\d+) buffer=([0-9.]+)MiB"
+)
+CACHE_SUMMARY_RE = re.compile(
+    r"cache read path summary: .*?"
+    r"client\(read_into=(\d+) ([0-9.]+)MiB local_hit=(\d+) local_miss=(\d+) "
+    r"raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"grpc_hit=(\d+) grpc_miss=(\d+) grpc_err=(\d+)\).*?"
+    r"client_local_page_file\(req=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"server\(grpc_req=(\d+) grpc_hit=(\d+) grpc_miss=(\d+) ([0-9.]+)MiB "
+    r"stream_req=(\d+) stream_chunks=(\d+) ([0-9.]+)MiB stream_err=(\d+) "
+    r"raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+)\)"
+)
 FUSE_RESPONSE_RE = re.compile(
     r"geesefs fuse read response complete: .*?"
     r"path=\"([^\"]+)\" hash=\"([^\"]*)\" offset=(\d+) size=(\d+) bytes=(\d+) .*?"
@@ -731,14 +744,52 @@ class ReadPathParser:
             "mmapMiB": 0.0,
             "readIntoHits": 0,
             "readIntoMiB": 0.0,
+            "bufferHits": 0,
+            "bufferMiB": 0.0,
             "streamHits": 0,
             "unaryHits": 0,
             "cloudReq": 0,
             "cloudMiB": 0.0,
         }
+        cache_summary: dict[str, Any] = {
+            "summaryLines": 0,
+            "clientLocalHits": 0,
+            "clientRawHits": 0,
+            "clientRawMisses": 0,
+            "clientRawErrors": 0,
+            "clientGRPCHits": 0,
+            "clientGRPCMisses": 0,
+            "clientGRPCErrors": 0,
+            "clientLocalPageFileHits": 0,
+            "serverRawRequests": 0,
+            "serverRawSendfile": 0,
+            "serverRawCopy": 0,
+            "serverRawReadAt": 0,
+            "serverRawErrors": 0,
+            "serverGRPCHits": 0,
+            "serverStreamChunks": 0,
+        }
         response = {"lines": 0, "bytes": 0, "handlerMs": 0.0, "responseMs": 0.0}
         external_hit_lines = 0
         for line in lines:
+            m = CACHE_SUMMARY_RE.search(line)
+            if m:
+                cache_summary["summaryLines"] += 1
+                cache_summary["clientLocalHits"] += int(m.group(3))
+                cache_summary["clientRawHits"] += int(m.group(5))
+                cache_summary["clientRawMisses"] += int(m.group(6))
+                cache_summary["clientRawErrors"] += int(m.group(7))
+                cache_summary["clientGRPCHits"] += int(m.group(8))
+                cache_summary["clientGRPCMisses"] += int(m.group(9))
+                cache_summary["clientGRPCErrors"] += int(m.group(10))
+                cache_summary["clientLocalPageFileHits"] += int(m.group(12))
+                cache_summary["serverGRPCHits"] += int(m.group(16))
+                cache_summary["serverStreamChunks"] += int(m.group(20))
+                cache_summary["serverRawRequests"] += int(m.group(22))
+                cache_summary["serverRawSendfile"] += int(m.group(23))
+                cache_summary["serverRawCopy"] += int(m.group(24))
+                cache_summary["serverRawReadAt"] += int(m.group(25))
+                cache_summary["serverRawErrors"] += int(m.group(28))
             if "geesefs external page hit" in line and geesefs_path in line:
                 external_hit_lines += 1
             m = FUSE_RESPONSE_RE.search(line)
@@ -747,6 +798,10 @@ class ReadPathParser:
                 response["bytes"] += int(m.group(5))
                 response["handlerMs"] += float(m.group(6))
                 response["responseMs"] += float(m.group(7))
+            m = GEESEFS_BUFFER_RE.search(line)
+            if m:
+                summary["bufferHits"] += int(m.group(1))
+                summary["bufferMiB"] += float(m.group(2))
             m = GEESEFS_SUMMARY_RE.search(line)
             if m:
                 summary["summaryLines"] += 1
@@ -762,6 +817,7 @@ class ReadPathParser:
                 summary["cloudMiB"] += float(m.group(19))
         return {
             "geesefsSummary": summary,
+            "cacheSummary": cache_summary,
             "fuseResponses": response,
             "externalPageHitLines": external_hit_lines,
         }
@@ -1092,6 +1148,9 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             "unable to upgrade connection",
             "container not found",
             "pod is not running",
+            "cannot exec into a container in a completed pod",
+            "current phase is Succeeded",
+            "current phase is Failed",
             "not found",
         )
         return any(fragment in message for fragment in retryable)
@@ -1479,6 +1538,7 @@ class SandboxRunner:
             image=image,
             cpu=parse_sdk_cpu(self.config.sandbox_cpu),
             memory=parse_sdk_memory(self.config.sandbox_memory),
+            gpu="",
             keep_warm_seconds=self.config.sandbox_keep_warm_seconds,
             authorized=False,
             volumes=[volume],
@@ -1572,6 +1632,8 @@ class SandboxRunner:
             "Unavailable",
             "connection refused",
             "error reading from server",
+            "Failed to get sandbox status",
+            "container state not found",
             "EOF",
         )
         return any(fragment in message for fragment in transient_fragments)
@@ -1737,9 +1799,14 @@ class Reporter:
     @staticmethod
     def _cache_path_label(proof: dict[str, Any]) -> str:
         summary = (proof or {}).get("geesefsSummary") or {}
+        cache_summary = (proof or {}).get("cacheSummary") or {}
         return (
             f"mmap={summary.get('mmapHits', 0)} "
             f"read_into={summary.get('readIntoHits', 0)} "
+            f"buffer={summary.get('bufferHits', 0)} "
+            f"local={cache_summary.get('clientLocalHits', 0)} "
+            f"raw={cache_summary.get('clientRawHits', 0)} "
+            f"grpc={cache_summary.get('clientGRPCHits', 0)} "
             f"cloud={summary.get('cloudReq', 0)}"
         )
 
@@ -1775,6 +1842,7 @@ class Reporter:
                 summary = proof.get("geesefsSummary") or {}
                 cache_hits += int(summary.get("mmapHits") or 0)
                 cache_hits += int(summary.get("readIntoHits") or 0)
+                cache_hits += int(summary.get("bufferHits") or 0)
             if self.config.require_read_path_proof and (
                 cache_hits <= 0 and external_page_hits <= 0
             ):
@@ -2045,7 +2113,17 @@ class CacheBenchmark:
             timeout_seconds=min(120, self.config.cache_proof_timeout_seconds),
             context="workload cache proof",
         )
-        eviction = self.cache.evict_cache_pages(entry)
+        cache_page_eviction = {
+            "ok": True,
+            "skipped": True,
+            "reason": "preserve embedded cache pages for hot-read measurement",
+        }
+        workspace_mount_probe = None
+        if access_type == "workspace_fuse":
+            workspace_mount_probe = self._ensure_workspace_fuse_mounted(
+                sandbox, token, paths, entry
+            )
+
         mounted_eviction = self.cache.evict_mounted_file(worker_path, entry["size"])
 
         if access_type == "workspace_fuse":
@@ -2066,7 +2144,6 @@ class CacheBenchmark:
         remote_object = self._remote_object_proof(workspace, paths, entry)
         worker_dd = None
         if self.config.worker_dd_reads:
-            self.cache.evict_cache_pages(entry)
             self.cache.evict_mounted_file(worker_path, entry["size"])
             worker_dd = self.cache.worker_dd(worker_path, entry["size"])
         sandbox_dd = None
@@ -2091,9 +2168,10 @@ class CacheBenchmark:
             "path": entry["path"],
             "hash": entry["sha256"],
             "cacheReady": ready,
-            "cachePageEviction": eviction,
+            "cachePageEviction": cache_page_eviction,
             "casProof": cas_proof,
             "remoteObject": remote_object,
+            "workspaceMountProbe": workspace_mount_probe,
             "mountedFileEviction": mounted_eviction,
             "hotRead": hot_payload,
             "hotSample": hot_sample,
@@ -2111,6 +2189,33 @@ class CacheBenchmark:
         }
         self._print_row(row)
         return row
+
+    def _ensure_workspace_fuse_mounted(
+        self,
+        sandbox,
+        token: str,
+        paths: BenchmarkPaths,
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        script = (
+            "import json, os, sys\n"
+            "path = os.path.join(sys.argv[1], sys.argv[2])\n"
+            "st = os.stat(path)\n"
+            "print(json.dumps({'ok': True, 'path': path, 'size': st.st_size}))\n"
+        )
+        payload, sample = self.runner.run_json(
+            sandbox,
+            token,
+            [
+                "python3",
+                "-c",
+                script,
+                paths.volume_container_root,
+                entry["path"],
+            ],
+            "workspace-fuse-mount-probe",
+        )
+        return {"payload": payload, "sample": sample}
 
     def _remote_object_proof(
         self, workspace: dict[str, Any], paths: BenchmarkPaths, entry: dict[str, Any]
