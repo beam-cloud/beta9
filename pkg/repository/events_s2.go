@@ -130,15 +130,17 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 
 	recordsByStream := map[s2.StreamName][]s2.AppendRecord{}
 	for _, event := range events {
-		record, streamName, err := r.appendRecordForEvent(event)
+		record, streamNames, err := r.appendRecordForEvent(event)
 		if err != nil {
 			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to build s2 event record")
 			continue
 		}
-		if streamName == "" {
+		if len(streamNames) == 0 {
 			continue
 		}
-		recordsByStream[streamName] = append(recordsByStream[streamName], record)
+		for _, streamName := range streamNames {
+			recordsByStream[streamName] = append(recordsByStream[streamName], record)
+		}
 	}
 
 	var streamErrs []error
@@ -168,16 +170,16 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 	return errors.Join(streamErrs...)
 }
 
-func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, s2.StreamName, error) {
+func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {
 	body, err := json.Marshal(event)
 	if err != nil {
-		return s2.AppendRecord{}, "", fmt.Errorf("marshal cloud event: %w", err)
+		return s2.AppendRecord{}, nil, fmt.Errorf("marshal cloud event: %w", err)
 	}
 
 	metadata := eventMetadataFromCloudEvent(event)
-	streamName := r.streamNameForEvent(event.Type(), metadata)
-	if streamName == "" {
-		return s2.AppendRecord{}, "", nil
+	streamNames := r.streamNamesForEvent(event.Type(), metadata)
+	if len(streamNames) == 0 {
+		return s2.AppendRecord{}, nil, nil
 	}
 
 	timestamp := uint64(event.Time().UnixMilli())
@@ -185,7 +187,7 @@ func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.Ap
 		Timestamp: &timestamp,
 		Headers:   s2HeadersForEvent(event, metadata),
 		Body:      body,
-	}, streamName, nil
+	}, streamNames, nil
 }
 
 func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error) {
@@ -241,11 +243,23 @@ func (r *S2EventRepository) StreamContainerEvents(ctx context.Context, container
 		return nil, fmt.Errorf("workspace id and stub id are required to stream container events")
 	}
 
+	streamName := r.containerStreamName(query.WorkspaceID, query.StubID, containerID)
+	return r.streamEvents(ctx, streamName, containerID, query)
+}
+
+func (r *S2EventRepository) StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if query.WorkspaceID == "" || query.StubID == "" {
+		return nil, fmt.Errorf("workspace id and stub id are required to stream stub events")
+	}
+
+	streamName := r.stubStreamName(query.WorkspaceID, query.StubID)
+	return r.streamEvents(ctx, streamName, "", query)
+}
+
+func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.StreamName, containerID string, query types.EventQuery) (EventStream, error) {
 	if err := r.ensureBasin(ctx); err != nil {
 		return nil, err
 	}
-
-	streamName := r.containerStreamName(query.WorkspaceID, query.StubID, containerID)
 	if err := r.ensureStream(ctx, streamName); err != nil {
 		return nil, err
 	}
@@ -259,10 +273,10 @@ func (r *S2EventRepository) StreamContainerEvents(ctx context.Context, container
 	}
 	session, err := r.basin.Stream(streamName).ReadSession(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("stream container events from s2 stream %q: %w", streamName, err)
+		return nil, fmt.Errorf("stream events from s2 stream %q: %w", streamName, err)
 	}
 
-	return &s2ContainerEventStream{
+	return &s2EventStream{
 		session: session,
 		query:   query,
 		response: &types.ContainerEventsResponse{
@@ -346,7 +360,7 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 	return nil
 }
 
-type s2ContainerEventStream struct {
+type s2EventStream struct {
 	session *s2.ReadSession
 	query   types.EventQuery
 
@@ -354,7 +368,7 @@ type s2ContainerEventStream struct {
 	current  types.ContainerEventRecord
 }
 
-func (s *s2ContainerEventStream) Next() bool {
+func (s *s2EventStream) Next() bool {
 	for s.session.Next() {
 		eventRecord, ok := containerEventRecordFromS2(s.session.Record(), s.query, s.response)
 		if !ok {
@@ -366,15 +380,15 @@ func (s *s2ContainerEventStream) Next() bool {
 	return false
 }
 
-func (s *s2ContainerEventStream) Record() types.ContainerEventRecord {
+func (s *s2EventStream) Record() types.ContainerEventRecord {
 	return s.current
 }
 
-func (s *s2ContainerEventStream) Err() error {
+func (s *s2EventStream) Err() error {
 	return s.session.Err()
 }
 
-func (s *s2ContainerEventStream) Close() error {
+func (s *s2EventStream) Close() error {
 	return s.session.Close()
 }
 
@@ -551,6 +565,27 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 	default:
 		return r.typeStreamName(eventType)
 	}
+}
+
+func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata eventMetadata) []s2.StreamName {
+	streams := []s2.StreamName{}
+	add := func(stream s2.StreamName) {
+		if stream == "" {
+			return
+		}
+		for _, existing := range streams {
+			if existing == stream {
+				return
+			}
+		}
+		streams = append(streams, stream)
+	}
+
+	add(r.streamNameForEvent(eventType, metadata))
+	if metadata.WorkspaceID != "" && metadata.StubID != "" {
+		add(r.stubStreamName(metadata.WorkspaceID, metadata.StubID))
+	}
+	return streams
 }
 
 func (r *S2EventRepository) containerStreamName(workspaceID, stubID, containerID string) s2.StreamName {

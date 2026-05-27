@@ -184,6 +184,7 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
+	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
 
@@ -243,6 +244,10 @@ func (g *EventGroup) StreamContainerEvents(ctx echo.Context) error {
 	}
 	defer stream.Close()
 
+	return g.writeEventStream(ctx, stream)
+}
+
+func (g *EventGroup) writeEventStream(ctx echo.Context, stream repository.EventStream) error {
 	response := ctx.Response()
 	response.Header().Set("Content-Type", "text/event-stream")
 	response.Header().Set("Cache-Control", "no-cache")
@@ -250,6 +255,13 @@ func (g *EventGroup) StreamContainerEvents(ctx echo.Context) error {
 	response.WriteHeader(http.StatusOK)
 
 	flusher, _ := response.Writer.(http.Flusher)
+	if _, err := fmt.Fprint(response.Writer, ": connected\n\n"); err != nil {
+		return nil
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
 	for stream.Next() {
 		record := stream.Record()
 		payload, err := json.Marshal(record)
@@ -271,6 +283,37 @@ func (g *EventGroup) StreamContainerEvents(ctx echo.Context) error {
 		}
 	}
 	return nil
+}
+
+func (g *EventGroup) StreamStubEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	stubID := ctx.Param("stubId")
+	if stubID == "" {
+		return HTTPBadRequest("Missing stub ID")
+	}
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := eventStreamQueryFromContext(ctx, authInfoFromContext(cc))
+	if err != nil {
+		return HTTPBadRequest("Invalid event stream query")
+	}
+	query.StubID = stubID
+	if query.WorkspaceID == "" {
+		return HTTPNotFound()
+	}
+
+	stream, err := g.eventRepo.StreamStubEvents(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
+		}
+		return HTTPInternalServerError("Failed to stream stub events")
+	}
+	defer stream.Close()
+
+	return g.writeEventStream(ctx, stream)
 }
 
 func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {

@@ -24,6 +24,26 @@ func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 	}
 }
 
+func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+	})
+
+	if got, want := len(streams), 2; got != want {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", got, want, streams)
+	}
+	if got, want := string(streams[0]), "events/workspaces/workspace-123/stubs/stub-456/containers/container-789"; got != want {
+		t.Fatalf("unexpected container stream name: got %q want %q", got, want)
+	}
+	if got, want := string(streams[1]), "events/workspaces/workspace-123/stubs/stub-456"; got != want {
+		t.Fatalf("unexpected stub stream name: got %q want %q", got, want)
+	}
+}
+
 func TestS2ContainerScopedEventsDoNotFallbackToNonCanonicalStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

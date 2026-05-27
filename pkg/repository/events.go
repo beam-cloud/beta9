@@ -31,6 +31,7 @@ type EventStream interface {
 
 type eventStreamer interface {
 	StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error)
+	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 }
 
 type EventClientRepo struct {
@@ -124,6 +125,13 @@ func (r *EventClientRepo) StreamContainerEvents(ctx context.Context, containerID
 		return nil, ErrEventReadUnsupported
 	}
 	return r.streamer.StreamContainerEvents(ctx, containerID, query)
+}
+
+func (r *EventClientRepo) StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if r.streamer == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.streamer.StreamStubEvents(ctx, query)
 }
 
 func (r *EventClientRepo) PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema) {
