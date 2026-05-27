@@ -224,6 +224,8 @@ type TailscaleRepository interface {
 
 type EventRepository interface {
 	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
+	StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error)
+	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)
 	PushContainerEvent(event types.EventContainerEventSchema)

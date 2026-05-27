@@ -29,6 +29,7 @@ type ContainerEventsBatchRequest struct {
 	TaskIDs              []string                     `json:"task_ids"`
 	Targets              []ContainerEventsBatchTarget `json:"targets,omitempty"`
 	Limit                uint64                       `json:"limit,omitempty"`
+	EventTypes           []string                     `json:"event_types,omitempty"`
 	IncludeEvents        bool                         `json:"include_events,omitempty"`
 	TopLifecycle         int                          `json:"top_lifecycle,omitempty"`
 	RequiredLifecycleIDs []string                     `json:"required_lifecycle_ids,omitempty"`
@@ -178,9 +179,12 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	}
 
 	g.GET("/:workspaceId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
+	g.GET("/:workspaceId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
+	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
+	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
 
@@ -207,6 +211,109 @@ func (g *EventGroup) GetContainerEvents(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, events)
+}
+
+func (g *EventGroup) StreamContainerEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	containerID := ctx.Param("containerId")
+	if containerID == "" {
+		return HTTPBadRequest("Missing container ID")
+	}
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := eventStreamQueryFromContext(ctx, authInfoFromContext(cc))
+	if err != nil {
+		return HTTPBadRequest("Invalid event stream query")
+	}
+	query, _, err = g.authorizeContainerEventQuery(ctx, containerID, query)
+	if err != nil {
+		return err
+	}
+	if query.WorkspaceID == "" || query.StubID == "" {
+		return HTTPNotFound()
+	}
+
+	stream, err := g.eventRepo.StreamContainerEvents(ctx.Request().Context(), containerID, query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
+		}
+		return HTTPInternalServerError("Failed to stream container events")
+	}
+	defer stream.Close()
+
+	return g.writeEventStream(ctx, stream)
+}
+
+func (g *EventGroup) writeEventStream(ctx echo.Context, stream repository.EventStream) error {
+	response := ctx.Response()
+	response.Header().Set("Content-Type", "text/event-stream")
+	response.Header().Set("Cache-Control", "no-cache")
+	response.Header().Set("Connection", "keep-alive")
+	response.WriteHeader(http.StatusOK)
+
+	flusher, _ := response.Writer.(http.Flusher)
+	if _, err := fmt.Fprint(response.Writer, ": connected\n\n"); err != nil {
+		return nil
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	for stream.Next() {
+		record := stream.Record()
+		payload, err := json.Marshal(record)
+		if err != nil {
+			continue
+		}
+		if err := writeSSEEvent(response.Writer, "event", strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
+			return nil
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if err := stream.Err(); err != nil && ctx.Request().Context().Err() == nil {
+		payload, _ := json.Marshal(map[string]string{"error": err.Error()})
+		_ = writeSSEEvent(response.Writer, "error", "", payload)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	return nil
+}
+
+func (g *EventGroup) StreamStubEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	stubID := ctx.Param("stubId")
+	if stubID == "" {
+		return HTTPBadRequest("Missing stub ID")
+	}
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := eventStreamQueryFromContext(ctx, authInfoFromContext(cc))
+	if err != nil {
+		return HTTPBadRequest("Invalid event stream query")
+	}
+	query.StubID = stubID
+	if query.WorkspaceID == "" {
+		return HTTPNotFound()
+	}
+
+	stream, err := g.eventRepo.StreamStubEvents(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
+		}
+		return HTTPInternalServerError("Failed to stream stub events")
+	}
+	defer stream.Close()
+
+	return g.writeEventStream(ctx, stream)
 }
 
 func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
@@ -278,6 +385,7 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 				WorkspaceID: task.Workspace.ExternalId,
 				StubID:      task.Stub.ExternalId,
 				TaskID:      task.ExternalId,
+				EventTypes:  eventQueryTypes(req.EventTypes),
 			})
 			if err != nil {
 				items = append(items, ContainerEventSummary{ContainerID: task.ContainerId, TaskID: target.TaskID, Error: err.Error()})
@@ -296,6 +404,7 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 			Limit:       req.Limit,
 			WorkspaceID: workspaceID,
 			StubID:      target.StubID,
+			EventTypes:  eventQueryTypes(req.EventTypes),
 		})
 		if err != nil {
 			items = append(items, ContainerEventSummary{ContainerID: target.ContainerID, StubID: target.StubID, Error: err.Error()})
@@ -371,6 +480,7 @@ func (g *EventGroup) GetTaskEvents(ctx echo.Context) error {
 		WorkspaceID: task.Workspace.ExternalId,
 		StubID:      task.Stub.ExternalId,
 		TaskID:      task.ExternalId,
+		EventTypes:  eventQueryTypesFromParam(ctx.QueryParam("event_types")),
 	})
 	if err != nil {
 		return err
@@ -387,21 +497,9 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 		return nil, HTTPInternalServerError("Event repository is unavailable")
 	}
 
-	state, stateErr := g.containerRepo.GetContainerState(containerID)
-	if stateErr == nil && state != nil {
-		if !eventWorkspaceAccessAllowed(authInfo, routeWorkspaceID, state.WorkspaceId) {
-			return nil, HTTPNotFound()
-		}
-		if query.WorkspaceID == "" {
-			query.WorkspaceID = state.WorkspaceId
-		}
-		if query.StubID == "" {
-			query.StubID = state.StubId
-		}
-	} else if query.StubID == "" {
-		if stubID, ok := common.ExtractStubIdFromStubScopedContainerId(containerID); ok {
-			query.StubID = stubID
-		}
+	query, state, err := g.authorizeContainerEventQuery(ctx, containerID, query)
+	if err != nil {
+		return nil, err
 	}
 
 	events, err := g.eventRepo.GetContainerEvents(ctx.Request().Context(), containerID, query)
@@ -412,7 +510,7 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 		return nil, HTTPInternalServerError("Failed to retrieve container events")
 	}
 
-	if stateErr == nil && state != nil {
+	if state != nil {
 		if events.WorkspaceID == "" {
 			events.WorkspaceID = state.WorkspaceId
 		}
@@ -434,6 +532,33 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 	}
 
 	return events, nil
+}
+
+func (g *EventGroup) authorizeContainerEventQuery(ctx echo.Context, containerID string, query types.EventQuery) (types.EventQuery, *types.ContainerState, error) {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := authInfoFromContext(cc)
+	routeWorkspaceID := requestedEventWorkspaceID(ctx, authInfo)
+
+	state, stateErr := g.containerRepo.GetContainerState(containerID)
+	if stateErr == nil && state != nil {
+		if !eventWorkspaceAccessAllowed(authInfo, routeWorkspaceID, state.WorkspaceId) {
+			return query, nil, HTTPNotFound()
+		}
+		if query.WorkspaceID == "" {
+			query.WorkspaceID = state.WorkspaceId
+		}
+		if query.StubID == "" {
+			query.StubID = state.StubId
+		}
+		return query, state, nil
+	}
+
+	if query.StubID == "" {
+		if stubID, ok := common.ExtractStubIdFromStubScopedContainerId(containerID); ok {
+			query.StubID = stubID
+		}
+	}
+	return query, nil, nil
 }
 
 func hasWorkspaceTaskAccess(task *types.TaskWithRelated, authInfo *auth.AuthInfo, routeWorkspaceID string) bool {
@@ -476,7 +601,113 @@ func eventQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo, limit uint
 		WorkspaceID: requestedEventWorkspaceID(ctx, authInfo),
 		StubID:      firstNonEmpty(ctx.Param("stubId"), ctx.QueryParam("stub_id")),
 		TaskID:      ctx.QueryParam("task_id"),
+		EventTypes:  eventQueryTypesFromParam(ctx.QueryParam("event_types")),
 	}
+}
+
+func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (types.EventQuery, error) {
+	limit, err := eventQueryLimit(ctx)
+	if err != nil {
+		return types.EventQuery{}, err
+	}
+
+	query := eventQueryFromContext(ctx, authInfo, limit)
+	startSelectors := 0
+
+	if raw := ctx.QueryParam("seq_num"); raw != "" {
+		seqNum, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return types.EventQuery{}, err
+		}
+		query.SeqNum = &seqNum
+		startSelectors++
+	}
+
+	if raw := ctx.QueryParam("tail_offset"); raw != "" {
+		tailOffset, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || tailOffset < 0 {
+			return types.EventQuery{}, fmt.Errorf("invalid tail offset")
+		}
+		query.TailOffset = &tailOffset
+		startSelectors++
+	}
+
+	if startSelectors > 1 {
+		return types.EventQuery{}, fmt.Errorf("multiple stream start selectors")
+	}
+
+	if raw := ctx.Request().Header.Get("Last-Event-ID"); query.SeqNum == nil && query.TailOffset == nil && raw != "" {
+		lastSeqNum, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return types.EventQuery{}, err
+		}
+		nextSeqNum := lastSeqNum + 1
+		query.SeqNum = &nextSeqNum
+	}
+
+	if raw := ctx.QueryParam("wait"); raw != "" {
+		wait, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil || wait < 0 {
+			return types.EventQuery{}, fmt.Errorf("invalid wait")
+		}
+		waitSeconds := int32(wait)
+		query.WaitSeconds = &waitSeconds
+	}
+
+	if raw := ctx.QueryParam("clamp"); raw != "" {
+		clamp, err := strconv.ParseBool(raw)
+		if err != nil {
+			return types.EventQuery{}, err
+		}
+		query.Clamp = &clamp
+	}
+	if query.SeqNum != nil && query.Clamp == nil {
+		clamp := true
+		query.Clamp = &clamp
+	}
+
+	return query, nil
+}
+
+func eventQueryTypesFromParam(raw string) []string {
+	return eventQueryTypes(strings.Split(raw, ","))
+}
+
+func eventQueryTypes(values []string) []string {
+	eventTypes := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		eventTypes = append(eventTypes, value)
+	}
+	return eventTypes
+}
+
+func writeSSEEvent(w http.ResponseWriter, eventName string, id string, data []byte) error {
+	if id != "" {
+		if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
+			return err
+		}
+	}
+	if eventName != "" {
+		if _, err := fmt.Fprintf(w, "event: %s\n", eventName); err != nil {
+			return err
+		}
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprint(w, "\n")
+	return err
 }
 
 func isClusterAdmin(authInfo *auth.AuthInfo) bool {

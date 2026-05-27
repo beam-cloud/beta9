@@ -130,15 +130,17 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 
 	recordsByStream := map[s2.StreamName][]s2.AppendRecord{}
 	for _, event := range events {
-		record, streamName, err := r.appendRecordForEvent(event)
+		record, streamNames, err := r.appendRecordForEvent(event)
 		if err != nil {
 			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to build s2 event record")
 			continue
 		}
-		if streamName == "" {
+		if len(streamNames) == 0 {
 			continue
 		}
-		recordsByStream[streamName] = append(recordsByStream[streamName], record)
+		for _, streamName := range streamNames {
+			recordsByStream[streamName] = append(recordsByStream[streamName], record)
+		}
 	}
 
 	var streamErrs []error
@@ -168,16 +170,16 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 	return errors.Join(streamErrs...)
 }
 
-func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, s2.StreamName, error) {
+func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, []s2.StreamName, error) {
 	body, err := json.Marshal(event)
 	if err != nil {
-		return s2.AppendRecord{}, "", fmt.Errorf("marshal cloud event: %w", err)
+		return s2.AppendRecord{}, nil, fmt.Errorf("marshal cloud event: %w", err)
 	}
 
 	metadata := eventMetadataFromCloudEvent(event)
-	streamName := r.streamNameForEvent(event.Type(), metadata)
-	if streamName == "" {
-		return s2.AppendRecord{}, "", nil
+	streamNames := r.streamNamesForEvent(event.Type(), metadata)
+	if len(streamNames) == 0 {
+		return s2.AppendRecord{}, nil, nil
 	}
 
 	timestamp := uint64(event.Time().UnixMilli())
@@ -185,7 +187,7 @@ func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.Ap
 		Timestamp: &timestamp,
 		Headers:   s2HeadersForEvent(event, metadata),
 		Body:      body,
-	}, streamName, nil
+	}, streamNames, nil
 }
 
 func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error) {
@@ -234,6 +236,55 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	response.Summary = summarizeContainerLifecycleDurations(response.Events)
 	response.Missing = requiredContainerLifecycleIDs(response.Events)
 	return response, nil
+}
+
+func (r *S2EventRepository) StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error) {
+	if query.WorkspaceID == "" || query.StubID == "" {
+		return nil, fmt.Errorf("workspace id and stub id are required to stream container events")
+	}
+
+	streamName := r.containerStreamName(query.WorkspaceID, query.StubID, containerID)
+	return r.streamEvents(ctx, streamName, containerID, query)
+}
+
+func (r *S2EventRepository) StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+	if query.WorkspaceID == "" || query.StubID == "" {
+		return nil, fmt.Errorf("workspace id and stub id are required to stream stub events")
+	}
+
+	streamName := r.stubStreamName(query.WorkspaceID, query.StubID)
+	return r.streamEvents(ctx, streamName, "", query)
+}
+
+func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.StreamName, containerID string, query types.EventQuery) (EventStream, error) {
+	if err := r.ensureBasin(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.ensureStream(ctx, streamName); err != nil {
+		return nil, err
+	}
+
+	opts := &s2.ReadOptions{
+		SeqNum:     query.SeqNum,
+		TailOffset: query.TailOffset,
+		Count:      countOption(query.Limit),
+		Wait:       query.WaitSeconds,
+		Clamp:      query.Clamp,
+	}
+	session, err := r.basin.Stream(streamName).ReadSession(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("stream events from s2 stream %q: %w", streamName, err)
+	}
+
+	return &s2EventStream{
+		session: session,
+		query:   query,
+		response: &types.ContainerEventsResponse{
+			ContainerID: containerID,
+			WorkspaceID: query.WorkspaceID,
+			StubID:      query.StubID,
+		},
+	}, nil
 }
 
 func (r *S2EventRepository) resolveContainerStreams(ctx context.Context, containerID string, query types.EventQuery) ([]s2.StreamName, error) {
@@ -300,36 +351,122 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 
 	response.Streams = append(response.Streams, string(streamName))
 	for _, record := range batch.Records {
-		eventRecord := types.ContainerEventRecord{
-			SeqNum:     record.SeqNum,
-			StoredAtNs: s2TimestampMillisToNanos(record.Timestamp),
-			CloudEvent: append([]byte(nil), record.Body...),
-		}
-
-		var envelope struct {
-			Type string          `json:"type"`
-			Time time.Time       `json:"time"`
-			Data json.RawMessage `json:"data"`
-		}
-		if err := json.Unmarshal(record.Body, &envelope); err != nil {
-			log.Debug().Err(err).Str("container_id", response.ContainerID).Msg("failed to unmarshal cloud event envelope")
-			if query.TaskID != "" {
-				continue
-			}
-			response.Events = append(response.Events, eventRecord)
-			continue
-		}
-
-		eventRecord.Type = envelope.Type
-		eventRecord.Timestamp = envelope.Time
-		eventRecord.Data = envelope.Data
-		augmentContainerEventResponse(response, &eventRecord)
-		if query.TaskID != "" && eventRecord.TaskID != query.TaskID {
+		eventRecord, ok := containerEventRecordFromS2(record, query, response)
+		if !ok {
 			continue
 		}
 		response.Events = append(response.Events, eventRecord)
 	}
 	return nil
+}
+
+type s2EventStream struct {
+	session *s2.ReadSession
+	query   types.EventQuery
+
+	response *types.ContainerEventsResponse
+	current  types.ContainerEventRecord
+}
+
+func (s *s2EventStream) Next() bool {
+	for s.session.Next() {
+		eventRecord, ok := containerEventRecordFromS2(s.session.Record(), s.query, s.response)
+		if !ok {
+			continue
+		}
+		s.current = eventRecord
+		return true
+	}
+	return false
+}
+
+func (s *s2EventStream) Record() types.ContainerEventRecord {
+	return s.current
+}
+
+func (s *s2EventStream) Err() error {
+	return s.session.Err()
+}
+
+func (s *s2EventStream) Close() error {
+	return s.session.Close()
+}
+
+func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuery, response *types.ContainerEventsResponse) (types.ContainerEventRecord, bool) {
+	eventRecord := types.ContainerEventRecord{
+		SeqNum:     record.SeqNum,
+		StoredAtNs: s2TimestampMillisToNanos(record.Timestamp),
+		CloudEvent: append([]byte(nil), record.Body...),
+	}
+
+	var envelope struct {
+		Type        string          `json:"type"`
+		Time        time.Time       `json:"time"`
+		Data        json.RawMessage `json:"data"`
+		ContainerID string          `json:"containerid"`
+		WorkspaceID string          `json:"workspaceid"`
+		TaskID      string          `json:"taskid"`
+		StubID      string          `json:"stubid"`
+		WorkerID    string          `json:"workerid"`
+	}
+	if err := json.Unmarshal(record.Body, &envelope); err != nil {
+		log.Debug().Err(err).Str("container_id", response.ContainerID).Msg("failed to unmarshal cloud event envelope")
+		if query.TaskID != "" {
+			return types.ContainerEventRecord{}, false
+		}
+		return eventRecord, true
+	}
+
+	eventRecord.Type = envelope.Type
+	eventRecord.Timestamp = envelope.Time
+	eventRecord.Data = envelope.Data
+	eventRecord.ContainerID = envelope.ContainerID
+	eventRecord.WorkspaceID = envelope.WorkspaceID
+	eventRecord.TaskID = envelope.TaskID
+	eventRecord.StubID = envelope.StubID
+	eventRecord.WorkerID = envelope.WorkerID
+	if !eventQueryAllowsType(query, eventRecord.Type) {
+		return types.ContainerEventRecord{}, false
+	}
+	augmentContainerEventResponse(response, &eventRecord)
+	if eventRecord.ContainerID == "" {
+		eventRecord.ContainerID = envelope.ContainerID
+	}
+	if eventRecord.WorkspaceID == "" {
+		eventRecord.WorkspaceID = envelope.WorkspaceID
+	}
+	if eventRecord.TaskID == "" {
+		eventRecord.TaskID = envelope.TaskID
+	}
+	if eventRecord.StubID == "" {
+		eventRecord.StubID = envelope.StubID
+	}
+	if eventRecord.WorkerID == "" {
+		eventRecord.WorkerID = envelope.WorkerID
+	}
+	if query.TaskID != "" && eventRecord.TaskID != query.TaskID {
+		return types.ContainerEventRecord{}, false
+	}
+	return eventRecord, true
+}
+
+func countOption(limit uint64) *uint64 {
+	if limit == 0 {
+		return nil
+	}
+	return &limit
+}
+
+func eventQueryAllowsType(query types.EventQuery, eventType string) bool {
+	if len(query.EventTypes) == 0 {
+		return true
+	}
+	for _, allowed := range query.EventTypes {
+		if strings.TrimSpace(allowed) == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func s2TimestampMillisToNanos(timestamp uint64) uint64 {
@@ -428,6 +565,27 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 	default:
 		return r.typeStreamName(eventType)
 	}
+}
+
+func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata eventMetadata) []s2.StreamName {
+	streams := []s2.StreamName{}
+	add := func(stream s2.StreamName) {
+		if stream == "" {
+			return
+		}
+		for _, existing := range streams {
+			if existing == stream {
+				return
+			}
+		}
+		streams = append(streams, stream)
+	}
+
+	add(r.streamNameForEvent(eventType, metadata))
+	if metadata.WorkspaceID != "" && metadata.StubID != "" {
+		add(r.stubStreamName(metadata.WorkspaceID, metadata.StubID))
+	}
+	return streams
 }
 
 func (r *S2EventRepository) containerStreamName(workspaceID, stubID, containerID string) s2.StreamName {

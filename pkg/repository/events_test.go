@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -17,6 +19,92 @@ type captureEventSink struct {
 func (s *captureEventSink) PushEvent(event cloudevents.Event) error {
 	s.events = append(s.events, event)
 	return nil
+}
+
+func TestEventHTTPSinkDeliversCloudEvent(t *testing.T) {
+	type callbackRequest struct {
+		body []byte
+		err  string
+	}
+	requests := make(chan callbackRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("X-Test"), "yes"; got != want {
+			requests <- callbackRequest{err: "unexpected header: got " + got + " want " + want}
+			return
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			requests <- callbackRequest{err: err.Error()}
+			return
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			requests <- callbackRequest{err: err.Error()}
+			return
+		}
+		requests <- callbackRequest{body: raw}
+	}))
+	defer server.Close()
+
+	repo := &EventClientRepo{}
+	event, err := repo.createEventObject(types.EventContainerEvent, types.EventContainerEventSchemaVersion, types.EventContainerEventSchema{
+		ID:          types.ContainerEventRuntimeExited,
+		ContainerID: "container-1",
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Message:     "runtime exited",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sink := newEventHTTPSink(types.EventCallbackConfig{
+		URL:        server.URL,
+		EventTypes: []string{"container.*"},
+		Headers:    map[string]string{"X-Test": "yes"},
+	})
+	defer close(sink.queue)
+
+	if err := sink.PushEvent(event); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case req := <-requests:
+		if req.err != "" {
+			t.Fatal(req.err)
+		}
+		var delivered struct {
+			Type string `json:"type"`
+			Data struct {
+				ContainerID string `json:"container_id"`
+				Message     string `json:"message"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(req.body, &delivered); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := delivered.Type, types.EventContainerEvent; got != want {
+			t.Fatalf("unexpected event type: got %q want %q", got, want)
+		}
+		if got, want := delivered.Data.ContainerID, "container-1"; got != want {
+			t.Fatalf("unexpected container id: got %q want %q", got, want)
+		}
+		if got, want := delivered.Data.Message, "runtime exited"; got != want {
+			t.Fatalf("unexpected message: got %q want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event callback")
+	}
+}
+
+func TestEventHTTPSinkSkipsUnmatchedEvents(t *testing.T) {
+	if !eventHTTPMatches([]string{"container.*"}, types.EventContainerEvent) {
+		t.Fatal("expected wildcard callback filter to match container event")
+	}
+	if eventHTTPMatches([]string{"task.*"}, types.EventContainerEvent) {
+		t.Fatal("expected task wildcard callback filter to skip container event")
+	}
 }
 
 func TestPushContainerTaskEventBuildsCanonicalEvent(t *testing.T) {

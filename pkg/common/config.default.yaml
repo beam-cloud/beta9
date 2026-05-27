@@ -22,6 +22,8 @@ database:
     apiKey: ""
     basin: beta9-events
     streamPrefix: events
+events:
+  callbacks: []
 storage:
   mode: juicefs
   fsName: beta9-fs

@@ -1,6 +1,12 @@
 package apiv1
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/labstack/echo/v4"
+)
 
 func TestSummarizeContainerEventsBatchReturnsCoverageAndBottleneck(t *testing.T) {
 	items := []ContainerEventSummary{
@@ -91,5 +97,60 @@ func TestNormalizeContainerEventsBatchTargets(t *testing.T) {
 	}
 	if got, want := targets[1].TaskID, "task-1"; got != want {
 		t.Fatalf("unexpected normalized task id: got %q want %q", got, want)
+	}
+}
+
+func TestEventQueryTypesNormalizesValues(t *testing.T) {
+	eventTypes := eventQueryTypes([]string{" container.event ", "", "container.lifecycle", "container.event"})
+
+	if got, want := len(eventTypes), 2; got != want {
+		t.Fatalf("unexpected event type count: got %d want %d", got, want)
+	}
+	if got, want := eventTypes[0], "container.event"; got != want {
+		t.Fatalf("unexpected first event type: got %q want %q", got, want)
+	}
+	if got, want := eventTypes[1], "container.lifecycle"; got != want {
+		t.Fatalf("unexpected second event type: got %q want %q", got, want)
+	}
+}
+
+func TestEventStreamQueryFromContextParsesS2ReadOptions(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?event_types=container.event,container.lifecycle&seq_num=7&wait=30&limit=10", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := eventStreamQueryFromContext(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.SeqNum == nil || *query.SeqNum != 7 {
+		t.Fatalf("unexpected seq_num: %#v", query.SeqNum)
+	}
+	if query.WaitSeconds == nil || *query.WaitSeconds != 30 {
+		t.Fatalf("unexpected wait: %#v", query.WaitSeconds)
+	}
+	if query.Clamp == nil || !*query.Clamp {
+		t.Fatalf("expected seq_num streams to clamp by default")
+	}
+	if got, want := query.Limit, uint64(10); got != want {
+		t.Fatalf("unexpected limit: got %d want %d", got, want)
+	}
+	if got, want := len(query.EventTypes), 2; got != want {
+		t.Fatalf("unexpected event type count: got %d want %d", got, want)
+	}
+}
+
+func TestEventStreamQueryFromContextUsesLastEventID(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Last-Event-ID", "41")
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := eventStreamQueryFromContext(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.SeqNum == nil || *query.SeqNum != 42 {
+		t.Fatalf("unexpected resumed seq_num: %#v", query.SeqNum)
 	}
 }
