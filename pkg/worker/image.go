@@ -966,8 +966,7 @@ func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Conte
 	cachePath := c.imageArchiveCachePath(imageId)
 	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
 	if err != nil {
-		var notFound *cache.ErrNodeNotFound
-		if errors.As(err, &notFound) {
+		if isEmbeddedImageCacheMiss(err) {
 			return false, nil
 		}
 		return false, err
@@ -980,9 +979,17 @@ func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Conte
 	}
 
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
+		if isEmbeddedImageCacheMiss(err) {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil
+}
+
+func isEmbeddedImageCacheMiss(err error) bool {
+	var notFound *cache.ErrNodeNotFound
+	return errors.Is(err, cache.ErrContentNotFound) || errors.As(err, &notFound) || strings.Contains(err.Error(), "cachefs node not found")
 }
 
 func (c *ImageClient) imageArchiveCachePath(imageId string) string {

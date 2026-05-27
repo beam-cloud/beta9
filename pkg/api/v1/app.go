@@ -95,7 +95,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		if stubs == nil || len(stubs) == 0 {
-			return HTTPBadRequest("No stubs or deployments found for app")
+			continue
 		}
 
 		appsWithLatest.Data[i].Stub = &stubs[0]

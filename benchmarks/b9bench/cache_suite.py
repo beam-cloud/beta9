@@ -207,6 +207,7 @@ class BenchmarkConfig:
     sandbox_dd_reads: bool
     reset_workers: bool
     reset_workers_after_prepare: bool
+    force_new_image: bool
     wait_running: bool
     workloads: list[WorkloadSpec] = field(default_factory=list)
 
@@ -271,12 +272,12 @@ class BenchmarkConfig:
         add(
             "--remote-cache-proof-chunk-bytes",
             type=int,
-            default=env_int("BENCH_CACHE_REMOTE_PROOF_CHUNK_BYTES", 16 * 1024 * 1024),
+            default=env_int("BENCH_CACHE_REMOTE_PROOF_CHUNK_BYTES", 1024 * 1024),
         )
         add(
             "--remote-cache-proof-concurrency",
             type=int,
-            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 16),
+            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 1),
         )
         add(
             "--direct-cache-disk-probe-size-mb",
@@ -426,6 +427,7 @@ class BenchmarkConfig:
             "BENCH_CACHE_RESET_WORKERS_AFTER_PREPARE",
             False,
         )
+        add_bool(parser, "force-new-image", "BENCH_CACHE_FORCE_NEW_IMAGE", False)
         add_bool(parser, "wait-running", "BENCH_CACHE_WAIT_RUNNING", True)
 
         data = vars(parser.parse_args())
@@ -561,6 +563,11 @@ class Kube:
             return []
         pods = []
         for item in json.loads(proc.stdout).get("items", []):
+            worker_statuses = [
+                status
+                for status in item.get("status", {}).get("containerStatuses", [])
+                if status.get("name") == "worker"
+            ]
             pods.append(
                 {
                     "name": item.get("metadata", {}).get("name", ""),
@@ -571,13 +578,12 @@ class Kube:
                     "podIP": item.get("status", {}).get("podIP", ""),
                     "hostIP": item.get("status", {}).get("hostIP", ""),
                     "phase": item.get("status", {}).get("phase", ""),
-                    "ready": any(
-                        status.get("ready")
-                        for status in item.get("status", {}).get(
-                            "containerStatuses", []
-                        )
-                        if status.get("name") == "worker"
+                    "restartCount": int(
+                        worker_statuses[0].get("restartCount", 0)
+                        if worker_statuses
+                        else 0
                     ),
+                    "ready": any(status.get("ready") for status in worker_statuses),
                 }
             )
         return pods
@@ -591,6 +597,65 @@ class Kube:
         raise RuntimeError(
             f"timed out waiting for {min_count} ready worker pod(s); current={self.worker_pods()}"
         )
+
+    def restart_worker_pods(
+        self, pod_names: list[str], timeout: float = 300
+    ) -> dict[str, Any]:
+        pods = {pod["name"]: pod for pod in self.worker_pods()}
+        before = {
+            name: int(pods.get(name, {}).get("restartCount") or 0)
+            for name in pod_names
+            if name in pods
+        }
+        result: dict[str, Any] = {"ok": True, "pods": []}
+        if not before:
+            return {"ok": False, "error": "no worker pods to restart", "pods": []}
+
+        for name in before:
+            proc = self.worker_shell(name, "kill -9 $(pidof worker)", timeout=10)
+            result["pods"].append(
+                {
+                    "pod": name,
+                    "restartRequested": True,
+                    "returnCode": proc.returncode,
+                    "stderr": proc.stderr.strip()[-300:],
+                }
+            )
+
+        deadline = time.monotonic() + timeout
+        pending = set(before)
+        terminal: dict[str, str] = {}
+        while pending and time.monotonic() < deadline:
+            pods = {pod["name"]: pod for pod in self.worker_pods()}
+            for name in list(pending):
+                pod = pods.get(name)
+                if not pod:
+                    continue
+                if pod.get("phase") in {"Succeeded", "Failed"}:
+                    terminal[name] = pod.get("phase", "")
+                    pending.remove(name)
+                    continue
+                restart_count = int(pod.get("restartCount") or 0)
+                if pod.get("ready") and restart_count > before[name]:
+                    pending.remove(name)
+            if pending:
+                time.sleep(2)
+
+        result["ok"] = not pending and not terminal
+        result["pending"] = sorted(pending)
+        if terminal:
+            result["terminal"] = terminal
+        result["after"] = [
+            {
+                "pod": pod["name"],
+                "nodeName": pod.get("nodeName", ""),
+                "ready": pod.get("ready", False),
+                "restartCount": pod.get("restartCount", 0),
+            }
+            for pod in self.worker_pods()
+            if pod["name"] in before
+        ]
+        return result
 
     def worker_exec(
         self, pod: str, command: list[str], timeout: Union[int, float] = 60
@@ -658,7 +723,19 @@ class Kube:
 class ReadPathParser:
     @staticmethod
     def parse(lines: list[str], geesefs_path: str) -> dict[str, Any]:
-        summary: dict[str, Any] = {}
+        summary: dict[str, Any] = {
+            "summaryLines": 0,
+            "mmapAttempts": 0,
+            "mmapHits": 0,
+            "mmapMisses": 0,
+            "mmapMiB": 0.0,
+            "readIntoHits": 0,
+            "readIntoMiB": 0.0,
+            "streamHits": 0,
+            "unaryHits": 0,
+            "cloudReq": 0,
+            "cloudMiB": 0.0,
+        }
         response = {"lines": 0, "bytes": 0, "handlerMs": 0.0, "responseMs": 0.0}
         external_hit_lines = 0
         for line in lines:
@@ -672,18 +749,17 @@ class ReadPathParser:
                 response["responseMs"] += float(m.group(7))
             m = GEESEFS_SUMMARY_RE.search(line)
             if m:
-                summary = {
-                    "mmapAttempts": int(m.group(1)),
-                    "mmapHits": int(m.group(2)),
-                    "mmapMisses": int(m.group(3)),
-                    "mmapMiB": float(m.group(5)),
-                    "readIntoHits": int(m.group(7)),
-                    "readIntoMiB": float(m.group(9)),
-                    "streamHits": int(m.group(11)),
-                    "unaryHits": int(m.group(15)),
-                    "cloudReq": int(m.group(18)),
-                    "cloudMiB": float(m.group(19)),
-                }
+                summary["summaryLines"] += 1
+                summary["mmapAttempts"] += int(m.group(1))
+                summary["mmapHits"] += int(m.group(2))
+                summary["mmapMisses"] += int(m.group(3))
+                summary["mmapMiB"] += float(m.group(5))
+                summary["readIntoHits"] += int(m.group(7))
+                summary["readIntoMiB"] += float(m.group(9))
+                summary["streamHits"] += int(m.group(11))
+                summary["unaryHits"] += int(m.group(15))
+                summary["cloudReq"] += int(m.group(18))
+                summary["cloudMiB"] += float(m.group(19))
         return {
             "geesefsSummary": summary,
             "fuseResponses": response,
@@ -730,19 +806,55 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             result["ok"] = result["ok"] and entry["ok"]
         return result
 
-    def wait_ready(self, entry: dict[str, Any]) -> dict[str, Any]:
-        deadline = time.monotonic() + self.config.cache_proof_timeout_seconds
+    def wait_ready(
+        self,
+        entry: dict[str, Any],
+        *,
+        timeout_seconds: Optional[float] = None,
+        required: bool = False,
+        context: str = "cache object",
+    ) -> dict[str, Any]:
+        timeout = (
+            self.config.cache_proof_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        next_progress = started + 15
         last: dict[str, Any] = {}
         while time.monotonic() < deadline:
             last = self.object_ready(entry["sha256"], entry["size"])
             if last.get("ready"):
+                last["waitedMs"] = (time.monotonic() - started) * 1000
                 return last
+            if time.monotonic() >= next_progress:
+                log(
+                    f"Still waiting for {context} {entry['path']} "
+                    f"hash={entry['sha256'][:12]} last={json.dumps(last, sort_keys=True)[:300]}"
+                )
+                next_progress = time.monotonic() + 15
             time.sleep(1)
-        raise RuntimeError(
-            f"cache object did not become ready for {entry['path']}: {last}"
+        result = dict(last)
+        result.update(
+            {
+                "hash": entry["sha256"],
+                "ready": False,
+                "timedOut": True,
+                "waitedMs": (time.monotonic() - started) * 1000,
+                "error": f"cache object did not become ready for {entry['path']}",
+            }
         )
+        if required:
+            raise RuntimeError(f"{result['error']}: {last}")
+        log(
+            f"Cache proof not ready for {entry['path']} after {timeout:.0f}s; "
+            "continuing so read-path evidence can show whether the cache was hit"
+        )
+        return result
 
     def object_ready(self, content_hash: str, expected_size: int) -> dict[str, Any]:
+        checked = []
         for pod in self.kube.running_workers():
             candidates = self._candidate_shell_paths(pod, content_hash)
             script = (
@@ -756,6 +868,13 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s}\\n\' "$ready" "$found" "$i" "$bytes"'
             )
             proc = self.kube.worker_shell(pod["name"], script, timeout=30)
+            checked.append(
+                {
+                    "pod": pod["name"],
+                    "nodeName": pod.get("nodeName", ""),
+                    "returnCode": proc.returncode,
+                }
+            )
             if proc.returncode != 0:
                 continue
             try:
@@ -771,7 +890,12 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             )
             if proof.get("ready"):
                 return proof
-        return {"hash": content_hash, "ready": False, "exists": False}
+        return {
+            "hash": content_hash,
+            "ready": False,
+            "exists": False,
+            "checked": checked,
+        }
 
     def object_proof(self, content_hash: str) -> dict[str, Any]:
         for pod in self.kube.running_workers():
@@ -955,11 +1079,22 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 return payload, sample
             if time.monotonic() >= deadline:
                 break
-            if "No such file or directory" not in last_error:
+            if not self._retry_worker_probe(last_error):
                 break
             time.sleep(2)
 
         raise RuntimeError(last_error or "no worker hot-read probe succeeded")
+
+    @staticmethod
+    def _retry_worker_probe(message: str) -> bool:
+        retryable = (
+            "No such file or directory",
+            "unable to upgrade connection",
+            "container not found",
+            "pod is not running",
+            "not found",
+        )
+        return any(fragment in message for fragment in retryable)
 
     def direct_disk_probe(self) -> Optional[dict[str, Any]]:
         if not self.config.direct_cache_disk_probe:
@@ -1078,7 +1213,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
     def cache_hosts_snapshot(self) -> dict[str, Any]:
         redis_pod = find_redis_pod(self.config.namespace)
         if not redis_pod:
-            return {"available": False, "hosts": []}
+            return self.cache_hosts_from_worker_logs()
 
         index_key = f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
         logical_host_ids = [
@@ -1125,7 +1260,65 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                     }
                 )
                 break
-        return {"available": True, "indexKey": index_key, "hosts": hosts}
+        if hosts:
+            return {"available": True, "indexKey": index_key, "hosts": hosts}
+        return self.cache_hosts_from_worker_logs()
+
+    def cache_hosts_from_worker_logs(self) -> dict[str, Any]:
+        hosts: list[dict[str, Any]] = []
+        workers = {pod["name"]: pod for pod in self.kube.running_workers()}
+        for pod_name, pod in workers.items():
+            proc = run(
+                [
+                    "kubectl",
+                    "-n",
+                    self.config.namespace,
+                    "logs",
+                    pod_name,
+                    "-c",
+                    "worker",
+                    "--since",
+                    "30m",
+                    "--tail",
+                    "5000",
+                ],
+                check=False,
+                timeout=30,
+            )
+            if proc.returncode != 0:
+                continue
+            for line in proc.stdout.splitlines():
+                if "Registered cache host" not in line:
+                    continue
+                start = line.find("{")
+                end = line.rfind("}")
+                if start < 0 or end <= start:
+                    continue
+                try:
+                    registration = json.loads(line[start : end + 1])
+                except json.JSONDecodeError:
+                    continue
+                host_id = registration.get("logical_host_id") or registration.get("logicalHostId")
+                registration_id = registration.get("registration_id") or registration.get("registrationId")
+                addr = registration.get("addr") or ""
+                if not host_id or not registration_id or not addr:
+                    continue
+                hosts.append(
+                    {
+                        "hostId": host_id,
+                        "registrationId": registration_id,
+                        "poolName": registration.get("pool_name")
+                        or registration.get("poolName")
+                        or "",
+                        "nodeName": pod.get("nodeName", ""),
+                        "addr": addr,
+                        "privateAddr": addr,
+                        "pod": pod_name,
+                        "source": "worker_logs",
+                    }
+                )
+                break
+        return {"available": bool(hosts), "source": "worker_logs", "hosts": hosts}
 
     def candidate_dirs(self, pod: dict[str, str], content_hash: str) -> list[str]:
         node_name = pod.get("nodeName") or pod.get("hostIP") or ""
@@ -1272,13 +1465,12 @@ class SandboxRunner:
         Image, Sandbox, sandbox_stub_type = import_sdk()
         from beta9 import Volume  # noqa: WPS433
 
-        image = Image(python_version=self.config.runtime_python_version).with_envs(
-            {
-                "BETA9_CACHE_BENCH_RUN": os.getenv(
-                    "BENCH_CACHE_RUNTIME_MARKER", str(time.time_ns())
-                )
-            }
-        )
+        image = Image(python_version=self.config.runtime_python_version)
+        runtime_marker = os.getenv("BENCH_CACHE_RUNTIME_MARKER", "")
+        if self.config.force_new_image:
+            runtime_marker = runtime_marker or str(time.time_ns())
+        if runtime_marker:
+            image = image.with_envs({"BETA9_CACHE_BENCH_RUN": runtime_marker})
         volume = Volume(
             name=self.config.volume_name, mount_path=self.config.volume_mount_path
         )
@@ -1305,6 +1497,30 @@ class SandboxRunner:
         return sandbox, volume, (time.monotonic_ns() - started) / 1_000_000
 
     def run_json(
+        self, sandbox, token: str, command: list[str], label: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        errors: list[str] = []
+        for attempt in range(1, self.config.sandbox_create_retries + 2):
+            try:
+                payload, sample = self._run_json_once(sandbox, token, command, label)
+                if errors:
+                    sample["retryErrors"] = errors
+                    sample["attempt"] = attempt
+                return payload, sample
+            except Exception as exc:
+                errors.append(str(exc))
+                if (
+                    attempt > self.config.sandbox_create_retries
+                    or not self._is_transient_sandbox_run_error(exc)
+                ):
+                    raise
+                log(
+                    f"{label} sandbox attempt {attempt} failed transiently: {exc}; retrying"
+                )
+                time.sleep(min(5.0, 0.25 * attempt))
+        raise RuntimeError(f"{label} failed after retries: {errors[-1]}")
+
+    def _run_json_once(
         self, sandbox, token: str, command: list[str], label: str
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         instance = None
@@ -1349,6 +1565,17 @@ class SandboxRunner:
             sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
             sample["finishedAt"] = now_rfc3339()
 
+    @staticmethod
+    def _is_transient_sandbox_run_error(exc: Exception) -> bool:
+        message = str(exc)
+        transient_fragments = (
+            "Unavailable",
+            "connection refused",
+            "error reading from server",
+            "EOF",
+        )
+        return any(fragment in message for fragment in transient_fragments)
+
     def _cleanup_sandbox_bounded(self, instance, sample: dict[str, Any]) -> None:
         cleanup_error: list[str] = []
 
@@ -1368,9 +1595,15 @@ class SandboxRunner:
             sample["cleanupError"] = cleanup_error[-1]
 
     def sandbox_dd(
-        self, sandbox, token: str, root: str, entry: dict[str, Any]
-    ) -> dict[str, Any]:
-        return self.run_json(
+        self,
+        sandbox,
+        token: str,
+        root: str,
+        entry: dict[str, Any],
+        geesefs_path: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        log_since = now_rfc3339()
+        payload, sample = self.run_json(
             sandbox,
             token,
             [
@@ -1385,7 +1618,13 @@ class SandboxRunner:
                 self.config.worker_dd_block_size,
             ],
             "sandbox-dd",
-        )[0]
+        )
+        if self.config.read_path_log_wait_seconds > 0:
+            time.sleep(self.config.read_path_log_wait_seconds)
+        sample["readPathProof"] = ReadPathParser.parse(
+            self.kube.worker_logs_since(log_since), geesefs_path
+        )
+        return payload, sample
 
     def hot_read(
         self, sandbox, token: str, root: str, entry: dict[str, Any], geesefs_path: str
@@ -1495,6 +1734,15 @@ class Reporter:
         )
         self._write_markdown(report)
 
+    @staticmethod
+    def _cache_path_label(proof: dict[str, Any]) -> str:
+        summary = (proof or {}).get("geesefsSummary") or {}
+        return (
+            f"mmap={summary.get('mmapHits', 0)} "
+            f"read_into={summary.get('readIntoHits', 0)} "
+            f"cloud={summary.get('cloudReq', 0)}"
+        )
+
     def validate(self, report: dict[str, Any]) -> list[str]:
         failures = []
         for row in report["rows"]:
@@ -1510,13 +1758,25 @@ class Reporter:
                 failures.append(
                     f"{row['accessType']}:{row['sizeMiB']}MiB hot file-read {read.get('fileReadMBps', 0):.2f} MB/s below {self.config.min_hot_file_read_mbps:.2f} MB/s"
                 )
-            read_path_proof = row.get("readPathProof") or {}
-            summary = read_path_proof.get("geesefsSummary") or {}
-            external_page_hits = int(read_path_proof.get("externalPageHitLines") or 0)
+            read_path_proofs = [
+                proof
+                for proof in (
+                    row.get("readPathProof"),
+                    row.get("ddReadPathProof"),
+                )
+                if proof
+            ]
+            external_page_hits = sum(
+                int(proof.get("externalPageHitLines") or 0)
+                for proof in read_path_proofs
+            )
+            cache_hits = 0
+            for proof in read_path_proofs:
+                summary = proof.get("geesefsSummary") or {}
+                cache_hits += int(summary.get("mmapHits") or 0)
+                cache_hits += int(summary.get("readIntoHits") or 0)
             if self.config.require_read_path_proof and (
-                summary.get("mmapHits", 0) <= 0
-                and summary.get("readIntoHits", 0) <= 0
-                and external_page_hits <= 0
+                cache_hits <= 0 and external_page_hits <= 0
             ):
                 failures.append(
                     f"{row['accessType']}:{row['sizeMiB']}MiB did not prove geesefs external-cache hits"
@@ -1559,19 +1819,25 @@ class Reporter:
             f"- Namespace: `{report['config']['namespace']}`",
             f"- Volume: `{report['config']['volumeName']}` mounted at `/{report['config']['volumeMountPath']}`",
             "",
-            "| Access | Size | Hot MB/s | File-read MB/s | Read Method | SHA OK | Remote Object | Cache Path | Worker dd MB/s | Sandbox dd MB/s | Remote MB/s | Direct Disk MB/s |",
-            "| --- | ---: | ---: | ---: | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |",
+            "| Access | Size | Hot MB/s | File-read MB/s | Read Method | SHA OK | Cache Ready | Remote Object | Cache Path | Worker dd MB/s | Sandbox dd MB/s | Remote MB/s | Direct Disk MB/s |",
+            "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |",
         ]
         direct = report.get("directDiskProbe") or {}
         for row in report["rows"]:
             read = row.get("hotRead") or {}
-            summary = (row.get("readPathProof") or {}).get("geesefsSummary") or {}
-            cache_path = f"mmap={summary.get('mmapHits', 0)} read_into={summary.get('readIntoHits', 0)} cloud={summary.get('cloudReq', 0)}"
+            cache_path = (
+                "hot("
+                + self._cache_path_label(row.get("readPathProof") or {})
+                + ") dd("
+                + self._cache_path_label(row.get("ddReadPathProof") or {})
+                + ")"
+            )
             lines.append(
                 "| "
                 f"{row['accessType']} | {row['sizeMiB']} MiB | "
                 f"{read.get('mbps', 0):.2f} | {read.get('fileReadMBps', 0):.2f} | "
                 f"`{read.get('timing', {}).get('readMethod', '')}` | {row.get('shaOK', False)} | "
+                f"{(row.get('cacheReady') or {}).get('ready', False)} | "
                 f"{(row.get('remoteObject') or {}).get('ok', False)} | "
                 f"`{cache_path}` | "
                 f"{(row.get('workerDD') or {}).get('mbps', 0):.2f} | "
@@ -1644,18 +1910,42 @@ class CacheBenchmark:
             ],
             "prepare-volume",
         )
+        prepare_cache_proofs = []
+        worker_restart_after_prepare = None
         if self.config.reset_workers_after_prepare:
             log("Waiting for embedded cache page files before worker reset")
             for entry in manifest["files"]:
-                self.cache.wait_ready(entry)
-            log(
-                "Deleting worker jobs after write prepare to clear geesefs memory state before strict cache reads"
+                prepare_cache_proofs.append(
+                    {
+                        "path": entry["path"],
+                        "proof": self.cache.wait_ready(
+                            entry,
+                            timeout_seconds=min(
+                                120, self.config.cache_proof_timeout_seconds
+                            ),
+                            context="pre-reset cache proof",
+                        ),
+                    }
+                )
+            pods_to_restart = sorted(
+                {
+                    proof["proof"].get("pod", "")
+                    for proof in prepare_cache_proofs
+                    if proof.get("proof", {}).get("ready")
+                    and proof.get("proof", {}).get("pod")
+                }
             )
-            delete_workers(self.config.namespace)
-            self.kube.wait_running_workers(
-                min_count=1,
+            log(
+                "Restarting worker container(s) after write prepare to clear in-memory state while preserving node-local disk cache"
+            )
+            worker_restart_after_prepare = self.kube.restart_worker_pods(
+                pods_to_restart,
                 timeout=max(300, self.config.sandbox_ready_timeout_seconds),
             )
+            if not worker_restart_after_prepare.get("ok"):
+                raise RuntimeError(
+                    f"failed to restart cache worker pod(s): {worker_restart_after_prepare}"
+                )
         direct_probe = self.cache.direct_disk_probe()
 
         self._print_header()
@@ -1680,6 +1970,8 @@ class CacheBenchmark:
                 "prepareMs": prepare_ms,
             },
             "volumePrepare": prepare_payload,
+            "prepareCacheProofs": prepare_cache_proofs,
+            "workerRestartAfterPrepare": worker_restart_after_prepare,
             "directDiskProbe": direct_probe,
             "cleanupBefore": cleanup_before,
             "cleanupAfter": cleanup_after,
@@ -1748,7 +2040,11 @@ class CacheBenchmark:
         log(
             f"Waiting for embedded cache page files for {entry['path']} hash={entry['sha256']}"
         )
-        ready = self.cache.wait_ready(entry)
+        ready = self.cache.wait_ready(
+            entry,
+            timeout_seconds=min(120, self.config.cache_proof_timeout_seconds),
+            context="workload cache proof",
+        )
         eviction = self.cache.evict_cache_pages(entry)
         mounted_eviction = self.cache.evict_mounted_file(worker_path, entry["size"])
 
@@ -1773,13 +2069,16 @@ class CacheBenchmark:
             self.cache.evict_cache_pages(entry)
             self.cache.evict_mounted_file(worker_path, entry["size"])
             worker_dd = self.cache.worker_dd(worker_path, entry["size"])
-        sandbox_dd = (
-            self.runner.sandbox_dd(
-                sandbox, token, paths.root_for_access(access_type), entry
+        sandbox_dd = None
+        sandbox_dd_sample = None
+        if self.config.sandbox_dd_reads and access_type == "volume_mount":
+            sandbox_dd, sandbox_dd_sample = self.runner.sandbox_dd(
+                sandbox,
+                token,
+                paths.root_for_access(access_type),
+                entry,
+                geesefs_path,
             )
-            if self.config.sandbox_dd_reads and access_type == "volume_mount"
-            else None
-        )
         remote = (
             self.cache.remote_read(entry, cas_proof)
             if self.config.require_remote_read
@@ -1806,6 +2105,8 @@ class CacheBenchmark:
             ),
             "workerDD": worker_dd,
             "sandboxDD": sandbox_dd,
+            "sandboxDDSample": sandbox_dd_sample,
+            "ddReadPathProof": (sandbox_dd_sample or {}).get("readPathProof"),
             "remoteRead": remote,
         }
         self._print_row(row)
@@ -1973,6 +2274,9 @@ class CacheBenchmark:
             "cacheMountPath": self.config.cache_mount_path,
             "cachePoolName": self.config.cache_pool_name,
             "readMethod": self.config.read_method,
+            "sandboxCpu": self.config.sandbox_cpu,
+            "sandboxMemory": self.config.sandbox_memory,
+            "forceNewImage": self.config.force_new_image,
         }
 
     @staticmethod

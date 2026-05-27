@@ -207,6 +207,23 @@ func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *
 	require.False(t, registry.locks["store-lock:test:/source"])
 }
 
+func TestWithStoreFromContentLockIgnoresAlreadyReleasedLock(t *testing.T) {
+	registry := &lockNotHeldOnUnlockRegistry{MockCacheMetadataStore: NewMockCacheMetadataStore()}
+	client := &Client{
+		ctx:           context.Background(),
+		locality:      "test",
+		metadataStore: registry,
+	}
+
+	hash, err := client.withStoreFromContentLock(context.Background(), "/source", true, func() (string, error) {
+		return "hash", nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hash", hash)
+	require.False(t, registry.locks["store-lock:test:/source"])
+}
+
 func TestAddHostClearsCachedRoutingForReplacedHost(t *testing.T) {
 	client := &Client{
 		ctx:          context.Background(),
@@ -299,6 +316,15 @@ func (r *failFirstUnlockRegistry) RemoveStoreFromContentLock(ctx context.Context
 		return errors.New("unlock failed")
 	}
 	return r.MockCacheMetadataStore.RemoveStoreFromContentLock(ctx, locality, sourcePath)
+}
+
+type lockNotHeldOnUnlockRegistry struct {
+	*MockCacheMetadataStore
+}
+
+func (r *lockNotHeldOnUnlockRegistry) RemoveStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
+	_ = r.MockCacheMetadataStore.RemoveStoreFromContentLock(ctx, locality, sourcePath)
+	return errors.New("redislock: lock not held")
 }
 
 type failOnGetFsNodeMetadataStore struct {
