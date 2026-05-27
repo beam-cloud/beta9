@@ -479,13 +479,6 @@ func (c *Client) removeLocalHostCache(hash string) {
 	delete(c.localHostCache, hash)
 }
 
-func sameHostEndpoint(a *Host, b *Host) bool {
-	if a == nil || b == nil {
-		return false
-	}
-	return a.HostId == b.HostId && a.Addr == b.Addr && a.PrivateAddr == b.PrivateAddr
-}
-
 func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 	if c.hostDirectory == nil || c.hostMap == nil {
 		return ErrHostNotFound
@@ -510,43 +503,51 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 	}
 
 	routable := false
-	for _, host := range hosts {
-		if host == nil || host.HostId == "" {
+	for _, group := range cacheHostCandidateGroups(hosts) {
+		if group.hostID == "" {
 			continue
 		}
 
-		verified := host
-		if c.discoveryClient != nil {
-			hostState, err := c.discoveryClient.GetHostState(refreshCtx, host)
-			if err != nil {
-				continue
-			}
-			verified = hostState
-		}
-		if verified == nil || verified.HostId == "" {
-			continue
-		}
-
-		known := c.hostMap.Get(verified.HostId)
-		c.mu.RLock()
-		_, clientExists := c.grpcClients[verified.HostId]
-		c.mu.RUnlock()
-		if known != nil && sameHostEndpoint(known, verified) && !clientExists {
-			if err := c.addHost(verified); err != nil {
-				continue
-			}
+		if c.keepExistingCacheHost(group) {
 			routable = true
 			continue
 		}
 
-		c.hostMap.Set(verified)
-		routable = true
+		if host, ok := group.firstReachable(refreshCtx, c.verifyCacheHost); ok {
+			c.hostMap.Set(host)
+			routable = true
+		}
 	}
 
 	if !routable && len(c.hostMap.GetAll()) == 0 {
 		return ErrHostNotFound
 	}
 	return nil
+}
+
+func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
+	known := c.hostMap.Get(group.hostID)
+	if !group.containsEndpoint(known) {
+		return false
+	}
+	if c.hasCacheClient(known.HostId) {
+		return true
+	}
+	return c.addHost(known) == nil
+}
+
+func (c *Client) hasCacheClient(hostID string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, exists := c.grpcClients[hostID]
+	return exists
+}
+
+func (c *Client) verifyCacheHost(ctx context.Context, host *Host) (*Host, error) {
+	if c.discoveryClient == nil {
+		return host, nil
+	}
+	return c.discoveryClient.GetHostState(ctx, host)
 }
 
 func (c *Client) getContentAttempts(length int64) int {

@@ -899,6 +899,12 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
+	if s.cacheManager != nil {
+		if err := s.cacheManager.Drain(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to drain cache registration: %v", err))
+		}
+	}
+
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
 

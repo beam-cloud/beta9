@@ -52,6 +52,7 @@ type Server struct {
 	grpcServer    *grpc.Server
 	listener      net.Listener
 	s3ClientCache sync.Map
+	draining      atomic.Bool
 	closeOnce     sync.Once
 }
 
@@ -340,9 +341,7 @@ func (cs *Server) StartServer(port uint) error {
 
 func (cs *Server) Close() error {
 	cs.closeOnce.Do(func() {
-		if cs.cancel != nil {
-			cs.cancel()
-		}
+		cs.Drain()
 		if cs.grpcServer != nil {
 			stopped := make(chan struct{})
 			go func() {
@@ -355,6 +354,9 @@ func (cs *Server) Close() error {
 				cs.grpcServer.Stop()
 			}
 		}
+		if cs.cancel != nil {
+			cs.cancel()
+		}
 		if cs.listener != nil {
 			_ = cs.listener.Close()
 		}
@@ -366,7 +368,23 @@ func (cs *Server) Close() error {
 	return nil
 }
 
+func (cs *Server) Drain() {
+	if cs != nil {
+		cs.draining.Store(true)
+	}
+}
+
+func (cs *Server) rejectIfDraining() error {
+	if cs != nil && cs.draining.Load() {
+		return status.Error(codes.Unavailable, "cache server is draining")
+	}
+	return nil
+}
+
 func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequest) (*proto.CacheGetContentResponse, error) {
+	if err := cs.rejectIfDraining(); err != nil {
+		return nil, err
+	}
 	atomic.AddInt64(&cachePathStats.serverGRPCGetRequests, 1)
 	if req == nil {
 		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
@@ -401,11 +419,17 @@ func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequ
 }
 
 func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequest) (*proto.CacheHasContentResponse, error) {
+	if err := cs.rejectIfDraining(); err != nil {
+		return nil, err
+	}
 	exists := cs.cas.Exists(req.Hash)
 	return &proto.CacheHasContentResponse{Exists: exists, Ok: true}, nil
 }
 
 func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream proto.Cache_GetContentStreamServer) error {
+	if err := cs.rejectIfDraining(); err != nil {
+		return err
+	}
 	atomic.AddInt64(&cachePathStats.serverStreamRequests, 1)
 	if req == nil {
 		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
@@ -644,6 +668,9 @@ func (cs *Server) storeContentInCacheFS(ctx context.Context, path string, hash s
 }
 
 func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
+	if err := cs.rejectIfDraining(); err != nil {
+		return err
+	}
 	ctx := stream.Context()
 
 	Logger.Debugf("StoreContent[ACK]")
@@ -724,6 +751,9 @@ func (cs *Server) usagePct() float64 {
 }
 
 func (cs *Server) GetState(ctx context.Context, req *proto.CacheGetStateRequest) (*proto.CacheGetStateResponse, error) {
+	if err := cs.rejectIfDraining(); err != nil {
+		return nil, err
+	}
 	return &proto.CacheGetStateResponse{
 		Version:          Version,
 		PrivateIpAddr:    cs.privateIpAddr,
@@ -776,6 +806,13 @@ func (cs *Server) s3ClientForSource(source *proto.CacheSource) (*S3Client, error
 }
 
 func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
+	if err := cs.rejectIfDraining(); err != nil {
+		return nil, err
+	}
+	return cs.storeContentFromSource(ctx, req)
+}
+
+func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
 	if req == nil || req.Source == nil {
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: "source is required"}, nil
 	}
@@ -849,6 +886,9 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 }
 
 func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
+	if err := cs.rejectIfDraining(); err != nil {
+		return nil, err
+	}
 	if req == nil || req.Source == nil {
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, ErrorMsg: "source is required"}, nil
 	}
@@ -890,7 +930,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		}
 	}()
 
-	storeContentFromSourceResp, err := cs.StoreContentFromSource(storeContext, req)
+	storeContentFromSourceResp, err := cs.storeContentFromSource(storeContext, req)
 	if err != nil {
 		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: err.Error()}, nil

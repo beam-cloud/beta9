@@ -49,23 +49,26 @@ const (
 )
 
 type WorkerCacheManager struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	config        types.AppConfig
-	poolConfig    types.WorkerPoolConfig
-	workerRepo    pb.WorkerRepositoryServiceClient
-	workerID      string
-	instanceID    string
-	poolName      string
-	podAddr       string
-	nodeID        string
-	locality      string
-	metadataStore cache.CacheMetadataStore
-	client        *cache.Client
-	server        *cache.Server
-	registration  *gatewayCacheRegistration
-	mu            sync.Mutex
-	wg            sync.WaitGroup
+	ctx                context.Context
+	cancel             context.CancelFunc
+	config             types.AppConfig
+	poolConfig         types.WorkerPoolConfig
+	workerRepo         pb.WorkerRepositoryServiceClient
+	workerID           string
+	instanceID         string
+	poolName           string
+	podAddr            string
+	nodeID             string
+	locality           string
+	metadataStore      cache.CacheMetadataStore
+	client             *cache.Client
+	server             *cache.Server
+	registration       *gatewayCacheRegistration
+	registrationCancel context.CancelFunc
+	mu                 sync.Mutex
+	wg                 sync.WaitGroup
+	drainOnce          sync.Once
+	drainErr           error
 }
 
 func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, workerRepo pb.WorkerRepositoryServiceClient, workerID, poolName, podAddr string) *WorkerCacheManager {
@@ -114,10 +117,12 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 		return nil, err
 	}
 	m.registration = registration
+	registrationCtx, registrationCancel := context.WithCancel(m.ctx)
+	m.registrationCancel = registrationCancel
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		runGatewayCacheRegistration(m.ctx, registration)
+		runGatewayCacheRegistration(registrationCtx, registration)
 	}()
 
 	hostDirectory := &gatewayCacheHostDirectory{
@@ -126,7 +131,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
-		_ = registration.unregister(context.Background())
+		_ = m.Drain()
 		_ = server.Close()
 		m.cancel()
 		return nil, err
@@ -163,18 +168,15 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 }
 
 func (m *WorkerCacheManager) Close() error {
+	var errs error
+	errs = errors.Join(errs, m.Drain())
 	m.cancel()
 
-	var errs error
 	m.mu.Lock()
 	server := m.server
 	client := m.client
-	registration := m.registration
 	m.mu.Unlock()
 
-	if registration != nil {
-		errs = errors.Join(errs, registration.unregister(context.Background()))
-	}
 	if client != nil {
 		errs = errors.Join(errs, client.Cleanup())
 	}
@@ -184,6 +186,34 @@ func (m *WorkerCacheManager) Close() error {
 
 	m.wg.Wait()
 	return errs
+}
+
+func (m *WorkerCacheManager) Drain() error {
+	if m == nil {
+		return nil
+	}
+
+	m.drainOnce.Do(func() {
+		m.mu.Lock()
+		cancel := m.registrationCancel
+		registration := m.registration
+		server := m.server
+		m.mu.Unlock()
+
+		if server != nil {
+			server.Drain()
+		}
+		if cancel != nil {
+			cancel()
+		}
+		m.wg.Wait()
+
+		if registration != nil {
+			m.drainErr = registration.unregister(context.Background())
+		}
+	})
+
+	return m.drainErr
 }
 
 func (m *WorkerCacheManager) enabled() bool {

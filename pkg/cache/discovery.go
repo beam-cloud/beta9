@@ -18,7 +18,6 @@ type DiscoveryClient struct {
 	hostMap       *HostMap
 	hostDirectory HostDirectory
 	locality      string
-	mu            sync.Mutex
 }
 
 func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, hostDirectory HostDirectory, locality string) *DiscoveryClient {
@@ -90,8 +89,9 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 		return nil, err
 	}
 
+	selectedHosts := []*Host{}
+	hostGroups := cacheHostCandidateGroups(hosts)
 	var wg sync.WaitGroup
-	filteredHosts := []*Host{}
 	mu := sync.Mutex{}
 	maxConcurrency := d.cfg.MaxDiscoveryConcurrency
 	if maxConcurrency <= 0 {
@@ -99,14 +99,13 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	}
 	sem := make(chan struct{}, maxConcurrency)
 
-	for _, host := range hosts {
-		// Don't try to get the state on peers we're already aware of
-		if existing := d.hostMap.Get(host.HostId); existing != nil && existing.Addr == host.Addr && existing.PrivateAddr == host.PrivateAddr {
+	for _, group := range hostGroups {
+		if group.containsEndpoint(d.hostMap.Get(group.hostID)) {
 			continue
 		}
 
 		wg.Add(1)
-		go func(host *Host) {
+		go func(group cacheHostCandidateGroup) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -115,22 +114,86 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 				return
 			}
 
-			hostState, err := d.GetHostState(ctx, host)
-			if err != nil {
+			host, ok := group.firstReachable(ctx, d.GetHostState)
+			if !ok {
 				return
 			}
 
 			mu.Lock()
-			filteredHosts = append(filteredHosts, hostState)
+			selectedHosts = append(selectedHosts, host)
 			mu.Unlock()
 
-			Logger.Debugf("Added host with private address to map: %s", hostState.PrivateAddr)
-		}(host)
-
+			Logger.Debugf("Added host with private address to map: %s", host.PrivateAddr)
+		}(group)
 	}
 
 	wg.Wait()
-	return filteredHosts, nil
+	return selectedHosts, nil
+}
+
+type cacheHostCandidateGroup struct {
+	hostID     string
+	candidates []*Host
+}
+
+type cacheHostVerifier func(context.Context, *Host) (*Host, error)
+
+func cacheHostCandidateGroups(hosts []*Host) []cacheHostCandidateGroup {
+	groupsByID := make(map[string][]*Host, len(hosts))
+	orderedIDs := make([]string, 0, len(hosts))
+
+	for _, host := range hosts {
+		if host == nil || host.HostId == "" {
+			continue
+		}
+		if _, exists := groupsByID[host.HostId]; !exists {
+			orderedIDs = append(orderedIDs, host.HostId)
+		}
+		groupsByID[host.HostId] = append(groupsByID[host.HostId], host)
+	}
+
+	groups := make([]cacheHostCandidateGroup, 0, len(orderedIDs))
+	for _, hostID := range orderedIDs {
+		groups = append(groups, cacheHostCandidateGroup{
+			hostID:     hostID,
+			candidates: groupsByID[hostID],
+		})
+	}
+	return groups
+}
+
+func (g cacheHostCandidateGroup) containsEndpoint(host *Host) bool {
+	if host == nil {
+		return false
+	}
+	for _, candidate := range g.candidates {
+		if sameCacheHostEndpoint(candidate, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g cacheHostCandidateGroup) firstReachable(ctx context.Context, verify cacheHostVerifier) (*Host, bool) {
+	for _, candidate := range g.candidates {
+		if candidate == nil || candidate.HostId == "" {
+			continue
+		}
+
+		host, err := verify(ctx, candidate)
+		if err != nil || host == nil || host.HostId == "" {
+			continue
+		}
+		return host, true
+	}
+	return nil, false
+}
+
+func sameCacheHostEndpoint(a *Host, b *Host) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.HostId == b.HostId && a.Addr == b.Addr && a.PrivateAddr == b.PrivateAddr
 }
 
 // GetHostState attempts to connect to the gRPC service and verifies its availability

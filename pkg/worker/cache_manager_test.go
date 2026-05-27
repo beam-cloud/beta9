@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -58,6 +59,27 @@ func TestWorkerCacheManagerDisabledWhenPoolDiskCacheDisabled(t *testing.T) {
 	}
 
 	require.False(t, manager.enabled())
+}
+
+func TestWorkerCacheManagerDrainStopsRegistrationLoopOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelCount := 0
+	manager := &WorkerCacheManager{
+		registrationCancel: func() {
+			cancelCount++
+			cancel()
+		},
+	}
+
+	manager.wg.Add(1)
+	go func() {
+		defer manager.wg.Done()
+		<-ctx.Done()
+	}()
+
+	require.NoError(t, manager.Drain())
+	require.NoError(t, manager.Drain())
+	require.Equal(t, 1, cancelCount)
 }
 
 func TestCacheLogicalHostIDDeduplicatesSharedNodeCachePath(t *testing.T) {

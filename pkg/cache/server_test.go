@@ -5,8 +5,11 @@ import (
 	"net"
 	"testing"
 
+	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNormalizeAdvertiseHostForJoinHostPort(t *testing.T) {
@@ -25,6 +28,19 @@ func TestNormalizeAdvertiseHostLeavesDNSHostUnchanged(t *testing.T) {
 	host := normalizeAdvertiseHost("machine-abc123.tailnet.example")
 	require.Equal(t, "machine-abc123.tailnet.example", host)
 	require.Equal(t, "machine-abc123.tailnet.example:2049", net.JoinHostPort(host, "2049"))
+}
+
+func TestServerDrainRejectsNewRPCs(t *testing.T) {
+	server := &Server{}
+	server.Drain()
+
+	_, err := server.GetState(context.Background(), &proto.CacheGetStateRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+
+	_, err = server.GetContent(context.Background(), &proto.CacheGetContentRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.Unavailable, status.Code(err))
 }
 
 func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {
