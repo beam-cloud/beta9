@@ -29,6 +29,7 @@ const (
 	defaultGeeseFSMaxReadBytes     = 1048576
 	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
 	defaultGeeseFSHashMinFileKb    = 1024
+	defaultGeeseFSMinMemoryLimitMB = 128
 )
 
 type GeeseStorage struct {
@@ -155,7 +156,10 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.MaxParallelParts = int(s.config.MaxParallelParts)
 	flags.FsyncOnClose = s.config.FsyncOnClose
 	flags.DebugMain = s.config.Debug
-	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
+	effectiveMemoryLimitMB := effectiveGeeseMemoryLimitMB(s.config.MemoryLimit, os.Getenv("MEMORY_LIMIT"))
+	if effectiveMemoryLimitMB > 0 {
+		flags.MemoryLimit = uint64(effectiveMemoryLimitMB) * 1024 * 1024
+	}
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
 	if s.config.HTTPTimeout > 0 {
@@ -210,7 +214,8 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 	log.Debug().
 		Str("local_path", localPath).
-		Int64("memory_limit_mb", s.config.MemoryLimit).
+		Int64("configured_memory_limit_mb", s.config.MemoryLimit).
+		Int64("effective_memory_limit_mb", effectiveMemoryLimitMB).
 		Int("max_flushers", int(flags.MaxFlushers)).
 		Int("max_parallel_parts", flags.MaxParallelParts).
 		Dur("http_timeout", flags.HTTPTimeout).
@@ -270,6 +275,59 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+func effectiveGeeseMemoryLimitMB(configuredLimitMB int64, workerLimitText string) int64 {
+	workerLimitMB := parseWorkerMemoryLimitMB(workerLimitText)
+	if workerLimitMB <= 0 {
+		return configuredLimitMB
+	}
+
+	maxGeeseMemoryMB := workerLimitMB / 2
+	if maxGeeseMemoryMB < defaultGeeseFSMinMemoryLimitMB {
+		maxGeeseMemoryMB = defaultGeeseFSMinMemoryLimitMB
+		if maxGeeseMemoryMB > workerLimitMB {
+			maxGeeseMemoryMB = workerLimitMB
+		}
+	}
+
+	if configuredLimitMB <= 0 || configuredLimitMB > maxGeeseMemoryMB {
+		return maxGeeseMemoryMB
+	}
+	return configuredLimitMB
+}
+
+func parseWorkerMemoryLimitMB(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+
+	lower := strings.ToLower(value)
+	multiplier := int64(1)
+	switch {
+	case strings.HasSuffix(lower, "gib"):
+		multiplier = 1024
+		lower = strings.TrimSuffix(lower, "gib")
+	case strings.HasSuffix(lower, "gi"):
+		multiplier = 1024
+		lower = strings.TrimSuffix(lower, "gi")
+	case strings.HasSuffix(lower, "gb"):
+		multiplier = 1000
+		lower = strings.TrimSuffix(lower, "gb")
+	case strings.HasSuffix(lower, "mi"):
+		lower = strings.TrimSuffix(lower, "mi")
+	case strings.HasSuffix(lower, "mib"):
+		lower = strings.TrimSuffix(lower, "mib")
+	case strings.HasSuffix(lower, "mb"):
+		lower = strings.TrimSuffix(lower, "mb")
+	}
+
+	limit, err := strconv.ParseInt(strings.TrimSpace(lower), 10, 64)
+	if err != nil || limit <= 0 {
+		return 0
+	}
+	return limit * multiplier
 }
 
 func (s *GeeseStorage) Mode() string {

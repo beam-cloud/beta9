@@ -69,6 +69,16 @@ GEESEFS_SUMMARY_RE = re.compile(
 GEESEFS_BUFFER_RE = re.compile(
     r"geesefs read path summary: .*?buffer_hit=(\d+) buffer=([0-9.]+)MiB"
 )
+CACHE_SUMMARY_RE = re.compile(
+    r"cache read path summary: .*?"
+    r"client\(read_into=(\d+) ([0-9.]+)MiB local_hit=(\d+) local_miss=(\d+) "
+    r"raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"grpc_hit=(\d+) grpc_miss=(\d+) grpc_err=(\d+)\).*?"
+    r"client_local_page_file\(req=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"server\(grpc_req=(\d+) grpc_hit=(\d+) grpc_miss=(\d+) ([0-9.]+)MiB "
+    r"stream_req=(\d+) stream_chunks=(\d+) ([0-9.]+)MiB stream_err=(\d+) "
+    r"raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+)\)"
+)
 FUSE_RESPONSE_RE = re.compile(
     r"geesefs fuse read response complete: .*?"
     r"path=\"([^\"]+)\" hash=\"([^\"]*)\" offset=(\d+) size=(\d+) bytes=(\d+) .*?"
@@ -741,9 +751,45 @@ class ReadPathParser:
             "cloudReq": 0,
             "cloudMiB": 0.0,
         }
+        cache_summary: dict[str, Any] = {
+            "summaryLines": 0,
+            "clientLocalHits": 0,
+            "clientRawHits": 0,
+            "clientRawMisses": 0,
+            "clientRawErrors": 0,
+            "clientGRPCHits": 0,
+            "clientGRPCMisses": 0,
+            "clientGRPCErrors": 0,
+            "clientLocalPageFileHits": 0,
+            "serverRawRequests": 0,
+            "serverRawSendfile": 0,
+            "serverRawCopy": 0,
+            "serverRawReadAt": 0,
+            "serverRawErrors": 0,
+            "serverGRPCHits": 0,
+            "serverStreamChunks": 0,
+        }
         response = {"lines": 0, "bytes": 0, "handlerMs": 0.0, "responseMs": 0.0}
         external_hit_lines = 0
         for line in lines:
+            m = CACHE_SUMMARY_RE.search(line)
+            if m:
+                cache_summary["summaryLines"] += 1
+                cache_summary["clientLocalHits"] += int(m.group(3))
+                cache_summary["clientRawHits"] += int(m.group(5))
+                cache_summary["clientRawMisses"] += int(m.group(6))
+                cache_summary["clientRawErrors"] += int(m.group(7))
+                cache_summary["clientGRPCHits"] += int(m.group(8))
+                cache_summary["clientGRPCMisses"] += int(m.group(9))
+                cache_summary["clientGRPCErrors"] += int(m.group(10))
+                cache_summary["clientLocalPageFileHits"] += int(m.group(12))
+                cache_summary["serverGRPCHits"] += int(m.group(16))
+                cache_summary["serverStreamChunks"] += int(m.group(20))
+                cache_summary["serverRawRequests"] += int(m.group(22))
+                cache_summary["serverRawSendfile"] += int(m.group(23))
+                cache_summary["serverRawCopy"] += int(m.group(24))
+                cache_summary["serverRawReadAt"] += int(m.group(25))
+                cache_summary["serverRawErrors"] += int(m.group(28))
             if "geesefs external page hit" in line and geesefs_path in line:
                 external_hit_lines += 1
             m = FUSE_RESPONSE_RE.search(line)
@@ -771,6 +817,7 @@ class ReadPathParser:
                 summary["cloudMiB"] += float(m.group(19))
         return {
             "geesefsSummary": summary,
+            "cacheSummary": cache_summary,
             "fuseResponses": response,
             "externalPageHitLines": external_hit_lines,
         }
@@ -1752,10 +1799,14 @@ class Reporter:
     @staticmethod
     def _cache_path_label(proof: dict[str, Any]) -> str:
         summary = (proof or {}).get("geesefsSummary") or {}
+        cache_summary = (proof or {}).get("cacheSummary") or {}
         return (
             f"mmap={summary.get('mmapHits', 0)} "
             f"read_into={summary.get('readIntoHits', 0)} "
             f"buffer={summary.get('bufferHits', 0)} "
+            f"local={cache_summary.get('clientLocalHits', 0)} "
+            f"raw={cache_summary.get('clientRawHits', 0)} "
+            f"grpc={cache_summary.get('clientGRPCHits', 0)} "
             f"cloud={summary.get('cloudReq', 0)}"
         )
 

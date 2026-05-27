@@ -7,8 +7,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -263,6 +265,12 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 				return
 			}
 			if _, err := io.CopyN(conn, file, copyLength); err != nil {
+				if isRawReadClientAbort(err) {
+					Logger.Debugf("raw cache read client aborted: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
+					_ = file.Close()
+					_ = conn.Close()
+					return
+				}
 				Logger.Warnf("raw cache read copy failed: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
 				_ = file.Close()
 				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
@@ -298,6 +306,17 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		return
 	}
 	atomic.AddInt64(&cachePathStats.serverRawReadAtHits, 1)
+}
+
+func isRawReadClientAbort(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset by peer")
 }
 
 func (cs *Server) rawReadPageRegions(req rawReadRequest) ([]rawReadPageRegion, bool, error) {

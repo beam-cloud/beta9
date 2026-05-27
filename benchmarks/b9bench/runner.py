@@ -377,18 +377,27 @@ class CacheSuiteProbe(ScriptProbeBase):
             else row.get("readPathProof")
         ) or {}
         summary = read_path.get("geesefsSummary") or {}
+        cache_summary = read_path.get("cacheSummary") or {}
         cloud_req = int(summary.get("cloudReq") or 0)
         external_page_hits = int(read_path.get("externalPageHitLines") or 0)
+        raw_hits = int(cache_summary.get("clientRawHits") or 0)
+        grpc_hits = int(cache_summary.get("clientGRPCHits") or 0)
+        local_hits = int(cache_summary.get("clientLocalHits") or 0)
         embedded_disk_hit = bool(
             summary.get("mmapHits", 0)
             or summary.get("readIntoHits", 0)
             or external_page_hits
+            or local_hits
         )
         buffer_hit = bool(summary.get("bufferHits", 0))
-        cache_hit = embedded_disk_hit or buffer_hit
+        cache_hit = embedded_disk_hit or buffer_hit or raw_hits > 0 or grpc_hits > 0
         cache_source = "unknown"
         if embedded_disk_hit:
             cache_source = "embedded_disk"
+        elif raw_hits > 0:
+            cache_source = "raw_remote"
+        elif grpc_hits > 0:
+            cache_source = "grpc_remote"
         elif buffer_hit:
             cache_source = "geesefs_buffer"
         elif cloud_req > 0:
@@ -400,6 +409,9 @@ class CacheSuiteProbe(ScriptProbeBase):
             "cloud_read": cloud_req > 0,
             "external_page_hits": external_page_hits,
             "buffer_hits": int(summary.get("bufferHits") or 0),
+            "raw_remote_hits": raw_hits,
+            "grpc_remote_hits": grpc_hits,
+            "local_cache_hits": local_hits,
             "hash": row.get("hash"),
             "artifact_output": str(self.sink.artifact_dir / f"{slug(suite.name)}.json"),
         }
