@@ -12,49 +12,57 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-from startup import (
-    API_PREFIX,
-    api_url,
-    authorize,
-    cluster_snapshot,
-    delete_workers,
-    env_bool,
-    env_float,
-    env_int,
-    find_redis_pod,
-    format_ms,
-    grpc_addr,
-    http_json,
-    install_overlay,
-    load_cached_token,
-    log,
-    percentile,
-    prepare_local_image,
-    require_tools,
-    redis_hgetall,
-    save_cached_token,
-    start_grpc_port_forward_if_needed,
-    start_http_port_forward_if_needed,
-    wait_http,
-)
-from sandbox_startup_report import (
-    DEFAULT_EVENT_LIMIT,
-    DEFAULT_EVENT_POLL_MS,
-    DEFAULT_EVENT_WAIT_SECONDS,
-    DEFAULT_TOP_LIFECYCLE,
-    default_markdown_path,
-    render_console_summary,
-    write_startup_report,
-)
+try:
+    from . import sandbox_startup_report as startup_report_mod
+    from . import startup as startup_mod
+except ImportError:  # pragma: no cover - script execution path
+    import sandbox_startup_report as startup_report_mod
+    import startup as startup_mod
+
+
+API_PREFIX = startup_mod.API_PREFIX
+api_url = startup_mod.api_url
+authorize = startup_mod.authorize
+cluster_snapshot = startup_mod.cluster_snapshot
+delete_workers = startup_mod.delete_workers
+env_bool = startup_mod.env_bool
+env_float = startup_mod.env_float
+env_int = startup_mod.env_int
+find_redis_pod = startup_mod.find_redis_pod
+format_ms = startup_mod.format_ms
+grpc_addr = startup_mod.grpc_addr
+http_json = startup_mod.http_json
+install_overlay = startup_mod.install_overlay
+load_cached_token = startup_mod.load_cached_token
+log = startup_mod.log
+percentile = startup_mod.percentile
+prepare_local_image = startup_mod.prepare_local_image
+require_tools = startup_mod.require_tools
+redis_hgetall = startup_mod.redis_hgetall
+save_cached_token = startup_mod.save_cached_token
+start_grpc_port_forward_if_needed = startup_mod.start_grpc_port_forward_if_needed
+start_http_port_forward_if_needed = startup_mod.start_http_port_forward_if_needed
+wait_http = startup_mod.wait_http
+
+DEFAULT_EVENT_LIMIT = startup_report_mod.DEFAULT_EVENT_LIMIT
+DEFAULT_EVENT_POLL_MS = startup_report_mod.DEFAULT_EVENT_POLL_MS
+DEFAULT_EVENT_WAIT_SECONDS = startup_report_mod.DEFAULT_EVENT_WAIT_SECONDS
+DEFAULT_TOP_LIFECYCLE = startup_report_mod.DEFAULT_TOP_LIFECYCLE
+default_markdown_path = startup_report_mod.default_markdown_path
+render_console_summary = startup_report_mod.render_console_summary
+write_startup_report = startup_report_mod.write_startup_report
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HEALTH_PATH = "/api/v1/health"
+DEFAULT_SANDBOX_EXEC = "sh -lc 'printf \"%s\\n\" \"$BETA9_BENCH_EXPECTED_OUTPUT\"'"
+DEFAULT_SANDBOX_EXPECTED_OUTPUT = "beta9-sandbox-ready-{index}"
+DEFAULT_EXEC_OUTPUT_TAIL_BYTES = 4096
 TABLE_HEADER = "\n".join(
     (
         "",
-        " run   kind container                                           create   running  proc_rdy exec_done   status",
-        "---- ------ ---------------------------------------------- --------- --------- --------- --------- --------",
+        " run   kind container                                           create   running  proc_rdy exec_done    check   status",
+        "---- ------ ---------------------------------------------- --------- --------- --------- --------- -------- --------",
     )
 )
 
@@ -89,8 +97,10 @@ def parse_args():
     parser.add_argument("--sandbox-memory", default=os.getenv("BENCH_SANDBOX_MEMORY", "192"))
     parser.add_argument("--sandbox-keep-warm-seconds", type=int, default=env_int("BENCH_SANDBOX_KEEP_WARM_SECONDS", 600))
     parser.add_argument("--sandbox-image-uri", default=os.getenv("BENCH_SANDBOX_IMAGE_URI", os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "registry.localhost:5000/beta9-bench-alpine:latest")))
-    parser.add_argument("--sandbox-exec", default=os.getenv("BENCH_SANDBOX_EXEC", "true"))
+    parser.add_argument("--sandbox-exec", default=os.getenv("BENCH_SANDBOX_EXEC", DEFAULT_SANDBOX_EXEC))
     parser.add_argument("--sandbox-exec-cwd", default=os.getenv("BENCH_SANDBOX_EXEC_CWD", "/"))
+    parser.add_argument("--sandbox-expected-output", default=os.getenv("BENCH_SANDBOX_EXPECTED_OUTPUT", DEFAULT_SANDBOX_EXPECTED_OUTPUT))
+    parser.add_argument("--sandbox-output-tail-bytes", type=int, default=env_int("BENCH_SANDBOX_OUTPUT_TAIL_BYTES", DEFAULT_EXEC_OUTPUT_TAIL_BYTES))
     parser.add_argument("--sandbox-create-retries", type=int, default=env_int("BENCH_SANDBOX_CREATE_RETRIES", 20))
     parser.add_argument("--sandbox-ready-timeout-seconds", type=float, default=env_float("BENCH_SANDBOX_READY_TIMEOUT_SECONDS", 120))
     parser.add_argument("--sandbox-ready-retry-ms", type=int, default=env_int("BENCH_SANDBOX_READY_RETRY_MS", 500))
@@ -131,7 +141,7 @@ def parse_args():
 
     parser.add_argument("--wait-exec-complete", dest="wait_exec_complete", action="store_true")
     parser.add_argument("--no-wait-exec-complete", dest="wait_exec_complete", action="store_false")
-    parser.set_defaults(wait_exec_complete=env_bool("BENCH_SANDBOX_WAIT_EXEC_COMPLETE", False))
+    parser.set_defaults(wait_exec_complete=env_bool("BENCH_SANDBOX_WAIT_EXEC_COMPLETE", True))
 
     args = parser.parse_args()
     if not args.token_cache:
@@ -150,6 +160,8 @@ def parse_args():
         raise SystemExit("BENCH_SANDBOX_CREATE_RETRIES cannot be negative")
     if args.sandbox_ready_timeout_seconds <= 0:
         raise SystemExit("BENCH_SANDBOX_READY_TIMEOUT_SECONDS must be greater than 0")
+    if args.sandbox_output_tail_bytes < 0:
+        raise SystemExit("BENCH_SANDBOX_OUTPUT_TAIL_BYTES cannot be negative")
     if args.prewarm_idle_timeout_seconds <= 0:
         raise SystemExit("BENCH_SANDBOX_PREWARM_IDLE_TIMEOUT_SECONDS must be greater than 0")
     args.bootstrap_image_uri = args.sandbox_image_uri
@@ -170,6 +182,55 @@ def parse_sdk_memory(value):
     if raw.isdigit():
         return int(raw)
     return raw
+
+
+def expected_exec_output(args, sample):
+    template = str(args.sandbox_expected_output or "")
+    if not template:
+        return ""
+    try:
+        return template.format(
+            index=sample.get("index", ""),
+            container_id=sample.get("containerId", ""),
+            stub_id=sample.get("stubId", ""),
+            warmup=str(bool(sample.get("warmup"))).lower(),
+        )
+    except (IndexError, KeyError, ValueError) as exc:
+        raise ValueError(f"invalid sandbox expected output template {template!r}: {exc}") from exc
+
+
+def text_tail(value, max_bytes):
+    text = value if isinstance(value, str) else str(value or "")
+    encoded = text.encode("utf-8", errors="replace")
+    if max_bytes <= 0 or len(encoded) <= max_bytes:
+        return text, False, len(encoded)
+    return encoded[-max_bytes:].decode("utf-8", errors="replace"), True, len(encoded)
+
+
+def verify_exec_output(result, stdout, expected_output):
+    result["execExpectedOutput"] = expected_output
+    if result.get("execExitCode") is None:
+        result["execVerified"] = False
+        result["execOutputMatched"] = None
+        result["execVerificationError"] = "exec completion was not observed"
+        return
+
+    exit_ok = result.get("execExitCode") == 0
+    if not expected_output:
+        result["execVerified"] = exit_ok
+        result["execOutputMatched"] = None
+        if not exit_ok:
+            result["execVerificationError"] = f"exit code {result.get('execExitCode')}"
+        return
+
+    actual = stdout.rstrip("\r\n")
+    matched = actual == expected_output
+    result["execOutputMatched"] = matched
+    result["execVerified"] = exit_ok and matched
+    if not exit_ok:
+        result["execVerificationError"] = f"exit code {result.get('execExitCode')}"
+    elif not matched:
+        result["execVerificationError"] = f"stdout mismatch: expected {expected_output!r}, got {actual!r}"
 
 
 def parse_host_port(address):
@@ -352,21 +413,27 @@ def exec_readiness(args, instance, command, request_start_ns, sample=None):
     deadline = time.monotonic() + args.sandbox_ready_timeout_seconds
     attempts = 0
     errors = []
+    expected_output = expected_exec_output(args, sample or {})
+    env = {"BETA9_BENCH_EXPECTED_OUTPUT": expected_output}
 
     while True:
         attempts += 1
         exec_start_ns = time.monotonic_ns()
         try:
-            process = instance.process.exec(command, cwd=args.sandbox_exec_cwd)
+            process = instance.process.exec(command, cwd=args.sandbox_exec_cwd, env=env)
             exec_accepted_ns = time.monotonic_ns()
             result = {
                 "execAttempts": attempts,
                 "execErrors": errors,
+                "execCommand": command,
                 "execAcceptedMs": (exec_accepted_ns - exec_start_ns) / 1_000_000,
                 "processReadyMs": (exec_accepted_ns - request_start_ns) / 1_000_000,
                 "execCompleteMs": None,
                 "execPid": process.pid,
                 "execExitCode": None,
+                "execExpectedOutput": expected_output,
+                "execOutputMatched": None,
+                "execVerified": False,
             }
             if args.wait_exec_complete:
                 remaining_seconds = deadline - time.monotonic()
@@ -376,6 +443,23 @@ def exec_readiness(args, instance, command, request_start_ns, sample=None):
                 exec_done_ns = time.monotonic_ns()
                 result["execCompleteMs"] = (exec_done_ns - request_start_ns) / 1_000_000
                 result["execExitCode"] = exit_code
+                stdout = process.stdout.read()
+                stderr = process.stderr.read()
+                stdout_tail, stdout_truncated, stdout_bytes = text_tail(stdout, args.sandbox_output_tail_bytes)
+                stderr_tail, stderr_truncated, stderr_bytes = text_tail(stderr, args.sandbox_output_tail_bytes)
+                result.update(
+                    {
+                        "execStdout": stdout_tail,
+                        "execStderr": stderr_tail,
+                        "execStdoutBytes": stdout_bytes,
+                        "execStderrBytes": stderr_bytes,
+                        "execStdoutTruncated": stdout_truncated,
+                        "execStderrTruncated": stderr_truncated,
+                    }
+                )
+                verify_exec_output(result, stdout, expected_output)
+            else:
+                result["execVerificationError"] = "exec completion was not requested"
             return result
         except Exception as exc:
             errors.append(str(exc))
@@ -421,7 +505,12 @@ def run_sandbox_iteration(args, sandbox, token, index, warmup=False, start_event
         exec_info = exec_readiness(args, instance, command, request_start_ns, sample)
         sample.update(exec_info)
         if args.wait_exec_complete and sample["execExitCode"] != 0:
-            raise RuntimeError(f"Sandbox readiness command exited {sample['execExitCode']}")
+            raise RuntimeError(
+                f"Sandbox readiness command exited {sample['execExitCode']}; "
+                f"stderr={sample.get('execStderr', '')!r}"
+            )
+        if args.wait_exec_complete and not sample.get("execVerified"):
+            raise RuntimeError(sample.get("execVerificationError") or "sandbox readiness command was not verified")
 
         sample["ok"] = True
     except Exception as exc:
@@ -460,6 +549,30 @@ def measured_failed_samples(samples):
     return [sample for sample in samples if sample.get("warmup") is False and not sample.get("ok")]
 
 
+def summarize_exec_verification(samples):
+    measured = [sample for sample in samples if sample.get("warmup") is False]
+    completed = [sample for sample in measured if sample.get("execExitCode") is not None]
+    verified = [sample for sample in measured if sample.get("execVerified")]
+    mismatched = [sample for sample in measured if sample.get("execOutputMatched") is False]
+    return {
+        "count": len(measured),
+        "completed": len(completed),
+        "verified": len(verified),
+        "mismatched": len(mismatched),
+        "failed": len(measured) - len(verified),
+    }
+
+
+def exec_check_label(sample):
+    if sample.get("execVerified"):
+        return "yes"
+    if sample.get("execExitCode") is not None:
+        return "no"
+    if sample.get("execAttempts"):
+        return "retry"
+    return "-"
+
+
 def print_sample(sample):
     status = "ok" if sample.get("ok") else "failed"
     print(
@@ -470,6 +583,7 @@ def print_sample(sample):
         f"{format_ms(sample.get('runningObservedMs')):>9} "
         f"{format_ms(sample.get('processReadyMs')):>9} "
         f"{format_ms(sample.get('execCompleteMs')):>9} "
+        f"{exec_check_label(sample):>8} "
         f"{status:>8}",
         flush=True,
     )
@@ -505,6 +619,14 @@ def print_summary(summary):
             f"ok={batch['okCount']}/{batch['count']} "
             f"wall={format_ms(batch['wallMs'])}ms "
             f"throughput={batch['throughputPerSecond']:.2f}/s"
+        )
+    verification = summary.get("execVerification")
+    if verification:
+        print(
+            f"  {'sandbox command check':<28} "
+            f"verified={verification['verified']}/{verification['count']} "
+            f"completed={verification['completed']} "
+            f"mismatched={verification['mismatched']}"
         )
 
 
@@ -669,6 +791,7 @@ def main():
         "runningObservedMs": summarize_metric(samples, "runningObservedMs"),
         "processReadyMs": summarize_metric(samples, "processReadyMs"),
         "execCompleteMs": summarize_metric(samples, "execCompleteMs"),
+        "execVerification": summarize_exec_verification(samples),
         "batch": batch,
     }
     print_summary(summary)
@@ -694,6 +817,8 @@ def main():
             "sandboxImageUri": args.sandbox_image_uri,
             "sandboxExec": args.sandbox_exec,
             "sandboxExecCwd": args.sandbox_exec_cwd,
+            "sandboxExpectedOutput": args.sandbox_expected_output,
+            "sandboxOutputTailBytes": args.sandbox_output_tail_bytes,
             "prepareSandbox": args.prepare_sandbox,
             "waitRunning": args.wait_running,
             "waitExecComplete": args.wait_exec_complete,

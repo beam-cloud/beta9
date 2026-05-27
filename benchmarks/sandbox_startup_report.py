@@ -177,7 +177,14 @@ def interactive_samples(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if sample.get("ok")
         and sample.get("execCompleteMs") is not None
         and sample.get("execExitCode") in (None, 0)
+        and sample_command_verified(sample)
     ]
+
+
+def sample_command_verified(sample: dict[str, Any]) -> bool:
+    if "execVerified" in sample:
+        return bool(sample.get("execVerified"))
+    return True
 
 
 def sample_metric_summary(samples: list[dict[str, Any]], key: str) -> dict[str, float] | None:
@@ -307,9 +314,10 @@ def build_startup_report(
     if not bottleneck:
         bottleneck = select_primary_bottleneck(server_phases, len(samples))
     coverage = build_event_coverage(samples, events, event_items)
+    exec_verification = build_exec_verification(samples)
     image_drilldown = build_image_drilldown(event_items, server_phases, len(samples))
     slowest = build_slowest_containers(samples, event_by_container)
-    data_quality = build_data_quality(samples, coverage, event_items, event_error, bottleneck)
+    data_quality = build_data_quality(samples, coverage, event_items, event_error, bottleneck, exec_verification)
     tti = client_timings.get("execCompleteMs")
 
     verdict_text = f"{len(interactive)}/{len(samples)} sandboxes interactive"
@@ -327,6 +335,7 @@ def build_startup_report(
         "timeToInteractive": tti,
         "primaryBottleneck": bottleneck,
         "eventCoverage": coverage,
+        "execVerification": exec_verification,
         "clientTimings": client_timings,
         "serverPhases": server_phases,
         "imageDrilldown": image_drilldown,
@@ -340,9 +349,32 @@ def build_client_timings(benchmark: dict[str, Any], samples: list[dict[str, Any]
     existing = benchmark.get("summary") or {}
     timings: dict[str, Any] = {}
     for key, _ in CLIENT_TIMINGS:
-        timings[key] = existing.get(key) or sample_metric_summary(samples, key)
+        source_samples = interactive_samples(samples) if key == "execCompleteMs" else samples
+        timings[key] = existing.get(key) or sample_metric_summary(source_samples, key)
     timings["batch"] = existing.get("batch")
     return timings
+
+
+def build_exec_verification(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    verified = [sample for sample in samples if sample.get("execVerified") is True]
+    failed = [sample for sample in samples if sample.get("execVerified") is False]
+    unknown = [sample for sample in samples if "execVerified" not in sample]
+    completed = [sample for sample in samples if sample.get("execExitCode") is not None]
+    mismatched = [sample for sample in samples if sample.get("execOutputMatched") is False]
+    nonzero = [
+        sample
+        for sample in samples
+        if sample.get("execExitCode") is not None and sample.get("execExitCode") != 0
+    ]
+    return {
+        "count": len(samples),
+        "completed": len(completed),
+        "verified": len(verified),
+        "failed": len(failed),
+        "unknown": len(unknown),
+        "mismatched": len(mismatched),
+        "nonzeroExit": len(nonzero),
+    }
 
 
 def build_server_phases(events: dict[str, Any] | None, measured_count: int) -> list[dict[str, Any]]:
@@ -727,8 +759,17 @@ def build_data_quality(
     event_items: list[dict[str, Any]],
     event_error: str,
     bottleneck: dict[str, Any] | None,
+    exec_verification: dict[str, Any],
 ) -> list[str]:
     notes = []
+    if exec_verification.get("failed"):
+        notes.append(
+            f"{exec_verification['failed']} sandbox readiness command check(s) failed."
+        )
+    if exec_verification.get("unknown"):
+        notes.append(
+            f"{exec_verification['unknown']} sample(s) did not include command verification metadata."
+        )
     if event_error:
         notes.append(f"Events API issue: {event_error}")
     if not coverage.get("eventsAvailable"):
@@ -763,11 +804,15 @@ def render_console_summary(report: dict[str, Any]) -> str:
     tti = report.get("timeToInteractive")
     bottleneck = report.get("primaryBottleneck")
     coverage = report.get("eventCoverage") or {}
+    verification = report.get("execVerification") or {}
     lines = [
         "",
         "Sandbox startup report:",
         f"  Verdict: {report['verdict']['text']}",
         f"  Time to interactive: {summary_inline(tti)}",
+        "  Command check: "
+        f"{verification.get('verified', 0)}/{verification.get('count', 0)} verified "
+        f"(completed={verification.get('completed', 0)}, failed={verification.get('failed', 0)})",
     ]
     if bottleneck:
         lines.append(
@@ -810,11 +855,15 @@ def render_console_summary(report: dict[str, Any]) -> str:
 def render_markdown(report: dict[str, Any]) -> str:
     bottleneck = report.get("primaryBottleneck")
     coverage = report.get("eventCoverage") or {}
+    verification = report.get("execVerification") or {}
     lines = [
         "# Sandbox Startup Benchmark Report",
         "",
         f"Verdict: {report['verdict']['text']}",
         f"Time to interactive: {summary_inline(report.get('timeToInteractive'))}",
+        "Command check: "
+        f"{verification.get('verified', 0)}/{verification.get('count', 0)} verified "
+        f"(completed={verification.get('completed', 0)}, failed={verification.get('failed', 0)})",
         "Primary bottleneck: "
         + (
             f"{bottleneck['eventId']} p95={format_ms(bottleneck.get('p95Ms'))}ms count={bottleneck.get('count', 0)}"

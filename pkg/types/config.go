@@ -14,6 +14,7 @@ type AppConfig struct {
 	DebugMode      bool                 `key:"debugMode" json:"debug_mode"`
 	PrettyLogs     bool                 `key:"prettyLogs" json:"pretty_logs"`
 	Database       DatabaseConfig       `key:"database" json:"database"`
+	Events         EventsConfig         `key:"events" json:"events"`
 	GatewayService GatewayServiceConfig `key:"gateway" json:"gateway_service"`
 	FileService    FileServiceConfig    `key:"fileService" json:"file_service"`
 	ImageService   ImageServiceConfig   `key:"imageService" json:"image_service"`
@@ -77,6 +78,18 @@ type S2Config struct {
 	ApiKey       string `key:"apiKey" json:"api_key"`
 	Basin        string `key:"basin" json:"basin"`
 	StreamPrefix string `key:"streamPrefix" json:"stream_prefix"`
+}
+
+type EventsConfig struct {
+	Callbacks []EventCallbackConfig `key:"callbacks" json:"callbacks"`
+}
+
+type EventCallbackConfig struct {
+	URL        string            `key:"url" json:"url"`
+	Format     string            `key:"format" json:"format"`
+	EventTypes []string          `key:"eventTypes" json:"event_types"`
+	Headers    map[string]string `key:"headers" json:"headers"`
+	Timeout    time.Duration     `key:"timeout" json:"timeout"`
 }
 
 type GRPCConfig struct {

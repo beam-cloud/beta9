@@ -38,6 +38,38 @@ class SandboxStartupReportTests(unittest.TestCase):
         self.assertEqual(report["timeToInteractive"]["count"], 2)
         self.assertEqual(report["timeToInteractive"]["p50"], 150)
 
+    def test_unverified_exec_is_not_interactive(self):
+        benchmark = {
+            "summary": {},
+            "samples": [
+                {
+                    "warmup": False,
+                    "ok": True,
+                    "execCompleteMs": 100,
+                    "execExitCode": 0,
+                    "execVerified": True,
+                },
+                {
+                    "warmup": False,
+                    "ok": True,
+                    "execCompleteMs": 120,
+                    "execExitCode": 0,
+                    "execVerified": False,
+                    "execOutputMatched": False,
+                },
+            ],
+        }
+
+        report = build_startup_report(benchmark)
+
+        self.assertEqual(report["verdict"]["interactive"], 1)
+        self.assertEqual(report["timeToInteractive"]["count"], 1)
+        self.assertEqual(report["execVerification"]["verified"], 1)
+        self.assertEqual(report["execVerification"]["failed"], 1)
+        self.assertTrue(
+            any("readiness command" in note for note in report["dataQuality"])
+        )
+
     def test_primary_bottleneck_ignores_low_coverage_outlier(self):
         phases = [
             {

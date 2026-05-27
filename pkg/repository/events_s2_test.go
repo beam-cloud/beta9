@@ -107,6 +107,20 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEventQueryAllowsType(t *testing.T) {
+	query := types.EventQuery{EventTypes: []string{types.EventContainerEvent, types.EventTaskUpdated}}
+
+	if !eventQueryAllowsType(query, types.EventTaskUpdated) {
+		t.Fatal("expected task.updated to be allowed")
+	}
+	if eventQueryAllowsType(query, types.EventContainerLog) {
+		t.Fatal("expected container.log to be filtered")
+	}
+	if !eventQueryAllowsType(types.EventQuery{}, types.EventContainerLog) {
+		t.Fatal("empty event type filter should allow all events")
+	}
+}
+
 func TestEventMetadataPoolNameRoundTrip(t *testing.T) {
 	repo := &EventClientRepo{}
 	event, err := repo.createEventObject(types.EventWorkerPoolDegraded, types.EventWorkerPoolStateSchemaVersion, types.EventWorkerPoolStateSchema{

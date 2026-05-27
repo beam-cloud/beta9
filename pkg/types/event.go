@@ -590,10 +590,15 @@ type EventContainerLogSchema struct {
 }
 
 type EventQuery struct {
-	Limit       uint64 `json:"limit,omitempty"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	StubID      string `json:"stub_id,omitempty"`
-	TaskID      string `json:"task_id,omitempty"`
+	Limit       uint64   `json:"limit,omitempty"`
+	WorkspaceID string   `json:"workspace_id,omitempty"`
+	StubID      string   `json:"stub_id,omitempty"`
+	TaskID      string   `json:"task_id,omitempty"`
+	EventTypes  []string `json:"event_types,omitempty"`
+	SeqNum      *uint64  `json:"seq_num,omitempty"`
+	TailOffset  *int64   `json:"tail_offset,omitempty"`
+	WaitSeconds *int32   `json:"wait,omitempty"`
+	Clamp       *bool    `json:"clamp,omitempty"`
 }
 
 type ContainerEventRecord struct {

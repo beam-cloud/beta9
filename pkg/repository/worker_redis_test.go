@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -120,6 +121,113 @@ func TestToggleWorkerAvailable(t *testing.T) {
 	assert.Equal(t, newWorker.FreeMemory, worker.FreeMemory)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, worker.Status)
+}
+
+func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+
+	worker := &types.Worker{
+		Id:            "worker-reconcile-capacity",
+		Status:        types.WorkerStatusPending,
+		TotalCpu:      4000,
+		TotalMemory:   1024,
+		TotalGpuCount: 2,
+		FreeCpu:       0,
+		FreeMemory:    0,
+		FreeGpuCount:  0,
+		Gpu:           "A10G",
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	queuedRequest := &types.ContainerRequest{
+		ContainerId: "container-reconcile-queued",
+		Cpu:         1000,
+		Memory:      100,
+	}
+	queuedJSON, err := json.Marshal(queuedRequest)
+	assert.Nil(t, err)
+	err = rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), queuedJSON).Err()
+	assert.Nil(t, err)
+
+	runningState := &types.ContainerState{
+		ContainerId: "container-reconcile-running",
+		Status:      types.ContainerStatusRunning,
+		Cpu:         1000,
+		Memory:      100,
+		Gpu:         "A10G",
+		GpuCount:    1,
+	}
+	runningStateKey := common.RedisKeys.SchedulerContainerState(runningState.ContainerId)
+	err = rdb.HSet(context.TODO(), runningStateKey, common.ToSlice(runningState)).Err()
+	assert.Nil(t, err)
+	err = rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), runningStateKey).Err()
+	assert.Nil(t, err)
+	staleStateKey := common.RedisKeys.SchedulerContainerState("container-reconcile-missing")
+	err = rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), staleStateKey).Err()
+	assert.Nil(t, err)
+
+	err = repo.ToggleWorkerAvailable(worker.Id)
+	assert.Nil(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+	assert.Equal(t, int64(2000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(774), updatedWorker.FreeMemory)
+	assert.Equal(t, uint32(1), updatedWorker.FreeGpuCount)
+	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
+
+	staleIndexExists, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), staleStateKey).Result()
+	assert.Nil(t, err)
+	assert.False(t, staleIndexExists)
+}
+
+func TestToggleWorkerAvailableCapsReconciledCapacityAtZero(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+
+	worker := &types.Worker{
+		Id:            "worker-reconcile-over-reserved",
+		Status:        types.WorkerStatusPending,
+		TotalCpu:      1000,
+		TotalMemory:   125,
+		TotalGpuCount: 1,
+		FreeCpu:       1000,
+		FreeMemory:    125,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	queuedRequest := &types.ContainerRequest{
+		ContainerId: "container-reconcile-over-reserved",
+		Cpu:         2000,
+		Memory:      200,
+		Gpu:         "A10G",
+		GpuCount:    2,
+	}
+	queuedJSON, err := json.Marshal(queuedRequest)
+	assert.Nil(t, err)
+	err = rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), queuedJSON).Err()
+	assert.Nil(t, err)
+
+	err = repo.ToggleWorkerAvailable(worker.Id)
+	assert.Nil(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
 }
 
 func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
@@ -283,6 +391,43 @@ func TestCapacityMemoryForRequest(t *testing.T) {
 	assert.Equal(t, int64(-1), capacityMemoryForRequest(&types.ContainerRequest{Memory: -1}))
 	assert.Equal(t, int64(125), capacityMemoryForRequest(&types.ContainerRequest{Memory: 100}))
 	assert.Equal(t, int64(2), capacityMemoryForRequest(&types.ContainerRequest{Memory: 1}))
+}
+
+func TestUpdateWorkerCapacityAddDoesNotExceedTotalCapacity(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:            "worker-capacity-cap",
+		Status:        types.WorkerStatusAvailable,
+		TotalCpu:      1000,
+		TotalMemory:   125,
+		TotalGpuCount: 1,
+		FreeCpu:       900,
+		FreeMemory:    100,
+		FreeGpuCount:  0,
+		Gpu:           "A10G",
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-capacity-cap",
+		Cpu:         500,
+		Memory:      100,
+		Gpu:         "A10G",
+		GpuCount:    2,
+	}
+	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
+	assert.Nil(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(125), updatedWorker.FreeMemory)
+	assert.Equal(t, uint32(1), updatedWorker.FreeGpuCount)
 }
 
 func TestGetAllWorkers(t *testing.T) {

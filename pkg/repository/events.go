@@ -22,9 +22,21 @@ type eventReader interface {
 	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
 }
 
+type EventStream interface {
+	Next() bool
+	Record() types.ContainerEventRecord
+	Err() error
+	Close() error
+}
+
+type eventStreamer interface {
+	StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error)
+}
+
 type EventClientRepo struct {
-	sinks  []eventSink
-	reader eventReader
+	sinks    []eventSink
+	reader   eventReader
+	streamer eventStreamer
 }
 
 var ErrEventReadUnsupported = errors.New("event read unsupported")
@@ -42,14 +54,23 @@ func NewEventClientRepo(config types.AppConfig) EventRepository {
 	sinks := []eventSink{}
 
 	var reader eventReader
+	var streamer eventStreamer
 	if s2Sink, err := NewS2EventRepository(config.Database.S2); err != nil {
 		log.Warn().Err(err).Msg("s2 event repository unavailable")
 	} else if s2Sink != nil {
 		sinks = append(sinks, s2Sink)
 		reader = s2Sink
+		streamer = s2Sink
 	}
 
-	return &EventClientRepo{sinks: sinks, reader: reader}
+	for _, callback := range config.Events.Callbacks {
+		if strings.TrimSpace(callback.URL) == "" {
+			continue
+		}
+		sinks = append(sinks, newEventHTTPSink(callback))
+	}
+
+	return &EventClientRepo{sinks: sinks, reader: reader, streamer: streamer}
 }
 
 func (r *EventClientRepo) createEventObject(eventName string, schemaVersion string, data interface{}) (cloudevents.Event, error) {
@@ -96,6 +117,13 @@ func (r *EventClientRepo) GetContainerEvents(ctx context.Context, containerID st
 		return nil, ErrEventReadUnsupported
 	}
 	return r.reader.GetContainerEvents(ctx, containerID, query)
+}
+
+func (r *EventClientRepo) StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error) {
+	if r.streamer == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.streamer.StreamContainerEvents(ctx, containerID, query)
 }
 
 func (r *EventClientRepo) PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema) {
