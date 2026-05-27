@@ -55,3 +55,27 @@ func TestGetPercentageWithDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkerPodTerminationGracePeriodAllowsNestedCleanup(t *testing.T) {
+	tests := []struct {
+		name            string
+		workerStopGrace int64
+		want            int64
+	}{
+		{name: "default", workerStopGrace: 0, want: 120},
+		{name: "short", workerStopGrace: 10, want: 120},
+		{name: "long", workerStopGrace: 90, want: 240},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workerPodTerminationGracePeriod(tt.workerStopGrace); got != tt.want {
+				t.Fatalf("workerPodTerminationGracePeriod(%d) = %d, want %d", tt.workerStopGrace, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkerPodCommandUsesInitReaper(t *testing.T) {
+	assert.Equal(t, []string{"/usr/bin/tini", "-g", "--", "/usr/local/bin/worker"}, workerPodCommand())
+}

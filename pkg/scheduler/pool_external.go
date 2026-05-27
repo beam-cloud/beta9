@@ -363,11 +363,9 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 
 	containers := []corev1.Container{
 		{
-			Name:  defaultContainerName,
-			Image: workerImage,
-			Command: []string{
-				defaultWorkerEntrypoint,
-			},
+			Name:    defaultContainerName,
+			Image:   workerImage,
+			Command: workerPodCommand(),
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
@@ -388,14 +386,15 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			Labels: labels,
 		},
 		Spec: corev1.PodSpec{
-			HostNetwork:        true,
-			ImagePullSecrets:   imagePullSecrets,
-			RestartPolicy:      corev1.RestartPolicyOnFailure,
-			NodeSelector:       wpc.workerPoolConfig.JobSpec.NodeSelector,
-			Containers:         containers,
-			Volumes:            wpc.getWorkerVolumes(workerMemory),
-			EnableServiceLinks: ptr.To(false),
-			DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
+			HostNetwork:                   true,
+			ImagePullSecrets:              imagePullSecrets,
+			RestartPolicy:                 corev1.RestartPolicyOnFailure,
+			NodeSelector:                  wpc.workerPoolConfig.JobSpec.NodeSelector,
+			Containers:                    containers,
+			Volumes:                       wpc.getWorkerVolumes(workerMemory),
+			EnableServiceLinks:            ptr.To(false),
+			DNSPolicy:                     corev1.DNSClusterFirstWithHostNet,
+			TerminationGracePeriodSeconds: ptr.To(workerPodTerminationGracePeriod(wpc.config.Worker.TerminationGracePeriod)),
 		},
 	}
 

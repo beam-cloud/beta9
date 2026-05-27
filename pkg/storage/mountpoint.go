@@ -1,19 +1,24 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"time"
 
+	managedprocess "github.com/beam-cloud/beta9/pkg/common/process"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const (
-	mountpointBinary = "ms3"
+	mountpointBinary         = "ms3"
+	mountpointMountTimeout   = 30 * time.Second
+	mountpointUnmountTimeout = 10 * time.Second
 )
 
 type MountPointStorage struct {
-	mountCmd *exec.Cmd
+	mountCmd *managedprocess.ManagedCommand
 	config   types.MountPointConfig
 }
 
@@ -24,8 +29,7 @@ func NewMountPointStorage(config types.MountPointConfig) (Storage, error) {
 }
 
 func (s *MountPointStorage) Mount(localPath string) error {
-	// NOTE: this is called to force unmount previous mounts
-	// It seems like mountpoint doesn't clean up gracefully by itself
+	// Clear any stale mount before remounting.
 	s.Unmount(localPath)
 
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
@@ -36,23 +40,45 @@ func (s *MountPointStorage) Mount(localPath string) error {
 	}
 
 	cmdArgs := newMountpointCmdArgs(s, localPath)
-	s.mountCmd = exec.Command(mountpointBinary, cmdArgs...)
-
+	env := []string{}
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {
-		s.mountCmd.Env = append(s.mountCmd.Env,
+		env = append(env,
 			fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AccessKey),
 			fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.SecretKey),
 		)
 	}
 
-	output, err := s.mountCmd.CombinedOutput()
+	mountCmd, err := managedprocess.StartManagedCommand(mountpointBinary, cmdArgs, env)
 	if err != nil {
-		// Cleanup the temporary mountpoint directory if the mount fails
 		os.RemoveAll(localPath)
-		return fmt.Errorf("%+v, %s", err, string(output))
+		return err
 	}
+	s.mountCmd = mountCmd
 
-	return nil
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(mountpointMountTimeout)
+	defer timeout.Stop()
+
+	for {
+		if isMounted(localPath) {
+			return nil
+		}
+		if err, done := s.mountCmd.DoneErr(); done {
+			os.RemoveAll(localPath)
+			return fmt.Errorf("mountpoint exited before mount completed: %w, output: %s", err, s.mountCmd.OutputString())
+		}
+
+		select {
+		case <-ticker.C:
+		case <-timeout.C:
+			output := s.mountCmd.OutputString()
+			_ = s.mountCmd.Terminate(mountpointUnmountTimeout)
+			s.mountCmd = nil
+			os.RemoveAll(localPath)
+			return fmt.Errorf("timed out mounting mountpoint filesystem to %q, output: %s", localPath, output)
+		}
+	}
 }
 
 func (s *MountPointStorage) Format(fsName string) error {
@@ -64,20 +90,33 @@ func (s *MountPointStorage) Mode() string {
 }
 
 func (s *MountPointStorage) Unmount(localPath string) error {
-	cmd := exec.Command("umount", localPath)
+	var errs error
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error executing mount-s3 umount: %v, output: %s", err, string(output))
+	if isMounted(localPath) {
+		output, err := managedprocess.RunCommandWithTimeout(mountpointUnmountTimeout, "umount", localPath)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("error executing mount-s3 umount: %v, output: %s", err, string(output)))
+		}
+	}
+
+	if s.mountCmd != nil {
+		if err := s.mountCmd.Wait(mountpointUnmountTimeout); errors.Is(err, managedprocess.ErrStillRunning) {
+			if terminateErr := s.mountCmd.Terminate(mountpointUnmountTimeout); terminateErr != nil {
+				errs = errors.Join(errs, fmt.Errorf("error terminating mountpoint process: %w, output: %s", terminateErr, s.mountCmd.OutputString()))
+			}
+		} else if err != nil {
+			log.Debug().Err(err).Str("output", s.mountCmd.OutputString()).Msg("mountpoint process exited during unmount")
+		}
+		s.mountCmd = nil
 	}
 
 	os.RemoveAll(localPath)
 
-	return nil
+	return errs
 }
 
 func newMountpointCmdArgs(s *MountPointStorage, localPath string) []string {
-	cmdArgs := []string{s.config.BucketName, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
+	cmdArgs := []string{s.config.BucketName, localPath, "--foreground", "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
 	if s.config.ReadOnly {
 		cmdArgs = append(cmdArgs, "--read-only")
 	} else {

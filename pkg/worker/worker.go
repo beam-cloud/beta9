@@ -37,6 +37,9 @@ const (
 	workerEventStreamReconnectMax  time.Duration = 5 * time.Second
 	defaultRuncStartConcurrency    int           = types.DefaultRuncStartConcurrency
 	defaultGvisorStartConcurrency  int           = types.DefaultGvisorStartConcurrency
+	defaultWorkerStopGracePeriodS  int64         = 30
+	shutdownDrainPollInterval      time.Duration = 100 * time.Millisecond
+	shutdownForceWait              time.Duration = 30 * time.Second
 )
 
 type Worker struct {
@@ -897,6 +900,7 @@ func (s *Worker) shutdown() error {
 
 	var errs error
 	s.waitForActiveContainersBeforeShutdown()
+	s.stopActiveContainersForShutdown()
 
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {
@@ -959,12 +963,109 @@ func (s *Worker) waitForActiveContainersBeforeShutdown() {
 		return
 	}
 
-	log.Info().Int("containers", s.containerInstances.Len()).Msg("waiting for active containers before worker shutdown")
-	for s.containerInstances.Len() > 0 {
-		s.containerWg.Wait()
-		if s.containerInstances.Len() == 0 {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	timeout := workerShutdownDrainTimeout(s.config.Worker.TerminationGracePeriod)
+	log.Info().
+		Int("containers", s.containerInstances.Len()).
+		Dur("timeout", timeout).
+		Msg("waiting for active containers before worker shutdown")
+	if s.waitForActiveContainers(timeout) {
+		return
 	}
+
+	log.Warn().
+		Int("containers", s.containerInstances.Len()).
+		Dur("timeout", timeout).
+		Msg("active containers still present after worker shutdown drain")
+}
+
+func (s *Worker) stopActiveContainersForShutdown() {
+	if s.containerInstances == nil || s.containerInstances.Len() == 0 {
+		return
+	}
+
+	ids := s.activeContainerIDs()
+	log.Info().Int("containers", len(ids)).Msg("stopping active containers before worker shutdown")
+
+	for _, id := range ids {
+		if instance, exists := s.containerInstances.Get(id); exists {
+			instance.StopReason = types.StopContainerReasonAdmin
+			s.containerInstances.Set(id, instance)
+		}
+		if err := s.stopContainer(id, false); err != nil {
+			log.Warn().Str("container_id", id).Err(err).Msg("failed to stop container during worker shutdown")
+		}
+	}
+
+	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
+	if s.waitForActiveContainers(grace) {
+		return
+	}
+
+	remaining := s.activeContainerIDs()
+	log.Warn().
+		Int("containers", len(remaining)).
+		Dur("grace", grace).
+		Msg("force stopping active containers during worker shutdown")
+	for _, id := range remaining {
+		if err := s.stopContainer(id, true); err != nil {
+			log.Warn().Str("container_id", id).Err(err).Msg("failed to force stop container during worker shutdown")
+		}
+	}
+
+	s.waitForActiveContainers(shutdownForceWait)
+}
+
+func (s *Worker) activeContainerIDs() []string {
+	ids := []string{}
+	if s.containerInstances == nil {
+		return ids
+	}
+	s.containerInstances.Range(func(key string, _ *ContainerInstance) bool {
+		ids = append(ids, key)
+		return true
+	})
+	return ids
+}
+
+func (s *Worker) waitForActiveContainers(timeout time.Duration) bool {
+	if s.containerInstances == nil || s.containerInstances.Len() == 0 {
+		return true
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for s.containerInstances.Len() > 0 {
+			s.containerWg.Wait()
+			if s.containerInstances.Len() == 0 {
+				return
+			}
+			time.Sleep(shutdownDrainPollInterval)
+		}
+	}()
+
+	if timeout <= 0 {
+		<-done
+		return true
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return s.containerInstances.Len() == 0
+	}
+}
+
+func workerContainerStopGrace(configuredSeconds int64) time.Duration {
+	if configuredSeconds <= 0 {
+		configuredSeconds = defaultWorkerStopGracePeriodS
+	}
+	return time.Duration(configuredSeconds) * time.Second
+}
+
+func workerShutdownDrainTimeout(configuredSeconds int64) time.Duration {
+	return workerContainerStopGrace(configuredSeconds) + shutdownForceWait
 }

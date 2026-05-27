@@ -1,17 +1,22 @@
 package cache
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"time"
+
+	managedprocess "github.com/beam-cloud/beta9/pkg/common/process"
 )
 
-const juiceFsMountTimeout time.Duration = 30 * time.Second
+const (
+	juiceFsSourceMountTimeout   time.Duration = 30 * time.Second
+	juiceFsSourceUnmountTimeout time.Duration = 10 * time.Second
+)
 
 type JuiceFsSource struct {
-	mountCmd *exec.Cmd
+	mountCmd *managedprocess.ManagedCommand
 	config   JuiceFSConfig
 }
 
@@ -36,57 +41,45 @@ func (s *JuiceFsSource) Mount(localPath string) error {
 		bufferSize = "300"
 	}
 
-	mountCtx, cancelMount := context.WithCancel(context.Background())
-
-	s.mountCmd = exec.CommandContext(
-		mountCtx,
-		"juicefs",
+	args := []string{
 		"mount",
 		s.config.RedisURI,
 		localPath,
-		"-d",
 		"--bucket", s.config.Bucket,
 		"--cache-size", cacheSize,
 		"--prefetch", prefetch,
 		"--buffer-size", bufferSize,
 		"--no-bgjob",
 		"--no-usage-report",
-	)
-
-	type mountResult struct {
-		output []byte
-		err    error
 	}
-	resultCh := make(chan mountResult, 1)
-	go func() {
-		output, err := s.mountCmd.CombinedOutput()
-		resultCh <- mountResult{output: output, err: err}
-	}()
+
+	mountCmd, err := managedprocess.StartManagedCommand("juicefs", args, nil)
+	if err != nil {
+		return err
+	}
+	s.mountCmd = mountCmd
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.NewTimer(juiceFsMountTimeout)
+	timeout := time.NewTimer(juiceFsSourceMountTimeout)
 	defer timeout.Stop()
 
 	for {
+		if isMounted(localPath) {
+			Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
+			return nil
+		}
+		if err, done := s.mountCmd.DoneErr(); done {
+			return fmt.Errorf("juicefs mount exited before filesystem was mounted to: '%s': %w, output: %s", localPath, err, s.mountCmd.OutputString())
+		}
+
 		select {
-		case result := <-resultCh:
-			if result.err != nil {
-				return fmt.Errorf("error executing juicefs mount: %w, output: %s", result.err, string(result.output))
-			}
-			if isMounted(localPath) {
-				Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
-				return nil
-			}
-			resultCh = nil
 		case <-ticker.C:
-			if isMounted(localPath) {
-				Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
-				return nil
-			}
 		case <-timeout.C:
-			cancelMount()
-			return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s': timed out after %s", localPath, juiceFsMountTimeout)
+			output := s.mountCmd.OutputString()
+			_ = s.mountCmd.Terminate(juiceFsSourceUnmountTimeout)
+			s.mountCmd = nil
+			return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s': timed out after %s, output: %s", localPath, juiceFsSourceMountTimeout, output)
 		}
 	}
 }
@@ -125,13 +118,21 @@ func (s *JuiceFsSource) Format(fsName string) error {
 }
 
 func (s *JuiceFsSource) Unmount(localPath string) error {
-	cmd := exec.Command("juicefs", "umount", "--force", localPath)
-
-	output, err := cmd.CombinedOutput()
+	var errs error
+	output, err := managedprocess.RunCommandWithTimeout(juiceFsSourceUnmountTimeout, "juicefs", "umount", "--force", localPath)
 	if err != nil {
-		return fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output))
+		errs = errors.Join(errs, fmt.Errorf("error executing juicefs umount: %v, output: %s", err, string(output)))
+	}
+
+	if s.mountCmd != nil {
+		if err := s.mountCmd.Wait(juiceFsSourceUnmountTimeout); errors.Is(err, managedprocess.ErrStillRunning) {
+			if terminateErr := s.mountCmd.Terminate(juiceFsSourceUnmountTimeout); terminateErr != nil {
+				errs = errors.Join(errs, fmt.Errorf("error terminating juicefs source process: %w, output: %s", terminateErr, s.mountCmd.OutputString()))
+			}
+		}
+		s.mountCmd = nil
 	}
 
 	Logger.Infof("JuiceFS filesystem unmounted from: '%s'", localPath)
-	return nil
+	return errs
 }

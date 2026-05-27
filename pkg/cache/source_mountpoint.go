@@ -1,17 +1,21 @@
 package cache
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
+
+	managedprocess "github.com/beam-cloud/beta9/pkg/common/process"
 )
 
-const mountPointMountTimeout time.Duration = 30 * time.Second
+const (
+	mountPointMountTimeout   time.Duration = 30 * time.Second
+	mountPointUnmountTimeout time.Duration = 10 * time.Second
+)
 
 type MountPointSource struct {
-	mountCmd *exec.Cmd
+	mountCmd *managedprocess.ManagedCommand
 	config   MountPointConfig
 }
 
@@ -22,16 +26,13 @@ func NewMountPointSource(config MountPointConfig) (Source, error) {
 }
 
 func (s *MountPointSource) Mount(localPath string) error {
-	// NOTE: this is called to force unmount previous mounts
-	// It seems like mountpoint doesn't clean up gracefully by itself
+	// Clear any stale mount before remounting.
 	s.Unmount(localPath)
 	if err := os.MkdirAll(localPath, 0755); err != nil {
 		return fmt.Errorf("failed to create mount path %s: %w", localPath, err)
 	}
 
-	mountCtx, cancelMount := context.WithCancel(context.Background())
-	s.mountCmd = exec.CommandContext(
-		mountCtx,
+	args := []string{
 		"mount-s3",
 		s.config.BucketName,
 		localPath,
@@ -39,29 +40,27 @@ func (s *MountPointSource) Mount(localPath string) error {
 		s.config.Region,
 		"--endpoint-url",
 		s.config.EndpointURL,
+		"--foreground",
 		"--read-only",
-	)
-
-	if s.config.ForcePathStyle {
-		s.mountCmd.Args = append(s.mountCmd.Args, "--force-path-style")
 	}
 
+	if s.config.ForcePathStyle {
+		args = append(args, "--force-path-style")
+	}
+
+	env := []string{}
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {
-		s.mountCmd.Env = append(os.Environ(),
+		env = append(env,
 			fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AccessKey),
 			fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.SecretKey),
 		)
 	}
 
-	type mountResult struct {
-		output []byte
-		err    error
+	mountCmd, err := managedprocess.StartManagedCommand(args[0], args[1:], env)
+	if err != nil {
+		return err
 	}
-	resultCh := make(chan mountResult, 1)
-	go func() {
-		output, err := s.mountCmd.CombinedOutput()
-		resultCh <- mountResult{output: output, err: err}
-	}()
+	s.mountCmd = mountCmd
 
 	Logger.Infof("Mountpoint filesystem is being mounted to: '%s'", localPath)
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -70,26 +69,21 @@ func (s *MountPointSource) Mount(localPath string) error {
 	defer timeout.Stop()
 
 	for {
+		if isMounted(localPath) {
+			Logger.Infof("Mountpoint filesystem mounted to: '%s'", localPath)
+			return nil
+		}
+		if err, done := s.mountCmd.DoneErr(); done {
+			return fmt.Errorf("mount-s3 exited before filesystem was mounted to: '%s': %w, output: %s", localPath, err, s.mountCmd.OutputString())
+		}
+
 		select {
-		case result := <-resultCh:
-			if result.err != nil {
-				cancelMount()
-				return fmt.Errorf("error executing mount-s3 mount: %w, output: %s", result.err, string(result.output))
-			}
-			if isMounted(localPath) {
-				Logger.Infof("Mountpoint filesystem mounted to: '%s'", localPath)
-				return nil
-			}
-			cancelMount()
-			return fmt.Errorf("mount-s3 exited before filesystem was mounted to: '%s', output: %s", localPath, string(result.output))
 		case <-ticker.C:
-			if isMounted(localPath) {
-				Logger.Infof("Mountpoint filesystem mounted to: '%s'", localPath)
-				return nil
-			}
 		case <-timeout.C:
-			cancelMount()
-			return fmt.Errorf("failed to mount Mountpoint filesystem to: '%s': timed out after %s", localPath, mountPointMountTimeout)
+			output := s.mountCmd.OutputString()
+			_ = s.mountCmd.Terminate(mountPointUnmountTimeout)
+			s.mountCmd = nil
+			return fmt.Errorf("failed to mount Mountpoint filesystem to: '%s': timed out after %s, output: %s", localPath, mountPointMountTimeout, output)
 		}
 	}
 }
@@ -99,12 +93,22 @@ func (s *MountPointSource) Format(fsName string) error {
 }
 
 func (s *MountPointSource) Unmount(localPath string) error {
-	cmd := exec.Command("umount", localPath)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error executing mount-s3 umount: %v, output: %s", err, string(output))
+	var errs error
+	if isMounted(localPath) {
+		output, err := managedprocess.RunCommandWithTimeout(mountPointUnmountTimeout, "umount", localPath)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("error executing mount-s3 umount: %v, output: %s", err, string(output)))
+		}
 	}
 
-	return nil
+	if s.mountCmd != nil {
+		if err := s.mountCmd.Wait(mountPointUnmountTimeout); errors.Is(err, managedprocess.ErrStillRunning) {
+			if terminateErr := s.mountCmd.Terminate(mountPointUnmountTimeout); terminateErr != nil {
+				errs = errors.Join(errs, fmt.Errorf("error terminating mountpoint source process: %w, output: %s", terminateErr, s.mountCmd.OutputString()))
+			}
+		}
+		s.mountCmd = nil
+	}
+
+	return errs
 }

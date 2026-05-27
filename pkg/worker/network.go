@@ -50,6 +50,7 @@ const (
 	defaultContainerNetworkSlotPoolSize               = 16
 	containerNetworkSlotPoolEnv         string        = "CONTAINER_NETWORK_SLOT_POOL_SIZE"
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
+	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 )
 
 type ContainerNetworkManager struct {
@@ -1882,7 +1883,10 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		return m.tearDownPreallocatedNetworkSlot(containerId, slot)
 	}
 
-	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+	defer cleanupCancel()
+
+	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(cleanupCtx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
 		Retries:       10,
@@ -1890,10 +1894,14 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	if err != nil {
 		return err
 	}
-	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix,
-		Token:         lockResponse.Token,
-	})
+	defer func() {
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+		defer unlockCancel()
+		m.workerRepoClient.RemoveNetworkLock(unlockCtx, &pb.RemoveNetworkLockRequest{
+			NetworkPrefix: m.networkPrefix,
+			Token:         lockResponse.Token,
+		})
+	}()
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -1937,7 +1945,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		netns.DeleteNamed(info.Namespace)
 	}
 
-	_, err = handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(m.ctx, &pb.RemoveContainerIpRequest{
+	_, err = handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(cleanupCtx, &pb.RemoveContainerIpRequest{
 		NetworkPrefix: m.networkPrefix,
 		ContainerId:   containerId,
 	}))
@@ -1999,7 +2007,10 @@ func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *conta
 
 func (m *ContainerNetworkManager) releasePreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
 	reservationID := m.containerNetworkSlotReservation(slot)
-	_, err := handleGRPCResponse(m.workerRepoClient.MoveContainerIp(m.ctx, &pb.MoveContainerIpRequest{
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+	defer cleanupCancel()
+
+	_, err := handleGRPCResponse(m.workerRepoClient.MoveContainerIp(cleanupCtx, &pb.MoveContainerIpRequest{
 		NetworkPrefix:   m.networkPrefix,
 		FromContainerId: containerId,
 		ToContainerId:   reservationID,

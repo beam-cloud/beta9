@@ -22,17 +22,22 @@ import (
 )
 
 type ContainerMountManager struct {
-	mountPointPaths *common.SafeMap[[]string]
-	storageConfig   types.StorageConfig
-	codeCacheRoot   string
-	codeCacheGroup  singleflight.Group
+	mountPointMounts *common.SafeMap[[]containerMountPoint]
+	storageConfig    types.StorageConfig
+	codeCacheRoot    string
+	codeCacheGroup   singleflight.Group
+}
+
+type containerMountPoint struct {
+	localPath string
+	storage   storage.Storage
 }
 
 func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 	return &ContainerMountManager{
-		mountPointPaths: common.NewSafeMap[[]string](),
-		storageConfig:   config.Storage,
-		codeCacheRoot:   filepath.Join(os.TempDir(), "beta9-stub-code-cache"),
+		mountPointMounts: common.NewSafeMap[[]containerMountPoint](),
+		storageConfig:    config.Storage,
+		codeCacheRoot:    filepath.Join(os.TempDir(), "beta9-stub-code-cache"),
 	}
 }
 
@@ -269,19 +274,21 @@ func copyRegularFile(src, dest string, mode os.FileMode) error {
 
 // RemoveContainerMounts removes all mounts for a container
 func (c *ContainerMountManager) RemoveContainerMounts(containerId string) {
-	mountPointPaths, ok := c.mountPointPaths.Get(containerId)
+	mountPoints, ok := c.mountPointMounts.Get(containerId)
 	if !ok {
 		return
 	}
 
-	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
-	for _, localPath := range mountPointPaths {
-		if err := mountPointS3.Unmount(localPath); err != nil {
-			log.Error().Str("container_id", containerId).Err(err).Msg("failed to unmount external s3 bucket")
+	for _, mountPoint := range mountPoints {
+		if mountPoint.storage == nil {
+			continue
+		}
+		if err := mountPoint.storage.Unmount(mountPoint.localPath); err != nil {
+			log.Error().Str("container_id", containerId).Str("local_path", mountPoint.localPath).Err(err).Msg("failed to unmount external s3 bucket")
 		}
 	}
 
-	c.mountPointPaths.Delete(containerId)
+	c.mountPointMounts.Delete(containerId)
 }
 
 func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mount) error {
@@ -292,14 +299,14 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 		return err
 	}
 
-	mountPointPaths, ok := c.mountPointPaths.Get(containerId)
+	mountPoints, ok := c.mountPointMounts.Get(containerId)
 	if !ok {
-		mountPointPaths = []string{m.LocalPath}
+		mountPoints = []containerMountPoint{{localPath: m.LocalPath, storage: mountPointS3}}
 	} else {
-		mountPointPaths = append(mountPointPaths, m.LocalPath)
+		mountPoints = append(mountPoints, containerMountPoint{localPath: m.LocalPath, storage: mountPointS3})
 	}
 
-	c.mountPointPaths.Set(containerId, mountPointPaths)
+	c.mountPointMounts.Set(containerId, mountPoints)
 
 	return nil
 }

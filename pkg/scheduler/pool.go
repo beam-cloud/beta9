@@ -33,6 +33,7 @@ const (
 	devicePluginVolumeName      string  = "kubelet-device-plugins"
 	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
 	defaultContainerName        string  = "worker"
+	defaultWorkerInit           string  = "/usr/bin/tini"
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string  = "/var/log/worker"
 	defaultImagesPath           string  = "/images"
@@ -40,9 +41,15 @@ const (
 	defaultStoragePath          string  = "/storage"
 	defaultCachePath            string  = "/var/lib/beta9/cache"
 	defaultSharedMemoryPct      float32 = 0.5
+	defaultWorkerStopGraceS     int64   = 30
+	minWorkerPodGraceS          int64   = 120
 	poolMonitoringInterval              = 1 * time.Second
 	poolHealthCheckInterval             = 10 * time.Second
 )
+
+func workerPodCommand() []string {
+	return []string{defaultWorkerInit, "-g", "--", defaultWorkerEntrypoint}
+}
 
 type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error)
@@ -120,6 +127,19 @@ func workerCacheMountPath(config types.AppConfig, poolConfig types.WorkerPoolCon
 		return config.Cache.Disk.MountPath
 	}
 	return defaultCachePath
+}
+
+func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
+	if workerStopGraceS <= 0 {
+		workerStopGraceS = defaultWorkerStopGraceS
+	}
+
+	// Covers task drain, forced nested-container stop, and FUSE unmounts.
+	grace := workerStopGraceS*2 + 60
+	if grace < minWorkerPodGraceS {
+		return minWorkerPodGraceS
+	}
+	return grace
 }
 
 func MonitorPoolSize(wpc WorkerPoolController,

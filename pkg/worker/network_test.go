@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -11,7 +12,19 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc"
 )
+
+type cleanupContextWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	moveCtxErr error
+}
+
+func (c *cleanupContextWorkerRepoClient) MoveContainerIp(ctx context.Context, in *pb.MoveContainerIpRequest, opts ...grpc.CallOption) (*pb.MoveContainerIpResponse, error) {
+	c.moveCtxErr = ctx.Err()
+	return &pb.MoveContainerIpResponse{Ok: true}, nil
+}
 
 func TestGetIPFromEnv(t *testing.T) {
 	tests := []struct {
@@ -162,6 +175,33 @@ func TestContainerNetworkSlotReservationParsing(t *testing.T) {
 	manager := &ContainerNetworkManager{workerId: "worker-a"}
 	if got := manager.containerNetworkSlotReservationID("slot-b"); got != scoped {
 		t.Fatalf("unexpected worker-scoped reservation id: got %q want %q", got, scoped)
+	}
+}
+
+func TestReleasePreallocatedNetworkSlotUsesFreshCleanupContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	repoClient := &cleanupContextWorkerRepoClient{}
+	manager := &ContainerNetworkManager{
+		ctx:              ctx,
+		workerId:         "worker-a",
+		workerRepoClient: repoClient,
+		networkPrefix:    "network-a",
+		allocatedIPs:     map[string]struct{}{"192.168.0.2": {}},
+		containerIPs:     map[string]string{"container-a": "192.168.0.2"},
+	}
+
+	err := manager.releasePreallocatedNetworkSlot("container-a", &containerNetworkSlot{
+		id: "slot-a",
+		ip: "192.168.0.2",
+	})
+
+	if err != nil {
+		t.Fatalf("releasePreallocatedNetworkSlot failed: %v", err)
+	}
+	if repoClient.moveCtxErr != nil {
+		t.Fatalf("cleanup RPC used canceled worker context: %v", repoClient.moveCtxErr)
 	}
 }
 
