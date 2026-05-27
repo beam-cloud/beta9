@@ -3,15 +3,40 @@ package worker
 import (
 	"context"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
+
+type shutdownSignalRuntime struct {
+	mockRuntime
+	mu      sync.Mutex
+	signals []syscall.Signal
+	onKill  func(syscall.Signal)
+}
+
+func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
+	m.mu.Lock()
+	m.signals = append(m.signals, sig)
+	m.mu.Unlock()
+	if m.onKill != nil {
+		m.onKill(sig)
+	}
+	return nil
+}
+
+func (m *shutdownSignalRuntime) recordedSignals() []syscall.Signal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]syscall.Signal(nil), m.signals...)
+}
 
 func TestCalculateCPUShares(t *testing.T) {
 	tests := []struct {
@@ -183,12 +208,16 @@ func TestUpdateContainerStatusOnceReconcilesStartedPendingContainer(t *testing.T
 	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
-func TestWaitForActiveContainersBeforeShutdownWaitsForInstanceDrain(t *testing.T) {
+func TestShutdownWaitDrainsWithoutStoppingActiveContainer(t *testing.T) {
 	worker := &Worker{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		containerWg:        sync.WaitGroup{},
 	}
-	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1"})
+	rt := &shutdownSignalRuntime{}
+	worker.containerInstances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		Runtime: rt,
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -201,6 +230,7 @@ func TestWaitForActiveContainersBeforeShutdownWaitsForInstanceDrain(t *testing.T
 		t.Fatal("shutdown wait returned before active instance drained")
 	case <-time.After(25 * time.Millisecond):
 	}
+	require.Empty(t, rt.recordedSignals())
 
 	worker.containerInstances.Delete("container-1")
 
@@ -209,6 +239,57 @@ func TestWaitForActiveContainersBeforeShutdownWaitsForInstanceDrain(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("shutdown wait did not return after active instance drained")
 	}
+	require.Empty(t, rt.recordedSignals())
+}
+
+func TestStopActiveContainersForShutdownStopsNestedRuntimeBeforeWorkerExit(t *testing.T) {
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerWg:        sync.WaitGroup{},
+		config: types.AppConfig{
+			Worker: types.WorkerConfig{TerminationGracePeriod: 30},
+		},
+	}
+	rt := &shutdownSignalRuntime{}
+	rt.onKill = func(sig syscall.Signal) {
+		worker.containerInstances.Delete("container-1")
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		Runtime: rt,
+	})
+
+	worker.stopActiveContainersForShutdown()
+
+	require.Empty(t, worker.activeContainerIDs())
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.recordedSignals())
+}
+
+func TestStopActiveContainersForShutdownForceKillsStuckRuntime(t *testing.T) {
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerWg:        sync.WaitGroup{},
+		config: types.AppConfig{
+			Worker: types.WorkerConfig{TerminationGracePeriod: 1},
+		},
+	}
+	rt := &shutdownSignalRuntime{}
+	rt.onKill = func(sig syscall.Signal) {
+		if sig == syscall.SIGKILL {
+			worker.containerInstances.Delete("container-1")
+		}
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		Runtime: rt,
+	})
+
+	start := time.Now()
+	worker.stopActiveContainersForShutdown()
+
+	require.GreaterOrEqual(t, time.Since(start), time.Second)
+	require.Empty(t, worker.activeContainerIDs())
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.recordedSignals())
 }
 
 func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {

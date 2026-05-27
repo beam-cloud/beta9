@@ -218,11 +218,9 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	containers := []corev1.Container{
 		{
-			Name:  defaultContainerName,
-			Image: workerImage,
-			Command: []string{
-				defaultWorkerEntrypoint,
-			},
+			Name:      defaultContainerName,
+			Image:     workerImage,
+			Command:   workerPodCommand(),
 			Resources: resources,
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
@@ -249,15 +247,16 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			Labels: labels,
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName:           wpc.config.Worker.ServiceAccountName,
-			AutomountServiceAccountToken: ptr.To(true),
-			HostNetwork:                  wpc.config.Worker.HostNetwork,
-			ImagePullSecrets:             imagePullSecrets,
-			RestartPolicy:                corev1.RestartPolicyOnFailure,
-			NodeSelector:                 wpc.workerPoolConfig.JobSpec.NodeSelector,
-			Containers:                   containers,
-			Volumes:                      wpc.getWorkerVolumes(workerMemory),
-			EnableServiceLinks:           ptr.To(false),
+			ServiceAccountName:            wpc.config.Worker.ServiceAccountName,
+			AutomountServiceAccountToken:  ptr.To(true),
+			HostNetwork:                   wpc.config.Worker.HostNetwork,
+			ImagePullSecrets:              imagePullSecrets,
+			RestartPolicy:                 corev1.RestartPolicyOnFailure,
+			NodeSelector:                  wpc.workerPoolConfig.JobSpec.NodeSelector,
+			Containers:                    containers,
+			Volumes:                       wpc.getWorkerVolumes(workerMemory),
+			EnableServiceLinks:            ptr.To(false),
+			TerminationGracePeriodSeconds: ptr.To(workerPodTerminationGracePeriod(wpc.config.Worker.TerminationGracePeriod)),
 		},
 	}
 

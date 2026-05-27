@@ -1,20 +1,25 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"time"
 
+	managedprocess "github.com/beam-cloud/beta9/pkg/common/process"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/cenkalti/backoff"
 	"github.com/rs/zerolog/log"
 )
 
-const juiceFsMountTimeout time.Duration = 30 * time.Second
+const (
+	juiceFsMountTimeout   time.Duration = 30 * time.Second
+	juiceFsUnmountTimeout time.Duration = 10 * time.Second
+)
 
 type JuiceFsStorage struct {
-	mountCmd *exec.Cmd
+	mountCmd *managedprocess.ManagedCommand
 	config   types.JuiceFSConfig
 }
 
@@ -39,8 +44,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		bufferSize = "300"
 	}
 
-	s.mountCmd = exec.Command(
-		"juicefs",
+	args := []string{
 		"mount",
 		s.config.RedisURI,
 		localPath,
@@ -49,41 +53,36 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--prefetch", prefetch,
 		"--buffer-size", bufferSize,
 		"--no-usage-report",
-	)
-
-	// Start command in the background
-	go func() {
-		if out, err := s.mountCmd.CombinedOutput(); err != nil {
-			log.Error().Err(err).Str("output", string(out)).Msg("error with juicefs mount command")
-		}
-	}()
+	}
+	mountCmd, err := managedprocess.StartManagedCommand("juicefs", args, nil)
+	if err != nil {
+		return err
+	}
+	s.mountCmd = mountCmd
 
 	ticker := time.NewTicker(100 * time.Millisecond)
-	timeout := time.After(juiceFsMountTimeout)
+	defer ticker.Stop()
+	timeout := time.NewTimer(juiceFsMountTimeout)
+	defer timeout.Stop()
 
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-timeout:
-				done <- false
-				return
-			case <-ticker.C:
-				if isMounted(localPath) {
-					done <- true
-					return
-				}
-			}
+	for {
+		if isMounted(localPath) {
+			log.Info().Str("local_path", localPath).Msg("juicefs filesystem mounted")
+			return nil
 		}
-	}()
+		if err, done := s.mountCmd.DoneErr(); done {
+			return fmt.Errorf("juicefs mount exited before mount completed: %w, output: %s", err, s.mountCmd.OutputString())
+		}
 
-	// Wait for confirmation or timeout
-	if !<-done {
-		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
+		select {
+		case <-ticker.C:
+		case <-timeout.C:
+			output := s.mountCmd.OutputString()
+			_ = s.mountCmd.Terminate(juiceFsUnmountTimeout)
+			s.mountCmd = nil
+			return fmt.Errorf("failed to mount JuiceFS filesystem to %q, output: %s", localPath, output)
+		}
 	}
-
-	log.Info().Str("local_path", localPath).Msg("juicefs filesystem mounted")
-	return nil
 }
 
 func (s *JuiceFsStorage) Mode() string {
@@ -124,10 +123,9 @@ func (s *JuiceFsStorage) Format(fsName string) error {
 }
 
 func (s *JuiceFsStorage) Unmount(localPath string) error {
+	var errs error
 	juiceFsUmount := func() error {
-		cmd := exec.Command("juicefs", "umount", localPath)
-
-		output, err := cmd.CombinedOutput()
+		output, err := managedprocess.RunCommandWithTimeout(juiceFsUnmountTimeout, "juicefs", "umount", localPath)
 		if err != nil {
 			log.Error().Err(err).Str("output", string(output)).Msg("error executing juicefs umount")
 			return err
@@ -138,15 +136,20 @@ func (s *JuiceFsStorage) Unmount(localPath string) error {
 	}
 
 	err := backoff.Retry(juiceFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
-	if err == nil {
-		return nil
-	}
-
-	// Forcefully kill the fuse mount devices
-	err = exec.Command("fuser", "-k", "/dev/fuse").Run()
 	if err != nil {
-		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
+		errs = errors.Join(errs, err)
 	}
 
-	return nil
+	if s.mountCmd != nil {
+		if err := s.mountCmd.Wait(juiceFsUnmountTimeout); errors.Is(err, managedprocess.ErrStillRunning) {
+			if terminateErr := s.mountCmd.Terminate(juiceFsUnmountTimeout); terminateErr != nil {
+				errs = errors.Join(errs, fmt.Errorf("error terminating juicefs process: %w, output: %s", terminateErr, s.mountCmd.OutputString()))
+			}
+		} else if err != nil {
+			log.Debug().Err(err).Str("output", s.mountCmd.OutputString()).Msg("juicefs process exited during unmount")
+		}
+		s.mountCmd = nil
+	}
+
+	return errs
 }

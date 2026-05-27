@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,6 +22,7 @@ const (
 	defaultGeeseFSFileMode         = 0644
 	defaultGeeseFSMountTimeout     = 30 * time.Second
 	defaultGeeseFSRequestTimeout   = 60 * time.Second
+	defaultGeeseFSUnmountTimeout   = 2 * defaultGeeseFSRequestTimeout
 	defaultGeeseFSFuseReadAheadKb  = 32768
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
@@ -296,14 +298,29 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var errs error
+
 	if s.fs != nil {
 		log.Info().Str("local_path", localPath).Msg("geesefs: waiting for files to flush")
-		s.fs.WaitForFlush()
-		log.Info().Str("local_path", localPath).Msg("geesefs: files flushed")
+		flushed := make(chan struct{})
+		go func(fs *core.Goofys) {
+			fs.WaitForFlush()
+			close(flushed)
+		}(s.fs)
+
+		select {
+		case <-flushed:
+			log.Info().Str("local_path", localPath).Msg("geesefs: files flushed")
+		case <-time.After(defaultGeeseFSUnmountTimeout):
+			errs = errors.Join(errs, fmt.Errorf("timed out waiting for geesefs files to flush after %s", defaultGeeseFSUnmountTimeout))
+			log.Warn().Str("local_path", localPath).Dur("timeout", defaultGeeseFSUnmountTimeout).Msg("geesefs: flush wait timed out during unmount")
+		}
 	}
 
 	if s.mfs != nil {
-		s.mfs.Unmount()
+		if err := s.mfs.Unmount(); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
 	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem unmounted")
@@ -311,7 +328,7 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 	s.mfs = nil
 	s.fs = nil
 
-	return nil
+	return errs
 }
 
 func (s *GeeseStorage) Format(fsName string) error {
