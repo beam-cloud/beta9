@@ -44,7 +44,7 @@ func (hm *HostMap) Set(host *Host) {
 	}
 
 	if exists {
-		Logger.Infof("Updated host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
+		Logger.Debugf("Updated host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	} else {
 		Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	}
