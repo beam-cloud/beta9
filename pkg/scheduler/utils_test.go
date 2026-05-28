@@ -162,6 +162,29 @@ func TestParseGPU(t *testing.T) {
 	}
 }
 
+func TestIsLocalBuildRegistry(t *testing.T) {
+	tests := []struct {
+		name     string
+		registry string
+		want     bool
+	}{
+		{name: "empty", registry: "", want: false},
+		{name: "localhost", registry: "localhost", want: true},
+		{name: "localhost with port", registry: "localhost:5000", want: true},
+		{name: "localhost subdomain", registry: "registry.localhost:5000", want: true},
+		{name: "loopback", registry: "127.0.0.1:5000", want: true},
+		{name: "ipv6 loopback", registry: "[::1]:5000", want: true},
+		{name: "ecr", registry: "123456789012.dkr.ecr.us-east-1.amazonaws.com", want: false},
+		{name: "remote registry", registry: "registry.example.com:5000", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isLocalBuildRegistry(tt.registry))
+		})
+	}
+}
+
 func TestParseGPUType(t *testing.T) {
 	tests := []struct {
 		name    string
