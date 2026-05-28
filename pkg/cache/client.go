@@ -3,10 +3,13 @@ package cache
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -631,9 +634,41 @@ func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool
 }
 
 func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
-	hostsToCheck := c.clientConfig.NTopHosts
+	if routingKey == "" {
+		routingKey = hash
+	}
 
-	for hostIndex := 0; hostIndex < hostsToCheck; hostIndex++ {
+	checked := make(map[string]struct{})
+	checkHost := func(host *Host) (bool, error) {
+		if host == nil || host.HostId == "" {
+			return false, nil
+		}
+		if _, ok := checked[host.HostId]; ok {
+			return false, nil
+		}
+		checked[host.HostId] = struct{}{}
+
+		c.mu.RLock()
+		client, exists := c.grpcClients[host.HostId]
+		c.mu.RUnlock()
+		if !exists {
+			return false, nil
+		}
+
+		resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+		if err != nil {
+			c.removeHost(host)
+			return false, err
+		}
+		if resp.Exists {
+			return true, nil
+		}
+
+		c.removeLocalHostCache(hash)
+		return false, nil
+	}
+
+	for hostIndex := 0; hostIndex < c.clientConfig.NTopHosts; hostIndex++ {
 		client, host, err := c.getGRPCClient(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
@@ -644,6 +679,7 @@ func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
 			continue
 		}
 
+		checked[host.HostId] = struct{}{}
 		resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
 			c.removeHost(host)
@@ -655,6 +691,13 @@ func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
 		}
 
 		c.removeLocalHostCache(hash)
+	}
+
+	for _, host := range c.remainingHostsForRequest(checked) {
+		exists, _ := checkHost(host)
+		if exists {
+			return true, nil
+		}
 	}
 
 	return false, nil
@@ -901,6 +944,7 @@ func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int6
 		}
 	}
 
+	checked := make(map[string]struct{})
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
@@ -923,30 +967,40 @@ func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int6
 			}
 		}
 
-		c.mu.RLock()
-		localServer := c.localServers[host.HostId]
-		c.mu.RUnlock()
-		if localServer == nil || localServer.cas == nil {
-			if views, ok := c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length); ok {
-				return views, nil
-			}
-			continue
-		}
-
-		if views, ok := clientLocalPageFileViewsFromStore(localServer.cas, hash, offset, length); ok {
-			cacheReadClientLocalPageFileTotal.Inc()
-			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
-			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+		checked[host.HostId] = struct{}{}
+		if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
 			return views, nil
 		}
+	}
 
-		if views, ok := c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length); ok {
+	for _, host := range c.remainingHostsForRequest(checked) {
+		if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
 			return views, nil
 		}
 	}
 
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	return nil, ErrContentNotFound
+}
+
+func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
+	if host == nil {
+		return nil, false
+	}
+
+	c.mu.RLock()
+	localServer := c.localServers[host.HostId]
+	c.mu.RUnlock()
+	if localServer != nil && localServer.cas != nil {
+		if views, ok := clientLocalPageFileViewsFromStore(localServer.cas, hash, offset, length); ok {
+			cacheReadClientLocalPageFileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+			return views, true
+		}
+	}
+
+	return c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length)
 }
 
 func (c *Client) clientLocalPageFileViewsFromAttachedStores(hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
@@ -1089,6 +1143,8 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 			}
 		}
 	}
+
+	checked := make(map[string]struct{})
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
@@ -1111,77 +1167,120 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 			}
 		}
 
-		c.mu.RLock()
-		localServer := c.localServers[host.HostId]
-		c.mu.RUnlock()
-		if localServer != nil && localServer.cas != nil {
-			n, err := localServer.cas.ReadAt(hash, offset, dst)
-			if err == nil && n == length {
-				cacheReadLocalTotal.Inc()
-				atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
-				return n, nil
-			}
-			if err == ErrContentNotFound {
-				atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
-				c.removeLocalHostCache(hash)
-				continue
-			}
-			if err != nil {
-				atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
-				continue
-			}
+		checked[host.HostId] = struct{}{}
+		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
+		if err == nil && n == length {
+			return n, nil
 		}
+	}
 
-		if c.clientConfig.ReadTransport.Enabled {
-			n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
-			if err == nil && n == length {
-				c.promoteReadChunkToLocal(hash, offset, dst[:int(n)])
-				return n, nil
-			}
-			if err == ErrContentNotFound {
-				c.removeLocalHostCache(hash)
-				continue
-			}
-			if err != nil {
-				cacheReadRawFallbackTotal.Inc()
-			}
+	for _, host := range c.remainingHostsForRequest(checked) {
+		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
+		if err == nil && n == length {
+			return n, nil
 		}
-
-		c.mu.RLock()
-		client, exists := c.grpcClients[host.HostId]
-		c.mu.RUnlock()
-		if !exists {
-			c.removeLocalHostCache(hash)
-			_ = c.refreshRoutableHosts(ctx)
-			continue
-		}
-
-		start := time.Now()
-		getContentResponse, err := client.GetContent(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
-		if err != nil {
-			atomic.AddInt64(&cachePathStats.clientGRPCErrors, 1)
-			if c.globalConfig.GRPCPayloadCodecV2 {
-				cacheReadGRPCCodecV2FallbackTotal.Inc()
-			}
-			c.removeHost(host)
-			continue
-		}
-		if !getContentResponse.Ok || int64(len(getContentResponse.Content)) != length {
-			atomic.AddInt64(&cachePathStats.clientGRPCMisses, 1)
-			c.removeLocalHostCache(hash)
-			continue
-		}
-
-		copy(dst, getContentResponse.Content)
-		atomic.AddInt64(&cachePathStats.clientGRPCHits, 1)
-		if c.globalConfig.GRPCPayloadCodecV2 {
-			cacheReadGRPCCodecV2Total.Inc()
-		}
-		Logger.Debugf("Elapsed time to get content: %v", time.Since(start))
-		return length, nil
 	}
 
 	return 0, ErrContentNotFound
+}
+
+func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
+	if host == nil {
+		return 0, ErrHostNotFound
+	}
+
+	length := int64(len(dst))
+	c.mu.RLock()
+	localServer := c.localServers[host.HostId]
+	c.mu.RUnlock()
+	if localServer != nil && localServer.cas != nil {
+		n, err := localServer.cas.ReadAt(hash, offset, dst)
+		if err == nil && n == length {
+			cacheReadLocalTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
+			return n, nil
+		}
+		if err == ErrContentNotFound {
+			atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+			c.removeLocalHostCache(hash)
+			return 0, err
+		}
+		if err != nil {
+			atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+		}
+	}
+
+	if c.clientConfig.ReadTransport.Enabled {
+		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
+		if err == nil && n == length {
+			c.promoteReadChunkToLocal(hash, offset, dst[:int(n)])
+			return n, nil
+		}
+		if err == ErrContentNotFound {
+			c.removeLocalHostCache(hash)
+			return 0, err
+		}
+		if err != nil {
+			cacheReadRawFallbackTotal.Inc()
+		}
+	}
+
+	c.mu.RLock()
+	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	if !exists {
+		c.removeLocalHostCache(hash)
+		_ = c.refreshRoutableHosts(ctx)
+		return 0, ErrHostNotFound
+	}
+
+	start := time.Now()
+	getContentResponse, err := client.GetContent(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
+	if err != nil {
+		atomic.AddInt64(&cachePathStats.clientGRPCErrors, 1)
+		if c.globalConfig.GRPCPayloadCodecV2 {
+			cacheReadGRPCCodecV2FallbackTotal.Inc()
+		}
+		c.removeHost(host)
+		return 0, err
+	}
+	if !getContentResponse.Ok || int64(len(getContentResponse.Content)) != length {
+		atomic.AddInt64(&cachePathStats.clientGRPCMisses, 1)
+		c.removeLocalHostCache(hash)
+		return 0, ErrContentNotFound
+	}
+
+	copy(dst, getContentResponse.Content)
+	atomic.AddInt64(&cachePathStats.clientGRPCHits, 1)
+	if c.globalConfig.GRPCPayloadCodecV2 {
+		cacheReadGRPCCodecV2Total.Inc()
+	}
+	Logger.Debugf("Elapsed time to get content: %v", time.Since(start))
+	return length, nil
+}
+
+func (c *Client) remainingHostsForRequest(checked map[string]struct{}) []*Host {
+	if c.hostMap == nil {
+		return nil
+	}
+
+	hosts := c.hostMap.GetAll()
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].HostId < hosts[j].HostId
+	})
+
+	out := hosts[:0]
+	for _, host := range hosts {
+		if host == nil || host.HostId == "" {
+			continue
+		}
+		if _, ok := checked[host.HostId]; ok {
+			continue
+		}
+		checked[host.HostId] = struct{}{}
+		out = append(out, host)
+	}
+	return out
 }
 
 func (c *Client) promoteReadChunkToLocal(hash string, offset int64, data []byte) {
@@ -1393,6 +1492,134 @@ func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	RoutingKey string
 }) (string, error) {
 	return c.storeContentFromChunks(chunks, hash, "", opts.RoutingKey)
+}
+
+// StoreContentWithLocalReplica tees streamed content into the
+// rendezvous-selected cache host and the writer's local disk cache at the same
+// time. This preserves churn safety without serializing a full second copy.
+func (c *Client) StoreContentWithLocalReplica(chunks chan []byte, hash string, opts StoreContentOptions) (string, error) {
+	localStore := c.localReplicaStoreForWrite()
+	if !c.clientConfig.PreferLocalCacheHost || localStore == nil {
+		return c.StoreContent(chunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
+	}
+
+	routingKey := opts.RoutingKey
+	if routingKey == "" {
+		routingKey = hash
+	}
+
+	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
+	defer cancel()
+
+	lockPath := routingKey
+	if lockPath == "" {
+		lockPath = hash
+	}
+
+	return c.withStoreFromContentLock(ctx, lockPath, opts.Lock, func() (string, error) {
+		return c.storeContentWithLocalReplica(ctx, localStore, chunks, hash, routingKey)
+	})
+}
+
+func (c *Client) localReplicaStoreForWrite() *Store {
+	for _, store := range c.localStoresSnapshot() {
+		if store != nil {
+			return store
+		}
+	}
+	return nil
+}
+
+func (c *Client) storeContentWithLocalReplica(ctx context.Context, localStore *Store, chunks <-chan []byte, expectedHash string, routingKey string) (string, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type storeResult struct {
+		hash string
+		size int64
+		err  error
+	}
+
+	remoteReader, remoteWriter := io.Pipe()
+	localReader, localWriter := io.Pipe()
+
+	remoteDone := make(chan storeResult, 1)
+	go func() {
+		hash, err := c.storeContentFromReaderWithContext(ctx, remoteReader, routingKey, "", nil)
+		remoteDone <- storeResult{hash: hash, err: err}
+	}()
+
+	localDone := make(chan storeResult, 1)
+	go func() {
+		hash, size, err := localStore.AddReader(ctx, localReader)
+		localDone <- storeResult{hash: hash, size: size, err: err}
+	}()
+
+	hasher := sha256.New()
+	var size int64
+	var writeErr error
+	for chunk := range chunks {
+		if len(chunk) == 0 {
+			continue
+		}
+		if _, err := hasher.Write(chunk); err != nil {
+			writeErr = err
+			break
+		}
+		if _, err := remoteWriter.Write(chunk); err != nil {
+			writeErr = err
+			break
+		}
+		if _, err := localWriter.Write(chunk); err != nil {
+			writeErr = err
+			break
+		}
+		size += int64(len(chunk))
+	}
+
+	if writeErr != nil {
+		cancel()
+		_ = remoteWriter.CloseWithError(writeErr)
+		_ = localWriter.CloseWithError(writeErr)
+		drainContentChunks(chunks)
+	} else {
+		_ = remoteWriter.Close()
+		_ = localWriter.Close()
+	}
+
+	remoteResult := <-remoteDone
+	localResult := <-localDone
+	if writeErr != nil {
+		return remoteResult.hash, writeErr
+	}
+	if remoteResult.err != nil {
+		return remoteResult.hash, remoteResult.err
+	}
+	if localResult.err != nil {
+		return remoteResult.hash, localResult.err
+	}
+
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if expectedHash != "" && actualHash != expectedHash {
+		return remoteResult.hash, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+	if remoteResult.hash != actualHash {
+		return remoteResult.hash, fmt.Errorf("remote content hash mismatch: expected %s, got %s", actualHash, remoteResult.hash)
+	}
+	if localResult.hash != actualHash {
+		return remoteResult.hash, fmt.Errorf("local replica hash mismatch: expected %s, got %s", actualHash, localResult.hash)
+	}
+	if localResult.size != size {
+		return remoteResult.hash, fmt.Errorf("local replica size mismatch: expected %d, got %d", size, localResult.size)
+	}
+
+	Logger.Debugf("StoreContentWithLocalReplica[OK] - [expected=%s actual=%s routing_key=%s size=%d]", expectedHash, remoteResult.hash, routingKey, size)
+	return remoteResult.hash, nil
+}
+
+func drainContentChunks(chunks <-chan []byte) {
+	for range chunks {
+	}
 }
 
 func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts StoreContentOptions) (string, error) {

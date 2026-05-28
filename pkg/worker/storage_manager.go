@@ -107,7 +107,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 				ReadAheadParallelKB:    sm.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
 				FuseReadAheadKB:        sm.config.WorkspaceStorage.Geese.FuseReadAheadKB,
 				DisableVolumeCaching:   sm.config.WorkspaceStorage.Geese.DisableVolumeCaching,
-				StagedWriteModeEnabled: false,
+				StagedWriteModeEnabled: sm.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
 				StagedWritePath:        sm.config.WorkspaceStorage.Geese.StagedWritePath,
 				StagedWriteDebounce:    sm.config.WorkspaceStorage.Geese.StagedWriteDebounce,
 				CacheStreamingEnabled:  sm.config.WorkspaceStorage.Geese.CacheStreamingEnabled,

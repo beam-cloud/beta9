@@ -3,6 +3,8 @@ package cache
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -70,6 +72,40 @@ func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+}
+
+func TestReadContentIntoFallsBackToReachableReplicaOutsideTopHosts(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("local-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+		hostMap:               NewHostMap(GlobalConfig{}, nil),
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap.Set(localHost)
+	client.AttachLocalServer(&Server{cas: store})
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
+	require.NoError(t, err)
+	require.Len(t, regions, 2)
 }
 
 func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
@@ -303,6 +339,75 @@ func TestStoreContentFromLocalFileUsesMatchingCacheMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, hash, got)
 	require.Empty(t, metadataStore.locks)
+}
+
+func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	localStore := newTestStore(t, 4)
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+	client.AttachLocalStore(localStore)
+
+	content := []byte("cache-through-local-replica")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	chunks := make(chan []byte, 2)
+	chunks <- content[:9]
+	chunks <- content[9:]
+	close(chunks)
+
+	got, err := client.StoreContentWithLocalReplica(chunks, expectedHash, StoreContentOptions{RoutingKey: "/cache/object"})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+
+	remote := make([]byte, len(content))
+	n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, remote)
+
+	local := make([]byte, len(content))
+	n, err = localStore.ReadAt(expectedHash, 0, local)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, local)
 }
 
 type failFirstUnlockRegistry struct {
