@@ -64,7 +64,7 @@ storage:
       fuseReadAheadKB: 32768
       readAheadParallelKB: 4096
       mountOptions: []
-      stagedWriteModeEnabled: false
+      stagedWriteModeEnabled: true
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false

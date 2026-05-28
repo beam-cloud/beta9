@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ const (
 	defaultGeeseFSFileMode         = 0644
 	defaultGeeseFSMountTimeout     = 30 * time.Second
 	defaultGeeseFSRequestTimeout   = 60 * time.Second
+	defaultGeeseFSFlushTimeout     = 60 * time.Second
 	defaultGeeseFSUnmountTimeout   = 10 * time.Second
 	defaultGeeseFSFuseReadAheadKb  = 32768
 	defaultGeeseFSReadAheadKb      = 32768
@@ -67,7 +69,7 @@ func (c *geeseContentCache) GetContentStream(hash string, offset int64, length i
 }
 
 func (c *geeseContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {
-	return c.client.StoreContent(chunks, hash, opts)
+	return c.client.StoreContentWithLocalReplica(chunks, hash, cache.StoreContentOptions{RoutingKey: opts.RoutingKey})
 }
 
 func (c *geeseContentCache) StoreContentFromS3(source struct {
@@ -176,10 +178,13 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		{PartSize: 128 * 1024 * 1024, PartCount: 8000},
 	}
 
-	// Staged writes route large writes through local temp files before flushing.
-	// Keep them disabled for workspace storage so benchmark and production reads
-	// validate the normal geesefs/S3/cache path instead of temp-file side effects.
 	flags.StagedWriteModeEnabled = s.config.StagedWriteModeEnabled
+	if s.cacheClient != nil && s.config.CacheThroughEnabled && !s.config.DisableVolumeCaching {
+		// Cache-through needs a stable local source for large files. The buffered
+		// multipart path can publish object metadata before the async hash/cache
+		// pipeline has finished, which makes hot reads race or miss after churn.
+		flags.StagedWriteModeEnabled = true
+	}
 	flags.StagedWritePath = s.config.StagedWritePath
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
@@ -369,14 +374,14 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 		select {
 		case <-flushed:
 			log.Info().Str("local_path", localPath).Msg("geesefs: files flushed")
-		case <-time.After(defaultGeeseFSUnmountTimeout):
-			errs = errors.Join(errs, fmt.Errorf("timed out waiting for geesefs files to flush after %s", defaultGeeseFSUnmountTimeout))
-			log.Warn().Str("local_path", localPath).Dur("timeout", defaultGeeseFSUnmountTimeout).Msg("geesefs: flush wait timed out during unmount")
+		case <-time.After(defaultGeeseFSFlushTimeout):
+			errs = errors.Join(errs, fmt.Errorf("timed out waiting for geesefs files to flush after %s", defaultGeeseFSFlushTimeout))
+			log.Warn().Str("local_path", localPath).Dur("timeout", defaultGeeseFSFlushTimeout).Msg("geesefs: flush wait timed out during unmount")
 		}
 	}
 
 	if s.mfs != nil {
-		if err := s.mfs.Unmount(); err != nil {
+		if err := unmountGeeseFS(s.mfs, localPath); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -386,6 +391,47 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 	s.mfs = nil
 	s.fs = nil
 
+	return errs
+}
+
+func unmountGeeseFS(mfs core.MountedFS, localPath string) error {
+	unmounted := make(chan error, 1)
+	go func() {
+		unmounted <- mfs.Unmount()
+	}()
+
+	select {
+	case err := <-unmounted:
+		return err
+	case <-time.After(defaultGeeseFSUnmountTimeout):
+		log.Warn().Str("local_path", localPath).Dur("timeout", defaultGeeseFSUnmountTimeout).Msg("geesefs: normal unmount timed out, forcing lazy unmount")
+		forceErr := forceUnmount(localPath)
+		select {
+		case err := <-unmounted:
+			return errors.Join(forceErr, err)
+		case <-time.After(2 * time.Second):
+			return errors.Join(forceErr, fmt.Errorf("timed out waiting for geesefs unmount after force unmount"))
+		}
+	}
+}
+
+func forceUnmount(localPath string) error {
+	var errs error
+	for _, args := range [][]string{
+		{"fusermount3", "-uz", localPath},
+		{"fusermount", "-uz", localPath},
+		{"umount", "-l", localPath},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		if err := cmd.Run(); err != nil {
+			cancel()
+			errs = errors.Join(errs, fmt.Errorf("%s: %w", strings.Join(args, " "), err))
+		} else {
+			cancel()
+			return nil
+		}
+	}
 	return errs
 }
 
