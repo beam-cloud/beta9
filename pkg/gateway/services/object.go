@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -17,7 +18,8 @@ import (
 )
 
 const (
-	defaultObjectPutExpirationS = 60 * 60 * 24
+	defaultObjectPutExpirationS    = 60 * 60 * 24
+	workspaceObjectHashMetadataKey = "--content-sha256"
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
@@ -42,12 +44,16 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 				}, nil
 			}
 
-			exists, err = storageClient.Exists(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
+			objectExists, head, err := storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
 			if err != nil {
 				return &pb.HeadObjectResponse{
 					Ok:       false,
 					ErrorMsg: "Unable to check if object exists",
 				}, nil
+			}
+			exists = objectExists
+			if exists && in.SupportsPutHeaders && !workspaceObjectHasHashMetadata(head, existingObject.Hash) {
+				exists = false
 			}
 		}
 
@@ -76,6 +82,23 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 		Exists:              false,
 		UseWorkspaceStorage: useWorkspaceStorage,
 	}, nil
+}
+
+func workspaceObjectHasHashMetadata(head *s3.HeadObjectOutput, expectedHash string) bool {
+	if head == nil || expectedHash == "" {
+		return false
+	}
+
+	for key, value := range head.Metadata {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		normalizedKey = strings.TrimPrefix(normalizedKey, "x-amz-meta-")
+		if (normalizedKey == workspaceObjectHashMetadataKey || normalizedKey == strings.TrimLeft(workspaceObjectHashMetadataKey, "-")) &&
+			strings.TrimSpace(value) == expectedHash {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObjectRequest) (*pb.CreateObjectResponse, error) {
@@ -111,7 +134,17 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		}
 	}
 
-	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId), defaultObjectPutExpirationS)
+	var (
+		presignedURL string
+		putHeaders   map[string]string
+	)
+	if in.SupportsPutHeaders && in.Hash != "" {
+		presignedMetadata := map[string]string{}
+		presignedMetadata[workspaceObjectHashMetadataKey] = in.Hash
+		presignedURL, putHeaders, err = storageClient.GeneratePresignedPutURLWithMetadata(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId), defaultObjectPutExpirationS, presignedMetadata)
+	} else {
+		presignedURL, err = storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId), defaultObjectPutExpirationS)
+	}
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
@@ -123,6 +156,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		Ok:           true,
 		ObjectId:     object.ExternalId,
 		PresignedUrl: presignedURL,
+		PutHeaders:   putHeaders,
 	}, nil
 }
 

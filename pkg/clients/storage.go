@@ -151,6 +151,9 @@ func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bo
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		if errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound)) {
+			return false, nil, nil
+		}
 		return false, nil, err
 	}
 
@@ -246,15 +249,33 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string, bucket st
 }
 
 func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
-	result, err := c.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
+	result, _, err := c.GeneratePresignedPutURLWithMetadata(ctx, key, expiresInSeconds, bucket, nil)
+	return result, err
+}
+
+func (c *StorageClient) GeneratePresignedPutURLWithMetadata(ctx context.Context, key string, expiresInSeconds int64, bucket string, metadata map[string]string) (string, map[string]string, error) {
+	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	}, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
-	if err != nil {
-		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+	if len(metadata) > 0 {
+		input.Metadata = metadata
 	}
 
-	return result.URL, nil
+	result, err := c.presignClient.PresignPutObject(ctx, input, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+
+	headers := make(map[string]string)
+	for key, values := range result.SignedHeader {
+		if strings.EqualFold(key, "host") || len(values) == 0 {
+			continue
+		}
+		headers[key] = values[0]
+	}
+
+	return result.URL, headers, nil
 }
 
 func (c *StorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
@@ -452,6 +473,10 @@ func (c *WorkspaceStorageClient) ListDirectory(ctx context.Context, dir string) 
 
 func (c *WorkspaceStorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
 	return c.StorageClient.GeneratePresignedPutURL(ctx, key, expiresInSeconds, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) GeneratePresignedPutURLWithMetadata(ctx context.Context, key string, expiresInSeconds int64, metadata map[string]string) (string, map[string]string, error) {
+	return c.StorageClient.GeneratePresignedPutURLWithMetadata(ctx, key, expiresInSeconds, *c.WorkspaceStorage.BucketName, metadata)
 }
 
 func (c *WorkspaceStorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {

@@ -98,13 +98,43 @@ func (r *EventClientRepo) createEventObject(eventName string, schemaVersion stri
 	event.SetSource("beta9-cluster")
 	event.SetType(eventName)
 	event.SetSpecVersion(schemaVersion)
-	event.SetTime(time.Now())
+	event.SetTime(eventTimeForData(data))
 	if err := event.SetData(cloudevents.ApplicationJSON, data); err != nil {
 		return cloudevents.Event{}, err
 	}
 	setEventExtensions(&event, metadata)
 
 	return event, nil
+}
+
+func eventTimeForData(data interface{}) time.Time {
+	switch d := data.(type) {
+	case types.EventTaskSchema:
+		if !d.UpdatedAt.IsZero() {
+			return d.UpdatedAt
+		}
+		if !d.CreatedAt.IsZero() {
+			return d.CreatedAt
+		}
+	case types.EventContainerLogSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
+	case types.EventPlatformLogSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
+	case types.EventContainerEventSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
+	case types.EventContainerLifecycleSchema:
+		if !d.StartTime.IsZero() {
+			return d.StartTime
+		}
+	}
+
+	return time.Now()
 }
 
 func (r *EventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
@@ -795,6 +825,7 @@ func eventTaskSchemaFromTask(task *types.TaskWithRelated) types.EventTaskSchema 
 		Status:      task.Status,
 		ContainerID: task.ContainerId,
 		CreatedAt:   task.CreatedAt.Time,
+		UpdatedAt:   task.UpdatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		StubType:    task.Stub.Type,
 		WorkspaceID: task.Workspace.ExternalId,

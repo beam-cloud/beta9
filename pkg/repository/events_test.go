@@ -98,6 +98,25 @@ func TestEventHTTPSinkDeliversCloudEvent(t *testing.T) {
 	}
 }
 
+func TestTaskCloudEventUsesTaskUpdatedAt(t *testing.T) {
+	repo := &EventClientRepo{}
+	updatedAt := time.Date(2026, 5, 28, 12, 0, 0, 123000000, time.UTC)
+
+	event, err := repo.createEventObject(types.EventTaskUpdated, types.EventTaskSchemaVersion, types.EventTaskSchema{
+		ID:        "task-1",
+		Status:    types.TaskStatusComplete,
+		CreatedAt: updatedAt.Add(-time.Minute),
+		UpdatedAt: updatedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !event.Time().Equal(updatedAt) {
+		t.Fatalf("unexpected event time: got %s want %s", event.Time(), updatedAt)
+	}
+}
+
 func TestEventHTTPSinkSkipsUnmatchedEvents(t *testing.T) {
 	if !eventHTTPMatches([]string{"container.*"}, types.EventContainerEvent) {
 		t.Fatal("expected wildcard callback filter to match container event")
@@ -274,6 +293,26 @@ func TestPushContainerLogSkipsCallbackSinks(t *testing.T) {
 	}
 	if got := len(callbackSink.events); got != 0 {
 		t.Fatalf("expected log event to skip callbacks, got %d callback events", got)
+	}
+}
+
+func TestContainerLogCloudEventUsesLogTimestamp(t *testing.T) {
+	logAt := time.Date(2026, 5, 28, 12, 30, 0, 123456789, time.UTC)
+	repo := &EventClientRepo{}
+
+	event, err := repo.createEventObject(types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		Timestamp:   logAt,
+		ContainerID: "container-1",
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Line:        "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := event.Time(); !got.Equal(logAt) {
+		t.Fatalf("unexpected event time: got %s want %s", got, logAt)
 	}
 }
 

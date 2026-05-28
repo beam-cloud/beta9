@@ -38,6 +38,42 @@ const (
 
 var PostgresDataError = pq.ErrorClass("22")
 
+const taskEventPublisherQueueSize = 4096
+
+type taskEventJob struct {
+	task     types.Task
+	callback func(*types.TaskWithRelated)
+}
+
+type taskEventPublisher struct {
+	repo  *PostgresBackendRepository
+	queue chan taskEventJob
+}
+
+func newTaskEventPublisher(repo *PostgresBackendRepository) *taskEventPublisher {
+	publisher := &taskEventPublisher{
+		repo:  repo,
+		queue: make(chan taskEventJob, taskEventPublisherQueueSize),
+	}
+	go publisher.run()
+
+	return publisher
+}
+
+func (p *taskEventPublisher) enqueue(job taskEventJob) {
+	if p == nil || job.callback == nil || job.task.ExternalId == "" {
+		return
+	}
+
+	p.queue <- job
+}
+
+func (p *taskEventPublisher) run() {
+	for job := range p.queue {
+		p.repo.handleTaskEvent(job.task, job.callback)
+	}
+}
+
 func GenerateDSN(config types.PostgresConfig) string {
 	sslMode := "disable"
 	if config.EnableTLS {
@@ -61,6 +97,7 @@ type PostgresBackendRepository struct {
 	config         types.PostgresConfig
 	eventRepo      EventRepository
 	adminWorkspace *types.Workspace
+	taskEvents     *taskEventPublisher
 }
 
 func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
@@ -71,11 +108,16 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		return nil, err
 	}
 
-	return &PostgresBackendRepository{
+	repo := &PostgresBackendRepository{
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
-	}, nil
+	}
+	if eventRepo != nil {
+		repo.taskEvents = newTaskEventPublisher(repo)
+	}
+
+	return repo, nil
 }
 
 type GooseLogger struct {
@@ -485,13 +527,29 @@ func (r *PostgresBackendRepository) DeleteObjectByExternalId(ctx context.Context
 
 // Task
 
-func (r *PostgresBackendRepository) handleTaskEvent(taskId string, callback func(*types.TaskWithRelated)) {
-	task, err := r.GetTaskWithRelated(context.Background(), taskId)
+func (r *PostgresBackendRepository) handleTaskEvent(task types.Task, callback func(*types.TaskWithRelated)) {
+	taskWithRelated, err := r.GetTaskWithRelated(context.Background(), task.ExternalId)
 	if err != nil {
 		return
 	}
+	if taskWithRelated == nil {
+		return
+	}
 
-	callback(task)
+	// Event payloads must reflect the exact row snapshot that triggered them.
+	taskWithRelated.Task = task
+	callback(taskWithRelated)
+}
+
+func (r *PostgresBackendRepository) enqueueTaskEvent(task types.Task, callback func(*types.TaskWithRelated)) {
+	if r.eventRepo == nil {
+		return
+	}
+	if r.taskEvents == nil {
+		r.handleTaskEvent(task, callback)
+		return
+	}
+	r.taskEvents.enqueue(taskEventJob{task: task, callback: callback})
 }
 
 func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error) {
@@ -516,7 +574,9 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 		return &types.Task{}, err
 	}
 
-	go r.handleTaskEvent(params.TaskId, r.eventRepo.PushTaskCreatedEvent)
+	if r.eventRepo != nil {
+		r.enqueueTaskEvent(newTask, r.eventRepo.PushTaskCreatedEvent)
+	}
 	return &newTask, nil
 }
 
@@ -536,7 +596,9 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 		return &types.Task{}, err
 	}
 
-	go r.handleTaskEvent(externalId, r.eventRepo.PushTaskUpdatedEvent)
+	if r.eventRepo != nil {
+		r.enqueueTaskEvent(task, r.eventRepo.PushTaskUpdatedEvent)
+	}
 	return &task, nil
 }
 

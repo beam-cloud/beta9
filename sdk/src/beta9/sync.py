@@ -6,7 +6,7 @@ import zipfile
 from http import HTTPStatus
 from pathlib import Path
 from queue import Queue
-from typing import Generator, List, NamedTuple
+from typing import Dict, Generator, List, NamedTuple, Optional
 
 import requests
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -216,14 +216,14 @@ class FileSyncer:
 
         object_id = None
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
-            HeadObjectRequest(hash=hash)
+            HeadObjectRequest(hash=hash, supports_put_headers=True)
         )
         if not head_response.exists:
             metadata = ObjectMetadata(name=hash, size=size)
 
-            def _upload_object() -> requests.Response:
+            def _upload_object(headers: Optional[Dict[str, str]] = None) -> requests.Response:
                 with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
-                    response = requests.put(presigned_url, data=file)
+                    response = requests.put(presigned_url, data=file, headers=headers or {})
                 return response
 
             # TODO: remove this once all workspaces are migrated to use workspace storage
@@ -236,12 +236,16 @@ class FileSyncer:
             if head_response.use_workspace_storage:
                 create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
                     CreateObjectRequest(
-                        object_metadata=metadata, hash=hash, size=size, overwrite=True
+                        object_metadata=metadata,
+                        hash=hash,
+                        size=size,
+                        overwrite=True,
+                        supports_put_headers=True,
                     )
                 )
                 if create_object_response.ok:
                     presigned_url = create_object_response.presigned_url
-                    response = _upload_object()
+                    response = _upload_object(create_object_response.put_headers)
                     if response.status_code == HTTPStatus.OK:
                         if self.is_workspace_dir and cache_object_id:
                             set_workspace_object_id(create_object_response.object_id)
