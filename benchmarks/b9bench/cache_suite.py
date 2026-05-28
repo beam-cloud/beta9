@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import json
 import os
 import re
+import select
 import shlex
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +29,7 @@ from benchmarks.sandbox_parallel import (  # noqa: E402
     cleanup_sandbox,
     create_sandbox_with_retries,
     import_sdk,
+    parse_host_port,
     parse_sdk_cpu,
     parse_sdk_memory,
     wait_running as wait_instance_running,
@@ -88,6 +94,36 @@ FUSE_RESPONSE_RE = re.compile(
 
 def now_rfc3339() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def resolve_workspace_storage_config(explicit: str, profile: str, beta9_config: str) -> str:
+    if explicit:
+        return explicit
+
+    normalized = (profile or "default").strip().lower()
+    candidates: list[Path] = []
+    if normalized in {"staging", "stage"}:
+        candidates.append(REPO_ROOT / "config.stage.yaml")
+    elif normalized in {"local", "default"}:
+        candidates.append(REPO_ROOT / "config.local.yaml")
+    else:
+        candidates.append(REPO_ROOT / f"config.{normalized}.yaml")
+
+    if beta9_config:
+        beta9_path = Path(beta9_config).expanduser()
+        if beta9_path.suffix in {".yaml", ".yml"}:
+            candidates.append(beta9_path)
+
+    candidates.extend(
+        (
+            REPO_ROOT / "config.local.yaml",
+            REPO_ROOT / "pkg" / "common" / "config.default.yaml",
+        )
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str(candidates[0])
 
 
 def parse_json_output(stdout: str) -> dict[str, Any]:
@@ -162,6 +198,8 @@ class WorkloadSpec:
 
 @dataclass
 class BenchmarkConfig:
+    profile: str
+    beta9_config: str
     namespace: str
     gateway_url: str
     grpc_addr: str
@@ -175,6 +213,7 @@ class BenchmarkConfig:
     volume_name: str
     volume_mount_path: str
     volume_subdir: str
+    worker_workspace_root: str
     cache_mount_path: str
     cache_pool_name: str
     cache_locality: str
@@ -182,6 +221,8 @@ class BenchmarkConfig:
     worker_dd_block_size: str
     remote_cache_proof_chunk_bytes: int
     remote_cache_proof_concurrency: int
+    remote_network_probe: bool
+    remote_network_probe_bytes: int
     direct_cache_disk_probe_size_mb: int
     sandbox_cpu: str
     sandbox_memory: str
@@ -230,6 +271,14 @@ class BenchmarkConfig:
             description="Run the beta9 embedded cache correctness/performance benchmark."
         )
         add = parser.add_argument
+        add(
+            "--profile",
+            default=os.getenv("BENCH_PROFILE") or os.getenv("BETA9_PROFILE") or "default",
+        )
+        add(
+            "--beta9-config",
+            default=os.getenv("BENCH_CONFIG") or os.getenv("BETA9_CONFIG") or "",
+        )
         add("--namespace", default=os.getenv("BENCH_NAMESPACE", "beta9"))
         add(
             "--gateway-url",
@@ -268,6 +317,10 @@ class BenchmarkConfig:
         )
         add("--volume-subdir", default=os.getenv("BENCH_CACHE_VOLUME_SUBDIR", ""))
         add(
+            "--worker-workspace-root",
+            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/storage"),
+        )
+        add(
             "--cache-mount-path",
             default=os.getenv("BENCH_CACHE_MOUNT_PATH", DEFAULT_CACHE_MOUNT_PATH),
         )
@@ -285,12 +338,23 @@ class BenchmarkConfig:
         add(
             "--remote-cache-proof-chunk-bytes",
             type=int,
-            default=env_int("BENCH_CACHE_REMOTE_PROOF_CHUNK_BYTES", 1024 * 1024),
+            default=env_int("BENCH_CACHE_REMOTE_PROOF_CHUNK_BYTES", 4 * 1024 * 1024),
         )
         add(
             "--remote-cache-proof-concurrency",
             type=int,
-            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 1),
+            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 16),
+        )
+        add_bool(
+            parser,
+            "remote-network-probe",
+            "BENCH_CACHE_REMOTE_NETWORK_PROBE",
+            False,
+        )
+        add(
+            "--remote-network-probe-bytes",
+            type=int,
+            default=env_int("BENCH_CACHE_REMOTE_NETWORK_PROBE_BYTES", 4 * 1024 * 1024 * 1024),
         )
         add(
             "--direct-cache-disk-probe-size-mb",
@@ -371,9 +435,7 @@ class BenchmarkConfig:
         )
         add(
             "--workspace-storage-config",
-            default=os.getenv(
-                "BENCH_WORKSPACE_STORAGE_CONFIG", str(REPO_ROOT / "config.local.yaml")
-            ),
+            default=os.getenv("BENCH_WORKSPACE_STORAGE_CONFIG", ""),
             help="local beta9 config YAML used to resolve default workspace storage for remote-object proof",
         )
         add(
@@ -445,6 +507,11 @@ class BenchmarkConfig:
 
         data = vars(parser.parse_args())
         data["workloads"] = WorkloadSpec.parse_plan(data["file_plan"])
+        data["workspace_storage_config"] = resolve_workspace_storage_config(
+            data["workspace_storage_config"],
+            data["profile"],
+            data["beta9_config"],
+        )
         if not data["volume_subdir"]:
             data["volume_subdir"] = f"run-{int(time.time())}-{os.urandom(4).hex()}"
         if not data["token_cache"]:
@@ -487,6 +554,34 @@ class CacheProbeTools:
         source = build_dir / "raw_read.go"
         output = build_dir / f"raw-read-linux-{goarch}"
         source.write_text(self._read("raw_read.go"), encoding="utf-8")
+        proc = run(
+            [
+                "env",
+                "-u",
+                "GOROOT",
+                "GOOS=linux",
+                f"GOARCH={goarch}",
+                "CGO_ENABLED=0",
+                "go",
+                "build",
+                "-trimpath",
+                "-o",
+                str(output),
+                str(source),
+            ],
+            check=False,
+            timeout=120,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr or proc.stdout)
+        return output
+
+    def build_network_probe(self, goarch: str) -> Path:
+        build_dir = Path(tempfile.gettempdir()) / "b9bench-cache-netprobe"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        source = build_dir / "net_probe.go"
+        output = build_dir / f"net-probe-linux-{goarch}"
+        source.write_text(self._read("net_probe.go"), encoding="utf-8")
         proc = run(
             [
                 "env",
@@ -555,6 +650,20 @@ class Kube:
                 pod["name"],
             ),
         )
+
+    def worker_pod_for_container(self, container_id: str) -> Optional[dict[str, str]]:
+        if not container_id:
+            return None
+
+        for pod in self.running_workers():
+            proc = self.worker_exec(
+                pod["name"],
+                ["test", "-d", f"/tmp/{container_id}"],
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                return pod
+        return None
 
     def worker_pods(self) -> list[dict[str, str]]:
         proc = run(
@@ -1046,9 +1155,14 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             result["ok"] = result["ok"] or proof.get("ok", False)
         return result
 
-    def worker_dd(self, worker_path: str, expected_size: int) -> dict[str, Any]:
+    def worker_dd(
+        self,
+        worker_path: str,
+        expected_size: int,
+        pods: Optional[list[dict[str, str]]] = None,
+    ) -> dict[str, Any]:
         source = self.tools.source("dd_probe.py")
-        for pod in self.kube.running_workers():
+        for pod in pods or self.kube.running_workers():
             proc = self.kube.worker_exec(
                 pod["name"],
                 [
@@ -1073,7 +1187,11 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         return {"ok": False, "error": "no worker dd probe succeeded"}
 
     def worker_hot_read(
-        self, worker_root: str, entry: dict[str, Any], geesefs_path: str
+        self,
+        worker_root: str,
+        entry: dict[str, Any],
+        geesefs_path: str,
+        pods: Optional[list[dict[str, str]]] = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         source = self.tools.source("read_file.py")
         command = [
@@ -1101,7 +1219,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         )
         last_error = ""
         while True:
-            for pod in self.kube.running_workers():
+            for pod in pods or self.kube.running_workers():
                 started = time.monotonic_ns()
                 proc = self.kube.worker_exec(
                     pod["name"],
@@ -1261,13 +1379,182 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         payload.update(
             {
                 "sourcePod": source_pod["name"],
+                "sourceNode": source_pod.get("nodeName", ""),
                 "targetPod": (target_pod or {}).get("name", ""),
+                "targetNode": (target_pod or {}).get("nodeName", "")
+                or target_host.get("nodeName", ""),
                 "targetHost": target_host,
                 "differentWorkerPod": bool(target_pod)
                 and source_pod["name"] != target_pod["name"],
+                "differentNode": bool(target_pod)
+                and source_pod.get("nodeName", "")
+                != target_pod.get("nodeName", ""),
             }
         )
+        if self.config.remote_network_probe and target_pod:
+            payload["networkProbe"] = self.remote_network_probe(
+                source_pod,
+                target_pod,
+                min(int(entry["size"]), int(self.config.remote_network_probe_bytes)),
+            )
         return payload
+
+    def remote_network_probe(
+        self, source_pod: dict[str, Any], target_pod: dict[str, Any], size: int
+    ) -> dict[str, Any]:
+        if size <= 0:
+            return {"ok": False, "error": "network probe size must be positive"}
+        source_arch = self.kube.node_arch(source_pod.get("nodeName", ""))
+        target_arch = self.kube.node_arch(target_pod.get("nodeName", ""))
+        source_binary = self.tools.build_network_probe(source_arch)
+        target_binary = self.tools.build_network_probe(target_arch)
+        source_path = f"/tmp/beta9-cache-net-probe-{source_arch}"
+        target_path = f"/tmp/beta9-cache-net-probe-{target_arch}"
+        for pod, binary, remote_path in (
+            (source_pod, source_binary, source_path),
+            (target_pod, target_binary, target_path),
+        ):
+            cp = run(
+                [
+                    "kubectl",
+                    "-n",
+                    self.config.namespace,
+                    "cp",
+                    str(binary),
+                    f"{pod['name']}:{remote_path}",
+                    "-c",
+                    "worker",
+                ],
+                check=False,
+                timeout=60,
+            )
+            if cp.returncode != 0:
+                return {"ok": False, "error": cp.stderr or cp.stdout}
+            self.kube.worker_exec(pod["name"], ["chmod", "+x", remote_path], timeout=10)
+
+        port = 39000 + ((os.getpid() + time.time_ns()) % 2000)
+        server_cmd = [
+            "kubectl",
+            "-n",
+            self.config.namespace,
+            "exec",
+            target_pod["name"],
+            "-c",
+            "worker",
+            "--",
+            target_path,
+            "--mode",
+            "server",
+            "--addr",
+            f"[::]:{port}",
+            "--concurrency",
+            str(self.config.remote_cache_proof_concurrency),
+            "--chunk-bytes",
+            str(self.config.remote_cache_proof_chunk_bytes),
+        ]
+        server = subprocess.Popen(
+            server_cmd,
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=1,
+        )
+        server_stdout: list[str] = []
+        server_stderr: list[str] = []
+        try:
+            ready_deadline = time.monotonic() + 15
+            while time.monotonic() < ready_deadline:
+                if server.poll() is not None:
+                    break
+                readable, _, _ = select.select([server.stdout], [], [], 0.2) if server.stdout else ([], [], [])
+                if readable:
+                    line = server.stdout.readline()
+                    server_stdout.append(line)
+                    if line.startswith("ready "):
+                        break
+            else:
+                server.kill()
+                out, err = server.communicate(timeout=5)
+                return {
+                    "ok": False,
+                    "error": "network probe server did not become ready",
+                    "serverStdout": ("".join(server_stdout) + (out or ""))[-2000:],
+                    "serverStderr": (err or "")[-2000:],
+                }
+
+            if not server_stdout or not server_stdout[-1].startswith("ready "):
+                out, err = server.communicate(timeout=5)
+                return {
+                    "ok": False,
+                    "error": f"network probe server exited before ready: {server.returncode}",
+                    "serverStdout": ("".join(server_stdout) + (out or ""))[-2000:],
+                    "serverStderr": (err or "")[-2000:],
+                }
+
+            target_ip = target_pod.get("podIP") or self._pod_ip(target_pod["name"])
+            if not target_ip:
+                return {"ok": False, "error": "target pod IP not found"}
+            client = self.kube.worker_exec(
+                source_pod["name"],
+                [
+                    source_path,
+                    "--mode",
+                    "client",
+                    "--addr",
+                    f"[{target_ip}]:{port}",
+                    "--bytes",
+                    str(size),
+                    "--concurrency",
+                    str(self.config.remote_cache_proof_concurrency),
+                    "--chunk-bytes",
+                    str(self.config.remote_cache_proof_chunk_bytes),
+                ],
+                timeout=max(120, int(self.config.exec_timeout_seconds)),
+            )
+            try:
+                out, err = server.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                out, err = server.communicate(timeout=5)
+            server_stdout.append(out or "")
+            server_stderr.append(err or "")
+            payload = (
+                parse_json_output(client.stdout)
+                if client.returncode == 0
+                else {"ok": False, "error": client.stderr or client.stdout}
+            )
+            payload.update(
+                {
+                    "sourcePod": source_pod["name"],
+                    "sourceNode": source_pod.get("nodeName", ""),
+                    "targetPod": target_pod["name"],
+                    "targetNode": target_pod.get("nodeName", ""),
+                    "serverStdout": "".join(server_stdout)[-2000:],
+                    "serverStderr": "".join(server_stderr)[-2000:],
+                }
+            )
+            return payload
+        finally:
+            if server.poll() is None:
+                server.kill()
+
+    def _pod_ip(self, pod_name: str) -> str:
+        proc = run(
+            [
+                "kubectl",
+                "-n",
+                self.config.namespace,
+                "get",
+                "pod",
+                pod_name,
+                "-o",
+                "jsonpath={.status.podIP}",
+            ],
+            check=False,
+            timeout=10,
+        )
+        return proc.stdout.strip() if proc.returncode == 0 else ""
 
     def cache_hosts_snapshot(self) -> dict[str, Any]:
         redis_pod = find_redis_pod(self.config.namespace)
@@ -1460,14 +1747,27 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         target_pod = next(
             (pod for pod in workers if pod.get("podIP") == target_ip), None
         )
-        source_pod = next(
-            (
-                pod
-                for pod in workers
-                if not target_pod or pod["name"] != target_pod["name"]
-            ),
-            None,
-        )
+        target_node = (target_pod or {}).get("nodeName") or target_host.get("nodeName", "")
+        source_pod = None
+        if target_node:
+            source_pod = next(
+                (
+                    pod
+                    for pod in workers
+                    if pod["name"] != (target_pod or {}).get("name", "")
+                    and pod.get("nodeName", "") != target_node
+                ),
+                None,
+            )
+        if source_pod is None:
+            source_pod = next(
+                (
+                    pod
+                    for pod in workers
+                    if not target_pod or pod["name"] != target_pod["name"]
+                ),
+                None,
+            )
         return source_pod, target_pod
 
     @staticmethod
@@ -1737,7 +2037,7 @@ class BenchmarkPaths:
     @property
     def worker_volume_root(self) -> str:
         return str(
-            Path("/workspace/data")
+            Path(self.config.worker_workspace_root)
             / self.workspace_name
             / "volumes"
             / self.volume_id
@@ -1772,6 +2072,21 @@ def storage_value(storage: dict[str, Any], *keys: str) -> str:
         value = storage.get(key)
         if value:
             return str(value)
+    return ""
+
+
+def first_metadata_hash(metadata: dict[str, str]) -> str:
+    for key in (
+        "--content-sha256",
+        "content-sha256",
+        "sha256",
+        "content_sha256",
+        "x-amz-meta---content-sha256",
+        "x-amz-meta-content-sha256",
+    ):
+        value = str(metadata.get(key, "")).strip()
+        if value:
+            return value
     return ""
 
 
@@ -1859,9 +2174,21 @@ class Reporter:
                     row["sizeMiB"] >= self.config.min_throughput_size_mb
                     and remote.get("mbps", 0) < self.config.min_remote_cache_socket_mbps
                 ):
-                    failures.append(
-                        f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below {self.config.min_remote_cache_socket_mbps:.2f} MB/s"
-                    )
+                    network = remote.get("networkProbe") or {}
+                    network_mbps = float(network.get("mbps") or 0)
+                    if network.get("ok") and network_mbps > 0:
+                        required_mbps = min(
+                            self.config.min_remote_cache_socket_mbps,
+                            network_mbps * 0.9,
+                        )
+                        if remote.get("mbps", 0) < required_mbps:
+                            failures.append(
+                                f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below measured network target {required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
+                            )
+                    else:
+                        failures.append(
+                            f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below {self.config.min_remote_cache_socket_mbps:.2f} MB/s"
+                        )
             remote_object = row.get("remoteObject")
             if self.config.require_remote_object_proof and (
                 not remote_object or not remote_object.get("ok")
@@ -1887,12 +2214,14 @@ class Reporter:
             f"- Namespace: `{report['config']['namespace']}`",
             f"- Volume: `{report['config']['volumeName']}` mounted at `/{report['config']['volumeMountPath']}`",
             "",
-            "| Access | Size | Hot MB/s | File-read MB/s | Read Method | SHA OK | Cache Ready | Remote Object | Cache Path | Worker dd MB/s | Sandbox dd MB/s | Remote MB/s | Direct Disk MB/s |",
-            "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |",
+            "| Access | Size | Hot MB/s | File-read MB/s | Read Method | SHA OK | Cache Ready | Remote Object | Cache Path | Worker dd MB/s | Sandbox dd MB/s | Remote MB/s | Network MB/s | Direct Disk MB/s |",
+            "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
         direct = report.get("directDiskProbe") or {}
         for row in report["rows"]:
             read = row.get("hotRead") or {}
+            remote = row.get("remoteRead") or {}
+            network = remote.get("networkProbe") or {}
             cache_path = (
                 "hot("
                 + self._cache_path_label(row.get("readPathProof") or {})
@@ -1910,7 +2239,8 @@ class Reporter:
                 f"`{cache_path}` | "
                 f"{(row.get('workerDD') or {}).get('mbps', 0):.2f} | "
                 f"{(row.get('sandboxDD') or {}).get('mbps', 0):.2f} | "
-                f"{(row.get('remoteRead') or {}).get('mbps', 0):.2f} | "
+                f"{remote.get('mbps', 0):.2f} | "
+                f"{network.get('mbps', 0):.2f} | "
                 f"{direct.get('mbps', 0):.2f} |"
             )
         lines.extend(["", "## Validation Failures", ""])
@@ -2119,76 +2449,88 @@ class CacheBenchmark:
             "reason": "preserve embedded cache pages for hot-read measurement",
         }
         workspace_mount_probe = None
-        if access_type == "workspace_fuse":
-            workspace_mount_probe = self._ensure_workspace_fuse_mounted(
-                sandbox, token, paths, entry
-            )
+        workspace_mount_instance = None
+        workspace_worker_pods = None
+        try:
+            if access_type == "workspace_fuse":
+                (
+                    workspace_mount_instance,
+                    workspace_mount_probe,
+                    workspace_worker_pods,
+                ) = self._ensure_workspace_fuse_mounted(sandbox, token, paths, entry)
 
-        mounted_eviction = self.cache.evict_mounted_file(worker_path, entry["size"])
+            mounted_eviction = self.cache.evict_mounted_file(worker_path, entry["size"])
 
-        if access_type == "workspace_fuse":
-            hot_payload, hot_sample = self.cache.worker_hot_read(
-                paths.worker_volume_root,
-                entry,
-                geesefs_path,
+            if access_type == "workspace_fuse":
+                hot_payload, hot_sample = self.cache.worker_hot_read(
+                    paths.worker_volume_root,
+                    entry,
+                    geesefs_path,
+                    pods=workspace_worker_pods,
+                )
+            else:
+                hot_payload, hot_sample = self.runner.hot_read(
+                    sandbox,
+                    token,
+                    paths.root_for_access(access_type),
+                    entry,
+                    geesefs_path,
+                )
+            cas_proof = self.cache.object_proof(entry["sha256"])
+            remote_object = self._remote_object_proof(workspace, paths, entry)
+            worker_dd = None
+            if self.config.worker_dd_reads:
+                self.cache.evict_mounted_file(worker_path, entry["size"])
+                worker_dd = self.cache.worker_dd(
+                    worker_path, entry["size"], pods=workspace_worker_pods
+                )
+            sandbox_dd = None
+            sandbox_dd_sample = None
+            if self.config.sandbox_dd_reads and access_type == "volume_mount":
+                sandbox_dd, sandbox_dd_sample = self.runner.sandbox_dd(
+                    sandbox,
+                    token,
+                    paths.root_for_access(access_type),
+                    entry,
+                    geesefs_path,
+                )
+            remote = (
+                self.cache.remote_read(entry, cas_proof)
+                if self.config.require_remote_read
+                else None
             )
-        else:
-            hot_payload, hot_sample = self.runner.hot_read(
-                sandbox,
-                token,
-                paths.root_for_access(access_type),
-                entry,
-                geesefs_path,
-            )
-        cas_proof = self.cache.object_proof(entry["sha256"])
-        remote_object = self._remote_object_proof(workspace, paths, entry)
-        worker_dd = None
-        if self.config.worker_dd_reads:
-            self.cache.evict_mounted_file(worker_path, entry["size"])
-            worker_dd = self.cache.worker_dd(worker_path, entry["size"])
-        sandbox_dd = None
-        sandbox_dd_sample = None
-        if self.config.sandbox_dd_reads and access_type == "volume_mount":
-            sandbox_dd, sandbox_dd_sample = self.runner.sandbox_dd(
-                sandbox,
-                token,
-                paths.root_for_access(access_type),
-                entry,
-                geesefs_path,
-            )
-        remote = (
-            self.cache.remote_read(entry, cas_proof)
-            if self.config.require_remote_read
-            else None
-        )
-        row = {
-            "accessType": access_type,
-            "pattern": entry["pattern"],
-            "sizeMiB": entry["sizeMiB"],
-            "path": entry["path"],
-            "hash": entry["sha256"],
-            "cacheReady": ready,
-            "cachePageEviction": cache_page_eviction,
-            "casProof": cas_proof,
-            "remoteObject": remote_object,
-            "workspaceMountProbe": workspace_mount_probe,
-            "mountedFileEviction": mounted_eviction,
-            "hotRead": hot_payload,
-            "hotSample": hot_sample,
-            "readPathProof": hot_sample.get("readPathProof"),
-            "shaOK": bool(cas_proof.get("matchesHash"))
-            and (
-                not self.config.verify_reads
-                or hot_payload.get("digest") == entry["sha256"]
-            ),
-            "workerDD": worker_dd,
-            "sandboxDD": sandbox_dd,
-            "sandboxDDSample": sandbox_dd_sample,
-            "ddReadPathProof": (sandbox_dd_sample or {}).get("readPathProof"),
-            "remoteRead": remote,
-        }
-        self._print_row(row)
-        return row
+            row = {
+                "accessType": access_type,
+                "pattern": entry["pattern"],
+                "sizeMiB": entry["sizeMiB"],
+                "path": entry["path"],
+                "hash": entry["sha256"],
+                "cacheReady": ready,
+                "cachePageEviction": cache_page_eviction,
+                "casProof": cas_proof,
+                "remoteObject": remote_object,
+                "workspaceMountProbe": workspace_mount_probe,
+                "mountedFileEviction": mounted_eviction,
+                "hotRead": hot_payload,
+                "hotSample": hot_sample,
+                "readPathProof": hot_sample.get("readPathProof"),
+                "shaOK": bool(cas_proof.get("matchesHash"))
+                and (
+                    not self.config.verify_reads
+                    or hot_payload.get("digest") == entry["sha256"]
+                ),
+                "workerDD": worker_dd,
+                "sandboxDD": sandbox_dd,
+                "sandboxDDSample": sandbox_dd_sample,
+                "ddReadPathProof": (sandbox_dd_sample or {}).get("readPathProof"),
+                "remoteRead": remote,
+            }
+            self._print_row(row)
+            return row
+        finally:
+            if workspace_mount_instance is not None:
+                sample = (workspace_mount_probe or {}).get("sample") or {}
+                self.runner._cleanup_sandbox_bounded(workspace_mount_instance, sample)
 
     def _ensure_workspace_fuse_mounted(
         self,
@@ -2196,32 +2538,82 @@ class CacheBenchmark:
         token: str,
         paths: BenchmarkPaths,
         entry: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> tuple[Any, dict[str, Any], Optional[list[dict[str, str]]]]:
         script = (
             "import json, os, sys\n"
             "path = os.path.join(sys.argv[1], sys.argv[2])\n"
             "st = os.stat(path)\n"
             "print(json.dumps({'ok': True, 'path': path, 'size': st.st_size}))\n"
         )
-        payload, sample = self.runner.run_json(
-            sandbox,
-            token,
-            [
-                "python3",
-                "-c",
-                script,
-                paths.volume_container_root,
-                entry["path"],
-            ],
-            "workspace-fuse-mount-probe",
-        )
-        return {"payload": payload, "sample": sample}
+        instance = None
+        sample: dict[str, Any] = {
+            "label": "workspace-fuse-mount-holder",
+            "startedAt": now_rfc3339(),
+        }
+        started = time.monotonic_ns()
+        try:
+            instance, create_info = create_sandbox_with_retries(self.config, sandbox)
+            sample.update(create_info)
+            sample["containerId"] = instance.container_id
+            sample["stubId"] = instance.stub_id
+            if not instance.ok:
+                raise RuntimeError(
+                    instance.error_msg or "Sandbox.create returned ok=false"
+                )
+            if self.config.wait_running:
+                sample["running"] = wait_instance_running(
+                    self.config, token, instance.container_id, started
+                )
+
+            process = instance.process.exec(
+                [
+                    "python3",
+                    "-c",
+                    script,
+                    paths.volume_container_root,
+                    entry["path"],
+                ],
+                cwd="/",
+            )
+            exit_code = process.wait(timeout=self.config.exec_timeout_seconds)
+            sample["exitCode"] = exit_code
+            sample["stdout"] = process.stdout.read()
+            sample["stderr"] = process.stderr.read()
+            if exit_code != 0:
+                raise RuntimeError(
+                    sample["stderr"]
+                    or sample["stdout"]
+                    or f"command exited {exit_code}"
+                )
+
+            payload = parse_json_output(sample["stdout"])
+            sample["ok"] = bool(payload.get("ok", True))
+            sample["payload"] = payload
+            pod = self.kube.worker_pod_for_container(instance.container_id)
+            if pod is None:
+                raise RuntimeError(
+                    f"unable to find worker pod for mounted workspace container {instance.container_id}"
+                )
+            pods = [pod]
+            sample["workerPod"] = pod
+            return instance, {"payload": payload, "sample": sample}, pods
+        except Exception:
+            if instance is not None:
+                self.runner._cleanup_sandbox_bounded(instance, sample)
+            raise
+        finally:
+            sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
+            sample["finishedAt"] = now_rfc3339()
 
     def _remote_object_proof(
         self, workspace: dict[str, Any], paths: BenchmarkPaths, entry: dict[str, Any]
     ) -> Optional[dict[str, Any]]:
         if not self.config.require_remote_object_proof:
             return None
+        presigned = self._remote_object_proof_presigned(paths, entry)
+        if presigned.get("ok"):
+            return presigned
+
         storage = self._resolve_remote_storage(workspace)
         endpoint = storage.get("endpoint_url", "")
         region = storage.get("region", "")
@@ -2275,7 +2667,114 @@ class CacheBenchmark:
             else {"ok": False, "error": proc.stderr or proc.stdout}
         )
         payload["fullReadRequested"] = full_read
+        payload["storageSource"] = storage.get("source", "")
+        payload["storageConfig"] = self.config.workspace_storage_config
+        if presigned:
+            payload["presignedFallbackError"] = presigned.get("error", "")
         return payload
+
+    def _remote_object_proof_presigned(
+        self, paths: BenchmarkPaths, entry: dict[str, Any]
+    ) -> dict[str, Any]:
+        sdk_src = str(REPO_ROOT / "sdk" / "src")
+        if sdk_src not in sys.path:
+            sys.path.insert(0, sdk_src)
+        try:
+            from beta9.channel import ServiceClient
+            from beta9.clients.volume import (
+                CreatePresignedUrlRequest,
+                PresignedUrlMethod,
+            )
+            from beta9.config import ConfigContext
+        except Exception as exc:
+            return {"ok": False, "error": f"import SDK volume client: {exc}"}
+
+        volume_path = str(Path(self.config.volume_subdir) / entry["path"])
+        full_read = entry["sizeMiB"] <= self.config.remote_object_full_read_max_mb
+        started = time.monotonic_ns()
+        out: dict[str, Any] = {
+            "ok": False,
+            "storageSource": "gateway_presigned_volume",
+            "volumeName": self.config.volume_name,
+            "volumePath": volume_path,
+            "expectedBytes": entry["size"],
+            "expectedSha256": entry["sha256"],
+            "fullRead": full_read,
+        }
+        try:
+            gateway_host, gateway_port = parse_host_port(resolved_grpc_addr(self.config))
+            sdk_context = ConfigContext(
+                token=self.config.token,
+                gateway_host=gateway_host,
+                gateway_port=gateway_port,
+            )
+            with ServiceClient(sdk_context) as client:
+                head = client.volume.create_presigned_url(
+                    CreatePresignedUrlRequest(
+                        volume_name=self.config.volume_name,
+                        volume_path=volume_path,
+                        expires=int(max(60, self.config.cache_proof_timeout_seconds)),
+                        method=PresignedUrlMethod.HeadObject,
+                    )
+                )
+                if not head.ok:
+                    out["error"] = f"presign HEAD failed: {head.err_msg}"
+                    return out
+                status, headers, _ = self._request_presigned(head.url, "HEAD")
+                out["statusCode"] = status
+                out["bytes"] = int(headers.get("content-length") or -1)
+                out["sizeOK"] = out["bytes"] == entry["size"]
+                out["metadata"] = {
+                    key: value
+                    for key, value in headers.items()
+                    if key.startswith("x-amz-meta-") or key in {"etag", "content-length"}
+                }
+                metadata_hash = first_metadata_hash(out["metadata"])
+                out["metadataHash"] = metadata_hash
+                out["hashOK"] = not metadata_hash or metadata_hash == entry["sha256"]
+
+                if full_read:
+                    get = client.volume.create_presigned_url(
+                        CreatePresignedUrlRequest(
+                            volume_name=self.config.volume_name,
+                            volume_path=volume_path,
+                            expires=int(max(60, self.config.cache_proof_timeout_seconds)),
+                            method=PresignedUrlMethod.GetObject,
+                        )
+                    )
+                    if not get.ok:
+                        out["error"] = f"presign GET failed: {get.err_msg}"
+                        return out
+                    _, _, body = self._request_presigned(get.url, "GET")
+                    import hashlib
+
+                    digest = hashlib.sha256(body).hexdigest()
+                    out["fullReadSha256"] = digest
+                    out["hashOK"] = digest == entry["sha256"]
+
+                out["ok"] = bool(out.get("sizeOK")) and bool(out.get("hashOK", True))
+                if not out["ok"] and not out.get("error"):
+                    out["error"] = "remote object size/hash check failed"
+                return out
+        except Exception as exc:
+            out["error"] = str(exc)
+            return out
+        finally:
+            out["durationMs"] = (time.monotonic_ns() - started) / 1_000_000
+
+    def _request_presigned(
+        self, url: str, method: str
+    ) -> tuple[int, dict[str, str], bytes]:
+        request = urllib.request.Request(url, method=method)
+        timeout = max(60, self.config.cache_proof_timeout_seconds)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read() if method != "HEAD" else b""
+                headers = {k.lower(): v for k, v in response.headers.items()}
+                return int(response.status), headers, body
+        except urllib.error.HTTPError as exc:
+            body = exc.read()
+            raise RuntimeError(f"{method} presigned object failed: HTTP {exc.code} {body[:200]!r}") from exc
 
     def _resolve_remote_storage(self, workspace: dict[str, Any]) -> dict[str, str]:
         storage = workspace.get("storage") or {}
@@ -2305,19 +2804,25 @@ class CacheBenchmark:
                 resolved[key] = value
                 resolved["source"] = "cli_or_env"
 
+        default_configs = self._default_workspace_storage_configs()
         if not self._has_complete_remote_storage(resolved):
-            local_config = self._load_default_workspace_storage_config()
-            for key, value in local_config.items():
-                if value and not resolved.get(key):
-                    resolved[key] = value
-                    resolved["source"] = "local_config"
-        else:
-            local_config = self._load_default_workspace_storage_config()
+            for default_config in default_configs:
+                updated = False
+                for key, value in default_config.items():
+                    if value and not resolved.get(key):
+                        resolved[key] = value
+                        updated = True
+                if updated:
+                    resolved["source"] = default_config.get("source", "config")
+                if self._has_complete_remote_storage(resolved):
+                    break
 
-        host_endpoint = local_config.get("host_endpoint_url", "")
-        if host_endpoint and self._endpoint_needs_host_alias(resolved.get("endpoint_url", "")):
-            resolved["endpoint_url"] = host_endpoint
-            resolved["source"] = resolved.get("source", "workspace_api") + "+host_endpoint"
+        for default_config in default_configs:
+            host_endpoint = default_config.get("host_endpoint_url", "")
+            if host_endpoint and self._endpoint_needs_host_alias(resolved.get("endpoint_url", "")):
+                resolved["endpoint_url"] = host_endpoint
+                resolved["source"] = resolved.get("source", "workspace_api") + "+host_endpoint"
+                break
 
         if not resolved.get("bucket_name") and resolved.get("bucket_prefix"):
             workspace_external_id = str(
@@ -2341,12 +2846,69 @@ class CacheBenchmark:
     def _endpoint_needs_host_alias(endpoint: str) -> bool:
         return "://localstack" in endpoint or endpoint.startswith("localstack:")
 
+    def _default_workspace_storage_configs(self) -> list[dict[str, str]]:
+        configs = []
+        cluster_config = self._load_cluster_workspace_storage_config()
+        if cluster_config:
+            configs.append(cluster_config)
+        local_config = self._load_default_workspace_storage_config()
+        if local_config:
+            configs.append(local_config)
+        return configs
+
+    def _load_cluster_workspace_storage_config(self) -> dict[str, str]:
+        proc = run(
+            [
+                "kubectl",
+                "-n",
+                self.config.namespace,
+                "get",
+                "secret",
+                "beta9-config",
+                "-o",
+                "json",
+            ],
+            check=False,
+            timeout=20,
+        )
+        if proc.returncode != 0:
+            return {}
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return {}
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            return {}
+        for key in (".config.yaml", "config.yaml", "config.local.yaml", "config.stage.yaml"):
+            encoded = data.get(key)
+            if not encoded:
+                continue
+            try:
+                decoded = base64.b64decode(encoded).decode("utf-8")
+            except Exception:
+                continue
+            config = self._workspace_storage_config_from_yaml(decoded, "cluster_secret")
+            if config:
+                return config
+        return {}
+
     def _load_default_workspace_storage_config(self) -> dict[str, str]:
         path = Path(self.config.workspace_storage_config).expanduser()
         if not path.exists():
             return {}
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            return self._workspace_storage_config_from_yaml(
+                path.read_text(encoding="utf-8"),
+                f"local_config:{path}",
+            )
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _workspace_storage_config_from_yaml(raw: str, source: str) -> dict[str, str]:
+        try:
+            data = yaml.safe_load(raw) or {}
         except Exception:
             return {}
         storage = (
@@ -2364,14 +2926,21 @@ class CacheBenchmark:
             "bucket_prefix": str(storage.get("defaultBucketPrefix") or ""),
             "access_key": str(storage.get("defaultAccessKey") or ""),
             "secret_key": str(storage.get("defaultSecretKey") or ""),
+            "source": source,
         }
 
     def _report_config(self, volume_id: str) -> dict[str, Any]:
         return {
+            "profile": self.config.profile,
             "namespace": self.config.namespace,
             "gatewayUrl": self.config.gateway_url,
             "grpcAddr": resolved_grpc_addr(self.config),
             "filePlan": self.config.file_plan,
+            "workspaceStorageConfig": self.config.workspace_storage_config,
+            "remoteCacheProofChunkBytes": self.config.remote_cache_proof_chunk_bytes,
+            "remoteCacheProofConcurrency": self.config.remote_cache_proof_concurrency,
+            "remoteNetworkProbe": self.config.remote_network_probe,
+            "remoteNetworkProbeBytes": self.config.remote_network_probe_bytes,
             "volumeName": self.config.volume_name,
             "volumeId": volume_id,
             "volumeMountPath": self.config.volume_mount_path,

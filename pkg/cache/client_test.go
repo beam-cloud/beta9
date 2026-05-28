@@ -410,6 +410,82 @@ func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
 	require.Equal(t, content, local)
 }
 
+func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	localServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("local-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
+
+	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	localHost := localServer.Host()
+	require.NotNil(t, localHost)
+
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 2, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost, remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+	client.AttachLocalServer(localServer)
+	client.AttachLocalStore(localServer.cas)
+
+	content := []byte("cache-through-local-primary")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	chunks := make(chan []byte, 2)
+	chunks <- content[:11]
+	chunks <- content[11:]
+	close(chunks)
+
+	got, err := client.StoreContentWithLocalReplica(chunks, expectedHash, StoreContentOptions{RoutingKey: "/cache/local-primary"})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+
+	remote := make([]byte, len(content))
+	n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, remote)
+
+	local := make([]byte, len(content))
+	n, err = localServer.cas.ReadAt(expectedHash, 0, local)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, local)
+}
+
 type failFirstUnlockRegistry struct {
 	*MockCacheMetadataStore
 	removeCalls int

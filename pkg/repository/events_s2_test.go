@@ -153,6 +153,42 @@ func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
 	}
 }
 
+func TestTaskEventSchemaIncludesStubTypeAndDeploymentContext(t *testing.T) {
+	version := uint(7)
+	deploymentID := "deployment-123"
+	deploymentName := "api"
+	task := &types.TaskWithRelated{
+		Task: types.Task{
+			ExternalId:  "task-123",
+			Status:      types.TaskStatusRunning,
+			ContainerId: "container-123",
+			CreatedAt:   types.Time{Time: time.Unix(0, 0).UTC()},
+		},
+	}
+	task.Workspace.ExternalId = "workspace-123"
+	task.Stub.ExternalId = "stub-123"
+	task.Stub.Type = types.StubType(types.StubTypeASGIDeployment)
+	task.App.ExternalId = "app-123"
+	task.Deployment.ExternalId = &deploymentID
+	task.Deployment.Name = &deploymentName
+	task.Deployment.Version = &version
+
+	event := eventTaskSchemaFromTask(task)
+
+	if event.StubType != types.StubType(types.StubTypeASGIDeployment) {
+		t.Fatalf("unexpected stub type: got %q", event.StubType)
+	}
+	if event.DeploymentID != deploymentID {
+		t.Fatalf("unexpected deployment id: got %q want %q", event.DeploymentID, deploymentID)
+	}
+	if event.DeploymentName != deploymentName {
+		t.Fatalf("unexpected deployment name: got %q want %q", event.DeploymentName, deploymentName)
+	}
+	if event.DeploymentVersion != "7" {
+		t.Fatalf("unexpected deployment version: got %q want %q", event.DeploymentVersion, "7")
+	}
+}
+
 func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

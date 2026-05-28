@@ -225,7 +225,12 @@ class CacheSuiteProbe(ScriptProbeBase):
             suite.defaults,
             suite.args,
             self.config.extra_args,
-            {"output": str(suite_json), "report": str(suite_md)},
+            {
+                "profile": self.config.profile,
+                "beta9_config": str(self.config.config_path),
+                "output": str(suite_json),
+                "report": str(suite_md),
+            },
         )
         if not args.get("file_plan"):
             file_plan = suite.file_plan
@@ -291,6 +296,28 @@ class CacheSuiteProbe(ScriptProbeBase):
                 "remote_cache_socket_read",
                 requires_remote=True,
             )
+            remote = row.get("remoteRead") or {}
+            network = remote.get("networkProbe") or {}
+            if network:
+                self.sink.emit(
+                    self._measurement(
+                        suite,
+                        scenario,
+                        row,
+                        "remote_network_read",
+                        mbps=float(network.get("mbps") or 0),
+                        duration_ms=float(network.get("durationMs") or 0),
+                        status="ok" if network.get("ok") else "failed",
+                        error=str(network.get("error") or ""),
+                        extra_evidence={
+                            "source_worker": network.get("sourcePod"),
+                            "source_node": network.get("sourceNode"),
+                            "target_worker": network.get("targetPod"),
+                            "target_node": network.get("targetNode"),
+                        },
+                        source_key="remoteNetwork",
+                    )
+                )
             hot = row.get("hotRead") or {}
             if hot.get("fileReadMBps"):
                 self.sink.emit(
@@ -349,8 +376,13 @@ class CacheSuiteProbe(ScriptProbeBase):
                     "remote_worker": bool(payload.get("differentWorkerPod"))
                     if requires_remote
                     else None,
+                    "remote_node": bool(payload.get("differentNode"))
+                    if requires_remote
+                    else None,
                     "source_worker": payload.get("sourcePod"),
+                    "source_node": payload.get("sourceNode"),
                     "target_worker": payload.get("targetPod"),
+                    "target_node": payload.get("targetNode"),
                 },
                 requires_remote=requires_remote,
                 source_key=source_key,
@@ -417,6 +449,10 @@ class CacheSuiteProbe(ScriptProbeBase):
         }
         if extra_evidence:
             evidence.update({key: value for key, value in extra_evidence.items() if value is not None})
+        if source_key == "remoteRead":
+            network = (row.get("remoteRead") or {}).get("networkProbe") or {}
+            if network.get("ok") and network.get("mbps"):
+                evidence["network_ceiling_mbps"] = float(network.get("mbps") or 0)
         tags = scenario.metric_tags
         tags.update(
             {

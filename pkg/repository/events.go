@@ -774,42 +774,29 @@ func (r *EventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stu
 }
 
 func (r *EventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
-	event := types.EventTaskSchema{
-		ID:          task.ExternalId,
-		Status:      task.Status,
-		ContainerID: task.ContainerId,
-		CreatedAt:   task.CreatedAt.Time,
-		StubID:      task.Stub.ExternalId,
-		WorkspaceID: task.Workspace.ExternalId,
-		AppID:       task.App.ExternalId,
-	}
-
-	if task.StartedAt.Valid {
-		event.StartedAt = &task.StartedAt.Time
-	}
-
-	if task.EndedAt.Valid {
-		event.EndedAt = &task.EndedAt.Time
-	}
-
-	if task.ExternalWorkspace != nil && task.ExternalWorkspace.ExternalId != nil {
-		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
-	}
-
 	r.pushEvent(
 		types.EventTaskUpdated,
 		types.EventTaskSchemaVersion,
-		event,
+		eventTaskSchemaFromTask(task),
 	)
 }
 
 func (r *EventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
+	r.pushEvent(
+		types.EventTaskCreated,
+		types.EventTaskSchemaVersion,
+		eventTaskSchemaFromTask(task),
+	)
+}
+
+func eventTaskSchemaFromTask(task *types.TaskWithRelated) types.EventTaskSchema {
 	event := types.EventTaskSchema{
 		ID:          task.ExternalId,
 		Status:      task.Status,
 		ContainerID: task.ContainerId,
 		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
+		StubType:    task.Stub.Type,
 		WorkspaceID: task.Workspace.ExternalId,
 		AppID:       task.App.ExternalId,
 	}
@@ -826,11 +813,17 @@ func (r *EventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
 	}
 
-	r.pushEvent(
-		types.EventTaskCreated,
-		types.EventTaskSchemaVersion,
-		event,
-	)
+	if task.Deployment.ExternalId != nil {
+		event.DeploymentID = *task.Deployment.ExternalId
+	}
+	if task.Deployment.Name != nil {
+		event.DeploymentName = *task.Deployment.Name
+	}
+	if task.Deployment.Version != nil {
+		event.DeploymentVersion = fmt.Sprint(*task.Deployment.Version)
+	}
+
+	return event
 }
 
 func (r *EventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {

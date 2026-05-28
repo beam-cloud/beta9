@@ -124,8 +124,12 @@ type EventTaskSchema struct {
 	WorkspaceID         string     `json:"workspace_id"`
 	ExternalWorkspaceID string     `json:"external_workspace_id"`
 	StubID              string     `json:"stub_id"`
+	StubType            StubType   `json:"stub_type,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	AppID               string     `json:"app_id"`
+	DeploymentID        string     `json:"deployment_id,omitempty"`
+	DeploymentName      string     `json:"deployment_name,omitempty"`
+	DeploymentVersion   string     `json:"deployment_version,omitempty"`
 }
 
 var EventStubStateSchemaVersion = "1.0"

@@ -38,7 +38,19 @@ class Validator:
                 f"{measurement.suite}/{measurement.scenario}/{measurement.measurement}: cloud read observed during hot cache scenario"
             )
         min_mbps = tags.get("min_mbps")
-        if min_mbps is not None and measurement.mbps and measurement.mbps < float(min_mbps):
+        if min_mbps is not None and measurement.mbps < float(min_mbps):
+            if measurement.measurement == "remote_cache_socket_read":
+                network_mbps = float(evidence.get("network_ceiling_mbps") or 0)
+                if network_mbps > 0:
+                    required_mbps = min(float(min_mbps), network_mbps * 0.9)
+                    if measurement.mbps >= required_mbps:
+                        return failures
+                    failures.append(
+                        f"{measurement.suite}/{measurement.scenario}/{measurement.measurement}: "
+                        f"{measurement.mbps:.2f} MB/s below measured network target "
+                        f"{required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
+                    )
+                    return failures
             failures.append(
                 f"{measurement.suite}/{measurement.scenario}/{measurement.measurement}: "
                 f"{measurement.mbps:.2f} MB/s below {float(min_mbps):.2f} MB/s"

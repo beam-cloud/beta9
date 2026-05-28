@@ -1534,6 +1534,12 @@ func (c *Client) storeContentWithLocalReplica(ctx context.Context, localStore *S
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	remoteHost, err := c.storeReplicaHost(routingKey)
+	if err != nil {
+		drainContentChunks(chunks)
+		return "", err
+	}
+
 	type storeResult struct {
 		hash string
 		size int64
@@ -1545,7 +1551,7 @@ func (c *Client) storeContentWithLocalReplica(ctx context.Context, localStore *S
 
 	remoteDone := make(chan storeResult, 1)
 	go func() {
-		hash, err := c.storeContentFromReaderWithContext(ctx, remoteReader, routingKey, "", nil)
+		hash, err := c.storeContentFromReaderToHostWithContext(ctx, remoteHost, remoteReader, "", nil)
 		remoteDone <- storeResult{hash: hash, err: err}
 	}()
 
@@ -1615,6 +1621,51 @@ func (c *Client) storeContentWithLocalReplica(ctx context.Context, localStore *S
 
 	Logger.Debugf("StoreContentWithLocalReplica[OK] - [expected=%s actual=%s routing_key=%s size=%d]", expectedHash, remoteResult.hash, routingKey, size)
 	return remoteResult.hash, nil
+}
+
+func (c *Client) storeReplicaHost(routingKey string) (*Host, error) {
+	localHostIDs := c.localHostIDsSnapshot()
+	hostCount := c.clientConfig.NTopHosts
+	if c.hostMap != nil {
+		hostCount = max(hostCount, len(c.hostMap.GetAll()))
+	}
+	if hostCount < 1 {
+		hostCount = 1
+	}
+
+	c.mu.RLock()
+	hosts := c.hasher.GetN(hostCount, routingKey)
+	c.mu.RUnlock()
+	if len(hosts) == 0 {
+		return nil, ErrHostNotFound
+	}
+
+	primary := hosts[0]
+	if _, isLocal := localHostIDs[primary.HostId]; !isLocal {
+		return primary, nil
+	}
+
+	for _, host := range hosts[1:] {
+		if host == nil {
+			continue
+		}
+		if _, isLocal := localHostIDs[host.HostId]; !isLocal {
+			return host, nil
+		}
+	}
+
+	return primary, nil
+}
+
+func (c *Client) localHostIDsSnapshot() map[string]struct{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	hostIDs := make(map[string]struct{}, len(c.localServers))
+	for hostID := range c.localServers {
+		hostIDs[hostID] = struct{}{}
+	}
+	return hostIDs
 }
 
 func drainContentChunks(chunks <-chan []byte) {
@@ -1805,7 +1856,7 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 }
 
 func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
-	client, _, err := c.getGRPCClient(&ClientRequest{
+	_, host, err := c.getGRPCClient(&ClientRequest{
 		rt:        ClientRequestTypeStorage,
 		hash:      routingKey,
 		key:       routingKey,
@@ -1813,6 +1864,21 @@ func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader i
 	})
 	if err != nil {
 		return "", err
+	}
+
+	return c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+}
+
+func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
+	if host == nil {
+		return "", ErrHostNotFound
+	}
+
+	c.mu.RLock()
+	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	if !exists {
+		return "", ErrHostNotFound
 	}
 
 	stream, err := client.StoreContent(ctx)
