@@ -20,6 +20,7 @@ type eventSink interface {
 
 type eventReader interface {
 	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
+	GetEventHistory(ctx context.Context, query types.EventQuery) (*types.EventHistoryResponse, error)
 	GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error)
 	GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
 	GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
@@ -168,6 +169,13 @@ func (r *EventClientRepo) GetContainerEvents(ctx context.Context, containerID st
 		return nil, ErrEventReadUnsupported
 	}
 	return r.reader.GetContainerEvents(ctx, containerID, query)
+}
+
+func (r *EventClientRepo) GetEventHistory(ctx context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.GetEventHistory(ctx, query)
 }
 
 func (r *EventClientRepo) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {

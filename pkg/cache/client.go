@@ -790,6 +790,81 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	return length, nil
 }
 
+func (c *Client) rawReadPrefixInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
+	if len(dst) == 0 {
+		return 0, nil
+	}
+	if host == nil || !c.clientConfig.ReadTransport.Enabled {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, ErrUnableToReachHost
+	}
+	addr := host.Addr
+	if host.PrivateAddr != "" {
+		addr = host.PrivateAddr
+	}
+	if addr == "" {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, ErrUnableToReachHost
+	}
+
+	c.mu.Lock()
+	pool := c.rawReadPools[host.HostId]
+	if pool == nil {
+		pool = newRawReadConnPool(addr, c.clientConfig.ReadTransport.MaxActiveConnsPerHost, c.clientConfig.ReadTransport.MaxIdleConnsPerHost)
+		c.rawReadPools[host.HostId] = pool
+	}
+	c.mu.Unlock()
+
+	conn, err := pool.get(ctx.Done())
+	if err != nil {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, err
+	}
+	reusable := false
+	defer func() {
+		if reusable {
+			pool.put(conn)
+		} else {
+			_ = conn.Close()
+			pool.release()
+		}
+	}()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+		defer conn.SetDeadline(time.Time{})
+	}
+
+	length := int64(len(dst))
+	if err := writeRawReadRequest(conn, hash, offset, length); err != nil {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, err
+	}
+	status, responseLength, err := readRawReadResponseHeader(conn)
+	if err != nil {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, err
+	}
+	if status == rawReadStatusMiss {
+		cacheReadRawFallbackTotal.Inc()
+		atomic.AddInt64(&cachePathStats.clientRawMisses, 1)
+		reusable = true
+		return 0, ErrContentNotFound
+	}
+	if status != rawReadStatusOK || responseLength <= 0 || responseLength > length {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, ErrUnableToReachHost
+	}
+	if _, err := io.ReadFull(conn, dst[:responseLength]); err != nil {
+		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		return 0, err
+	}
+	cacheReadRawTransportTotal.Inc()
+	atomic.AddInt64(&cachePathStats.clientRawHits, 1)
+	reusable = true
+	return responseLength, nil
+}
+
 func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
 	if len(dst) == 0 {
 		return 0, nil
@@ -1065,7 +1140,7 @@ func (c *Client) promoteRemotePageRegionsToClientLocalPageFiles(host *Host, hash
 	}
 
 	promoteLength := promoteEnd - pageStart
-	if maxBytes := c.clientConfig.Prefetch.AheadBytes; maxBytes > 0 && promoteLength > maxBytes {
+	if maxBytes := c.clientConfig.Prefetch.AheadBytes; maxBytes > 0 && length > maxBytes {
 		return nil, false
 	}
 	if promoteLength > int64(int(^uint(0)>>1)) {
@@ -1086,15 +1161,21 @@ func (c *Client) promoteRemotePageRegionsToClientLocalPageFiles(host *Host, hash
 	buf := make([]byte, int(promoteLength))
 	ctx, cancel := context.WithTimeout(c.ctx, getContentRequestTimeout)
 	defer cancel()
+
 	n, err := c.rawReadIntoWindowed(ctx, host, hash, pageStart, buf)
-	if err != nil || n != promoteLength {
-		if err != nil && err != ErrContentNotFound {
-			Logger.Debugf("cache remote page-region raw promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
+	if err == nil && n == promoteLength {
+		store.PutFullPages(hash, pageStart, buf)
+	} else {
+		n, err = c.rawReadPrefixInto(ctx, host, hash, pageStart, buf)
+		if err != nil || n <= 0 {
+			if err != nil && err != ErrContentNotFound {
+				Logger.Debugf("cache remote page-region raw promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
+			}
+			return nil, false
 		}
-		return nil, false
+		store.PutPageRange(hash, pageStart, buf[:n])
 	}
 
-	store.PutFullPages(hash, pageStart, buf)
 	views, ok := clientLocalPageFileViewsFromStore(store, hash, offset, length)
 	if !ok {
 		return nil, false

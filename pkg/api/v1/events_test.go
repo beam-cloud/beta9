@@ -154,3 +154,34 @@ func TestEventStreamQueryFromContextUsesLastEventID(t *testing.T) {
 		t.Fatalf("unexpected resumed seq_num: %#v", query.SeqNum)
 	}
 }
+
+func TestEventHistoryQueryFromContextParsesFilters(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?event_types=stub.state.warning,stub.state.degraded&stub_id=stub-1&container_id=container-1&start_time=2026-05-28T10:00:00Z&end_time=2026-05-28T10:05:00Z&limit=25", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues("workspace-1")
+
+	query, err := eventHistoryQueryFromContext(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := query.WorkspaceID, "workspace-1"; got != want {
+		t.Fatalf("unexpected workspace id: got %q want %q", got, want)
+	}
+	if got, want := query.StubID, "stub-1"; got != want {
+		t.Fatalf("unexpected stub id: got %q want %q", got, want)
+	}
+	if got, want := query.ContainerID, "container-1"; got != want {
+		t.Fatalf("unexpected container id: got %q want %q", got, want)
+	}
+	if got, want := query.Limit, uint64(25); got != want {
+		t.Fatalf("unexpected limit: got %d want %d", got, want)
+	}
+	if query.StartTime == nil || query.EndTime == nil {
+		t.Fatal("expected start and end times")
+	}
+	if got, want := len(query.EventTypes), 2; got != want {
+		t.Fatalf("unexpected event type count: got %d want %d", got, want)
+	}
+}

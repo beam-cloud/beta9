@@ -20,6 +20,7 @@ import (
 const (
 	defaultS2EventStreamPrefix = "events"
 	defaultS2EventReadLimit    = 10000
+	s2EventHistoryReadLimit    = uint64(1000)
 	s2EventQueueSize           = 16384
 	s2EventBatchSize           = 256
 	s2EventRetentionSeconds    = int64(30 * 24 * 60 * 60)
@@ -238,6 +239,38 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	return response, nil
 }
 
+func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	limit := query.Limit
+	if limit == 0 {
+		limit = defaultS2EventReadLimit
+	}
+
+	if err := r.ensureBasin(ctx); err != nil {
+		return nil, err
+	}
+
+	streams, err := r.resolveEventHistoryStreams(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	response := &types.EventHistoryResponse{
+		Events:  []types.ContainerEventRecord{},
+		Streams: make([]string, 0, len(streams)),
+	}
+	for _, streamName := range streams {
+		if uint64(len(response.Events)) >= limit {
+			break
+		}
+		if err := r.readEventHistoryStream(ctx, streamName, query, limit, response); err != nil {
+			return nil, err
+		}
+	}
+
+	sortContainerEventRecords(response.Events)
+	return response, nil
+}
+
 func (r *S2EventRepository) StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error) {
 	if query.WorkspaceID == "" || query.StubID == "" {
 		return nil, fmt.Errorf("workspace id and stub id are required to stream container events")
@@ -351,6 +384,37 @@ func (r *S2EventRepository) resolveContainerStreams(ctx context.Context, contain
 	return streams, nil
 }
 
+func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, query types.EventQuery) ([]s2.StreamName, error) {
+	addIfExists := func(streamName s2.StreamName) ([]s2.StreamName, error) {
+		if streamName == "" {
+			return nil, nil
+		}
+		exists, err := r.streamExists(ctx, streamName)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, nil
+		}
+		return []s2.StreamName{streamName}, nil
+	}
+
+	switch {
+	case query.ContainerID != "" && query.WorkspaceID != "":
+		return r.resolveContainerStreams(ctx, query.ContainerID, query)
+	case query.TaskID != "":
+		return addIfExists(r.taskStreamName(query.TaskID))
+	case query.AppID != "" && query.WorkspaceID != "":
+		return addIfExists(r.appStreamName(query.WorkspaceID, query.AppID))
+	case query.StubID != "" && query.WorkspaceID != "":
+		return addIfExists(r.stubStreamName(query.WorkspaceID, query.StubID))
+	case query.WorkspaceID != "":
+		return addIfExists(r.workspaceStreamName(query.WorkspaceID))
+	default:
+		return nil, nil
+	}
+}
+
 func (r *S2EventRepository) streamExists(ctx context.Context, streamName s2.StreamName) (bool, error) {
 	limit := 1
 	resp, err := r.basin.Streams.List(ctx, &s2.ListStreamsArgs{
@@ -385,6 +449,82 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 			continue
 		}
 		response.Events = append(response.Events, eventRecord)
+	}
+	return nil
+}
+
+func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamName s2.StreamName, query types.EventQuery, limit uint64, response *types.EventHistoryResponse) error {
+	response.Streams = append(response.Streams, string(streamName))
+
+	var nextSeqNum *uint64
+	if query.SeqNum != nil {
+		seq := *query.SeqNum
+		nextSeqNum = &seq
+	}
+	var startTimestamp *uint64
+	if query.StartTime != nil {
+		ts := uint64(query.StartTime.UTC().UnixMilli())
+		startTimestamp = &ts
+	} else if query.Timestamp != nil {
+		ts := *query.Timestamp
+		startTimestamp = &ts
+	}
+	var until *uint64
+	if query.EndTime != nil {
+		ts := uint64(query.EndTime.UTC().UnixMilli())
+		until = &ts
+	} else if query.Until != nil {
+		ts := *query.Until
+		until = &ts
+	}
+
+	for uint64(len(response.Events)) < limit {
+		count := s2EventHistoryReadLimit
+		if remaining := limit - uint64(len(response.Events)); remaining < count {
+			count = remaining
+		}
+		opts := &s2.ReadOptions{
+			Count: &count,
+			Until: until,
+		}
+		if nextSeqNum != nil {
+			opts.SeqNum = nextSeqNum
+		} else if startTimestamp != nil {
+			opts.Timestamp = startTimestamp
+		} else {
+			seq := uint64(0)
+			opts.SeqNum = &seq
+		}
+
+		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
+		if err != nil {
+			if isS2RangeNotSatisfiable(err) {
+				return nil
+			}
+			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
+		}
+		if len(batch.Records) == 0 {
+			return nil
+		}
+
+		for _, record := range batch.Records {
+			eventRecord, ok := containerEventRecordFromS2(record, query, &types.ContainerEventsResponse{})
+			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
+				continue
+			}
+			response.Events = append(response.Events, eventRecord)
+			if uint64(len(response.Events)) >= limit {
+				break
+			}
+		}
+
+		last := batch.Records[len(batch.Records)-1]
+		seq := last.SeqNum + 1
+		nextSeqNum = &seq
+		startTimestamp = nil
+		if len(batch.Records) < int(count) {
+			return nil
+		}
 	}
 	return nil
 }
@@ -496,11 +636,44 @@ func eventQueryAllowsType(query types.EventQuery, eventType string) bool {
 		return true
 	}
 	for _, allowed := range query.EventTypes {
-		if strings.TrimSpace(allowed) == eventType {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == eventType {
+			return true
+		}
+		if strings.HasSuffix(allowed, "*") && strings.HasPrefix(eventType, strings.TrimSuffix(allowed, "*")) {
 			return true
 		}
 	}
 	return false
+}
+
+func eventRecordMatchesQuery(record types.ContainerEventRecord, query types.EventQuery) bool {
+	if query.WorkspaceID != "" && record.WorkspaceID != query.WorkspaceID {
+		return false
+	}
+	if query.StubID != "" && record.StubID != query.StubID {
+		return false
+	}
+	if query.AppID != "" && record.AppID != query.AppID {
+		return false
+	}
+	if query.TaskID != "" && record.TaskID != query.TaskID {
+		return false
+	}
+	if query.ContainerID != "" && record.ContainerID != query.ContainerID {
+		return false
+	}
+	eventTime := record.Timestamp
+	if eventTime.IsZero() {
+		eventTime = record.StartTime
+	}
+	if query.StartTime != nil && !eventTime.IsZero() && eventTime.Before(query.StartTime.UTC()) {
+		return false
+	}
+	if query.EndTime != nil && !eventTime.IsZero() && !eventTime.Before(query.EndTime.UTC()) {
+		return false
+	}
+	return true
 }
 
 func s2TimestampMillisToNanos(timestamp uint64) uint64 {
@@ -642,6 +815,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	if metadata.WorkspaceID != "" && metadata.StubID != "" {
 		add(r.stubStreamName(metadata.WorkspaceID, metadata.StubID))
 	}
+	if isStubEvent(eventType) && metadata.WorkspaceID != "" {
+		add(r.workspaceStreamName(metadata.WorkspaceID))
+	}
 	if isWorkspaceContainerRealtimeEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
@@ -656,6 +832,10 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 
 func isTaskEvent(eventType string) bool {
 	return eventType == types.EventTaskCreated || eventType == types.EventTaskUpdated
+}
+
+func isStubEvent(eventType string) bool {
+	return strings.HasPrefix(eventType, "stub.")
 }
 
 func isWorkspaceContainerRealtimeEvent(eventType string) bool {
