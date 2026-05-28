@@ -13,6 +13,7 @@ func Test_CopyConfig(t *testing.T) {
 
 	var config RedisConfig
 	faker.FakeData(&config)
+	config.Addrs = []string{"localhost:6379"}
 
 	tests := []struct {
 		name            string

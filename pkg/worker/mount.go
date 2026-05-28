@@ -156,17 +156,17 @@ func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request
 func (c *ContainerMountManager) extractStubCode(ctx context.Context, request *types.ContainerRequest, destPath string) error {
 	objectID := request.Stub.Object.ExternalId
 	if request.StorageAvailable() {
+		workspaceObjectPath := filepath.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, objectID)
+		if pathExists(workspaceObjectPath) {
+			return common.ExtractObjectFile(ctx, workspaceObjectPath, destPath)
+		}
+
 		if workspaceStorageDownloadAvailable(request.Workspace.Storage) {
 			log.Info().
 				Str("container_id", request.ContainerId).
 				Str("object_id", objectID).
 				Msg("downloading stub code from workspace storage")
 			return getAndExtractStubCodeToPath(ctx, request, destPath)
-		}
-
-		workspaceObjectPath := filepath.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, objectID)
-		if pathExists(workspaceObjectPath) {
-			return common.ExtractObjectFile(ctx, workspaceObjectPath, destPath)
 		}
 
 		return fmt.Errorf("workspace object not available at %s and direct download is not configured", workspaceObjectPath)

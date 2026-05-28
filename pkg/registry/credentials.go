@@ -526,6 +526,12 @@ func GetAmbientECRTokenForImage(ctx context.Context, imageURI string) (string, e
 	return decodeECRAuthorizationToken(output)
 }
 
+// IsECRRegistry reports whether registry is an AWS ECR registry hostname.
+func IsECRRegistry(registry string) bool {
+	_, _, ok := parseECRRegistry(registry)
+	return ok
+}
+
 func parseECRRegistry(registry string) (registryID string, region string, ok bool) {
 	registry = strings.TrimPrefix(registry, "https://")
 	registry = strings.TrimPrefix(registry, "http://")
