@@ -6,6 +6,7 @@ from pathlib import Path
 
 from benchmarks.b9bench.config import resolve_run_config
 from benchmarks.b9bench.config import http_url_from_gateway
+from benchmarks.b9bench.cache_suite import CacheBenchmark, resolve_workspace_storage_config
 from benchmarks.b9bench.model import Measurement, ScenarioSpec
 from benchmarks.b9bench.payload import deterministic_payload_range, deterministic_sha256
 from benchmarks.b9bench.reports import MetricSink
@@ -34,6 +35,32 @@ class B9BenchTests(unittest.TestCase):
         self.assertIn("volume_mount:sequential:32", suite.file_plan)
         self.assertIn("workspace_fuse:sequential:32", suite.file_plan)
 
+    def test_staging_cache_profile_uses_stage_workspace_storage_config(self):
+        root = Path(__file__).resolve().parents[2]
+        self.assertEqual(
+            Path(resolve_workspace_storage_config("", "staging", "")).name,
+            "config.stage.yaml",
+        )
+        self.assertTrue((root / "config.stage.yaml").exists())
+
+    def test_workspace_storage_config_parser_keeps_source(self):
+        parsed = CacheBenchmark._workspace_storage_config_from_yaml(
+            """
+storage:
+  workspaceStorage:
+    defaultEndpointUrl: https://s3.example.com
+    defaultRegion: us-east-1
+    defaultBucketPrefix: workspace-stage
+    defaultAccessKey: access
+    defaultSecretKey: secret
+""",
+            "cluster_secret",
+        )
+
+        self.assertEqual(parsed["endpoint_url"], "https://s3.example.com")
+        self.assertEqual(parsed["bucket_prefix"], "workspace-stage")
+        self.assertEqual(parsed["source"], "cluster_secret")
+
     def test_validator_requires_cache_hit_when_requested(self):
         measurement = Measurement(
             run_id="run",
@@ -48,6 +75,52 @@ class B9BenchTests(unittest.TestCase):
         failures = Validator().validate([measurement])
         self.assertEqual(len(failures), 1)
         self.assertIn("missing embedded-cache hit proof", failures[0])
+
+    def test_validator_uses_network_ceiling_for_remote_cache_reads(self):
+        measurement = Measurement(
+            run_id="run",
+            suite="cache",
+            scenario="s",
+            measurement="remote_cache_socket_read",
+            timestamp="now",
+            mbps=1450,
+            status="ok",
+            tags={"min_mbps": 2000},
+            evidence={"network_ceiling_mbps": 1500},
+        )
+        self.assertEqual(Validator().validate([measurement]), [])
+
+    def test_validator_fails_remote_cache_below_network_ceiling(self):
+        measurement = Measurement(
+            run_id="run",
+            suite="cache",
+            scenario="s",
+            measurement="remote_cache_socket_read",
+            timestamp="now",
+            mbps=1000,
+            status="ok",
+            tags={"min_mbps": 2000},
+            evidence={"network_ceiling_mbps": 1500},
+        )
+        failures = Validator().validate([measurement])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("measured network target", failures[0])
+
+    def test_validator_fails_zero_throughput_when_threshold_is_set(self):
+        measurement = Measurement(
+            run_id="run",
+            suite="cache",
+            scenario="s",
+            measurement="python_file_read",
+            timestamp="now",
+            mbps=0,
+            status="ok",
+            tags={"min_mbps": 1},
+            evidence={"sha_ok": True},
+        )
+        failures = Validator().validate([measurement])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("below 1.00 MB/s", failures[0])
 
     def test_metric_sink_writes_jsonl_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:

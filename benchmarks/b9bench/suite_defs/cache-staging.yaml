@@ -1,10 +1,11 @@
-name: cache-default
+name: cache-staging
 kind: cache
 runner: cache
-description: Embedded cache correctness and throughput suite with strict path evidence.
+description: Staging embedded-cache proof with 1GiB/4GiB volume and workspace reads.
 defaults:
   verify_reads: true
   require_remote_read: true
+  require_remote_object_proof: true
   require_read_path_proof: true
   direct_cache_disk_probe: true
   require_direct_cache_disk_probe: true
@@ -12,12 +13,15 @@ defaults:
   sandbox_dd_reads: true
   sandbox_cpu: "4"
   sandbox_memory: "8192"
+  worker_workspace_root: /storage
   cleanup_cache_before_run: true
   cleanup_cache_after_run: true
   reset_workers: false
   reset_workers_after_prepare: true
   remote_cache_proof_chunk_bytes: 4194304
   remote_cache_proof_concurrency: 16
+  remote_network_probe: true
+  remote_network_probe_bytes: 4294967296
   min_hot_file_read_mbps: 2000
   min_remote_cache_socket_mbps: 2000
   min_throughput_size_mb: 1024
@@ -48,7 +52,7 @@ scenarios:
     pattern: sequential
     size_mib: 1024
     cache_state: strict_disk
-    probes: [sandbox_read, worker_dd, sandbox_dd, remote_cache_socket, cache_path]
+    probes: [worker_read, worker_dd, remote_cache_socket, cache_path]
     thresholds:
       python_file_read_min_mbps: 2000
       remote_cache_socket_read_min_mbps: 2000
@@ -58,7 +62,7 @@ scenarios:
     pattern: sequential
     size_mib: 4096
     cache_state: strict_disk
-    probes: [sandbox_read, worker_dd, sandbox_dd, remote_cache_socket, cache_path]
+    probes: [worker_read, worker_dd, remote_cache_socket, cache_path]
     thresholds:
       python_file_read_min_mbps: 2000
       remote_cache_socket_read_min_mbps: 2000
