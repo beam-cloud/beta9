@@ -72,6 +72,7 @@ class ObjectMetadata(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class HeadObjectRequest(betterproto.Message):
     hash: str = betterproto.string_field(1)
+    supports_put_headers: bool = betterproto.bool_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -90,6 +91,7 @@ class CreateObjectRequest(betterproto.Message):
     hash: str = betterproto.string_field(2)
     size: int = betterproto.int64_field(3)
     overwrite: bool = betterproto.bool_field(4)
+    supports_put_headers: bool = betterproto.bool_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -98,6 +100,9 @@ class CreateObjectResponse(betterproto.Message):
     object_id: str = betterproto.string_field(2)
     presigned_url: str = betterproto.string_field(3)
     error_msg: str = betterproto.string_field(4)
+    put_headers: Dict[str, str] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
 
 
 @dataclass(eq=False, repr=False)

@@ -230,7 +230,10 @@ message ObjectMetadata {
   int64 size = 2;
 }
 
-message HeadObjectRequest { string hash = 1; }
+message HeadObjectRequest {
+  string hash = 1;
+  bool supports_put_headers = 2;
+}
 
 message HeadObjectResponse {
   bool ok = 1;
@@ -246,6 +249,7 @@ message CreateObjectRequest {
   string hash = 2;
   int64 size = 3;
   bool overwrite = 4;
+  bool supports_put_headers = 5;
 }
 
 message CreateObjectResponse {
@@ -253,6 +257,7 @@ message CreateObjectResponse {
   string object_id = 2;
   string presigned_url = 3;
   string error_msg = 4;
+  map<string, string> put_headers = 5;
 }
 
 message PutObjectRequest {

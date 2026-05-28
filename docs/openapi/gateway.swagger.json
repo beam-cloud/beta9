@@ -448,6 +448,12 @@
             "in": "path",
             "required": true,
             "type": "string"
+          },
+          {
+            "name": "supportsPutHeaders",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
           }
         ],
         "tags": [
@@ -1127,6 +1133,9 @@
         },
         "overwrite": {
           "type": "boolean"
+        },
+        "supportsPutHeaders": {
+          "type": "boolean"
         }
       }
     },
@@ -1144,6 +1153,12 @@
         },
         "errorMsg": {
           "type": "string"
+        },
+        "putHeaders": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

@@ -99,6 +99,57 @@ func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 	}
 }
 
+func TestS2ContainerLogRecordUsesLogTimestamp(t *testing.T) {
+	logAt := time.Date(2026, 5, 28, 12, 30, 0, 123000000, time.UTC)
+	eventRepo := &EventClientRepo{}
+	event, err := eventRepo.createEventObject(types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		Timestamp:   logAt,
+		ContainerID: "container-789",
+		StubID:      "stub-456",
+		TaskID:      "task-123",
+		WorkspaceID: "workspace-123",
+		Line:        "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := &S2EventRepository{streamPrefix: "events"}
+	record, streams, err := repo.appendRecordForEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(streams) == 0 {
+		t.Fatal("expected log streams")
+	}
+	if record.Timestamp == nil {
+		t.Fatal("expected s2 timestamp")
+	}
+	if got, want := *record.Timestamp, uint64(logAt.UnixMilli()); got != want {
+		t.Fatalf("unexpected s2 timestamp: got %d want %d", got, want)
+	}
+}
+
+func TestTaskLogQueryAllowsUntaggedLogsFromSameContainer(t *testing.T) {
+	query := types.LogQuery{
+		TaskID:      "task-123",
+		ContainerID: "container-789",
+	}
+
+	if !logRecordMatchesQuery(types.LogRecord{ContainerID: "container-789", Message: "untagged"}, query) {
+		t.Fatal("expected untagged log from the task container to match")
+	}
+	if !logRecordMatchesQuery(types.LogRecord{TaskID: "task-123", ContainerID: "container-789", Message: "tagged"}, query) {
+		t.Fatal("expected tagged task log to match")
+	}
+	if logRecordMatchesQuery(types.LogRecord{TaskID: "other-task", ContainerID: "container-789", Message: "other task"}, query) {
+		t.Fatal("expected other task log from the same container to be filtered")
+	}
+	if logRecordMatchesQuery(types.LogRecord{ContainerID: "other-container", Message: "other container"}, query) {
+		t.Fatal("expected untagged log from a different container to be filtered")
+	}
+}
+
 func TestS2TaskEventsUseWorkspaceAndAppAggregateStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -163,6 +214,7 @@ func TestTaskEventSchemaIncludesStubTypeAndDeploymentContext(t *testing.T) {
 			Status:      types.TaskStatusRunning,
 			ContainerId: "container-123",
 			CreatedAt:   types.Time{Time: time.Unix(0, 0).UTC()},
+			UpdatedAt:   types.Time{Time: time.Unix(10, 0).UTC()},
 		},
 	}
 	task.Workspace.ExternalId = "workspace-123"
@@ -186,6 +238,9 @@ func TestTaskEventSchemaIncludesStubTypeAndDeploymentContext(t *testing.T) {
 	}
 	if event.DeploymentVersion != "7" {
 		t.Fatalf("unexpected deployment version: got %q want %q", event.DeploymentVersion, "7")
+	}
+	if !event.UpdatedAt.Equal(time.Unix(10, 0).UTC()) {
+		t.Fatalf("unexpected updated at: got %s", event.UpdatedAt)
 	}
 }
 

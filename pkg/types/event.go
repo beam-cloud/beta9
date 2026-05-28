@@ -126,6 +126,7 @@ type EventTaskSchema struct {
 	StubID              string     `json:"stub_id"`
 	StubType            StubType   `json:"stub_type,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 	AppID               string     `json:"app_id"`
 	DeploymentID        string     `json:"deployment_id,omitempty"`
 	DeploymentName      string     `json:"deployment_name,omitempty"`

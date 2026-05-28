@@ -97,19 +97,9 @@ func (r *S2EventRepository) StreamLogs(ctx context.Context, query types.LogQuery
 		return nil, fmt.Errorf("stream logs from s2 stream %q: %w", streams[0], err)
 	}
 
-	return &s2EventStream{
+	return &s2LogEventStream{
 		session: session,
-		query: types.EventQuery{
-			WorkspaceID: query.WorkspaceID,
-			StubID:      query.StubID,
-			TaskID:      query.TaskID,
-			EventTypes:  []string{types.EventContainerLog},
-		},
-		response: &types.ContainerEventsResponse{
-			ContainerID: query.ContainerID,
-			WorkspaceID: query.WorkspaceID,
-			StubID:      query.StubID,
-		},
+		query:   query,
 	}, nil
 }
 
@@ -330,7 +320,7 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 }
 
 func logRecordMatchesQuery(record types.LogRecord, query types.LogQuery) bool {
-	if query.TaskID != "" && record.TaskID != query.TaskID {
+	if query.TaskID != "" && record.TaskID != query.TaskID && !untaggedContainerLogMatchesTaskQuery(record, query) {
 		return false
 	}
 	if query.ContainerID != "" && record.ContainerID != query.ContainerID {
@@ -346,6 +336,58 @@ func logRecordMatchesQuery(record types.LogRecord, query types.LogQuery) bool {
 		return false
 	}
 	return true
+}
+
+func untaggedContainerLogMatchesTaskQuery(record types.LogRecord, query types.LogQuery) bool {
+	return record.TaskID == "" && query.ContainerID != "" && record.ContainerID == query.ContainerID
+}
+
+type s2LogEventStream struct {
+	session *s2.ReadSession
+	query   types.LogQuery
+	current types.ContainerEventRecord
+}
+
+func (s *s2LogEventStream) Next() bool {
+	for s.session.Next() {
+		logRecord, ok := logRecordFromS2(s.session.Record())
+		if !ok || !logRecordMatchesQuery(logRecord, s.query) {
+			continue
+		}
+		s.current = containerEventRecordFromLogRecord(logRecord)
+		return true
+	}
+	return false
+}
+
+func (s *s2LogEventStream) Record() types.ContainerEventRecord {
+	return s.current
+}
+
+func (s *s2LogEventStream) Err() error {
+	return s.session.Err()
+}
+
+func (s *s2LogEventStream) Close() error {
+	return s.session.Close()
+}
+
+func containerEventRecordFromLogRecord(record types.LogRecord) types.ContainerEventRecord {
+	return types.ContainerEventRecord{
+		SeqNum:      record.SeqNum,
+		StoredAtNs:  record.StoredAtNs,
+		Timestamp:   record.Timestamp,
+		Type:        types.EventContainerLog,
+		Line:        record.Message,
+		Stream:      record.Stream,
+		ContainerID: record.ContainerID,
+		StubID:      record.StubID,
+		StubType:    record.StubType,
+		TaskID:      record.TaskID,
+		WorkspaceID: record.WorkspaceID,
+		AppID:       record.AppID,
+		WorkerID:    record.WorkerID,
+	}
 }
 
 func containerMetricsFromS2(record s2.SequencedRecord) (types.EventContainerMetricsSchema, time.Time, bool) {
