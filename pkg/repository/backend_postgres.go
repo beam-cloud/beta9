@@ -8,12 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -40,7 +38,7 @@ const (
 
 var PostgresDataError = pq.ErrorClass("22")
 
-const taskEventPublisherShardCount = 16
+const taskEventPublisherQueueSize = 4096
 
 type taskEventJob struct {
 	task     types.Task
@@ -48,62 +46,31 @@ type taskEventJob struct {
 }
 
 type taskEventPublisher struct {
-	shards []*taskEventPublisherShard
-}
-
-type taskEventPublisherShard struct {
 	repo  *PostgresBackendRepository
-	mu    sync.Mutex
-	cond  *sync.Cond
-	queue []taskEventJob
+	queue chan taskEventJob
 }
 
 func newTaskEventPublisher(repo *PostgresBackendRepository) *taskEventPublisher {
 	publisher := &taskEventPublisher{
-		shards: make([]*taskEventPublisherShard, taskEventPublisherShardCount),
+		repo:  repo,
+		queue: make(chan taskEventJob, taskEventPublisherQueueSize),
 	}
-
-	for i := range publisher.shards {
-		shard := &taskEventPublisherShard{repo: repo}
-		shard.cond = sync.NewCond(&shard.mu)
-		publisher.shards[i] = shard
-		go shard.run()
-	}
+	go publisher.run()
 
 	return publisher
 }
 
 func (p *taskEventPublisher) enqueue(job taskEventJob) {
-	if p == nil || len(p.shards) == 0 || job.callback == nil || job.task.ExternalId == "" {
+	if p == nil || job.callback == nil || job.task.ExternalId == "" {
 		return
 	}
 
-	shardIndex := crc32.ChecksumIEEE([]byte(job.task.ExternalId)) % uint32(len(p.shards))
-	p.shards[shardIndex].enqueue(job)
+	p.queue <- job
 }
 
-func (s *taskEventPublisherShard) enqueue(job taskEventJob) {
-	s.mu.Lock()
-	s.queue = append(s.queue, job)
-	s.cond.Signal()
-	s.mu.Unlock()
-}
-
-func (s *taskEventPublisherShard) run() {
-	for {
-		s.mu.Lock()
-		for len(s.queue) == 0 {
-			s.cond.Wait()
-		}
-		job := s.queue[0]
-		s.queue[0] = taskEventJob{}
-		s.queue = s.queue[1:]
-		if len(s.queue) == 0 {
-			s.queue = nil
-		}
-		s.mu.Unlock()
-
-		s.repo.handleTaskEvent(job.task, job.callback)
+func (p *taskEventPublisher) run() {
+	for job := range p.queue {
+		p.repo.handleTaskEvent(job.task, job.callback)
 	}
 }
 
@@ -570,7 +537,6 @@ func (r *PostgresBackendRepository) handleTaskEvent(task types.Task, callback fu
 	}
 
 	// Event payloads must reflect the exact row snapshot that triggered them.
-	// Re-reading the task asynchronously can publish stale or out-of-order status transitions.
 	taskWithRelated.Task = task
 	callback(taskWithRelated)
 }

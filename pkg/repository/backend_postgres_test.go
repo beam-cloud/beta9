@@ -75,7 +75,7 @@ func TestHandleTaskEventUsesProvidedTaskSnapshot(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestTaskEventPublisherPreservesPerTaskOrder(t *testing.T) {
+func TestTaskEventPublisherPreservesOrder(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 	publisher := newTaskEventPublisher(postgresRepo)
