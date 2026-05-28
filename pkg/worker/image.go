@@ -1379,7 +1379,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}()
 
-	buildCtxPath, err := c.getBuildContext(buildPath, request)
+	buildCtxPath, err := c.getBuildContext(ctx, buildPath, request)
 	if err != nil {
 		return err
 	}
@@ -1743,7 +1743,7 @@ func umociUnpackOptions() layer.UnpackOptions {
 	return unpackOptions
 }
 
-func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
+func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, request *types.ContainerRequest) (string, error) {
 	if request.BuildOptions.BuildCtxObject == nil {
 		return ".", nil
 	}
@@ -1757,7 +1757,7 @@ func (c *ImageClient) getBuildContext(buildPath string, request *types.Container
 		buildCtxPath = path.Join(buildPath, "build-ctx")
 	}
 
-	err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
+	err := common.ExtractObjectFile(ctx, objectPath, buildCtxPath)
 	if err != nil {
 		return "", err
 	}

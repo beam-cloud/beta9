@@ -337,6 +337,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Generate dynamic runc spec for this container
 	phaseStart = time.Now()
