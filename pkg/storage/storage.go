@@ -1,12 +1,16 @@
 package storage
 
 import (
+	"bufio"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -23,16 +27,54 @@ type Storage interface {
 	Mode() string
 }
 
-// isMounted uses stat to check if the specified FUSE mount point is available
+// IsMounted reports whether mountPoint is present in mountinfo without touching
+// the mounted filesystem. FUSE calls like statfs can block if the daemon is wedged.
+func IsMounted(mountPoint string) bool {
+	return isMounted(mountPoint)
+}
+
 func isMounted(mountPoint string) bool {
-	var statfs unix.Statfs_t
-	if err := unix.Statfs(mountPoint, &statfs); err != nil {
+	file, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
 		return false
 	}
+	defer file.Close()
 
-	// FUSE filesystems usually have a magic number 0x65735546 (FUSE_SUPER_MAGIC)
-	const FUSE_SUPER_MAGIC = 0x65735546
-	return statfs.Type == FUSE_SUPER_MAGIC
+	return mountInfoContains(file, mountPoint)
+}
+
+func mountInfoContains(reader io.Reader, mountPoint string) bool {
+	target := cleanMountInfoPath(mountPoint)
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 5 {
+			continue
+		}
+
+		if cleanMountInfoPath(unescapeMountInfoPath(fields[4])) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanMountInfoPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
+}
+
+func unescapeMountInfoPath(path string) string {
+	replacer := strings.NewReplacer(
+		`\\`, `\`,
+		`\040`, " ",
+		`\011`, "\t",
+		`\012`, "\n",
+		`\134`, `\`,
+	)
+	return replacer.Replace(path)
 }
 
 func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {

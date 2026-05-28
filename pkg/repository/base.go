@@ -224,6 +224,7 @@ type TailscaleRepository interface {
 
 type EventRepository interface {
 	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
+	GetEventHistory(ctx context.Context, query types.EventQuery) (*types.EventHistoryResponse, error)
 	GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error)
 	GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
 	GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)

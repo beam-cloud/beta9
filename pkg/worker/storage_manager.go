@@ -26,7 +26,8 @@ type WorkspaceStorageManager struct {
 	config             types.StorageConfig
 	poolConfig         types.WorkerPoolConfig
 	containerInstances *common.SafeMap[*ContainerInstance]
-	mu                 sync.Mutex
+	mountLocks         map[string]*sync.Mutex
+	mountLocksMu       sync.Mutex
 	cacheClient        *cache.Client
 }
 
@@ -37,7 +38,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		config:             config,
 		poolConfig:         poolConfig,
 		containerInstances: containerInstances,
-		mu:                 sync.Mutex{},
+		mountLocks:         make(map[string]*sync.Mutex),
 		cacheClient:        cacheClient,
 	}
 
@@ -52,27 +53,38 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 }
 
 func (sm *WorkspaceStorageManager) Create(workspaceName string, storage storage.Storage) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	unlock := sm.lockWorkspaceMount(workspaceName)
+	defer unlock()
 
 	sm.mounts.Set(workspaceName, storage)
 }
 
 func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
+	mountPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	mount, ok := sm.mounts.Get(workspaceName)
-	if ok {
+	if ok && workspaceMountHealthy(mount, mountPath) {
 		return mount, nil
 	}
 
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	unlock := sm.lockWorkspaceMount(workspaceName)
+	defer unlock()
 
 	mount, ok = sm.mounts.Get(workspaceName)
 	if ok {
-		return mount, nil
-	}
+		if workspaceMountHealthy(mount, mountPath) {
+			return mount, nil
+		}
 
-	mountPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
+		log.Warn().
+			Str("workspace_name", workspaceName).
+			Str("local_path", mountPath).
+			Msg("workspace storage mount is registered but not mounted, remounting")
+		if err := mount.Unmount(mountPath); err != nil {
+			log.Warn().Err(err).Str("workspace_name", workspaceName).Str("local_path", mountPath).Msg("failed to unmount stale workspace storage")
+		}
+		sm.mounts.Delete(workspaceName)
+		_ = os.RemoveAll(mountPath)
+	}
 
 	var err error
 	switch sm.poolConfig.StorageMode {
@@ -162,8 +174,8 @@ func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return nil
 	}
 
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	unlock := sm.lockWorkspaceMount(workspaceName)
+	defer unlock()
 
 	mount, ok = sm.mounts.Get(workspaceName)
 	if !ok {
@@ -188,6 +200,28 @@ func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
 	sm.mounts.Delete(workspaceName)
 
 	return nil
+}
+
+func (sm *WorkspaceStorageManager) lockWorkspaceMount(workspaceName string) func() {
+	sm.mountLocksMu.Lock()
+	lock, ok := sm.mountLocks[workspaceName]
+	if !ok {
+		lock = &sync.Mutex{}
+		sm.mountLocks[workspaceName] = lock
+	}
+	sm.mountLocksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
+
+func workspaceMountHealthy(mount storage.Storage, mountPath string) bool {
+	switch mount.Mode() {
+	case storage.StorageModeGeese, storage.StorageModeJuiceFS, storage.StorageModeMountPoint:
+		return storage.IsMounted(mountPath)
+	default:
+		return true
+	}
 }
 
 func (sm *WorkspaceStorageManager) Cleanup() error {

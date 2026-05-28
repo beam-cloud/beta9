@@ -239,37 +239,28 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
 	}
 
-	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
+	mountCtx, cancel := context.WithTimeout(context.Background(), defaultGeeseFSMountTimeout)
+	defer cancel()
+
+	fs, mfs, err := core.MountFuse(mountCtx, s.config.BucketName, flags)
 	if err != nil {
 		log.Error().Err(err).Str("local_path", localPath).Msg("geesefs: mount process exited with error")
 		return err
 	}
 
-	// Poll until the filesystem is mounted or we timeout
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	timeout := time.After(defaultGeeseFSMountTimeout)
-
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-timeout:
-				done <- false
-				return
-			case <-ticker.C:
-				if isMounted(localPath) {
-					done <- true
-					return
-				}
-			}
+	for {
+		if isMounted(localPath) {
+			break
 		}
-	}()
 
-	// Wait for confirmation or timeout
-	if !<-done {
-		return fmt.Errorf("failed to mount GeeseFS filesystem to: '%s'", localPath)
+		select {
+		case <-mountCtx.Done():
+			return fmt.Errorf("failed to mount GeeseFS filesystem to: '%s': %w", localPath, mountCtx.Err())
+		case <-ticker.C:
+		}
 	}
 
 	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem mounted")

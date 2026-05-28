@@ -223,9 +223,9 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		return
 	}
 
-	regions, ok, err := cs.rawReadPageRegions(req)
+	regions, responseLength, ok, err := cs.rawReadPageRegions(req)
 	if err == nil && ok {
-		if err := writeRawReadResponseHeader(conn, rawReadStatusOK, req.length); err != nil {
+		if err := writeRawReadResponseHeader(conn, rawReadStatusOK, responseLength); err != nil {
 			return
 		}
 		usedSendfile := false
@@ -319,29 +319,34 @@ func isRawReadClientAbort(err error) bool {
 	return strings.Contains(msg, "broken pipe") || strings.Contains(msg, "connection reset by peer")
 }
 
-func (cs *Server) rawReadPageRegions(req rawReadRequest) ([]rawReadPageRegion, bool, error) {
+func (cs *Server) rawReadPageRegions(req rawReadRequest) ([]rawReadPageRegion, int64, bool, error) {
 	pageSize := cs.serverConfig.PageSizeBytes
 	if pageSize <= 0 || req.length <= 0 {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 	regions := make([]rawReadPageRegion, 0, 1)
 	remaining := req.length
 	currentOffset := req.offset
+	var responseLength int64
 	for remaining > 0 {
 		pageRemaining := pageSize - currentOffset%pageSize
 		readLength := min(remaining, pageRemaining)
 		path, pageOffset, n, ok, err := cs.cas.PageRegion(req.hash, currentOffset, readLength)
 		if err != nil || !ok || n <= 0 {
-			return nil, false, err
-		}
-		if int64(n) != readLength {
-			return nil, false, ErrContentNotFound
+			return nil, 0, false, err
 		}
 		regions = append(regions, rawReadPageRegion{path: path, pageOffset: pageOffset, length: n})
+		responseLength += int64(n)
+		if int64(n) != readLength {
+			// A short page-region read is the CAS representation for the final
+			// partial page. Exact-read clients reject the short response; page
+			// promotion clients use it to install the EOF tail locally.
+			return regions, responseLength, true, nil
+		}
 		currentOffset += int64(n)
 		remaining -= int64(n)
 	}
-	return regions, true, nil
+	return regions, responseLength, true, nil
 }
 
 type rawReadConnPool struct {

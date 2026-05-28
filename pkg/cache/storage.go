@@ -365,6 +365,14 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 }
 
 func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
+	cas.putPages(hash, offset, data, false)
+}
+
+func (cas *Store) PutPageRange(hash string, offset int64, data []byte) {
+	cas.putPages(hash, offset, data, true)
+}
+
+func (cas *Store) putPages(hash string, offset int64, data []byte, includePartialTail bool) {
 	if hash == "" || offset < 0 || len(data) == 0 || cas.serverConfig.PageSizeBytes <= 0 || cas.diskCachedUsageExceeded {
 		return
 	}
@@ -374,7 +382,11 @@ func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
 		return
 	}
 	fullPages := int64(len(data)) / pageSize
-	if fullPages <= 0 {
+	pageCount := fullPages
+	if includePartialTail && int64(len(data))%pageSize != 0 {
+		pageCount++
+	}
+	if pageCount <= 0 {
 		return
 	}
 	if err := os.MkdirAll(cas.pageDir(hash), 0755); err != nil {
@@ -382,13 +394,23 @@ func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
 		return
 	}
 
-	for page := int64(0); page < fullPages; page++ {
+	for page := int64(0); page < pageCount; page++ {
 		start := page * pageSize
 		end := start + pageSize
+		if end > int64(len(data)) {
+			end = int64(len(data))
+		}
+		if end <= start {
+			return
+		}
 		pageIdx := (offset / pageSize) + page
 		pagePath := cas.pagePath(hash, pageIdx)
 		pageLock := cas.pageLock(hash, pageIdx)
 		pageLock.Lock()
+		if _, info, err := cas.existingPagePath(hash, pageIdx); err == nil && info.Size() >= end-start {
+			pageLock.Unlock()
+			continue
+		}
 		err := writeCacheChunkAtomic(pagePath, data[start:end])
 		pageLock.Unlock()
 		if err != nil {

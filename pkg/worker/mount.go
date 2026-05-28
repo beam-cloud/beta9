@@ -88,6 +88,36 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 	return nil
 }
 
+func (c *ContainerMountManager) RequiresWorkspaceStorageMount(request *types.ContainerRequest) bool {
+	if request == nil || !request.StorageAvailable() {
+		return false
+	}
+
+	if request.IsBuildRequest() {
+		return true
+	}
+
+	directCodeDownload := workspaceStorageDownloadAvailable(request.Workspace.Storage)
+	for _, mount := range request.Mounts {
+		if mount.MountPath == types.WorkerUserCodeVolume {
+			if !directCodeDownload {
+				return true
+			}
+			continue
+		}
+
+		if mount.MountType == storage.StorageModeMountPoint {
+			continue
+		}
+
+		if workspaceStorageMountPath(request, mount) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request *types.ContainerRequest) (string, error) {
 	destPath := types.TempContainerWorkspace(request.ContainerId)
 	readyPath := filepath.Join(filepath.Dir(destPath), ".workspace-ready")
@@ -156,17 +186,17 @@ func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request
 func (c *ContainerMountManager) extractStubCode(ctx context.Context, request *types.ContainerRequest, destPath string) error {
 	objectID := request.Stub.Object.ExternalId
 	if request.StorageAvailable() {
-		workspaceObjectPath := filepath.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, objectID)
-		if pathExists(workspaceObjectPath) {
-			return common.ExtractObjectFile(ctx, workspaceObjectPath, destPath)
-		}
-
 		if workspaceStorageDownloadAvailable(request.Workspace.Storage) {
 			log.Info().
 				Str("container_id", request.ContainerId).
 				Str("object_id", objectID).
-				Msg("downloading stub code from workspace storage")
+				Msg("downloading stub code directly from workspace storage")
 			return getAndExtractStubCodeToPath(ctx, request, destPath)
+		}
+
+		workspaceObjectPath := filepath.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, objectID)
+		if pathExists(workspaceObjectPath) {
+			return common.ExtractObjectFile(ctx, workspaceObjectPath, destPath)
 		}
 
 		return fmt.Errorf("workspace object not available at %s and direct download is not configured", workspaceObjectPath)
@@ -174,6 +204,18 @@ func (c *ContainerMountManager) extractStubCode(ctx context.Context, request *ty
 
 	objectPath := filepath.Join(types.DefaultObjectPath, request.Workspace.Name, objectID)
 	return common.ExtractObjectFile(ctx, objectPath, destPath)
+}
+
+func workspaceStorageMountPath(request *types.ContainerRequest, mount types.Mount) bool {
+	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) ||
+		strings.HasPrefix(mount.MountPath, types.WorkerUserOutputVolume) {
+		return true
+	}
+
+	workspaceVolumeRoot := path.Join(types.DefaultVolumesPath, request.Workspace.Name)
+	workspaceOutputRoot := path.Join(types.DefaultOutputsPath, request.Workspace.Name)
+	return strings.HasPrefix(mount.LocalPath, workspaceVolumeRoot) ||
+		strings.HasPrefix(mount.LocalPath, workspaceOutputRoot)
 }
 
 func workspaceStorageDownloadAvailable(storage *types.WorkspaceStorage) bool {
