@@ -42,6 +42,7 @@ const (
 	shutdownDrainMax               time.Duration = 5 * time.Second
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
+	defaultContainerStartupTimeout time.Duration = 5 * time.Minute
 )
 
 type Worker struct {
@@ -566,19 +567,50 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 		go s.cancelBuildIfAlreadyStopping(ctx, cancel, containerId)
 	}
 
-	// If isolated workspace storage is available, mount it
-	if request.StorageAvailable() {
-		log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
+	run := func() error {
+		if request.StorageAvailable() {
+			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
+			if _, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage); err != nil {
+				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 
-		_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
-			s.failContainerRequest(containerId, request, err)
-			return
+		return s.RunContainer(ctx, request)
+	}
+
+	var err error
+	if request.IsBuildRequest() {
+		err = run()
+	} else {
+		timeout := defaultContainerStartupTimeout
+		if s.config.Worker.Failover.MaxSchedulingLatencyMs > 0 {
+			timeout = time.Duration(s.config.Worker.Failover.MaxSchedulingLatencyMs) * time.Millisecond
+		}
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- run()
+		}()
+
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case err = <-errCh:
+		case <-timer.C:
+			cancel()
+			err = fmt.Errorf("container startup timed out after %s", timeout)
+		case <-s.ctx.Done():
+			cancel()
+			err = fmt.Errorf("worker shutting down before container startup completed: %w", s.ctx.Err())
 		}
 	}
 
-	if err := s.RunContainer(ctx, request); err != nil {
+	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
 		s.failContainerRequest(containerId, request, err)
 		return

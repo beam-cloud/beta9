@@ -130,14 +130,14 @@ func TestS2ContainerLogRecordUsesLogTimestamp(t *testing.T) {
 	}
 }
 
-func TestTaskLogQueryAllowsUntaggedLogsFromSameContainer(t *testing.T) {
+func TestTaskLogQueryRequiresTaskTaggedLogs(t *testing.T) {
 	query := types.LogQuery{
 		TaskID:      "task-123",
 		ContainerID: "container-789",
 	}
 
-	if !logRecordMatchesQuery(types.LogRecord{ContainerID: "container-789", Message: "untagged"}, query) {
-		t.Fatal("expected untagged log from the task container to match")
+	if logRecordMatchesQuery(types.LogRecord{ContainerID: "container-789", Message: "untagged"}, query) {
+		t.Fatal("expected untagged log from the task container to be filtered")
 	}
 	if !logRecordMatchesQuery(types.LogRecord{TaskID: "task-123", ContainerID: "container-789", Message: "tagged"}, query) {
 		t.Fatal("expected tagged task log to match")

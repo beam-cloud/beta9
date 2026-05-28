@@ -221,12 +221,12 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 	}
 
 	switch {
+	case query.TaskID != "" && query.WorkspaceID != "":
+		return addIfExists(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
 	case query.ContainerID != "" && query.WorkspaceID != "" && query.StubID != "":
 		return addIfExists(r.containerLogStreamName(query.WorkspaceID, query.StubID, query.ContainerID))
 	case query.ContainerID != "" && query.WorkspaceID != "":
 		return r.findContainerLogStreams(ctx, query.WorkspaceID, query.ContainerID)
-	case query.TaskID != "" && query.WorkspaceID != "":
-		return addIfExists(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
 	case query.StubID != "" && query.WorkspaceID != "":
 		return addIfExists(r.stubLogStreamName(query.WorkspaceID, query.StubID))
 	case query.AppID != "" && query.WorkspaceID != "":
@@ -320,7 +320,7 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 }
 
 func logRecordMatchesQuery(record types.LogRecord, query types.LogQuery) bool {
-	if query.TaskID != "" && record.TaskID != query.TaskID && !untaggedContainerLogMatchesTaskQuery(record, query) {
+	if query.TaskID != "" && record.TaskID != query.TaskID {
 		return false
 	}
 	if query.ContainerID != "" && record.ContainerID != query.ContainerID {
@@ -336,10 +336,6 @@ func logRecordMatchesQuery(record types.LogRecord, query types.LogQuery) bool {
 		return false
 	}
 	return true
-}
-
-func untaggedContainerLogMatchesTaskQuery(record types.LogRecord, query types.LogQuery) bool {
-	return record.TaskID == "" && query.ContainerID != "" && record.ContainerID == query.ContainerID
 }
 
 type s2LogEventStream struct {
