@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +125,54 @@ func TestSetupContainerMountsPrefersDirectWorkspaceStorageForStubCode(t *testing
 	require.Equal(t, "direct\n", string(workspaceBytes))
 }
 
+func TestRequiresWorkspaceStorageMount(t *testing.T) {
+	manager := NewContainerMountManager(types.AppConfig{})
+
+	t.Run("direct storage user code only", func(t *testing.T) {
+		request := stubCodeMountRequest("container-direct-code", "workspace", "object")
+		request.Workspace.Storage = directWorkspaceStorage()
+
+		require.False(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+
+	t.Run("legacy storage user code", func(t *testing.T) {
+		request := stubCodeMountRequest("container-legacy-code", "workspace", "object")
+
+		require.True(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+
+	t.Run("workspace volume", func(t *testing.T) {
+		request := stubCodeMountRequest("container-volume", "workspace", "object")
+		request.Workspace.Storage = directWorkspaceStorage()
+		request.Mounts = append(request.Mounts, types.Mount{
+			MountPath: types.WorkerContainerVolumePath + "/data",
+			LocalPath: filepath.Join(types.DefaultVolumesPath, request.Workspace.Name, "data"),
+		})
+
+		require.True(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+
+	t.Run("mountpoint storage", func(t *testing.T) {
+		request := stubCodeMountRequest("container-mountpoint", "workspace", "object")
+		request.Workspace.Storage = directWorkspaceStorage()
+		request.Mounts = []types.Mount{{
+			MountPath: "/mnt/s3",
+			MountType: storage.StorageModeMountPoint,
+		}}
+
+		require.False(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+
+	t.Run("build request", func(t *testing.T) {
+		sourceImage := "alpine"
+		request := stubCodeMountRequest("container-build", "workspace", "object")
+		request.Workspace.Storage = directWorkspaceStorage()
+		request.BuildOptions.SourceImage = &sourceImage
+
+		require.True(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+}
+
 func stubCodeMountRequest(containerID, workspaceName, objectID string) *types.ContainerRequest {
 	storageID := uint(1)
 	return &types.ContainerRequest{
@@ -138,6 +187,21 @@ func stubCodeMountRequest(containerID, workspaceName, objectID string) *types.Co
 		Mounts: []types.Mount{{
 			MountPath: types.WorkerUserCodeVolume,
 		}},
+	}
+}
+
+func directWorkspaceStorage() *types.WorkspaceStorage {
+	storageID := uint(1)
+	bucket := "bucket"
+	accessKey := "access"
+	secretKey := "secret"
+	region := "us-east-1"
+	return &types.WorkspaceStorage{
+		Id:         &storageID,
+		BucketName: &bucket,
+		AccessKey:  &accessKey,
+		SecretKey:  &secretKey,
+		Region:     &region,
 	}
 }
 

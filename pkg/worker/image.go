@@ -38,12 +38,12 @@ import (
 )
 
 const (
-	imageBundlePath                string = "/dev/shm/images"
-	imageTmpDir                    string = "/tmp"
-	metricsSourceLabel                    = "image_client"
-	pullLazyBackoff                       = 1000 * time.Millisecond
-	embeddedImageCacheWaitTimeout         = 2 * time.Minute
-	embeddedImageCacheWaitInterval        = 250 * time.Millisecond
+	imageBundlePath                   string = "/dev/shm/images"
+	imageTmpDir                       string = "/tmp"
+	metricsSourceLabel                       = "image_client"
+	pullLazyBackoff                          = 1000 * time.Millisecond
+	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
+	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
 )
 
 var (
@@ -911,6 +911,11 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 					"reason": "store_lock_contended",
 				})
 				return false, waitErr
+			} else {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), false, map[string]string{
+					"reason": "store_lock_contended",
+				})
+				return false, nil
 			}
 		}
 		return false, err
@@ -935,7 +940,7 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 }
 
 func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archivePath, imageId string) (bool, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, embeddedImageCacheWaitTimeout)
+	waitCtx, cancel := context.WithTimeout(ctx, embeddedImageCacheLockWaitTimeout)
 	defer cancel()
 
 	ticker := time.NewTicker(embeddedImageCacheWaitInterval)
@@ -953,10 +958,13 @@ func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archi
 
 		select {
 		case <-waitCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
 			if lastErr != nil {
 				return false, lastErr
 			}
-			return false, waitCtx.Err()
+			return false, nil
 		case <-ticker.C:
 		}
 	}

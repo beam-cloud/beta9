@@ -88,6 +88,36 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 	return nil
 }
 
+func (c *ContainerMountManager) RequiresWorkspaceStorageMount(request *types.ContainerRequest) bool {
+	if request == nil || !request.StorageAvailable() {
+		return false
+	}
+
+	if request.IsBuildRequest() {
+		return true
+	}
+
+	directCodeDownload := workspaceStorageDownloadAvailable(request.Workspace.Storage)
+	for _, mount := range request.Mounts {
+		if mount.MountPath == types.WorkerUserCodeVolume {
+			if !directCodeDownload {
+				return true
+			}
+			continue
+		}
+
+		if mount.MountType == storage.StorageModeMountPoint {
+			continue
+		}
+
+		if workspaceStorageMountPath(request, mount) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request *types.ContainerRequest) (string, error) {
 	destPath := types.TempContainerWorkspace(request.ContainerId)
 	readyPath := filepath.Join(filepath.Dir(destPath), ".workspace-ready")
@@ -174,6 +204,18 @@ func (c *ContainerMountManager) extractStubCode(ctx context.Context, request *ty
 
 	objectPath := filepath.Join(types.DefaultObjectPath, request.Workspace.Name, objectID)
 	return common.ExtractObjectFile(ctx, objectPath, destPath)
+}
+
+func workspaceStorageMountPath(request *types.ContainerRequest, mount types.Mount) bool {
+	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) ||
+		strings.HasPrefix(mount.MountPath, types.WorkerUserOutputVolume) {
+		return true
+	}
+
+	workspaceVolumeRoot := path.Join(types.DefaultVolumesPath, request.Workspace.Name)
+	workspaceOutputRoot := path.Join(types.DefaultOutputsPath, request.Workspace.Name)
+	return strings.HasPrefix(mount.LocalPath, workspaceVolumeRoot) ||
+		strings.HasPrefix(mount.LocalPath, workspaceOutputRoot)
 }
 
 func workspaceStorageDownloadAvailable(storage *types.WorkspaceStorage) bool {
