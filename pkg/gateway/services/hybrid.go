@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -159,6 +161,7 @@ func (gws *GatewayService) ReserveHybridPool(ctx context.Context, in *pb.Reserve
 	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
 		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolReserved, ""))
 
 	return &pb.ReserveHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
 }
@@ -240,6 +243,7 @@ func (gws *GatewayService) UpsertHybridPool(ctx context.Context, in *pb.UpsertHy
 	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
 		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolUpserted, ""))
 	return &pb.UpsertHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
 }
 
@@ -276,6 +280,7 @@ func (gws *GatewayService) DeleteHybridPool(ctx context.Context, in *pb.DeleteHy
 	if err := gws.deleteHybridPoolState(ctx, workspaceID, in.Name); err != nil {
 		return &pb.DeleteHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolDeleted, "deleted"))
 	return &pb.DeleteHybridPoolResponse{Ok: true}, nil
 }
 
@@ -307,6 +312,7 @@ func (gws *GatewayService) ExtendHybridPool(ctx context.Context, in *pb.ExtendHy
 	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
 		return &pb.ExtendHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolExtended, ""))
 	return &pb.ExtendHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
 }
 
@@ -355,6 +361,12 @@ func (gws *GatewayService) RevokeHybridPoolJoinToken(ctx context.Context, in *pb
 	if err := gws.saveHybridJoinTokenState(ctx, state, time.Until(state.ExpiresAt)); err != nil {
 		return &pb.RevokeHybridPoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	gws.emitHybridEvent(types.EventHybridJoinToken, types.EventHybridSchema{
+		WorkspaceID: state.WorkspaceID,
+		PoolName:    state.PoolName,
+		Action:      types.EventHybridActionJoinTokenRevoked,
+		Status:      "revoked",
+	})
 	return &pb.RevokeHybridPoolJoinTokenResponse{Ok: true}, nil
 }
 
@@ -423,6 +435,24 @@ func (gws *GatewayService) JoinHybridPool(ctx context.Context, in *pb.JoinHybrid
 	if err := gws.saveHybridAgentTokenState(ctx, agentState); err != nil {
 		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+		WorkspaceID: tokenState.WorkspaceID,
+		PoolName:    tokenState.PoolName,
+		MachineID:   machineID,
+		Action:      types.EventHybridActionMachineJoined,
+		Status:      hybridMachineStatus(agentState),
+		Transport:   normalizeHybridPoolConfig(poolState.Config).Transport,
+		Executor:    agentState.Executor,
+		Hostname:    agentState.Hostname,
+		OS:          agentState.OS,
+		Arch:        agentState.Arch,
+		CPUCount:    agentState.CPUCount,
+		MemoryMB:    agentState.MemoryMB,
+		GPUCount:    agentState.GPUCount,
+		GPUs:        agentState.GPUs,
+		Schedulable: boolPtr(agentState.Schedulable),
+		Message:     hybridPreflightSummary(agentState.Preflight),
+	})
 
 	return &pb.JoinHybridPoolResponse{
 		Ok:          true,
@@ -446,20 +476,27 @@ func (gws *GatewayService) RequestHybridTransportCredential(ctx context.Context,
 	transport := firstNonEmpty(in.Transport, types.BackendRouteTransportTSNet)
 	transport = strings.ReplaceAll(transport, "-", "_")
 	if transport == types.BackendRouteTransportLocalDirect {
+		gws.emitHybridEvent(types.EventHybridTransport, types.EventHybridSchema{
+			WorkspaceID: agentState.WorkspaceID,
+			PoolName:    agentState.PoolName,
+			MachineID:   agentState.MachineID,
+			Action:      types.EventHybridActionTransportCredentialVended,
+			Status:      "ready",
+			Transport:   transport,
+		})
 		return &pb.RequestHybridTransportCredentialResponse{Ok: true}, nil
 	}
-	if transport != types.BackendRouteTransportTSNet {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: fmt.Sprintf("unsupported transport %q", transport)}, nil
+	if err := gws.validateHybridTransportConfig(transport); err != nil {
+		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if !gws.appConfig.Tailscale.Enabled {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: "tailscale is not enabled"}, nil
-	}
-	if gws.appConfig.Tailscale.AuthKey == "" {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: "gateway tailscale auth key is not configured"}, nil
-	}
-	if gws.appConfig.Tailscale.HybridWorkerAuthKey == "" {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: "hybrid worker tailscale auth key is not configured"}, nil
-	}
+	gws.emitHybridEvent(types.EventHybridTransport, types.EventHybridSchema{
+		WorkspaceID: agentState.WorkspaceID,
+		PoolName:    agentState.PoolName,
+		MachineID:   agentState.MachineID,
+		Action:      types.EventHybridActionTransportCredentialVended,
+		Status:      "ready",
+		Transport:   transport,
+	})
 
 	return &pb.RequestHybridTransportCredentialResponse{
 		Ok:         true,
@@ -511,12 +548,34 @@ func (gws *GatewayService) UpdateHybridRouteStatus(ctx context.Context, in *pb.U
 		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: "route does not belong to this agent"}, nil
 	}
 
+	previousState := route.State
+	previousProxyTarget := route.ProxyTarget
+	previousError := route.Error
 	route.State = firstNonEmpty(in.State, route.State)
 	route.ProxyTarget = firstNonEmpty(in.ProxyTarget, route.ProxyTarget)
 	route.Error = in.Error
 	route.UpdatedAt = time.Now().Unix()
 	if err := gws.containerRepo.SetBackendRoute(ctx, *route); err != nil {
 		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if previousState != route.State || previousProxyTarget != route.ProxyTarget || previousError != route.Error {
+		gws.emitHybridEvent(types.EventHybridRoute, types.EventHybridSchema{
+			WorkspaceID: agentState.WorkspaceID,
+			PoolName:    agentState.PoolName,
+			MachineID:   agentState.MachineID,
+			WorkerID:    route.WorkerID,
+			ContainerID: route.ContainerID,
+			RouteID:     route.RouteID,
+			Action:      types.EventHybridActionRouteStatusUpdated,
+			Status:      route.State,
+			Transport:   route.Transport,
+			Message:     route.Error,
+			Attrs: map[string]string{
+				"kind":     route.Kind,
+				"port":     fmt.Sprintf("%d", route.Port),
+				"protocol": route.Protocol,
+			},
+		})
 	}
 	return &pb.UpdateHybridRouteStatusResponse{Ok: true}, nil
 }
@@ -727,20 +786,30 @@ func timestampOrNil(t time.Time) *timestamppb.Timestamp {
 }
 
 func (gws *GatewayService) createHybridPoolJoinCommand(ctx context.Context, poolName, ttlValue string) (string, string, time.Time, error) {
+	gatewayURL := strings.TrimRight(gws.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
+
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	devMode := isLocalGatewayURL(gatewayURL)
+	if authInfo != nil && authInfo.Workspace != nil {
+		if state, err := gws.getOwnedHybridPoolState(ctx, authInfo, poolName); err == nil && state != nil {
+			config := normalizeHybridPoolConfig(state.Config)
+			if err := gws.validateHybridTransportConfig(config.Transport); err != nil {
+				return "", "", time.Time{}, err
+			}
+			if config.Transport == types.BackendRouteTransportLocalDirect {
+				devMode = true
+			}
+		}
+	}
+
 	token, expiresAt, err := gws.createHybridPoolJoinToken(ctx, poolName, ttlValue)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
-	gatewayURL := strings.TrimRight(gws.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
+
 	command := fmt.Sprintf("curl -fsSL %s/install/hybrid-worker | sudo bash -s -- --gateway %s --join-token %s", gatewayURL, gatewayURL, token)
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	if authInfo != nil && authInfo.Workspace != nil {
-		if state, err := gws.getOwnedHybridPoolState(ctx, authInfo, poolName); err == nil && state != nil {
-			config := normalizeHybridPoolConfig(state.Config)
-			if config.Transport == types.BackendRouteTransportLocalDirect {
-				command = fmt.Sprintf("curl -fsSL %s/install/hybrid-worker | bash -s -- --gateway %s --join-token %s --dev", gatewayURL, gatewayURL, token)
-			}
-		}
+	if devMode {
+		command = fmt.Sprintf("curl -fsSL %s/install/hybrid-worker | bash -s -- --gateway %s --join-token %s --dev", gatewayURL, gatewayURL, token)
 	}
 	return command, token, expiresAt, nil
 }
@@ -794,6 +863,16 @@ func (gws *GatewayService) createHybridPoolJoinToken(ctx context.Context, poolNa
 	if err := gws.saveHybridJoinTokenState(ctx, tokenState, ttl); err != nil {
 		return "", time.Time{}, err
 	}
+	gws.emitHybridEvent(types.EventHybridJoinToken, types.EventHybridSchema{
+		WorkspaceID: tokenState.WorkspaceID,
+		PoolName:    tokenState.PoolName,
+		Action:      types.EventHybridActionJoinTokenCreated,
+		Status:      "active",
+		Attrs: map[string]string{
+			"expires_at":  tokenState.ExpiresAt.UTC().Format(time.RFC3339),
+			"ttl_seconds": fmt.Sprintf("%.0f", ttl.Seconds()),
+		},
+	})
 	return token, tokenState.ExpiresAt, nil
 }
 
@@ -819,6 +898,43 @@ func (gws *GatewayService) hybridWorkerBootstrapConfig(workspaceID string, poolS
 			"k3s",
 		},
 	}
+}
+
+func (gws *GatewayService) validateHybridTransportConfig(transport string) error {
+	transport = strings.ReplaceAll(firstNonEmpty(transport, types.BackendRouteTransportTSNet), "-", "_")
+	switch transport {
+	case types.BackendRouteTransportLocalDirect:
+		return nil
+	case types.BackendRouteTransportTSNet:
+		if !gws.appConfig.Tailscale.Enabled {
+			return fmt.Errorf("tailscale is not enabled")
+		}
+		if gws.appConfig.Tailscale.AuthKey == "" {
+			return fmt.Errorf("gateway tailscale auth key is not configured")
+		}
+		if gws.appConfig.Tailscale.HybridWorkerAuthKey == "" {
+			return fmt.Errorf("hybrid worker tailscale auth key is not configured")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported hybrid transport %q", transport)
+	}
+}
+
+func isLocalGatewayURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		host = strings.TrimSpace(rawURL)
+	}
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func generateHybridToken() (string, error) {
@@ -920,6 +1036,74 @@ func (gws *GatewayService) getOwnedHybridPoolState(ctx context.Context, authInfo
 		return nil, nil
 	}
 	return state, nil
+}
+
+func (gws *GatewayService) emitHybridEvent(eventType string, event types.EventHybridSchema) {
+	if gws.eventRepo == nil {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	gws.eventRepo.PushHybridEvent(eventType, event)
+}
+
+func hybridPoolEvent(workspaceID string, state *hybrid.PoolState, action, status string) types.EventHybridSchema {
+	if state == nil {
+		return types.EventHybridSchema{}
+	}
+	if status == "" {
+		status = state.Status
+	}
+	event := types.EventHybridSchema{
+		WorkspaceID: workspaceID,
+		PoolName:    state.Name,
+		Action:      action,
+		Status:      status,
+		Transport:   state.Transport,
+		Fallback:    state.Fallback,
+		Source:      string(state.Source),
+		GPUCount:    state.ReservedGPUs,
+		Attrs: map[string]string{
+			"selector":               state.Selector,
+			"mode":                   state.Mode,
+			"priority":               fmt.Sprintf("%d", state.Priority),
+			"reservation_count":      fmt.Sprintf("%d", len(state.Reservations)),
+			"committed_spend_micros": fmt.Sprintf("%d", state.CommittedSpendMicros),
+		},
+	}
+	if state.Config != nil {
+		event.Attrs["ttl"] = state.Config.Ttl
+		event.Attrs["max_spend"] = fmt.Sprintf("%g", state.Config.MaxSpend)
+	}
+	if !state.ExpiresAt.IsZero() {
+		event.Attrs["expires_at"] = state.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return event
+}
+
+func hybridMachineStatus(state *hybrid.AgentTokenState) string {
+	if state != nil && state.Schedulable {
+		return "schedulable"
+	}
+	return "preflight_failed"
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func hybridPreflightSummary(checks []hybrid.PreflightCheckState) string {
+	failed := make([]string, 0)
+	for _, check := range checks {
+		if check.Severity == "error" && !check.OK {
+			failed = append(failed, check.Name)
+		}
+	}
+	if len(failed) == 0 {
+		return "all required preflight checks passed"
+	}
+	return "failed preflight checks: " + strings.Join(failed, ", ")
 }
 
 func filterHybridPoolsCreatedByAuth(states []*hybrid.PoolState, authInfo *auth.AuthInfo) []*hybrid.PoolState {

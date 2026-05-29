@@ -39,6 +39,12 @@ var (
 	EventWorkerPoolHealthy  = "workerpool.healthy"
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
+
+	EventHybridPool      = "hybrid.pool"
+	EventHybridJoinToken = "hybrid.join_token"
+	EventHybridMachine   = "hybrid.machine"
+	EventHybridTransport = "hybrid.transport"
+	EventHybridRoute     = "hybrid.route"
 )
 
 var (
@@ -90,6 +96,46 @@ type EventWorkerLifecycleSchema struct {
 	Status    string              `json:"status"`
 	PoolName  string              `json:"pool_name"`
 	Reason    DeletedWorkerReason `json:"reason"`
+}
+
+var EventHybridSchemaVersion = "1.0"
+
+const (
+	EventHybridActionPoolReserved              = "pool.reserved"
+	EventHybridActionPoolUpserted              = "pool.upserted"
+	EventHybridActionPoolDeleted               = "pool.deleted"
+	EventHybridActionPoolExtended              = "pool.extended"
+	EventHybridActionJoinTokenCreated          = "join_token.created"
+	EventHybridActionJoinTokenRevoked          = "join_token.revoked"
+	EventHybridActionMachineJoined             = "machine.joined"
+	EventHybridActionTransportCredentialVended = "transport.credential_vended"
+	EventHybridActionRouteStatusUpdated        = "route.status_updated"
+)
+
+type EventHybridSchema struct {
+	Timestamp   time.Time         `json:"timestamp"`
+	WorkspaceID string            `json:"workspace_id,omitempty"`
+	PoolName    string            `json:"pool_name,omitempty"`
+	MachineID   string            `json:"machine_id,omitempty"`
+	WorkerID    string            `json:"worker_id,omitempty"`
+	ContainerID string            `json:"container_id,omitempty"`
+	RouteID     string            `json:"route_id,omitempty"`
+	Action      string            `json:"action"`
+	Status      string            `json:"status,omitempty"`
+	Transport   string            `json:"transport,omitempty"`
+	Executor    string            `json:"executor,omitempty"`
+	Fallback    string            `json:"fallback,omitempty"`
+	Source      string            `json:"source,omitempty"`
+	Hostname    string            `json:"hostname,omitempty"`
+	OS          string            `json:"os,omitempty"`
+	Arch        string            `json:"arch,omitempty"`
+	CPUCount    uint32            `json:"cpu_count,omitempty"`
+	MemoryMB    uint64            `json:"memory_mb,omitempty"`
+	GPUCount    uint32            `json:"gpu_count,omitempty"`
+	GPUs        []string          `json:"gpus,omitempty"`
+	Schedulable *bool             `json:"schedulable,omitempty"`
+	Message     string            `json:"message,omitempty"`
+	Attrs       map[string]string `json:"attrs,omitempty"`
 }
 
 type DeletedWorkerReason string

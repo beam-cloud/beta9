@@ -331,6 +331,12 @@ func TestS2PlatformEventStreamsUseEntityMetadata(t *testing.T) {
 			want:      "events/workspaces/workspace-1",
 		},
 		{
+			name:      "hybrid route",
+			eventType: types.EventHybridRoute,
+			metadata:  eventMetadata{WorkspaceID: "workspace-1", WorkerID: "worker-1", RouteID: "route-1"},
+			want:      "events/workspaces/workspace-1",
+		},
+		{
 			name:      "stub state",
 			eventType: "stub.state.degraded",
 			metadata:  eventMetadata{WorkspaceID: "workspace-1", StubID: "stub-1"},
@@ -368,6 +374,33 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		metadata.StubID != "stub-1" ||
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
+		t.Fatalf("metadata did not round trip: %#v", metadata)
+	}
+}
+
+func TestHybridEventMetadataExtensionsRoundTrip(t *testing.T) {
+	repo := &EventClientRepo{}
+	event, err := repo.createEventObject(types.EventHybridRoute, types.EventHybridSchemaVersion, types.EventHybridSchema{
+		WorkspaceID: "workspace-1",
+		PoolName:    "private-gpu",
+		MachineID:   "machine-1",
+		WorkerID:    "worker-1",
+		ContainerID: "container-1",
+		RouteID:     "route-1",
+		Action:      types.EventHybridActionRouteStatusUpdated,
+		Status:      types.BackendRouteStateReady,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := eventMetadataFromCloudEvent(event)
+	if metadata.WorkspaceID != "workspace-1" ||
+		metadata.PoolName != "private-gpu" ||
+		metadata.MachineID != "machine-1" ||
+		metadata.WorkerID != "worker-1" ||
+		metadata.ContainerID != "container-1" ||
+		metadata.RouteID != "route-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)
 	}
 }

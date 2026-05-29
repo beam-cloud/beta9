@@ -284,6 +284,7 @@ type EventRepository interface {
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)
+	PushHybridEvent(eventType string, event types.EventHybridSchema)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
