@@ -31,7 +31,15 @@ func (hm *HostMap) Set(host *Host) {
 
 	hm.mu.Lock()
 	existing, exists := hm.hosts[host.HostId]
-	if exists && existing.Addr == host.Addr && existing.PrivateAddr == host.PrivateAddr && existing.CapacityUsagePct == host.CapacityUsagePct {
+	if exists &&
+		existing.Addr == host.Addr &&
+		existing.PrivateAddr == host.PrivateAddr &&
+		existing.CapacityUsagePct == host.CapacityUsagePct &&
+		existing.RegistrationID == host.RegistrationID &&
+		existing.PoolName == host.PoolName &&
+		existing.Locality == host.Locality &&
+		existing.NodeID == host.NodeID &&
+		existing.CachePathID == host.CachePathID {
 		hm.mu.Unlock()
 		return
 	}
