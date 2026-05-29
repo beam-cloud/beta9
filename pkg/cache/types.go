@@ -350,6 +350,11 @@ type MountPointConfig struct {
 type Host struct {
 	RTT              time.Duration `redis:"rtt" json:"rtt"`
 	HostId           string        `redis:"host_id" json:"host_id"`
+	RegistrationID   string        `redis:"registration_id" json:"registration_id"`
+	PoolName         string        `redis:"pool_name" json:"pool_name"`
+	Locality         string        `redis:"locality" json:"locality"`
+	NodeID           string        `redis:"node_id" json:"node_id"`
+	CachePathID      string        `redis:"cache_path_id" json:"cache_path_id"`
 	Addr             string        `redis:"addr" json:"addr"`
 	PrivateAddr      string        `redis:"private_addr" json:"private_addr"`
 	CapacityUsagePct float64       `redis:"capacity_usage_pct" json:"capacity_usage_pct"`
@@ -357,6 +362,10 @@ type Host struct {
 
 // Bytes is needed for the rendezvous hasher
 func (h *Host) Bytes() []byte {
+	// HRW placement is intentionally based only on the stable logical cache
+	// host. Registration, endpoint, and pool metadata describe the active
+	// process lease for that host and must not perturb placement during worker
+	// churn.
 	return []byte(h.HostId)
 }
 

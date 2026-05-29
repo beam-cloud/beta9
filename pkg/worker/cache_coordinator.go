@@ -15,8 +15,7 @@ import (
 const cacheCoordinatorRPCTimeout = 5 * time.Second
 
 type gatewayCacheHostDirectory struct {
-	client   pb.WorkerRepositoryServiceClient
-	poolName string
+	client pb.WorkerRepositoryServiceClient
 }
 
 func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, locality string) ([]*cache.Host, error) {
@@ -25,7 +24,6 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 	}
 
 	resp, err := handleGRPCResponse(d.client.ListCacheHosts(ctx, &pb.ListCacheHostsRequest{
-		PoolName: d.poolName,
 		Locality: locality,
 	}))
 	if err != nil {
@@ -39,6 +37,11 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 		}
 		hosts = append(hosts, &cache.Host{
 			HostId:           host.LogicalHostId,
+			RegistrationID:   host.RegistrationId,
+			PoolName:         host.PoolName,
+			Locality:         host.Locality,
+			NodeID:           host.NodeId,
+			CachePathID:      host.CachePathId,
 			Addr:             host.Addr,
 			PrivateAddr:      host.PrivateAddr,
 			CapacityUsagePct: float64(host.CapacityUsagePct),
@@ -123,6 +126,10 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		logger.
 			Str("logical_host_id", host.LogicalHostId).
 			Str("registration_id", host.RegistrationId).
+			Str("pool_name", host.PoolName).
+			Str("locality", host.Locality).
+			Str("node_id", host.NodeId).
+			Str("cache_path_id", host.CachePathId).
 			Str("addr", host.PrivateAddr).
 			Msg("Registered cache host")
 	}

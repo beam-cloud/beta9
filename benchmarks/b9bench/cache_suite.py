@@ -1462,10 +1462,15 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         hosts = self.cache_hosts_snapshot()
         target_host = self._choose_cache_host(hosts, cas_proof)
         if target_host is None:
+            cas_node = cas_proof.get("nodeName") or cas_proof.get("nodeId") or ""
+            error = "no cache host with advertised address"
+            if cas_node:
+                error = f"no active cache host advertises cached node {cas_node}"
             return {
                 "ok": False,
-                "error": "no cache host with advertised address",
+                "error": error,
                 "hosts": hosts,
+                "casProof": cas_proof,
             }
         source_pod, target_pod = self._choose_remote_source(target_host)
         if source_pod is None:
@@ -1756,13 +1761,20 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "poolName": registration.get("pool_name")
                         or registration.get("poolName")
                         or self.config.cache_pool_name,
+                        "nodeId": registration.get("node_id")
+                        or registration.get("nodeId")
+                        or "",
                         "nodeName": registration.get("node_id")
                         or registration.get("nodeId")
+                        or "",
+                        "cachePathId": registration.get("cache_path_id")
+                        or registration.get("cachePathId")
                         or "",
                         "addr": registration.get("addr") or "",
                         "privateAddr": registration.get("private_addr")
                         or registration.get("privateAddr")
                         or "",
+                        "source": "coordinator",
                     }
                 )
                 break
@@ -1816,7 +1828,13 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "poolName": registration.get("pool_name")
                         or registration.get("poolName")
                         or "",
+                        "nodeId": registration.get("node_id")
+                        or registration.get("nodeId")
+                        or pod.get("nodeName", ""),
                         "nodeName": pod.get("nodeName", ""),
+                        "cachePathId": registration.get("cache_path_id")
+                        or registration.get("cachePathId")
+                        or "",
                         "addr": addr,
                         "privateAddr": addr,
                         "pod": pod_name,
@@ -1894,9 +1912,17 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         if not hosts:
             return None
         node_name = cas_proof.get("nodeName") or ""
-        for host in hosts:
-            if node_name and node_name in (host.get("hostId") or ""):
-                return host
+        if node_name:
+            for host in hosts:
+                if node_name in {
+                    host.get("nodeName") or "",
+                    host.get("nodeId") or "",
+                }:
+                    return host
+            for host in hosts:
+                if node_name in (host.get("hostId") or ""):
+                    return host
+            return None
         return hosts[0]
 
     def _choose_remote_source(

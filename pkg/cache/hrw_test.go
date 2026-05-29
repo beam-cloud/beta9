@@ -127,3 +127,65 @@ func TestHashRemove(t *testing.T) {
 		t.Errorf("Key %s does not map to any node after removing 'b'", keyForB)
 	}
 }
+
+func TestHashPlacementSurvivesRegistrationEndpointChurn(t *testing.T) {
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(&Host{
+		HostId:         "cache-host-default-node-a-path",
+		RegistrationID: "worker-a-1",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.1:2049",
+	})
+	hostMap.Set(&Host{
+		HostId:         "cache-host-default-node-b-path",
+		RegistrationID: "worker-b-1",
+		NodeID:         "node-b",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.2:2049",
+	})
+
+	var keyForNodeA string
+	for i := 0; i < 10000; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		hash := rendezvous.New[*Host]()
+		hash.Add(hostMap.GetAll()...)
+		host, _ := hash.Get(key)
+		if host != nil && host.HostId == "cache-host-default-node-a-path" {
+			keyForNodeA = key
+			break
+		}
+	}
+	if keyForNodeA == "" {
+		t.Fatal("failed to find a key routed to node-a")
+	}
+
+	hashBefore := rendezvous.New[*Host]()
+	hashBefore.Add(hostMap.GetAll()...)
+	before, _ := hashBefore.Get(keyForNodeA)
+	if before == nil {
+		t.Fatal("expected key to route before endpoint churn")
+	}
+
+	hostMap.Set(&Host{
+		HostId:         "cache-host-default-node-a-path",
+		RegistrationID: "worker-a-2",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.3:2049",
+	})
+
+	hashAfter := rendezvous.New[*Host]()
+	hashAfter.Add(hostMap.GetAll()...)
+	after, _ := hashAfter.Get(keyForNodeA)
+	if after == nil {
+		t.Fatal("expected key to route after endpoint churn")
+	}
+
+	if before.HostId != after.HostId {
+		t.Fatalf("logical cache host changed across endpoint churn: before=%s after=%s", before.HostId, after.HostId)
+	}
+	if after.RegistrationID != "worker-a-2" {
+		t.Fatalf("expected active endpoint metadata to update, got registration %q", after.RegistrationID)
+	}
+}
