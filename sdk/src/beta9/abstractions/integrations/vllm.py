@@ -172,7 +172,7 @@ class VLLM(ASGI):
         vllm_version (str):
             The version of vLLM that will be installed from PyPI. As the configuration of the vLLM engine depends on the version of vLLM, using a non-default vllm_version might require subclassing VLLMArgs in order to add the missing configuration options. Default is version 0.8.4.
         huggingface_hub_version (str):
-            The version of huggingface_hub that will be installed from PyPI. Different versions of vLLM require different versions of huggingface_hub, thus using a non-default vLLM version might require using a non-default version of huggingface_hub.  Default is version 0.30.2.
+            The version of huggingface_hub that will be installed from PyPI. Different versions of vLLM require different versions of huggingface_hub, thus using a non-default vLLM version might require using a non-default version of huggingface_hub. Default is version 0.30.2.
         workers (int):
             The number of workers to run in the container. Default is 1.
         concurrent_requests (int):
@@ -194,6 +194,8 @@ class VLLM(ASGI):
             The secrets to pass to the container. If you need huggingface authentication to download models, you should set HF_TOKEN in the secrets.
         autoscaler (Autoscaler):
             The autoscaler to use. Default is a queue depth autoscaler.
+        checkpoint_enabled (bool):
+            Whether to enable checkpointing for the endpoint. Default is False. If enabled, the app will be checkpointed after the on_start function has completed. On next invocation, each container will restore from a checkpoint and resume execution instead of booting up from cold.
         vllm_args (VLLMArgs):
             The arguments for the vLLM model.
 
@@ -228,6 +230,7 @@ class VLLM(ASGI):
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
+        checkpoint_enabled: bool = False,
         vllm_args: VLLMArgs = VLLMArgs(),
     ):
         if vllm_args.download_dir == DEFAULT_VLLM_CACHE_DIR:
@@ -261,6 +264,7 @@ class VLLM(ASGI):
             volumes=volumes,
             secrets=secrets,
             autoscaler=autoscaler,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
         self.chat_template_url = vllm_args.chat_template_url
