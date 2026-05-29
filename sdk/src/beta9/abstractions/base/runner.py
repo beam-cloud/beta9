@@ -38,6 +38,7 @@ from ...type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    Pool,
     PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
@@ -120,6 +121,7 @@ class RunnerAbstraction(BaseAbstraction):
         block_network: bool = False,
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
+        pool: Optional[Union[str, Pool]] = None,
     ) -> None:
         super().__init__()
 
@@ -149,6 +151,8 @@ class RunnerAbstraction(BaseAbstraction):
         self.memory = self.parse_memory(memory)
         self.gpu = gpu
         self.gpu_count = gpu_count
+        self.pool = pool
+        self.pool_config = self.parse_pool(pool)
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.env: List[str] = formatted_env
@@ -377,6 +381,35 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             return GpuType(gpu).value
 
+    def _gpu_values(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> List[str]:
+        if gpu is None or gpu == "":
+            return []
+        if isinstance(gpu, list):
+            return [GpuType(g).value for g in gpu]
+        return [GpuType(gpu).value]
+
+    def parse_pool(self, pool: Optional[Union[str, Pool]]):
+        if pool is None:
+            return None
+
+        if isinstance(pool, str):
+            if not pool:
+                raise ValueError("Pool name cannot be empty")
+            return Pool(name=pool).export(selector=pool)
+
+        if not isinstance(pool, Pool):
+            raise ValueError("pool must be a string or Pool")
+
+        pool_gpu_values = pool.gpu_values()
+        function_gpu_values = self._gpu_values(self.gpu)
+        if pool_gpu_values:
+            if not function_gpu_values:
+                self.gpu = pool.gpu
+            elif not set(pool_gpu_values).intersection(function_gpu_values):
+                raise ValueError("Function GPU requirements are incompatible with pool GPU requirements")
+
+        return pool.export()
+
     def parse_on_deploy(self, func: Callable):
         if func is None:
             return None
@@ -535,6 +568,7 @@ class RunnerAbstraction(BaseAbstraction):
                 tcp=self.tcp,
                 block_network=self.block_network,
                 allow_list=self.allow_list,
+                pool=self.pool_config,
             )
 
             if _is_stub_created_for_workspace():

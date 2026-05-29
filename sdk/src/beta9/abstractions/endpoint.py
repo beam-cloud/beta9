@@ -31,6 +31,7 @@ from ..type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    Pool,
     PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
@@ -154,6 +155,7 @@ class Endpoint(RunnerAbstraction):
         pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
+        pool: Optional[Union[str, Pool]] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -182,6 +184,7 @@ class Endpoint(RunnerAbstraction):
             pricing=pricing,
             inputs=inputs,
             outputs=outputs,
+            pool=pool,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -318,6 +321,7 @@ class ASGI(Endpoint):
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
         pricing: Optional[PricingPolicy] = None,
+        pool: Optional[Union[str, Pool]] = None,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
@@ -342,6 +346,7 @@ class ASGI(Endpoint):
             checkpoint_enabled=checkpoint_enabled,
             app=app,
             pricing=pricing,
+            pool=pool,
         )
 
         self.is_asgi = True
@@ -456,6 +461,7 @@ class RealtimeASGI(ASGI):
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
         pricing: Optional[PricingPolicy] = None,
+        pool: Optional[Union[str, Pool]] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -479,6 +485,7 @@ class RealtimeASGI(ASGI):
             concurrent_requests=concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
             pricing=pricing,
+            pool=pool,
         )
         self.is_websocket = True
 

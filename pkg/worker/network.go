@@ -49,6 +49,7 @@ const (
 	containerNetworkCleanupInterval     time.Duration = time.Minute * 1
 	defaultContainerNetworkSlotPoolSize               = 16
 	containerNetworkSlotPoolEnv         string        = "CONTAINER_NETWORK_SLOT_POOL_SIZE"
+	workerIptablesModeEnv               string        = "WORKER_IPTABLES_MODE"
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 )
@@ -357,10 +358,11 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	ipv6Path := ""
 	switch ipTablesMode {
 	case "nftables":
-		ipv4Path = "/usr/sbin/iptables-nft"
-		ipv6Path = "/usr/sbin/ip6tables-nft"
+		ipv4Path = firstExistingPath("/usr/sbin/iptables-nft", "/usr/sbin/iptables")
+		ipv6Path = firstExistingPath("/usr/sbin/ip6tables-nft", "/usr/sbin/ip6tables")
 	case "legacy":
-		fallthrough
+		ipv4Path = firstExistingPath("/usr/sbin/iptables-legacy", "/usr/sbin/iptables")
+		ipv6Path = firstExistingPath("/usr/sbin/ip6tables-legacy", "/usr/sbin/ip6tables")
 	default:
 		ipv4Path = "/usr/sbin/iptables"
 		ipv6Path = "/usr/sbin/ip6tables"
@@ -1087,24 +1089,60 @@ func taskIDFromContainerRequestEnv(env []string) string {
 	return ""
 }
 
-// detectIptablesMode detects which iptables version is use on the host based on where the KUBE-FORWARD chain has been setup
+// detectIptablesMode detects the host iptables backend without assuming Kubernetes chains exist.
 func detectIptablesMode() string {
-	iptNft, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-nft"))
-	if err == nil {
-		if exists, _ := iptNft.ChainExists("filter", "KUBE-FORWARD"); exists {
-			return "nftables"
-		}
+	switch strings.TrimSpace(os.Getenv(workerIptablesModeEnv)) {
+	case "nftables":
+		return "nftables"
+	case "legacy":
+		return "legacy"
 	}
 
-	iptLegacy, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-legacy"))
-	if err == nil {
-		if exists, _ := iptLegacy.ChainExists("filter", "KUBE-FORWARD"); exists {
-			return "legacy"
-		}
+	if iptablesChainExists("/usr/sbin/iptables-nft", "filter", "KUBE-FORWARD") {
+		return "nftables"
+	}
+	if iptablesChainExists("/usr/sbin/iptables-legacy", "filter", "KUBE-FORWARD") {
+		return "legacy"
 	}
 
-	// Default to legacy if no KUBE-FORWARD chain found
-	return "legacy"
+	if iptablesTableAvailable("/usr/sbin/iptables-nft", "nat") {
+		return "nftables"
+	}
+	if iptablesTableAvailable("/usr/sbin/iptables-legacy", "nat") {
+		return "legacy"
+	}
+
+	return "default"
+}
+
+func iptablesChainExists(path, table, chain string) bool {
+	ipt, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path(path))
+	if err != nil {
+		return false
+	}
+	exists, err := ipt.ChainExists(table, chain)
+	return err == nil && exists
+}
+
+func iptablesTableAvailable(path, table string) bool {
+	ipt, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path(path))
+	if err != nil {
+		return false
+	}
+	_, err = ipt.List(table, "POSTROUTING")
+	return err == nil
+}
+
+func firstExistingPath(paths ...string) string {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[len(paths)-1]
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {

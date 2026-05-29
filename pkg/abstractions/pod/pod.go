@@ -344,6 +344,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		BlockNetwork:      stubConfig.BlockNetwork,
 		AllowList:         stubConfig.AllowList,
 		DockerEnabled:     stubConfig.DockerEnabled,
+		PoolSelector:      stubConfig.PoolSelector(),
 	})
 	if err != nil {
 		return "", err

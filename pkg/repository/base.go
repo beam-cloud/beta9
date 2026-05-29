@@ -5,6 +5,7 @@ import (
 	"time"
 
 	pkgcommon "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/hybrid"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -52,6 +53,10 @@ type ContainerRepository interface {
 	GetContainerExitCode(string) (int, error)
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
+	SetBackendRoute(ctx context.Context, route types.BackendRoute) error
+	GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error)
+	ListBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) ([]types.BackendRoute, error)
+	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
@@ -81,6 +86,17 @@ type WorkerPoolRepository interface {
 	RemoveWorkerPoolSizerLock(poolName string) error
 	SetWorkerCleanerLock(poolName string) error
 	RemoveWorkerCleanerLock(poolName string) error
+}
+
+type HybridRepository interface {
+	SavePoolState(ctx context.Context, workspaceID string, state *hybrid.PoolState) error
+	GetPoolState(ctx context.Context, workspaceID, name string) (*hybrid.PoolState, error)
+	ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*hybrid.PoolState, error)
+	DeletePoolState(ctx context.Context, workspaceID, name string) error
+	SaveJoinTokenState(ctx context.Context, state *hybrid.JoinTokenState, ttl time.Duration) error
+	GetJoinTokenState(ctx context.Context, tokenHash string) (*hybrid.JoinTokenState, error)
+	SaveAgentTokenState(ctx context.Context, state *hybrid.AgentTokenState, ttl time.Duration) error
+	GetAgentTokenState(ctx context.Context, tokenHash string) (*hybrid.AgentTokenState, error)
 }
 
 type WorkspaceRepository interface {

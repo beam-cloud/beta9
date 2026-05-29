@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Literal, Type, Union
+from typing import Dict, List, Literal, Optional, Type, Union
 
 
 class LifeCycleMethod(str, Enum):
@@ -98,6 +98,8 @@ class GpuType(str, Enum):
     A100_40 = "A100-40"
     A100_80 = "A100-80"
     H100 = "H100"
+    H200 = "H200"
+    B200 = "B200"
     A6000 = "A6000"
     RTX4090 = "RTX4090"
     L40S = "L40S"
@@ -114,12 +116,78 @@ GpuTypeLiteral = Literal[
     "A100-40",
     "A100-80",
     "H100",
+    "H200",
+    "B200",
     "A6000",
     "RTX4090",
     "L40S",
 ]
 
 GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
+
+
+@dataclass
+class Pool:
+    name: Optional[str] = None
+    gpu: Optional[Union[GpuTypeAlias, List[GpuTypeAlias]]] = None
+    gpus: Optional[int] = None
+    ttl: Optional[str] = None
+    max_spend: Optional[float] = None
+    providers: Optional[List[str]] = None
+    regions: Optional[List[str]] = None
+    min_reliability: Optional[float] = None
+
+    def gpu_values(self) -> List[str]:
+        if self.gpu is None:
+            return []
+        if isinstance(self.gpu, list):
+            return [GpuType(g).value for g in self.gpu]
+        if self.gpu == "":
+            return []
+        return [GpuType(self.gpu).value]
+
+    def reservation_required(self) -> bool:
+        return any(
+            [
+                self.gpus is not None,
+                self.ttl is not None,
+                self.max_spend is not None,
+                bool(self.providers),
+                bool(self.regions),
+                self.min_reliability is not None,
+            ]
+        )
+
+    def validate(self) -> None:
+        if self.gpus is not None and self.gpus <= 0:
+            raise ValueError("Pool.gpus must be greater than 0")
+        if self.reservation_required():
+            if not self.gpus:
+                raise ValueError("Reserved pools require gpus")
+            if not self.ttl:
+                raise ValueError("Reserved pools require ttl")
+            if not self.max_spend or self.max_spend <= 0:
+                raise ValueError("Reserved pools require max_spend")
+        if self.min_reliability is not None and not 0 <= self.min_reliability <= 1:
+            raise ValueError("Pool.min_reliability must be between 0 and 1")
+
+    def export(self, selector: str = ""):
+        from .clients.gateway import HybridPoolConfig
+
+        self.validate()
+        name = self.name or ""
+        return HybridPoolConfig(
+            name=name,
+            gpu=self.gpu_values(),
+            gpus=self.gpus or 0,
+            ttl=self.ttl or "",
+            max_spend=float(self.max_spend or 0),
+            providers=self.providers or [],
+            regions=self.regions or [],
+            min_reliability=float(self.min_reliability or 0),
+            reservation_required=self.reservation_required(),
+            selector=selector or name,
+        )
 
 
 QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"

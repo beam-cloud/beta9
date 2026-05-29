@@ -69,7 +69,20 @@ func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, r
 }
 
 func (s *ContainerRepositoryService) SetContainerAddress(ctx context.Context, req *pb.SetContainerAddressRequest) (*pb.SetContainerAddressResponse, error) {
-	err := s.containerRepo.SetContainerAddress(req.ContainerId, req.Address)
+	address := req.Address
+	if req.Route != nil {
+		route := backendRouteFromProto(req.Route)
+		route.ContainerID = req.ContainerId
+		if route.LocalTarget == "" {
+			route.LocalTarget = req.Address
+		}
+		if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+			return &pb.SetContainerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+		address = types.BackendRouteAddress(route.RouteID)
+	}
+
+	err := s.containerRepo.SetContainerAddress(req.ContainerId, address)
 	if err != nil {
 		return &pb.SetContainerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -81,6 +94,17 @@ func (s *ContainerRepositoryService) SetContainerAddressMap(ctx context.Context,
 	addressMap := make(map[int32]string)
 	for k, v := range req.AddressMap {
 		addressMap[int32(k)] = v
+	}
+	for _, routeProto := range req.Routes {
+		route := backendRouteFromProto(routeProto)
+		route.ContainerID = req.ContainerId
+		if route.LocalTarget == "" {
+			route.LocalTarget = addressMap[route.Port]
+		}
+		if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+		addressMap[route.Port] = types.BackendRouteAddress(route.RouteID)
 	}
 
 	err := s.containerRepo.SetContainerAddressMap(req.ContainerId, addressMap)
@@ -106,10 +130,56 @@ func (s *ContainerRepositoryService) GetContainerAddressMap(ctx context.Context,
 }
 
 func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *pb.SetWorkerAddressRequest) (*pb.SetWorkerAddressResponse, error) {
-	err := s.containerRepo.SetWorkerAddress(req.ContainerId, req.Address)
+	address := req.Address
+	if req.Route != nil {
+		route := backendRouteFromProto(req.Route)
+		route.ContainerID = req.ContainerId
+		if route.LocalTarget == "" {
+			route.LocalTarget = req.Address
+		}
+		if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+			return &pb.SetWorkerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+		address = types.BackendRouteAddress(route.RouteID)
+	}
+
+	err := s.containerRepo.SetWorkerAddress(req.ContainerId, address)
 	if err != nil {
 		return &pb.SetWorkerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
+}
+
+func backendRouteFromProto(in *pb.BackendRoute) types.BackendRoute {
+	if in == nil {
+		return types.BackendRoute{}
+	}
+	route := types.BackendRoute{
+		RouteID:     in.RouteId,
+		WorkspaceID: in.WorkspaceId,
+		PoolName:    in.PoolName,
+		MachineID:   in.MachineId,
+		WorkerID:    in.WorkerId,
+		ContainerID: in.ContainerId,
+		Kind:        in.Kind,
+		Port:        in.Port,
+		Protocol:    in.Protocol,
+		Transport:   in.Transport,
+		LocalTarget: in.LocalTarget,
+		ProxyTarget: in.ProxyTarget,
+		State:       in.State,
+		Error:       in.Error,
+		UpdatedAt:   in.UpdatedAt,
+	}
+	if route.Protocol == "" {
+		route.Protocol = types.BackendRouteProtocolTCP
+	}
+	if route.Transport == "" {
+		route.Transport = types.BackendRouteTransportDirect
+	}
+	if route.State == "" {
+		route.State = types.BackendRouteStateOpening
+	}
+	return route
 }

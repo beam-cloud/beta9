@@ -362,12 +362,12 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 
 func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*http.Client, error) {
 	// If it isn't an tailnet address, just return the standard http client
-	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
+	if _, isRoute := types.ParseBackendRouteAddress(address); !isRoute && (!rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName)) {
 		return rb.httpClient, nil
 	}
 
 	start := time.Now()
-	conn, err := network.ConnectToHost(rb.ctx, address, timeout, rb.tailscale, rb.tsConfig)
+	conn, err := network.ConnectToBackend(rb.ctx, address, timeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
 	if err != nil {
 		return nil, err
 	}

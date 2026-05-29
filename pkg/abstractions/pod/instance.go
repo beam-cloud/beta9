@@ -88,6 +88,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			BlockNetwork:      i.StubConfig.BlockNetwork,
 			AllowList:         i.StubConfig.AllowList,
 			DockerEnabled:     i.StubConfig.DockerEnabled,
+			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
 
 		ttl := time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second

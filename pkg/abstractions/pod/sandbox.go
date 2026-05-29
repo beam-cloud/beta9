@@ -669,7 +669,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 
 	phaseStart = time.Now()
 	dialCtx, cancel := context.WithTimeout(ctx, sandboxConnectWorkerDialTimeout)
-	conn, err := network.ConnectToHost(dialCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale)
+	conn, err := network.ConnectToBackend(dialCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale, s.containerRepo)
 	cancel()
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), "worker_dial_failed", false, time.Since(phaseStart))

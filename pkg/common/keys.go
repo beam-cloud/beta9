@@ -15,6 +15,8 @@ var (
 	schedulerContainerState          string = "scheduler:container:state:%s"
 	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
 	schedulerContainerAddressMap     string = "scheduler:container:container_addr_map:%s"
+	schedulerBackendRoute            string = "scheduler:container:backend_route:%s"
+	schedulerBackendRouteIndex       string = "scheduler:container:backend_route_index:%s"
 	schedulerContainerRequestStatus  string = "scheduler:container:request_status:%s"
 	schedulerContainerIndex          string = "scheduler:container:index:%s"
 	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
@@ -161,6 +163,14 @@ func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerAddressMap(containerId string) string {
 	return fmt.Sprintf(schedulerContainerAddressMap, containerId)
+}
+
+func (rk *redisKeys) SchedulerBackendRoute(routeId string) string {
+	return fmt.Sprintf(schedulerBackendRoute, routeId)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteIndex(containerId string) string {
+	return fmt.Sprintf(schedulerBackendRouteIndex, containerId)
 }
 
 func (rk *redisKeys) SchedulerContainerRequestStatus(containerId string) string {

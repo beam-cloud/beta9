@@ -55,7 +55,7 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 		return err
 	}
 
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, l.tailscale, l.config.Tailscale)
+	conn, err := network.ConnectToBackend(ctx, hostname, time.Second*30, l.tailscale, l.config.Tailscale, l.containerRepo)
 	if err != nil {
 		return err
 	}

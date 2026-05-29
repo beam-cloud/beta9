@@ -1,4 +1,6 @@
 import json
+import shlex
+import subprocess
 import time
 from typing import Any, Dict, List, Tuple
 
@@ -13,7 +15,14 @@ from rich.text import Text
 from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
-from ..clients.gateway import ListPoolsRequest, ListPoolsResponse, StringList
+from ..clients.gateway import (
+    GetHybridPoolJoinCommandRequest,
+    HybridPoolConfig,
+    ListPoolsRequest,
+    ListPoolsResponse,
+    StringList,
+    UpsertHybridPoolRequest,
+)
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -36,6 +45,26 @@ def _create_table(rows: List[Tuple[str, str]]) -> Table:
     for label, value in rows:
         table.add_row(label, value)
     return table
+
+
+def _hybrid_pool_config(
+    name: str,
+    gpu: tuple[str, ...] = (),
+    gpus: int = 0,
+    priority: int = 1000,
+    transport: str = "tsnet-restricted",
+    fallback: str = "internal",
+) -> HybridPoolConfig:
+    return HybridPoolConfig(
+        name=name,
+        gpu=list(gpu),
+        gpus=gpus or 0,
+        selector=name,
+        mode="hybrid",
+        transport=transport.replace("-", "_"),
+        fallback=fallback,
+        priority=priority,
+    )
 
 
 def _get_pool_renderable(
@@ -173,3 +202,182 @@ def list_pools(
                 time.sleep(period)
         except KeyboardInterrupt:
             pass
+
+
+@management.command(
+    name="upsert",
+    help="Create or update a private hybrid worker pool.",
+    epilog="""
+    Examples:
+
+      # Create a private GPU pool that prefers attached H100 machines
+      {cli_name} pool upsert private-gpu --mode hybrid --gpu H100 --priority 1000
+      \b
+    """,
+)
+@click.argument("name")
+@click.option("--mode", type=click.Choice(("hybrid",)), default="hybrid", show_default=True)
+@click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
+@click.option("--gpus", type=click.IntRange(0), default=0, help="Optional desired pool GPU capacity.")
+@click.option("--priority", type=int, default=1000, show_default=True)
+@click.option(
+    "--transport",
+    type=click.Choice(("tsnet-restricted", "tsnet_restricted", "local-direct", "local_direct")),
+    default="tsnet-restricted",
+    show_default=True,
+)
+@click.option(
+    "--fallback",
+    type=click.Choice(("internal", "wait", "fail")),
+    default="internal",
+    show_default=True,
+)
+@extraclick.pass_service_client
+def upsert(
+    service: ServiceClient,
+    name: str,
+    mode: str,
+    gpu: tuple[str, ...],
+    gpus: int,
+    priority: int,
+    transport: str,
+    fallback: str,
+):
+    if mode != "hybrid":
+        return terminal.error("Only hybrid pools can be upserted from the CLI.")
+
+    res = service.gateway.upsert_hybrid_pool(
+        UpsertHybridPoolRequest(
+            pool=_hybrid_pool_config(
+                name=name,
+                gpu=gpu,
+                gpus=gpus,
+                priority=priority,
+                transport=transport,
+                fallback=fallback,
+            )
+        )
+    )
+    if not res.ok:
+        return terminal.error(res.err_msg)
+    terminal.success(f"Upserted hybrid pool '{res.pool.name}'")
+
+
+@management.command(
+    name="join-command",
+    help="Print the one-command installer for a private hybrid worker pool.",
+)
+@click.argument("name")
+@click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
+@extraclick.pass_service_client
+def join_command(service: ServiceClient, name: str, ttl: str):
+    res = service.gateway.get_hybrid_pool_join_command(
+        GetHybridPoolJoinCommandRequest(pool_name=name, ttl=ttl)
+    )
+    if not res.ok:
+        return terminal.error(res.err_msg)
+    terminal.detail(res.command, crop=False, overflow="ignore")
+
+
+@management.command(
+    name="join",
+    help="Join this machine to a private hybrid worker pool.",
+    epilog="""
+    Examples:
+
+      # Join this machine to a private pool
+      {cli_name} pool join private-gpu
+
+      # Print the command without running it
+      {cli_name} pool join private-gpu --print-only
+      \b
+    """,
+)
+@click.argument("name")
+@click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
+@click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
+@click.option("--gpus", type=click.IntRange(0), default=0, help="Optional desired pool GPU capacity.")
+@click.option("--priority", type=int, default=1000, show_default=True)
+@click.option(
+    "--fallback",
+    type=click.Choice(("internal", "wait", "fail")),
+    default="internal",
+    show_default=True,
+)
+@click.option(
+    "--transport",
+    type=click.Choice(("auto", "tsnet-restricted", "tsnet_restricted", "local-direct", "local_direct")),
+    default="auto",
+    show_default=True,
+)
+@click.option("--listen", default="", help="Agent listener address, for example 0.0.0.0:0.")
+@click.option("--advertise-host", default="", help="Host the gateway should dial for this machine.")
+@click.option("--agent-bin", default="", help="Use a specific local beam-agent binary.")
+@click.option("--print-only", is_flag=True, help="Only print the generated join command.")
+@extraclick.pass_service_client
+def join(
+    service: ServiceClient,
+    name: str,
+    ttl: str,
+    gpu: tuple[str, ...],
+    gpus: int,
+    priority: int,
+    fallback: str,
+    transport: str,
+    listen: str,
+    advertise_host: str,
+    agent_bin: str,
+    print_only: bool,
+):
+    transport = _join_transport(service, transport)
+    res = service.gateway.upsert_hybrid_pool(
+        UpsertHybridPoolRequest(
+            pool=_hybrid_pool_config(
+                name=name,
+                gpu=gpu,
+                gpus=gpus,
+                priority=priority,
+                transport=transport,
+                fallback=fallback,
+            )
+        )
+    )
+    if not res.ok:
+        return terminal.error(res.err_msg)
+
+    command_res = service.gateway.get_hybrid_pool_join_command(
+        GetHybridPoolJoinCommandRequest(pool_name=name, ttl=ttl)
+    )
+    if not command_res.ok:
+        return terminal.error(command_res.err_msg)
+
+    command = _append_join_args(
+        command_res.command,
+        listen=listen,
+        advertise_host=advertise_host,
+        agent_bin=agent_bin,
+    )
+    terminal.detail(command, crop=False, overflow="ignore")
+    if print_only:
+        return
+
+    raise SystemExit(subprocess.call(command, shell=True))
+
+
+def _join_transport(service: ServiceClient, transport: str) -> str:
+    if transport != "auto":
+        return transport
+    return "tsnet_restricted"
+
+
+def _append_join_args(command: str, listen: str = "", advertise_host: str = "", agent_bin: str = "") -> str:
+    extra = []
+    if listen:
+        extra.extend(["--listen", listen])
+    if advertise_host:
+        extra.extend(["--advertise-host", advertise_host])
+    if agent_bin:
+        extra.extend(["--agent-bin", agent_bin])
+    if not extra:
+        return command
+    return command + " " + " ".join(shlex.quote(value) for value in extra)

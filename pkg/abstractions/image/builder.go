@@ -108,6 +108,7 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 
 	go b.refreshBuildContainerTTL(ctx, build.containerID)
 
+	build.routeResolver = b.containerRepo
 	return build.connectToHost(hostname, b.tailscale)
 }
 

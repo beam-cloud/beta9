@@ -136,6 +136,102 @@ service GatewayService {
     };
   }
 
+  // Hybrid reserved pools
+  rpc ListHybridOffers(ListHybridOffersRequest)
+      returns (ListHybridOffersResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/offers"
+      body : "*"
+    };
+  }
+  rpc ReserveHybridPool(ReserveHybridPoolRequest)
+      returns (ReserveHybridPoolResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/pools"
+      body : "*"
+    };
+  }
+  rpc ListHybridPools(ListHybridPoolsRequest) returns (ListHybridPoolsResponse) {
+    option (google.api.http) = {
+      get : "/hybrid/pools"
+    };
+  }
+  rpc UpsertHybridPool(UpsertHybridPoolRequest)
+      returns (UpsertHybridPoolResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/pools:upsert"
+      body : "*"
+    };
+  }
+  rpc DeleteHybridPool(DeleteHybridPoolRequest)
+      returns (DeleteHybridPoolResponse) {
+    option (google.api.http) = {
+      delete : "/hybrid/pools/{name}"
+    };
+  }
+  rpc ExtendHybridPool(ExtendHybridPoolRequest)
+      returns (ExtendHybridPoolResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/pools/{name}/extend"
+      body : "*"
+    };
+  }
+  rpc AttachHybridPool(AttachHybridPoolRequest)
+      returns (AttachHybridPoolResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/pools/{name}/attach"
+      body : "*"
+    };
+  }
+  rpc CreateHybridPoolJoinToken(CreateHybridPoolJoinTokenRequest)
+      returns (CreateHybridPoolJoinTokenResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/pools/{pool_name}/join-tokens"
+      body : "*"
+    };
+  }
+  rpc RevokeHybridPoolJoinToken(RevokeHybridPoolJoinTokenRequest)
+      returns (RevokeHybridPoolJoinTokenResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/join-tokens/revoke"
+      body : "*"
+    };
+  }
+  rpc GetHybridPoolJoinCommand(GetHybridPoolJoinCommandRequest)
+      returns (GetHybridPoolJoinCommandResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/pools/{pool_name}/join-command"
+      body : "*"
+    };
+  }
+  rpc JoinHybridPool(JoinHybridPoolRequest) returns (JoinHybridPoolResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/join"
+      body : "*"
+    };
+  }
+  rpc RequestHybridTransportCredential(RequestHybridTransportCredentialRequest)
+      returns (RequestHybridTransportCredentialResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/transport-credential"
+      body : "*"
+    };
+  }
+  rpc ListHybridRoutes(ListHybridRoutesRequest)
+      returns (ListHybridRoutesResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/routes:list"
+      body : "*"
+    };
+  }
+  rpc UpdateHybridRouteStatus(UpdateHybridRouteStatusRequest)
+      returns (UpdateHybridRouteStatusResponse) {
+    option (google.api.http) = {
+      post : "/hybrid/routes/status"
+      body : "*"
+    };
+  }
+
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse) {
     option (google.api.http) = {
@@ -453,6 +549,7 @@ message GetOrCreateStubRequest {
   bool block_network = 38;
   repeated string allow_list = 39;
   bool docker_enabled = 40;
+  HybridPoolConfig pool = 41;
 }
 
 message GetOrCreateStubResponse {
@@ -553,6 +650,256 @@ message ListPoolsResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Pool pools = 3;
+}
+
+message HybridPoolConfig {
+  string name = 1;
+  repeated string gpu = 2;
+  uint32 gpus = 3;
+  string ttl = 4;
+  double max_spend = 5;
+  repeated string providers = 6;
+  repeated string regions = 7;
+  double min_reliability = 8;
+  bool reservation_required = 9;
+  string selector = 10;
+  string mode = 11;
+  string transport = 12;
+  string fallback = 13;
+  int32 priority = 14;
+}
+
+message HybridOffer {
+  string id = 1;
+  string provider = 2;
+  string instance_type = 3;
+  string region = 4;
+  string gpu = 5;
+  uint32 gpu_count = 6;
+  int64 cpu_millicores = 7;
+  int64 memory_mb = 8;
+  int64 hourly_cost_micros = 9;
+  double reliability = 10;
+  uint32 available = 11;
+}
+
+message HybridReservation {
+  string id = 1;
+  string pool_name = 2;
+  string provider = 3;
+  string offer_id = 4;
+  string status = 5;
+  uint32 gpu_count = 6;
+  int64 hourly_cost_micros = 7;
+  string source = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  google.protobuf.Timestamp billing_renewal_at = 11;
+}
+
+message HybridPool {
+  string name = 1;
+  string selector = 2;
+  HybridPoolConfig config = 3;
+  repeated HybridReservation reservations = 4;
+  uint32 reserved_gpus = 5;
+  int64 committed_spend_micros = 6;
+  string status = 7;
+  string source = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+}
+
+message ListHybridOffersRequest { HybridPoolConfig pool = 1; }
+
+message ListHybridOffersResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated HybridOffer offers = 3;
+}
+
+message ReserveHybridPoolRequest { HybridPoolConfig pool = 1; }
+
+message ReserveHybridPoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  HybridPool pool = 3;
+}
+
+message ListHybridPoolsRequest {
+  map<string, StringList> filters = 1;
+  uint32 limit = 2;
+}
+
+message ListHybridPoolsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated HybridPool pools = 3;
+}
+
+message UpsertHybridPoolRequest { HybridPoolConfig pool = 1; }
+
+message UpsertHybridPoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  HybridPool pool = 3;
+}
+
+message DeleteHybridPoolRequest { string name = 1; }
+
+message DeleteHybridPoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message ExtendHybridPoolRequest {
+  string name = 1;
+  string ttl = 2;
+  double max_spend = 3;
+}
+
+message ExtendHybridPoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  HybridPool pool = 3;
+}
+
+message AttachHybridPoolRequest { string name = 1; }
+
+message AttachHybridPoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string command = 3;
+}
+
+message CreateHybridPoolJoinTokenRequest {
+  string pool_name = 1;
+  string ttl = 2;
+}
+
+message CreateHybridPoolJoinTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message RevokeHybridPoolJoinTokenRequest { string token = 1; }
+
+message RevokeHybridPoolJoinTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message GetHybridPoolJoinCommandRequest {
+  string pool_name = 1;
+  string ttl = 2;
+}
+
+message GetHybridPoolJoinCommandResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string command = 3;
+  string token = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message HybridWorkerBootstrapConfig {
+  string gateway_http_url = 1;
+  string gateway_grpc_host = 2;
+  int32 gateway_grpc_port = 3;
+  bool gateway_grpc_tls = 4;
+  string workspace_id = 5;
+  string pool_name = 6;
+  string transport = 7;
+  string executor = 8;
+  string fallback = 9;
+  repeated string disabled_services = 10;
+}
+
+message JoinHybridPoolRequest {
+  string join_token = 1;
+  string machine_fingerprint = 2;
+  string hostname = 3;
+  string os = 4;
+  string arch = 5;
+  uint32 cpu_count = 6;
+  uint64 memory_mb = 7;
+  repeated string gpu = 8;
+  uint32 gpu_count = 9;
+  repeated HybridPreflightCheck preflight = 10;
+  bool schedulable = 11;
+  string executor = 12;
+}
+
+message JoinHybridPoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string workspace_id = 3;
+  string pool_name = 4;
+  string machine_id = 5;
+  string agent_token = 6;
+  HybridWorkerBootstrapConfig bootstrap = 7;
+}
+
+message HybridPreflightCheck {
+  string name = 1;
+  bool ok = 2;
+  string message = 3;
+  string severity = 4;
+}
+
+message HybridBackendRoute {
+  string route_id = 1;
+  string workspace_id = 2;
+  string pool_name = 3;
+  string machine_id = 4;
+  string worker_id = 5;
+  string container_id = 6;
+  string kind = 7;
+  int32 port = 8;
+  string protocol = 9;
+  string transport = 10;
+  string local_target = 11;
+  string proxy_target = 12;
+  string state = 13;
+  string error = 14;
+  int64 updated_at = 15;
+}
+
+message RequestHybridTransportCredentialRequest {
+  string agent_token = 1;
+  string transport = 2;
+}
+
+message RequestHybridTransportCredentialResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string auth_key = 3;
+  string control_url = 4;
+  string hostname = 5;
+  bool ephemeral = 6;
+}
+
+message ListHybridRoutesRequest { string agent_token = 1; }
+
+message ListHybridRoutesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated HybridBackendRoute routes = 3;
+}
+
+message UpdateHybridRouteStatusRequest {
+  string agent_token = 1;
+  string route_id = 2;
+  string state = 3;
+  string proxy_target = 4;
+  string error = 5;
+}
+
+message UpdateHybridRouteStatusResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }
 
 message Machine {

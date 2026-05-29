@@ -126,6 +126,25 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		outputs = types.NewSchemaFromProto(in.Outputs)
 	}
 
+	poolConfig := hybridPoolConfigFromProto(in.Pool)
+	if poolConfig != nil {
+		configureHybridPoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
+		if poolConfig.ReservationRequired {
+			res, err := gws.ReserveHybridPool(ctx, &pb.ReserveHybridPoolRequest{
+				Pool: hybridPoolConfigToProto(poolConfig),
+			})
+			if err != nil {
+				return nil, err
+			}
+			if !res.Ok {
+				return &pb.GetOrCreateStubResponse{
+					Ok:     false,
+					ErrMsg: res.ErrMsg,
+				}, nil
+			}
+		}
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
@@ -161,6 +180,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
+		Pool:               poolConfig,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -269,6 +289,85 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		StubId:  stub.ExternalId,
 		WarnMsg: warning,
 	}, nil
+}
+
+func hybridPoolConfigFromProto(in *pb.HybridPoolConfig) *types.HybridPoolConfig {
+	if in == nil {
+		return nil
+	}
+	return &types.HybridPoolConfig{
+		Name:                in.Name,
+		GPUs:                in.Gpu,
+		TotalGPUs:           in.Gpus,
+		TTL:                 in.Ttl,
+		MaxSpend:            in.MaxSpend,
+		Providers:           in.Providers,
+		Regions:             in.Regions,
+		MinReliability:      in.MinReliability,
+		ReservationRequired: in.ReservationRequired,
+		Selector:            in.Selector,
+	}
+}
+
+func hybridPoolConfigToProto(in *types.HybridPoolConfig) *pb.HybridPoolConfig {
+	if in == nil {
+		return nil
+	}
+	return &pb.HybridPoolConfig{
+		Name:                in.Name,
+		Gpu:                 in.GPUs,
+		Gpus:                in.TotalGPUs,
+		Ttl:                 in.TTL,
+		MaxSpend:            in.MaxSpend,
+		Providers:           in.Providers,
+		Regions:             in.Regions,
+		MinReliability:      in.MinReliability,
+		ReservationRequired: in.ReservationRequired,
+		Selector:            in.Selector,
+	}
+}
+
+func configureHybridPoolSelector(pool *types.HybridPoolConfig, workspaceID, stubName string) {
+	if pool.Selector != "" {
+		if pool.Name == "" && pool.ReservationRequired {
+			pool.Name = pool.Selector
+		}
+		return
+	}
+	if pool.Name != "" {
+		pool.Selector = pool.Name
+		return
+	}
+	pool.Selector = sanitizeHybridPoolSelector(fmt.Sprintf("hybrid-%s-%s", workspaceID, stubName))
+	if pool.Name == "" && pool.ReservationRequired {
+		pool.Name = pool.Selector
+	}
+}
+
+func sanitizeHybridPoolSelector(value string) string {
+	value = strings.ToLower(value)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
+		if ok {
+			b.WriteRune(r)
+			lastDash = r == '-'
+			continue
+		}
+		if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-._")
+	if out == "" {
+		return "hybrid-pool"
+	}
+	if len(out) > 128 {
+		return out[:128]
+	}
+	return out
 }
 
 func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest, gpus []types.GpuType) error {
