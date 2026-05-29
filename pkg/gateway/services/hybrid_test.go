@@ -67,3 +67,47 @@ func TestFilterHybridPoolsCreatedByAuth(t *testing.T) {
 		t.Fatalf("expected owned pool, got %q", filtered[0].Name)
 	}
 }
+
+func TestIsLocalGatewayURL(t *testing.T) {
+	tests := []struct {
+		rawURL string
+		want   bool
+	}{
+		{rawURL: "http://localhost:1994", want: true},
+		{rawURL: "http://127.0.0.1:1994", want: true},
+		{rawURL: "http://[::1]:1994", want: true},
+		{rawURL: "https://gateway.beam.cloud", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.rawURL, func(t *testing.T) {
+			if got := isLocalGatewayURL(tt.rawURL); got != tt.want {
+				t.Fatalf("isLocalGatewayURL() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateHybridTransportConfig(t *testing.T) {
+	gws := &GatewayService{
+		appConfig: types.AppConfig{
+			Tailscale: types.TailscaleConfig{
+				Enabled:             true,
+				AuthKey:             "tskey-auth-gateway",
+				HybridWorkerAuthKey: "tskey-auth-worker",
+			},
+		},
+	}
+
+	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportTSNet); err != nil {
+		t.Fatalf("expected configured tsnet transport to pass, got %v", err)
+	}
+	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportLocalDirect); err != nil {
+		t.Fatalf("expected local_direct transport to pass, got %v", err)
+	}
+
+	gws.appConfig.Tailscale.HybridWorkerAuthKey = ""
+	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportTSNet); err == nil {
+		t.Fatal("expected missing hybrid worker auth key to fail")
+	}
+}

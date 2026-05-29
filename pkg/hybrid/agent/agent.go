@@ -177,10 +177,16 @@ func join(ctx context.Context, client *Client, token string, devMode bool) (*joi
 }
 
 func runRouteProxy(ctx context.Context, client *Client, agentToken, transport, listenAddr, advertiseHost string, devMode bool, stdout, stderr io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	transport = normalizeTransport(transport)
 	switch transport {
 	case types.BackendRouteTransportTSNet:
-		return runTSNetRouteProxy(ctx, client, agentToken, transport, stderr)
+		return runTSNetRouteProxy(ctx, client, agentToken, transport, stdout, stderr)
 	case types.BackendRouteTransportLocalDirect:
 		return runLocalDirectRouteProxy(ctx, client, agentToken, listenAddr, advertiseHost, devMode, stdout, stderr)
 	default:
@@ -188,7 +194,7 @@ func runRouteProxy(ctx context.Context, client *Client, agentToken, transport, l
 	}
 }
 
-func runTSNetRouteProxy(ctx context.Context, client *Client, agentToken, transport string, stderr io.Writer) error {
+func runTSNetRouteProxy(ctx context.Context, client *Client, agentToken, transport string, stdout, stderr io.Writer) error {
 	credential, err := requestTransportCredential(ctx, client, agentToken, transport)
 	if err != nil {
 		return err
@@ -226,7 +232,9 @@ func runTSNetRouteProxy(ctx context.Context, client *Client, agentToken, transpo
 		return err
 	}
 
-	return newRouteProxy(client, agentToken, listener, net.JoinHostPort(hostname, port), stderr).run(ctx)
+	proxyTarget := net.JoinHostPort(hostname, port)
+	fmt.Fprintf(stdout, "hybrid route listener ready at %s\n", proxyTarget)
+	return newRouteProxy(client, agentToken, listener, proxyTarget, stderr).run(ctx)
 }
 
 func runLocalDirectRouteProxy(ctx context.Context, client *Client, agentToken, listenAddr, advertiseHost string, devMode bool, stdout, stderr io.Writer) error {

@@ -1,0 +1,116 @@
+# Hybrid Local Tailscale Test
+
+This path tests the real hybrid join flow locally:
+
+```text
+beam pool join
+  -> gateway creates/upserts a private hybrid pool
+  -> gateway mints a short-lived join token
+  -> installer starts cmd/agent
+  -> agent joins the tailnet with tsnet_restricted
+  -> one embedded listener on the joined machine handles all backend routes
+```
+
+There is no k3s, Flux, system Tailscale daemon, or `local_direct` transport in this flow.
+
+## Tailscale Admin Setup
+
+In the Tailscale admin console, open **Access controls** and merge this into the tailnet policy file. If the policy still has a broad default rule such as `src: ["*"], dst: ["*:*"]`, remove it or the deny tests below should fail.
+
+```jsonc
+{
+  "tagOwners": {
+    "tag:beam-gateway": ["autogroup:admin"],
+    "tag:beam-byo-worker": ["autogroup:admin"]
+  },
+  "grants": [
+    {
+      "src": ["tag:beam-gateway"],
+      "dst": ["tag:beam-byo-worker"],
+      "ip": ["29443"]
+    }
+  ],
+  "tests": [
+    {
+      "src": "tag:beam-gateway",
+      "accept": ["tag:beam-byo-worker:29443"],
+      "deny": ["tag:beam-byo-worker:22"]
+    },
+    {
+      "src": "tag:beam-byo-worker",
+      "deny": ["tag:beam-gateway:29443", "tag:beam-byo-worker:29443"]
+    }
+  ]
+}
+```
+
+Then create two auth keys under **Settings -> Keys -> Generate auth key**:
+
+```text
+Gateway key
+  Tags: tag:beam-gateway
+  Reusable: on
+  Ephemeral: on
+  Pre-approved: on, if device approval is enabled
+
+Hybrid worker key
+  Tags: tag:beam-byo-worker
+  Reusable: on
+  Ephemeral: on
+  Pre-approved: on, if device approval is enabled
+```
+
+For Tailscale.com, leave `controlUrl` empty. For Headscale, set it to the Headscale control URL.
+
+## Local Gateway Config
+
+Create a small local overlay config at the repo root. The default config is still loaded first, so this file only needs the Tailscale override:
+
+```sh
+cat > config.yaml <<'YAML'
+tailscale:
+  enabled: true
+  controlUrl: ""
+  authKey: "tskey-auth-REPLACE_WITH_GATEWAY_KEY"
+  hybridWorkerAuthKey: "tskey-auth-REPLACE_WITH_WORKER_KEY"
+YAML
+```
+
+Start the local control plane the same way you normally do, with:
+
+```sh
+make start
+```
+
+## Single Node Command
+
+From a second terminal in this repo, run:
+
+```sh
+uv run --project ./sdk beam pool join private-dev
+```
+
+That command creates or updates `private-dev`, gets a join token, downloads the local installer from the gateway, and starts `cmd/agent join`. Because the gateway URL is localhost, the generated installer command automatically uses `--dev`; the transport is still `tsnet_restricted`.
+
+Expected output:
+
+```text
+joined hybrid pool "private-dev" as machine "machine-..."
+transport=tsnet_restricted executor=local-dev fallback=internal
+hybrid route listener ready at beam-agent-machine-....<tailnet>:29443
+```
+
+Keep that process running while testing route/proxy behavior. Stop it with `Ctrl-C`; because the agent node is ephemeral, Tailscale removes it after it disconnects.
+
+Useful checks:
+
+```sh
+uv run --project ./sdk beam pool join private-dev --print-only
+uv run --project ./sdk beam pool list --filter name=private-dev
+```
+
+## Notes
+
+- The local command is route/control-plane validation. macOS joins are intentionally `local-dev` and do not advertise production worker-container capacity.
+- Linux production validation should run the same `beam pool join <name>` command without a localhost gateway URL. In that mode, preflight requires rootful runtime, netns, iptables, FUSE, and GPU/CDI checks as applicable.
+- The route proxy uses one machine-level tsnet listener on TCP `29443`. Individual worker and container ports are selected by the gateway route preface after the connection is established.

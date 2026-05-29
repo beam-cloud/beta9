@@ -597,6 +597,8 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 		return ""
 	case metadata.TaskID != "":
 		return r.taskStreamName(metadata.TaskID)
+	case isHybridEvent(eventType) && metadata.WorkspaceID != "":
+		return r.workspaceStreamName(metadata.WorkspaceID)
 	case metadata.WorkerID != "":
 		return r.workerStreamName(metadata.WorkerID)
 	case metadata.WorkspaceID != "" && metadata.StubID != "":
@@ -645,6 +647,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	if isWorkspaceContainerRealtimeEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
+	if isHybridEvent(eventType) && metadata.WorkspaceID != "" {
+		add(r.workspaceStreamName(metadata.WorkspaceID))
+	}
 	if isTaskEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 		if metadata.AppID != "" {
@@ -662,6 +667,10 @@ func isWorkspaceContainerRealtimeEvent(eventType string) bool {
 	return eventType == types.EventContainerMetrics ||
 		eventType == types.EventContainerEvent ||
 		eventType == types.EventContainerLifecycle
+}
+
+func isHybridEvent(eventType string) bool {
+	return strings.HasPrefix(eventType, "hybrid.")
 }
 
 func (r *S2EventRepository) primaryLogStreamName(metadata eventMetadata) s2.StreamName {
@@ -813,6 +822,8 @@ func eventMetadataFromCloudEvent(event cloudevents.Event) eventMetadata {
 		TaskID:      extensionString(extensions, "taskid"),
 		StubID:      extensionString(extensions, "stubid"),
 		WorkerID:    extensionString(extensions, "workerid"),
+		MachineID:   extensionString(extensions, "machineid"),
+		RouteID:     extensionString(extensions, "routeid"),
 		AppID:       extensionString(extensions, "appid"),
 		ServiceName: extensionString(extensions, "servicename"),
 		InstanceID:  extensionString(extensions, "instanceid"),
@@ -846,6 +857,12 @@ func s2HeadersForEvent(event cloudevents.Event, metadata eventMetadata) []s2.Hea
 	}
 	if metadata.WorkerID != "" {
 		headers = append(headers, s2.NewHeader("worker_id", metadata.WorkerID))
+	}
+	if metadata.MachineID != "" {
+		headers = append(headers, s2.NewHeader("machine_id", metadata.MachineID))
+	}
+	if metadata.RouteID != "" {
+		headers = append(headers, s2.NewHeader("route_id", metadata.RouteID))
 	}
 	if metadata.ServiceName != "" {
 		headers = append(headers, s2.NewHeader("service", metadata.ServiceName))
