@@ -145,7 +145,7 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 		c.maybeLogSummary()
 	}()
 
-	return c.client.IsCachedNearby(hash, opts.RoutingKey)
+	return c.client.IsCachedOnSelectedHost(hash, opts.RoutingKey)
 }
 
 func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (views []clipStorage.ClientLocalPageFileView, err error) {
@@ -230,7 +230,7 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 		}
 	}()
 
-	actualHash, err := c.client.StoreContentWithLocalReplica(countingChunks, hash, cache.StoreContentOptions{RoutingKey: opts.RoutingKey})
+	actualHash, err := c.client.StoreContent(countingChunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
 	close(done)
 	elapsed := time.Since(started)
 	if err != nil {
@@ -258,6 +258,52 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	c.maybeLogSummary()
 
 	return actualHash, err
+}
+
+func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, opts struct{ RoutingKey string }) (actualHash string, err error) {
+	if c == nil || c.client == nil {
+		return "", cache.ErrClientNotFound
+	}
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = hash
+	}
+
+	started := time.Now()
+	c.storeRequests.Add(1)
+	defer func() {
+		elapsed := time.Since(started)
+		if err != nil {
+			c.storeErrors.Add(1)
+			log.Warn().
+				Err(err).
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Str("path", path).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache local-path store result")
+		} else if elapsed > imageContentCacheSlowStore {
+			log.Debug().
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("actual_hash", shortHash(actualHash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Str("path", path).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache local-path store result")
+		}
+		c.maybeLogSummary()
+	}()
+
+	return c.client.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      path,
+		CachePath: path,
+	}, cache.StoreContentOptions{
+		RoutingKey: opts.RoutingKey,
+		Lock:       true,
+	})
 }
 
 func drainImageContentChunks(chunks <-chan []byte) {

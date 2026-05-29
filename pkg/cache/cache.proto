@@ -72,6 +72,7 @@ message CacheSource {
   string secret_key = 6;
   string cache_path = 7;
   bool force_path_style = 8;
+  string expected_hash = 9;
 }
 
 message CacheStoreContentFromSourceRequest { CacheSource source = 1; }

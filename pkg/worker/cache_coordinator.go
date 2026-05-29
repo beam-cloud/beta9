@@ -15,8 +15,7 @@ import (
 const cacheCoordinatorRPCTimeout = 5 * time.Second
 
 type gatewayCacheHostDirectory struct {
-	client   pb.WorkerRepositoryServiceClient
-	poolName string
+	client pb.WorkerRepositoryServiceClient
 }
 
 func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, locality string) ([]*cache.Host, error) {
@@ -25,7 +24,6 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 	}
 
 	resp, err := handleGRPCResponse(d.client.ListCacheHosts(ctx, &pb.ListCacheHostsRequest{
-		PoolName: d.poolName,
 		Locality: locality,
 	}))
 	if err != nil {
@@ -39,6 +37,11 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 		}
 		hosts = append(hosts, &cache.Host{
 			HostId:           host.LogicalHostId,
+			RegistrationID:   host.RegistrationId,
+			PoolName:         host.PoolName,
+			Locality:         host.Locality,
+			NodeID:           host.NodeId,
+			CachePathID:      host.CachePathId,
 			Addr:             host.Addr,
 			PrivateAddr:      host.PrivateAddr,
 			CapacityUsagePct: float64(host.CapacityUsagePct),
@@ -63,7 +66,7 @@ type gatewayCacheRegistration struct {
 
 func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) *gatewayCacheRegistration {
 	cachePathID := cachePathID(cacheConfig.Server.DiskCacheDir)
-	logicalHostID := cacheLogicalHostID(manager.poolName, manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
+	logicalHostID := cacheLogicalHostID(manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
 
 	return &gatewayCacheRegistration{
 		manager:        manager,
@@ -123,6 +126,10 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		logger.
 			Str("logical_host_id", host.LogicalHostId).
 			Str("registration_id", host.RegistrationId).
+			Str("pool_name", host.PoolName).
+			Str("locality", host.Locality).
+			Str("node_id", host.NodeId).
+			Str("cache_path_id", host.CachePathId).
 			Str("addr", host.PrivateAddr).
 			Msg("Registered cache host")
 	}
@@ -176,13 +183,12 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 }
 
 // cacheLogicalHostID is the stable routing identity for one cache placement
-// target. It is intentionally based on pool, locality, node, and cache path,
-// not the worker process ID; restarted or colocated cache servers register under
-// this same logical host when they serve the same disk cache target.
-func cacheLogicalHostID(poolName, locality, nodeID, diskCacheDir string) string {
+// target. It is intentionally based on locality, node, and cache path, not the
+// worker pool or process ID; restarted or colocated cache servers register
+// under this same logical host when they serve the same disk cache target.
+func cacheLogicalHostID(locality, nodeID, diskCacheDir string) string {
 	return fmt.Sprintf(
-		"cache-host-%s-%s-%s-%s",
-		safeCacheName(poolName),
+		"cache-host-%s-%s-%s",
 		safeCacheName(locality),
 		safeCacheName(nodeID),
 		cachePathID(diskCacheDir),

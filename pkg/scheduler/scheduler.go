@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"slices"
 	"sort"
 	"strings"
@@ -462,7 +463,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 // These credentials are used for both build-time (push) and runtime (CLIP layer mounting)
 func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerRequest) error {
 	buildRegistry := s.config.ImageService.BuildRegistry
-	if buildRegistry == "" || buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+	if buildRegistry == "" || isLocalBuildRegistry(buildRegistry) {
 		log.Debug().
 			Str("container_id", request.ContainerId).
 			Str("build_registry", buildRegistry).
@@ -492,7 +493,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 		}
 	}
 
-	if token == "" {
+	if token == "" && reg.IsECRRegistry(buildRegistry) {
 		var err error
 		token, err = reg.GetAmbientECRTokenForImage(context.TODO(), dummyImageRef)
 		if err != nil {
@@ -523,6 +524,25 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 		Msg("attached build registry credentials to request")
 
 	return nil
+}
+
+func isLocalBuildRegistry(buildRegistry string) bool {
+	registry := strings.TrimPrefix(buildRegistry, "https://")
+	registry = strings.TrimPrefix(registry, "http://")
+	registry = strings.Split(registry, "/")[0]
+
+	host := registry
+	if splitHost, _, err := net.SplitHostPort(registry); err == nil {
+		host = splitHost
+	} else if i := strings.LastIndex(registry, ":"); i >= 0 && strings.Count(registry, ":") == 1 {
+		host = registry[:i]
+	}
+
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	return host == "localhost" ||
+		strings.HasSuffix(host, ".localhost") ||
+		strings.HasPrefix(host, "127.") ||
+		host == "::1"
 }
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {

@@ -1,0 +1,16 @@
+name: clip-layer-cache
+kind: clip
+runner: clip_layer
+description: Proves CLIP OCI layer bytes are served from embedded cache after worker churn.
+defaults:
+  size_mib: 128
+  reset_workers_between: true
+  timeout_seconds: 1200
+  read_timeout_seconds: 240
+scenarios:
+  - name: clip-oci-layer-after-worker-kill
+    operation: read
+    cache_state: after_worker_kill
+    probes: [sandbox_read, worker_reset, clip_events, embedded_cache_page_proof]
+    tags:
+      image_mode: clip_v2

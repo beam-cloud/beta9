@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,6 +30,8 @@ const (
 	getContentRequestTimeout        = 60 * time.Second
 	getContentStreamRequestTimeout  = 600 * time.Second
 	storeContentRequestTimeout      = 600 * time.Second
+	storeContentLockWaitTimeout     = time.Duration(storeFromContentLockTtlS+5) * time.Second
+	storeContentLockWaitInterval    = 500 * time.Millisecond
 	closestHostTimeout              = 30 * time.Second
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
@@ -88,14 +91,12 @@ type Client struct {
 	grpcClients           map[string]proto.CacheClient
 	grpcConns             map[string]*grpc.ClientConn
 	localServers          map[string]*Server
-	localReplicaStore     *Store
 	rawReadPools          map[string]*rawReadConnPool
 	hostMap               *HostMap
 	mu                    sync.RWMutex
 	discoveryClient       *DiscoveryClient
 	metadataStore         CacheMetadataStore
 	localHostCache        map[string]*localClientCache
-	localPromotionSem     chan struct{}
 	cachefsServer         *fuse.Server
 	hasher                RendezvousHasher
 	hostDirectory         HostDirectory
@@ -149,7 +150,6 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		localPromotionSem:     make(chan struct{}, 16),
 		mu:                    sync.RWMutex{},
 		metadataStore:         metadataStore,
 		hasher:                rendezvous.New[*Host](),
@@ -211,24 +211,7 @@ func (c *Client) Cleanup() error {
 		pool.close()
 		delete(c.rawReadPools, hostID)
 	}
-	if c.localReplicaStore != nil {
-		c.localReplicaStore.Cleanup()
-		c.localReplicaStore = nil
-	}
-
 	return nil
-}
-
-func (c *Client) AttachLocalStore(store *Store) {
-	if store == nil {
-		return
-	}
-	c.mu.Lock()
-	if c.localReplicaStore != nil && c.localReplicaStore != store {
-		c.localReplicaStore.Cleanup()
-	}
-	c.localReplicaStore = store
-	c.mu.Unlock()
 }
 
 func (c *Client) AttachLocalServer(server *Server) {
@@ -279,22 +262,6 @@ func (c *Client) localServersSnapshot() []*Server {
 		}
 	}
 	return servers
-}
-
-func (c *Client) localStoresSnapshot() []*Store {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	stores := make([]*Store, 0, len(c.localServers)+1)
-	if c.localReplicaStore != nil {
-		stores = append(stores, c.localReplicaStore)
-	}
-	for _, server := range c.localServers {
-		if server != nil && server.cas != nil {
-			stores = append(stores, server.cas)
-		}
-	}
-	return stores
 }
 
 func (c *Client) GetNearbyHosts() ([]*Host, error) {
@@ -410,6 +377,10 @@ func (c *Client) monitorHost(host *Host) {
 	for {
 		select {
 		case <-ticker.C:
+			if !c.isCurrentHostEndpoint(host) {
+				return
+			}
+
 			err := func() error {
 				c.mu.RLock()
 				client, exists := c.grpcClients[host.HostId]
@@ -454,7 +425,11 @@ func (c *Client) removeHost(host *Host) {
 		return
 	}
 
-	c.hostMap.Remove(host)
+	if c.hostMap != nil {
+		if !c.hostMap.Remove(host) {
+			return
+		}
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -474,6 +449,16 @@ func (c *Client) removeHost(host *Host) {
 			delete(c.localHostCache, hash)
 		}
 	}
+}
+
+func (c *Client) isCurrentHostEndpoint(host *Host) bool {
+	if host == nil || host.HostId == "" {
+		return false
+	}
+	if c.hostMap == nil {
+		return true
+	}
+	return sameCacheHostEndpoint(c.hostMap.Get(host.HostId), host)
 }
 
 func (c *Client) removeLocalHostCache(hash string) {
@@ -530,7 +515,7 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
 	known := c.hostMap.Get(group.hostID)
-	if !group.containsEndpoint(known) {
+	if !group.hasEndpoint(known) {
 		return false
 	}
 	if c.hasCacheClient(known.HostId) {
@@ -571,16 +556,16 @@ func (c *Client) dataCallOptions() []grpc.CallOption {
 	return []grpc.CallOption{grpc.ForceCodecV2(cachegrpc.New(c.globalConfig.GRPCPayloadCodecMinBytes))}
 }
 
-func (c *Client) IsPathCachedNearby(ctx context.Context, path string) bool {
+func (c *Client) IsPathCachedReachable(ctx context.Context, path string) bool {
 	metadata, err := c.metadataStore.GetFsNode(ctx, GenerateFsID(path))
 	if err != nil {
 		Logger.Errorf("error getting fs node: %v, path: %s", err, path)
 		return false
 	}
 
-	exists, err := c.IsCachedNearby(metadata.Hash, path)
+	exists, err := c.IsCachedReachable(metadata.Hash, path)
 	if err != nil {
-		Logger.Errorf("error checking if content is cached nearby: %v, hash: %s", err, metadata.Hash)
+		Logger.Errorf("error checking if content is cached on a reachable cache host: %v, hash: %s", err, metadata.Hash)
 		return false
 	}
 
@@ -606,16 +591,10 @@ func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info
 		return "", false
 	}
 
-	for _, store := range c.localStoresSnapshot() {
-		if store.Exists(metadata.Hash) {
-			return metadata.Hash, true
-		}
-	}
-
 	if routingKey == "" {
 		routingKey = cachePath
 	}
-	exists, err := c.IsCachedNearby(metadata.Hash, routingKey)
+	exists, err := c.IsCachedOnSelectedHost(metadata.Hash, routingKey)
 	if err != nil || !exists {
 		return "", false
 	}
@@ -633,7 +612,11 @@ func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool
 		metadata.Mtimensec == uint32(modTime.Nanosecond())
 }
 
-func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
+// IsCachedReachable reports whether hash exists on any currently reachable cache
+// host. It checks the HRW read order first, then scans remaining known hosts as
+// a recovery path for placement drift or host churn. Do not use it to decide
+// whether a cache-through write can be skipped.
+func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error) {
 	if routingKey == "" {
 		routingKey = hash
 	}
@@ -701,6 +684,39 @@ func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// IsCachedOnSelectedHost checks only the HRW-selected storage host for routingKey.
+// This is intentionally stricter than IsCachedReachable: cache-through writers use
+// it to avoid treating a fallback replica as proof that the primary placement is
+// already populated.
+func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, error) {
+	if routingKey == "" {
+		routingKey = hash
+	}
+
+	client, host, err := c.getGRPCClient(&ClientRequest{
+		rt:        ClientRequestTypeStorage,
+		hash:      hash,
+		key:       routingKey,
+		hostIndex: 0,
+	})
+	if err != nil {
+		if err == ErrHostNotFound {
+			_ = c.refreshRoutableHosts(c.ctx)
+		}
+		return false, err
+	}
+
+	resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+	if err != nil {
+		c.removeHost(host)
+		return false, err
+	}
+	if !resp.Exists {
+		c.removeLocalHostCache(hash)
+	}
+	return resp.Exists, nil
 }
 
 func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
@@ -938,12 +954,6 @@ func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int6
 	if offset < 0 || length <= 0 {
 		return nil, nil
 	}
-	if c.clientConfig.PreferLocalCacheHost {
-		if views, ok := c.clientLocalPageFileViewsFromAttachedStores(hash, offset, length); ok {
-			return views, nil
-		}
-	}
-
 	checked := make(map[string]struct{})
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 		host, err := c.getHostForRequest(&ClientRequest{
@@ -1000,19 +1010,6 @@ func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offse
 		}
 	}
 
-	return c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length)
-}
-
-func (c *Client) clientLocalPageFileViewsFromAttachedStores(hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
-	for _, store := range c.localStoresSnapshot() {
-		views, ok := clientLocalPageFileViewsFromStore(store, hash, offset, length)
-		if ok {
-			cacheReadClientLocalPageFileTotal.Inc()
-			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
-			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
-			return views, true
-		}
-	}
 	return nil, false
 }
 
@@ -1035,75 +1032,6 @@ func clientLocalPageFileViewsFromStore(store *Store, hash string, offset int64, 
 		readLength := int64(n)
 		currentOffset += readLength
 		remaining -= readLength
-	}
-	return views, true
-}
-
-func (c *Client) promoteRemotePageRegionsToClientLocalPageFiles(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
-	if host == nil || hash == "" || offset < 0 || length <= 0 || !c.clientConfig.ReadTransport.Enabled {
-		return nil, false
-	}
-
-	var store *Store
-	for _, localStore := range c.localStoresSnapshot() {
-		store = localStore
-		break
-	}
-	if store == nil || store.serverConfig.PageSizeBytes <= 0 {
-		return nil, false
-	}
-
-	pageSize := store.serverConfig.PageSizeBytes
-	pageStart := offset - offset%pageSize
-	requestEnd := offset + length
-	if requestEnd <= offset {
-		return nil, false
-	}
-	promoteEnd := requestEnd
-	if rem := promoteEnd % pageSize; rem != 0 {
-		promoteEnd += pageSize - rem
-	}
-
-	promoteLength := promoteEnd - pageStart
-	if maxBytes := c.clientConfig.Prefetch.AheadBytes; maxBytes > 0 && promoteLength > maxBytes {
-		return nil, false
-	}
-	if promoteLength > int64(int(^uint(0)>>1)) {
-		return nil, false
-	}
-	releasePromotion := func() {}
-	if c.localPromotionSem != nil {
-		select {
-		case c.localPromotionSem <- struct{}{}:
-			releasePromotion = func() { <-c.localPromotionSem }
-		default:
-			return nil, false
-		}
-	}
-	defer releasePromotion()
-
-	started := time.Now()
-	buf := make([]byte, int(promoteLength))
-	ctx, cancel := context.WithTimeout(c.ctx, getContentRequestTimeout)
-	defer cancel()
-	n, err := c.rawReadIntoWindowed(ctx, host, hash, pageStart, buf)
-	if err != nil || n != promoteLength {
-		if err != nil && err != ErrContentNotFound {
-			Logger.Debugf("cache remote page-region raw promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
-		}
-		return nil, false
-	}
-
-	store.PutFullPages(hash, pageStart, buf)
-	views, ok := clientLocalPageFileViewsFromStore(store, hash, offset, length)
-	if !ok {
-		return nil, false
-	}
-	cacheReadClientLocalPageFileTotal.Inc()
-	atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
-	atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		Logger.Debugf("cache remote page-region raw promotion result: host=%s hash=%s offset=%d length=%d promoted=%d client_local_page_file_views=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(views), elapsed.Truncate(time.Millisecond))
 	}
 	return views, true
 }
@@ -1133,17 +1061,6 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 	}()
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
 	atomic.AddInt64(&cachePathStats.clientReadIntoBytes, length)
-	if c.clientConfig.PreferLocalCacheHost {
-		for _, store := range c.localStoresSnapshot() {
-			n, err := store.ReadAt(hash, offset, dst)
-			if err == nil && n == length {
-				cacheReadLocalTotal.Inc()
-				atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
-				return n, nil
-			}
-		}
-	}
-
 	checked := make(map[string]struct{})
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 		host, err := c.getHostForRequest(&ClientRequest{
@@ -1213,7 +1130,6 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	if c.clientConfig.ReadTransport.Enabled {
 		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
 		if err == nil && n == length {
-			c.promoteReadChunkToLocal(hash, offset, dst[:int(n)])
 			return n, nil
 		}
 		if err == ErrContentNotFound {
@@ -1281,37 +1197,6 @@ func (c *Client) remainingHostsForRequest(checked map[string]struct{}) []*Host {
 		out = append(out, host)
 	}
 	return out
-}
-
-func (c *Client) promoteReadChunkToLocal(hash string, offset int64, data []byte) {
-	if hash == "" || len(data) == 0 || !c.clientConfig.PreferLocalCacheHost {
-		return
-	}
-
-	var store *Store
-	for _, localStore := range c.localStoresSnapshot() {
-		store = localStore
-		break
-	}
-	if store == nil || store.serverConfig.PageSizeBytes <= 0 {
-		return
-	}
-	if offset%store.serverConfig.PageSizeBytes != 0 || int64(len(data)) < store.serverConfig.PageSizeBytes {
-		return
-	}
-
-	select {
-	case c.localPromotionSem <- struct{}{}:
-	default:
-		return
-	}
-
-	chunk := make([]byte, len(data))
-	copy(chunk, data)
-	go func() {
-		defer func() { <-c.localPromotionSem }()
-		store.PutFullPages(hash, offset, chunk)
-	}()
 }
 
 func (c *Client) GetContent(hash string, offset int64, length int64, opts struct {
@@ -1494,185 +1379,6 @@ func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	return c.storeContentFromChunks(chunks, hash, "", opts.RoutingKey)
 }
 
-// StoreContentWithLocalReplica tees streamed content into the
-// rendezvous-selected cache host and the writer's local disk cache at the same
-// time. This preserves churn safety without serializing a full second copy.
-func (c *Client) StoreContentWithLocalReplica(chunks chan []byte, hash string, opts StoreContentOptions) (string, error) {
-	localStore := c.localReplicaStoreForWrite()
-	if !c.clientConfig.PreferLocalCacheHost || localStore == nil {
-		return c.StoreContent(chunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
-	}
-
-	routingKey := opts.RoutingKey
-	if routingKey == "" {
-		routingKey = hash
-	}
-
-	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
-	defer cancel()
-
-	lockPath := routingKey
-	if lockPath == "" {
-		lockPath = hash
-	}
-
-	return c.withStoreFromContentLock(ctx, lockPath, opts.Lock, func() (string, error) {
-		return c.storeContentWithLocalReplica(ctx, localStore, chunks, hash, routingKey)
-	})
-}
-
-func (c *Client) localReplicaStoreForWrite() *Store {
-	for _, store := range c.localStoresSnapshot() {
-		if store != nil {
-			return store
-		}
-	}
-	return nil
-}
-
-func (c *Client) storeContentWithLocalReplica(ctx context.Context, localStore *Store, chunks <-chan []byte, expectedHash string, routingKey string) (string, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	remoteHost, err := c.storeReplicaHost(routingKey)
-	if err != nil {
-		drainContentChunks(chunks)
-		return "", err
-	}
-
-	type storeResult struct {
-		hash string
-		size int64
-		err  error
-	}
-
-	remoteReader, remoteWriter := io.Pipe()
-	localReader, localWriter := io.Pipe()
-
-	remoteDone := make(chan storeResult, 1)
-	go func() {
-		hash, err := c.storeContentFromReaderToHostWithContext(ctx, remoteHost, remoteReader, "", nil)
-		remoteDone <- storeResult{hash: hash, err: err}
-	}()
-
-	localDone := make(chan storeResult, 1)
-	go func() {
-		hash, size, err := localStore.AddReader(ctx, localReader)
-		localDone <- storeResult{hash: hash, size: size, err: err}
-	}()
-
-	hasher := sha256.New()
-	var size int64
-	var writeErr error
-	for chunk := range chunks {
-		if len(chunk) == 0 {
-			continue
-		}
-		if _, err := hasher.Write(chunk); err != nil {
-			writeErr = err
-			break
-		}
-		if _, err := remoteWriter.Write(chunk); err != nil {
-			writeErr = err
-			break
-		}
-		if _, err := localWriter.Write(chunk); err != nil {
-			writeErr = err
-			break
-		}
-		size += int64(len(chunk))
-	}
-
-	if writeErr != nil {
-		cancel()
-		_ = remoteWriter.CloseWithError(writeErr)
-		_ = localWriter.CloseWithError(writeErr)
-		drainContentChunks(chunks)
-	} else {
-		_ = remoteWriter.Close()
-		_ = localWriter.Close()
-	}
-
-	remoteResult := <-remoteDone
-	localResult := <-localDone
-	if writeErr != nil {
-		return remoteResult.hash, writeErr
-	}
-	if remoteResult.err != nil {
-		return remoteResult.hash, remoteResult.err
-	}
-	if localResult.err != nil {
-		return remoteResult.hash, localResult.err
-	}
-
-	actualHash := hex.EncodeToString(hasher.Sum(nil))
-	if expectedHash != "" && actualHash != expectedHash {
-		return remoteResult.hash, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
-	}
-	if remoteResult.hash != actualHash {
-		return remoteResult.hash, fmt.Errorf("remote content hash mismatch: expected %s, got %s", actualHash, remoteResult.hash)
-	}
-	if localResult.hash != actualHash {
-		return remoteResult.hash, fmt.Errorf("local replica hash mismatch: expected %s, got %s", actualHash, localResult.hash)
-	}
-	if localResult.size != size {
-		return remoteResult.hash, fmt.Errorf("local replica size mismatch: expected %d, got %d", size, localResult.size)
-	}
-
-	Logger.Debugf("StoreContentWithLocalReplica[OK] - [expected=%s actual=%s routing_key=%s size=%d]", expectedHash, remoteResult.hash, routingKey, size)
-	return remoteResult.hash, nil
-}
-
-func (c *Client) storeReplicaHost(routingKey string) (*Host, error) {
-	localHostIDs := c.localHostIDsSnapshot()
-	hostCount := c.clientConfig.NTopHosts
-	if c.hostMap != nil {
-		hostCount = max(hostCount, len(c.hostMap.GetAll()))
-	}
-	if hostCount < 1 {
-		hostCount = 1
-	}
-
-	c.mu.RLock()
-	hosts := c.hasher.GetN(hostCount, routingKey)
-	c.mu.RUnlock()
-	if len(hosts) == 0 {
-		return nil, ErrHostNotFound
-	}
-
-	primary := hosts[0]
-	if _, isLocal := localHostIDs[primary.HostId]; !isLocal {
-		return primary, nil
-	}
-
-	for _, host := range hosts[1:] {
-		if host == nil {
-			continue
-		}
-		if _, isLocal := localHostIDs[host.HostId]; !isLocal {
-			return host, nil
-		}
-	}
-
-	return primary, nil
-}
-
-func (c *Client) localHostIDsSnapshot() map[string]struct{} {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	hostIDs := make(map[string]struct{}, len(c.localServers))
-	for hostID := range c.localServers {
-		hostIDs[hostID] = struct{}{}
-	}
-	return hostIDs
-}
-
-func drainContentChunks(chunks <-chan []byte) {
-	for range chunks {
-	}
-}
-
 func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts StoreContentOptions) (string, error) {
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = cachePath
@@ -1681,7 +1387,7 @@ func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts Store
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
-	return c.withStoreFromContentLock(ctx, cachePath, opts.Lock, func() (string, error) {
+	return c.withStoreFromContentLock(ctx, storeContentLockKey(cachePath, opts.RoutingKey), opts.Lock, func() (string, error) {
 		return c.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), opts.RoutingKey, cachePath, nil)
 	})
 }
@@ -1714,21 +1420,68 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 	}
 	defer file.Close()
 
-	hash, err := c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, func() (string, error) {
+	store := func() (string, error) {
 		if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
 			return hash, nil
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return "", err
 		}
-		return c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
-	})
+		hash, err := c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
+		if err != nil {
+			return hash, err
+		}
+		if isContentHash(opts.RoutingKey) && hash != opts.RoutingKey {
+			return hash, fmt.Errorf("stored content hash mismatch: expected %s, got %s", opts.RoutingKey, hash)
+		}
+		return hash, nil
+	}
+
+	hash, err := c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
+	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+			return opts.RoutingKey, nil
+		}
+		hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
+	}
 	if err != nil {
 		return hash, err
 	}
 
-	c.promoteLocalFileToAttachedServers(hash, source.Path)
 	return hash, nil
+}
+
+func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, timeout time.Duration) bool {
+	if hash == "" || timeout <= 0 {
+		return false
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(storeContentLockWaitInterval)
+	defer ticker.Stop()
+
+	for {
+		exists, err := c.IsCachedOnSelectedHost(hash, routingKey)
+		if err == nil && exists {
+			return true
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func isContentHash(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (c *Client) StoreContentFromLocalPath(source struct {
@@ -1745,38 +1498,6 @@ func (c *Client) StoreContentFromLocalPath(source struct {
 		RoutingKey: opts.RoutingKey,
 		Lock:       opts.Lock,
 	})
-}
-
-func (c *Client) promoteLocalFileToAttachedServers(hash string, path string) {
-	if !c.clientConfig.PreferLocalCacheHost || hash == "" || path == "" {
-		return
-	}
-
-	for _, server := range c.localServersSnapshot() {
-		if server.cas.Exists(hash) {
-			continue
-		}
-
-		started := time.Now()
-		file, err := os.Open(path)
-		if err != nil {
-			Logger.Warnf("cache local replica open failed: hash=%s path=%s err=%v", hash, path, err)
-			continue
-		}
-		ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
-		localHash, size, addErr := server.cas.AddReader(ctx, file)
-		cancel()
-		_ = file.Close()
-		if addErr != nil {
-			Logger.Warnf("cache local replica store failed: hash=%s path=%s size=%d err=%v elapsed=%s", hash, path, size, addErr, time.Since(started).Truncate(time.Millisecond))
-			continue
-		}
-		if localHash != hash {
-			Logger.Warnf("cache local replica hash mismatch: expected=%s actual=%s path=%s size=%d elapsed=%s", hash, localHash, path, size, time.Since(started).Truncate(time.Millisecond))
-			continue
-		}
-		Logger.Debugf("cache local replica stored: hash=%s path=%s size=%d elapsed=%s", hash, path, size, time.Since(started).Truncate(time.Millisecond))
-	}
 }
 
 func cacheFSMetadataFromFileInfo(cachePath string, info os.FileInfo) *proto.CacheFSMetadata {
@@ -1856,17 +1577,50 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 }
 
 func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
-	_, host, err := c.getGRPCClient(&ClientRequest{
-		rt:        ClientRequestTypeStorage,
-		hash:      routingKey,
-		key:       routingKey,
-		hostIndex: 0,
-	})
-	if err != nil {
-		return "", err
+	seeker, retryable := reader.(io.Seeker)
+	var lastErr error
+	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
+		if retryable {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return "", err
+			}
+		} else if attempt > 0 {
+			break
+		}
+
+		_, host, err := c.getGRPCClient(&ClientRequest{
+			rt:        ClientRequestTypeStorage,
+			hash:      routingKey,
+			key:       routingKey,
+			hostIndex: 0,
+		})
+		if err != nil {
+			lastErr = err
+			if err == ErrHostNotFound {
+				_ = c.refreshRoutableHosts(ctx)
+			}
+			continue
+		}
+
+		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+		if err == nil {
+			return hash, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		lastErr = err
+		c.removeHost(host)
+		_ = c.refreshRoutableHosts(ctx)
+		if !retryable {
+			break
+		}
 	}
 
-	return c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", ErrHostNotFound
 }
 
 func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
@@ -1923,6 +1677,9 @@ func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, ho
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
 		return "", err
+	}
+	if resp == nil || !resp.Ok {
+		return "", ErrUnableToPopulateContent
 	}
 
 	Logger.Debugf("Elapsed time to send content: %v", time.Since(start))
@@ -2002,7 +1759,17 @@ func (c *Client) StoreContentFromLocalSource(source LocalContentSource, opts Sto
 	}
 
 	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: source.Path, CachePath: source.CachePath}}
-	return c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
+	if isContentHash(opts.RoutingKey) {
+		req.Source.ExpectedHash = opts.RoutingKey
+	}
+	hash, err := c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
+	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+			return opts.RoutingKey, nil
+		}
+		hash, err = c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
+	}
+	return hash, err
 }
 
 func (c *Client) StoreContentFromS3(source struct {
@@ -2048,7 +1815,17 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 		SecretKey:      source.SecretKey,
 		ForcePathStyle: source.ForcePathStyle,
 	}}
-	return c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+	if isContentHash(opts.RoutingKey) {
+		req.Source.ExpectedHash = opts.RoutingKey
+	}
+	hash, err := c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+			return opts.RoutingKey, nil
+		}
+		hash, err = c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+	}
+	return hash, err
 }
 
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {

@@ -77,7 +77,7 @@ func TestSamePortRawReadTransportAndGRPC(t *testing.T) {
 	require.Equal(t, Version, state.GetVersion())
 }
 
-func TestClientLocalPageFileViewsPromotesRemotePageRegionRange(t *testing.T) {
+func TestClientLocalPageFileViewsDoesNotPromoteRemotePageRegion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -131,80 +131,51 @@ func TestClientLocalPageFileViewsPromotesRemotePageRegionRange(t *testing.T) {
 	client.AttachLocalServer(&Server{cas: localStore})
 
 	regions, err := client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{})
-	require.NoError(t, err)
-	require.Len(t, regions, 2)
-	require.Contains(t, regions[0].Path, localStore.serverConfig.DiskCacheDir)
-	require.Contains(t, regions[1].Path, localStore.serverConfig.DiskCacheDir)
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Empty(t, regions)
 
 	dst := make([]byte, len(content))
 	n, err := localStore.ReadAt(hash, 0, dst)
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Zero(t, n)
+
+	n, err = client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
 }
 
-func TestClientLocalPageFileViewsPromotesRemotePageRegionForSubPageRead(t *testing.T) {
+func TestClientLocalPageFileViewsReturnsLocalFinalPartialPage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg := Config{
-		Server: ServerConfig{
-			DiskCacheDir:         t.TempDir(),
-			DiskCacheMaxUsagePct: 90,
-			PageSizeBytes:        4,
-			ObjectTtlS:           300,
-			ReadTransport: ServerReadTransportConfig{
-				Enabled:  true,
-				Sendfile: false,
-			},
-		},
-		Global: GlobalConfig{
-			GRPCMessageSizeBytes: 1024 * 1024,
-			GRPCDialTimeoutS:     1,
-		},
-	}
-	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
-	require.NoError(t, err)
-	addr, err := remoteServer.Serve("127.0.0.1:0", "")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
-
-	content := []byte("abcdefgh")
+	content := []byte("abcdefghij")
 	sum := sha256.Sum256(content)
 	hash := hex.EncodeToString(sum[:])
-	require.NoError(t, remoteServer.cas.Add(context.Background(), hash, content))
 
+	localHost := &Host{HostId: "local-host"}
 	localStore := newTestStore(t, 4)
-	localStore.currentHost = &Host{HostId: "local-host"}
-
-	remoteHost := remoteServer.Host()
-	require.NotNil(t, remoteHost)
-	remoteHost.Addr = addr
-	remoteHost.PrivateAddr = addr
+	localStore.currentHost = localHost
+	require.NoError(t, localStore.Add(ctx, hash, content))
 
 	client := &Client{
 		ctx:                   ctx,
-		clientConfig:          ClientConfig{NTopHosts: 1, ReadTransport: ClientReadTransportConfig{Enabled: true}},
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		localPromotionSem:     make(chan struct{}, 1),
-		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
 	client.AttachLocalServer(&Server{cas: localStore})
 
-	regions, err := client.ClientLocalPageFileViews(hash, 1, 2, ClientOptions{})
+	regions, err := client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{})
 	require.NoError(t, err)
-	require.Len(t, regions, 1)
-	require.Equal(t, int64(1), regions[0].Offset)
-	require.Equal(t, 2, regions[0].Length)
-
-	dst := make([]byte, 4)
-	n, err := localStore.ReadAt(hash, 0, dst)
-	require.NoError(t, err)
-	require.Equal(t, int64(4), n)
-	require.Equal(t, []byte("abcd"), dst)
+	require.Len(t, regions, 3)
+	require.Equal(t, 4, regions[0].Length)
+	require.Equal(t, 4, regions[1].Length)
+	require.Equal(t, 2, regions[2].Length)
+	require.Contains(t, regions[0].Path, localStore.serverConfig.DiskCacheDir)
 }

@@ -585,7 +585,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	}
 
 	run := func() error {
-		if request.StorageAvailable() {
+		if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
 			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
 			if _, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage); err != nil {
 				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
@@ -677,7 +677,19 @@ func (s *Worker) listenForShutdown() {
 	<-terminate
 	log.Info().Msg("shutdown signal received")
 
+	s.disableSchedulingForShutdown()
 	s.cancel()
+}
+
+func (s *Worker) disableSchedulingForShutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
+		WorkerId: s.workerId,
+	})); err != nil {
+		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
+	}
 }
 
 // Exit if there are no containers running and no containers have recently been spun up on this

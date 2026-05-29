@@ -103,7 +103,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
 
-	hostID := cacheLogicalHostID(m.poolName, m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
+	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
 	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
 	if err != nil {
 		m.cancel()
@@ -126,8 +126,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}()
 
 	hostDirectory := &gatewayCacheHostDirectory{
-		client:   m.workerRepo,
-		poolName: m.poolName,
+		client: m.workerRepo,
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
@@ -135,22 +134,6 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 		_ = server.Close()
 		m.cancel()
 		return nil, err
-	}
-	if localStore, err := cache.NewStore(
-		m.ctx,
-		&cache.Host{HostId: cacheLocalReaderHostID(m.locality, m.nodeID, m.workerID, m.instanceID)},
-		m.locality,
-		metadataStore,
-		localReaderCacheConfig(cacheConfig),
-	); err != nil {
-		log.Warn().Err(err).Str("locality", m.locality).Str("node_id", m.nodeID).Msg("Failed to attach local cache reader")
-	} else {
-		client.AttachLocalStore(localStore)
-		log.Info().
-			Str("cache_dir", cacheConfig.Server.DiskCacheDir).
-			Str("locality", m.locality).
-			Str("node_id", m.nodeID).
-			Msg("Attached local cache reader")
 	}
 
 	m.client = client
@@ -416,18 +399,6 @@ func cacheLocality(config types.AppConfig, poolConfig types.WorkerPoolConfig) st
 		return config.Cache.Global.DefaultLocality
 	}
 	return cacheDefaultLocality
-}
-
-func cacheLocalReaderHostID(locality, nodeID, workerID, instanceID string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:reader", locality, nodeID, workerID, instanceID)
-}
-
-func localReaderCacheConfig(cacheConfig cache.Config) cache.Config {
-	cacheConfig.Server.MaxCachePct = 0
-	cacheConfig.Memory.Enabled = false
-	cacheConfig.Client.Prefetch.Enabled = false
-	cacheConfig.Metrics.URL = ""
-	return cacheConfig
 }
 
 func cacheNodeID() string {

@@ -27,6 +27,7 @@ const (
 	WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName        = "/WorkerRepositoryService/RemoveContainerFromWorker"
 	WorkerRepositoryService_GetWorkerById_FullMethodName                    = "/WorkerRepositoryService/GetWorkerById"
 	WorkerRepositoryService_ToggleWorkerAvailable_FullMethodName            = "/WorkerRepositoryService/ToggleWorkerAvailable"
+	WorkerRepositoryService_DisableWorker_FullMethodName                    = "/WorkerRepositoryService/DisableWorker"
 	WorkerRepositoryService_RemoveWorker_FullMethodName                     = "/WorkerRepositoryService/RemoveWorker"
 	WorkerRepositoryService_UpdateWorkerCapacity_FullMethodName             = "/WorkerRepositoryService/UpdateWorkerCapacity"
 	WorkerRepositoryService_SetWorkerKeepAlive_FullMethodName               = "/WorkerRepositoryService/SetWorkerKeepAlive"
@@ -66,6 +67,7 @@ type WorkerRepositoryServiceClient interface {
 	RemoveContainerFromWorker(ctx context.Context, in *RemoveContainerFromWorkerRequest, opts ...grpc.CallOption) (*RemoveContainerFromWorkerResponse, error)
 	GetWorkerById(ctx context.Context, in *GetWorkerByIdRequest, opts ...grpc.CallOption) (*GetWorkerByIdResponse, error)
 	ToggleWorkerAvailable(ctx context.Context, in *ToggleWorkerAvailableRequest, opts ...grpc.CallOption) (*ToggleWorkerAvailableResponse, error)
+	DisableWorker(ctx context.Context, in *DisableWorkerRequest, opts ...grpc.CallOption) (*DisableWorkerResponse, error)
 	RemoveWorker(ctx context.Context, in *RemoveWorkerRequest, opts ...grpc.CallOption) (*RemoveWorkerResponse, error)
 	UpdateWorkerCapacity(ctx context.Context, in *UpdateWorkerCapacityRequest, opts ...grpc.CallOption) (*UpdateWorkerCapacityResponse, error)
 	SetWorkerKeepAlive(ctx context.Context, in *SetWorkerKeepAliveRequest, opts ...grpc.CallOption) (*SetWorkerKeepAliveResponse, error)
@@ -213,6 +215,15 @@ func (c *workerRepositoryServiceClient) GetWorkerById(ctx context.Context, in *G
 func (c *workerRepositoryServiceClient) ToggleWorkerAvailable(ctx context.Context, in *ToggleWorkerAvailableRequest, opts ...grpc.CallOption) (*ToggleWorkerAvailableResponse, error) {
 	out := new(ToggleWorkerAvailableResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_ToggleWorkerAvailable_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) DisableWorker(ctx context.Context, in *DisableWorkerRequest, opts ...grpc.CallOption) (*DisableWorkerResponse, error) {
+	out := new(DisableWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_DisableWorker_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -456,6 +467,7 @@ type WorkerRepositoryServiceServer interface {
 	RemoveContainerFromWorker(context.Context, *RemoveContainerFromWorkerRequest) (*RemoveContainerFromWorkerResponse, error)
 	GetWorkerById(context.Context, *GetWorkerByIdRequest) (*GetWorkerByIdResponse, error)
 	ToggleWorkerAvailable(context.Context, *ToggleWorkerAvailableRequest) (*ToggleWorkerAvailableResponse, error)
+	DisableWorker(context.Context, *DisableWorkerRequest) (*DisableWorkerResponse, error)
 	RemoveWorker(context.Context, *RemoveWorkerRequest) (*RemoveWorkerResponse, error)
 	UpdateWorkerCapacity(context.Context, *UpdateWorkerCapacityRequest) (*UpdateWorkerCapacityResponse, error)
 	SetWorkerKeepAlive(context.Context, *SetWorkerKeepAliveRequest) (*SetWorkerKeepAliveResponse, error)
@@ -511,6 +523,9 @@ func (UnimplementedWorkerRepositoryServiceServer) GetWorkerById(context.Context,
 }
 func (UnimplementedWorkerRepositoryServiceServer) ToggleWorkerAvailable(context.Context, *ToggleWorkerAvailableRequest) (*ToggleWorkerAvailableResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ToggleWorkerAvailable not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) DisableWorker(context.Context, *DisableWorkerRequest) (*DisableWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DisableWorker not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveWorker(context.Context, *RemoveWorkerRequest) (*RemoveWorkerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveWorker not implemented")
@@ -747,6 +762,24 @@ func _WorkerRepositoryService_ToggleWorkerAvailable_Handler(srv interface{}, ctx
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerRepositoryServiceServer).ToggleWorkerAvailable(ctx, req.(*ToggleWorkerAvailableRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_DisableWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisableWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).DisableWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_DisableWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).DisableWorker(ctx, req.(*DisableWorkerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1231,6 +1264,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ToggleWorkerAvailable",
 			Handler:    _WorkerRepositoryService_ToggleWorkerAvailable_Handler,
+		},
+		{
+			MethodName: "DisableWorker",
+			Handler:    _WorkerRepositoryService_DisableWorker_Handler,
 		},
 		{
 			MethodName: "RemoveWorker",

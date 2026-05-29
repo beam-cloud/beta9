@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -1258,6 +1259,116 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	assert.Equal(t, secondRequest.ContainerId, requeuedRequest.ContainerId)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
 	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+}
+
+func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T) {
+	firstScheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	secondScheduler := *firstScheduler
+	secondScheduler.provisioning = newProvisioningTracker()
+
+	worker := &types.Worker{
+		Id:            uuid.New().String(),
+		Status:        types.WorkerStatusAvailable,
+		TotalCpu:      4000,
+		TotalMemory:   5000,
+		TotalGpuCount: 1,
+		FreeCpu:       4000,
+		FreeMemory:    5000,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+		PoolName:      "beta9-a10g",
+	}
+	err = firstScheduler.workerRepo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	firstReplicaWorkers, err := firstScheduler.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	secondReplicaWorkers, err := secondScheduler.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
+	}()
+
+	close(start)
+	wg.Wait()
+
+	queuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedRequest)
+
+	extraQueuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.Nil(t, extraQueuedRequest)
+
+	updatedWorker, err := firstScheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(3000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(3750), updatedWorker.FreeMemory)
+	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
+	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
+
+	queuedIds := map[string]struct{}{queuedRequest.ContainerId: {}}
+	expectedIds := map[string]struct{}{
+		firstRequest.ContainerId:  {},
+		secondRequest.ContainerId: {},
+	}
+	_, queuedWasExpected := expectedIds[queuedRequest.ContainerId]
+	assert.True(t, queuedWasExpected)
+
+	deadline := time.After(time.Second)
+	var requeuedRequest *types.ContainerRequest
+	for requeuedRequest == nil {
+		var err error
+		requeuedRequest, err = firstScheduler.requestBacklog.Pop()
+		if err == nil {
+			break
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("expected stale reservation to be requeued")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	_, requeuedWasExpected := expectedIds[requeuedRequest.ContainerId]
+	assert.True(t, requeuedWasExpected)
+	_, requeuedWasAlreadyQueued := queuedIds[requeuedRequest.ContainerId]
+	assert.False(t, requeuedWasAlreadyQueued)
+	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
+	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+
+	extraRequeuedRequest, err := firstScheduler.requestBacklog.Pop()
+	assert.Error(t, err)
+	assert.Nil(t, extraRequeuedRequest)
 }
 
 func TestAddWorkerForReservationReleasesOnContextCancellation(t *testing.T) {

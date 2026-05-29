@@ -31,7 +31,15 @@ func (hm *HostMap) Set(host *Host) {
 
 	hm.mu.Lock()
 	existing, exists := hm.hosts[host.HostId]
-	if exists && existing.Addr == host.Addr && existing.PrivateAddr == host.PrivateAddr && existing.CapacityUsagePct == host.CapacityUsagePct {
+	if exists &&
+		existing.Addr == host.Addr &&
+		existing.PrivateAddr == host.PrivateAddr &&
+		existing.CapacityUsagePct == host.CapacityUsagePct &&
+		existing.RegistrationID == host.RegistrationID &&
+		existing.PoolName == host.PoolName &&
+		existing.Locality == host.Locality &&
+		existing.NodeID == host.NodeID &&
+		existing.CachePathID == host.CachePathID {
 		hm.mu.Unlock()
 		return
 	}
@@ -60,17 +68,26 @@ func (hm *HostMap) Set(host *Host) {
 	}
 }
 
-func (hm *HostMap) Remove(host *Host) {
+func (hm *HostMap) Remove(host *Host) bool {
+	if host == nil || host.HostId == "" {
+		return false
+	}
+
 	hm.mu.Lock()
 	defer hm.mu.Unlock()
 
-	_, exists := hm.hosts[host.HostId]
+	existing, exists := hm.hosts[host.HostId]
 	if !exists {
-		return
+		return false
+	}
+	if !sameCacheHostEndpoint(existing, host) {
+		Logger.Debugf("Ignored stale host removal @ %s (stale PrivateAddr=%s active PrivateAddr=%s)", host.HostId, host.PrivateAddr, existing.PrivateAddr)
+		return false
 	}
 
 	Logger.Infof("Removed host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	delete(hm.hosts, host.HostId)
+	return true
 }
 
 func (hm *HostMap) Members() mapset.Set[string] {

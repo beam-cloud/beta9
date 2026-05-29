@@ -1,7 +1,10 @@
 package cache
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"testing"
 
@@ -41,6 +44,28 @@ func TestServerDrainRejectsNewRPCs(t *testing.T) {
 	_, err = server.GetContent(context.Background(), &proto.CacheGetContentRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+func TestStoreContentFromSourceWithExpectedHashIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t, 4)
+	content := []byte("already cached content")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	storedHash, _, err := store.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.Equal(t, hash, storedHash)
+
+	server := &Server{cas: store}
+	resp, err := server.storeContentFromSource(ctx, &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
+		Path:         "missing/source",
+		BucketName:   "bucket",
+		ExpectedHash: hash,
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.True(t, resp.Ok)
+	require.Equal(t, hash, resp.Hash)
 }
 
 func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {

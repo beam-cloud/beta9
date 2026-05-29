@@ -259,6 +259,8 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 		opts.BaseImageDigest = baseImage.Digest
 	}
 
+	is.resolveBaseImageDigest(ctx, opts)
+
 	// Add base Python requirements to PythonPackages list
 	// These are merged with user-specified packages in the build process
 	if in.Dockerfile != "" {
@@ -307,6 +309,24 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 	}
 
 	return imageId, exists, valid, opts, nil
+}
+
+func (is *ContainerImageService) resolveBaseImageDigest(ctx context.Context, opts *BuildOpts) {
+	if opts == nil || opts.BaseImageDigest != "" || opts.BaseImageRegistry == "" || opts.BaseImageName == "" || opts.BaseImageTag == "" {
+		return
+	}
+
+	sourceImage := getSourceImage(opts)
+	metadata, err := is.builder.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
+	if err != nil {
+		log.Warn().Err(err).Str("source_image", sourceImage).Msg("failed to resolve base image digest for image identity")
+		return
+	}
+	if metadata.Digest == "" {
+		log.Warn().Str("source_image", sourceImage).Msg("base image digest missing from registry inspect")
+		return
+	}
+	opts.BaseImageDigest = metadata.Digest
 }
 
 func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {

@@ -71,6 +71,28 @@ func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent("stub.state.degraded", eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stub stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stub stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
 func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -394,6 +416,42 @@ func TestEventQueryAllowsType(t *testing.T) {
 	}
 	if !eventQueryAllowsType(types.EventQuery{}, types.EventContainerLog) {
 		t.Fatal("empty event type filter should allow all events")
+	}
+	if !eventQueryAllowsType(types.EventQuery{EventTypes: []string{"stub.state.*"}}, "stub.state.degraded") {
+		t.Fatal("expected wildcard event type to be allowed")
+	}
+}
+
+func TestEventRecordMatchesQueryFiltersByScopeAndTime(t *testing.T) {
+	start := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Minute)
+	query := types.EventQuery{
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		TaskID:      "task-1",
+		StartTime:   &start,
+		EndTime:     &end,
+	}
+
+	record := types.ContainerEventRecord{
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		TaskID:      "task-1",
+		Timestamp:   start.Add(time.Minute),
+	}
+	if !eventRecordMatchesQuery(record, query) {
+		t.Fatal("expected scoped record inside time range to match")
+	}
+
+	record.WorkspaceID = ""
+	if eventRecordMatchesQuery(record, query) {
+		t.Fatal("expected missing workspace metadata to be rejected")
+	}
+
+	record.WorkspaceID = "workspace-1"
+	record.Timestamp = end
+	if eventRecordMatchesQuery(record, query) {
+		t.Fatal("expected end time to be exclusive")
 	}
 }
 

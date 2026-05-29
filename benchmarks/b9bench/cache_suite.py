@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,7 +160,6 @@ class WorkloadSpec:
     @classmethod
     def parse_plan(cls, plan: str) -> list["WorkloadSpec"]:
         specs: list[WorkloadSpec] = []
-        seen = set()
         for part in (p.strip() for p in plan.split(",") if p.strip()):
             fields = [field.strip() for field in part.split(":")]
             if len(fields) != 3:
@@ -168,10 +168,6 @@ class WorkloadSpec:
                 )
             spec = cls(fields[0], fields[1], parse_size_mib(fields[2]))
             spec.validate()
-            key = (spec.access_type, spec.pattern, spec.size_mib)
-            if key in seen:
-                raise SystemExit(f"duplicate file-plan entry: {part}")
-            seen.add(key)
             specs.append(spec)
         return specs or [cls("volume_mount", "sequential", 4096)]
 
@@ -251,6 +247,7 @@ class BenchmarkConfig:
     port_forward: bool
     cleanup_cache_before_run: bool
     cleanup_cache_after_run: bool
+    force_read_through_after_prepare: bool
     verify_reads: bool
     require_remote_read: bool
     require_remote_object_proof: bool
@@ -318,7 +315,7 @@ class BenchmarkConfig:
         add("--volume-subdir", default=os.getenv("BENCH_CACHE_VOLUME_SUBDIR", ""))
         add(
             "--worker-workspace-root",
-            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/storage"),
+            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/workspace/data"),
         )
         add(
             "--cache-mount-path",
@@ -343,7 +340,7 @@ class BenchmarkConfig:
         add(
             "--remote-cache-proof-concurrency",
             type=int,
-            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 16),
+            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 2),
         )
         add_bool(
             parser,
@@ -469,6 +466,12 @@ class BenchmarkConfig:
         )
         add_bool(
             parser, "cleanup-cache-after-run", "BENCH_CACHE_CLEANUP_AFTER_RUN", True
+        )
+        add_bool(
+            parser,
+            "force-read-through-after-prepare",
+            "BENCH_CACHE_FORCE_READ_THROUGH_AFTER_PREPARE",
+            False,
         )
         add_bool(parser, "verify-reads", "BENCH_CACHE_VERIFY_READS", True)
         add_bool(parser, "require-remote-read", "BENCH_CACHE_REQUIRE_REMOTE_READ", True)
@@ -665,6 +668,17 @@ class Kube:
                 return pod
         return None
 
+    def wait_worker_pod_for_container(
+        self, container_id: str, timeout: float = 90
+    ) -> Optional[dict[str, str]]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pod = self.worker_pod_for_container(container_id)
+            if pod is not None:
+                return pod
+            time.sleep(1)
+        return None
+
     def worker_pods(self) -> list[dict[str, str]]:
         proc = run(
             [
@@ -693,6 +707,10 @@ class Kube:
             pods.append(
                 {
                     "name": item.get("metadata", {}).get("name", ""),
+                    "uid": item.get("metadata", {}).get("uid", ""),
+                    "jobName": item.get("metadata", {})
+                    .get("labels", {})
+                    .get("batch.kubernetes.io/job-name", ""),
                     "deleting": bool(
                         item.get("metadata", {}).get("deletionTimestamp", "")
                     ),
@@ -700,6 +718,9 @@ class Kube:
                     "podIP": item.get("status", {}).get("podIP", ""),
                     "hostIP": item.get("status", {}).get("hostIP", ""),
                     "phase": item.get("status", {}).get("phase", ""),
+                    "poolName": item.get("metadata", {})
+                    .get("labels", {})
+                    .get("run.beam.cloud/worker-pool-name", ""),
                     "restartCount": int(
                         worker_statuses[0].get("restartCount", 0)
                         if worker_statuses
@@ -724,20 +745,63 @@ class Kube:
         self, pod_names: list[str], timeout: float = 300
     ) -> dict[str, Any]:
         pods = {pod["name"]: pod for pod in self.worker_pods()}
-        before = {
-            name: int(pods.get(name, {}).get("restartCount") or 0)
-            for name in pod_names
-            if name in pods
+        before = {name: pods[name] for name in pod_names if name in pods}
+        pool_names = {
+            pod.get("poolName", "")
+            for pod in before.values()
+            if pod.get("poolName", "")
         }
-        result: dict[str, Any] = {"ok": True, "pods": []}
+        before_running = [
+            pod
+            for pod in self.running_workers()
+            if not pool_names or pod.get("poolName", "") in pool_names
+        ]
+        before_count = len(before_running)
+        required_ready_workers = 1
+        result: dict[str, Any] = {
+            "ok": True,
+            "pods": [],
+            "beforeReadyWorkers": before_count,
+            "requiredReadyWorkers": required_ready_workers,
+            "workerPools": sorted(pool_names),
+        }
         if not before:
             return {"ok": False, "error": "no worker pods to restart", "pods": []}
 
-        for name in before:
-            proc = self.worker_shell(name, "kill -9 $(pidof worker)", timeout=10)
+        deleted_jobs: set[str] = set()
+        for name, pod in before.items():
+            job_name = pod.get("jobName", "")
+            if job_name and job_name not in deleted_jobs:
+                command = [
+                    "kubectl",
+                    "-n",
+                    self.config.namespace,
+                    "delete",
+                    "job",
+                    job_name,
+                    "--wait=false",
+                ]
+                deleted_jobs.add(job_name)
+            else:
+                command = [
+                    "kubectl",
+                    "-n",
+                    self.config.namespace,
+                    "delete",
+                    "pod",
+                    name,
+                    "--wait=false",
+                ]
+            proc = run(
+                command,
+                check=False,
+                timeout=30,
+            )
             result["pods"].append(
                 {
                     "pod": name,
+                    "uid": before[name].get("uid", ""),
+                    "job": job_name,
                     "restartRequested": True,
                     "returnCode": proc.returncode,
                     "stderr": proc.stderr.strip()[-300:],
@@ -747,30 +811,69 @@ class Kube:
         deadline = time.monotonic() + timeout
         pending = set(before)
         terminal: dict[str, str] = {}
+        ready_workers: list[dict[str, str]] = []
         while pending and time.monotonic() < deadline:
             pods = {pod["name"]: pod for pod in self.worker_pods()}
             for name in list(pending):
                 pod = pods.get(name)
                 if not pod:
+                    pending.remove(name)
+                    continue
+                if pod.get("deleting") or not pod.get("ready"):
+                    pending.remove(name)
                     continue
                 if pod.get("phase") in {"Succeeded", "Failed"}:
                     terminal[name] = pod.get("phase", "")
                     pending.remove(name)
                     continue
-                restart_count = int(pod.get("restartCount") or 0)
-                if pod.get("ready") and restart_count > before[name]:
-                    pending.remove(name)
-            if pending:
+            ready_workers = [
+                pod
+                for pod in self.running_workers()
+                if not pool_names or pod.get("poolName", "") in pool_names
+            ]
+            if pending or len(ready_workers) < required_ready_workers:
                 time.sleep(2)
 
-        result["ok"] = not pending and not terminal
+        while (
+            not pending
+            and time.monotonic() < deadline
+            and len(ready_workers) < required_ready_workers
+        ):
+            ready_workers = [
+                pod
+                for pod in self.running_workers()
+                if not pool_names or pod.get("poolName", "") in pool_names
+            ]
+            if len(ready_workers) >= required_ready_workers:
+                break
+            time.sleep(2)
+
+        result["ok"] = (
+            not pending and not terminal and len(ready_workers) >= required_ready_workers
+        )
         result["pending"] = sorted(pending)
         if terminal:
             result["terminal"] = terminal
+        result["afterReadyWorkers"] = len(ready_workers)
+        result["replacementPods"] = [
+            {
+                "pod": pod["name"],
+                "uid": pod.get("uid", ""),
+                "job": pod.get("jobName", ""),
+                "nodeName": pod.get("nodeName", ""),
+                "podIP": pod.get("podIP", ""),
+                "poolName": pod.get("poolName", ""),
+            }
+            for pod in ready_workers
+            if pod["name"] not in before
+        ]
         result["after"] = [
             {
                 "pod": pod["name"],
+                "uid": pod.get("uid", ""),
+                "job": pod.get("jobName", ""),
                 "nodeName": pod.get("nodeName", ""),
+                "poolName": pod.get("poolName", ""),
                 "ready": pod.get("ready", False),
                 "restartCount": pod.get("restartCount", 0),
             }
@@ -1131,12 +1234,51 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         result["ok"] = any(pod.get("evicted") for pod in result["pods"])
         return result
 
+    def remove_cache_pages(self, entry: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {"ok": False, "pods": []}
+        seen_nodes = set()
+        for pod in self.kube.running_workers():
+            node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
+            if node_key in seen_nodes:
+                continue
+            seen_nodes.add(node_key)
+            candidates = self._candidate_shell_paths(pod, entry["sha256"])
+            script = (
+                f"hash={shlex.quote(entry['sha256'])}; removed=false; bytes=0; chunks=0; "
+                "for candidate in "
+                f"{candidates}; do "
+                "[ -d \"$candidate\" ] || continue; "
+                "i=0; while [ -f \"$candidate/$hash-$i\" ]; do "
+                "bytes=$((bytes + $(stat -c %s \"$candidate/$hash-$i\"))); "
+                "chunks=$((chunks + 1)); i=$((i + 1)); "
+                "done; "
+                "rm -rf \"$candidate\"; removed=true; "
+                "done; "
+                "printf '{\"removed\":%s,\"bytes\":%s,\"chunks\":%s}\\n' \"$removed\" \"$bytes\" \"$chunks\""
+            )
+            proc = self.kube.worker_shell(pod["name"], script, timeout=120)
+            proof = {
+                "pod": pod["name"],
+                "nodeName": pod.get("nodeName", ""),
+                "returnCode": proc.returncode,
+            }
+            try:
+                proof.update(parse_json_output(proc.stdout))
+            except Exception as exc:
+                proof["error"] = str(exc)
+            result["pods"].append(proof)
+        result["ok"] = any(pod.get("removed") for pod in result["pods"])
+        return result
+
     def evict_mounted_file(
-        self, worker_path: str, expected_size: int
+        self,
+        worker_path: str,
+        expected_size: int,
+        pods: Optional[list[dict[str, str]]] = None,
     ) -> dict[str, Any]:
         source = self.tools.source("evict_file.py")
         result: dict[str, Any] = {"ok": False, "pods": []}
-        for pod in self.kube.running_workers():
+        for pod in pods or self.kube.running_workers():
             proc = self.kube.worker_exec(
                 pod["name"],
                 ["python3", "-c", source, worker_path, str(expected_size)],
@@ -1208,6 +1350,10 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             entry["sha256"],
             "--read-method",
             self.config.read_method,
+            "--progress-interval-seconds",
+            "10",
+            "--read-stall-timeout-seconds",
+            "120",
         ]
         if not self.config.verify_reads:
             command.append("--skip-verify")
@@ -1316,10 +1462,15 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         hosts = self.cache_hosts_snapshot()
         target_host = self._choose_cache_host(hosts, cas_proof)
         if target_host is None:
+            cas_node = cas_proof.get("nodeName") or cas_proof.get("nodeId") or ""
+            error = "no cache host with advertised address"
+            if cas_node:
+                error = f"no active cache host advertises cached node {cas_node}"
             return {
                 "ok": False,
-                "error": "no cache host with advertised address",
+                "error": error,
                 "hosts": hosts,
+                "casProof": cas_proof,
             }
         source_pod, target_pod = self._choose_remote_source(target_host)
         if source_pod is None:
@@ -1561,14 +1712,28 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         if not redis_pod:
             return self.cache_hosts_from_worker_logs()
 
-        index_key = f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
-        logical_host_ids = [
-            line
+        index_pattern = f"cache:coordinator:host_index:*:{self.config.cache_locality}"
+        index_keys = [
+            line.strip()
             for line in (
-                redis_cli(self.config.namespace, redis_pod, "SMEMBERS", index_key) or ""
+                redis_cli(self.config.namespace, redis_pod, "KEYS", index_pattern) or ""
             ).splitlines()
             if line.strip()
         ]
+        if not index_keys:
+            index_keys = [
+                f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
+            ]
+        logical_host_ids = []
+        seen_logical_hosts = set()
+        for index_key in index_keys:
+            for line in (
+                redis_cli(self.config.namespace, redis_pod, "SMEMBERS", index_key) or ""
+            ).splitlines():
+                logical_host_id = line.strip()
+                if logical_host_id and logical_host_id not in seen_logical_hosts:
+                    seen_logical_hosts.add(logical_host_id)
+                    logical_host_ids.append(logical_host_id)
         hosts = []
         for logical_host_id in logical_host_ids:
             registration_ids = self._registration_ids(redis_pod, logical_host_id)
@@ -1596,18 +1761,25 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "poolName": registration.get("pool_name")
                         or registration.get("poolName")
                         or self.config.cache_pool_name,
+                        "nodeId": registration.get("node_id")
+                        or registration.get("nodeId")
+                        or "",
                         "nodeName": registration.get("node_id")
                         or registration.get("nodeId")
+                        or "",
+                        "cachePathId": registration.get("cache_path_id")
+                        or registration.get("cachePathId")
                         or "",
                         "addr": registration.get("addr") or "",
                         "privateAddr": registration.get("private_addr")
                         or registration.get("privateAddr")
                         or "",
+                        "source": "coordinator",
                     }
                 )
                 break
         if hosts:
-            return {"available": True, "indexKey": index_key, "hosts": hosts}
+            return {"available": True, "indexKeys": index_keys, "hosts": hosts}
         return self.cache_hosts_from_worker_logs()
 
     def cache_hosts_from_worker_logs(self) -> dict[str, Any]:
@@ -1656,7 +1828,13 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "poolName": registration.get("pool_name")
                         or registration.get("poolName")
                         or "",
+                        "nodeId": registration.get("node_id")
+                        or registration.get("nodeId")
+                        or pod.get("nodeName", ""),
                         "nodeName": pod.get("nodeName", ""),
+                        "cachePathId": registration.get("cache_path_id")
+                        or registration.get("cachePathId")
+                        or "",
                         "addr": addr,
                         "privateAddr": addr,
                         "pod": pod_name,
@@ -1734,9 +1912,17 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         if not hosts:
             return None
         node_name = cas_proof.get("nodeName") or ""
-        for host in hosts:
-            if node_name and node_name in (host.get("hostId") or ""):
-                return host
+        if node_name:
+            for host in hosts:
+                if node_name in {
+                    host.get("nodeName") or "",
+                    host.get("nodeId") or "",
+                }:
+                    return host
+            for host in hosts:
+                if node_name in (host.get("hostId") or ""):
+                    return host
+            return None
         return hosts[0]
 
     def _choose_remote_source(
@@ -1847,14 +2033,45 @@ class SandboxRunner:
         sandbox.entrypoint = ["tail", "-f", "/dev/null"]
 
         started = time.monotonic_ns()
-        ok = sandbox.prepare_runtime(
-            stub_type=sandbox_stub_type,
-            force_create_stub=True,
-            ignore_patterns=["*"],
+        deadline = max(60.0, self.config.sandbox_ready_timeout_seconds)
+        ok = self._prepare_runtime_bounded(
+            sandbox,
+            sandbox_stub_type,
+            deadline,
         )
         if not ok:
             raise RuntimeError("SDK Sandbox runtime preparation failed")
         return sandbox, volume, (time.monotonic_ns() - started) / 1_000_000
+
+    def _prepare_runtime_bounded(self, sandbox, sandbox_stub_type, timeout: float) -> bool:
+        result: list[bool] = []
+        errors: list[BaseException] = []
+
+        def prepare() -> None:
+            try:
+                result.append(
+                    bool(
+                        sandbox.prepare_runtime(
+                            stub_type=sandbox_stub_type,
+                            force_create_stub=True,
+                            ignore_patterns=["*"],
+                        )
+                    )
+                )
+            except BaseException as exc:  # defensive: surface SDK/gRPC hangs cleanly
+                errors.append(exc)
+
+        thread = threading.Thread(target=prepare, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            raise TimeoutError(
+                f"SDK Sandbox runtime preparation did not return within {timeout:.0f}s; "
+                f"workers={self.kube.running_workers()}"
+            )
+        if errors:
+            raise errors[-1]
+        return bool(result and result[0])
 
     def run_json(
         self, sandbox, token: str, command: list[str], label: str
@@ -1887,25 +2104,39 @@ class SandboxRunner:
         sample: dict[str, Any] = {"label": label, "startedAt": now_rfc3339()}
         started = time.monotonic_ns()
         try:
+            log(f"{label}: creating sandbox")
             instance, create_info = create_sandbox_with_retries(self.config, sandbox)
             sample.update(create_info)
             sample["containerId"] = instance.container_id
             sample["stubId"] = instance.stub_id
+            log(
+                f"{label}: sandbox accepted container={instance.container_id} "
+                f"stub={instance.stub_id}"
+            )
             if not instance.ok:
                 raise RuntimeError(
                     instance.error_msg or "Sandbox.create returned ok=false"
                 )
             if self.config.wait_running:
-                sample["running"] = wait_instance_running(
-                    self.config, token, instance.container_id, started
-                )
+                log(f"{label}: waiting for sandbox RUNNING")
+                sample["running"] = self._wait_instance_running(instance, started)
+                log(f"{label}: sandbox RUNNING container={instance.container_id}")
             proc_started = time.monotonic_ns()
-            process = instance.process.exec(command, cwd="/")
+            process = self._start_process_bounded(
+                instance,
+                self._wrap_command_for_output_capture(command), cwd="/"
+            )
             sample["execAcceptedMs"] = (time.monotonic_ns() - proc_started) / 1_000_000
-            exit_code = process.wait(timeout=self.config.exec_timeout_seconds)
+            log(
+                f"{label}: process accepted container={instance.container_id} "
+                f"pid={process.pid}"
+            )
+            exit_code, stdout, stderr = self._wait_process_with_output(
+                process, instance, self.config.exec_timeout_seconds, label
+            )
             sample["exitCode"] = exit_code
-            sample["stdout"] = process.stdout.read()
-            sample["stderr"] = process.stderr.read()
+            sample["stdout"] = stdout
+            sample["stderr"] = stderr
             if exit_code != 0:
                 raise RuntimeError(
                     sample["stderr"]
@@ -1924,6 +2155,195 @@ class SandboxRunner:
             self._cleanup_sandbox_bounded(instance, sample)
             sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
             sample["finishedAt"] = now_rfc3339()
+
+    def _start_process_bounded(self, instance, command: list[str], cwd: str):
+        result: list[Any] = []
+        errors: list[BaseException] = []
+
+        def start() -> None:
+            try:
+                result.append(instance.process.exec(command, cwd=cwd))
+            except BaseException as exc:  # defensive: surface SDK/gRPC hangs cleanly
+                errors.append(exc)
+
+        thread = threading.Thread(target=start, daemon=True)
+        thread.start()
+        deadline = min(60.0, max(10.0, self.config.sandbox_ready_timeout_seconds))
+        thread.join(deadline)
+        if thread.is_alive():
+            raise TimeoutError(
+                f"process exec did not return within {deadline:.0f}s for "
+                f"container {instance.container_id}; workers={self.kube.running_workers()}"
+            )
+        if errors:
+            raise errors[-1]
+        if not result:
+            raise RuntimeError(
+                f"process exec returned no process for container {instance.container_id}"
+            )
+        return result[0]
+
+    @staticmethod
+    def _wrap_command_for_output_capture(command: list[str]) -> list[str]:
+        # goproc stdout/stderr reads are destructive and can lose very short
+        # process output after exit. Keep the shell process alive briefly after
+        # the helper exits so the benchmark can poll and capture its JSON.
+        return [
+            "sh",
+            "-lc",
+            f"{shlex.join(command)}; status=$?; sleep 2; exit $status",
+        ]
+
+    def _wait_instance_running(self, instance, request_start_ns: int) -> Optional[dict[str, Any]]:
+        if not self.config.wait_running:
+            return None
+
+        from beta9.clients.pod import PodSandboxStatusRequest, PodSandboxStatusResponse
+
+        container_id = instance.container_id
+        start = time.monotonic()
+        deadline = start + self.config.timeout_seconds
+        # A container that doesn't fit any warm worker forces the scheduler to
+        # provision a new, right-sized worker on demand (job create -> image pull
+        # -> boot -> register -> pick up container), which can take minutes. Until
+        # the container has actually landed on a worker we must not treat its
+        # absence as "disappeared"; that races against legitimate provisioning.
+        # We only fast-fail on disappearance once the container has been observed
+        # on a worker and then vanished (genuine worker death/OOM). Initial
+        # placement is bounded by placement_grace so a never-scheduled container
+        # still fails promptly instead of hanging until timeout_seconds.
+        placement_grace = min(
+            self.config.timeout_seconds,
+            max(240.0, self.config.sandbox_ready_timeout_seconds),
+        )
+        interval = self.config.poll_interval_ms / 1000
+        next_liveness_check = start + 15
+        next_progress_log = start + 15
+        missing_container_checks = 0
+        ever_on_worker = False
+        last: Optional[dict[str, Any]] = None
+        attempts = 0
+
+        while time.monotonic() < deadline:
+            attempts += 1
+            try:
+                response = instance.stub._unary_unary(
+                    "/pod.PodService/SandboxStatus",
+                    PodSandboxStatusRequest,
+                    PodSandboxStatusResponse,
+                )(
+                    PodSandboxStatusRequest(container_id=container_id, pid=0),
+                    timeout=5,
+                )
+                last = {
+                    "ok": bool(response.ok),
+                    "status": response.status,
+                    "error": response.error_msg,
+                }
+                if response.ok and str(response.status).lower() == "running":
+                    return {
+                        "observedMs": (time.monotonic_ns() - request_start_ns)
+                        / 1_000_000,
+                        "attempts": attempts,
+                        "state": last,
+                    }
+            except Exception as exc:
+                last = {"error": str(exc)}
+
+            if time.monotonic() >= next_progress_log:
+                next_progress_log = time.monotonic() + 15
+                log(
+                    f"waiting for sandbox RUNNING: container={container_id} "
+                    f"elapsed={time.monotonic() - start:.1f}s attempts={attempts} "
+                    f"ever_on_worker={ever_on_worker} last={last} "
+                    f"workers={self.kube.running_workers()}"
+                )
+            if time.monotonic() >= next_liveness_check:
+                next_liveness_check = time.monotonic() + 5
+                if self.kube.worker_pod_for_container(container_id):
+                    ever_on_worker = True
+                    missing_container_checks = 0
+                elif ever_on_worker:
+                    # Was placed on a worker and then vanished -> worker died.
+                    missing_container_checks += 1
+                    if missing_container_checks >= 3:
+                        raise RuntimeError(
+                            f"sandbox container {container_id} disappeared from workers "
+                            f"while waiting for RUNNING; last response={last}"
+                        )
+                elif time.monotonic() - start >= placement_grace:
+                    # Never scheduled onto any worker within the placement window.
+                    raise RuntimeError(
+                        f"sandbox container {container_id} was never scheduled onto a "
+                        f"worker within {placement_grace:.0f}s (no worker had capacity "
+                        f"or provisioning failed); last response={last}"
+                    )
+            time.sleep(interval)
+
+        raise TimeoutError(
+            f"Timed out waiting for {container_id} RUNNING; last response={last}"
+        )
+
+    def _wait_process_with_output(
+        self, process, instance, timeout: float, label: str
+    ) -> tuple[int, str, str]:
+        stdout = ""
+        stderr = ""
+        started = time.monotonic()
+        deadline = time.monotonic() + timeout
+        next_liveness_check = time.monotonic() + 15
+        next_progress_log = time.monotonic() + 15
+        missing_container_checks = 0
+        while True:
+            stdout_chunk = process.stdout.read()
+            stderr_chunk = process.stderr.read()
+            if stdout_chunk:
+                stdout += stdout_chunk
+            if stderr_chunk:
+                stderr += stderr_chunk
+            exit_code, _ = process.status()
+            if exit_code >= 0:
+                for _ in range(5):
+                    time.sleep(0.1)
+                    stdout += process.stdout.read()
+                    stderr += process.stderr.read()
+                    if stdout or stderr:
+                        break
+                return exit_code, stdout, stderr
+            if time.monotonic() >= next_progress_log:
+                next_progress_log = time.monotonic() + 15
+                progress_tail = (stderr or stdout)[-500:].replace("\n", " ")
+                log(
+                    f"{label} still running: container={instance.container_id} "
+                    f"pid={process.pid} elapsed={time.monotonic() - started:.1f}s "
+                    f"stdout_bytes={len(stdout)} stderr_bytes={len(stderr)} "
+                    f"tail={progress_tail!r}"
+                )
+            if time.monotonic() >= next_liveness_check:
+                next_liveness_check = time.monotonic() + 5
+                if not self.kube.worker_pod_for_container(instance.container_id):
+                    missing_container_checks += 1
+                    if missing_container_checks >= 3:
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            "sandbox process still reports running, but "
+                            f"container {instance.container_id} is no longer present on any worker"
+                        )
+                else:
+                    missing_container_checks = 0
+            if time.monotonic() >= deadline:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"process {process.pid} did not exit within {timeout} seconds; "
+                    f"stdout_tail={stdout[-1000:]!r} stderr_tail={stderr[-1000:]!r}"
+                )
+            time.sleep(0.1)
 
     @staticmethod
     def _is_transient_sandbox_run_error(exc: Exception) -> bool:
@@ -2005,6 +2425,10 @@ class SandboxRunner:
             entry["sha256"],
             "--read-method",
             self.config.read_method,
+            "--progress-interval-seconds",
+            "10",
+            "--read-stall-timeout-seconds",
+            "120",
         ]
         if not self.config.verify_reads:
             command.append("--skip-verify")
@@ -2308,23 +2732,20 @@ class CacheBenchmark:
             ],
             "prepare-volume",
         )
-        prepare_cache_proofs = []
+        log("Waiting for embedded cache page files for all prepared files")
+        prepare_cache_proofs = [
+            {
+                "path": entry["path"],
+                "proof": self.cache.wait_ready(
+                    entry,
+                    timeout_seconds=min(120, self.config.cache_proof_timeout_seconds),
+                    context="prepare cache proof",
+                ),
+            }
+            for entry in manifest["files"]
+        ]
         worker_restart_after_prepare = None
         if self.config.reset_workers_after_prepare:
-            log("Waiting for embedded cache page files before worker reset")
-            for entry in manifest["files"]:
-                prepare_cache_proofs.append(
-                    {
-                        "path": entry["path"],
-                        "proof": self.cache.wait_ready(
-                            entry,
-                            timeout_seconds=min(
-                                120, self.config.cache_proof_timeout_seconds
-                            ),
-                            context="pre-reset cache proof",
-                        ),
-                    }
-                )
             pods_to_restart = sorted(
                 {
                     proof["proof"].get("pod", "")
@@ -2349,7 +2770,7 @@ class CacheBenchmark:
         self._print_header()
         rows = [
             self._run_workload(sandbox, token, paths, workspace, entry)
-            for entry in manifest["files"]
+            for entry in manifest.get("workloads", manifest["files"])
         ]
         cleanup_after = (
             self.cache.cleanup_worker_cache()
@@ -2406,22 +2827,38 @@ class CacheBenchmark:
 
     def _build_manifest(self) -> dict[str, Any]:
         nonce = f"{datetime.now(timezone.utc).isoformat()}:{os.urandom(8).hex()}"
-        files = []
+        files_by_path: dict[str, dict[str, Any]] = {}
+        workloads = []
+        repeat_counts: defaultdict[tuple[str, str, int], int] = defaultdict(int)
         for workload in self.config.workloads:
-            files.append(
+            key = (workload.access_type, workload.pattern, workload.size_mib)
+            repeat_counts[key] += 1
+            entry = {
+                "path": workload.path,
+                "accessType": workload.access_type,
+                "pattern": workload.pattern,
+                "sizeMiB": workload.size_mib,
+                "size": workload.size_bytes,
+                "label": workload.label,
+                "sha256": self.tools.payload_sha256(
+                    nonce, workload.label, workload.size_bytes
+                ),
+            }
+            if workload.path not in files_by_path:
+                files_by_path[workload.path] = entry
+            workloads.append(
                 {
-                    "path": workload.path,
-                    "accessType": workload.access_type,
-                    "pattern": workload.pattern,
-                    "sizeMiB": workload.size_mib,
-                    "size": workload.size_bytes,
-                    "label": workload.label,
-                    "sha256": self.tools.payload_sha256(
-                        nonce, workload.label, workload.size_bytes
-                    ),
+                    **entry,
+                    "runIndex": len(workloads) + 1,
+                    "repeatIndex": repeat_counts[key],
                 }
             )
-        return {"version": 5, "nonce": nonce, "files": files}
+        return {
+            "version": 6,
+            "nonce": nonce,
+            "files": list(files_by_path.values()),
+            "workloads": workloads,
+        }
 
     def _run_workload(
         self,
@@ -2443,14 +2880,33 @@ class CacheBenchmark:
             timeout_seconds=min(120, self.config.cache_proof_timeout_seconds),
             context="workload cache proof",
         )
+        initial_ready = ready
         cache_page_eviction = {
             "ok": True,
             "skipped": True,
             "reason": "preserve embedded cache pages for hot-read measurement",
         }
+        if self.config.force_read_through_after_prepare and ready.get("ready"):
+            log(
+                f"Removing embedded cache pages for {entry['path']} to prove read-through caching"
+            )
+            cache_page_eviction = self.cache.remove_cache_pages(entry)
+            after_removal = self.cache.object_ready(entry["sha256"], entry["size"])
+            ready = {
+                "ready": False,
+                "removedForReadThrough": True,
+                "beforeEviction": initial_ready,
+                "removal": cache_page_eviction,
+                "afterRemoval": after_removal,
+            }
+            if after_removal.get("ready"):
+                raise RuntimeError(
+                    f"failed to remove embedded cache pages for read-through proof: {after_removal}"
+                )
         workspace_mount_probe = None
         workspace_mount_instance = None
         workspace_worker_pods = None
+        read_through_warmup = None
         try:
             if access_type == "workspace_fuse":
                 (
@@ -2459,15 +2915,59 @@ class CacheBenchmark:
                     workspace_worker_pods,
                 ) = self._ensure_workspace_fuse_mounted(sandbox, token, paths, entry)
 
-            mounted_eviction = self.cache.evict_mounted_file(worker_path, entry["size"])
+            if not ready.get("ready"):
+                log(
+                    f"Embedded cache proof not ready for {entry['path']}; "
+                    "running one verified read-through warmup before measuring hot cache"
+                )
+                if access_type == "workspace_fuse":
+                    warm_payload, warm_sample = self.cache.worker_hot_read(
+                        paths.worker_volume_root,
+                        entry,
+                        geesefs_path,
+                        pods=workspace_worker_pods,
+                    )
+                else:
+                    warm_payload, warm_sample = self.runner.hot_read(
+                        sandbox,
+                        token,
+                        paths.root_for_access(access_type),
+                        entry,
+                        geesefs_path,
+                    )
+                if self.config.verify_reads and warm_payload.get("digest") != entry["sha256"]:
+                    raise RuntimeError(
+                        f"read-through warmup digest mismatch for {entry['path']}: "
+                        f"expected={entry['sha256']} actual={warm_payload.get('digest')}"
+                    )
+                read_through_warmup = {
+                    "read": warm_payload,
+                    "sample": warm_sample,
+                }
+                ready = self.cache.wait_ready(
+                    entry,
+                    timeout_seconds=self.config.cache_proof_timeout_seconds,
+                    required=True,
+                    context="post-warmup cache proof",
+                )
 
             if access_type == "workspace_fuse":
+                log(f"Evicting workspace-fuse mounted file from holder worker")
+            mounted_eviction = self.cache.evict_mounted_file(
+                worker_path, entry["size"], pods=workspace_worker_pods
+            )
+            if access_type == "workspace_fuse":
+                log("Workspace-fuse mounted file eviction finished")
+
+            if access_type == "workspace_fuse":
+                log("Starting workspace-fuse worker hot read")
                 hot_payload, hot_sample = self.cache.worker_hot_read(
                     paths.worker_volume_root,
                     entry,
                     geesefs_path,
                     pods=workspace_worker_pods,
                 )
+                log("Workspace-fuse worker hot read finished")
             else:
                 hot_payload, hot_sample = self.runner.hot_read(
                     sandbox,
@@ -2480,7 +2980,9 @@ class CacheBenchmark:
             remote_object = self._remote_object_proof(workspace, paths, entry)
             worker_dd = None
             if self.config.worker_dd_reads:
-                self.cache.evict_mounted_file(worker_path, entry["size"])
+                self.cache.evict_mounted_file(
+                    worker_path, entry["size"], pods=workspace_worker_pods
+                )
                 worker_dd = self.cache.worker_dd(
                     worker_path, entry["size"], pods=workspace_worker_pods
                 )
@@ -2499,13 +3001,21 @@ class CacheBenchmark:
                 if self.config.require_remote_read
                 else None
             )
+            content_sha_ok = (
+                not self.config.verify_reads
+                or hot_payload.get("digest") == entry["sha256"]
+            )
             row = {
                 "accessType": access_type,
                 "pattern": entry["pattern"],
                 "sizeMiB": entry["sizeMiB"],
+                "runIndex": entry.get("runIndex"),
+                "repeatIndex": entry.get("repeatIndex"),
                 "path": entry["path"],
                 "hash": entry["sha256"],
                 "cacheReady": ready,
+                "initialCacheReady": initial_ready,
+                "readThroughWarmup": read_through_warmup,
                 "cachePageEviction": cache_page_eviction,
                 "casProof": cas_proof,
                 "remoteObject": remote_object,
@@ -2514,11 +3024,8 @@ class CacheBenchmark:
                 "hotRead": hot_payload,
                 "hotSample": hot_sample,
                 "readPathProof": hot_sample.get("readPathProof"),
-                "shaOK": bool(cas_proof.get("matchesHash"))
-                and (
-                    not self.config.verify_reads
-                    or hot_payload.get("digest") == entry["sha256"]
-                ),
+                "shaOK": content_sha_ok,
+                "casProofOK": bool(cas_proof.get("matchesHash")),
                 "workerDD": worker_dd,
                 "sandboxDD": sandbox_dd,
                 "sandboxDDSample": sandbox_dd_sample,
@@ -2539,12 +3046,6 @@ class CacheBenchmark:
         paths: BenchmarkPaths,
         entry: dict[str, Any],
     ) -> tuple[Any, dict[str, Any], Optional[list[dict[str, str]]]]:
-        script = (
-            "import json, os, sys\n"
-            "path = os.path.join(sys.argv[1], sys.argv[2])\n"
-            "st = os.stat(path)\n"
-            "print(json.dumps({'ok': True, 'path': path, 'size': st.st_size}))\n"
-        )
         instance = None
         sample: dict[str, Any] = {
             "label": "workspace-fuse-mount-holder",
@@ -2560,40 +3061,31 @@ class CacheBenchmark:
                 raise RuntimeError(
                     instance.error_msg or "Sandbox.create returned ok=false"
                 )
-            if self.config.wait_running:
-                sample["running"] = wait_instance_running(
-                    self.config, token, instance.container_id, started
-                )
-
-            process = instance.process.exec(
-                [
-                    "python3",
-                    "-c",
-                    script,
-                    paths.volume_container_root,
-                    entry["path"],
-                ],
-                cwd="/",
+            sample["runningSkipped"] = (
+                "workspace holder uses worker ownership probe instead of status polling"
             )
-            exit_code = process.wait(timeout=self.config.exec_timeout_seconds)
-            sample["exitCode"] = exit_code
-            sample["stdout"] = process.stdout.read()
-            sample["stderr"] = process.stderr.read()
-            if exit_code != 0:
-                raise RuntimeError(
-                    sample["stderr"]
-                    or sample["stdout"]
-                    or f"command exited {exit_code}"
-                )
 
-            payload = parse_json_output(sample["stdout"])
-            sample["ok"] = bool(payload.get("ok", True))
+            payload = {
+                "ok": True,
+                "root": paths.volume_container_root,
+                "path": str(Path(paths.volume_container_root) / entry["path"]),
+                "fileStatSkipped": True,
+                "holderExecSkipped": True,
+            }
+            sample["ok"] = True
             sample["payload"] = payload
-            pod = self.kube.worker_pod_for_container(instance.container_id)
+            log(f"Locating worker pod for workspace holder {instance.container_id}")
+            pod = self.kube.wait_worker_pod_for_container(
+                instance.container_id, timeout=30
+            )
             if pod is None:
                 raise RuntimeError(
                     f"unable to find worker pod for mounted workspace container {instance.container_id}"
                 )
+            log(
+                "Workspace holder is mounted on "
+                f"{pod['name']} for {entry['path']}"
+            )
             pods = [pod]
             sample["workerPod"] = pod
             return instance, {"payload": payload, "sample": sample}, pods
@@ -2951,6 +3443,7 @@ class CacheBenchmark:
             "sandboxCpu": self.config.sandbox_cpu,
             "sandboxMemory": self.config.sandbox_memory,
             "forceNewImage": self.config.force_new_image,
+            "forceReadThroughAfterPrepare": self.config.force_read_through_after_prepare,
         }
 
     @staticmethod

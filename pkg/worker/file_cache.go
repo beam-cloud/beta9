@@ -141,7 +141,7 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
 	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
 
-	if cm.CacheAvailable() && cm.client.IsPathCachedNearby(context.Background(), fileName) {
+	if cm.CacheAvailable() && cm.client.IsPathCachedReachable(context.Background(), fileName) {
 		return workspaceVolumePath, nil
 	}
 

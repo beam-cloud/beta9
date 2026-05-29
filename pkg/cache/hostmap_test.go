@@ -75,3 +75,14 @@ func TestHostMapSetRemovesNewHostWhenInitialAddFails(t *testing.T) {
 
 	require.Empty(t, hostMap.GetAll())
 }
+
+func TestHostMapRemoveIgnoresStaleEndpointForSameLogicalHost(t *testing.T) {
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	active := &Host{HostId: "logical-host", PrivateAddr: "10.0.0.2:2049"}
+	hostMap.Set(active)
+
+	removed := hostMap.Remove(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.1:2049"})
+
+	require.False(t, removed)
+	require.Equal(t, active.PrivateAddr, hostMap.Get("logical-host").PrivateAddr)
+}

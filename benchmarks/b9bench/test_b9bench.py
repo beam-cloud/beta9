@@ -6,7 +6,11 @@ from pathlib import Path
 
 from benchmarks.b9bench.config import resolve_run_config
 from benchmarks.b9bench.config import http_url_from_gateway
-from benchmarks.b9bench.cache_suite import CacheBenchmark, resolve_workspace_storage_config
+from benchmarks.b9bench.cache_suite import (
+    CacheBenchmark,
+    WorkloadSpec,
+    resolve_workspace_storage_config,
+)
 from benchmarks.b9bench.model import Measurement, ScenarioSpec
 from benchmarks.b9bench.payload import deterministic_payload_range, deterministic_sha256
 from benchmarks.b9bench.reports import MetricSink
@@ -34,6 +38,14 @@ class B9BenchTests(unittest.TestCase):
         self.assertEqual(suite.kind, "cache")
         self.assertIn("volume_mount:sequential:32", suite.file_plan)
         self.assertIn("workspace_fuse:sequential:32", suite.file_plan)
+
+    def test_cache_file_plan_allows_repeated_reads(self):
+        specs = WorkloadSpec.parse_plan(
+            "volume_mount:sequential:32,volume_mount:sequential:32"
+        )
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual(specs[0].path, specs[1].path)
 
     def test_staging_cache_profile_uses_stage_workspace_storage_config(self):
         root = Path(__file__).resolve().parents[2]

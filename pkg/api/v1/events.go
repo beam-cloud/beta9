@@ -187,6 +187,7 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
 	g.GET("/:workspaceId/tasks/:taskId/stream", auth.WithWorkspaceAuth(group.StreamTaskEvents))
 	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppEvents))
+	g.GET("/:workspaceId/history", auth.WithWorkspaceAuth(group.GetEventHistory))
 	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamWorkspaceEvents))
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
@@ -418,6 +419,53 @@ func (g *EventGroup) StreamAppEvents(ctx echo.Context) error {
 	defer stream.Close()
 
 	return g.writeEventStream(ctx, stream)
+}
+
+func (g *EventGroup) GetEventHistory(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := authInfoFromContext(cc)
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := eventHistoryQueryFromContext(ctx, authInfo)
+	if err != nil {
+		return err
+	}
+	if query.WorkspaceID == "" {
+		return HTTPNotFound()
+	}
+
+	if query.TaskID != "" {
+		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), query.TaskID)
+		if err != nil {
+			return HTTPInternalServerError("Failed to retrieve task")
+		}
+		if task == nil || !hasWorkspaceTaskAccess(task, authInfo, query.WorkspaceID) {
+			return HTTPNotFound()
+		}
+		query.TaskID = task.ExternalId
+		query.StubID = task.Stub.ExternalId
+		query.WorkspaceID = task.Workspace.ExternalId
+		query.AppID = task.App.ExternalId
+	}
+	if query.ContainerID != "" {
+		var err error
+		query, _, err = g.authorizeContainerEventQuery(ctx, query.ContainerID, query)
+		if err != nil {
+			return err
+		}
+	}
+
+	response, err := g.eventRepo.GetEventHistory(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event reads are not configured")
+		}
+		return HTTPInternalServerError("Failed to retrieve event history")
+	}
+
+	return ctx.JSON(http.StatusOK, response)
 }
 
 func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
@@ -707,6 +755,43 @@ func eventQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo, limit uint
 		TaskID:      ctx.QueryParam("task_id"),
 		EventTypes:  eventQueryTypesFromParam(ctx.QueryParam("event_types")),
 	}
+}
+
+func eventHistoryQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (types.EventQuery, error) {
+	limit, err := eventQueryLimit(ctx)
+	if err != nil {
+		return types.EventQuery{}, HTTPBadRequest("Invalid event limit")
+	}
+	query := types.EventQuery{
+		Limit:       limit,
+		WorkspaceID: requestedEventWorkspaceID(ctx, authInfo),
+		StubID:      ctx.QueryParam("stub_id"),
+		AppID:       ctx.QueryParam("app_id"),
+		TaskID:      ctx.QueryParam("task_id"),
+		ContainerID: ctx.QueryParam("container_id"),
+		EventTypes:  eventQueryTypesFromParam(ctx.QueryParam("event_types")),
+	}
+
+	if raw := ctx.QueryParam("start_time"); raw != "" {
+		start, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return types.EventQuery{}, HTTPBadRequest("Invalid start time")
+		}
+		start = start.UTC()
+		query.StartTime = &start
+	}
+	if raw := ctx.QueryParam("end_time"); raw != "" {
+		end, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return types.EventQuery{}, HTTPBadRequest("Invalid end time")
+		}
+		end = end.UTC()
+		query.EndTime = &end
+	}
+	if query.StartTime != nil && query.EndTime != nil && !query.EndTime.After(*query.StartTime) {
+		return types.EventQuery{}, HTTPBadRequest("Invalid event time range")
+	}
+	return query, nil
 }
 
 func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (types.EventQuery, error) {
