@@ -197,6 +197,43 @@ func TestImageID_V1_V2_Different(t *testing.T) {
 	assert.NotEqual(t, idV1, idV2, "V1 and V2 should produce different image IDs")
 }
 
+func TestImageID_ClipVersionAffectsHash(t *testing.T) {
+	optsV1 := &BuildOpts{
+		BaseImageRegistry: "docker.io",
+		BaseImageName:     "library/ubuntu",
+		BaseImageTag:      "22.04",
+		ClipVersion:       1,
+	}
+	optsV2 := *optsV1
+	optsV2.ClipVersion = 2
+
+	id1, err := getImageID(optsV1)
+	require.NoError(t, err)
+	id2, err := getImageID(&optsV2)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, id1, id2, "clip archive format changes must invalidate image IDs")
+}
+
+func TestImageID_BaseImageDigestAffectsHash(t *testing.T) {
+	optsA := &BuildOpts{
+		BaseImageRegistry: "registry.localhost:5000",
+		BaseImageName:     "beta9-runner",
+		BaseImageTag:      "py310-latest",
+		BaseImageDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ClipVersion:       2,
+	}
+	optsB := *optsA
+	optsB.BaseImageDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	idA, err := getImageID(optsA)
+	require.NoError(t, err)
+	idB, err := getImageID(&optsB)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, idA, idB, "mutable base tags must not reuse stale OCI metadata")
+}
+
 // TestImageID_Format ensures image IDs are in expected format
 func TestImageID_Format(t *testing.T) {
 	opts := &BuildOpts{

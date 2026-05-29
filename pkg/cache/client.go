@@ -790,81 +790,6 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	return length, nil
 }
 
-func (c *Client) rawReadPrefixInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
-	if len(dst) == 0 {
-		return 0, nil
-	}
-	if host == nil || !c.clientConfig.ReadTransport.Enabled {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, ErrUnableToReachHost
-	}
-	addr := host.Addr
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
-	if addr == "" {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, ErrUnableToReachHost
-	}
-
-	c.mu.Lock()
-	pool := c.rawReadPools[host.HostId]
-	if pool == nil {
-		pool = newRawReadConnPool(addr, c.clientConfig.ReadTransport.MaxActiveConnsPerHost, c.clientConfig.ReadTransport.MaxIdleConnsPerHost)
-		c.rawReadPools[host.HostId] = pool
-	}
-	c.mu.Unlock()
-
-	conn, err := pool.get(ctx.Done())
-	if err != nil {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
-	}
-	reusable := false
-	defer func() {
-		if reusable {
-			pool.put(conn)
-		} else {
-			_ = conn.Close()
-			pool.release()
-		}
-	}()
-
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-		defer conn.SetDeadline(time.Time{})
-	}
-
-	length := int64(len(dst))
-	if err := writeRawReadRequest(conn, hash, offset, length); err != nil {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
-	}
-	status, responseLength, err := readRawReadResponseHeader(conn)
-	if err != nil {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
-	}
-	if status == rawReadStatusMiss {
-		cacheReadRawFallbackTotal.Inc()
-		atomic.AddInt64(&cachePathStats.clientRawMisses, 1)
-		reusable = true
-		return 0, ErrContentNotFound
-	}
-	if status != rawReadStatusOK || responseLength <= 0 || responseLength > length {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, ErrUnableToReachHost
-	}
-	if _, err := io.ReadFull(conn, dst[:responseLength]); err != nil {
-		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
-	}
-	cacheReadRawTransportTotal.Inc()
-	atomic.AddInt64(&cachePathStats.clientRawHits, 1)
-	reusable = true
-	return responseLength, nil
-}
-
 func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
 	if len(dst) == 0 {
 		return 0, nil
@@ -1075,7 +1000,7 @@ func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offse
 		}
 	}
 
-	return c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length)
+	return nil, false
 }
 
 func (c *Client) clientLocalPageFileViewsFromAttachedStores(hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
@@ -1110,81 +1035,6 @@ func clientLocalPageFileViewsFromStore(store *Store, hash string, offset int64, 
 		readLength := int64(n)
 		currentOffset += readLength
 		remaining -= readLength
-	}
-	return views, true
-}
-
-func (c *Client) promoteRemotePageRegionsToClientLocalPageFiles(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
-	if host == nil || hash == "" || offset < 0 || length <= 0 || !c.clientConfig.ReadTransport.Enabled {
-		return nil, false
-	}
-
-	var store *Store
-	for _, localStore := range c.localStoresSnapshot() {
-		store = localStore
-		break
-	}
-	if store == nil || store.serverConfig.PageSizeBytes <= 0 {
-		return nil, false
-	}
-
-	pageSize := store.serverConfig.PageSizeBytes
-	pageStart := offset - offset%pageSize
-	requestEnd := offset + length
-	if requestEnd <= offset {
-		return nil, false
-	}
-	promoteEnd := requestEnd
-	if rem := promoteEnd % pageSize; rem != 0 {
-		promoteEnd += pageSize - rem
-	}
-
-	promoteLength := promoteEnd - pageStart
-	if maxBytes := c.clientConfig.Prefetch.AheadBytes; maxBytes > 0 && length > maxBytes {
-		return nil, false
-	}
-	if promoteLength > int64(int(^uint(0)>>1)) {
-		return nil, false
-	}
-	releasePromotion := func() {}
-	if c.localPromotionSem != nil {
-		select {
-		case c.localPromotionSem <- struct{}{}:
-			releasePromotion = func() { <-c.localPromotionSem }
-		default:
-			return nil, false
-		}
-	}
-	defer releasePromotion()
-
-	started := time.Now()
-	buf := make([]byte, int(promoteLength))
-	ctx, cancel := context.WithTimeout(c.ctx, getContentRequestTimeout)
-	defer cancel()
-
-	n, err := c.rawReadIntoWindowed(ctx, host, hash, pageStart, buf)
-	if err == nil && n == promoteLength {
-		store.PutFullPages(hash, pageStart, buf)
-	} else {
-		n, err = c.rawReadPrefixInto(ctx, host, hash, pageStart, buf)
-		if err != nil || n <= 0 {
-			if err != nil && err != ErrContentNotFound {
-				Logger.Debugf("cache remote page-region raw promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
-			}
-			return nil, false
-		}
-		store.PutPageRange(hash, pageStart, buf[:n])
-	}
-
-	views, ok := clientLocalPageFileViewsFromStore(store, hash, offset, length)
-	if !ok {
-		return nil, false
-	}
-	cacheReadClientLocalPageFileTotal.Inc()
-	atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
-	atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		Logger.Debugf("cache remote page-region raw promotion result: host=%s hash=%s offset=%d length=%d promoted=%d client_local_page_file_views=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(views), elapsed.Truncate(time.Millisecond))
 	}
 	return views, true
 }
@@ -1706,6 +1556,29 @@ func (c *Client) storeContentWithLocalReplica(ctx context.Context, localStore *S
 
 func (c *Client) storeReplicaHost(routingKey string) (*Host, error) {
 	localHostIDs := c.localHostIDsSnapshot()
+	host, foundRemote, err := c.storeReplicaHostFromSnapshot(routingKey, localHostIDs)
+	if err == nil && foundRemote {
+		return host, nil
+	}
+
+	// A worker can start storing image/volume content before the asynchronous
+	// discovery loop has observed all cache hosts in the locality. Refresh once
+	// before accepting a local-only replica choice so short-lived workloads do
+	// not lose cache reuse after worker churn.
+	if !foundRemote {
+		_ = c.refreshRoutableHosts(c.ctx)
+		if refreshedHost, refreshedRemote, refreshedErr := c.storeReplicaHostFromSnapshot(routingKey, localHostIDs); refreshedErr == nil && (refreshedRemote || host == nil) {
+			return refreshedHost, nil
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return host, nil
+}
+
+func (c *Client) storeReplicaHostFromSnapshot(routingKey string, localHostIDs map[string]struct{}) (*Host, bool, error) {
 	hostCount := c.clientConfig.NTopHosts
 	if c.hostMap != nil {
 		hostCount = max(hostCount, len(c.hostMap.GetAll()))
@@ -1718,12 +1591,12 @@ func (c *Client) storeReplicaHost(routingKey string) (*Host, error) {
 	hosts := c.hasher.GetN(hostCount, routingKey)
 	c.mu.RUnlock()
 	if len(hosts) == 0 {
-		return nil, ErrHostNotFound
+		return nil, false, ErrHostNotFound
 	}
 
 	primary := hosts[0]
 	if _, isLocal := localHostIDs[primary.HostId]; !isLocal {
-		return primary, nil
+		return primary, true, nil
 	}
 
 	for _, host := range hosts[1:] {
@@ -1731,11 +1604,11 @@ func (c *Client) storeReplicaHost(routingKey string) (*Host, error) {
 			continue
 		}
 		if _, isLocal := localHostIDs[host.HostId]; !isLocal {
-			return host, nil
+			return host, true, nil
 		}
 	}
 
-	return primary, nil
+	return primary, false, nil
 }
 
 func (c *Client) localHostIDsSnapshot() map[string]struct{} {

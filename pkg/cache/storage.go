@@ -832,6 +832,9 @@ func (cas *Store) PageRegion(hash string, offset int64, length int64) (path stri
 		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, nil
 	}
+	if cas.prefetcher != nil {
+		cas.prefetcher.OnRead(hash, offset, readLength)
+	}
 	atomic.AddInt64(&cachePathStats.storePageRegionHits, 1)
 	atomic.AddInt64(&cachePathStats.storePageRegionBytes, readLength)
 	return pagePath, pageOffset, int(readLength), true, nil

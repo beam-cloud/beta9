@@ -10,14 +10,19 @@ defaults:
   require_direct_cache_disk_probe: true
   worker_dd_reads: true
   sandbox_dd_reads: true
-  sandbox_cpu: "4"
-  sandbox_memory: "8192"
+  # Sized to fit a warm default worker (2500m CPU / 8Gi). The scheduler reserves
+  # request*1.25 memory, so 4096Mi -> 5120Mi reserved, well under 8Gi. Reads
+  # stream in 4MiB chunks (see cache_tools/read_file.py), so the sandbox never
+  # holds a whole file; 4Gi is generous headroom and avoids forcing the
+  # scheduler to provision a new oversized worker on demand.
+  sandbox_cpu: "2"
+  sandbox_memory: "4096"
   cleanup_cache_before_run: true
   cleanup_cache_after_run: true
   reset_workers: false
   reset_workers_after_prepare: true
   remote_cache_proof_chunk_bytes: 4194304
-  remote_cache_proof_concurrency: 16
+  remote_cache_proof_concurrency: 2
   min_hot_file_read_mbps: 2000
   min_remote_cache_socket_mbps: 2000
   min_throughput_size_mb: 1024

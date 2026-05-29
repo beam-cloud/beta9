@@ -19,10 +19,12 @@ func getImageID(opts *BuildOpts) (string, error) {
 	// Base the image ID primarily on the Dockerfile content and build context
 	if opts.ClipVersion == uint32(types.ClipVersion2) && opts.Dockerfile != "" {
 		hashInput := struct {
+			ClipVersion    uint32
 			Dockerfile     string
 			BuildCtxObject string
 			EnvVars        []string
 		}{
+			ClipVersion:    opts.ClipVersion,
 			Dockerfile:     opts.Dockerfile,
 			BuildCtxObject: opts.BuildCtxObject,
 			EnvVars:        opts.EnvVars,
@@ -39,6 +41,7 @@ func getImageID(opts *BuildOpts) (string, error) {
 	// For V1 builds and V2 builds without Dockerfiles, hash all build options
 	// Order matters for consistency, so we use a struct with defined field order
 	hashInput := struct {
+		ClipVersion       uint32
 		BaseImageName     string
 		BaseImageTag      string
 		BaseImageDigest   string
@@ -52,6 +55,7 @@ func getImageID(opts *BuildOpts) (string, error) {
 		Dockerfile        string
 		BuildCtxObject    string
 	}{
+		ClipVersion:       opts.ClipVersion,
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
 		BaseImageDigest:   opts.BaseImageDigest,
