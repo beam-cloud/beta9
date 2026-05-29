@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,7 +110,7 @@ func TestReadContentIntoFallsBackToReachableReplicaOutsideTopHosts(t *testing.T)
 	require.Len(t, regions, 2)
 }
 
-func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
+func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
@@ -124,7 +126,7 @@ func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
 	client.AttachLocalServer(&Server{cas: store})
@@ -157,7 +159,7 @@ func TestContentReadHotPathDoesNotUseCacheFSMetadata(t *testing.T) {
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
-	client.AttachLocalStore(store)
+	client.AttachLocalServer(&Server{cas: store})
 
 	dst := make([]byte, len(content))
 	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{RoutingKey: "/images/test.clip"})
@@ -198,7 +200,7 @@ func TestClientLocalPageFileViewsReturnsSelectedClientLocalPageFiles(t *testing.
 	require.FileExists(t, regions[1].Path)
 }
 
-func TestClientLocalPageFileViewsPrefersAttachedLocalReplica(t *testing.T) {
+func TestClientLocalPageFileViewsUsesSelectedLocalServer(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("abcdefghijkl")
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
@@ -212,7 +214,7 @@ func TestClientLocalPageFileViewsPrefersAttachedLocalReplica(t *testing.T) {
 		localServers:   make(map[string]*Server),
 		rawReadPools:   make(map[string]*rawReadConnPool),
 		localHostCache: make(map[string]*localClientCache),
-		hasher:         &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+		hasher:         &orderedTestHasher{hosts: []*Host{localHost}},
 	}
 	client.AttachLocalServer(&Server{cas: store})
 
@@ -297,8 +299,32 @@ func TestStoreContentFromLocalFileUsesMatchingCacheMetadata(t *testing.T) {
 	info, err := os.Stat(sourcePath)
 	require.NoError(t, err)
 
-	store := newTestStore(t, 5)
-	hash, _, err := store.AddReader(ctx, bytes.NewReader(content))
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        5,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 4 * 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	hash, _, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
 	require.NoError(t, err)
 
 	cachePath := "/workspace/source.txt"
@@ -315,19 +341,18 @@ func TestStoreContentFromLocalFileUsesMatchingCacheMetadata(t *testing.T) {
 		ctx:                   ctx,
 		locality:              "test",
 		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
-		globalConfig:          GlobalConfig{GRPCMessageSizeBytes: 4 * 1024 * 1024},
+		globalConfig:          cfg.Global,
 		metadataStore:         metadataStore,
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		localPromotionSem:     make(chan struct{}, 1),
-		hasher:                &orderedTestHasher{},
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
+	require.NoError(t, client.addHost(remoteHost))
 	defer client.Cleanup()
-	client.AttachLocalStore(store)
 
 	got, err := client.StoreContentFromLocalFile(LocalContentSource{
 		Path:      sourcePath,
@@ -348,31 +373,54 @@ func TestStoreContentFromLocalFileWaitsForLockedHashAlreadyPublished(t *testing.
 	sourcePath := filepath.Join(t.TempDir(), "source.txt")
 	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
 
-	store := newTestStore(t, 5)
-	hash, _, err := store.AddReader(ctx, bytes.NewReader(content))
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        5,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 4 * 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	hash, _, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
 	require.NoError(t, err)
 
 	cachePath := "/workspace/source.txt"
 	metadataStore := NewMockCacheMetadataStore()
-	require.NoError(t, metadataStore.SetStoreFromContentLock(ctx, "test", cachePath))
+	require.NoError(t, metadataStore.SetStoreFromContentLock(ctx, "test", storeContentHashLockKey(hash)))
 
 	client := &Client{
 		ctx:                   ctx,
 		locality:              "test",
 		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
-		globalConfig:          GlobalConfig{GRPCMessageSizeBytes: 4 * 1024 * 1024},
+		globalConfig:          cfg.Global,
 		metadataStore:         metadataStore,
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		localPromotionSem:     make(chan struct{}, 1),
-		hasher:                &orderedTestHasher{},
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
+	require.NoError(t, client.addHost(remoteHost))
 	defer client.Cleanup()
-	client.AttachLocalStore(store)
 
 	got, err := client.StoreContentFromLocalFile(LocalContentSource{
 		Path:      sourcePath,
@@ -385,7 +433,163 @@ func TestStoreContentFromLocalFileWaitsForLockedHashAlreadyPublished(t *testing.
 	require.Equal(t, hash, got)
 }
 
-func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
+func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	metadataStore := NewMockCacheMetadataStore()
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	content := []byte("cache-through-local-file")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	sourcePath := filepath.Join(t.TempDir(), "source.bin")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+	cachePath := "/workspace/source.bin"
+
+	got, err := client.StoreContentFromLocalFile(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: cachePath,
+	}, StoreContentOptions{
+		RoutingKey: expectedHash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.Empty(t, metadataStore.locks)
+
+	require.Eventually(t, func() bool {
+		remote := make([]byte, len(content))
+		n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
+		return err == nil && n == int64(len(content)) && bytes.Equal(content, remote)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.T) {
+	ctx := context.Background()
+	firstHost := &Host{HostId: "first-host"}
+	secondHost := &Host{HostId: "second-host"}
+	firstStream := &fakeStoreContentStream{failOnSend: true}
+	secondStream := &fakeStoreContentStream{}
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           map[string]proto.CacheClient{"first-host": &fakeStoreCacheClient{stream: firstStream}, "second-host": &fakeStoreCacheClient{stream: secondStream}},
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{firstHost, secondHost}},
+		maxGetContentAttempts: 2,
+	}
+
+	content := bytes.Repeat([]byte("x"), writeBufferSizeBytes+17)
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.NotEmpty(t, firstStream.sent.Bytes())
+	require.Equal(t, content, secondStream.sent.Bytes())
+}
+
+type fakeStoreCacheClient struct {
+	stream proto.Cache_StoreContentClient
+}
+
+func (f *fakeStoreCacheClient) GetContent(ctx context.Context, in *proto.CacheGetContentRequest, opts ...grpc.CallOption) (*proto.CacheGetContentResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) HasContent(ctx context.Context, in *proto.CacheHasContentRequest, opts ...grpc.CallOption) (*proto.CacheHasContentResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) GetContentStream(ctx context.Context, in *proto.CacheGetContentRequest, opts ...grpc.CallOption) (proto.Cache_GetContentStreamClient, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) StoreContent(ctx context.Context, opts ...grpc.CallOption) (proto.Cache_StoreContentClient, error) {
+	return f.stream, nil
+}
+
+func (f *fakeStoreCacheClient) StoreContentFromSource(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) StoreContentFromSourceWithLock(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) GetState(ctx context.Context, in *proto.CacheGetStateRequest, opts ...grpc.CallOption) (*proto.CacheGetStateResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+type fakeStoreContentStream struct {
+	grpc.ClientStream
+	failOnSend bool
+	sent       bytes.Buffer
+}
+
+func (s *fakeStoreContentStream) Send(req *proto.CacheStoreContentRequest) error {
+	if len(req.GetContent()) > 0 {
+		_, _ = s.sent.Write(req.GetContent())
+	}
+	if s.failOnSend {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (s *fakeStoreContentStream) CloseAndRecv() (*proto.CacheStoreContentResponse, error) {
+	sum := sha256.Sum256(s.sent.Bytes())
+	return &proto.CacheStoreContentResponse{
+		Ok:   true,
+		Hash: hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+func TestStoreContentUsesSelectedRemoteHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -412,7 +616,6 @@ func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
 	remoteHost.Addr = addr
 	remoteHost.PrivateAddr = addr
 
-	localStore := newTestStore(t, 4)
 	client := &Client{
 		ctx:                   ctx,
 		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
@@ -427,9 +630,8 @@ func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
 	}
 	require.NoError(t, client.addHost(remoteHost))
 	defer client.Cleanup()
-	client.AttachLocalStore(localStore)
 
-	content := []byte("cache-through-local-replica")
+	content := []byte("cache-through-selected-remote")
 	sum := sha256.Sum256(content)
 	expectedHash := hex.EncodeToString(sum[:])
 	chunks := make(chan []byte, 2)
@@ -437,24 +639,167 @@ func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
 	chunks <- content[9:]
 	close(chunks)
 
-	got, err := client.StoreContentWithLocalReplica(chunks, expectedHash, StoreContentOptions{RoutingKey: "/cache/object"})
+	got, err := client.StoreContent(chunks, expectedHash, struct{ RoutingKey string }{RoutingKey: "/cache/object"})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
 
-	remote := make([]byte, len(content))
-	n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), n)
-	require.Equal(t, content, remote)
-
-	local := make([]byte, len(content))
-	n, err = localStore.ReadAt(expectedHash, 0, local)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), n)
-	require.Equal(t, content, local)
+	require.Eventually(t, func() bool {
+		remote := make([]byte, len(content))
+		n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
+		return err == nil && n == int64(len(content)) && bytes.Equal(content, remote)
+	}, time.Second, 10*time.Millisecond)
 }
 
-func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testing.T) {
+func TestStoreContentDoesNotSilentlyFallbackToLocalWhenSelectedHostUnavailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	remoteHost := &Host{HostId: "remote-host", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	defer client.Cleanup()
+
+	content := []byte("local-cache-through-survives-remote-failure")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	chunks := make(chan []byte, 3)
+	chunks <- content[:10]
+	chunks <- content[10:25]
+	chunks <- content[25:]
+	close(chunks)
+
+	_, err := client.StoreContent(chunks, expectedHash, struct{ RoutingKey string }{RoutingKey: expectedHash})
+	require.Error(t, err)
+}
+
+func TestStoreContentStreamWritesSelectedRemoteHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		metadataStore:         NewMockCacheMetadataStore(),
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	content := []byte("stream-cache-through-selected-remote")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	chunks := make(chan []byte, 1)
+	chunks <- content
+	close(chunks)
+
+	got, err := client.StoreContent(chunks, expectedHash, struct{ RoutingKey string }{RoutingKey: expectedHash})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+
+	require.Eventually(t, func() bool {
+		remote := make([]byte, len(content))
+		n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
+		return err == nil && n == int64(len(content)) && bytes.Equal(content, remote)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestStoreContentFromS3SourceWaitsForLockedHashAlreadyPublished(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	metadataStore := NewMockCacheMetadataStore()
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(metadataStore), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	content := []byte("published by source cache writer")
+	hash, _, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.NoError(t, metadataStore.SetStoreFromContentLock(ctx, "test", storeContentHashLockKey(hash)))
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	got, err := client.StoreContentFromS3Source(S3ContentSource{Path: "objects/source.bin"}, StoreContentOptions{RoutingKey: hash, Lock: true})
+	require.NoError(t, err)
+	require.Equal(t, hash, got)
+}
+
+func TestStoreContentUsesSelectedLocalLogicalHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -472,9 +817,13 @@ func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testin
 	}
 	localServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("local-host"))
 	require.NoError(t, err)
+	localAddr, err := localServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
 
-	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
 	require.NoError(t, err)
 	addr, err := remoteServer.Serve("127.0.0.1:0", "")
 	require.NoError(t, err)
@@ -487,6 +836,8 @@ func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testin
 
 	localHost := localServer.Host()
 	require.NotNil(t, localHost)
+	localHost.Addr = localAddr
+	localHost.PrivateAddr = localAddr
 
 	client := &Client{
 		ctx:                   ctx,
@@ -500,10 +851,10 @@ func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testin
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost, remoteHost}},
 		maxGetContentAttempts: 1,
 	}
+	require.NoError(t, client.addHost(localHost))
 	require.NoError(t, client.addHost(remoteHost))
 	defer client.Cleanup()
 	client.AttachLocalServer(localServer)
-	client.AttachLocalStore(localServer.cas)
 
 	content := []byte("cache-through-local-primary")
 	sum := sha256.Sum256(content)
@@ -513,21 +864,16 @@ func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testin
 	chunks <- content[11:]
 	close(chunks)
 
-	got, err := client.StoreContentWithLocalReplica(chunks, expectedHash, StoreContentOptions{RoutingKey: "/cache/local-primary"})
+	got, err := client.StoreContent(chunks, expectedHash, struct{ RoutingKey string }{RoutingKey: "/cache/local-primary"})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
 
-	remote := make([]byte, len(content))
-	n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), n)
-	require.Equal(t, content, remote)
-
 	local := make([]byte, len(content))
-	n, err = localServer.cas.ReadAt(expectedHash, 0, local)
+	n, err := localServer.cas.ReadAt(expectedHash, 0, local)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, local)
+	require.False(t, remoteServer.cas.Exists(expectedHash))
 
 	postChurnClient := &Client{
 		ctx:                   ctx,
@@ -538,10 +884,11 @@ func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testin
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
-	require.NoError(t, postChurnClient.addHost(remoteHost))
+	require.NoError(t, postChurnClient.addHost(localHost))
+	postChurnClient.AttachLocalServer(localServer)
 	defer postChurnClient.Cleanup()
 
 	afterLocalChurn := make([]byte, len(content))
@@ -635,6 +982,21 @@ func TestReadContentIntoSurvivesLogicalHostRegistrationReplacement(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, afterReplacement)
+}
+
+func TestStoreContentSourceLockKeyUsesExpectedHash(t *testing.T) {
+	source := &proto.CacheSource{
+		Path:         "objects/path",
+		CachePath:    "cache/path",
+		ExpectedHash: strings.Repeat("a", sha256.Size*2),
+	}
+	require.Equal(t, storeContentHashLockKey(source.ExpectedHash), storeContentSourceLockKey(source))
+
+	source.ExpectedHash = ""
+	require.Equal(t, "/cache/path", storeContentSourceLockKey(source))
+
+	source.CachePath = ""
+	require.Equal(t, "objects/path", storeContentSourceLockKey(source))
 }
 
 type failFirstUnlockRegistry struct {

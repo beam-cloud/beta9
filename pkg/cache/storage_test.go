@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,6 +152,114 @@ func TestStoreAddReaderStoresEmptyContent(t *testing.T) {
 	n, err := store.Get(hash, 0, 0, nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), n)
+}
+
+func TestStoreAddReaderWithExpectedHashPublishesPagesAfterValidation(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("firstsecondtail")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	reader, writer := io.Pipe()
+	type result struct {
+		hash string
+		size int64
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		hash, size, err := store.AddReaderWithExpectedHash(context.Background(), reader, expectedHash)
+		done <- result{hash: hash, size: size, err: err}
+	}()
+
+	_, err := writer.Write(content[:5])
+	require.NoError(t, err)
+
+	_, _, _, ok, err := store.PageRegion(expectedHash, 0, 5)
+	require.False(t, ok)
+	require.Error(t, err)
+
+	_, err = writer.Write(content[5:])
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	res := <-done
+	require.NoError(t, res.err)
+	require.Equal(t, expectedHash, res.hash)
+	require.Equal(t, int64(len(content)), res.size)
+
+	dst := make([]byte, 5)
+	n, err := store.ReadAt(expectedHash, 0, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), n)
+	require.Equal(t, content[:5], dst)
+}
+
+func TestStoreAddReaderWithExpectedHashRemovesNewPagesOnMismatch(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("this does not match the supplied hash")
+	wrongHash := strings.Repeat("0", sha256.Size*2)
+
+	hash, size, err := store.AddReaderWithExpectedHash(context.Background(), bytes.NewReader(content), wrongHash)
+	require.Error(t, err)
+	require.NotEqual(t, wrongHash, hash)
+	require.Equal(t, int64(len(content)), size)
+
+	_, _, _, ok, pageErr := store.PageRegion(wrongHash, 0, 5)
+	require.False(t, ok)
+	require.Error(t, pageErr)
+}
+
+func TestStoreAddPageSourceWithExpectedHashInstallsPagesOutOfOrder(t *testing.T) {
+	store := newTestStore(t, 4)
+	content := []byte("abcdefghijklmnopqr")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	requested := make(chan int64, 8)
+
+	hash, size, err := store.AddPageSourceWithExpectedHash(context.Background(), expectedHash, int64(len(content)), 3, func(_ context.Context, pageIdx, start, length int64) ([]byte, error) {
+		requested <- pageIdx
+		chunk := make([]byte, int(length))
+		copy(chunk, content[start:start+length])
+		return chunk, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, hash)
+	require.Equal(t, int64(len(content)), size)
+	require.NotEmpty(t, requested)
+
+	for offset := int64(0); offset < int64(len(content)); offset += 4 {
+		_, pageOffset, n, ok, err := store.PageRegion(expectedHash, offset, 4)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, int64(0), pageOffset)
+		require.Positive(t, n)
+	}
+
+	dst := make([]byte, len(content))
+	n, err := store.ReadAt(expectedHash, 0, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestStoreAddPageSourceWithExpectedHashCleansUpOnMismatch(t *testing.T) {
+	store := newTestStore(t, 4)
+	content := []byte("bad hash content")
+	wrongHash := strings.Repeat("1", sha256.Size*2)
+
+	hash, size, err := store.AddPageSourceWithExpectedHash(context.Background(), wrongHash, int64(len(content)), 2, func(_ context.Context, _ int64, start, length int64) ([]byte, error) {
+		chunk := make([]byte, int(length))
+		copy(chunk, content[start:start+length])
+		return chunk, nil
+	})
+	require.Error(t, err)
+	require.NotEqual(t, wrongHash, hash)
+	require.Equal(t, int64(len(content)), size)
+
+	_, _, _, ok, pageErr := store.PageRegion(wrongHash, 0, 4)
+	require.False(t, ok)
+	require.Error(t, pageErr)
 }
 
 func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {

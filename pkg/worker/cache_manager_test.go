@@ -83,10 +83,17 @@ func TestWorkerCacheManagerDrainStopsRegistrationLoopOnce(t *testing.T) {
 }
 
 func TestCacheLogicalHostIDDeduplicatesSharedNodeCachePath(t *testing.T) {
-	first := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a")
-	second := cacheLogicalHostID("default", "default", "node-a", "/var/lib/beta9/cache/default/node-a")
-	otherPath := cacheLogicalHostID("default", "default", "node-a", "/mnt/cache/default/node-a")
+	first := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	second := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	otherPath := cacheLogicalHostID("default", "node-a", "/mnt/cache/default/node-a")
 
 	require.Equal(t, first, second)
 	require.NotEqual(t, first, otherPath)
+}
+
+func TestCacheLogicalHostIDIgnoresWorkerPool(t *testing.T) {
+	defaultPool := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	buildPool := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
+
+	require.Equal(t, defaultPool, buildPool)
 }

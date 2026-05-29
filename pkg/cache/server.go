@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	writeBufferSizeBytes      int   = 128 * 1024
+	writeBufferSizeBytes      int   = 1024 * 1024
 	getContentStreamChunkSize int64 = 4 * 1024 * 1024 // 4MB
 )
 
@@ -499,6 +499,22 @@ func (cs *Server) storeReader(ctx context.Context, reader io.Reader) (string, ui
 	return hash, uint64(size), nil
 }
 
+func (cs *Server) storeReaderWithExpectedHash(ctx context.Context, reader io.Reader, expectedHash string) (string, uint64, error) {
+	if !isContentHash(expectedHash) {
+		return cs.storeReader(ctx, reader)
+	}
+
+	Logger.Debugf("Store[ACK] - [expected_hash=%s]", expectedHash)
+	hash, size, err := cs.cas.AddReaderWithExpectedHash(ctx, reader, expectedHash)
+	if err != nil {
+		Logger.Warnf("Store[ERR] - [expected_hash=%s actual=%s] - %v", expectedHash, hash, err)
+		return "", 0, status.Errorf(codes.Internal, "Failed to add content: %v", err)
+	}
+
+	Logger.Debugf("Store[OK] - [%s] (%d bytes)", hash, size)
+	return hash, uint64(size), nil
+}
+
 func (cs *Server) StoreContentInCacheFS(ctx context.Context, path string, hash string, size uint64) error {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
@@ -823,14 +839,24 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
 	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
+	if req.Source.CachePath == "" && isContentHash(req.Source.ExpectedHash) && cs.cas.Exists(req.Source.ExpectedHash) {
+		Logger.Debugf("StoreFromContent[EXISTS] - [%s]", req.Source.ExpectedHash)
+		return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: req.Source.ExpectedHash}, nil
+	}
 
-	var reader io.ReadCloser
-	var err error
+	var (
+		hash string
+		size uint64
+		err  error
+	)
 	if req.Source.BucketName == "" {
+		var reader io.ReadCloser
 		reader, err = cs.openLocalSource(localPath)
 		if err != nil {
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
 		}
+		defer reader.Close()
+		hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
 	} else {
 		s3Client, err := cs.s3ClientForSource(req.Source)
 		if err != nil {
@@ -838,16 +864,20 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
 		}
 
-		reader, err = s3Client.Open(ctx, req.Source.Path)
-		if err != nil {
-			Logger.Errorf("StoreFromContent[ERR] - error opening source: %v", err)
-			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
+		if req.Source.ExpectedHash != "" {
+			hash, size, err = cs.storeS3SourceWithExpectedHash(ctx, s3Client, req.Source.Path, req.Source.ExpectedHash)
+		} else {
+			var reader io.ReadCloser
+			reader, err = s3Client.Open(ctx, req.Source.Path)
+			if err != nil {
+				Logger.Errorf("StoreFromContent[ERR] - error opening source: %v", err)
+				return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
+			}
+			defer reader.Close()
+			hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
 		}
 	}
-	defer reader.Close()
 
-	// Store the content
-	hash, size, err := cs.storeReader(ctx, reader)
 	if err != nil {
 		Logger.Warnf("StoreFromContent[ERR] - error storing data in cache: %v", err)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -885,6 +915,26 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: hash}, nil
 }
 
+func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S3Client, path string, expectedHash string) (string, uint64, error) {
+	ok, head, err := s3Client.Head(ctx, path)
+	if err != nil {
+		return "", 0, err
+	}
+	if !ok || head == nil || head.ContentLength == nil {
+		return "", 0, fmt.Errorf("unable to resolve source size for %s", path)
+	}
+	size := *head.ContentLength
+	if size < 0 {
+		return "", 0, fmt.Errorf("invalid source size for %s: %d", path, size)
+	}
+
+	concurrency := int(s3Client.DownloadConcurrency)
+	hash, storedSize, err := cs.cas.AddPageSourceWithExpectedHash(ctx, expectedHash, size, concurrency, func(ctx context.Context, _ int64, start int64, length int64) ([]byte, error) {
+		return s3Client.ReadRange(ctx, path, start, length)
+	})
+	return hash, uint64(storedSize), err
+}
+
 func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
 	if err := cs.rejectIfDraining(); err != nil {
 		return nil, err
@@ -894,13 +944,14 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 	}
 
 	started := time.Now()
-	sourcePath := req.Source.Path
+	sourcePath := storeContentSourceLockKey(req.Source)
+	logSourcePath := req.Source.Path
 	if req.Source.CachePath != "" {
-		sourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
+		logSourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
 	Logger.Debugf("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
 	if err := cs.metadataStore.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
-		Logger.Debugf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
+		Logger.Debugf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s lock=%s elapsed=%s err=%v]", logSourcePath, sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}
 	lockReleased := false
@@ -938,7 +989,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		if storeContentFromSourceResp != nil {
 			errorMsg = storeContentFromSourceResp.ErrorMsg
 		}
-		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%s]", sourcePath, time.Since(started).Truncate(time.Millisecond), errorMsg)
+		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s lock=%s elapsed=%s err=%s]", logSourcePath, sourcePath, time.Since(started).Truncate(time.Millisecond), errorMsg)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
 	}
 
@@ -947,4 +998,17 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 
 	Logger.Debugf("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))
 	return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: storeContentFromSourceResp.Hash, Ok: true}, nil
+}
+
+func storeContentSourceLockKey(source *proto.CacheSource) string {
+	if source == nil {
+		return ""
+	}
+	if isContentHash(source.ExpectedHash) {
+		return storeContentHashLockKey(source.ExpectedHash)
+	}
+	if source.CachePath != "" {
+		return filepath.Join("/", filepath.Clean(source.CachePath))
+	}
+	return source.Path
 }

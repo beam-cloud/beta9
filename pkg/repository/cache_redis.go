@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -64,7 +65,38 @@ func (r *CacheRedisRepository) SetActiveCacheRegistration(ctx context.Context, l
 }
 
 func (r *CacheRedisRepository) ListCacheLogicalHosts(ctx context.Context, poolName, locality string) ([]string, error) {
+	if poolName == "" {
+		return r.listCacheLogicalHostsForLocality(ctx, locality)
+	}
 	return r.rdb.SMembers(ctx, cacheCoordinatorIndexKey(poolName, locality)).Result()
+}
+
+func (r *CacheRedisRepository) listCacheLogicalHostsForLocality(ctx context.Context, locality string) ([]string, error) {
+	pattern := cacheCoordinatorIndexKey("*", locality)
+	keys, err := r.rdb.Scan(ctx, pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]struct{}{}
+	for _, key := range keys {
+		ids, err := r.rdb.SMembers(ctx, key).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			if id != "" {
+				seen[id] = struct{}{}
+			}
+		}
+	}
+
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }
 
 func (r *CacheRedisRepository) ListCacheRegistrations(ctx context.Context, logicalHostID string) ([]string, error) {

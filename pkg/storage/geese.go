@@ -69,7 +69,7 @@ func (c *geeseContentCache) GetContentStream(hash string, offset int64, length i
 }
 
 func (c *geeseContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {
-	return c.client.StoreContentWithLocalReplica(chunks, hash, cache.StoreContentOptions{RoutingKey: opts.RoutingKey})
+	return c.client.StoreContent(chunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
 }
 
 func (c *geeseContentCache) StoreContentFromS3(source struct {
@@ -97,7 +97,13 @@ func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
 	RoutingKey string
 	Lock       bool
 }) (string, error) {
-	return c.client.StoreContentFromLocalPath(source, opts)
+	return c.client.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      source.Path,
+		CachePath: source.CachePath,
+	}, cache.StoreContentOptions{
+		RoutingKey: opts.RoutingKey,
+		Lock:       opts.Lock,
+	})
 }
 
 func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]cfg.ClientLocalPageFileView, error) {

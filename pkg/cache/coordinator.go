@@ -99,8 +99,8 @@ func (c *Coordinator) ListHosts(ctx context.Context, poolName, locality string) 
 	if c == nil || c.repository == nil {
 		return nil, ErrCoordinatorUnavailable
 	}
-	if poolName == "" || locality == "" {
-		return nil, fmt.Errorf("%w: pool and locality are required", ErrInvalidHostRegistration)
+	if locality == "" {
+		return nil, fmt.Errorf("%w: locality is required", ErrInvalidHostRegistration)
 	}
 
 	logicalHostIDs, err := c.repository.ListCacheLogicalHosts(ctx, poolName, locality)
@@ -139,6 +139,12 @@ func (c *Coordinator) logicalHosts(ctx context.Context, poolName, locality, logi
 		}
 		if !ok {
 			_ = c.repository.RemoveCacheRegistration(ctx, logicalHostID, registrationID)
+			continue
+		}
+		if host.Locality != locality {
+			continue
+		}
+		if poolName != "" && host.PoolName != poolName {
 			continue
 		}
 

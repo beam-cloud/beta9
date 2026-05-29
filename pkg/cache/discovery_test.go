@@ -8,6 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testHostDirectoryFunc func(context.Context, string) ([]*Host, error)
+
+func (f testHostDirectoryFunc) GetAvailableHosts(ctx context.Context, locality string) ([]*Host, error) {
+	return f(ctx, locality)
+}
+
 func TestCacheHostCandidateGroupsPreserveLogicalHostAndCandidateOrder(t *testing.T) {
 	hosts := []*Host{
 		{HostId: "host-a", PrivateAddr: "10.0.0.1:2049"},
@@ -29,7 +35,7 @@ func TestCacheHostCandidateGroupsPreserveLogicalHostAndCandidateOrder(t *testing
 	require.Equal(t, "10.0.0.5:2049", groups[1].candidates[1].PrivateAddr)
 }
 
-func TestCacheHostCandidateGroupContainsEndpoint(t *testing.T) {
+func TestCacheHostCandidateGroupHasEndpoint(t *testing.T) {
 	group := cacheHostCandidateGroup{
 		hostID: "logical-host",
 		candidates: []*Host{
@@ -38,20 +44,20 @@ func TestCacheHostCandidateGroupContainsEndpoint(t *testing.T) {
 		},
 	}
 
-	require.True(t, group.containsEndpoint(&Host{
+	require.True(t, group.hasEndpoint(&Host{
+		HostId:      "logical-host",
+		Addr:        "public-a:2049",
+		PrivateAddr: "10.0.0.1:2049",
+	}))
+	require.True(t, group.hasEndpoint(&Host{
 		HostId:      "logical-host",
 		Addr:        "public-b:2049",
 		PrivateAddr: "10.0.0.2:2049",
 	}))
-	require.False(t, group.containsEndpoint(&Host{
+	require.False(t, group.hasEndpoint(&Host{
 		HostId:      "logical-host",
 		Addr:        "public-c:2049",
 		PrivateAddr: "10.0.0.3:2049",
-	}))
-	require.False(t, group.containsEndpoint(&Host{
-		HostId:      "other-host",
-		Addr:        "public-b:2049",
-		PrivateAddr: "10.0.0.2:2049",
 	}))
 }
 
@@ -76,4 +82,58 @@ func TestCacheHostCandidateGroupFirstReachableFallsBackInOrder(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "10.0.0.2:2049", host.PrivateAddr)
 	require.Equal(t, []string{"10.0.0.1:2049", "10.0.0.2:2049"}, called)
+}
+
+func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("logical-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	knownStale := &Host{
+		HostId:      "logical-host",
+		Addr:        "public-old:2049",
+		PrivateAddr: "10.0.0.1:2049",
+	}
+	active := &Host{
+		HostId:      "logical-host",
+		Addr:        addr,
+		PrivateAddr: addr,
+	}
+	stale := &Host{
+		HostId:      "logical-host",
+		Addr:        "public-old:2049",
+		PrivateAddr: "10.0.0.1:2049",
+	}
+
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(knownStale)
+	discovery := &DiscoveryClient{
+		cfg:     cfg.Global,
+		hostMap: hostMap,
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			return []*Host{active, stale}, nil
+		}),
+	}
+
+	hosts, err := discovery.discoverHosts(context.Background())
+
+	require.NoError(t, err)
+	require.Empty(t, hosts)
 }

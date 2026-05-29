@@ -100,7 +100,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	sem := make(chan struct{}, maxConcurrency)
 
 	for _, group := range hostGroups {
-		if group.containsEndpoint(d.hostMap.Get(group.hostID)) {
+		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
 			continue
 		}
 
@@ -162,7 +162,11 @@ func cacheHostCandidateGroups(hosts []*Host) []cacheHostCandidateGroup {
 	return groups
 }
 
-func (g cacheHostCandidateGroup) containsEndpoint(host *Host) bool {
+// hasEndpoint reports whether the client is already using one of the
+// registered worker endpoints for this logical cache host. Logical host IDs are
+// node/cache-path scoped, so switching between healthy endpoints on the same
+// node only churns connections and can cancel in-flight cache streams.
+func (g cacheHostCandidateGroup) hasEndpoint(host *Host) bool {
 	if host == nil {
 		return false
 	}

@@ -63,7 +63,7 @@ type gatewayCacheRegistration struct {
 
 func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) *gatewayCacheRegistration {
 	cachePathID := cachePathID(cacheConfig.Server.DiskCacheDir)
-	logicalHostID := cacheLogicalHostID(manager.poolName, manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
+	logicalHostID := cacheLogicalHostID(manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
 
 	return &gatewayCacheRegistration{
 		manager:        manager,
@@ -176,13 +176,12 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 }
 
 // cacheLogicalHostID is the stable routing identity for one cache placement
-// target. It is intentionally based on pool, locality, node, and cache path,
-// not the worker process ID; restarted or colocated cache servers register under
-// this same logical host when they serve the same disk cache target.
-func cacheLogicalHostID(poolName, locality, nodeID, diskCacheDir string) string {
+// target. It is intentionally based on locality, node, and cache path, not the
+// worker pool or process ID; restarted or colocated cache servers register
+// under this same logical host when they serve the same disk cache target.
+func cacheLogicalHostID(locality, nodeID, diskCacheDir string) string {
 	return fmt.Sprintf(
-		"cache-host-%s-%s-%s-%s",
-		safeCacheName(poolName),
+		"cache-host-%s-%s-%s",
 		safeCacheName(locality),
 		safeCacheName(nodeID),
 		cachePathID(diskCacheDir),

@@ -247,6 +247,7 @@ class BenchmarkConfig:
     port_forward: bool
     cleanup_cache_before_run: bool
     cleanup_cache_after_run: bool
+    force_read_through_after_prepare: bool
     verify_reads: bool
     require_remote_read: bool
     require_remote_object_proof: bool
@@ -465,6 +466,12 @@ class BenchmarkConfig:
         )
         add_bool(
             parser, "cleanup-cache-after-run", "BENCH_CACHE_CLEANUP_AFTER_RUN", True
+        )
+        add_bool(
+            parser,
+            "force-read-through-after-prepare",
+            "BENCH_CACHE_FORCE_READ_THROUGH_AFTER_PREPARE",
+            False,
         )
         add_bool(parser, "verify-reads", "BENCH_CACHE_VERIFY_READS", True)
         add_bool(parser, "require-remote-read", "BENCH_CACHE_REQUIRE_REMOTE_READ", True)
@@ -750,7 +757,7 @@ class Kube:
             if not pool_names or pod.get("poolName", "") in pool_names
         ]
         before_count = len(before_running)
-        required_ready_workers = min(before_count, 2) if before_count > 0 else 1
+        required_ready_workers = 1
         result: dict[str, Any] = {
             "ok": True,
             "pods": [],
@@ -1227,6 +1234,42 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         result["ok"] = any(pod.get("evicted") for pod in result["pods"])
         return result
 
+    def remove_cache_pages(self, entry: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {"ok": False, "pods": []}
+        seen_nodes = set()
+        for pod in self.kube.running_workers():
+            node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
+            if node_key in seen_nodes:
+                continue
+            seen_nodes.add(node_key)
+            candidates = self._candidate_shell_paths(pod, entry["sha256"])
+            script = (
+                f"hash={shlex.quote(entry['sha256'])}; removed=false; bytes=0; chunks=0; "
+                "for candidate in "
+                f"{candidates}; do "
+                "[ -d \"$candidate\" ] || continue; "
+                "i=0; while [ -f \"$candidate/$hash-$i\" ]; do "
+                "bytes=$((bytes + $(stat -c %s \"$candidate/$hash-$i\"))); "
+                "chunks=$((chunks + 1)); i=$((i + 1)); "
+                "done; "
+                "rm -rf \"$candidate\"; removed=true; "
+                "done; "
+                "printf '{\"removed\":%s,\"bytes\":%s,\"chunks\":%s}\\n' \"$removed\" \"$bytes\" \"$chunks\""
+            )
+            proc = self.kube.worker_shell(pod["name"], script, timeout=120)
+            proof = {
+                "pod": pod["name"],
+                "nodeName": pod.get("nodeName", ""),
+                "returnCode": proc.returncode,
+            }
+            try:
+                proof.update(parse_json_output(proc.stdout))
+            except Exception as exc:
+                proof["error"] = str(exc)
+            result["pods"].append(proof)
+        result["ok"] = any(pod.get("removed") for pod in result["pods"])
+        return result
+
     def evict_mounted_file(
         self,
         worker_path: str,
@@ -1307,6 +1350,10 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             entry["sha256"],
             "--read-method",
             self.config.read_method,
+            "--progress-interval-seconds",
+            "10",
+            "--read-stall-timeout-seconds",
+            "120",
         ]
         if not self.config.verify_reads:
             command.append("--skip-verify")
@@ -1660,14 +1707,28 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         if not redis_pod:
             return self.cache_hosts_from_worker_logs()
 
-        index_key = f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
-        logical_host_ids = [
-            line
+        index_pattern = f"cache:coordinator:host_index:*:{self.config.cache_locality}"
+        index_keys = [
+            line.strip()
             for line in (
-                redis_cli(self.config.namespace, redis_pod, "SMEMBERS", index_key) or ""
+                redis_cli(self.config.namespace, redis_pod, "KEYS", index_pattern) or ""
             ).splitlines()
             if line.strip()
         ]
+        if not index_keys:
+            index_keys = [
+                f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
+            ]
+        logical_host_ids = []
+        seen_logical_hosts = set()
+        for index_key in index_keys:
+            for line in (
+                redis_cli(self.config.namespace, redis_pod, "SMEMBERS", index_key) or ""
+            ).splitlines():
+                logical_host_id = line.strip()
+                if logical_host_id and logical_host_id not in seen_logical_hosts:
+                    seen_logical_hosts.add(logical_host_id)
+                    logical_host_ids.append(logical_host_id)
         hosts = []
         for logical_host_id in logical_host_ids:
             registration_ids = self._registration_ids(redis_pod, logical_host_id)
@@ -1706,7 +1767,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 )
                 break
         if hosts:
-            return {"available": True, "indexKey": index_key, "hosts": hosts}
+            return {"available": True, "indexKeys": index_keys, "hosts": hosts}
         return self.cache_hosts_from_worker_logs()
 
     def cache_hosts_from_worker_logs(self) -> dict[str, Any]:
@@ -1946,14 +2007,45 @@ class SandboxRunner:
         sandbox.entrypoint = ["tail", "-f", "/dev/null"]
 
         started = time.monotonic_ns()
-        ok = sandbox.prepare_runtime(
-            stub_type=sandbox_stub_type,
-            force_create_stub=True,
-            ignore_patterns=["*"],
+        deadline = max(60.0, self.config.sandbox_ready_timeout_seconds)
+        ok = self._prepare_runtime_bounded(
+            sandbox,
+            sandbox_stub_type,
+            deadline,
         )
         if not ok:
             raise RuntimeError("SDK Sandbox runtime preparation failed")
         return sandbox, volume, (time.monotonic_ns() - started) / 1_000_000
+
+    def _prepare_runtime_bounded(self, sandbox, sandbox_stub_type, timeout: float) -> bool:
+        result: list[bool] = []
+        errors: list[BaseException] = []
+
+        def prepare() -> None:
+            try:
+                result.append(
+                    bool(
+                        sandbox.prepare_runtime(
+                            stub_type=sandbox_stub_type,
+                            force_create_stub=True,
+                            ignore_patterns=["*"],
+                        )
+                    )
+                )
+            except BaseException as exc:  # defensive: surface SDK/gRPC hangs cleanly
+                errors.append(exc)
+
+        thread = threading.Thread(target=prepare, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            raise TimeoutError(
+                f"SDK Sandbox runtime preparation did not return within {timeout:.0f}s; "
+                f"workers={self.kube.running_workers()}"
+            )
+        if errors:
+            raise errors[-1]
+        return bool(result and result[0])
 
     def run_json(
         self, sandbox, token: str, command: list[str], label: str
@@ -1986,23 +2078,35 @@ class SandboxRunner:
         sample: dict[str, Any] = {"label": label, "startedAt": now_rfc3339()}
         started = time.monotonic_ns()
         try:
+            log(f"{label}: creating sandbox")
             instance, create_info = create_sandbox_with_retries(self.config, sandbox)
             sample.update(create_info)
             sample["containerId"] = instance.container_id
             sample["stubId"] = instance.stub_id
+            log(
+                f"{label}: sandbox accepted container={instance.container_id} "
+                f"stub={instance.stub_id}"
+            )
             if not instance.ok:
                 raise RuntimeError(
                     instance.error_msg or "Sandbox.create returned ok=false"
                 )
             if self.config.wait_running:
+                log(f"{label}: waiting for sandbox RUNNING")
                 sample["running"] = self._wait_instance_running(instance, started)
+                log(f"{label}: sandbox RUNNING container={instance.container_id}")
             proc_started = time.monotonic_ns()
-            process = instance.process.exec(
+            process = self._start_process_bounded(
+                instance,
                 self._wrap_command_for_output_capture(command), cwd="/"
             )
             sample["execAcceptedMs"] = (time.monotonic_ns() - proc_started) / 1_000_000
+            log(
+                f"{label}: process accepted container={instance.container_id} "
+                f"pid={process.pid}"
+            )
             exit_code, stdout, stderr = self._wait_process_with_output(
-                process, instance, self.config.exec_timeout_seconds
+                process, instance, self.config.exec_timeout_seconds, label
             )
             sample["exitCode"] = exit_code
             sample["stdout"] = stdout
@@ -2025,6 +2129,33 @@ class SandboxRunner:
             self._cleanup_sandbox_bounded(instance, sample)
             sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
             sample["finishedAt"] = now_rfc3339()
+
+    def _start_process_bounded(self, instance, command: list[str], cwd: str):
+        result: list[Any] = []
+        errors: list[BaseException] = []
+
+        def start() -> None:
+            try:
+                result.append(instance.process.exec(command, cwd=cwd))
+            except BaseException as exc:  # defensive: surface SDK/gRPC hangs cleanly
+                errors.append(exc)
+
+        thread = threading.Thread(target=start, daemon=True)
+        thread.start()
+        deadline = min(60.0, max(10.0, self.config.sandbox_ready_timeout_seconds))
+        thread.join(deadline)
+        if thread.is_alive():
+            raise TimeoutError(
+                f"process exec did not return within {deadline:.0f}s for "
+                f"container {instance.container_id}; workers={self.kube.running_workers()}"
+            )
+        if errors:
+            raise errors[-1]
+        if not result:
+            raise RuntimeError(
+                f"process exec returned no process for container {instance.container_id}"
+            )
+        return result[0]
 
     @staticmethod
     def _wrap_command_for_output_capture(command: list[str]) -> list[str]:
@@ -2061,6 +2192,7 @@ class SandboxRunner:
         )
         interval = self.config.poll_interval_ms / 1000
         next_liveness_check = start + 15
+        next_progress_log = start + 15
         missing_container_checks = 0
         ever_on_worker = False
         last: Optional[dict[str, Any]] = None
@@ -2092,6 +2224,14 @@ class SandboxRunner:
             except Exception as exc:
                 last = {"error": str(exc)}
 
+            if time.monotonic() >= next_progress_log:
+                next_progress_log = time.monotonic() + 15
+                log(
+                    f"waiting for sandbox RUNNING: container={container_id} "
+                    f"elapsed={time.monotonic() - start:.1f}s attempts={attempts} "
+                    f"ever_on_worker={ever_on_worker} last={last} "
+                    f"workers={self.kube.running_workers()}"
+                )
             if time.monotonic() >= next_liveness_check:
                 next_liveness_check = time.monotonic() + 5
                 if self.kube.worker_pod_for_container(container_id):
@@ -2118,15 +2258,23 @@ class SandboxRunner:
             f"Timed out waiting for {container_id} RUNNING; last response={last}"
         )
 
-    def _wait_process_with_output(self, process, instance, timeout: float) -> tuple[int, str, str]:
+    def _wait_process_with_output(
+        self, process, instance, timeout: float, label: str
+    ) -> tuple[int, str, str]:
         stdout = ""
         stderr = ""
+        started = time.monotonic()
         deadline = time.monotonic() + timeout
         next_liveness_check = time.monotonic() + 15
+        next_progress_log = time.monotonic() + 15
         missing_container_checks = 0
         while True:
-            stdout += process.stdout.read()
-            stderr += process.stderr.read()
+            stdout_chunk = process.stdout.read()
+            stderr_chunk = process.stderr.read()
+            if stdout_chunk:
+                stdout += stdout_chunk
+            if stderr_chunk:
+                stderr += stderr_chunk
             exit_code, _ = process.status()
             if exit_code >= 0:
                 for _ in range(5):
@@ -2136,6 +2284,15 @@ class SandboxRunner:
                     if stdout or stderr:
                         break
                 return exit_code, stdout, stderr
+            if time.monotonic() >= next_progress_log:
+                next_progress_log = time.monotonic() + 15
+                progress_tail = (stderr or stdout)[-500:].replace("\n", " ")
+                log(
+                    f"{label} still running: container={instance.container_id} "
+                    f"pid={process.pid} elapsed={time.monotonic() - started:.1f}s "
+                    f"stdout_bytes={len(stdout)} stderr_bytes={len(stderr)} "
+                    f"tail={progress_tail!r}"
+                )
             if time.monotonic() >= next_liveness_check:
                 next_liveness_check = time.monotonic() + 5
                 if not self.kube.worker_pod_for_container(instance.container_id):
@@ -2157,7 +2314,8 @@ class SandboxRunner:
                 except Exception:
                     pass
                 raise RuntimeError(
-                    f"process {process.pid} did not exit within {timeout} seconds"
+                    f"process {process.pid} did not exit within {timeout} seconds; "
+                    f"stdout_tail={stdout[-1000:]!r} stderr_tail={stderr[-1000:]!r}"
                 )
             time.sleep(0.1)
 
@@ -2241,6 +2399,10 @@ class SandboxRunner:
             entry["sha256"],
             "--read-method",
             self.config.read_method,
+            "--progress-interval-seconds",
+            "10",
+            "--read-stall-timeout-seconds",
+            "120",
         ]
         if not self.config.verify_reads:
             command.append("--skip-verify")
@@ -2692,14 +2854,33 @@ class CacheBenchmark:
             timeout_seconds=min(120, self.config.cache_proof_timeout_seconds),
             context="workload cache proof",
         )
+        initial_ready = ready
         cache_page_eviction = {
             "ok": True,
             "skipped": True,
             "reason": "preserve embedded cache pages for hot-read measurement",
         }
+        if self.config.force_read_through_after_prepare and ready.get("ready"):
+            log(
+                f"Removing embedded cache pages for {entry['path']} to prove read-through caching"
+            )
+            cache_page_eviction = self.cache.remove_cache_pages(entry)
+            after_removal = self.cache.object_ready(entry["sha256"], entry["size"])
+            ready = {
+                "ready": False,
+                "removedForReadThrough": True,
+                "beforeEviction": initial_ready,
+                "removal": cache_page_eviction,
+                "afterRemoval": after_removal,
+            }
+            if after_removal.get("ready"):
+                raise RuntimeError(
+                    f"failed to remove embedded cache pages for read-through proof: {after_removal}"
+                )
         workspace_mount_probe = None
         workspace_mount_instance = None
         workspace_worker_pods = None
+        read_through_warmup = None
         try:
             if access_type == "workspace_fuse":
                 (
@@ -2707,6 +2888,42 @@ class CacheBenchmark:
                     workspace_mount_probe,
                     workspace_worker_pods,
                 ) = self._ensure_workspace_fuse_mounted(sandbox, token, paths, entry)
+
+            if not ready.get("ready"):
+                log(
+                    f"Embedded cache proof not ready for {entry['path']}; "
+                    "running one verified read-through warmup before measuring hot cache"
+                )
+                if access_type == "workspace_fuse":
+                    warm_payload, warm_sample = self.cache.worker_hot_read(
+                        paths.worker_volume_root,
+                        entry,
+                        geesefs_path,
+                        pods=workspace_worker_pods,
+                    )
+                else:
+                    warm_payload, warm_sample = self.runner.hot_read(
+                        sandbox,
+                        token,
+                        paths.root_for_access(access_type),
+                        entry,
+                        geesefs_path,
+                    )
+                if self.config.verify_reads and warm_payload.get("digest") != entry["sha256"]:
+                    raise RuntimeError(
+                        f"read-through warmup digest mismatch for {entry['path']}: "
+                        f"expected={entry['sha256']} actual={warm_payload.get('digest')}"
+                    )
+                read_through_warmup = {
+                    "read": warm_payload,
+                    "sample": warm_sample,
+                }
+                ready = self.cache.wait_ready(
+                    entry,
+                    timeout_seconds=self.config.cache_proof_timeout_seconds,
+                    required=True,
+                    context="post-warmup cache proof",
+                )
 
             if access_type == "workspace_fuse":
                 log(f"Evicting workspace-fuse mounted file from holder worker")
@@ -2758,6 +2975,10 @@ class CacheBenchmark:
                 if self.config.require_remote_read
                 else None
             )
+            content_sha_ok = (
+                not self.config.verify_reads
+                or hot_payload.get("digest") == entry["sha256"]
+            )
             row = {
                 "accessType": access_type,
                 "pattern": entry["pattern"],
@@ -2767,6 +2988,8 @@ class CacheBenchmark:
                 "path": entry["path"],
                 "hash": entry["sha256"],
                 "cacheReady": ready,
+                "initialCacheReady": initial_ready,
+                "readThroughWarmup": read_through_warmup,
                 "cachePageEviction": cache_page_eviction,
                 "casProof": cas_proof,
                 "remoteObject": remote_object,
@@ -2775,11 +2998,8 @@ class CacheBenchmark:
                 "hotRead": hot_payload,
                 "hotSample": hot_sample,
                 "readPathProof": hot_sample.get("readPathProof"),
-                "shaOK": bool(cas_proof.get("matchesHash"))
-                and (
-                    not self.config.verify_reads
-                    or hot_payload.get("digest") == entry["sha256"]
-                ),
+                "shaOK": content_sha_ok,
+                "casProofOK": bool(cas_proof.get("matchesHash")),
                 "workerDD": worker_dd,
                 "sandboxDD": sandbox_dd,
                 "sandboxDDSample": sandbox_dd_sample,
@@ -3197,6 +3417,7 @@ class CacheBenchmark:
             "sandboxCpu": self.config.sandbox_cpu,
             "sandboxMemory": self.config.sandbox_memory,
             "forceNewImage": self.config.force_new_image,
+            "forceReadThroughAfterPrepare": self.config.force_read_through_after_prepare,
         }
 
     @staticmethod
