@@ -27,7 +27,7 @@ In the Tailscale admin console, open **Access controls** and merge this into the
     {
       "src": ["tag:beam-gateway"],
       "dst": ["tag:beam-byo-worker"],
-      "ip": ["29443"]
+      "ip": ["tcp:29443"]
     }
   ],
   "tests": [
@@ -62,9 +62,23 @@ Hybrid worker key
 
 For Tailscale.com, leave `controlUrl` empty. For Headscale, set it to the Headscale control URL.
 
+You can also create the policy entries and the two auth keys from a Tailscale API access token:
+
+```sh
+TS_API_KEY="tskey-api-..." ./hack/setup_hybrid_tailscale.sh
+```
+
+The helper non-destructively merges the Beam tags and grant into the tailnet policy, creates a tagged gateway auth key and a tagged hybrid worker auth key, then writes the local `config.yaml` used by `make start`.
+
+By default the helper does not remove existing broad access rules in your tailnet. To remove the default allow-all ACL and add the deny tests above, run:
+
+```sh
+STRICT_TAILSCALE_POLICY=1 TS_API_KEY="tskey-api-..." ./hack/setup_hybrid_tailscale.sh
+```
+
 ## Local Gateway Config
 
-Create a small local overlay config at the repo root. The default config is still loaded first, so this file only needs the Tailscale override:
+If you created keys manually, create a small local overlay config at the repo root. The default config is still loaded first, so this file only needs the Tailscale override:
 
 ```sh
 cat > config.yaml <<'YAML'
