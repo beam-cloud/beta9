@@ -40,3 +40,6 @@ docs/*.md
 /metrics.jsonl
 /summary.json
 /summary.md
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
