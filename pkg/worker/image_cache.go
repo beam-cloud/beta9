@@ -230,7 +230,7 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 		}
 	}()
 
-	actualHash, err := c.client.StoreContentWithLocalReplica(countingChunks, hash, cache.StoreContentOptions{RoutingKey: opts.RoutingKey})
+	actualHash, err := c.client.StoreContent(countingChunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
 	close(done)
 	elapsed := time.Since(started)
 	if err != nil {

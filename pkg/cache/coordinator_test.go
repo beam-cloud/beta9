@@ -48,9 +48,28 @@ func (r *memoryCoordinatorRepository) SetActiveCacheRegistration(ctx context.Con
 }
 
 func (r *memoryCoordinatorRepository) ListCacheLogicalHosts(ctx context.Context, poolName, locality string) ([]string, error) {
-	indexKey := fmt.Sprintf("%s:%s", poolName, locality)
-	ids := make([]string, 0, len(r.index[indexKey]))
-	for id := range r.index[indexKey] {
+	seen := map[string]struct{}{}
+	if poolName == "" {
+		for indexKey, indexed := range r.index {
+			if indexKey == fmt.Sprintf("%s:%s", poolName, locality) {
+				continue
+			}
+			if len(indexKey) < len(locality)+1 || indexKey[len(indexKey)-len(locality)-1:] != ":"+locality {
+				continue
+			}
+			for id := range indexed {
+				seen[id] = struct{}{}
+			}
+		}
+	} else {
+		indexKey := fmt.Sprintf("%s:%s", poolName, locality)
+		for id := range r.index[indexKey] {
+			seen[id] = struct{}{}
+		}
+	}
+
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
 		ids = append(ids, id)
 	}
 	return ids, nil
@@ -192,4 +211,35 @@ func TestCoordinatorPromotesRegisteringRegistrationWhenActiveRegistrationIsGone(
 	host.PrivateAddr = "10.0.0.2:2049"
 	require.NoError(t, coordinator.RegisterHost(ctx, host, 30*time.Second))
 	require.Equal(t, "worker-b", repo.active[host.LogicalHostID])
+}
+
+func TestCoordinatorCanListCacheHostsAcrossWorkerPools(t *testing.T) {
+	repo := newMemoryCoordinatorRepository()
+	coordinator := NewCoordinator(repo)
+	ctx := context.Background()
+
+	logicalHostID := "cache-host-default-node-a-path-0"
+	for _, pool := range []string{"build", "default"} {
+		require.NoError(t, coordinator.RegisterHost(ctx, CoordinatorHost{
+			LogicalHostID:  logicalHostID,
+			RegistrationID: "worker-" + pool,
+			PoolName:       pool,
+			Locality:       "default",
+			NodeID:         "node-a",
+			CachePathID:    "path",
+			Addr:           "10.0.0.1:2049",
+			PrivateAddr:    "10.0.0.1:2049",
+		}, 30*time.Second))
+	}
+
+	hosts, err := coordinator.ListHosts(ctx, "", "default")
+	require.NoError(t, err)
+	require.Len(t, hosts, 2)
+	require.Equal(t, logicalHostID, hosts[0].LogicalHostID)
+	require.Equal(t, logicalHostID, hosts[1].LogicalHostID)
+
+	defaultHosts, err := coordinator.ListHosts(ctx, "default", "default")
+	require.NoError(t, err)
+	require.Len(t, defaultHosts, 1)
+	require.Equal(t, "default", defaultHosts[0].PoolName)
 }

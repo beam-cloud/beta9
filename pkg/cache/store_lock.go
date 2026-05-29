@@ -40,3 +40,17 @@ func refreshStoreFromContentLock(ctx context.Context, metadataStore CacheMetadat
 func isStoreFromContentLockNotHeld(err error) bool {
 	return errors.Is(err, redislock.ErrLockNotHeld) || strings.Contains(err.Error(), "redislock: lock not held")
 }
+
+func storeContentHashLockKey(hash string) string {
+	return "hash:" + hash
+}
+
+func storeContentLockKey(cachePath string, routingKey string) string {
+	if isContentHash(routingKey) {
+		return storeContentHashLockKey(routingKey)
+	}
+	if cachePath != "" {
+		return cachePath
+	}
+	return routingKey
+}

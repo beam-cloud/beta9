@@ -99,10 +99,10 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	}
 	sem := make(chan struct{}, maxConcurrency)
 
-	for _, group := range hostGroups {
-		if group.containsEndpoint(d.hostMap.Get(group.hostID)) {
-			continue
-		}
+		for _, group := range hostGroups {
+			if group.preferredRegistrationEndpointMatches(d.hostMap.Get(group.hostID)) {
+				continue
+			}
 
 		wg.Add(1)
 		go func(group cacheHostCandidateGroup) {
@@ -162,16 +162,15 @@ func cacheHostCandidateGroups(hosts []*Host) []cacheHostCandidateGroup {
 	return groups
 }
 
-func (g cacheHostCandidateGroup) containsEndpoint(host *Host) bool {
-	if host == nil {
+// preferredRegistrationEndpointMatches reports whether the client is already
+// using the first registration returned for a logical cache host. The
+// coordinator orders candidates so the first registration is the worker/cache
+// server process currently preferred for that node-local cache path.
+func (g cacheHostCandidateGroup) preferredRegistrationEndpointMatches(host *Host) bool {
+	if host == nil || len(g.candidates) == 0 {
 		return false
 	}
-	for _, candidate := range g.candidates {
-		if sameCacheHostEndpoint(candidate, host) {
-			return true
-		}
-	}
-	return false
+	return sameCacheHostEndpoint(g.candidates[0], host)
 }
 
 func (g cacheHostCandidateGroup) firstReachable(ctx context.Context, verify cacheHostVerifier) (*Host, bool) {

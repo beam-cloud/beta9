@@ -453,6 +453,16 @@ class CacheSuiteProbe(ScriptProbeBase):
             network = (row.get("remoteRead") or {}).get("networkProbe") or {}
             if network.get("ok") and network.get("mbps"):
                 evidence["network_ceiling_mbps"] = float(network.get("mbps") or 0)
+        min_mbps = scenario.thresholds.get(f"{name}_min_mbps")
+        if name in {"sandbox_hot_read", "worker_hot_read", "python_file_read"}:
+            if "min_hot_file_read_mbps" in self.config.extra_args:
+                min_mbps = self.config.extra_args["min_hot_file_read_mbps"]
+        elif name == "remote_cache_socket_read":
+            if "min_remote_cache_socket_mbps" in self.config.extra_args:
+                min_mbps = self.config.extra_args["min_remote_cache_socket_mbps"]
+        if min_mbps is not None and float(min_mbps) <= 0:
+            min_mbps = None
+
         tags = scenario.metric_tags
         tags.update(
             {
@@ -462,7 +472,7 @@ class CacheSuiteProbe(ScriptProbeBase):
                 and scenario.cache_state in {"hot", "strict_disk"},
                 "reject_cloud_read": scenario.cache_state in {"hot", "strict_disk"},
                 "requires_remote_worker": requires_remote,
-                "min_mbps": scenario.thresholds.get(f"{name}_min_mbps"),
+                "min_mbps": min_mbps,
             }
         )
         return Measurement(
@@ -498,6 +508,7 @@ class ScriptSuiteProbe(ScriptProbeBase):
         output = self.sink.artifact_dir / f"{slug(suite.name)}.json"
         args = merge_args(
             self._common_args(),
+            {"install": False},
             suite.defaults,
             suite.args,
             self.config.extra_args,

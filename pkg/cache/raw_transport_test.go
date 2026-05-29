@@ -153,18 +153,20 @@ func TestClientLocalPageFileViewsReturnsLocalFinalPartialPage(t *testing.T) {
 	sum := sha256.Sum256(content)
 	hash := hex.EncodeToString(sum[:])
 
+	localHost := &Host{HostId: "local-host"}
 	localStore := newTestStore(t, 4)
-	localStore.currentHost = &Host{HostId: "local-host"}
+	localStore.currentHost = localHost
 	require.NoError(t, localStore.Add(ctx, hash, content))
 
 	client := &Client{
 		ctx:                   ctx,
-		clientConfig:          ClientConfig{PreferLocalCacheHost: true},
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
 	client.AttachLocalServer(&Server{cas: localStore})

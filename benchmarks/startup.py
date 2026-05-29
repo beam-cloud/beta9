@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import atexit
-import base64
 import hashlib
 import json
 import os
@@ -331,38 +330,63 @@ def make_stub_zip():
     return Path(tmp.name), data, digest
 
 
-def upload_object_stream(args):
+def upload_object(args):
     require_tools("grpcurl")
     zip_path, data, digest = make_stub_zip()
-    chunk_size = 512 * 1024
     metadata = {"name": digest, "size": len(data)}
-    messages = []
-    for offset in range(0, len(data), chunk_size):
-        chunk = data[offset : offset + chunk_size]
-        messages.append({
-            "objectContent": base64.b64encode(chunk).decode("ascii"),
-            "objectMetadata": metadata,
-            "hash": digest,
-        })
-
     try:
-        response = grpcurl(
+        head_response = grpcurl(
             args,
-            "gateway.GatewayService/PutObjectStream",
-            "\n".join(json.dumps(message) for message in messages),
+            "gateway.GatewayService/HeadObject",
+            json.dumps({"hash": digest, "supportsPutHeaders": True}),
             proto="pkg/gateway/gateway.proto",
             timeout=args.timeout_seconds,
         )
+        head = head_response[-1] if head_response else {}
+        if head.get("ok") and head.get("exists") and (head.get("objectId") or head.get("object_id")):
+            return head.get("objectId") or head.get("object_id")
+        if head and not head.get("ok", False):
+            raise RuntimeError(f"HeadObject failed: {head}")
+        if not head.get("useWorkspaceStorage") and not head.get("use_workspace_storage"):
+            raise RuntimeError(
+                "Benchmark object upload requires workspace storage; legacy PutObjectStream is not used because it can hang under grpcurl."
+            )
+
+        create_response = grpcurl(
+            args,
+            "gateway.GatewayService/CreateObject",
+            json.dumps(
+                {
+                    "objectMetadata": metadata,
+                    "hash": digest,
+                    "size": len(data),
+                    "overwrite": True,
+                    "supportsPutHeaders": True,
+                }
+            ),
+            proto="pkg/gateway/gateway.proto",
+            timeout=args.timeout_seconds,
+        )
+        created = create_response[-1] if create_response else {}
+        if not created.get("ok"):
+            raise RuntimeError(f"CreateObject failed: {created or create_response}")
+        object_id = created.get("objectId") or created.get("object_id")
+        presigned_url = created.get("presignedUrl") or created.get("presigned_url")
+        if not object_id or not presigned_url:
+            raise RuntimeError(f"CreateObject did not return object id and presigned URL: {created}")
+
+        request = urllib.request.Request(
+            presigned_url,
+            data=data,
+            method="PUT",
+            headers=created.get("putHeaders") or created.get("put_headers") or {},
+        )
+        with urllib.request.urlopen(request, timeout=args.timeout_seconds) as response:
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"presigned object upload failed with HTTP {response.status}")
+        return object_id
     finally:
         zip_path.unlink(missing_ok=True)
-
-    last = response[-1] if response else {}
-    if not last.get("ok"):
-        raise RuntimeError(f"PutObjectStream failed: {last or response}")
-    object_id = last.get("objectId") or last.get("object_id")
-    if not object_id:
-        raise RuntimeError(f"PutObjectStream did not return an object id: {last}")
-    return object_id
 
 
 def create_benchmark_stub(args, image_id, object_id):
@@ -413,7 +437,7 @@ def bootstrap_stub(args):
     prepare_local_image(args)
     image_id = build_benchmark_image(args)
     log("Uploading minimal benchmark object")
-    object_id = upload_object_stream(args)
+    object_id = upload_object(args)
     stub_id = create_benchmark_stub(args, image_id, object_id)
     args.image_id = image_id
     args.stub_id = stub_id

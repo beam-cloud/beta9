@@ -364,6 +364,328 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	return hash, size, nil
 }
 
+// AddReaderWithExpectedHash stores a content-addressed stream into a temporary
+// page directory, validates the full stream hash, then publishes the verified
+// pages under the final hash path.
+func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reader, expectedHash string) (string, int64, error) {
+	if expectedHash == "" {
+		return cas.AddReader(ctx, reader)
+	}
+	if reader == nil {
+		return "", 0, errors.New("nil content reader")
+	}
+	if cas.serverConfig.PageSizeBytes <= 0 {
+		return "", 0, errors.New("invalid page size")
+	}
+	if cas.diskCachedUsageExceeded {
+		if !cas.memoryCacheEnabled {
+			return "", 0, errors.New("disk cache capacity exceeded")
+		}
+		return cas.addReaderToMemory(ctx, reader)
+	}
+	tmpDir, err := cas.newExpectedHashTempDir(expectedHash)
+	if err != nil {
+		return "", 0, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	hasher := sha256.New()
+	pageSize := int(cas.serverConfig.PageSizeBytes)
+	buf := make([]byte, pageSize)
+	var size int64
+	var chunkCount int64
+
+	cleanupInstalled := func() {
+		_ = os.RemoveAll(tmpDir)
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			cleanupInstalled()
+			return "", size, err
+		}
+
+		n, readErr := io.ReadFull(reader, buf)
+		if n > 0 {
+			chunk := buf[:n]
+			if _, err := hasher.Write(chunk); err != nil {
+				cleanupInstalled()
+				return "", size, err
+			}
+
+			filePath := filepath.Join(tmpDir, cas.pageKey(expectedHash, chunkCount))
+			if err := writeCacheChunkAtomic(filePath, chunk); err != nil {
+				cleanupInstalled()
+				return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
+			}
+
+			size += int64(n)
+			chunkCount++
+		}
+
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			break
+		}
+		cleanupInstalled()
+		return "", size, readErr
+	}
+
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if actualHash != expectedHash {
+		cleanupInstalled()
+		return actualHash, size, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+
+	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, chunkCount); err != nil {
+		cleanupInstalled()
+		return "", size, err
+	}
+
+	if cas.memoryCacheEnabled {
+		chunkKeys := make([]string, 0, chunkCount)
+		for chunkIdx := int64(0); chunkIdx < chunkCount; chunkIdx++ {
+			chunkKeys = append(chunkKeys, cas.pageKey(expectedHash, chunkIdx))
+		}
+		chunks := strings.Join(chunkKeys, ",")
+		added := cas.cache.SetWithTTL(expectedHash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
+		if !added {
+			return "", size, errors.New("unable to cache: set dropped")
+		}
+	}
+
+	Logger.Debugf("Added expected-hash object: %s, size: %d bytes", expectedHash, size)
+	return actualHash, size, nil
+}
+
+func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHash string, size int64, concurrency int, readPage func(context.Context, int64, int64, int64) ([]byte, error)) (string, int64, error) {
+	if expectedHash == "" {
+		return "", 0, errors.New("expected hash is required")
+	}
+	if size < 0 {
+		return "", 0, errors.New("invalid content size")
+	}
+	if readPage == nil {
+		return "", 0, errors.New("nil page reader")
+	}
+	if cas.serverConfig.PageSizeBytes <= 0 {
+		return "", 0, errors.New("invalid page size")
+	}
+	if cas.diskCachedUsageExceeded {
+		return "", 0, errors.New("disk cache capacity exceeded")
+	}
+	tmpDir, err := cas.newExpectedHashTempDir(expectedHash)
+	if err != nil {
+		return "", 0, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	pageSize := cas.serverConfig.PageSizeBytes
+	pageCount := (size + pageSize - 1) / pageSize
+	if pageCount == 0 {
+		actualHash := hex.EncodeToString(sha256.New().Sum(nil))
+		if actualHash != expectedHash {
+			return actualHash, 0, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
+		}
+		if err := os.MkdirAll(cas.pageDir(expectedHash), 0755); err != nil {
+			return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
+		}
+		return actualHash, 0, nil
+	}
+	if concurrency <= 0 {
+		concurrency = defaultDownloadConcurrency
+	}
+	if int64(concurrency) > pageCount {
+		concurrency = int(pageCount)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type pageResult struct {
+		pageIdx int64
+		data    []byte
+		err     error
+	}
+
+	jobs := make(chan int64)
+	results := make(chan pageResult, concurrency)
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pageIdx := range jobs {
+				start := pageIdx * pageSize
+				length := pageSize
+				if remaining := size - start; remaining < length {
+					length = remaining
+				}
+				if length <= 0 {
+					continue
+				}
+				if length > int64(int(^uint(0)>>1)) {
+					results <- pageResult{pageIdx: pageIdx, err: fmt.Errorf("page too large: %d", length)}
+					cancel()
+					continue
+				}
+
+				data, err := readPage(ctx, pageIdx, start, length)
+				if err != nil {
+					results <- pageResult{pageIdx: pageIdx, err: err}
+					cancel()
+					continue
+				}
+				if int64(len(data)) != length {
+					results <- pageResult{pageIdx: pageIdx, err: fmt.Errorf("short page read: page=%d read=%d expected=%d", pageIdx, len(data), length)}
+					cancel()
+					continue
+				}
+
+				tmpPath := filepath.Join(tmpDir, cas.pageKey(expectedHash, pageIdx))
+				if err := writeCacheChunkAtomic(tmpPath, data); err != nil {
+					results <- pageResult{pageIdx: pageIdx, err: err}
+					cancel()
+					continue
+				}
+				results <- pageResult{pageIdx: pageIdx, data: data}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
+			select {
+			case jobs <- pageIdx:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	hasher := sha256.New()
+	nextHashPage := int64(0)
+	pending := make(map[int64][]byte, concurrency)
+	var firstErr error
+
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			cancel()
+			continue
+		}
+
+		pending[result.pageIdx] = result.data
+		for {
+			data, ok := pending[nextHashPage]
+			if !ok {
+				break
+			}
+			if _, err := hasher.Write(data); err != nil && firstErr == nil {
+				firstErr = err
+				cancel()
+			}
+			delete(pending, nextHashPage)
+			nextHashPage++
+		}
+	}
+
+	cleanupInstalled := func() {
+		_ = os.RemoveAll(tmpDir)
+	}
+
+	if firstErr != nil {
+		cleanupInstalled()
+		return "", size, firstErr
+	}
+	if nextHashPage != pageCount {
+		cleanupInstalled()
+		return "", size, fmt.Errorf("incomplete page source: hashed %d/%d pages", nextHashPage, pageCount)
+	}
+
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if actualHash != expectedHash {
+		cleanupInstalled()
+		return actualHash, size, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+
+	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, pageCount); err != nil {
+		cleanupInstalled()
+		return "", size, err
+	}
+
+	Logger.Debugf("Added expected-hash object from page source: %s, size: %d bytes", expectedHash, size)
+	return actualHash, size, nil
+}
+
+func (cas *Store) newExpectedHashTempDir(hash string) (string, error) {
+	finalDir := cas.pageDir(hash)
+	parent := filepath.Dir(finalDir)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cache parent directory: %w", err)
+	}
+	tmpDir, err := os.MkdirTemp(parent, "."+filepath.Base(finalDir)+".*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("failed to create cache temp directory: %w", err)
+	}
+	return tmpDir, nil
+}
+
+func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64) error {
+	finalDir := cas.pageDir(hash)
+	if err := os.MkdirAll(finalDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	published := make([]string, 0)
+	for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
+		pageKey := cas.pageKey(hash, pageIdx)
+		tmpPath := filepath.Join(tmpDir, pageKey)
+		tmpInfo, err := os.Stat(tmpPath)
+		if err != nil {
+			return fmt.Errorf("missing verified cache chunk %s: %w", tmpPath, err)
+		}
+
+		pagePath := cas.pagePath(hash, pageIdx)
+		pageLock := cas.pageLock(hash, pageIdx)
+		pageLock.Lock()
+		if _, info, err := cas.existingPagePath(hash, pageIdx); err == nil && info.Size() == tmpInfo.Size() {
+			pageLock.Unlock()
+			_ = os.Remove(tmpPath)
+			continue
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrContentNotFound) {
+			pageLock.Unlock()
+			return err
+		}
+
+		if err := os.Remove(pagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			pageLock.Unlock()
+			return err
+		}
+		if err := os.Rename(tmpPath, pagePath); err != nil {
+			pageLock.Unlock()
+			for _, path := range published {
+				_ = os.Remove(path)
+			}
+			return err
+		}
+		published = append(published, pagePath)
+		pageLock.Unlock()
+	}
+	return nil
+}
+
 func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
 	cas.putPages(hash, offset, data, false)
 }
