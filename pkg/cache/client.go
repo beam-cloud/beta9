@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,6 +30,8 @@ const (
 	getContentRequestTimeout        = 60 * time.Second
 	getContentStreamRequestTimeout  = 600 * time.Second
 	storeContentRequestTimeout      = 600 * time.Second
+	storeContentLockWaitTimeout     = time.Duration(storeFromContentLockTtlS+5) * time.Second
+	storeContentLockWaitInterval    = 500 * time.Millisecond
 	closestHostTimeout              = 30 * time.Second
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
@@ -1668,7 +1671,7 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 	}
 	defer file.Close()
 
-	hash, err := c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, func() (string, error) {
+	store := func() (string, error) {
 		if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
 			return hash, nil
 		}
@@ -1676,13 +1679,67 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 			return "", err
 		}
 		return c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
-	})
+	}
+
+	hash, err := c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, store)
+	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+			c.promoteLocalFileToAttachedServers(opts.RoutingKey, source.Path)
+			return opts.RoutingKey, nil
+		}
+		hash, err = c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, store)
+	}
 	if err != nil {
 		return hash, err
 	}
 
 	c.promoteLocalFileToAttachedServers(hash, source.Path)
 	return hash, nil
+}
+
+func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, timeout time.Duration) bool {
+	if hash == "" || timeout <= 0 {
+		return false
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(storeContentLockWaitInterval)
+	defer ticker.Stop()
+
+	for {
+		if c.hasLocalStoreContent(hash) {
+			return true
+		}
+		exists, err := c.IsCachedNearby(hash, routingKey)
+		if err == nil && exists {
+			return true
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func (c *Client) hasLocalStoreContent(hash string) bool {
+	for _, store := range c.localStoresSnapshot() {
+		if store != nil && store.Exists(hash) {
+			return true
+		}
+	}
+	return false
+}
+
+func isContentHash(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (c *Client) StoreContentFromLocalPath(source struct {
