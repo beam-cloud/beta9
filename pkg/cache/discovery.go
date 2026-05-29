@@ -99,10 +99,10 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	}
 	sem := make(chan struct{}, maxConcurrency)
 
-		for _, group := range hostGroups {
-			if group.preferredRegistrationEndpointMatches(d.hostMap.Get(group.hostID)) {
-				continue
-			}
+	for _, group := range hostGroups {
+		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
+			continue
+		}
 
 		wg.Add(1)
 		go func(group cacheHostCandidateGroup) {
@@ -162,15 +162,20 @@ func cacheHostCandidateGroups(hosts []*Host) []cacheHostCandidateGroup {
 	return groups
 }
 
-// preferredRegistrationEndpointMatches reports whether the client is already
-// using the first registration returned for a logical cache host. The
-// coordinator orders candidates so the first registration is the worker/cache
-// server process currently preferred for that node-local cache path.
-func (g cacheHostCandidateGroup) preferredRegistrationEndpointMatches(host *Host) bool {
-	if host == nil || len(g.candidates) == 0 {
+// hasEndpoint reports whether the client is already using one of the
+// registered worker endpoints for this logical cache host. Logical host IDs are
+// node/cache-path scoped, so switching between healthy endpoints on the same
+// node only churns connections and can cancel in-flight cache streams.
+func (g cacheHostCandidateGroup) hasEndpoint(host *Host) bool {
+	if host == nil {
 		return false
 	}
-	return sameCacheHostEndpoint(g.candidates[0], host)
+	for _, candidate := range g.candidates {
+		if sameCacheHostEndpoint(candidate, host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g cacheHostCandidateGroup) firstReachable(ctx context.Context, verify cacheHostVerifier) (*Host, bool) {

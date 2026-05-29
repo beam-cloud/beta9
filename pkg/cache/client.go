@@ -377,6 +377,10 @@ func (c *Client) monitorHost(host *Host) {
 	for {
 		select {
 		case <-ticker.C:
+			if !c.isCurrentHostEndpoint(host) {
+				return
+			}
+
 			err := func() error {
 				c.mu.RLock()
 				client, exists := c.grpcClients[host.HostId]
@@ -422,7 +426,9 @@ func (c *Client) removeHost(host *Host) {
 	}
 
 	if c.hostMap != nil {
-		c.hostMap.Remove(host)
+		if !c.hostMap.Remove(host) {
+			return
+		}
 	}
 
 	c.mu.Lock()
@@ -443,6 +449,16 @@ func (c *Client) removeHost(host *Host) {
 			delete(c.localHostCache, hash)
 		}
 	}
+}
+
+func (c *Client) isCurrentHostEndpoint(host *Host) bool {
+	if host == nil || host.HostId == "" {
+		return false
+	}
+	if c.hostMap == nil {
+		return true
+	}
+	return sameCacheHostEndpoint(c.hostMap.Get(host.HostId), host)
 }
 
 func (c *Client) removeLocalHostCache(hash string) {
@@ -499,7 +515,7 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
 	known := c.hostMap.Get(group.hostID)
-	if !group.preferredRegistrationEndpointMatches(known) {
+	if !group.hasEndpoint(known) {
 		return false
 	}
 	if c.hasCacheClient(known.HostId) {
@@ -1524,17 +1540,50 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 }
 
 func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
-	_, host, err := c.getGRPCClient(&ClientRequest{
-		rt:        ClientRequestTypeStorage,
-		hash:      routingKey,
-		key:       routingKey,
-		hostIndex: 0,
-	})
-	if err != nil {
-		return "", err
+	seeker, retryable := reader.(io.Seeker)
+	var lastErr error
+	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
+		if retryable {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return "", err
+			}
+		} else if attempt > 0 {
+			break
+		}
+
+		_, host, err := c.getGRPCClient(&ClientRequest{
+			rt:        ClientRequestTypeStorage,
+			hash:      routingKey,
+			key:       routingKey,
+			hostIndex: 0,
+		})
+		if err != nil {
+			lastErr = err
+			if err == ErrHostNotFound {
+				_ = c.refreshRoutableHosts(ctx)
+			}
+			continue
+		}
+
+		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+		if err == nil {
+			return hash, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		lastErr = err
+		c.removeHost(host)
+		_ = c.refreshRoutableHosts(ctx)
+		if !retryable {
+			break
+		}
 	}
 
-	return c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", ErrHostNotFound
 }
 
 func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {

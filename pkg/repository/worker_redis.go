@@ -484,6 +484,9 @@ func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to get worker <%s>: %v", key, err)
 	}
+	if len(res) == 0 {
+		return nil, &types.ErrWorkerNotFound{WorkerId: workerId}
+	}
 
 	if err = common.ToStruct(res, worker); err != nil {
 		return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", key, err)
@@ -782,6 +785,14 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		return err
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
+
+	currentWorker, err := r.getWorkerFromKey(common.RedisKeys.SchedulerWorkerState(worker.Id))
+	if err != nil {
+		return err
+	}
+	if currentWorker.Status != types.WorkerStatusAvailable {
+		return fmt.Errorf("worker <%s> is not available: %s", worker.Id, currentWorker.Status)
+	}
 
 	updatedWorker, err := r.updateWorkerCapacityLocked(ctx, worker.Id, request, types.RemoveCapacity)
 	if err != nil {

@@ -35,7 +35,7 @@ func TestCacheHostCandidateGroupsPreserveLogicalHostAndCandidateOrder(t *testing
 	require.Equal(t, "10.0.0.5:2049", groups[1].candidates[1].PrivateAddr)
 }
 
-func TestCacheHostCandidateGroupPreferredRegistrationEndpoint(t *testing.T) {
+func TestCacheHostCandidateGroupHasEndpoint(t *testing.T) {
 	group := cacheHostCandidateGroup{
 		hostID: "logical-host",
 		candidates: []*Host{
@@ -44,15 +44,20 @@ func TestCacheHostCandidateGroupPreferredRegistrationEndpoint(t *testing.T) {
 		},
 	}
 
-	require.True(t, group.preferredRegistrationEndpointMatches(&Host{
+	require.True(t, group.hasEndpoint(&Host{
 		HostId:      "logical-host",
 		Addr:        "public-a:2049",
 		PrivateAddr: "10.0.0.1:2049",
 	}))
-	require.False(t, group.preferredRegistrationEndpointMatches(&Host{
+	require.True(t, group.hasEndpoint(&Host{
 		HostId:      "logical-host",
 		Addr:        "public-b:2049",
 		PrivateAddr: "10.0.0.2:2049",
+	}))
+	require.False(t, group.hasEndpoint(&Host{
+		HostId:      "logical-host",
+		Addr:        "public-c:2049",
+		PrivateAddr: "10.0.0.3:2049",
 	}))
 }
 
@@ -79,7 +84,7 @@ func TestCacheHostCandidateGroupFirstReachableFallsBackInOrder(t *testing.T) {
 	require.Equal(t, []string{"10.0.0.1:2049", "10.0.0.2:2049"}, called)
 }
 
-func TestDiscoveryRefreshesWhenKnownEndpointIsNotPreferredRegistration(t *testing.T) {
+func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -130,6 +135,5 @@ func TestDiscoveryRefreshesWhenKnownEndpointIsNotPreferredRegistration(t *testin
 	hosts, err := discovery.discoverHosts(context.Background())
 
 	require.NoError(t, err)
-	require.Len(t, hosts, 1)
-	require.Equal(t, active.PrivateAddr, hosts[0].PrivateAddr)
+	require.Empty(t, hosts)
 }

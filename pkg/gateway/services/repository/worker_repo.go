@@ -131,6 +131,15 @@ func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req
 	return &pb.ToggleWorkerAvailableResponse{Ok: true}, nil
 }
 
+func (s *WorkerRepositoryService) DisableWorker(ctx context.Context, req *pb.DisableWorkerRequest) (*pb.DisableWorkerResponse, error) {
+	err := s.workerRepo.UpdateWorkerStatus(req.WorkerId, types.WorkerStatusDisabled)
+	if err != nil {
+		return &pb.DisableWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
 func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req *pb.UpdateWorkerCapacityRequest) (*pb.UpdateWorkerCapacityResponse, error) {
 	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
 	if err != nil {

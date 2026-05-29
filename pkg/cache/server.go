@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	writeBufferSizeBytes      int   = 128 * 1024
+	writeBufferSizeBytes      int   = 1024 * 1024
 	getContentStreamChunkSize int64 = 4 * 1024 * 1024 // 4MB
 )
 

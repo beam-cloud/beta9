@@ -47,6 +47,8 @@ class BenchmarkRunner:
         runner = suite.runner
         if runner == "cache":
             CacheSuiteProbe(self.config, self.run_id, self.sink).run(suite)
+        elif runner == "clip_layer":
+            ClipLayerSuiteProbe(self.config, self.run_id, self.sink).run(suite)
         elif runner == "startup":
             ScriptSuiteProbe(
                 self.config, self.run_id, self.sink, "startup", "benchmarks/startup.py"
@@ -566,3 +568,112 @@ class ScriptSuiteProbe(ScriptProbeBase):
         if path.is_absolute():
             return path
         return self.config.root / path
+
+
+class ClipLayerSuiteProbe(ScriptProbeBase):
+    def run(self, suite: SuiteSpec) -> None:
+        output = self.sink.artifact_dir / f"{slug(suite.name)}.json"
+        args = merge_args(
+            self._common_args(),
+            suite.defaults,
+            suite.args,
+            self.config.extra_args,
+            {
+                "profile": self.config.profile,
+                "beta9_config": str(self.config.config_path),
+                "output": str(output),
+            },
+        )
+        proc = self._run_python_script(
+            suite, "benchmarks/b9bench/clip_layer_suite.py", args
+        )
+        if output.exists():
+            report = json.loads(output.read_text(encoding="utf-8"))
+            self._emit_report_metrics(suite, report, proc.returncode)
+
+    def _emit_report_metrics(
+        self, suite: SuiteSpec, report: dict[str, Any], returncode: int
+    ) -> None:
+        iterations = report.get("iterations") or []
+        for item in iterations:
+            read = item.get("read") or {}
+            logs = item.get("logSummary") or {}
+            page_proof = item.get("embeddedCachePageProof") or {}
+            clip_disk = item.get("clipDiskCachePresence") or {}
+            name = str(item.get("name") or "read")
+            is_after_kill = name == "after_worker_kill"
+            cloud_read = logs.get("ociCacheMisses", 0) > 0 or logs.get("layerDecompressed", 0) > 0
+            cache_hit = bool(page_proof.get("ok") and not clip_disk.get("present") and not cloud_read)
+            self.sink.emit(
+                Measurement(
+                    run_id=self.run_id,
+                    suite=suite.name,
+                    scenario=f"clip-layer-{name}",
+                    measurement="clip_layer_read",
+                    timestamp=utc_now(),
+                    duration_ms=float(read.get("durationSeconds") or 0) * 1000,
+                    bytes=int(read.get("size") or 0),
+                    mbps=float(read.get("mbps") or 0),
+                    status="ok" if read.get("ok") else "failed",
+                    tags={
+                        "suite_kind": suite.kind,
+                        "requires_sha": True,
+                        "requires_cache_hit": is_after_kill,
+                        "reject_cloud_read": is_after_kill,
+                        "requires_remote_worker": is_after_kill,
+                        "cache_state": "after_worker_kill" if is_after_kill else "cold",
+                    },
+                    evidence={
+                        "sha_ok": bool(read.get("ok")),
+                        "cache_hit": cache_hit,
+                        "cache_source": "embedded_disk"
+                        if page_proof.get("ok")
+                        else "unknown",
+                        "cloud_read": cloud_read,
+                        "remote_worker": self._worker_changed(iterations)
+                        if is_after_kill
+                        else False,
+                        "worker": ((item.get("worker") or {}).get("name") or ""),
+                        "decompressed_hashes": logs.get("decompressedHashes") or [],
+                        "artifact_output": str(
+                            self.sink.artifact_dir / f"{slug(suite.name)}.json"
+                        ),
+                    },
+                    error="" if read.get("ok") else str(read),
+                )
+            )
+
+        for failure in report.get("validationFailures", []):
+            self.sink.emit(
+                Measurement(
+                    run_id=self.run_id,
+                    suite=suite.name,
+                    scenario=suite.name,
+                    measurement="suite_validation",
+                    timestamp=utc_now(),
+                    status="failed",
+                    error=str(failure),
+                    evidence={"artifact_output": str(self.sink.artifact_dir)},
+                )
+            )
+        if returncode != 0 and not report.get("validationFailures"):
+            self.sink.emit(
+                Measurement(
+                    run_id=self.run_id,
+                    suite=suite.name,
+                    scenario=suite.name,
+                    measurement="suite_validation",
+                    timestamp=utc_now(),
+                    status="failed",
+                    error=str(report.get("error") or "clip layer suite failed"),
+                    evidence={"artifact_output": str(self.sink.artifact_dir)},
+                )
+            )
+
+    @staticmethod
+    def _worker_changed(iterations: list[dict[str, Any]]) -> bool:
+        if len(iterations) < 2:
+            return False
+        first = ((iterations[0].get("worker") or {}).get("name") or "")
+        second = ((iterations[1].get("worker") or {}).get("name") or "")
+        return bool(first and second and first != second)

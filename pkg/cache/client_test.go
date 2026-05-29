@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -502,6 +503,90 @@ func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T)
 		n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
 		return err == nil && n == int64(len(content)) && bytes.Equal(content, remote)
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.T) {
+	ctx := context.Background()
+	firstHost := &Host{HostId: "first-host"}
+	secondHost := &Host{HostId: "second-host"}
+	firstStream := &fakeStoreContentStream{failOnSend: true}
+	secondStream := &fakeStoreContentStream{}
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           map[string]proto.CacheClient{"first-host": &fakeStoreCacheClient{stream: firstStream}, "second-host": &fakeStoreCacheClient{stream: secondStream}},
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{firstHost, secondHost}},
+		maxGetContentAttempts: 2,
+	}
+
+	content := bytes.Repeat([]byte("x"), writeBufferSizeBytes+17)
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.NotEmpty(t, firstStream.sent.Bytes())
+	require.Equal(t, content, secondStream.sent.Bytes())
+}
+
+type fakeStoreCacheClient struct {
+	stream proto.Cache_StoreContentClient
+}
+
+func (f *fakeStoreCacheClient) GetContent(ctx context.Context, in *proto.CacheGetContentRequest, opts ...grpc.CallOption) (*proto.CacheGetContentResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) HasContent(ctx context.Context, in *proto.CacheHasContentRequest, opts ...grpc.CallOption) (*proto.CacheHasContentResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) GetContentStream(ctx context.Context, in *proto.CacheGetContentRequest, opts ...grpc.CallOption) (proto.Cache_GetContentStreamClient, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) StoreContent(ctx context.Context, opts ...grpc.CallOption) (proto.Cache_StoreContentClient, error) {
+	return f.stream, nil
+}
+
+func (f *fakeStoreCacheClient) StoreContentFromSource(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) StoreContentFromSourceWithLock(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *fakeStoreCacheClient) GetState(ctx context.Context, in *proto.CacheGetStateRequest, opts ...grpc.CallOption) (*proto.CacheGetStateResponse, error) {
+	return nil, errors.New("not implemented")
+}
+
+type fakeStoreContentStream struct {
+	grpc.ClientStream
+	failOnSend bool
+	sent       bytes.Buffer
+}
+
+func (s *fakeStoreContentStream) Send(req *proto.CacheStoreContentRequest) error {
+	if len(req.GetContent()) > 0 {
+		_, _ = s.sent.Write(req.GetContent())
+	}
+	if s.failOnSend {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func (s *fakeStoreContentStream) CloseAndRecv() (*proto.CacheStoreContentResponse, error) {
+	sum := sha256.Sum256(s.sent.Bytes())
+	return &proto.CacheStoreContentResponse{
+		Ok:   true,
+		Hash: hex.EncodeToString(sum[:]),
+	}, nil
 }
 
 func TestStoreContentUsesSelectedRemoteHost(t *testing.T) {
