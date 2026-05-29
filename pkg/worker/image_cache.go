@@ -145,7 +145,7 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 		c.maybeLogSummary()
 	}()
 
-	return c.client.IsCachedNearby(hash, opts.RoutingKey)
+	return c.client.IsCachedOnSelectedHost(hash, opts.RoutingKey)
 }
 
 func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (views []clipStorage.ClientLocalPageFileView, err error) {
