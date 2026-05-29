@@ -37,6 +37,10 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
 			"/gateway.GatewayService/Authorize":                         true,
+			"/gateway.GatewayService/JoinHybridPool":                    true,
+			"/gateway.GatewayService/ListHybridRoutes":                  true,
+			"/gateway.GatewayService/RequestHybridTransportCredential":  true,
+			"/gateway.GatewayService/UpdateHybridRouteStatus":           true,
 			"/grpc.health.v1.Health/Check":                              true,
 			"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo": config.DebugMode,
 		},

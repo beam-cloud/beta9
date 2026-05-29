@@ -53,6 +53,7 @@ type Build struct {
 	outputChan      chan common.OutputMsg
 	authInfo        *auth.AuthInfo
 	containerClient ContainerClient
+	routeResolver   network.BackendRouteResolver
 	commands        []string
 	micromamba      bool
 	mounts          []types.Mount
@@ -239,7 +240,7 @@ func (b *Build) logWithImageAndPythonVersion(Done bool, Msg string) {
 }
 
 func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) error {
-	conn, err := network.ConnectToHost(b.ctx, hostname, time.Second*30, tailscale, b.config.Tailscale)
+	conn, err := network.ConnectToBackend(b.ctx, hostname, time.Second*30, tailscale, b.config.Tailscale, b.routeResolver)
 	if err != nil {
 		b.log(true, "Failed to connect to build container.\n")
 		return err

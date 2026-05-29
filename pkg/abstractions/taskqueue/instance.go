@@ -99,6 +99,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			Mounts:            mounts,
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
+			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

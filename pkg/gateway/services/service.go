@@ -25,6 +25,7 @@ type GatewayService struct {
 	eventRepo        repository.EventRepository
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
+	hybridRepo       repository.HybridRepository
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
@@ -44,6 +45,7 @@ type GatewayServiceOpts struct {
 	EventRepo        repository.EventRepository
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
+	HybridRepo       repository.HybridRepository
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
@@ -53,6 +55,10 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
 	if err != nil {
 		return nil, err
+	}
+	hybridRepo := opts.HybridRepo
+	if hybridRepo == nil {
+		hybridRepo = repository.NewHybridRedisRepository(opts.RedisClient)
 	}
 
 	return &GatewayService{
@@ -67,6 +73,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		eventRepo:        opts.EventRepo,
 		workerRepo:       opts.WorkerRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
+		hybridRepo:       hybridRepo,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,6 +251,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
+		Route:       s.backendRouteFor(request, types.BackendRouteKindWorker, 0, hostname),
 	}))
 	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, phaseStart, err == nil, nil)
@@ -359,6 +361,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 			ContainerId: request.ContainerId,
 			Address:     containerAddr,
+			Route:       s.backendRouteFor(request, types.BackendRouteKindContainer, int32(opts.StartupPortBindings[0].ContainerPort), containerAddr),
 		}))
 		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
 		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, phaseStart, err == nil, nil)
@@ -369,13 +372,20 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	addressMap := make(map[int32]string, len(opts.StartupPortBindings))
+	routes := make([]*pb.BackendRoute, 0, len(opts.StartupPortBindings))
 	for _, binding := range opts.StartupPortBindings {
-		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
+		containerPort := int32(binding.ContainerPort)
+		localTarget := fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
+		addressMap[containerPort] = localTarget
+		if route := s.backendRouteFor(request, types.BackendRouteKindContainer, containerPort, localTarget); route != nil {
+			routes = append(routes, route)
+		}
 	}
 	phaseStart = time.Now()
 	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
 		ContainerId: request.ContainerId,
 		AddressMap:  addressMap,
+		Routes:      routes,
 	}))
 	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
@@ -1546,4 +1556,38 @@ func (s *Worker) applyDeferredSandboxCPUThrottle(request *types.ContainerRequest
 	instance.DeferredCPUQuota = nil
 	s.containerInstances.Set(request.ContainerId, instance)
 	return nil
+}
+
+func (s *Worker) backendRouteFor(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute {
+	if !s.persistent || s.machineID == "" || s.hybridTransport == "" {
+		return nil
+	}
+	localTarget = s.hybridRouteLocalTarget(localTarget)
+	routeID := strings.Join([]string{s.machineID, s.workerId, request.ContainerId, kind, fmt.Sprintf("%d", port)}, ":")
+	return &pb.BackendRoute{
+		RouteId:     routeID,
+		WorkspaceId: request.WorkspaceId,
+		PoolName:    s.poolName,
+		MachineId:   s.machineID,
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+		Kind:        kind,
+		Port:        port,
+		Protocol:    types.BackendRouteProtocolTCP,
+		Transport:   s.hybridTransport,
+		LocalTarget: localTarget,
+		State:       types.BackendRouteStateOpening,
+	}
+}
+
+func (s *Worker) hybridRouteLocalTarget(localTarget string) string {
+	if s.hybridLocalTargetHost == "" {
+		return localTarget
+	}
+
+	_, port, err := net.SplitHostPort(localTarget)
+	if err != nil {
+		return localTarget
+	}
+	return net.JoinHostPort(s.hybridLocalTargetHost, port)
 }

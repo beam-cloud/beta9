@@ -214,7 +214,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 	}
 
 	dialStart := time.Now()
-	podConn, err := network.ConnectToHost(context.TODO(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	podConn, err := network.ConnectToBackend(context.TODO(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "tcp", err == nil, time.Since(dialStart))
 	if err == nil {
 		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, connectionReadTimeout)
@@ -339,7 +339,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	proxy.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, networkType, addr string) (net.Conn, error) {
 			start := time.Now()
-			conn, err := network.ConnectToHost(ctx, addr, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+			conn, err := network.ConnectToBackend(ctx, addr, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
 			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
 			if err == nil {
 				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
@@ -485,7 +485,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 // checkContainerAvailable checks if a container is available (meaning you can connect to it via a TCP dial)
 func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool {
 	start := time.Now()
-	conn, err := network.ConnectToHost(pb.ctx, containerAddress, containerAvailableTimeout, pb.tailscale, pb.tsConfig)
+	conn, err := network.ConnectToBackend(pb.ctx, containerAddress, containerAvailableTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	if err != nil {
 		metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", false, time.Since(start))
 		return false

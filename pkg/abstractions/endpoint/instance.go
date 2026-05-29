@@ -103,6 +103,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
 			Preemptable:       true,
+			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers

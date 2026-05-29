@@ -452,35 +452,62 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 }
 
 type StubConfigV1 struct {
-	Runtime            Runtime         `json:"runtime"`
-	Handler            string          `json:"handler"`
-	OnStart            string          `json:"on_start"`
-	OnDeploy           string          `json:"on_deploy"`
-	OnDeployStubId     string          `json:"on_deploy_stub_id"`
-	PythonVersion      string          `json:"python_version"`
-	KeepWarmSeconds    uint            `json:"keep_warm_seconds"`
-	MaxPendingTasks    uint            `json:"max_pending_tasks"`
-	CallbackUrl        string          `json:"callback_url"`
-	TaskPolicy         TaskPolicy      `json:"task_policy"`
-	Workers            uint            `json:"workers"`
-	ConcurrentRequests uint            `json:"concurrent_requests"`
-	Authorized         bool            `json:"authorized"`
-	Volumes            []*pb.Volume    `json:"volumes"`
-	Secrets            []Secret        `json:"secrets,omitempty"`
-	Env                []string        `json:"env,omitempty"`
-	Autoscaler         *Autoscaler     `json:"autoscaler"`
-	Extra              json.RawMessage `json:"extra"`
-	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
-	WorkDir            string          `json:"work_dir"`
-	EntryPoint         []string        `json:"entry_point"`
-	Ports              []uint32        `json:"ports"`
-	Pricing            *PricingPolicy  `json:"pricing"`
-	Inputs             *Schema         `json:"inputs"`
-	Outputs            *Schema         `json:"outputs"`
-	TCP                bool            `json:"tcp"`
-	BlockNetwork       bool            `json:"block_network"`
-	AllowList          []string        `json:"allow_list"`
-	DockerEnabled      bool            `json:"docker_enabled"`
+	Runtime            Runtime           `json:"runtime"`
+	Handler            string            `json:"handler"`
+	OnStart            string            `json:"on_start"`
+	OnDeploy           string            `json:"on_deploy"`
+	OnDeployStubId     string            `json:"on_deploy_stub_id"`
+	PythonVersion      string            `json:"python_version"`
+	KeepWarmSeconds    uint              `json:"keep_warm_seconds"`
+	MaxPendingTasks    uint              `json:"max_pending_tasks"`
+	CallbackUrl        string            `json:"callback_url"`
+	TaskPolicy         TaskPolicy        `json:"task_policy"`
+	Workers            uint              `json:"workers"`
+	ConcurrentRequests uint              `json:"concurrent_requests"`
+	Authorized         bool              `json:"authorized"`
+	Volumes            []*pb.Volume      `json:"volumes"`
+	Secrets            []Secret          `json:"secrets,omitempty"`
+	Env                []string          `json:"env,omitempty"`
+	Autoscaler         *Autoscaler       `json:"autoscaler"`
+	Extra              json.RawMessage   `json:"extra"`
+	CheckpointEnabled  bool              `json:"checkpoint_enabled"`
+	WorkDir            string            `json:"work_dir"`
+	EntryPoint         []string          `json:"entry_point"`
+	Ports              []uint32          `json:"ports"`
+	Pricing            *PricingPolicy    `json:"pricing"`
+	Inputs             *Schema           `json:"inputs"`
+	Outputs            *Schema           `json:"outputs"`
+	TCP                bool              `json:"tcp"`
+	BlockNetwork       bool              `json:"block_network"`
+	AllowList          []string          `json:"allow_list"`
+	DockerEnabled      bool              `json:"docker_enabled"`
+	Pool               *HybridPoolConfig `json:"pool,omitempty"`
+}
+
+type HybridPoolConfig struct {
+	Name                string   `json:"name,omitempty"`
+	GPUs                []string `json:"gpu,omitempty"`
+	TotalGPUs           uint32   `json:"gpus,omitempty"`
+	TTL                 string   `json:"ttl,omitempty"`
+	MaxSpend            float64  `json:"max_spend,omitempty"`
+	Providers           []string `json:"providers,omitempty"`
+	Regions             []string `json:"regions,omitempty"`
+	MinReliability      float64  `json:"min_reliability,omitempty"`
+	ReservationRequired bool     `json:"reservation_required,omitempty"`
+	Selector            string   `json:"selector,omitempty"`
+}
+
+func (c *StubConfigV1) PoolSelector() string {
+	if c == nil || c.Pool == nil {
+		return ""
+	}
+	if c.Pool.Selector != "" {
+		return c.Pool.Selector
+	}
+	if c.Pool.Name != "" {
+		return c.Pool.Name
+	}
+	return ""
 }
 
 type StubConfigLimitedValues struct {

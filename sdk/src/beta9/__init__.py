@@ -37,6 +37,7 @@ from .client.deployment import Deployment
 from .client.task import Task
 from .type import (
     GpuType,
+    Pool,
     PricingPolicy,
     PricingPolicyCostModel,
     PythonVersion,
@@ -59,6 +60,7 @@ __all__ = [
     "Container",
     "env",
     "GpuType",
+    "Pool",
     "PythonVersion",
     "Output",
     "QueueDepthAutoscaler",

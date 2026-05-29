@@ -55,7 +55,7 @@ from ..clients.pod import (
 )
 from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
-from ..type import GpuType, GpuTypeAlias
+from ..type import GpuType, GpuTypeAlias, Pool
 from ..utils import retry_on_transient_error
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
@@ -171,6 +171,7 @@ class Sandbox(Pod):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         ports: Optional[List[int]] = [],
+        pool: Optional[Union[str, Pool]] = None,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
@@ -191,6 +192,7 @@ class Sandbox(Pod):
             allow_list=allow_list,
             docker_enabled=docker_enabled,
             ports=ports,
+            pool=pool,
         )
 
     def debug(self):

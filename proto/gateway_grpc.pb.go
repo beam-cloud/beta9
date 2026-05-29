@@ -19,40 +19,54 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_Authorize_FullMethodName             = "/gateway.GatewayService/Authorize"
-	GatewayService_SignPayload_FullMethodName           = "/gateway.GatewayService/SignPayload"
-	GatewayService_HeadObject_FullMethodName            = "/gateway.GatewayService/HeadObject"
-	GatewayService_CreateObject_FullMethodName          = "/gateway.GatewayService/CreateObject"
-	GatewayService_PutObjectStream_FullMethodName       = "/gateway.GatewayService/PutObjectStream"
-	GatewayService_CheckpointContainer_FullMethodName   = "/gateway.GatewayService/CheckpointContainer"
-	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
-	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
-	GatewayService_AttachToContainer_FullMethodName     = "/gateway.GatewayService/AttachToContainer"
-	GatewayService_StartTask_FullMethodName             = "/gateway.GatewayService/StartTask"
-	GatewayService_EndTask_FullMethodName               = "/gateway.GatewayService/EndTask"
-	GatewayService_StopTasks_FullMethodName             = "/gateway.GatewayService/StopTasks"
-	GatewayService_ListTasks_FullMethodName             = "/gateway.GatewayService/ListTasks"
-	GatewayService_GetOrCreateStub_FullMethodName       = "/gateway.GatewayService/GetOrCreateStub"
-	GatewayService_DeployStub_FullMethodName            = "/gateway.GatewayService/DeployStub"
-	GatewayService_GetURL_FullMethodName                = "/gateway.GatewayService/GetURL"
-	GatewayService_ListDeployments_FullMethodName       = "/gateway.GatewayService/ListDeployments"
-	GatewayService_StopDeployment_FullMethodName        = "/gateway.GatewayService/StopDeployment"
-	GatewayService_StartDeployment_FullMethodName       = "/gateway.GatewayService/StartDeployment"
-	GatewayService_ScaleDeployment_FullMethodName       = "/gateway.GatewayService/ScaleDeployment"
-	GatewayService_DeleteDeployment_FullMethodName      = "/gateway.GatewayService/DeleteDeployment"
-	GatewayService_ListPools_FullMethodName             = "/gateway.GatewayService/ListPools"
-	GatewayService_ListMachines_FullMethodName          = "/gateway.GatewayService/ListMachines"
-	GatewayService_CreateMachine_FullMethodName         = "/gateway.GatewayService/CreateMachine"
-	GatewayService_DeleteMachine_FullMethodName         = "/gateway.GatewayService/DeleteMachine"
-	GatewayService_ListTokens_FullMethodName            = "/gateway.GatewayService/ListTokens"
-	GatewayService_CreateToken_FullMethodName           = "/gateway.GatewayService/CreateToken"
-	GatewayService_ToggleToken_FullMethodName           = "/gateway.GatewayService/ToggleToken"
-	GatewayService_DeleteToken_FullMethodName           = "/gateway.GatewayService/DeleteToken"
-	GatewayService_ListWorkers_FullMethodName           = "/gateway.GatewayService/ListWorkers"
-	GatewayService_CordonWorker_FullMethodName          = "/gateway.GatewayService/CordonWorker"
-	GatewayService_UncordonWorker_FullMethodName        = "/gateway.GatewayService/UncordonWorker"
-	GatewayService_DrainWorker_FullMethodName           = "/gateway.GatewayService/DrainWorker"
-	GatewayService_ExportWorkspaceConfig_FullMethodName = "/gateway.GatewayService/ExportWorkspaceConfig"
+	GatewayService_Authorize_FullMethodName                        = "/gateway.GatewayService/Authorize"
+	GatewayService_SignPayload_FullMethodName                      = "/gateway.GatewayService/SignPayload"
+	GatewayService_HeadObject_FullMethodName                       = "/gateway.GatewayService/HeadObject"
+	GatewayService_CreateObject_FullMethodName                     = "/gateway.GatewayService/CreateObject"
+	GatewayService_PutObjectStream_FullMethodName                  = "/gateway.GatewayService/PutObjectStream"
+	GatewayService_CheckpointContainer_FullMethodName              = "/gateway.GatewayService/CheckpointContainer"
+	GatewayService_ListContainers_FullMethodName                   = "/gateway.GatewayService/ListContainers"
+	GatewayService_StopContainer_FullMethodName                    = "/gateway.GatewayService/StopContainer"
+	GatewayService_AttachToContainer_FullMethodName                = "/gateway.GatewayService/AttachToContainer"
+	GatewayService_StartTask_FullMethodName                        = "/gateway.GatewayService/StartTask"
+	GatewayService_EndTask_FullMethodName                          = "/gateway.GatewayService/EndTask"
+	GatewayService_StopTasks_FullMethodName                        = "/gateway.GatewayService/StopTasks"
+	GatewayService_ListTasks_FullMethodName                        = "/gateway.GatewayService/ListTasks"
+	GatewayService_GetOrCreateStub_FullMethodName                  = "/gateway.GatewayService/GetOrCreateStub"
+	GatewayService_DeployStub_FullMethodName                       = "/gateway.GatewayService/DeployStub"
+	GatewayService_GetURL_FullMethodName                           = "/gateway.GatewayService/GetURL"
+	GatewayService_ListDeployments_FullMethodName                  = "/gateway.GatewayService/ListDeployments"
+	GatewayService_StopDeployment_FullMethodName                   = "/gateway.GatewayService/StopDeployment"
+	GatewayService_StartDeployment_FullMethodName                  = "/gateway.GatewayService/StartDeployment"
+	GatewayService_ScaleDeployment_FullMethodName                  = "/gateway.GatewayService/ScaleDeployment"
+	GatewayService_DeleteDeployment_FullMethodName                 = "/gateway.GatewayService/DeleteDeployment"
+	GatewayService_ListPools_FullMethodName                        = "/gateway.GatewayService/ListPools"
+	GatewayService_ListHybridOffers_FullMethodName                 = "/gateway.GatewayService/ListHybridOffers"
+	GatewayService_ReserveHybridPool_FullMethodName                = "/gateway.GatewayService/ReserveHybridPool"
+	GatewayService_ListHybridPools_FullMethodName                  = "/gateway.GatewayService/ListHybridPools"
+	GatewayService_UpsertHybridPool_FullMethodName                 = "/gateway.GatewayService/UpsertHybridPool"
+	GatewayService_DeleteHybridPool_FullMethodName                 = "/gateway.GatewayService/DeleteHybridPool"
+	GatewayService_ExtendHybridPool_FullMethodName                 = "/gateway.GatewayService/ExtendHybridPool"
+	GatewayService_AttachHybridPool_FullMethodName                 = "/gateway.GatewayService/AttachHybridPool"
+	GatewayService_CreateHybridPoolJoinToken_FullMethodName        = "/gateway.GatewayService/CreateHybridPoolJoinToken"
+	GatewayService_RevokeHybridPoolJoinToken_FullMethodName        = "/gateway.GatewayService/RevokeHybridPoolJoinToken"
+	GatewayService_GetHybridPoolJoinCommand_FullMethodName         = "/gateway.GatewayService/GetHybridPoolJoinCommand"
+	GatewayService_JoinHybridPool_FullMethodName                   = "/gateway.GatewayService/JoinHybridPool"
+	GatewayService_RequestHybridTransportCredential_FullMethodName = "/gateway.GatewayService/RequestHybridTransportCredential"
+	GatewayService_ListHybridRoutes_FullMethodName                 = "/gateway.GatewayService/ListHybridRoutes"
+	GatewayService_UpdateHybridRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateHybridRouteStatus"
+	GatewayService_ListMachines_FullMethodName                     = "/gateway.GatewayService/ListMachines"
+	GatewayService_CreateMachine_FullMethodName                    = "/gateway.GatewayService/CreateMachine"
+	GatewayService_DeleteMachine_FullMethodName                    = "/gateway.GatewayService/DeleteMachine"
+	GatewayService_ListTokens_FullMethodName                       = "/gateway.GatewayService/ListTokens"
+	GatewayService_CreateToken_FullMethodName                      = "/gateway.GatewayService/CreateToken"
+	GatewayService_ToggleToken_FullMethodName                      = "/gateway.GatewayService/ToggleToken"
+	GatewayService_DeleteToken_FullMethodName                      = "/gateway.GatewayService/DeleteToken"
+	GatewayService_ListWorkers_FullMethodName                      = "/gateway.GatewayService/ListWorkers"
+	GatewayService_CordonWorker_FullMethodName                     = "/gateway.GatewayService/CordonWorker"
+	GatewayService_UncordonWorker_FullMethodName                   = "/gateway.GatewayService/UncordonWorker"
+	GatewayService_DrainWorker_FullMethodName                      = "/gateway.GatewayService/DrainWorker"
+	GatewayService_ExportWorkspaceConfig_FullMethodName            = "/gateway.GatewayService/ExportWorkspaceConfig"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -88,6 +102,21 @@ type GatewayServiceClient interface {
 	DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
+	// Hybrid reserved pools
+	ListHybridOffers(ctx context.Context, in *ListHybridOffersRequest, opts ...grpc.CallOption) (*ListHybridOffersResponse, error)
+	ReserveHybridPool(ctx context.Context, in *ReserveHybridPoolRequest, opts ...grpc.CallOption) (*ReserveHybridPoolResponse, error)
+	ListHybridPools(ctx context.Context, in *ListHybridPoolsRequest, opts ...grpc.CallOption) (*ListHybridPoolsResponse, error)
+	UpsertHybridPool(ctx context.Context, in *UpsertHybridPoolRequest, opts ...grpc.CallOption) (*UpsertHybridPoolResponse, error)
+	DeleteHybridPool(ctx context.Context, in *DeleteHybridPoolRequest, opts ...grpc.CallOption) (*DeleteHybridPoolResponse, error)
+	ExtendHybridPool(ctx context.Context, in *ExtendHybridPoolRequest, opts ...grpc.CallOption) (*ExtendHybridPoolResponse, error)
+	AttachHybridPool(ctx context.Context, in *AttachHybridPoolRequest, opts ...grpc.CallOption) (*AttachHybridPoolResponse, error)
+	CreateHybridPoolJoinToken(ctx context.Context, in *CreateHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*CreateHybridPoolJoinTokenResponse, error)
+	RevokeHybridPoolJoinToken(ctx context.Context, in *RevokeHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokeHybridPoolJoinTokenResponse, error)
+	GetHybridPoolJoinCommand(ctx context.Context, in *GetHybridPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetHybridPoolJoinCommandResponse, error)
+	JoinHybridPool(ctx context.Context, in *JoinHybridPoolRequest, opts ...grpc.CallOption) (*JoinHybridPoolResponse, error)
+	RequestHybridTransportCredential(ctx context.Context, in *RequestHybridTransportCredentialRequest, opts ...grpc.CallOption) (*RequestHybridTransportCredentialResponse, error)
+	ListHybridRoutes(ctx context.Context, in *ListHybridRoutesRequest, opts ...grpc.CallOption) (*ListHybridRoutesResponse, error)
+	UpdateHybridRouteStatus(ctx context.Context, in *UpdateHybridRouteStatusRequest, opts ...grpc.CallOption) (*UpdateHybridRouteStatusResponse, error)
 	// Machines
 	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
 	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
@@ -359,6 +388,132 @@ func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsReque
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ListHybridOffers(ctx context.Context, in *ListHybridOffersRequest, opts ...grpc.CallOption) (*ListHybridOffersResponse, error) {
+	out := new(ListHybridOffersResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListHybridOffers_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ReserveHybridPool(ctx context.Context, in *ReserveHybridPoolRequest, opts ...grpc.CallOption) (*ReserveHybridPoolResponse, error) {
+	out := new(ReserveHybridPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ReserveHybridPool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListHybridPools(ctx context.Context, in *ListHybridPoolsRequest, opts ...grpc.CallOption) (*ListHybridPoolsResponse, error) {
+	out := new(ListHybridPoolsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListHybridPools_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) UpsertHybridPool(ctx context.Context, in *UpsertHybridPoolRequest, opts ...grpc.CallOption) (*UpsertHybridPoolResponse, error) {
+	out := new(UpsertHybridPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_UpsertHybridPool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) DeleteHybridPool(ctx context.Context, in *DeleteHybridPoolRequest, opts ...grpc.CallOption) (*DeleteHybridPoolResponse, error) {
+	out := new(DeleteHybridPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteHybridPool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ExtendHybridPool(ctx context.Context, in *ExtendHybridPoolRequest, opts ...grpc.CallOption) (*ExtendHybridPoolResponse, error) {
+	out := new(ExtendHybridPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ExtendHybridPool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) AttachHybridPool(ctx context.Context, in *AttachHybridPoolRequest, opts ...grpc.CallOption) (*AttachHybridPoolResponse, error) {
+	out := new(AttachHybridPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_AttachHybridPool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreateHybridPoolJoinToken(ctx context.Context, in *CreateHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*CreateHybridPoolJoinTokenResponse, error) {
+	out := new(CreateHybridPoolJoinTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateHybridPoolJoinToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RevokeHybridPoolJoinToken(ctx context.Context, in *RevokeHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokeHybridPoolJoinTokenResponse, error) {
+	out := new(RevokeHybridPoolJoinTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RevokeHybridPoolJoinToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetHybridPoolJoinCommand(ctx context.Context, in *GetHybridPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetHybridPoolJoinCommandResponse, error) {
+	out := new(GetHybridPoolJoinCommandResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetHybridPoolJoinCommand_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) JoinHybridPool(ctx context.Context, in *JoinHybridPoolRequest, opts ...grpc.CallOption) (*JoinHybridPoolResponse, error) {
+	out := new(JoinHybridPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_JoinHybridPool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RequestHybridTransportCredential(ctx context.Context, in *RequestHybridTransportCredentialRequest, opts ...grpc.CallOption) (*RequestHybridTransportCredentialResponse, error) {
+	out := new(RequestHybridTransportCredentialResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RequestHybridTransportCredential_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListHybridRoutes(ctx context.Context, in *ListHybridRoutesRequest, opts ...grpc.CallOption) (*ListHybridRoutesResponse, error) {
+	out := new(ListHybridRoutesResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListHybridRoutes_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) UpdateHybridRouteStatus(ctx context.Context, in *UpdateHybridRouteStatusRequest, opts ...grpc.CallOption) (*UpdateHybridRouteStatusResponse, error) {
+	out := new(UpdateHybridRouteStatusResponse)
+	err := c.cc.Invoke(ctx, GatewayService_UpdateHybridRouteStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error) {
 	out := new(ListMachinesResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListMachines_FullMethodName, in, out, opts...)
@@ -500,6 +655,21 @@ type GatewayServiceServer interface {
 	DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
+	// Hybrid reserved pools
+	ListHybridOffers(context.Context, *ListHybridOffersRequest) (*ListHybridOffersResponse, error)
+	ReserveHybridPool(context.Context, *ReserveHybridPoolRequest) (*ReserveHybridPoolResponse, error)
+	ListHybridPools(context.Context, *ListHybridPoolsRequest) (*ListHybridPoolsResponse, error)
+	UpsertHybridPool(context.Context, *UpsertHybridPoolRequest) (*UpsertHybridPoolResponse, error)
+	DeleteHybridPool(context.Context, *DeleteHybridPoolRequest) (*DeleteHybridPoolResponse, error)
+	ExtendHybridPool(context.Context, *ExtendHybridPoolRequest) (*ExtendHybridPoolResponse, error)
+	AttachHybridPool(context.Context, *AttachHybridPoolRequest) (*AttachHybridPoolResponse, error)
+	CreateHybridPoolJoinToken(context.Context, *CreateHybridPoolJoinTokenRequest) (*CreateHybridPoolJoinTokenResponse, error)
+	RevokeHybridPoolJoinToken(context.Context, *RevokeHybridPoolJoinTokenRequest) (*RevokeHybridPoolJoinTokenResponse, error)
+	GetHybridPoolJoinCommand(context.Context, *GetHybridPoolJoinCommandRequest) (*GetHybridPoolJoinCommandResponse, error)
+	JoinHybridPool(context.Context, *JoinHybridPoolRequest) (*JoinHybridPoolResponse, error)
+	RequestHybridTransportCredential(context.Context, *RequestHybridTransportCredentialRequest) (*RequestHybridTransportCredentialResponse, error)
+	ListHybridRoutes(context.Context, *ListHybridRoutesRequest) (*ListHybridRoutesResponse, error)
+	UpdateHybridRouteStatus(context.Context, *UpdateHybridRouteStatusRequest) (*UpdateHybridRouteStatusResponse, error)
 	// Machines
 	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
 	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
@@ -588,6 +758,48 @@ func (UnimplementedGatewayServiceServer) DeleteDeployment(context.Context, *Dele
 }
 func (UnimplementedGatewayServiceServer) ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPools not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListHybridOffers(context.Context, *ListHybridOffersRequest) (*ListHybridOffersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListHybridOffers not implemented")
+}
+func (UnimplementedGatewayServiceServer) ReserveHybridPool(context.Context, *ReserveHybridPoolRequest) (*ReserveHybridPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReserveHybridPool not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListHybridPools(context.Context, *ListHybridPoolsRequest) (*ListHybridPoolsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListHybridPools not implemented")
+}
+func (UnimplementedGatewayServiceServer) UpsertHybridPool(context.Context, *UpsertHybridPoolRequest) (*UpsertHybridPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpsertHybridPool not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeleteHybridPool(context.Context, *DeleteHybridPoolRequest) (*DeleteHybridPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteHybridPool not implemented")
+}
+func (UnimplementedGatewayServiceServer) ExtendHybridPool(context.Context, *ExtendHybridPoolRequest) (*ExtendHybridPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExtendHybridPool not implemented")
+}
+func (UnimplementedGatewayServiceServer) AttachHybridPool(context.Context, *AttachHybridPoolRequest) (*AttachHybridPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AttachHybridPool not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateHybridPoolJoinToken(context.Context, *CreateHybridPoolJoinTokenRequest) (*CreateHybridPoolJoinTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateHybridPoolJoinToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) RevokeHybridPoolJoinToken(context.Context, *RevokeHybridPoolJoinTokenRequest) (*RevokeHybridPoolJoinTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeHybridPoolJoinToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetHybridPoolJoinCommand(context.Context, *GetHybridPoolJoinCommandRequest) (*GetHybridPoolJoinCommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetHybridPoolJoinCommand not implemented")
+}
+func (UnimplementedGatewayServiceServer) JoinHybridPool(context.Context, *JoinHybridPoolRequest) (*JoinHybridPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method JoinHybridPool not implemented")
+}
+func (UnimplementedGatewayServiceServer) RequestHybridTransportCredential(context.Context, *RequestHybridTransportCredentialRequest) (*RequestHybridTransportCredentialResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestHybridTransportCredential not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListHybridRoutes(context.Context, *ListHybridRoutesRequest) (*ListHybridRoutesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListHybridRoutes not implemented")
+}
+func (UnimplementedGatewayServiceServer) UpdateHybridRouteStatus(context.Context, *UpdateHybridRouteStatusRequest) (*UpdateHybridRouteStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateHybridRouteStatus not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMachines not implemented")
@@ -1050,6 +1262,258 @@ func _GatewayService_ListPools_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ListHybridOffers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHybridOffersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListHybridOffers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListHybridOffers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListHybridOffers(ctx, req.(*ListHybridOffersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ReserveHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReserveHybridPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ReserveHybridPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ReserveHybridPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ReserveHybridPool(ctx, req.(*ReserveHybridPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListHybridPools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHybridPoolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListHybridPools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListHybridPools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListHybridPools(ctx, req.(*ListHybridPoolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_UpsertHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertHybridPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).UpsertHybridPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_UpsertHybridPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).UpsertHybridPool(ctx, req.(*UpsertHybridPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_DeleteHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteHybridPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeleteHybridPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeleteHybridPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeleteHybridPool(ctx, req.(*DeleteHybridPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ExtendHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExtendHybridPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ExtendHybridPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ExtendHybridPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ExtendHybridPool(ctx, req.(*ExtendHybridPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_AttachHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AttachHybridPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).AttachHybridPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_AttachHybridPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).AttachHybridPool(ctx, req.(*AttachHybridPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreateHybridPoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateHybridPoolJoinTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateHybridPoolJoinToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateHybridPoolJoinToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateHybridPoolJoinToken(ctx, req.(*CreateHybridPoolJoinTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RevokeHybridPoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeHybridPoolJoinTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RevokeHybridPoolJoinToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RevokeHybridPoolJoinToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RevokeHybridPoolJoinToken(ctx, req.(*RevokeHybridPoolJoinTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetHybridPoolJoinCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetHybridPoolJoinCommandRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetHybridPoolJoinCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetHybridPoolJoinCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetHybridPoolJoinCommand(ctx, req.(*GetHybridPoolJoinCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_JoinHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinHybridPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).JoinHybridPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_JoinHybridPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).JoinHybridPool(ctx, req.(*JoinHybridPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RequestHybridTransportCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestHybridTransportCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RequestHybridTransportCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RequestHybridTransportCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RequestHybridTransportCredential(ctx, req.(*RequestHybridTransportCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListHybridRoutes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHybridRoutesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListHybridRoutes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListHybridRoutes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListHybridRoutes(ctx, req.(*ListHybridRoutesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_UpdateHybridRouteStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateHybridRouteStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).UpdateHybridRouteStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_UpdateHybridRouteStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).UpdateHybridRouteStatus(ctx, req.(*UpdateHybridRouteStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_ListMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListMachinesRequest)
 	if err := dec(in); err != nil {
@@ -1352,6 +1816,62 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListPools",
 			Handler:    _GatewayService_ListPools_Handler,
+		},
+		{
+			MethodName: "ListHybridOffers",
+			Handler:    _GatewayService_ListHybridOffers_Handler,
+		},
+		{
+			MethodName: "ReserveHybridPool",
+			Handler:    _GatewayService_ReserveHybridPool_Handler,
+		},
+		{
+			MethodName: "ListHybridPools",
+			Handler:    _GatewayService_ListHybridPools_Handler,
+		},
+		{
+			MethodName: "UpsertHybridPool",
+			Handler:    _GatewayService_UpsertHybridPool_Handler,
+		},
+		{
+			MethodName: "DeleteHybridPool",
+			Handler:    _GatewayService_DeleteHybridPool_Handler,
+		},
+		{
+			MethodName: "ExtendHybridPool",
+			Handler:    _GatewayService_ExtendHybridPool_Handler,
+		},
+		{
+			MethodName: "AttachHybridPool",
+			Handler:    _GatewayService_AttachHybridPool_Handler,
+		},
+		{
+			MethodName: "CreateHybridPoolJoinToken",
+			Handler:    _GatewayService_CreateHybridPoolJoinToken_Handler,
+		},
+		{
+			MethodName: "RevokeHybridPoolJoinToken",
+			Handler:    _GatewayService_RevokeHybridPoolJoinToken_Handler,
+		},
+		{
+			MethodName: "GetHybridPoolJoinCommand",
+			Handler:    _GatewayService_GetHybridPoolJoinCommand_Handler,
+		},
+		{
+			MethodName: "JoinHybridPool",
+			Handler:    _GatewayService_JoinHybridPool_Handler,
+		},
+		{
+			MethodName: "RequestHybridTransportCredential",
+			Handler:    _GatewayService_RequestHybridTransportCredential_Handler,
+		},
+		{
+			MethodName: "ListHybridRoutes",
+			Handler:    _GatewayService_ListHybridRoutes_Handler,
+		},
+		{
+			MethodName: "UpdateHybridRouteStatus",
+			Handler:    _GatewayService_UpdateHybridRouteStatus_Handler,
 		},
 		{
 			MethodName: "ListMachines",

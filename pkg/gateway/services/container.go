@@ -161,7 +161,7 @@ func (gws *GatewayService) getClient(ctx context.Context, containerId, token str
 		return nil, nil, err
 	}
 
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, gws.tailscale, gws.appConfig.Tailscale)
+	conn, err := network.ConnectToBackend(ctx, hostname, time.Second*30, gws.tailscale, gws.appConfig.Tailscale, gws.containerRepo)
 	if err != nil {
 		return nil, nil, err
 	}
