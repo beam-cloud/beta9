@@ -484,6 +484,113 @@ func TestStoreContentWithLocalReplicaSkipsLocalPrimaryForRemoteReplica(t *testin
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, local)
+
+	postChurnClient := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, postChurnClient.addHost(remoteHost))
+	defer postChurnClient.Cleanup()
+
+	afterLocalChurn := make([]byte, len(content))
+	n, err = postChurnClient.ReadContentInto(ctx, expectedHash, 0, afterLocalChurn, ClientOptions{RoutingKey: "/cache/local-primary"})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, afterLocalChurn)
+}
+
+func TestReadContentIntoSurvivesLogicalHostRegistrationReplacement(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cacheDir := t.TempDir()
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         cacheDir,
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+			ReadTransport:        ServerReadTransportConfig{Enabled: true, Sendfile: true},
+		},
+		Client: ClientConfig{
+			NTopHosts:     1,
+			ReadTransport: ClientReadTransportConfig{Enabled: true, MaxActiveConnsPerHost: 4, MaxIdleConnsPerHost: 2},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	logicalHostID := "logical-node-cache-host"
+
+	server1, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID(logicalHostID))
+	require.NoError(t, err)
+	addr1, err := server1.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+
+	content := []byte("cache-survives-registration-replacement")
+	hash, _, err := server1.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	direct := make([]byte, len(content))
+	n, err := server1.cas.ReadAt(hash, 0, direct)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, direct)
+
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{},
+		maxGetContentAttempts: 1,
+	}
+	defer client.Cleanup()
+
+	host1 := server1.Host()
+	require.NotNil(t, host1)
+	host1.Addr = addr1
+	host1.PrivateAddr = addr1
+	require.NoError(t, client.addHost(host1))
+
+	firstRead := make([]byte, len(content))
+	n, err = client.ReadContentInto(ctx, hash, 0, firstRead, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, firstRead)
+
+	require.NoError(t, server1.Close())
+
+	server2, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID(logicalHostID))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, server2.Close()) }()
+	addr2, err := server2.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	require.NotEqual(t, addr1, addr2)
+
+	host2 := server2.Host()
+	require.NotNil(t, host2)
+	host2.Addr = addr2
+	host2.PrivateAddr = addr2
+	require.NoError(t, client.addHost(host2))
+
+	afterReplacement := make([]byte, len(content))
+	n, err = client.ReadContentInto(ctx, hash, 0, afterReplacement, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, afterReplacement)
 }
 
 type failFirstUnlockRegistry struct {

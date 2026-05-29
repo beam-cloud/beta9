@@ -45,7 +45,9 @@ from ..clients.pod import (
     PodSandboxStatusRequest,
     PodSandboxStatusResponse,
     PodSandboxStderrRequest,
+    PodSandboxStderrResponse,
     PodSandboxStdoutRequest,
+    PodSandboxStdoutResponse,
     PodSandboxUpdateNetworkPermissionsRequest,
     PodSandboxUpdateNetworkPermissionsResponse,
     PodSandboxUpdateTtlRequest,
@@ -60,6 +62,7 @@ from ..utils import retry_on_transient_error
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
+SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 
 
@@ -1085,12 +1088,10 @@ class SandboxProcessStream:
             # On persistent failure, return empty to avoid blocking
             return ""
 
-        if output == self._last_output:
-            return ""
-
-        new_output = output[len(self._last_output) :]
-        self._last_output = output
-        return new_output
+        # The sandbox process manager returns output deltas and clears its
+        # internal buffer after each read. Do not treat the returned value as
+        # cumulative output.
+        return output
 
     def read(self):
         """
@@ -1285,11 +1286,7 @@ class SandboxProcess:
         if not hasattr(self, "_stdout_stream"):
             self._stdout_stream = SandboxProcessStream(
                 self,
-                lambda: self.sandbox_instance.stub.sandbox_stdout(
-                    PodSandboxStdoutRequest(
-                        container_id=self.sandbox_instance.container_id, pid=self.pid
-                    )
-                ).stdout,
+                self._stdout,
             )
         return self._stdout_stream
 
@@ -1312,13 +1309,33 @@ class SandboxProcess:
         if not hasattr(self, "_stderr_stream"):
             self._stderr_stream = SandboxProcessStream(
                 self,
-                lambda: self.sandbox_instance.stub.sandbox_stderr(
-                    PodSandboxStderrRequest(
-                        container_id=self.sandbox_instance.container_id, pid=self.pid
-                    )
-                ).stderr,
+                self._stderr,
             )
         return self._stderr_stream
+
+    def _stdout(self) -> str:
+        return self.sandbox_instance.stub._unary_unary(
+            "/pod.PodService/SandboxStdout",
+            PodSandboxStdoutRequest,
+            PodSandboxStdoutResponse,
+        )(
+            PodSandboxStdoutRequest(
+                container_id=self.sandbox_instance.container_id, pid=self.pid
+            ),
+            timeout=SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS,
+        ).stdout
+
+    def _stderr(self) -> str:
+        return self.sandbox_instance.stub._unary_unary(
+            "/pod.PodService/SandboxStderr",
+            PodSandboxStderrRequest,
+            PodSandboxStderrResponse,
+        )(
+            PodSandboxStderrRequest(
+                container_id=self.sandbox_instance.container_id, pid=self.pid
+            ),
+            timeout=SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS,
+        ).stderr
 
     @property
     def logs(self):
