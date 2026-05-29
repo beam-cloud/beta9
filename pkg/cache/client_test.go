@@ -341,6 +341,50 @@ func TestStoreContentFromLocalFileUsesMatchingCacheMetadata(t *testing.T) {
 	require.Empty(t, metadataStore.locks)
 }
 
+func TestStoreContentFromLocalFileWaitsForLockedHashAlreadyPublished(t *testing.T) {
+	ctx := context.Background()
+	content := []byte("published by competing cache writer")
+
+	sourcePath := filepath.Join(t.TempDir(), "source.txt")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+
+	store := newTestStore(t, 5)
+	hash, _, err := store.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	cachePath := "/workspace/source.txt"
+	metadataStore := NewMockCacheMetadataStore()
+	require.NoError(t, metadataStore.SetStoreFromContentLock(ctx, "test", cachePath))
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          GlobalConfig{GRPCMessageSizeBytes: 4 * 1024 * 1024},
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		localPromotionSem:     make(chan struct{}, 1),
+		hasher:                &orderedTestHasher{},
+		maxGetContentAttempts: 1,
+	}
+	defer client.Cleanup()
+	client.AttachLocalStore(store)
+
+	got, err := client.StoreContentFromLocalFile(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: cachePath,
+	}, StoreContentOptions{
+		RoutingKey: hash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, hash, got)
+}
+
 func TestStoreContentWithLocalReplicaWritesRemoteAndLocal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
