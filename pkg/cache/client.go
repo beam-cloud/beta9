@@ -556,16 +556,16 @@ func (c *Client) dataCallOptions() []grpc.CallOption {
 	return []grpc.CallOption{grpc.ForceCodecV2(cachegrpc.New(c.globalConfig.GRPCPayloadCodecMinBytes))}
 }
 
-func (c *Client) IsPathCachedNearby(ctx context.Context, path string) bool {
+func (c *Client) IsPathCachedReachable(ctx context.Context, path string) bool {
 	metadata, err := c.metadataStore.GetFsNode(ctx, GenerateFsID(path))
 	if err != nil {
 		Logger.Errorf("error getting fs node: %v, path: %s", err, path)
 		return false
 	}
 
-	exists, err := c.IsCachedNearby(metadata.Hash, path)
+	exists, err := c.IsCachedReachable(metadata.Hash, path)
 	if err != nil {
-		Logger.Errorf("error checking if content is cached nearby: %v, hash: %s", err, metadata.Hash)
+		Logger.Errorf("error checking if content is cached on a reachable cache host: %v, hash: %s", err, metadata.Hash)
 		return false
 	}
 
@@ -594,7 +594,7 @@ func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info
 	if routingKey == "" {
 		routingKey = cachePath
 	}
-	exists, err := c.IsCachedNearby(metadata.Hash, routingKey)
+	exists, err := c.IsCachedOnSelectedHost(metadata.Hash, routingKey)
 	if err != nil || !exists {
 		return "", false
 	}
@@ -612,7 +612,11 @@ func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool
 		metadata.Mtimensec == uint32(modTime.Nanosecond())
 }
 
-func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
+// IsCachedReachable reports whether hash exists on any currently reachable cache
+// host. It checks the HRW read order first, then scans remaining known hosts as
+// a recovery path for placement drift or host churn. Do not use it to decide
+// whether a cache-through write can be skipped.
+func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error) {
 	if routingKey == "" {
 		routingKey = hash
 	}
@@ -680,6 +684,39 @@ func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// IsCachedOnSelectedHost checks only the HRW-selected storage host for routingKey.
+// This is intentionally stricter than IsCachedReachable: cache-through writers use
+// it to avoid treating a fallback replica as proof that the primary placement is
+// already populated.
+func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, error) {
+	if routingKey == "" {
+		routingKey = hash
+	}
+
+	client, host, err := c.getGRPCClient(&ClientRequest{
+		rt:        ClientRequestTypeStorage,
+		hash:      hash,
+		key:       routingKey,
+		hostIndex: 0,
+	})
+	if err != nil {
+		if err == ErrHostNotFound {
+			_ = c.refreshRoutableHosts(c.ctx)
+		}
+		return false, err
+	}
+
+	resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+	if err != nil {
+		c.removeHost(host)
+		return false, err
+	}
+	if !resp.Exists {
+		c.removeLocalHostCache(hash)
+	}
+	return resp.Exists, nil
 }
 
 func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
@@ -1424,7 +1461,7 @@ func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingK
 	defer ticker.Stop()
 
 	for {
-		exists, err := c.IsCachedNearby(hash, routingKey)
+		exists, err := c.IsCachedOnSelectedHost(hash, routingKey)
 		if err == nil && exists {
 			return true
 		}

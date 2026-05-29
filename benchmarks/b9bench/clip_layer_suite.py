@@ -15,7 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from b9bench.cache_suite import Kube, run
+from b9bench.cache_suite import Kube, find_redis_pod, redis_cli, run
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--size-mib", type=int, default=128)
     parser.add_argument("--timeout-seconds", type=float, default=1200)
     parser.add_argument("--read-timeout-seconds", type=float, default=240)
+    parser.add_argument("--cache-pool-name", default=os.getenv("BENCH_CACHE_POOL_NAME", "default"))
+    parser.add_argument("--cache-locality", default=os.getenv("BENCH_CACHE_LOCALITY", "default"))
     parser.add_argument("--reset-workers-between", dest="reset_workers_between", action="store_true")
     parser.add_argument("--no-reset-workers-between", dest="reset_workers_between", action="store_false")
     parser.set_defaults(reset_workers_between=True)
@@ -289,6 +291,241 @@ def embedded_cache_page_proof(kube: Kube, hashes: list[str]) -> dict[str, Any]:
     return proof
 
 
+def cache_hosts_snapshot(kube: Kube, pool_name: str, locality: str) -> dict[str, Any]:
+    redis_pod = find_redis_pod(kube.config.namespace)
+    if not redis_pod:
+        return cache_hosts_from_worker_logs(kube)
+
+    index_pattern = f"cache:coordinator:host_index:*:{locality}"
+    index_keys = [
+        line.strip()
+        for line in (redis_cli(kube.config.namespace, redis_pod, "KEYS", index_pattern) or "").splitlines()
+        if line.strip()
+    ]
+    if not index_keys:
+        index_keys = [f"cache:coordinator:host_index:{pool_name}:{locality}"]
+
+    logical_host_ids: list[str] = []
+    seen = set()
+    for index_key in index_keys:
+        members = redis_cli(kube.config.namespace, redis_pod, "SMEMBERS", index_key) or ""
+        for line in members.splitlines():
+            logical_host_id = line.strip()
+            if logical_host_id and logical_host_id not in seen:
+                seen.add(logical_host_id)
+                logical_host_ids.append(logical_host_id)
+
+    hosts: list[dict[str, Any]] = []
+    for logical_host_id in logical_host_ids:
+        for registration_id in registration_ids(kube.config.namespace, redis_pod, logical_host_id):
+            raw = redis_cli(
+                kube.config.namespace,
+                redis_pod,
+                "GET",
+                f"cache:coordinator:host:{logical_host_id}:registration:{registration_id}",
+            )
+            if not raw:
+                continue
+            try:
+                registration = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            hosts.append(
+                {
+                    "hostId": registration.get("logical_host_id")
+                    or registration.get("logicalHostId")
+                    or logical_host_id,
+                    "registrationId": registration.get("registration_id")
+                    or registration.get("registrationId")
+                    or registration_id,
+                    "poolName": registration.get("pool_name")
+                    or registration.get("poolName")
+                    or pool_name,
+                    "nodeId": registration.get("node_id") or registration.get("nodeId") or "",
+                    "nodeName": registration.get("node_id") or registration.get("nodeId") or "",
+                    "cachePathId": registration.get("cache_path_id")
+                    or registration.get("cachePathId")
+                    or "",
+                    "addr": registration.get("addr") or "",
+                    "privateAddr": registration.get("private_addr")
+                    or registration.get("privateAddr")
+                    or "",
+                    "source": "coordinator",
+                }
+            )
+            break
+    if hosts:
+        return {"available": True, "source": "coordinator", "indexKeys": index_keys, "hosts": hosts}
+    return cache_hosts_from_worker_logs(kube)
+
+
+def registration_ids(namespace: str, redis_pod: str, logical_host_id: str) -> list[str]:
+    active = redis_cli(
+        namespace,
+        redis_pod,
+        "GET",
+        f"cache:coordinator:host:{logical_host_id}:active_registration",
+    )
+    ids = [active.strip()] if active and active.strip() else []
+    ids.extend(
+        registration_id.strip()
+        for registration_id in (
+            redis_cli(namespace, redis_pod, "SMEMBERS", f"cache:coordinator:host:{logical_host_id}:registrations")
+            or ""
+        ).splitlines()
+        if registration_id.strip() and registration_id.strip() not in ids
+    )
+    return ids
+
+
+def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
+    hosts_by_id: dict[str, dict[str, Any]] = {}
+    for pod in kube.running_workers():
+        proc = run(
+            [
+                "kubectl",
+                "-n",
+                kube.config.namespace,
+                "logs",
+                pod["name"],
+                "-c",
+                "worker",
+                "--since",
+                "2h",
+                "--tail",
+                "10000",
+            ],
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            continue
+        latest: dict[str, Any] | None = None
+        for line in proc.stdout.splitlines():
+            if "Registered cache host" not in line:
+                continue
+            start = line.find("{")
+            end = line.rfind("}")
+            if start < 0 or end <= start:
+                continue
+            try:
+                latest = json.loads(line[start : end + 1])
+            except json.JSONDecodeError:
+                continue
+        if not latest:
+            continue
+        host_id = latest.get("logical_host_id") or latest.get("logicalHostId")
+        registration_id = latest.get("registration_id") or latest.get("registrationId")
+        addr = latest.get("addr") or ""
+        if not host_id or not registration_id:
+            continue
+        hosts_by_id[host_id] = {
+            "hostId": host_id,
+            "registrationId": registration_id,
+            "poolName": latest.get("pool_name") or latest.get("poolName") or "",
+            "nodeId": latest.get("node_id") or latest.get("nodeId") or pod.get("nodeName", ""),
+            "nodeName": pod.get("nodeName", ""),
+            "cachePathId": latest.get("cache_path_id") or latest.get("cachePathId") or "",
+            "addr": addr,
+            "privateAddr": addr,
+            "pod": pod.get("name", ""),
+            "source": "worker_logs",
+        }
+    hosts = list(hosts_by_id.values())
+    return {"available": bool(hosts), "source": "worker_logs", "hosts": hosts}
+
+
+def hrw_routing_proof(
+    kube: Kube,
+    hashes: list[str],
+    page_proof: dict[str, Any],
+    artifact_dir: Path,
+    pool_name: str,
+    locality: str,
+) -> dict[str, Any]:
+    proof: dict[str, Any] = {
+        "ok": False,
+        "hashes": hashes,
+        "hostsSnapshot": cache_hosts_snapshot(kube, pool_name, locality),
+        "routes": [],
+    }
+    hosts = proof["hostsSnapshot"].get("hosts") or []
+    if not hashes:
+        proof["error"] = "no hashes provided"
+        return proof
+    if not hosts:
+        proof["error"] = "no active cache hosts found"
+        return proof
+
+    go = shutil.which("go")
+    if not go:
+        proof["error"] = "go not found"
+        return proof
+
+    env = dict(os.environ)
+    bundled_goroot = "/opt/homebrew/Cellar/go/1.24.2/libexec"
+    if Path(bundled_goroot).exists():
+        env["GOROOT"] = bundled_goroot
+
+    proc = subprocess.run(
+        [
+            go,
+            "run",
+            "./benchmarks/b9bench/cache_tools/hrw_routing.go",
+            "--hosts-json",
+            json.dumps(hosts, sort_keys=True),
+            "--keys",
+            ",".join(hashes),
+            "--n",
+            "1",
+        ],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    if proc.returncode != 0:
+        proof["error"] = proc.stderr.strip()[-1000:] or f"hrw helper exited {proc.returncode}"
+        return proof
+
+    routes = json.loads(proc.stdout)
+    pages_by_hash_node: dict[tuple[str, str], int] = {}
+    for worker in page_proof.get("workers") or []:
+        node = worker.get("nodeName") or ""
+        for row in worker.get("rows") or []:
+            pages_by_hash_node[(row.get("hash") or "", node)] = int(row.get("pages") or 0)
+
+    checked = []
+    ok = True
+    for route in routes:
+        key = route.get("key") or ""
+        selected = (route.get("hosts") or [{}])[0]
+        node = selected.get("nodeName") or selected.get("nodeId") or ""
+        pages = pages_by_hash_node.get((key, node), 0)
+        item = {
+            "hash": key,
+            "selectedHostId": selected.get("hostId") or "",
+            "selectedRegistrationId": selected.get("registrationId") or "",
+            "selectedNode": node,
+            "selectedPod": selected.get("pod") or "",
+            "pagesOnSelectedNode": pages,
+            "ok": pages > 0,
+        }
+        checked.append(item)
+        ok = ok and item["ok"]
+
+    proof["routes"] = checked
+    proof["ok"] = ok
+    if not ok:
+        (artifact_dir / "clip-hrw-routing-proof.json").write_text(
+            json.dumps(proof, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return proof
+
+
 def clip_disk_cache_presence(kube: Kube, hashes: list[str]) -> dict[str, Any]:
     proof: dict[str, Any] = {"hashes": hashes, "workers": []}
     if not hashes:
@@ -349,31 +586,6 @@ def extract_archive_hashes(kube: Kube, image_id: str, artifact_dir: Path) -> lis
     workers = kube.running_workers()
     if not workers:
         return []
-    archive = artifact_dir / f"{image_id}.clip"
-    copied = False
-    for pod in workers:
-        proc = subprocess.run(
-            [
-                "kubectl",
-                "-n",
-                kube.config.namespace,
-                "cp",
-                "-c",
-                "worker",
-                f"{pod['name']}:/images/cache/{image_id}.clip",
-                str(archive),
-            ],
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=60,
-        )
-        if proc.returncode == 0 and archive.exists():
-            copied = True
-            break
-    if not copied:
-        return []
     go = shutil.which("go")
     if not go:
         return []
@@ -381,18 +593,46 @@ def extract_archive_hashes(kube: Kube, image_id: str, artifact_dir: Path) -> lis
     bundled_goroot = "/opt/homebrew/Cellar/go/1.24.2/libexec"
     if Path(bundled_goroot).exists():
         env["GOROOT"] = bundled_goroot
-    proc = subprocess.run(
-        [go, "run", "./benchmarks/b9bench/cache_tools/clip_hashes.go", str(archive)],
-        cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=120,
-        env=env,
-    )
-    if proc.returncode != 0:
-        return []
-    return list(json.loads(proc.stdout))
+
+    for suffix in (".rclip", ".clip"):
+        archive = artifact_dir / f"{image_id}{suffix}"
+        for pod in workers:
+            proc = subprocess.run(
+                [
+                    "kubectl",
+                    "-n",
+                    kube.config.namespace,
+                    "cp",
+                    "-c",
+                    "worker",
+                    f"{pod['name']}:/images/cache/{image_id}{suffix}",
+                    str(archive),
+                ],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+            )
+            if proc.returncode != 0 or not archive.exists():
+                continue
+
+            parse = subprocess.run(
+                [go, "run", "./benchmarks/b9bench/cache_tools/clip_hashes.go", str(archive)],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+            if parse.returncode == 0:
+                return list(json.loads(parse.stdout))
+            (artifact_dir / f"{image_id}{suffix}.clip_hashes.err").write_text(
+                parse.stderr,
+                encoding="utf-8",
+            )
+    return []
 
 
 def terminate(instance) -> None:
@@ -417,6 +657,7 @@ def main() -> int:
         "startedAt": utc_now(),
         "probeId": probe_id,
         "sizeMiB": args.size_mib,
+        "resetWorkersBetween": args.reset_workers_between,
         "iterations": [],
         "validationFailures": validation_failures,
     }
@@ -435,6 +676,14 @@ def main() -> int:
         report["iterations"].append(first)
         first_hashes = first.get("logSummary", {}).get("decompressedHashes") or report["decompressedHashes"]
         first["embeddedCachePageProof"] = embedded_cache_page_proof(kube, first_hashes)
+        first["hrwRoutingProof"] = hrw_routing_proof(
+            kube,
+            first_hashes,
+            first["embeddedCachePageProof"],
+            artifact_dir,
+            args.cache_pool_name,
+            args.cache_locality,
+        )
         first["clipDiskCachePresence"] = clip_disk_cache_presence(kube, first_hashes)
 
         if args.reset_workers_between:
@@ -442,15 +691,26 @@ def main() -> int:
             if not report["workerReset"].get("ok"):
                 validation_failures.append(f"worker reset failed: {report['workerReset']}")
             kube.wait_running_workers(min_count=1, timeout=max(180, args.timeout_seconds / 4))
-            if args.clear_clip_disk_cache:
-                report["postResetClipDiskCacheClear"] = clear_clip_decompressed_disk_cache(kube, report["decompressedHashes"])
-                report["postResetClipDiskCachePresence"] = clip_disk_cache_presence(kube, report["decompressedHashes"])
+
+        second_hashes = first_hashes or report["decompressedHashes"]
+        if args.clear_clip_disk_cache:
+            report["preSecondClipDiskCacheClear"] = clear_clip_decompressed_disk_cache(kube, second_hashes)
+            report["preSecondClipDiskCachePresence"] = clip_disk_cache_presence(kube, second_hashes)
 
         second_since = utc_now()
-        second = run_iteration(kube, image, image_id, "after_worker_kill", args, artifact_dir, second_since)
+        second_name = "after_worker_kill" if args.reset_workers_between else "stable_second_read"
+        second = run_iteration(kube, image, image_id, second_name, args, artifact_dir, second_since)
         report["iterations"].append(second)
-        second_hashes = second.get("logSummary", {}).get("decompressedHashes") or first_hashes or report["decompressedHashes"]
+        second_hashes = second.get("logSummary", {}).get("decompressedHashes") or second_hashes
         second["embeddedCachePageProof"] = embedded_cache_page_proof(kube, second_hashes)
+        second["hrwRoutingProof"] = hrw_routing_proof(
+            kube,
+            second_hashes,
+            second["embeddedCachePageProof"],
+            artifact_dir,
+            args.cache_pool_name,
+            args.cache_locality,
+        )
         second["clipDiskCachePresence"] = clip_disk_cache_presence(kube, second_hashes)
 
         validate_report(report, validation_failures)
@@ -502,7 +762,7 @@ def run_iteration(
 def validate_report(report: dict[str, Any], failures: list[str]) -> None:
     iterations = report.get("iterations") or []
     if len(iterations) < 2:
-        failures.append("expected cold and after-worker-kill iterations")
+        failures.append("expected cold and second read iterations")
         return
     cold, after = iterations[0], iterations[1]
     for item in iterations:
@@ -514,22 +774,27 @@ def validate_report(report: dict[str, Any], failures: list[str]) -> None:
     if not cold.get("embeddedCachePageProof", {}).get("ok"):
         failures.append("cold iteration did not materialize embedded cache pages")
     if not after.get("embeddedCachePageProof", {}).get("ok"):
-        failures.append("after-worker-kill iteration could not find embedded cache pages")
+        failures.append(f"{after.get('name')} iteration could not find embedded cache pages")
+    if not cold.get("hrwRoutingProof", {}).get("ok"):
+        failures.append("cold iteration did not materialize pages on HRW-selected cache hosts")
+    if not after.get("hrwRoutingProof", {}).get("ok"):
+        failures.append(f"{after.get('name')} iteration did not find pages on HRW-selected cache hosts")
 
     cold_logs = cold.get("logSummary") or {}
     after_logs = after.get("logSummary") or {}
     if not report.get("decompressedHashes"):
         failures.append("could not extract OCI decompressed layer hashes from clip archive")
-    if cold.get("clipDiskCachePresence", {}).get("present"):
-        failures.append("cold iteration left CLIP local decompressed disk cache present")
+    if report.get("preSecondClipDiskCachePresence", {}).get("present"):
+        failures.append("CLIP local decompressed disk cache was still present before second iteration")
     if after.get("clipDiskCachePresence", {}).get("present"):
-        failures.append("after-worker-kill iteration used/materialized CLIP local decompressed disk cache")
+        failures.append(f"{after.get('name')} iteration used/materialized CLIP local decompressed disk cache")
     if after_logs.get("ociCacheMisses", 0) > 0 or after_logs.get("layerDecompressed", 0) > 0:
-        failures.append("after-worker-kill iteration fell back to OCI registry/decompression")
-    cold_worker = ((cold.get("worker") or {}).get("name") or "")
-    after_worker = ((after.get("worker") or {}).get("name") or "")
-    if cold_worker and after_worker and cold_worker == after_worker:
-        failures.append(f"worker did not change across reset: {cold_worker}")
+        failures.append(f"{after.get('name')} iteration fell back to OCI registry/decompression")
+    if report.get("resetWorkersBetween", True):
+        cold_worker = ((cold.get("worker") or {}).get("name") or "")
+        after_worker = ((after.get("worker") or {}).get("name") or "")
+        if cold_worker and after_worker and cold_worker == after_worker:
+            failures.append(f"worker did not change across reset: {cold_worker}")
 
 
 if __name__ == "__main__":

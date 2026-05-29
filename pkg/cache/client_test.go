@@ -505,6 +505,108 @@ func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T)
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{
+			NTopHosts:            2,
+			PreferLocalCacheHost: true,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	selectedServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("selected-host"))
+	require.NoError(t, err)
+	selectedAddr, err := selectedServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, selectedServer.Close()) })
+
+	fallbackCfg := cfg
+	fallbackCfg.Server.DiskCacheDir = t.TempDir()
+	fallbackServer, err := NewServerWithOptions(ctx, fallbackCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("fallback-host"))
+	require.NoError(t, err)
+	fallbackAddr, err := fallbackServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fallbackServer.Close()) })
+
+	selectedHost := selectedServer.Host()
+	require.NotNil(t, selectedHost)
+	selectedHost.Addr = selectedAddr
+	selectedHost.PrivateAddr = selectedAddr
+
+	fallbackHost := fallbackServer.Host()
+	require.NotNil(t, fallbackHost)
+	fallbackHost.Addr = fallbackAddr
+	fallbackHost.PrivateAddr = fallbackAddr
+
+	content := []byte("cache-through-must-repair-selected-host")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	sourcePath := filepath.Join(t.TempDir(), "source.bin")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+	info, err := os.Stat(sourcePath)
+	require.NoError(t, err)
+
+	_, _, err = fallbackServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.False(t, selectedServer.cas.Exists(expectedHash))
+	require.True(t, fallbackServer.cas.Exists(expectedHash))
+
+	cachePath := "/workspace/source.bin"
+	metadataStore := NewMockCacheMetadataStore()
+	require.NoError(t, metadataStore.SetFsNode(ctx, GenerateFsID(cachePath), &FSMetadata{
+		Path:      cachePath,
+		Hash:      expectedHash,
+		Size:      uint64(info.Size()),
+		Mtime:     uint64(info.ModTime().Unix()),
+		Mtimensec: uint32(info.ModTime().Nanosecond()),
+	}))
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{selectedHost, fallbackHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(selectedHost))
+	require.NoError(t, client.addHost(fallbackHost))
+	defer client.Cleanup()
+
+	got, err := client.StoreContentFromLocalFile(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: cachePath,
+	}, StoreContentOptions{
+		RoutingKey: expectedHash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+
+	require.Eventually(t, func() bool {
+		selected := make([]byte, len(content))
+		n, err := selectedServer.cas.ReadAt(expectedHash, 0, selected)
+		return err == nil && n == int64(len(content)) && bytes.Equal(content, selected)
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.T) {
 	ctx := context.Background()
 	firstHost := &Host{HostId: "first-host"}

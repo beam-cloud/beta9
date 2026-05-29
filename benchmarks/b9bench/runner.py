@@ -599,11 +599,13 @@ class ClipLayerSuiteProbe(ScriptProbeBase):
             read = item.get("read") or {}
             logs = item.get("logSummary") or {}
             page_proof = item.get("embeddedCachePageProof") or {}
+            hrw_proof = item.get("hrwRoutingProof") or {}
             clip_disk = item.get("clipDiskCachePresence") or {}
             name = str(item.get("name") or "read")
             is_after_kill = name == "after_worker_kill"
+            is_second_read = is_after_kill or name == "stable_second_read"
             cloud_read = logs.get("ociCacheMisses", 0) > 0 or logs.get("layerDecompressed", 0) > 0
-            cache_hit = bool(page_proof.get("ok") and not clip_disk.get("present") and not cloud_read)
+            cache_hit = bool(page_proof.get("ok") and hrw_proof.get("ok") and not clip_disk.get("present") and not cloud_read)
             self.sink.emit(
                 Measurement(
                     run_id=self.run_id,
@@ -618,23 +620,28 @@ class ClipLayerSuiteProbe(ScriptProbeBase):
                     tags={
                         "suite_kind": suite.kind,
                         "requires_sha": True,
-                        "requires_cache_hit": is_after_kill,
-                        "reject_cloud_read": is_after_kill,
+                        "requires_cache_hit": is_second_read,
+                        "reject_cloud_read": is_second_read,
                         "requires_remote_worker": is_after_kill,
-                        "cache_state": "after_worker_kill" if is_after_kill else "cold",
+                        "cache_state": name if is_second_read else "cold",
                     },
                     evidence={
                         "sha_ok": bool(read.get("ok")),
                         "cache_hit": cache_hit,
                         "cache_source": "embedded_disk"
-                        if page_proof.get("ok")
+                        if page_proof.get("ok") and hrw_proof.get("ok")
                         else "unknown",
+                        "hrw_routed": bool(hrw_proof.get("ok")),
+                        "hrw_routes": hrw_proof.get("routes") or [],
                         "cloud_read": cloud_read,
                         "remote_worker": self._worker_changed(iterations)
                         if is_after_kill
                         else False,
                         "worker": ((item.get("worker") or {}).get("name") or ""),
-                        "decompressed_hashes": logs.get("decompressedHashes") or [],
+                        "decompressed_hashes": logs.get("decompressedHashes")
+                        or page_proof.get("hashes")
+                        or report.get("decompressedHashes")
+                        or [],
                         "artifact_output": str(
                             self.sink.artifact_dir / f"{slug(suite.name)}.json"
                         ),
