@@ -126,12 +126,7 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
-	tailscale := network.GetOrCreateTailscale(network.TailscaleConfig{
-		ControlURL: config.Tailscale.ControlURL,
-		AuthKey:    config.Tailscale.AuthKey,
-		Debug:      config.Tailscale.Debug,
-		Ephemeral:  true,
-	}, tailscaleRepo)
+	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config), tailscaleRepo)
 
 	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 
