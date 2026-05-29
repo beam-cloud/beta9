@@ -1,0 +1,303 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/storage"
+	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+)
+
+func TestRouteProxySingleListenerRoutesByPreface(t *testing.T) {
+	backend := startEchoListener(t, "127.0.0.1:0")
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = proxyListener.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	proxy := &routeProxy{
+		listener: proxyListener,
+		routes: map[string]string{
+			"route-one": backend.Addr().String(),
+		},
+	}
+
+	go func() {
+		_ = proxy.accept(ctx)
+	}()
+
+	conn, err := net.DialTimeout("tcp", proxyListener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if _, err := fmt.Fprintf(conn, "%sroute-one\n", network.BackendRoutePreface); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "ping" {
+		t.Fatalf("expected ping echo, got %q", string(buf))
+	}
+}
+
+func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
+	backend := startEchoListener(t, "127.0.0.1:0")
+	_, port, err := net.SplitHostPort(backend.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := dialLocalTargetWithTimeout(net.JoinHostPort("127.0.0.2", port), 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+}
+
+func TestNormalizeBootstrapForAgentContainerUsesReachableGatewayHost(t *testing.T) {
+	t.Setenv("BEAM_AGENT_CONTAINER", "1")
+
+	got := normalizeBootstrapForAgentRuntime("http://host.docker.internal:1994", bootstrapConfig{
+		GatewayHTTPURL:  "http://localhost:1994",
+		GatewayGRPCHost: "beta9-gateway",
+		GatewayGRPCPort: 1993,
+	})
+
+	if got.GatewayHTTPURL != "http://host.docker.internal:1994" {
+		t.Fatalf("expected docker-reachable http url, got %q", got.GatewayHTTPURL)
+	}
+	if got.GatewayGRPCHost != "host.docker.internal" {
+		t.Fatalf("expected docker-reachable grpc host, got %q", got.GatewayGRPCHost)
+	}
+}
+
+func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
+	t.Setenv("BEAM_AGENT_LOCAL_TARGET_HOST", "host.docker.internal")
+
+	args := dockerRunArgs("slot-one", "worker:dev", "/tmp/config.json", bootstrapConfig{
+		GatewayHTTPURL: "http://host.docker.internal:1994",
+	}, &pb.AgentWorkerSlot{
+		WorkerId:      "worker-one",
+		WorkerToken:   "token",
+		PoolName:      "private",
+		MachineId:     "machine",
+		Memory:        512,
+		NetworkPrefix: "10.0.0.0/24",
+	}, agentWorkerDirs("/tmp/agent-state", "worker-one"))
+
+	if !containsArg(args, "-e", "HYBRID_LOCAL_TARGET_HOST=host.docker.internal") {
+		t.Fatalf("expected HYBRID_LOCAL_TARGET_HOST env in docker args: %#v", args)
+	}
+	for _, want := range []string{
+		"CACHE_LOCALITY=private",
+		"CACHE_NODE_ID=machine",
+		"CACHE_HOST_NETWORK=true",
+		"BEAM_WORKSPACE_STORAGE_ENDPOINT_URL=http://host.docker.internal:4566",
+		"BEAM_GATEWAY_HTTP_URL=http://host.docker.internal:1994",
+		"BEAM_OCI_REGISTRY_REWRITE=registry.localhost:5000=host.docker.internal:5000,localhost:5000=host.docker.internal:5000,127.0.0.1:5000=host.docker.internal:5000",
+	} {
+		if !containsArg(args, "-e", want) {
+			t.Fatalf("expected %s env in docker args: %#v", want, args)
+		}
+	}
+	for _, want := range []string{
+		"/tmp/agent-state/images:/images",
+		"/tmp/agent-state/data:/data",
+		"/tmp/agent-state/workspace-data:/workspace/data",
+		"/tmp/agent-state/cache:/var/lib/beta9/cache",
+		"/tmp/agent-state/checkpoints:/checkpoints",
+	} {
+		if !containsArg(args, "-v", want) {
+			t.Fatalf("expected %s volume in docker args: %#v", want, args)
+		}
+	}
+	if !containsArg(args, "--shm-size", "256m") {
+		t.Fatalf("expected shm size to track worker memory: %#v", args)
+	}
+	for _, want := range []string{
+		"registry.localhost:host-gateway",
+		"localstack:host-gateway",
+	} {
+		if !containsArg(args, "--add-host", want) {
+			t.Fatalf("expected %s host alias in docker args: %#v", want, args)
+		}
+	}
+}
+
+func TestAgentOCIRegistryRewriteCanBeOverridden(t *testing.T) {
+	t.Setenv("BEAM_AGENT_OCI_REGISTRY_REWRITE", "registry.internal:5000=registry.example.com")
+
+	got := agentOCIRegistryRewrite(bootstrapConfig{
+		GatewayHTTPURL: "https://gateway.example.com",
+	})
+	if got != "registry.internal:5000=registry.example.com" {
+		t.Fatalf("registry rewrite = %q, want configured value", got)
+	}
+}
+
+func TestAgentWorkspaceStorageEndpointURLCanBeOverridden(t *testing.T) {
+	t.Setenv("BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_URL", "https://storage.example.com")
+
+	got := agentWorkspaceStorageEndpointURL(bootstrapConfig{
+		GatewayHTTPURL: "https://gateway.example.com",
+	})
+	if got != "https://storage.example.com" {
+		t.Fatalf("endpoint override = %q, want configured value", got)
+	}
+}
+
+func TestMachineFingerprintCanBeProvidedByHost(t *testing.T) {
+	t.Setenv("BEAM_AGENT_MACHINE_FINGERPRINT", "mac-hardware-id")
+
+	if got := machineFingerprint("container-hostname"); got != "mac-hardware-id" {
+		t.Fatalf("expected host-provided fingerprint, got %q", got)
+	}
+}
+
+func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	slot := &pb.AgentWorkerSlot{
+		PoolName:      "private-dev",
+		MachineId:     "machine-a",
+		Cpu:           500,
+		Memory:        256,
+		NetworkPrefix: "10.0.0.0/24",
+	}
+
+	if err := writeWorkerConfig(path, bootstrapConfig{}, slot, agentWorkerDirs("/tmp/agent-state", "worker-one")); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+
+	storageConfig := config["storage"].(map[string]any)
+	if got := storageConfig["fsPath"]; got != agentContainerDataPath {
+		t.Fatalf("storage fsPath = %v, want %q", got, agentContainerDataPath)
+	}
+	if got := storageConfig["objectPath"]; got != "/data/objects" {
+		t.Fatalf("storage objectPath = %v, want /data/objects", got)
+	}
+	workspaceStorage := storageConfig["workspaceStorage"].(map[string]any)
+	if got := workspaceStorage["baseMountPath"]; got != agentContainerWorkspaceStoragePath {
+		t.Fatalf("workspace base path = %v, want %q", got, agentContainerWorkspaceStoragePath)
+	}
+	if got := workspaceStorage["defaultStorageMode"]; got != storage.StorageModeGeese {
+		t.Fatalf("workspace storage mode = %v, want %q", got, storage.StorageModeGeese)
+	}
+
+	monitoringConfig := config["monitoring"].(map[string]any)
+	if got := monitoringConfig["metricsCollector"]; got != string(types.MetricsCollectorNone) {
+		t.Fatalf("metrics collector = %v, want disabled collector", got)
+	}
+	prometheusConfig := monitoringConfig["prometheus"].(map[string]any)
+	if got := prometheusConfig["scrapeWorkers"]; got != false {
+		t.Fatalf("prometheus scrapeWorkers = %v, want false", got)
+	}
+	if got := prometheusConfig["port"]; got != float64(0) {
+		t.Fatalf("prometheus port = %v, want 0", got)
+	}
+
+	workerConfig := config["worker"].(map[string]any)
+	if got := workerConfig["cacheEnabled"]; got != true {
+		t.Fatalf("worker cacheEnabled = %v, want true", got)
+	}
+	pools := workerConfig["pools"].(map[string]any)
+	pool := pools["private-dev"].(map[string]any)
+	if got := pool["storageMode"]; got != storage.StorageModeGeese {
+		t.Fatalf("pool storage mode = %v, want %q", got, storage.StorageModeGeese)
+	}
+	poolCache := pool["cache"].(map[string]any)
+	poolDisk := poolCache["disk"].(map[string]any)
+	if got := poolCache["enabled"]; got != true {
+		t.Fatalf("pool cache enabled = %v, want true", got)
+	}
+	if got := poolDisk["mountPath"]; got != agentContainerCachePath {
+		t.Fatalf("pool cache mount path = %v, want %q", got, agentContainerCachePath)
+	}
+
+	cacheConfig := config["cache"].(map[string]any)
+	cacheDisk := cacheConfig["disk"].(map[string]any)
+	cacheServer := cacheConfig["server"].(map[string]any)
+	cacheClient := cacheConfig["client"].(map[string]any)
+	cacheFS := cacheClient["cachefs"].(map[string]any)
+	if got := cacheConfig["enabled"]; got != true {
+		t.Fatalf("cache enabled = %v, want true", got)
+	}
+	if got := cacheDisk["mountPath"]; got != agentContainerCachePath {
+		t.Fatalf("cache disk mount path = %v, want %q", got, agentContainerCachePath)
+	}
+	if got := cacheServer["diskCacheDir"]; got != "/var/lib/beta9/cache/private-dev/machine-a" {
+		t.Fatalf("cache disk dir = %v, want machine-scoped persistent path", got)
+	}
+	if got := cacheFS["mountPoint"]; got != agentContainerCacheFSMountPath {
+		t.Fatalf("cachefs mount point = %v, want %q", got, agentContainerCacheFSMountPath)
+	}
+}
+
+func containsArg(args []string, prefix, value string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == prefix && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func startEchoListener(t *testing.T, addr string) net.Listener {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		_ = listener.Close()
+		wg.Wait()
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_, _ = io.Copy(conn, conn)
+			}()
+		}
+	}()
+	return listener
+}

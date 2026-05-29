@@ -108,6 +108,8 @@ const (
 	EventHybridActionJoinTokenCreated          = "join_token.created"
 	EventHybridActionJoinTokenRevoked          = "join_token.revoked"
 	EventHybridActionMachineJoined             = "machine.joined"
+	EventHybridActionWorkerSlotCreated         = "worker_slot.created"
+	EventHybridActionWorkerSlotPruned          = "worker_slot.pruned"
 	EventHybridActionTransportCredentialVended = "transport.credential_vended"
 	EventHybridActionRouteStatusUpdated        = "route.status_updated"
 )

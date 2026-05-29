@@ -210,7 +210,8 @@ func (g *Gateway) initHttp() error {
 	}))
 	e.Use(gatewaymiddleware.Subdomain(g.Config.GatewayService.HTTP.GetExternalURL(), g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
-	e.GET("/install/hybrid-worker", hybridWorkerInstallScriptHandler())
+	e.GET("/install/agent", agentInstallScriptHandler())
+	e.GET("/install/hybrid-worker", agentInstallScriptHandler())
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{
@@ -222,6 +223,7 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
+	g.baseRouteGroup.GET("/agent/images/:image_id/:file", g.agentImageArchiveHandler(), authMiddleware)
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)

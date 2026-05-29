@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -44,6 +47,8 @@ const (
 	pullLazyBackoff                          = 1000 * time.Millisecond
 	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
+	agentGatewayHTTPURLEnv                   = "BEAM_GATEWAY_HTTP_URL"
+	ociRegistryRewriteEnv                    = "BEAM_OCI_REGISTRY_REWRITE"
 )
 
 var (
@@ -259,6 +264,94 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	}
 
 	return nil, false
+}
+
+func rewriteOCIMetadataRegistry(meta *clipCommon.ClipArchiveMetadata, imageId string) {
+	if meta == nil || meta.StorageInfo == nil {
+		return
+	}
+
+	switch ociInfo := meta.StorageInfo.(type) {
+	case clipCommon.OCIStorageInfo:
+		rewritten := rewriteOCIRegistryURL(ociInfo.RegistryURL)
+		if rewritten == ociInfo.RegistryURL {
+			return
+		}
+		log.Info().
+			Str("image_id", imageId).
+			Str("original_registry", ociInfo.RegistryURL).
+			Str("registry", rewritten).
+			Msg("rewrote OCI registry for agent worker")
+		ociInfo.RegistryURL = rewritten
+		meta.StorageInfo = ociInfo
+	case *clipCommon.OCIStorageInfo:
+		if ociInfo == nil {
+			return
+		}
+		rewritten := rewriteOCIRegistryURL(ociInfo.RegistryURL)
+		if rewritten == ociInfo.RegistryURL {
+			return
+		}
+		log.Info().
+			Str("image_id", imageId).
+			Str("original_registry", ociInfo.RegistryURL).
+			Str("registry", rewritten).
+			Msg("rewrote OCI registry for agent worker")
+		ociInfo.RegistryURL = rewritten
+	}
+}
+
+func rewriteOCIRegistryURL(registryURL string) string {
+	registryURL = strings.TrimSpace(registryURL)
+	if registryURL == "" {
+		return registryURL
+	}
+
+	rewriteMap := ociRegistryRewriteMap()
+	if len(rewriteMap) == 0 {
+		return registryURL
+	}
+
+	if rewritten, ok := rewriteMap[registryRewriteKey(registryURL)]; ok {
+		return rewritten
+	}
+	return registryURL
+}
+
+func ociRegistryRewriteMap() map[string]string {
+	config := strings.TrimSpace(os.Getenv(ociRegistryRewriteEnv))
+	if config == "" {
+		return nil
+	}
+
+	rewriteMap := map[string]string{}
+	for _, entry := range strings.Split(config, ",") {
+		from, to, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		from = registryRewriteKey(from)
+		to = registryRewriteValue(to)
+		if from == "" || to == "" {
+			continue
+		}
+		rewriteMap[from] = to
+	}
+	return rewriteMap
+}
+
+func registryRewriteKey(value string) string {
+	return strings.ToLower(registryRewriteValue(value))
+}
+
+func registryRewriteValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimPrefix(value, "http://")
+	if i := strings.IndexByte(value, '/'); i >= 0 {
+		value = value[:i]
+	}
+	return strings.TrimRight(value, "/")
 }
 
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
@@ -526,6 +619,7 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 	// Check if this is an OCI v2 image
 	isOCI := false
 	if meta != nil {
+		rewriteOCIMetadataRegistry(meta, imageId)
 		if ociInfo, ok := ociStorageInfo(meta); ok {
 			isOCI = ociInfo.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(ociInfo.Type()) == "oci"
 		} else if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
@@ -612,6 +706,7 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to extract metadata from clip archive")
 		return nil, false
 	}
+	rewriteOCIMetadataRegistry(meta, imageId)
 
 	// Check if this is an OCI archive with metadata
 	c.cacheOCIMetadata(imageId, meta)
@@ -818,7 +913,12 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	defer os.Remove(tempPath)
 
 	if err = c.registry.Pull(ctx, tempPath, imageId); err != nil {
-		if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+		if gatewayErr := c.pullImageArchiveFromGateway(ctx, tempPath, imageId); gatewayErr == nil {
+			err = nil
+		} else if agentGatewayImageArchiveAvailable() {
+			log.Warn().Err(gatewayErr).Str("image_id", imageId).Msg("failed to pull image archive from gateway")
+		}
+		if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
 			if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
 				_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
 				if err2 := c.registry.Pull(ctx, tempPath, imageId); err2 == nil {
@@ -839,6 +939,50 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	return &sourceRegistry, nil
+}
+
+func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath, imageId string) error {
+	gatewayURL := strings.TrimRight(os.Getenv(agentGatewayHTTPURLEnv), "/")
+	workerToken := strings.TrimSpace(os.Getenv("WORKER_TOKEN"))
+	if gatewayURL == "" || workerToken == "" {
+		return fmt.Errorf("gateway image archive proxy is not configured")
+	}
+
+	file := fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
+	imageURL := fmt.Sprintf("%s/api/v1/agent/images/%s/%s", gatewayURL, url.PathEscape(imageId), url.PathEscape(file))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+workerToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gateway image archive request failed: %s", resp.Status)
+	}
+
+	if err := ensureImageDirectory(filepath.Dir(localPath), 0755); err != nil {
+		return err
+	}
+	out, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return err
+	}
+
+	log.Info().Str("image_id", imageId).Str("path", localPath).Msg("pulled image archive from gateway")
+	return nil
+}
+
+func agentGatewayImageArchiveAvailable() bool {
+	return strings.TrimSpace(os.Getenv(agentGatewayHTTPURLEnv)) != "" && strings.TrimSpace(os.Getenv("WORKER_TOKEN")) != ""
 }
 
 func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, error) {
@@ -1087,6 +1231,7 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 	if err != nil {
 		return fmt.Errorf("restored v2 image archive metadata invalid: image_id=%s: %w", imageId, err)
 	}
+	rewriteOCIMetadataRegistry(meta, imageId)
 
 	ociInfo, ok := ociStorageInfo(meta)
 	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {

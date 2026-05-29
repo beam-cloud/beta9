@@ -672,7 +672,7 @@ class GetHybridPoolJoinCommandResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class HybridWorkerBootstrapConfig(betterproto.Message):
+class AgentBootstrapConfig(betterproto.Message):
     gateway_http_url: str = betterproto.string_field(1)
     gateway_grpc_host: str = betterproto.string_field(2)
     gateway_grpc_port: int = betterproto.int32_field(3)
@@ -686,7 +686,7 @@ class HybridWorkerBootstrapConfig(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class JoinHybridPoolRequest(betterproto.Message):
+class JoinAgentRequest(betterproto.Message):
     join_token: str = betterproto.string_field(1)
     machine_fingerprint: str = betterproto.string_field(2)
     hostname: str = betterproto.string_field(3)
@@ -696,24 +696,24 @@ class JoinHybridPoolRequest(betterproto.Message):
     memory_mb: int = betterproto.uint64_field(7)
     gpu: List[str] = betterproto.string_field(8)
     gpu_count: int = betterproto.uint32_field(9)
-    preflight: List["HybridPreflightCheck"] = betterproto.message_field(10)
+    preflight: List["AgentPreflightCheck"] = betterproto.message_field(10)
     schedulable: bool = betterproto.bool_field(11)
     executor: str = betterproto.string_field(12)
 
 
 @dataclass(eq=False, repr=False)
-class JoinHybridPoolResponse(betterproto.Message):
+class JoinAgentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     workspace_id: str = betterproto.string_field(3)
     pool_name: str = betterproto.string_field(4)
     machine_id: str = betterproto.string_field(5)
     agent_token: str = betterproto.string_field(6)
-    bootstrap: "HybridWorkerBootstrapConfig" = betterproto.message_field(7)
+    bootstrap: "AgentBootstrapConfig" = betterproto.message_field(7)
 
 
 @dataclass(eq=False, repr=False)
-class HybridPreflightCheck(betterproto.Message):
+class AgentPreflightCheck(betterproto.Message):
     name: str = betterproto.string_field(1)
     ok: bool = betterproto.bool_field(2)
     message: str = betterproto.string_field(3)
@@ -721,7 +721,7 @@ class HybridPreflightCheck(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class HybridBackendRoute(betterproto.Message):
+class AgentRoute(betterproto.Message):
     route_id: str = betterproto.string_field(1)
     workspace_id: str = betterproto.string_field(2)
     pool_name: str = betterproto.string_field(3)
@@ -740,13 +740,13 @@ class HybridBackendRoute(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class RequestHybridTransportCredentialRequest(betterproto.Message):
+class RequestAgentTransportCredentialRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
     transport: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class RequestHybridTransportCredentialResponse(betterproto.Message):
+class RequestAgentTransportCredentialResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     auth_key: str = betterproto.string_field(3)
@@ -756,19 +756,19 @@ class RequestHybridTransportCredentialResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ListHybridRoutesRequest(betterproto.Message):
+class ListAgentRoutesRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class ListHybridRoutesResponse(betterproto.Message):
+class ListAgentRoutesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    routes: List["HybridBackendRoute"] = betterproto.message_field(3)
+    routes: List["AgentRoute"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class UpdateHybridRouteStatusRequest(betterproto.Message):
+class UpdateAgentRouteStatusRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
     route_id: str = betterproto.string_field(2)
     state: str = betterproto.string_field(3)
@@ -777,9 +777,37 @@ class UpdateHybridRouteStatusRequest(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class UpdateHybridRouteStatusResponse(betterproto.Message):
+class UpdateAgentRouteStatusResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class AgentWorkerSlot(betterproto.Message):
+    worker_id: str = betterproto.string_field(1)
+    worker_token: str = betterproto.string_field(2)
+    pool_name: str = betterproto.string_field(3)
+    machine_id: str = betterproto.string_field(4)
+    cpu: int = betterproto.int64_field(5)
+    memory: int = betterproto.int64_field(6)
+    gpu: str = betterproto.string_field(7)
+    gpu_count: int = betterproto.uint32_field(8)
+    gpu_assignment: str = betterproto.string_field(9)
+    network_prefix: str = betterproto.string_field(10)
+    worker_image: str = betterproto.string_field(11)
+
+
+@dataclass(eq=False, repr=False)
+class StreamAgentRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StreamAgentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    routes: List["AgentRoute"] = betterproto.message_field(3)
+    slots: List["AgentWorkerSlot"] = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -1275,42 +1303,50 @@ class GatewayServiceStub(SyncServiceStub):
             GetHybridPoolJoinCommandResponse,
         )(get_hybrid_pool_join_command_request)
 
-    def join_hybrid_pool(
-        self, join_hybrid_pool_request: "JoinHybridPoolRequest"
-    ) -> "JoinHybridPoolResponse":
+    def join_agent(self, join_agent_request: "JoinAgentRequest") -> "JoinAgentResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/JoinHybridPool",
-            JoinHybridPoolRequest,
-            JoinHybridPoolResponse,
-        )(join_hybrid_pool_request)
+            "/gateway.GatewayService/JoinAgent",
+            JoinAgentRequest,
+            JoinAgentResponse,
+        )(join_agent_request)
 
-    def request_hybrid_transport_credential(
+    def request_agent_transport_credential(
         self,
-        request_hybrid_transport_credential_request: "RequestHybridTransportCredentialRequest",
-    ) -> "RequestHybridTransportCredentialResponse":
+        request_agent_transport_credential_request: "RequestAgentTransportCredentialRequest",
+    ) -> "RequestAgentTransportCredentialResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/RequestHybridTransportCredential",
-            RequestHybridTransportCredentialRequest,
-            RequestHybridTransportCredentialResponse,
-        )(request_hybrid_transport_credential_request)
+            "/gateway.GatewayService/RequestAgentTransportCredential",
+            RequestAgentTransportCredentialRequest,
+            RequestAgentTransportCredentialResponse,
+        )(request_agent_transport_credential_request)
 
-    def list_hybrid_routes(
-        self, list_hybrid_routes_request: "ListHybridRoutesRequest"
-    ) -> "ListHybridRoutesResponse":
+    def list_agent_routes(
+        self, list_agent_routes_request: "ListAgentRoutesRequest"
+    ) -> "ListAgentRoutesResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/ListHybridRoutes",
-            ListHybridRoutesRequest,
-            ListHybridRoutesResponse,
-        )(list_hybrid_routes_request)
+            "/gateway.GatewayService/ListAgentRoutes",
+            ListAgentRoutesRequest,
+            ListAgentRoutesResponse,
+        )(list_agent_routes_request)
 
-    def update_hybrid_route_status(
-        self, update_hybrid_route_status_request: "UpdateHybridRouteStatusRequest"
-    ) -> "UpdateHybridRouteStatusResponse":
+    def update_agent_route_status(
+        self, update_agent_route_status_request: "UpdateAgentRouteStatusRequest"
+    ) -> "UpdateAgentRouteStatusResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/UpdateHybridRouteStatus",
-            UpdateHybridRouteStatusRequest,
-            UpdateHybridRouteStatusResponse,
-        )(update_hybrid_route_status_request)
+            "/gateway.GatewayService/UpdateAgentRouteStatus",
+            UpdateAgentRouteStatusRequest,
+            UpdateAgentRouteStatusResponse,
+        )(update_agent_route_status_request)
+
+    def stream_agent(
+        self, stream_agent_request: "StreamAgentRequest"
+    ) -> Iterator["StreamAgentResponse"]:
+        for response in self._unary_stream(
+            "/gateway.GatewayService/StreamAgent",
+            StreamAgentRequest,
+            StreamAgentResponse,
+        )(stream_agent_request):
+            yield response
 
     def list_machines(
         self, list_machines_request: "ListMachinesRequest"

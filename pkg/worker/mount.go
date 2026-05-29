@@ -381,7 +381,8 @@ func checkpointSignalDir(containerId string) string {
 }
 
 func getAndExtractStubCodeToPath(ctx context.Context, request *types.ContainerRequest, destPath string) error {
-	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	workspaceStorage := workspaceStorageForMount(request.Workspace.Storage)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, workspaceStorage)
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
 		return err

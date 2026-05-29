@@ -102,12 +102,9 @@ func TestValidateHybridTransportConfig(t *testing.T) {
 	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportTSNet); err != nil {
 		t.Fatalf("expected configured tsnet transport to pass, got %v", err)
 	}
-	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportLocalDirect); err != nil {
-		t.Fatalf("expected local_direct transport to pass, got %v", err)
-	}
 
 	gws.appConfig.Tailscale.HybridWorkerAuthKey = ""
 	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportTSNet); err == nil {
-		t.Fatal("expected missing hybrid worker auth key to fail")
+		t.Fatal("expected missing agent auth key to fail")
 	}
 }

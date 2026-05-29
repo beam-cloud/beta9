@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/hybrid"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -33,7 +34,10 @@ type Scheduler struct {
 	ctx                   context.Context
 	config                types.AppConfig
 	backendRepo           repo.BackendRepository
+	providerRepo          repo.ProviderRepository
 	workerRepo            repo.WorkerRepository
+	workerPoolRepo        repo.WorkerPoolRepository
+	hybridRepo            repo.HybridRepository
 	workerPoolManager     *WorkerPoolManager
 	requestBacklog        *RequestBacklog
 	containerRepo         repo.ContainerRepository
@@ -52,6 +56,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
+	hybridRepo := repo.NewHybridRedisRepository(redisClient)
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewEventClientRepo(config)
@@ -89,6 +94,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				Tailscale:      tailscale,
 				EventRepo:      eventRepo,
 			})
+		case types.PoolModeHybrid:
+			log.Debug().Str("pool_name", name).Msg("skipping static hybrid pool without workspace state")
+			continue
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -108,7 +116,10 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		config:                config,
 		eventBus:              eventBus,
 		backendRepo:           backendRepo,
+		providerRepo:          providerRepo,
 		workerRepo:            workerRepo,
+		workerPoolRepo:        workerPoolRepo,
+		hybridRepo:            hybridRepo,
 		workerPoolManager:     workerPoolManager,
 		requestBacklog:        requestBacklog,
 		containerRepo:         containerRepo,
@@ -118,6 +129,76 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 		provisioning: newProvisioningTracker(),
 	}, nil
+}
+
+func (s *Scheduler) RegisterAgentPool(workspaceID string, state *hybrid.PoolState) error {
+	if s == nil || state == nil {
+		return nil
+	}
+	name := firstNonEmpty(state.Selector, state.Name)
+	if name == "" {
+		return errors.New("pool selector is required")
+	}
+
+	config := normalizeAgentWorkerPoolConfig(state)
+	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+		Context:        s.ctx,
+		Name:           name,
+		WorkspaceID:    workspaceID,
+		Config:         s.config,
+		WorkerPool:     config,
+		PoolState:      state,
+		BackendRepo:    s.backendRepo,
+		WorkerRepo:     s.workerRepo,
+		WorkerPoolRepo: s.workerPoolRepo,
+		HybridRepo:     s.hybridRepo,
+		EventRepo:      s.eventRepo,
+	})
+	if err != nil {
+		return err
+	}
+	s.workerPoolManager.SetPool(name, config, controller)
+	return nil
+}
+
+func (s *Scheduler) DeleteAgentPool(selector string) {
+	if s == nil || selector == "" {
+		return
+	}
+	s.workerPoolManager.DeletePool(selector)
+}
+
+func normalizeAgentWorkerPoolConfig(state *hybrid.PoolState) types.WorkerPoolConfig {
+	config := types.WorkerPoolConfig{
+		Mode:                 types.PoolModeHybrid,
+		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
+		RequiresPoolSelector: true,
+		Priority:             int32(1000),
+	}
+	if state == nil {
+		return config
+	}
+	if state.Priority != 0 {
+		config.Priority = state.Priority
+	}
+	if state.Config != nil {
+		if len(state.Config.Gpu) > 0 {
+			config.GPUType = state.Config.Gpu[0]
+		}
+		if state.Config.Priority != 0 {
+			config.Priority = state.Config.Priority
+		}
+	}
+	return config
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {

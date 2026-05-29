@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/hybrid"
 	"github.com/beam-cloud/beta9/pkg/hybrid/shadeform"
 	"github.com/beam-cloud/beta9/pkg/hybrid/solver"
@@ -161,6 +162,11 @@ func (gws *GatewayService) ReserveHybridPool(ctx context.Context, in *pb.Reserve
 	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
 		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	if gws.scheduler != nil {
+		if err := gws.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
+			return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+	}
 	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolReserved, ""))
 
 	return &pb.ReserveHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
@@ -243,6 +249,11 @@ func (gws *GatewayService) UpsertHybridPool(ctx context.Context, in *pb.UpsertHy
 	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
 		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	if gws.scheduler != nil {
+		if err := gws.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
+			return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+	}
 	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolUpserted, ""))
 	return &pb.UpsertHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
 }
@@ -279,6 +290,9 @@ func (gws *GatewayService) DeleteHybridPool(ctx context.Context, in *pb.DeleteHy
 
 	if err := gws.deleteHybridPoolState(ctx, workspaceID, in.Name); err != nil {
 		return &pb.DeleteHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if gws.scheduler != nil {
+		gws.scheduler.DeleteAgentPool(firstNonEmpty(state.Selector, state.Name))
 	}
 	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolDeleted, "deleted"))
 	return &pb.DeleteHybridPoolResponse{Ok: true}, nil
@@ -383,33 +397,33 @@ func (gws *GatewayService) GetHybridPoolJoinCommand(ctx context.Context, in *pb.
 	}, nil
 }
 
-func (gws *GatewayService) JoinHybridPool(ctx context.Context, in *pb.JoinHybridPoolRequest) (*pb.JoinHybridPoolResponse, error) {
+func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.JoinAgentResponse, error) {
 	if strings.TrimSpace(in.JoinToken) == "" {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: "join token is required"}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is required"}, nil
 	}
 
 	tokenState, err := gws.getHybridJoinTokenState(ctx, in.JoinToken)
 	if err != nil {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if tokenState == nil || tokenState.Revoked || time.Now().After(tokenState.ExpiresAt) {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 
 	poolState, err := gws.getHybridPoolState(ctx, tokenState.WorkspaceID, tokenState.PoolName)
 	if err != nil {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if poolState == nil {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 	if poolState.CreatedByTokenID == "" || poolState.CreatedByTokenID != tokenState.CreatedByTokenID {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 
 	agentToken, err := generateHybridToken()
 	if err != nil {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	machineID := hybridMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
 	now := time.Now()
@@ -433,7 +447,12 @@ func (gws *GatewayService) JoinHybridPool(ctx context.Context, in *pb.JoinHybrid
 		LastJoinAt:         now,
 	}
 	if err := gws.saveHybridAgentTokenState(ctx, agentState); err != nil {
-		return &pb.JoinHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if gws.scheduler != nil {
+		if err := gws.scheduler.RegisterAgentPool(tokenState.WorkspaceID, poolState); err != nil {
+			return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
 	}
 	gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
 		WorkspaceID: tokenState.WorkspaceID,
@@ -454,40 +473,32 @@ func (gws *GatewayService) JoinHybridPool(ctx context.Context, in *pb.JoinHybrid
 		Message:     hybridPreflightSummary(agentState.Preflight),
 	})
 
-	return &pb.JoinHybridPoolResponse{
+	bootstrap := gws.agentBootstrapConfig(tokenState.WorkspaceID, poolState)
+	bootstrap.Executor = agentState.Executor
+
+	return &pb.JoinAgentResponse{
 		Ok:          true,
 		WorkspaceId: tokenState.WorkspaceID,
 		PoolName:    tokenState.PoolName,
 		MachineId:   machineID,
 		AgentToken:  agentToken,
-		Bootstrap:   gws.hybridWorkerBootstrapConfig(tokenState.WorkspaceID, poolState),
+		Bootstrap:   bootstrap,
 	}, nil
 }
 
-func (gws *GatewayService) RequestHybridTransportCredential(ctx context.Context, in *pb.RequestHybridTransportCredentialRequest) (*pb.RequestHybridTransportCredentialResponse, error) {
+func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
 	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if agentState == nil {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
 	}
 
 	transport := firstNonEmpty(in.Transport, types.BackendRouteTransportTSNet)
 	transport = strings.ReplaceAll(transport, "-", "_")
-	if transport == types.BackendRouteTransportLocalDirect {
-		gws.emitHybridEvent(types.EventHybridTransport, types.EventHybridSchema{
-			WorkspaceID: agentState.WorkspaceID,
-			PoolName:    agentState.PoolName,
-			MachineID:   agentState.MachineID,
-			Action:      types.EventHybridActionTransportCredentialVended,
-			Status:      "ready",
-			Transport:   transport,
-		})
-		return &pb.RequestHybridTransportCredentialResponse{Ok: true}, nil
-	}
 	if err := gws.validateHybridTransportConfig(transport); err != nil {
-		return &pb.RequestHybridTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	gws.emitHybridEvent(types.EventHybridTransport, types.EventHybridSchema{
 		WorkspaceID: agentState.WorkspaceID,
@@ -498,7 +509,7 @@ func (gws *GatewayService) RequestHybridTransportCredential(ctx context.Context,
 		Transport:   transport,
 	})
 
-	return &pb.RequestHybridTransportCredentialResponse{
+	return &pb.RequestAgentTransportCredentialResponse{
 		Ok:         true,
 		AuthKey:    gws.appConfig.Tailscale.HybridWorkerAuthKey,
 		ControlUrl: gws.appConfig.Tailscale.ControlURL,
@@ -507,45 +518,155 @@ func (gws *GatewayService) RequestHybridTransportCredential(ctx context.Context,
 	}, nil
 }
 
-func (gws *GatewayService) ListHybridRoutes(ctx context.Context, in *pb.ListHybridRoutesRequest) (*pb.ListHybridRoutesResponse, error) {
+func (gws *GatewayService) ListAgentRoutes(ctx context.Context, in *pb.ListAgentRoutesRequest) (*pb.ListAgentRoutesResponse, error) {
 	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
-		return &pb.ListHybridRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if agentState == nil {
-		return &pb.ListHybridRoutesResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
 	}
 
+	out, err := gws.agentRoutesForMachine(ctx, agentState)
+	if err != nil {
+		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.ListAgentRoutesResponse{Ok: true, Routes: out}, nil
+}
+
+func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
+	ctx := stream.Context()
+	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
+	if err != nil {
+		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+	}
+	if agentState == nil {
+		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "invalid agent token"})
+	}
+
+	sendSnapshot := func() error {
+		routes, err := gws.agentRoutesForMachine(ctx, agentState)
+		if err != nil {
+			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+		}
+		slots, err := gws.agentSlotsForMachine(ctx, agentState)
+		if err != nil {
+			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+		}
+		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots})
+	}
+
+	if err := sendSnapshot(); err != nil {
+		return err
+	}
+
+	events := make(chan common.KeyEvent, 32)
+	if gws.keyEventManager != nil {
+		if err := gws.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerBackendRoute(""), events); err != nil {
+			return err
+		}
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-events:
+			if err := sendSnapshot(); err != nil {
+				return err
+			}
+		case <-ticker.C:
+			if err := sendSnapshot(); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (gws *GatewayService) agentRoutesForMachine(ctx context.Context, agentState *hybrid.AgentTokenState) ([]*pb.AgentRoute, error) {
 	routes, err := gws.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
 	if err != nil {
-		return &pb.ListHybridRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return nil, err
 	}
 
-	out := make([]*pb.HybridBackendRoute, 0, len(routes))
+	out := make([]*pb.AgentRoute, 0, len(routes))
 	for _, route := range routes {
 		if route.State == types.BackendRouteStateClosing {
 			continue
 		}
-		out = append(out, hybridBackendRouteToProto(route))
+		out = append(out, agentRouteToProto(route))
 	}
-	return &pb.ListHybridRoutesResponse{Ok: true, Routes: out}, nil
+	return out, nil
 }
 
-func (gws *GatewayService) UpdateHybridRouteStatus(ctx context.Context, in *pb.UpdateHybridRouteStatusRequest) (*pb.UpdateHybridRouteStatusResponse, error) {
+func (gws *GatewayService) agentSlotsForMachine(ctx context.Context, agentState *hybrid.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
+	slots, err := gws.hybridRepo.ListAgentWorkerSlotStates(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pb.AgentWorkerSlot, 0, len(slots))
+	for _, slot := range slots {
+		if slot == nil || slot.WorkerID == "" {
+			continue
+		}
+		if _, err := gws.workerRepo.GetWorkerById(slot.WorkerID); err != nil {
+			notFoundErr := &types.ErrWorkerNotFound{}
+			if notFoundErr.From(err) {
+				if deleteErr := gws.hybridRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); deleteErr != nil {
+					return nil, deleteErr
+				}
+				gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+					WorkspaceID: slot.WorkspaceID,
+					PoolName:    slot.PoolName,
+					MachineID:   slot.MachineID,
+					WorkerID:    slot.WorkerID,
+					Action:      types.EventHybridActionWorkerSlotPruned,
+					Status:      "stale",
+					Message:     "removed stale agent worker slot because the scheduler worker no longer exists",
+				})
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, agentWorkerSlotToProto(slot))
+	}
+	return out, nil
+}
+
+func agentWorkerSlotToProto(slot *hybrid.AgentWorkerSlotState) *pb.AgentWorkerSlot {
+	return &pb.AgentWorkerSlot{
+		WorkerId:      slot.WorkerID,
+		WorkerToken:   slot.WorkerToken,
+		PoolName:      slot.PoolName,
+		MachineId:     slot.MachineID,
+		Cpu:           slot.CPU,
+		Memory:        slot.Memory,
+		Gpu:           slot.GPU,
+		GpuCount:      slot.GPUCount,
+		GpuAssignment: slot.GPUAssignment,
+		NetworkPrefix: slot.NetworkPrefix,
+		WorkerImage:   slot.WorkerImage,
+	}
+}
+
+func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest) (*pb.UpdateAgentRouteStatusResponse, error) {
 	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
-		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if agentState == nil {
-		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
 	}
 
 	route, err := gws.containerRepo.GetBackendRoute(ctx, in.RouteId)
 	if err != nil {
-		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if route.WorkspaceID != agentState.WorkspaceID || route.PoolName != agentState.PoolName || route.MachineID != agentState.MachineID {
-		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: "route does not belong to this agent"}, nil
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: "route does not belong to this agent"}, nil
 	}
 
 	previousState := route.State
@@ -556,7 +677,7 @@ func (gws *GatewayService) UpdateHybridRouteStatus(ctx context.Context, in *pb.U
 	route.Error = in.Error
 	route.UpdatedAt = time.Now().Unix()
 	if err := gws.containerRepo.SetBackendRoute(ctx, *route); err != nil {
-		return &pb.UpdateHybridRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if previousState != route.State || previousProxyTarget != route.ProxyTarget || previousError != route.Error {
 		gws.emitHybridEvent(types.EventHybridRoute, types.EventHybridSchema{
@@ -577,7 +698,7 @@ func (gws *GatewayService) UpdateHybridRouteStatus(ctx context.Context, in *pb.U
 			},
 		})
 	}
-	return &pb.UpdateHybridRouteStatusResponse{Ok: true}, nil
+	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
 }
 
 func (gws *GatewayService) hybridVendors() map[string]hybrid.Vendor {
@@ -672,7 +793,7 @@ func hybridPoolFromProto(in *pb.HybridPoolConfig, requireReservation bool) (hybr
 		return hybrid.Pool{}, fmt.Errorf("hybrid pool mode must be %q", "hybrid")
 	}
 	switch in.Transport {
-	case "", defaultHybridTransport, types.BackendRouteTransportLocalDirect:
+	case "", defaultHybridTransport:
 	default:
 		return hybrid.Pool{}, fmt.Errorf("unsupported hybrid transport %q", in.Transport)
 	}
@@ -738,8 +859,8 @@ func hybridReservationToProto(reservation hybrid.Reservation) *pb.HybridReservat
 	}
 }
 
-func hybridBackendRouteToProto(route types.BackendRoute) *pb.HybridBackendRoute {
-	return &pb.HybridBackendRoute{
+func agentRouteToProto(route types.BackendRoute) *pb.AgentRoute {
+	return &pb.AgentRoute{
 		RouteId:     route.RouteID,
 		WorkspaceId: route.WorkspaceID,
 		PoolName:    route.PoolName,
@@ -796,9 +917,6 @@ func (gws *GatewayService) createHybridPoolJoinCommand(ctx context.Context, pool
 			if err := gws.validateHybridTransportConfig(config.Transport); err != nil {
 				return "", "", time.Time{}, err
 			}
-			if config.Transport == types.BackendRouteTransportLocalDirect {
-				devMode = true
-			}
 		}
 	}
 
@@ -807,9 +925,9 @@ func (gws *GatewayService) createHybridPoolJoinCommand(ctx context.Context, pool
 		return "", "", time.Time{}, err
 	}
 
-	command := fmt.Sprintf("curl -fsSL %s/install/hybrid-worker | sudo bash -s -- --gateway %s --join-token %s", gatewayURL, gatewayURL, token)
+	command := fmt.Sprintf("curl -fsSL %s/install/agent | sudo bash -s -- --gateway %s --join-token %s", gatewayURL, gatewayURL, token)
 	if devMode {
-		command = fmt.Sprintf("curl -fsSL %s/install/hybrid-worker | bash -s -- --gateway %s --join-token %s --dev", gatewayURL, gatewayURL, token)
+		command = fmt.Sprintf("curl -fsSL %s/install/agent | bash -s -- --gateway %s --join-token %s --dev", gatewayURL, gatewayURL, token)
 	}
 	return command, token, expiresAt, nil
 }
@@ -876,9 +994,9 @@ func (gws *GatewayService) createHybridPoolJoinToken(ctx context.Context, poolNa
 	return token, tokenState.ExpiresAt, nil
 }
 
-func (gws *GatewayService) hybridWorkerBootstrapConfig(workspaceID string, poolState *hybrid.PoolState) *pb.HybridWorkerBootstrapConfig {
+func (gws *GatewayService) agentBootstrapConfig(workspaceID string, poolState *hybrid.PoolState) *pb.AgentBootstrapConfig {
 	config := normalizeHybridPoolConfig(poolState.Config)
-	return &pb.HybridWorkerBootstrapConfig{
+	return &pb.AgentBootstrapConfig{
 		GatewayHttpUrl:  gws.appConfig.GatewayService.HTTP.GetExternalURL(),
 		GatewayGrpcHost: gws.appConfig.GatewayService.GRPC.ExternalHost,
 		GatewayGrpcPort: int32(gws.appConfig.GatewayService.GRPC.ExternalPort),
@@ -903,8 +1021,6 @@ func (gws *GatewayService) hybridWorkerBootstrapConfig(workspaceID string, poolS
 func (gws *GatewayService) validateHybridTransportConfig(transport string) error {
 	transport = strings.ReplaceAll(firstNonEmpty(transport, types.BackendRouteTransportTSNet), "-", "_")
 	switch transport {
-	case types.BackendRouteTransportLocalDirect:
-		return nil
 	case types.BackendRouteTransportTSNet:
 		if !gws.appConfig.Tailscale.Enabled {
 			return fmt.Errorf("tailscale is not enabled")
@@ -913,7 +1029,7 @@ func (gws *GatewayService) validateHybridTransportConfig(transport string) error
 			return fmt.Errorf("gateway tailscale auth key is not configured")
 		}
 		if gws.appConfig.Tailscale.HybridWorkerAuthKey == "" {
-			return fmt.Errorf("hybrid worker tailscale auth key is not configured")
+			return fmt.Errorf("agent tailscale auth key is not configured")
 		}
 		return nil
 	default:
@@ -959,7 +1075,7 @@ func hybridMachineID(workspaceID, poolName, fingerprint string) string {
 	return "machine-" + hex.EncodeToString(sum[:])[:20]
 }
 
-func hybridPreflightChecksFromProto(in []*pb.HybridPreflightCheck) []hybrid.PreflightCheckState {
+func hybridPreflightChecksFromProto(in []*pb.AgentPreflightCheck) []hybrid.PreflightCheckState {
 	checks := make([]hybrid.PreflightCheckState, 0, len(in))
 	for _, check := range in {
 		if check == nil {

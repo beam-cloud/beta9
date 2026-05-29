@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -2273,31 +2274,97 @@ func GetPodAddr() (string, error) {
 
 // getDefaultInterface returns the link that goes to the internet.
 func getDefaultInterface() (netlink.Link, error) {
-	file, err := os.Open("/proc/net/route")
-	if err != nil {
-		return nil, err
+	if name := strings.TrimSpace(os.Getenv("WORKER_DEFAULT_INTERFACE")); name != "" {
+		return netlink.LinkByName(name)
 	}
-	defer file.Close()
 
-	linkName := ""
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if fields[1] == "00000000" { // Destination of default route
-			linkName = fields[0]
+	file, err := os.Open("/proc/net/route")
+	if err == nil {
+		defer file.Close()
+		if linkName, err := defaultInterfaceNameFromProcRoute(file); err == nil {
+			return netlink.LinkByName(linkName)
 		}
 	}
 
-	if linkName == "" {
-		return nil, fmt.Errorf("default route not found")
+	if link, err := defaultInterfaceFromNetlinkRoutes(); err == nil {
+		return link, nil
 	}
 
-	link, err := netlink.LinkByName(linkName)
+	if link, err := firstUsableInterface(); err == nil {
+		log.Warn().Str("interface", link.Attrs().Name).Msg("default route not found; using first usable interface")
+		return link, nil
+	}
+
+	return nil, fmt.Errorf("default route not found")
+}
+
+func defaultInterfaceNameFromProcRoute(r io.Reader) (string, error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 || fields[0] == "Iface" {
+			continue
+		}
+		if fields[1] == "00000000" && fields[0] != "" { // Destination of default route
+			return fields[0], nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("default route not found")
+}
+
+func defaultInterfaceFromNetlinkRoutes() (netlink.Link, error) {
+	routes, err := netlink.RouteList(nil, unix.AF_INET)
+	if err != nil {
+		return nil, err
+	}
+	for _, route := range routes {
+		if route.Dst != nil || route.LinkIndex == 0 {
+			continue
+		}
+		link, err := netlink.LinkByIndex(route.LinkIndex)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, fmt.Errorf("default route not found")
+}
+
+func firstUsableInterface() (netlink.Link, error) {
+	links, err := netlink.LinkList()
 	if err != nil {
 		return nil, err
 	}
 
-	return link, nil
+	var fallback netlink.Link
+	for _, link := range links {
+		attrs := link.Attrs()
+		if attrs == nil ||
+			attrs.Name == "lo" ||
+			attrs.MTU <= 0 ||
+			attrs.Flags&net.FlagUp == 0 ||
+			attrs.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if fallback == nil {
+			fallback = link
+		}
+		addrs, err := netlink.AddrList(link, unix.AF_INET)
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if addr.IP != nil && !addr.IP.IsLoopback() && !addr.IP.IsLinkLocalUnicast() {
+				return link, nil
+			}
+		}
+	}
+	if fallback != nil {
+		return fallback, nil
+	}
+	return nil, fmt.Errorf("default route not found")
 }
 
 // getIPFromEnv gets the IP address from an environment variable.

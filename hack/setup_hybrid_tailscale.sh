@@ -196,8 +196,8 @@ create_key() {
 
 ensure_tailnet_policy
 
-gateway_key="$(create_key "tag:beam-gateway" "Beam hybrid local gateway")"
-worker_key="$(create_key "tag:beam-byo-worker" "Beam hybrid local worker")"
+gateway_key="$(create_key "tag:beam-gateway" "Beam local gateway")"
+worker_key="$(create_key "tag:beam-byo-worker" "Beam local agent")"
 
 cat > "$CONFIG_PATH" <<YAML
 tailscale:
@@ -212,5 +212,6 @@ echo "gateway auth key: ${gateway_key:0:18}..."
 echo "worker auth key:  ${worker_key:0:18}..."
 echo
 echo "Next:"
+echo "  make worker"
 echo "  make start"
 echo "  uv run --project ./sdk beam pool join private-dev"

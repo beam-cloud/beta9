@@ -95,6 +95,24 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 	}, bindings)
 }
 
+func TestCreateOverlayUsesTmpfsForAgentWorkers(t *testing.T) {
+	t.Setenv("HYBRID_WORKER", "true")
+
+	worker := &Worker{}
+	request := &types.ContainerRequest{ContainerId: "container-agent"}
+
+	overlay := worker.createOverlay(request, t.TempDir())
+	require.Equal(t, "/dev/shm", overlay.OverlayPath())
+}
+
+func TestCreateOverlayKeepsDefaultPathForNormalWorkers(t *testing.T) {
+	worker := &Worker{}
+	request := &types.ContainerRequest{ContainerId: "container-default"}
+
+	overlay := worker.createOverlay(request, t.TempDir())
+	require.Equal(t, baseConfigPath, overlay.OverlayPath())
+}
+
 func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -710,6 +728,42 @@ func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	sourceRef, ok := imageClient.GetSourceImageRef(imageId)
 	require.True(t, ok)
 	assert.Equal(t, "registry.example.com/team/image:latest", sourceRef)
+}
+
+func TestRewriteOCIMetadataRegistryUsesConfiguredAgentMapping(t *testing.T) {
+	t.Setenv(ociRegistryRewriteEnv, "registry.localhost:5000=host.docker.internal:5000")
+
+	meta := &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			RegistryURL: "registry.localhost:5000",
+			Repository:  "beta9-users",
+			Reference:   "latest",
+		},
+	}
+
+	rewriteOCIMetadataRegistry(meta, "image-one")
+
+	ociInfo, ok := meta.StorageInfo.(*clipCommon.OCIStorageInfo)
+	require.True(t, ok)
+	assert.Equal(t, "host.docker.internal:5000", ociInfo.RegistryURL)
+}
+
+func TestRewriteOCIMetadataRegistryUpdatesValueStorageInfo(t *testing.T) {
+	t.Setenv(ociRegistryRewriteEnv, "registry.localhost:5000=host.docker.internal:5000")
+
+	meta := &clipCommon.ClipArchiveMetadata{
+		StorageInfo: clipCommon.OCIStorageInfo{
+			RegistryURL: "registry.localhost:5000",
+			Repository:  "beta9-users",
+			Reference:   "latest",
+		},
+	}
+
+	rewriteOCIMetadataRegistry(meta, "image-one")
+
+	ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo)
+	require.True(t, ok)
+	assert.Equal(t, "host.docker.internal:5000", ociInfo.RegistryURL)
 }
 
 func TestMountedImageReadyVerifiesMountPath(t *testing.T) {

@@ -206,7 +206,7 @@ def list_pools(
 
 @management.command(
     name="upsert",
-    help="Create or update a private hybrid worker pool.",
+    help="Create or update a private agent pool.",
     epilog="""
     Examples:
 
@@ -222,7 +222,7 @@ def list_pools(
 @click.option("--priority", type=int, default=1000, show_default=True)
 @click.option(
     "--transport",
-    type=click.Choice(("tsnet-restricted", "tsnet_restricted", "local-direct", "local_direct")),
+    type=click.Choice(("tsnet-restricted", "tsnet_restricted")),
     default="tsnet-restricted",
     show_default=True,
 )
@@ -265,7 +265,7 @@ def upsert(
 
 @management.command(
     name="join-command",
-    help="Print the one-command installer for a private hybrid worker pool.",
+    help="Print the one-command installer for a private agent pool.",
 )
 @click.argument("name")
 @click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
@@ -281,7 +281,7 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 
 @management.command(
     name="join",
-    help="Join this machine to a private hybrid worker pool.",
+    help="Join this machine to a private agent pool.",
     epilog="""
     Examples:
 
@@ -306,13 +306,18 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 )
 @click.option(
     "--transport",
-    type=click.Choice(("auto", "tsnet-restricted", "tsnet_restricted", "local-direct", "local_direct")),
+    type=click.Choice(("auto", "tsnet-restricted", "tsnet_restricted")),
     default="auto",
     show_default=True,
 )
-@click.option("--listen", default="", help="Agent listener address, for example 0.0.0.0:0.")
-@click.option("--advertise-host", default="", help="Host the gateway should dial for this machine.")
 @click.option("--agent-bin", default="", help="Use a specific local beam-agent binary.")
+@click.option(
+    "--executor",
+    type=click.Choice(("worker-container", "local-dev")),
+    default=None,
+    help="Override the agent executor returned by preflight.",
+)
+@click.option("--worker-image", default="", help="Worker image for the worker-container executor.")
 @click.option("--print-only", is_flag=True, help="Only print the generated join command.")
 @extraclick.pass_service_client
 def join(
@@ -324,9 +329,9 @@ def join(
     priority: int,
     fallback: str,
     transport: str,
-    listen: str,
-    advertise_host: str,
     agent_bin: str,
+    executor: str | None,
+    worker_image: str,
     print_only: bool,
 ):
     transport = _join_transport(service, transport)
@@ -353,9 +358,9 @@ def join(
 
     command = _append_join_args(
         command_res.command,
-        listen=listen,
-        advertise_host=advertise_host,
         agent_bin=agent_bin,
+        executor=executor,
+        worker_image=worker_image,
     )
     terminal.detail(command, crop=False, overflow="ignore")
     if print_only:
@@ -370,14 +375,19 @@ def _join_transport(service: ServiceClient, transport: str) -> str:
     return "tsnet_restricted"
 
 
-def _append_join_args(command: str, listen: str = "", advertise_host: str = "", agent_bin: str = "") -> str:
+def _append_join_args(
+    command: str,
+    agent_bin: str = "",
+    executor: str = "",
+    worker_image: str = "",
+) -> str:
     extra = []
-    if listen:
-        extra.extend(["--listen", listen])
-    if advertise_host:
-        extra.extend(["--advertise-host", advertise_host])
     if agent_bin:
         extra.extend(["--agent-bin", agent_bin])
+    if executor:
+        extra.extend(["--executor", executor])
+    if worker_image:
+        extra.extend(["--worker-image", worker_image])
     if not extra:
         return command
     return command + " " + " ".join(shlex.quote(value) for value in extra)

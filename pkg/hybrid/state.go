@@ -55,6 +55,23 @@ type AgentTokenState struct {
 	LastJoinAt         time.Time             `json:"last_join_at"`
 }
 
+type AgentWorkerSlotState struct {
+	WorkerID      string    `json:"worker_id"`
+	WorkerToken   string    `json:"worker_token"`
+	WorkspaceID   string    `json:"workspace_id"`
+	PoolName      string    `json:"pool_name"`
+	MachineID     string    `json:"machine_id"`
+	CPU           int64     `json:"cpu"`
+	Memory        int64     `json:"memory"`
+	GPU           string    `json:"gpu"`
+	GPUCount      uint32    `json:"gpu_count"`
+	GPUAssignment string    `json:"gpu_assignment"`
+	NetworkPrefix string    `json:"network_prefix"`
+	WorkerImage   string    `json:"worker_image"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type PreflightCheckState struct {
 	Name     string `json:"name"`
 	OK       bool   `json:"ok"`

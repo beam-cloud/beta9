@@ -63,12 +63,12 @@ def test_pool_join_transport_auto_uses_tsnet_for_local_gateway():
 
 def test_pool_join_appends_agent_flags():
     command = _append_join_args(
-        "curl -fsSL http://localhost/install/hybrid-worker | bash -s -- --dev",
-        listen="0.0.0.0:0",
-        advertise_host="host.docker.internal",
+        "curl -fsSL http://localhost/install/agent | bash -s -- --dev",
         agent_bin="/tmp/beam agent",
+        executor="worker-container",
+        worker_image="registry.localhost:5000/beta9-worker:latest",
     )
 
-    assert "--listen 0.0.0.0:0" in command
-    assert "--advertise-host host.docker.internal" in command
     assert "--agent-bin '/tmp/beam agent'" in command
+    assert "--executor worker-container" in command
+    assert "--worker-image registry.localhost:5000/beta9-worker:latest" in command

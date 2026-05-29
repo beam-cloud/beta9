@@ -7,8 +7,10 @@ beam pool join
   -> gateway creates/upserts a private hybrid pool
   -> gateway mints a short-lived join token
   -> installer starts cmd/agent
+  -> on macOS, installer runs the Linux agent inside Docker
   -> agent joins the tailnet with tsnet_restricted
   -> one embedded listener on the joined machine handles all backend routes
+  -> scheduler creates worker slots and the agent starts worker containers
 ```
 
 There is no k3s, Flux, system Tailscale daemon, or `local_direct` transport in this flow.
@@ -53,7 +55,7 @@ Gateway key
   Ephemeral: on
   Pre-approved: on, if device approval is enabled
 
-Hybrid worker key
+Agent key
   Tags: tag:beam-byo-worker
   Reusable: on
   Ephemeral: on
@@ -68,7 +70,7 @@ You can also create the policy entries and the two auth keys from a Tailscale AP
 TS_API_KEY="tskey-api-..." ./hack/setup_hybrid_tailscale.sh
 ```
 
-The helper non-destructively merges the Beam tags and grant into the tailnet policy, creates a tagged gateway auth key and a tagged hybrid worker auth key, then writes the local `config.yaml` used by `make start`.
+The helper non-destructively merges the Beam tags and grant into the tailnet policy, creates a tagged gateway auth key and a tagged agent auth key, then writes the local `config.yaml` used by `make start`.
 
 By default the helper does not remove existing broad access rules in your tailnet. To remove the default allow-all ACL and add the deny tests above, run:
 
@@ -93,10 +95,15 @@ YAML
 Start the local control plane the same way you normally do, with:
 
 ```sh
+make worker
 make start
 ```
 
+`make worker` publishes `localhost:5001/beta9-worker:latest`, which the local installer uses automatically when the gateway URL is localhost.
+
 ## Single Node Command
+
+On macOS, start Docker Desktop first. The installer uses a Linux agent container and mounts the Docker socket so the agent can start sibling worker containers. On Linux, the same command runs the native agent.
 
 From a second terminal in this repo, run:
 
@@ -109,12 +116,13 @@ That command creates or updates `private-dev`, gets a join token, downloads the 
 Expected output:
 
 ```text
-joined hybrid pool "private-dev" as machine "machine-..."
-transport=tsnet_restricted executor=local-dev fallback=internal
-hybrid route listener ready at beam-agent-machine-....<tailnet>:29443
+starting Linux beam-agent in Docker on macOS
+joined pool "private-dev" as machine "machine-..."
+transport=tsnet_restricted executor=worker-container fallback=internal
+agent route listener ready at beam-agent-machine-....<tailnet>:29443
 ```
 
-Keep that process running while testing route/proxy behavior. Stop it with `Ctrl-C`; because the agent node is ephemeral, Tailscale removes it after it disconnects.
+Keep that process running while testing workloads and route/proxy behavior. Stop it with `Ctrl-C`; because the agent node is ephemeral, Tailscale removes it after it disconnects.
 
 Useful checks:
 
@@ -125,6 +133,7 @@ uv run --project ./sdk beam pool list --filter name=private-dev
 
 ## Notes
 
-- The local command is route/control-plane validation. macOS joins are intentionally `local-dev` and do not advertise production worker-container capacity.
-- Linux production validation should run the same `beam pool join <name>` command without a localhost gateway URL. In that mode, preflight requires rootful runtime, netns, iptables, FUSE, and GPU/CDI checks as applicable.
+- The local command uses the same pool join, tsnet, route, scheduler, and worker-container path as production. macOS gets Linux semantics by running the agent and workers inside Docker.
+- Docker Desktop host networking must be available because the agent route listener dials worker and container host-network ports on the Docker Linux VM.
+- Linux production validation should run the same `beam pool join <name>` command without a localhost gateway URL. Preflight requires rootful runtime, netns, iptables, FUSE, and GPU/CDI checks as applicable.
 - The route proxy uses one machine-level tsnet listener on TCP `29443`. Individual worker and container ports are selected by the gateway route preface after the connection is established.

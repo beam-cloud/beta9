@@ -204,33 +204,34 @@ service GatewayService {
       body : "*"
     };
   }
-  rpc JoinHybridPool(JoinHybridPoolRequest) returns (JoinHybridPoolResponse) {
+  rpc JoinAgent(JoinAgentRequest) returns (JoinAgentResponse) {
     option (google.api.http) = {
-      post : "/hybrid/join"
+      post : "/agent/join"
       body : "*"
     };
   }
-  rpc RequestHybridTransportCredential(RequestHybridTransportCredentialRequest)
-      returns (RequestHybridTransportCredentialResponse) {
+  rpc RequestAgentTransportCredential(RequestAgentTransportCredentialRequest)
+      returns (RequestAgentTransportCredentialResponse) {
     option (google.api.http) = {
-      post : "/hybrid/transport-credential"
+      post : "/agent/transport-credential"
       body : "*"
     };
   }
-  rpc ListHybridRoutes(ListHybridRoutesRequest)
-      returns (ListHybridRoutesResponse) {
+  rpc ListAgentRoutes(ListAgentRoutesRequest)
+      returns (ListAgentRoutesResponse) {
     option (google.api.http) = {
-      post : "/hybrid/routes:list"
+      post : "/agent/routes:list"
       body : "*"
     };
   }
-  rpc UpdateHybridRouteStatus(UpdateHybridRouteStatusRequest)
-      returns (UpdateHybridRouteStatusResponse) {
+  rpc UpdateAgentRouteStatus(UpdateAgentRouteStatusRequest)
+      returns (UpdateAgentRouteStatusResponse) {
     option (google.api.http) = {
-      post : "/hybrid/routes/status"
+      post : "/agent/routes/status"
       body : "*"
     };
   }
+  rpc StreamAgent(StreamAgentRequest) returns (stream StreamAgentResponse);
 
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse) {
@@ -804,7 +805,7 @@ message GetHybridPoolJoinCommandResponse {
   google.protobuf.Timestamp expires_at = 5;
 }
 
-message HybridWorkerBootstrapConfig {
+message AgentBootstrapConfig {
   string gateway_http_url = 1;
   string gateway_grpc_host = 2;
   int32 gateway_grpc_port = 3;
@@ -817,7 +818,7 @@ message HybridWorkerBootstrapConfig {
   repeated string disabled_services = 10;
 }
 
-message JoinHybridPoolRequest {
+message JoinAgentRequest {
   string join_token = 1;
   string machine_fingerprint = 2;
   string hostname = 3;
@@ -827,29 +828,29 @@ message JoinHybridPoolRequest {
   uint64 memory_mb = 7;
   repeated string gpu = 8;
   uint32 gpu_count = 9;
-  repeated HybridPreflightCheck preflight = 10;
+  repeated AgentPreflightCheck preflight = 10;
   bool schedulable = 11;
   string executor = 12;
 }
 
-message JoinHybridPoolResponse {
+message JoinAgentResponse {
   bool ok = 1;
   string err_msg = 2;
   string workspace_id = 3;
   string pool_name = 4;
   string machine_id = 5;
   string agent_token = 6;
-  HybridWorkerBootstrapConfig bootstrap = 7;
+  AgentBootstrapConfig bootstrap = 7;
 }
 
-message HybridPreflightCheck {
+message AgentPreflightCheck {
   string name = 1;
   bool ok = 2;
   string message = 3;
   string severity = 4;
 }
 
-message HybridBackendRoute {
+message AgentRoute {
   string route_id = 1;
   string workspace_id = 2;
   string pool_name = 3;
@@ -867,12 +868,12 @@ message HybridBackendRoute {
   int64 updated_at = 15;
 }
 
-message RequestHybridTransportCredentialRequest {
+message RequestAgentTransportCredentialRequest {
   string agent_token = 1;
   string transport = 2;
 }
 
-message RequestHybridTransportCredentialResponse {
+message RequestAgentTransportCredentialResponse {
   bool ok = 1;
   string err_msg = 2;
   string auth_key = 3;
@@ -881,15 +882,15 @@ message RequestHybridTransportCredentialResponse {
   bool ephemeral = 6;
 }
 
-message ListHybridRoutesRequest { string agent_token = 1; }
+message ListAgentRoutesRequest { string agent_token = 1; }
 
-message ListHybridRoutesResponse {
+message ListAgentRoutesResponse {
   bool ok = 1;
   string err_msg = 2;
-  repeated HybridBackendRoute routes = 3;
+  repeated AgentRoute routes = 3;
 }
 
-message UpdateHybridRouteStatusRequest {
+message UpdateAgentRouteStatusRequest {
   string agent_token = 1;
   string route_id = 2;
   string state = 3;
@@ -897,9 +898,32 @@ message UpdateHybridRouteStatusRequest {
   string error = 5;
 }
 
-message UpdateHybridRouteStatusResponse {
+message UpdateAgentRouteStatusResponse {
   bool ok = 1;
   string err_msg = 2;
+}
+
+message AgentWorkerSlot {
+  string worker_id = 1;
+  string worker_token = 2;
+  string pool_name = 3;
+  string machine_id = 4;
+  int64 cpu = 5;
+  int64 memory = 6;
+  string gpu = 7;
+  uint32 gpu_count = 8;
+  string gpu_assignment = 9;
+  string network_prefix = 10;
+  string worker_image = 11;
+}
+
+message StreamAgentRequest { string agent_token = 1; }
+
+message StreamAgentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated AgentRoute routes = 3;
+  repeated AgentWorkerSlot slots = 4;
 }
 
 message Machine {

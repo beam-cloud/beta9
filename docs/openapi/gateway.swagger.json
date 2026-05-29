@@ -16,6 +16,134 @@
     "application/json"
   ],
   "paths": {
+    "/agent/join": {
+      "post": {
+        "operationId": "GatewayService_JoinAgent",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayJoinAgentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayJoinAgentRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/agent/routes/status": {
+      "post": {
+        "operationId": "GatewayService_UpdateAgentRouteStatus",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateAgentRouteStatusResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateAgentRouteStatusRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/agent/routes:list": {
+      "post": {
+        "operationId": "GatewayService_ListAgentRoutes",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListAgentRoutesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayListAgentRoutesRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/agent/transport-credential": {
+      "post": {
+        "operationId": "GatewayService_RequestAgentTransportCredential",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayRequestAgentTransportCredentialResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayRequestAgentTransportCredentialRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/auth/authorize": {
       "post": {
         "summary": "Auth",
@@ -281,38 +409,6 @@
             "in": "path",
             "required": true,
             "type": "string"
-          }
-        ],
-        "tags": [
-          "GatewayService"
-        ]
-      }
-    },
-    "/hybrid/join": {
-      "post": {
-        "operationId": "GatewayService_JoinHybridPool",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/gatewayJoinHybridPoolResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/gatewayJoinHybridPoolRequest"
-            }
           }
         ],
         "tags": [
@@ -657,102 +753,6 @@
             "required": true,
             "schema": {
               "$ref": "#/definitions/gatewayUpsertHybridPoolRequest"
-            }
-          }
-        ],
-        "tags": [
-          "GatewayService"
-        ]
-      }
-    },
-    "/hybrid/routes/status": {
-      "post": {
-        "operationId": "GatewayService_UpdateHybridRouteStatus",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/gatewayUpdateHybridRouteStatusResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/gatewayUpdateHybridRouteStatusRequest"
-            }
-          }
-        ],
-        "tags": [
-          "GatewayService"
-        ]
-      }
-    },
-    "/hybrid/routes:list": {
-      "post": {
-        "operationId": "GatewayService_ListHybridRoutes",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/gatewayListHybridRoutesResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/gatewayListHybridRoutesRequest"
-            }
-          }
-        ],
-        "tags": [
-          "GatewayService"
-        ]
-      }
-    },
-    "/hybrid/transport-credential": {
-      "post": {
-        "operationId": "GatewayService_RequestHybridTransportCredential",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/gatewayRequestHybridTransportCredentialResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/gatewayRequestHybridTransportCredentialRequest"
             }
           }
         ],
@@ -1506,6 +1506,155 @@
         }
       }
     },
+    "gatewayAgentBootstrapConfig": {
+      "type": "object",
+      "properties": {
+        "gatewayHttpUrl": {
+          "type": "string"
+        },
+        "gatewayGrpcHost": {
+          "type": "string"
+        },
+        "gatewayGrpcPort": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "gatewayGrpcTls": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "transport": {
+          "type": "string"
+        },
+        "executor": {
+          "type": "string"
+        },
+        "fallback": {
+          "type": "string"
+        },
+        "disabledServices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gatewayAgentPreflightCheck": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayAgentRoute": {
+      "type": "object",
+      "properties": {
+        "routeId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "transport": {
+          "type": "string"
+        },
+        "localTarget": {
+          "type": "string"
+        },
+        "proxyTarget": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayAgentWorkerSlot": {
+      "type": "object",
+      "properties": {
+        "workerId": {
+          "type": "string"
+        },
+        "workerToken": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "cpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "gpuAssignment": {
+          "type": "string"
+        },
+        "networkPrefix": {
+          "type": "string"
+        },
+        "workerImage": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayAttachHybridPoolResponse": {
       "type": "object",
       "properties": {
@@ -2149,58 +2298,6 @@
         }
       }
     },
-    "gatewayHybridBackendRoute": {
-      "type": "object",
-      "properties": {
-        "routeId": {
-          "type": "string"
-        },
-        "workspaceId": {
-          "type": "string"
-        },
-        "poolName": {
-          "type": "string"
-        },
-        "machineId": {
-          "type": "string"
-        },
-        "workerId": {
-          "type": "string"
-        },
-        "containerId": {
-          "type": "string"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "port": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "protocol": {
-          "type": "string"
-        },
-        "transport": {
-          "type": "string"
-        },
-        "localTarget": {
-          "type": "string"
-        },
-        "proxyTarget": {
-          "type": "string"
-        },
-        "state": {
-          "type": "string"
-        },
-        "error": {
-          "type": "string"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "int64"
-        }
-      }
-    },
     "gatewayHybridOffer": {
       "type": "object",
       "properties": {
@@ -2348,23 +2445,6 @@
         }
       }
     },
-    "gatewayHybridPreflightCheck": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "ok": {
-          "type": "boolean"
-        },
-        "message": {
-          "type": "string"
-        },
-        "severity": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayHybridReservation": {
       "type": "object",
       "properties": {
@@ -2408,46 +2488,7 @@
         }
       }
     },
-    "gatewayHybridWorkerBootstrapConfig": {
-      "type": "object",
-      "properties": {
-        "gatewayHttpUrl": {
-          "type": "string"
-        },
-        "gatewayGrpcHost": {
-          "type": "string"
-        },
-        "gatewayGrpcPort": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "gatewayGrpcTls": {
-          "type": "boolean"
-        },
-        "workspaceId": {
-          "type": "string"
-        },
-        "poolName": {
-          "type": "string"
-        },
-        "transport": {
-          "type": "string"
-        },
-        "executor": {
-          "type": "string"
-        },
-        "fallback": {
-          "type": "string"
-        },
-        "disabledServices": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "gatewayJoinHybridPoolRequest": {
+    "gatewayJoinAgentRequest": {
       "type": "object",
       "properties": {
         "joinToken": {
@@ -2487,7 +2528,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/gatewayHybridPreflightCheck"
+            "$ref": "#/definitions/gatewayAgentPreflightCheck"
           }
         },
         "schedulable": {
@@ -2498,7 +2539,7 @@
         }
       }
     },
-    "gatewayJoinHybridPoolResponse": {
+    "gatewayJoinAgentResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -2520,7 +2561,33 @@
           "type": "string"
         },
         "bootstrap": {
-          "$ref": "#/definitions/gatewayHybridWorkerBootstrapConfig"
+          "$ref": "#/definitions/gatewayAgentBootstrapConfig"
+        }
+      }
+    },
+    "gatewayListAgentRoutesRequest": {
+      "type": "object",
+      "properties": {
+        "agentToken": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayListAgentRoutesResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayAgentRoute"
+          }
         }
       }
     },
@@ -2600,32 +2667,6 @@
           "items": {
             "type": "object",
             "$ref": "#/definitions/gatewayHybridPool"
-          }
-        }
-      }
-    },
-    "gatewayListHybridRoutesRequest": {
-      "type": "object",
-      "properties": {
-        "agentToken": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayListHybridRoutesResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        },
-        "routes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/gatewayHybridBackendRoute"
           }
         }
       }
@@ -2896,7 +2937,7 @@
         }
       }
     },
-    "gatewayRequestHybridTransportCredentialRequest": {
+    "gatewayRequestAgentTransportCredentialRequest": {
       "type": "object",
       "properties": {
         "agentToken": {
@@ -2907,7 +2948,7 @@
         }
       }
     },
-    "gatewayRequestHybridTransportCredentialResponse": {
+    "gatewayRequestAgentTransportCredentialResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -3114,6 +3155,31 @@
         }
       }
     },
+    "gatewayStreamAgentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayAgentRoute"
+          }
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayAgentWorkerSlot"
+          }
+        }
+      }
+    },
     "gatewayStringList": {
       "type": "object",
       "properties": {
@@ -3274,7 +3340,7 @@
         }
       }
     },
-    "gatewayUpdateHybridRouteStatusRequest": {
+    "gatewayUpdateAgentRouteStatusRequest": {
       "type": "object",
       "properties": {
         "agentToken": {
@@ -3294,7 +3360,7 @@
         }
       }
     },
-    "gatewayUpdateHybridRouteStatusResponse": {
+    "gatewayUpdateAgentRouteStatusResponse": {
       "type": "object",
       "properties": {
         "ok": {

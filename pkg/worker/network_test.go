@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,6 +81,21 @@ func TestGetIPFromEnv(t *testing.T) {
 				t.Errorf("getIPFromEnv() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultInterfaceNameFromProcRoute(t *testing.T) {
+	route := strings.NewReader(`Iface	Destination	Gateway	Flags	RefCnt	Use	Metric	Mask	MTU	Window	IRTT
+eth0	00000000	010012AC	0003	0	0	0	00000000	0	0	0
+eth1	0012AC0A	00000000	0001	0	0	0	00FFFFFF	0	0	0
+`)
+
+	name, err := defaultInterfaceNameFromProcRoute(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "eth0" {
+		t.Fatalf("expected eth0 default interface, got %q", name)
 	}
 }
 

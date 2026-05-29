@@ -338,6 +338,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1490,7 +1491,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	}
 
 	overlayPath := baseConfigPath
-	if request.IsBuildRequest() {
+	if request.IsBuildRequest() || envBool("HYBRID_WORKER") {
 		overlayPath = "/dev/shm"
 	}
 

@@ -599,6 +599,7 @@ type MetricsCollector string
 var (
 	MetricsCollectorPrometheus MetricsCollector = "prometheus"
 	MetricsCollectorOpenMeter  MetricsCollector = "openmeter"
+	MetricsCollectorNone       MetricsCollector = "none"
 )
 
 type MonitoringConfig struct {

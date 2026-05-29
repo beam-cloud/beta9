@@ -18,6 +18,7 @@ const (
 	hybridJoinTokenKeyPrefix  = "hybrid:join_token"
 	hybridAgentTokenKeyPrefix = "hybrid:agent_token"
 	hybridMachineKeyPrefix    = "hybrid:machine"
+	hybridAgentSlotKeyPrefix  = "hybrid:agent_slot"
 )
 
 type HybridRedisRepository struct {
@@ -145,6 +146,72 @@ func (r *HybridRedisRepository) GetAgentTokenState(ctx context.Context, tokenHas
 	return &state, nil
 }
 
+func (r *HybridRedisRepository) ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*hybrid.AgentTokenState, error) {
+	keys, err := r.rdb.Scan(ctx, hybridMachineKey(workspaceID, poolName, "*"))
+	if err != nil {
+		return nil, err
+	}
+	states := make([]*hybrid.AgentTokenState, 0, len(keys))
+	for _, key := range keys {
+		data, err := r.rdb.Get(ctx, key).Bytes()
+		if err != nil {
+			continue
+		}
+		var state hybrid.AgentTokenState
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+		states = append(states, &state)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		return states[i].MachineID < states[j].MachineID
+	})
+	return states, nil
+}
+
+func (r *HybridRedisRepository) SaveAgentWorkerSlotState(ctx context.Context, state *hybrid.AgentWorkerSlotState) error {
+	if state == nil || state.WorkerID == "" {
+		return fmt.Errorf("worker slot id is required")
+	}
+	now := time.Now()
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = now
+	}
+	state.UpdatedAt = now
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Set(ctx, hybridAgentSlotKey(state.WorkspaceID, state.PoolName, state.MachineID, state.WorkerID), data, 0).Err()
+}
+
+func (r *HybridRedisRepository) ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*hybrid.AgentWorkerSlotState, error) {
+	keys, err := r.rdb.Scan(ctx, hybridAgentSlotKey(workspaceID, poolName, machineID, "*"))
+	if err != nil {
+		return nil, err
+	}
+	states := make([]*hybrid.AgentWorkerSlotState, 0, len(keys))
+	for _, key := range keys {
+		data, err := r.rdb.Get(ctx, key).Bytes()
+		if err != nil {
+			continue
+		}
+		var state hybrid.AgentWorkerSlotState
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+		states = append(states, &state)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		return states[i].WorkerID < states[j].WorkerID
+	})
+	return states, nil
+}
+
+func (r *HybridRedisRepository) DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error {
+	return r.rdb.Del(ctx, hybridAgentSlotKey(workspaceID, poolName, machineID, workerID)).Err()
+}
+
 func hybridPoolKey(workspaceID, name string) string {
 	return fmt.Sprintf("%s:%s:%s", hybridPoolKeyPrefix, workspaceID, name)
 }
@@ -163,4 +230,8 @@ func hybridAgentTokenKey(tokenHash string) string {
 
 func hybridMachineKey(workspaceID, poolName, machineID string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", hybridMachineKeyPrefix, workspaceID, poolName, machineID)
+}
+
+func hybridAgentSlotKey(workspaceID, poolName, machineID, workerID string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s", hybridAgentSlotKeyPrefix, workspaceID, poolName, machineID, workerID)
 }

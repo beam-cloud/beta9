@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/beam-cloud/beta9/pkg/hybrid/agent"
+	"github.com/beam-cloud/beta9/pkg/agent"
 )
 
 func main() {
@@ -21,11 +21,11 @@ func main() {
 		Stderr: os.Stderr,
 	}
 	flags.StringVar(&opts.GatewayURL, "gateway", "", "public Beam gateway HTTP URL")
-	flags.StringVar(&opts.JoinToken, "join-token", "", "short-lived hybrid pool join token")
-	flags.BoolVar(&opts.DevMode, "dev", false, "use local development defaults for macOS/Linux")
+	flags.StringVar(&opts.JoinToken, "join-token", "", "short-lived pool join token")
+	flags.BoolVar(&opts.DevMode, "dev", false, "use local development installer defaults")
 	flags.StringVar(&opts.TransportOverride, "transport", "", "override transport returned by gateway bootstrap")
-	flags.StringVar(&opts.ListenAddr, "listen", "", "local_direct listener address")
-	flags.StringVar(&opts.AdvertiseHost, "advertise-host", "", "host the gateway should dial for local_direct")
+	flags.StringVar(&opts.ExecutorOverride, "executor", "", "override executor returned by local preflight")
+	flags.StringVar(&opts.WorkerImage, "worker-image", "", "worker image for worker-container executor")
 
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)

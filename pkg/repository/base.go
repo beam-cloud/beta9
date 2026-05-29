@@ -97,6 +97,10 @@ type HybridRepository interface {
 	GetJoinTokenState(ctx context.Context, tokenHash string) (*hybrid.JoinTokenState, error)
 	SaveAgentTokenState(ctx context.Context, state *hybrid.AgentTokenState, ttl time.Duration) error
 	GetAgentTokenState(ctx context.Context, tokenHash string) (*hybrid.AgentTokenState, error)
+	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*hybrid.AgentTokenState, error)
+	SaveAgentWorkerSlotState(ctx context.Context, state *hybrid.AgentWorkerSlotState) error
+	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*hybrid.AgentWorkerSlotState, error)
+	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
 }
 
 type WorkspaceRepository interface {

@@ -17,8 +17,10 @@ const (
 	BackendRouteProtocolTCP          = "tcp"
 	BackendRouteKindWorker           = "worker"
 	BackendRouteKindContainer        = "container"
-	DefaultHybridTSNetRouteProxyPort = 29443
-	DefaultHybridWorkerContainerMode = "worker-container"
+	DefaultAgentTSNetRouteProxyPort  = 29443
+	DefaultHybridTSNetRouteProxyPort = DefaultAgentTSNetRouteProxyPort
+	DefaultAgentWorkerContainerMode  = "worker-container"
+	DefaultHybridWorkerContainerMode = DefaultAgentWorkerContainerMode
 )
 
 type BackendRoute struct {

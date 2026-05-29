@@ -3,9 +3,12 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +21,10 @@ import (
 
 const (
 	mountCleanupInterval = 30 * time.Second
+
+	workspaceStorageEndpointEnv             = "BEAM_WORKSPACE_STORAGE_ENDPOINT_URL"
+	workspaceStorageEndpointRewriteHostsEnv = "BEAM_WORKSPACE_STORAGE_ENDPOINT_REWRITE_HOSTS"
+	defaultWorkspaceStorageEndpointHosts    = "localstack,localstack.beta9,localstack.beta9.svc,localstack.beta9.svc.cluster.local"
 )
 
 type WorkspaceStorageManager struct {
@@ -87,8 +94,12 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	}
 
 	var err error
+	workspaceStorage = workspaceStorageForMount(workspaceStorage)
 	switch sm.poolConfig.StorageMode {
 	case storage.StorageModeGeese:
+		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
+			return nil, err
+		}
 		os.MkdirAll(mountPath, 0755)
 
 		mount, err = storage.NewStorage(types.StorageConfig{
@@ -132,6 +143,9 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		}
 
 	case storage.StorageModeAlluxio:
+		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
+			return nil, err
+		}
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
@@ -159,6 +173,16 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 			return nil, err
 		}
 
+	case storage.StorageModeLocal:
+		mount, err = storage.NewStorage(types.StorageConfig{
+			Mode:           storage.StorageModeLocal,
+			FilesystemName: workspaceName,
+			FilesystemPath: mountPath,
+		}, sm.cacheClient)
+		if err != nil {
+			return nil, err
+		}
+
 	default:
 		return nil, errors.New("invalid storage mode")
 	}
@@ -166,6 +190,81 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	sm.mounts.Set(workspaceName, mount)
 
 	return mount, nil
+}
+
+func workspaceStorageForMount(workspaceStorage *types.WorkspaceStorage) *types.WorkspaceStorage {
+	if workspaceStorage == nil || workspaceStorage.EndpointUrl == nil {
+		return workspaceStorage
+	}
+
+	endpoint := *workspaceStorage.EndpointUrl
+	rewrittenEndpoint := rewriteWorkspaceStorageEndpoint(endpoint)
+	if rewrittenEndpoint == endpoint {
+		return workspaceStorage
+	}
+
+	out := *workspaceStorage
+	out.EndpointUrl = &rewrittenEndpoint
+	log.Info().
+		Str("original_endpoint", endpoint).
+		Str("endpoint", rewrittenEndpoint).
+		Msg("rewrote workspace storage endpoint for agent worker")
+	return &out
+}
+
+func rewriteWorkspaceStorageEndpoint(endpoint string) string {
+	override := strings.TrimSpace(os.Getenv(workspaceStorageEndpointEnv))
+	if override == "" {
+		return endpoint
+	}
+
+	current, err := url.Parse(endpoint)
+	if err != nil || current.Hostname() == "" {
+		return endpoint
+	}
+	if !workspaceStorageEndpointHostRewriteAllowed(current.Hostname()) {
+		return endpoint
+	}
+
+	next, err := url.Parse(override)
+	if err != nil || next.Scheme == "" || next.Host == "" {
+		return endpoint
+	}
+
+	current.Scheme = next.Scheme
+	current.Host = next.Host
+	if next.Path != "" && next.Path != "/" {
+		current.Path = strings.TrimRight(next.Path, "/")
+	}
+	return strings.TrimRight(current.String(), "/")
+}
+
+func workspaceStorageEndpointHostRewriteAllowed(host string) bool {
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	rewriteHosts := strings.TrimSpace(os.Getenv(workspaceStorageEndpointRewriteHostsEnv))
+	if rewriteHosts == "" {
+		rewriteHosts = defaultWorkspaceStorageEndpointHosts
+	}
+	for _, allowed := range strings.Split(rewriteHosts, ",") {
+		allowed = strings.ToLower(strings.TrimSpace(strings.Trim(allowed, "[]")))
+		if allowed == "" {
+			continue
+		}
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
+	if workspaceStorage == nil {
+		return errors.New("workspace storage metadata is required")
+	}
+	if workspaceStorage.EndpointUrl == nil || workspaceStorage.BucketName == nil || workspaceStorage.AccessKey == nil || workspaceStorage.SecretKey == nil || workspaceStorage.Region == nil {
+		return fmt.Errorf("workspace storage metadata is incomplete")
+	}
+	return nil
 }
 
 func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
@@ -192,6 +291,10 @@ func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		}
 
 		os.RemoveAll(localPath)
+	case storage.StorageModeLocal:
+		if err := mount.Unmount(localPath); err != nil {
+			return err
+		}
 	case storage.StorageModeAlluxio:
 		fallthrough
 	default:
