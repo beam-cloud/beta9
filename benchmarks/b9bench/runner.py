@@ -449,9 +449,33 @@ class CacheSuiteProbe(ScriptProbeBase):
             "hash": row.get("hash"),
             "artifact_output": str(self.sink.artifact_dir / f"{slug(suite.name)}.json"),
         }
+        hrw_route = (((row.get("hrwRoutingProof") or {}).get("routes") or []) + [{}])[0]
+        if hrw_route:
+            evidence.update(
+                {
+                    "hrw_ok": bool(hrw_route.get("ok")),
+                    "hrw_selected_host": hrw_route.get("selectedHostId"),
+                    "hrw_selected_registration": hrw_route.get("selectedRegistrationId"),
+                    "hrw_selected_node": hrw_route.get("selectedNode"),
+                    "hrw_pages_on_selected_node": hrw_route.get("pagesOnSelectedNode"),
+                    "remote_target_matches_hrw": hrw_route.get("remoteTargetMatchesHRW"),
+                    "remote_target_registration_matches_hrw": hrw_route.get("remoteTargetRegistrationMatchesHRW"),
+                }
+            )
         if extra_evidence:
             evidence.update({key: value for key, value in extra_evidence.items() if value is not None})
         if source_key == "remoteRead":
+            remote = row.get("remoteRead") or {}
+            evidence.update(
+                {
+                    "source_worker": remote.get("sourcePod"),
+                    "source_node": remote.get("sourceNode"),
+                    "target_worker": remote.get("targetPod"),
+                    "target_node": remote.get("targetNode"),
+                    "remote_worker": remote.get("differentWorkerPod"),
+                    "remote_node": remote.get("differentNode"),
+                }
+            )
             network = (row.get("remoteRead") or {}).get("networkProbe") or {}
             if network.get("ok") and network.get("mbps"):
                 evidence["network_ceiling_mbps"] = float(network.get("mbps") or 0)
