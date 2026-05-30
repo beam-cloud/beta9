@@ -84,6 +84,33 @@ func TestCacheHostCandidateGroupFirstReachableFallsBackInOrder(t *testing.T) {
 	require.Equal(t, []string{"10.0.0.1:2049", "10.0.0.2:2049"}, called)
 }
 
+func TestCacheHostCandidateGroupLogicalHostIgnoresEndpointFields(t *testing.T) {
+	group := cacheHostCandidateGroup{
+		hostID: "logical-host",
+		candidates: []*Host{
+			{
+				HostId:         "logical-host",
+				RegistrationID: "worker-a",
+				PoolName:       "default",
+				Locality:       "default",
+				NodeID:         "node-a",
+				CachePathID:    "path",
+				PrivateAddr:    "10.0.0.1:2049",
+			},
+		},
+	}
+
+	host := group.logicalHost()
+
+	require.NotNil(t, host)
+	require.Equal(t, "logical-host", host.HostId)
+	require.Equal(t, "node-a", host.NodeID)
+	require.Equal(t, "path", host.CachePathID)
+	require.Empty(t, host.RegistrationID)
+	require.Empty(t, host.PrivateAddr)
+	require.False(t, host.HasEndpoint())
+}
+
 func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

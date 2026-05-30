@@ -62,7 +62,7 @@ func (hm *HostMap) Set(host *Host) {
 		if exists {
 			hm.hosts[host.HostId] = existing
 		} else {
-			delete(hm.hosts, host.HostId)
+			hm.hosts[host.HostId] = host.LogicalOnly()
 		}
 		hm.mu.Unlock()
 	}
@@ -88,6 +88,29 @@ func (hm *HostMap) Remove(host *Host) bool {
 	Logger.Infof("Removed host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	delete(hm.hosts, host.HostId)
 	return true
+}
+
+func (hm *HostMap) DeactivateEndpoint(host *Host) (*Host, bool) {
+	if host == nil || host.HostId == "" {
+		return nil, false
+	}
+
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+
+	existing, exists := hm.hosts[host.HostId]
+	if !exists {
+		return nil, false
+	}
+	if !sameCacheHostEndpoint(existing, host) {
+		Logger.Debugf("Ignored stale host deactivation @ %s (stale PrivateAddr=%s active PrivateAddr=%s)", host.HostId, host.PrivateAddr, existing.PrivateAddr)
+		return nil, false
+	}
+
+	logicalHost := existing.LogicalOnly()
+	hm.hosts[host.HostId] = logicalHost
+	Logger.Infof("Deactivated cache host endpoint @ %s (PrivateAddr=%s)", host.HostId, host.PrivateAddr)
+	return logicalHost, true
 }
 
 func (hm *HostMap) Members() mapset.Set[string] {

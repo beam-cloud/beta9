@@ -160,6 +160,39 @@ def create_sandbox(image, args: argparse.Namespace):
     return instance
 
 
+def wait_instance_running(instance, timeout_seconds: float) -> None:
+    from beta9.clients.pod import PodSandboxStatusRequest, PodSandboxStatusResponse
+
+    container_id = instance.container_id
+    deadline = time.monotonic() + timeout_seconds
+    attempts = 0
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        attempts += 1
+        try:
+            response = instance.stub._unary_unary(
+                "/pod.PodService/SandboxStatus",
+                PodSandboxStatusRequest,
+                PodSandboxStatusResponse,
+            )(
+                PodSandboxStatusRequest(container_id=container_id, pid=0),
+                timeout=5,
+            )
+            last = {
+                "ok": bool(response.ok),
+                "status": response.status,
+                "error": response.error_msg,
+            }
+            if response.ok and str(response.status).lower() == "running":
+                return
+        except Exception as exc:
+            last = {"error": str(exc)}
+        if attempts % 30 == 0:
+            log(f"waiting for sandbox RUNNING container={container_id} last={last}")
+        time.sleep(0.5)
+    raise TimeoutError(f"timed out waiting for sandbox RUNNING container={container_id}; last={last}")
+
+
 def read_layer(instance, timeout_seconds: float) -> dict[str, Any]:
     process = instance.process.exec("python3", "-c", READ_CODE, cwd="/")
     exit_code = process.wait(timeout=timeout_seconds)
@@ -737,6 +770,7 @@ def run_iteration(
 ) -> dict[str, Any]:
     log(f"Starting CLIP layer read iteration: {name}")
     instance = create_sandbox(image, args)
+    wait_instance_running(instance, min(args.timeout_seconds, 300))
     worker = worker_for_container(kube, instance.container_id)
     started = time.perf_counter()
     try:
