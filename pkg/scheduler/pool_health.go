@@ -101,7 +101,8 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 		return nil, err
 	}
 
-	if p.wpc.Mode() == types.PoolModeExternal {
+	switch p.wpc.Mode() {
+	case types.PoolModeExternal:
 		providerName := string(*p.workerPoolConfig.Provider)
 		machines, err := p.providerRepo.ListAllMachines(providerName, p.wpc.Name(), false)
 		if err != nil {
@@ -118,6 +119,14 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 				readyMachines++
 			}
 		}
+	case types.PoolModeHybrid:
+		poolState, err := p.wpc.State()
+		if err != nil {
+			return nil, err
+		}
+		registeredMachines = int(poolState.RegisteredMachines)
+		pendingMachines = int(poolState.PendingMachines)
+		readyMachines = int(poolState.ReadyMachines)
 	}
 
 	for _, worker := range workers {

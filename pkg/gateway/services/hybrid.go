@@ -28,7 +28,7 @@ const (
 	defaultHybridTransport = "tsnet_restricted"
 	defaultHybridFallback  = "internal"
 	defaultHybridPriority  = int32(1000)
-	defaultHybridExecutor  = "worker-container"
+	defaultHybridExecutor  = types.DefaultAgentWorkerContainerMode
 	defaultHybridJoinTTL   = 30 * time.Minute
 )
 

@@ -12,15 +12,6 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-const (
-	hybridPoolKeyPrefix       = "hybrid:pool"
-	hybridPoolIndexKeyPrefix  = "hybrid:pool_index"
-	hybridJoinTokenKeyPrefix  = "hybrid:join_token"
-	hybridAgentTokenKeyPrefix = "hybrid:agent_token"
-	hybridMachineKeyPrefix    = "hybrid:machine"
-	hybridAgentSlotKeyPrefix  = "hybrid:agent_slot"
-)
-
 type HybridRedisRepository struct {
 	rdb *common.RedisClient
 }
@@ -34,14 +25,14 @@ func (r *HybridRedisRepository) SavePoolState(ctx context.Context, workspaceID s
 	if err != nil {
 		return err
 	}
-	if err := r.rdb.Set(ctx, hybridPoolKey(workspaceID, state.Name), data, 0).Err(); err != nil {
+	if err := r.rdb.Set(ctx, common.RedisKeys.HybridPoolState(workspaceID, state.Name), data, 0).Err(); err != nil {
 		return err
 	}
-	return r.rdb.SAdd(ctx, hybridPoolIndexKey(workspaceID), state.Name).Err()
+	return r.rdb.SAdd(ctx, common.RedisKeys.HybridPoolIndex(workspaceID), state.Name).Err()
 }
 
 func (r *HybridRedisRepository) GetPoolState(ctx context.Context, workspaceID, name string) (*hybrid.PoolState, error) {
-	data, err := r.rdb.Get(ctx, hybridPoolKey(workspaceID, name)).Bytes()
+	data, err := r.rdb.Get(ctx, common.RedisKeys.HybridPoolState(workspaceID, name)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -57,7 +48,7 @@ func (r *HybridRedisRepository) GetPoolState(ctx context.Context, workspaceID, n
 }
 
 func (r *HybridRedisRepository) ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*hybrid.PoolState, error) {
-	names, err := r.rdb.SMembers(ctx, hybridPoolIndexKey(workspaceID)).Result()
+	names, err := r.rdb.SMembers(ctx, common.RedisKeys.HybridPoolIndex(workspaceID)).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +71,10 @@ func (r *HybridRedisRepository) ListPoolStates(ctx context.Context, workspaceID 
 }
 
 func (r *HybridRedisRepository) DeletePoolState(ctx context.Context, workspaceID, name string) error {
-	if err := r.rdb.Del(ctx, hybridPoolKey(workspaceID, name)).Err(); err != nil {
+	if err := r.rdb.Del(ctx, common.RedisKeys.HybridPoolState(workspaceID, name)).Err(); err != nil {
 		return err
 	}
-	return r.rdb.SRem(ctx, hybridPoolIndexKey(workspaceID), name).Err()
+	return r.rdb.SRem(ctx, common.RedisKeys.HybridPoolIndex(workspaceID), name).Err()
 }
 
 func (r *HybridRedisRepository) SaveJoinTokenState(ctx context.Context, state *hybrid.JoinTokenState, ttl time.Duration) error {
@@ -94,11 +85,11 @@ func (r *HybridRedisRepository) SaveJoinTokenState(ctx context.Context, state *h
 	if err != nil {
 		return err
 	}
-	return r.rdb.Set(ctx, hybridJoinTokenKey(state.TokenHash), data, ttl).Err()
+	return r.rdb.Set(ctx, common.RedisKeys.HybridJoinToken(state.TokenHash), data, ttl).Err()
 }
 
 func (r *HybridRedisRepository) GetJoinTokenState(ctx context.Context, tokenHash string) (*hybrid.JoinTokenState, error) {
-	data, err := r.rdb.Get(ctx, hybridJoinTokenKey(tokenHash)).Bytes()
+	data, err := r.rdb.Get(ctx, common.RedisKeys.HybridJoinToken(tokenHash)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -121,17 +112,20 @@ func (r *HybridRedisRepository) SaveAgentTokenState(ctx context.Context, state *
 	if err != nil {
 		return err
 	}
-	if err := r.rdb.Set(ctx, hybridAgentTokenKey(state.TokenHash), data, ttl).Err(); err != nil {
+	if err := r.rdb.Set(ctx, common.RedisKeys.HybridAgentToken(state.TokenHash), data, ttl).Err(); err != nil {
 		return err
 	}
-	return r.rdb.Set(ctx, hybridMachineKey(state.WorkspaceID, state.PoolName, state.MachineID), data, 0).Err()
+	if err := r.rdb.Set(ctx, common.RedisKeys.HybridAgentMachine(state.WorkspaceID, state.PoolName, state.MachineID), data, 0).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SAdd(ctx, common.RedisKeys.HybridAgentMachineIndex(state.WorkspaceID, state.PoolName), state.MachineID).Err()
 }
 
 func (r *HybridRedisRepository) GetAgentTokenState(ctx context.Context, tokenHash string) (*hybrid.AgentTokenState, error) {
 	if tokenHash == "" {
 		return nil, nil
 	}
-	data, err := r.rdb.Get(ctx, hybridAgentTokenKey(tokenHash)).Bytes()
+	data, err := r.rdb.Get(ctx, common.RedisKeys.HybridAgentToken(tokenHash)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
@@ -147,13 +141,13 @@ func (r *HybridRedisRepository) GetAgentTokenState(ctx context.Context, tokenHas
 }
 
 func (r *HybridRedisRepository) ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*hybrid.AgentTokenState, error) {
-	keys, err := r.rdb.Scan(ctx, hybridMachineKey(workspaceID, poolName, "*"))
+	machineIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.HybridAgentMachineIndex(workspaceID, poolName)).Result()
 	if err != nil {
 		return nil, err
 	}
-	states := make([]*hybrid.AgentTokenState, 0, len(keys))
-	for _, key := range keys {
-		data, err := r.rdb.Get(ctx, key).Bytes()
+	states := make([]*hybrid.AgentTokenState, 0, len(machineIDs))
+	for _, machineID := range machineIDs {
+		data, err := r.rdb.Get(ctx, common.RedisKeys.HybridAgentMachine(workspaceID, poolName, machineID)).Bytes()
 		if err != nil {
 			continue
 		}
@@ -182,17 +176,20 @@ func (r *HybridRedisRepository) SaveAgentWorkerSlotState(ctx context.Context, st
 	if err != nil {
 		return err
 	}
-	return r.rdb.Set(ctx, hybridAgentSlotKey(state.WorkspaceID, state.PoolName, state.MachineID, state.WorkerID), data, 0).Err()
+	if err := r.rdb.Set(ctx, common.RedisKeys.HybridAgentSlot(state.WorkspaceID, state.PoolName, state.MachineID, state.WorkerID), data, 0).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SAdd(ctx, common.RedisKeys.HybridAgentSlotIndex(state.WorkspaceID, state.PoolName, state.MachineID), state.WorkerID).Err()
 }
 
 func (r *HybridRedisRepository) ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*hybrid.AgentWorkerSlotState, error) {
-	keys, err := r.rdb.Scan(ctx, hybridAgentSlotKey(workspaceID, poolName, machineID, "*"))
+	workerIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.HybridAgentSlotIndex(workspaceID, poolName, machineID)).Result()
 	if err != nil {
 		return nil, err
 	}
-	states := make([]*hybrid.AgentWorkerSlotState, 0, len(keys))
-	for _, key := range keys {
-		data, err := r.rdb.Get(ctx, key).Bytes()
+	states := make([]*hybrid.AgentWorkerSlotState, 0, len(workerIDs))
+	for _, workerID := range workerIDs {
+		data, err := r.rdb.Get(ctx, common.RedisKeys.HybridAgentSlot(workspaceID, poolName, machineID, workerID)).Bytes()
 		if err != nil {
 			continue
 		}
@@ -209,29 +206,8 @@ func (r *HybridRedisRepository) ListAgentWorkerSlotStates(ctx context.Context, w
 }
 
 func (r *HybridRedisRepository) DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error {
-	return r.rdb.Del(ctx, hybridAgentSlotKey(workspaceID, poolName, machineID, workerID)).Err()
-}
-
-func hybridPoolKey(workspaceID, name string) string {
-	return fmt.Sprintf("%s:%s:%s", hybridPoolKeyPrefix, workspaceID, name)
-}
-
-func hybridPoolIndexKey(workspaceID string) string {
-	return fmt.Sprintf("%s:%s", hybridPoolIndexKeyPrefix, workspaceID)
-}
-
-func hybridJoinTokenKey(tokenHash string) string {
-	return fmt.Sprintf("%s:%s", hybridJoinTokenKeyPrefix, tokenHash)
-}
-
-func hybridAgentTokenKey(tokenHash string) string {
-	return fmt.Sprintf("%s:%s", hybridAgentTokenKeyPrefix, tokenHash)
-}
-
-func hybridMachineKey(workspaceID, poolName, machineID string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", hybridMachineKeyPrefix, workspaceID, poolName, machineID)
-}
-
-func hybridAgentSlotKey(workspaceID, poolName, machineID, workerID string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", hybridAgentSlotKeyPrefix, workspaceID, poolName, machineID, workerID)
+	if err := r.rdb.Del(ctx, common.RedisKeys.HybridAgentSlot(workspaceID, poolName, machineID, workerID)).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SRem(ctx, common.RedisKeys.HybridAgentSlotIndex(workspaceID, poolName, machineID), workerID).Err()
 }

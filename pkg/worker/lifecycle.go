@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -353,53 +352,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
-
-	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
-	// gateway may need to directly interact with this pod/container.
-	if len(opts.StartupPortBindings) > 0 {
-		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.StartupPortBindings[0].HostPort)
-		phaseStart = time.Now()
-		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
-			ContainerId: request.ContainerId,
-			Address:     containerAddr,
-			Route:       s.backendRouteFor(request, types.BackendRouteKindContainer, int32(opts.StartupPortBindings[0].ContainerPort), containerAddr),
-		}))
-		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, phaseStart, err == nil, nil)
-		if err != nil {
-			return err
-		}
-		log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
-	}
-
-	addressMap := make(map[int32]string, len(opts.StartupPortBindings))
-	routes := make([]*pb.BackendRoute, 0, len(opts.StartupPortBindings))
-	for _, binding := range opts.StartupPortBindings {
-		containerPort := int32(binding.ContainerPort)
-		localTarget := fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
-		addressMap[containerPort] = localTarget
-		if route := s.backendRouteFor(request, types.BackendRouteKindContainer, containerPort, localTarget); route != nil {
-			routes = append(routes, route)
-		}
-	}
-	phaseStart = time.Now()
-	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
-		ContainerId: request.ContainerId,
-		AddressMap:  addressMap,
-		Routes:      routes,
-	}))
-	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
-	if err != nil {
-		return err
-	}
-
-	log.Info().
-		Str("container_id", containerId).
-		Str("stub_type", request.Stub.Type.Kind()).
-		Int("port_count", len(addressMap)).
-		Interface("address_map", addressMap).
-		Msg("set container address map")
 
 	s.containerWg.Add(1)
 
@@ -850,31 +802,6 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	return &newSpec, nil
 }
 
-func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
-	// Most of these env vars are required to communicate with the gateway and vice versa
-	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
-		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
-		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
-		"PYTHONUNBUFFERED=1",
-	}
-
-	// Add env vars from request
-	env = append(request.Env, env...)
-
-	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
-	if options.InitialSpec != nil {
-		env = append(options.InitialSpec.Process.Env, env...)
-	}
-
-	return env
-}
-
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -1001,6 +928,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"success":    "true",
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
+
+	if err := s.registerContainerPorts(ctx, request, opts.StartupPortBindings); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to register container network addresses")
+		return
+	}
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -1491,7 +1423,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	}
 
 	overlayPath := baseConfigPath
-	if request.IsBuildRequest() || envBool("HYBRID_WORKER") {
+	if s.useMemoryOverlay(request) {
 		overlayPath = "/dev/shm"
 	}
 
@@ -1557,38 +1489,4 @@ func (s *Worker) applyDeferredSandboxCPUThrottle(request *types.ContainerRequest
 	instance.DeferredCPUQuota = nil
 	s.containerInstances.Set(request.ContainerId, instance)
 	return nil
-}
-
-func (s *Worker) backendRouteFor(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute {
-	if !s.persistent || s.machineID == "" || s.hybridTransport == "" {
-		return nil
-	}
-	localTarget = s.hybridRouteLocalTarget(localTarget)
-	routeID := strings.Join([]string{s.machineID, s.workerId, request.ContainerId, kind, fmt.Sprintf("%d", port)}, ":")
-	return &pb.BackendRoute{
-		RouteId:     routeID,
-		WorkspaceId: request.WorkspaceId,
-		PoolName:    s.poolName,
-		MachineId:   s.machineID,
-		WorkerId:    s.workerId,
-		ContainerId: request.ContainerId,
-		Kind:        kind,
-		Port:        port,
-		Protocol:    types.BackendRouteProtocolTCP,
-		Transport:   s.hybridTransport,
-		LocalTarget: localTarget,
-		State:       types.BackendRouteStateOpening,
-	}
-}
-
-func (s *Worker) hybridRouteLocalTarget(localTarget string) string {
-	if s.hybridLocalTargetHost == "" {
-		return localTarget
-	}
-
-	_, port, err := net.SplitHostPort(localTarget)
-	if err != nil {
-		return localTarget
-	}
-	return net.JoinHostPort(s.hybridLocalTargetHost, port)
 }

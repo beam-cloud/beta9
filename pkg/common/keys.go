@@ -15,8 +15,9 @@ var (
 	schedulerContainerState          string = "scheduler:container:state:%s"
 	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
 	schedulerContainerAddressMap     string = "scheduler:container:container_addr_map:%s"
-	schedulerBackendRoute            string = "scheduler:container:backend_route:%s"
-	schedulerBackendRouteIndex       string = "scheduler:container:backend_route_index:%s"
+	schedulerBackendRoute            string = "scheduler:route:%s"
+	schedulerBackendRouteIndex       string = "scheduler:route:index:%s"
+	schedulerBackendRouteMachine     string = "scheduler:route:machine:{%s}:%s:%s"
 	schedulerContainerRequestStatus  string = "scheduler:container:request_status:%s"
 	schedulerContainerIndex          string = "scheduler:container:index:%s"
 	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
@@ -90,6 +91,17 @@ var (
 var (
 	tailscalePrefix          string = "tailscale"
 	tailscaleServiceHostname string = "tailscale:%s:%s"
+)
+
+var (
+	hybridPoolState         string = "hybrid:{%s}:p:%s"
+	hybridPoolIndex         string = "hybrid:{%s}:pools"
+	hybridJoinToken         string = "hybrid:join:%s"
+	hybridAgentToken        string = "agent:token:%s"
+	hybridAgentMachine      string = "agent:{%s}:p:%s:m:%s"
+	hybridAgentMachineIndex string = "agent:{%s}:p:%s:machines"
+	hybridAgentSlot         string = "agent:{%s}:p:%s:m:%s:s:%s"
+	hybridAgentSlotIndex    string = "agent:{%s}:p:%s:m:%s:slots"
 )
 
 var (
@@ -171,6 +183,10 @@ func (rk *redisKeys) SchedulerBackendRoute(routeId string) string {
 
 func (rk *redisKeys) SchedulerBackendRouteIndex(containerId string) string {
 	return fmt.Sprintf(schedulerBackendRouteIndex, containerId)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteMachineIndex(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(schedulerBackendRouteMachine, workspaceID, poolName, machineID)
 }
 
 func (rk *redisKeys) SchedulerContainerRequestStatus(containerId string) string {
@@ -266,6 +282,39 @@ func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
 
 func (rk *redisKeys) WorkerPoolCleanerLock(poolName string) string {
 	return fmt.Sprintf(workerPoolCleanerLock, poolName)
+}
+
+// Hybrid keys
+func (rk *redisKeys) HybridPoolState(workspaceID, poolName string) string {
+	return fmt.Sprintf(hybridPoolState, workspaceID, poolName)
+}
+
+func (rk *redisKeys) HybridPoolIndex(workspaceID string) string {
+	return fmt.Sprintf(hybridPoolIndex, workspaceID)
+}
+
+func (rk *redisKeys) HybridJoinToken(tokenHash string) string {
+	return fmt.Sprintf(hybridJoinToken, tokenHash)
+}
+
+func (rk *redisKeys) HybridAgentToken(tokenHash string) string {
+	return fmt.Sprintf(hybridAgentToken, tokenHash)
+}
+
+func (rk *redisKeys) HybridAgentMachine(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(hybridAgentMachine, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) HybridAgentMachineIndex(workspaceID, poolName string) string {
+	return fmt.Sprintf(hybridAgentMachineIndex, workspaceID, poolName)
+}
+
+func (rk *redisKeys) HybridAgentSlot(workspaceID, poolName, machineID, workerID string) string {
+	return fmt.Sprintf(hybridAgentSlot, workspaceID, poolName, machineID, workerID)
+}
+
+func (rk *redisKeys) HybridAgentSlotIndex(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(hybridAgentSlotIndex, workspaceID, poolName, machineID)
 }
 
 // Task keys

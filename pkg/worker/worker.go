@@ -58,7 +58,7 @@ type Worker struct {
 	gpuCount                uint32
 	podAddr                 string
 	podHostName             string
-	hybridLocalTargetHost   string
+	routeLocalTargetHost    string
 	imageMountPath          string
 	runtime                 runtime.Runtime
 	runcRuntime             runtime.Runtime
@@ -67,7 +67,7 @@ type Worker struct {
 	cacheManager            *WorkerCacheManager
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
-	containerNetworkManager *ContainerNetworkManager
+	containerNetworkManager ContainerNetwork
 	containerGPUManager     GPUManager
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
@@ -89,7 +89,7 @@ type Worker struct {
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
 	persistent              bool
-	hybridTransport         string
+	routeTransport          string
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -153,17 +153,17 @@ func NewWorker() (*Worker, error) {
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
 	gpuType := os.Getenv("GPU_TYPE")
-	workerId := os.Getenv("WORKER_ID")
-	workerToken := os.Getenv("WORKER_TOKEN")
-	workerPoolName := os.Getenv("WORKER_POOL_NAME")
-	machineID := os.Getenv("WORKER_MACHINE_ID")
+	workerId := os.Getenv(types.WorkerEnvID)
+	workerToken := os.Getenv(types.WorkerEnvToken)
+	workerPoolName := os.Getenv(types.WorkerEnvPoolName)
+	machineID := os.Getenv(types.WorkerEnvMachineID)
 	podHostName := os.Getenv("HOSTNAME")
-	persistent := envBool("WORKER_PERSISTENT") || envBool("HYBRID_WORKER")
-	hybridTransport := os.Getenv("HYBRID_TRANSPORT")
-	if hybridTransport == "" && persistent {
-		hybridTransport = types.BackendRouteTransportTSNet
+	persistent := envBool(types.WorkerEnvPersistent)
+	routeTransport := firstNonEmptyWorkerValue(os.Getenv(types.WorkerEnvRouteTransport))
+	if routeTransport == "" && persistent {
+		routeTransport = types.BackendRouteTransportTSNet
 	}
-	hybridLocalTargetHost := os.Getenv("HYBRID_LOCAL_TARGET_HOST")
+	routeLocalTargetHost := firstNonEmptyWorkerValue(os.Getenv(types.WorkerEnvRouteLocalTargetHost))
 
 	podAddr, err := GetPodAddr()
 	if err != nil {
@@ -319,11 +319,12 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
+	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport)
 
 	worker := &Worker{
 		ctx:                     ctx,
@@ -349,7 +350,7 @@ func NewWorker() (*Worker, error) {
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
-		hybridLocalTargetHost:   hybridLocalTargetHost,
+		routeLocalTargetHost:    routeLocalTargetHost,
 		imageClient:             imageClient,
 		criuManager:             criuManager,
 		podHostName:             podHostName,
@@ -374,7 +375,7 @@ func NewWorker() (*Worker, error) {
 		userDataStorage:     userDataStorage,
 		checkpointStorage:   checkpointStorage,
 		persistent:          persistent,
-		hybridTransport:     hybridTransport,
+		routeTransport:      routeTransport,
 	}
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{

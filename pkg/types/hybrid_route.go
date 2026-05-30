@@ -18,9 +18,8 @@ const (
 	BackendRouteKindWorker           = "worker"
 	BackendRouteKindContainer        = "container"
 	DefaultAgentTSNetRouteProxyPort  = 29443
-	DefaultHybridTSNetRouteProxyPort = DefaultAgentTSNetRouteProxyPort
 	DefaultAgentWorkerContainerMode  = "worker-container"
-	DefaultHybridWorkerContainerMode = DefaultAgentWorkerContainerMode
+	DefaultAgentLocalDevMode         = "local-dev"
 )
 
 type BackendRoute struct {
@@ -43,6 +42,10 @@ type BackendRoute struct {
 
 func BackendRouteAddress(routeID string) string {
 	return fmt.Sprintf("%s://%s", BackendRouteScheme, routeID)
+}
+
+func BackendRouteID(machineID, workerID, containerID, kind string, port int32) string {
+	return strings.Join([]string{machineID, workerID, containerID, kind, fmt.Sprintf("%d", port)}, ":")
 }
 
 func ParseBackendRouteAddress(address string) (string, bool) {

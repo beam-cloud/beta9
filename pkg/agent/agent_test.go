@@ -97,7 +97,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv("BEAM_AGENT_LOCAL_TARGET_HOST", "host.docker.internal")
 
 	args := dockerRunArgs("slot-one", "worker:dev", "/tmp/config.json", bootstrapConfig{
-		GatewayHTTPURL: "http://host.docker.internal:1994",
+		GatewayHTTPURL:  "http://host.docker.internal:1994",
+		GatewayGRPCHost: "host.docker.internal",
+		GatewayGRPCPort: 1993,
 	}, &pb.AgentWorkerSlot{
 		WorkerId:      "worker-one",
 		WorkerToken:   "token",
@@ -107,8 +109,8 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		NetworkPrefix: "10.0.0.0/24",
 	}, agentWorkerDirs("/tmp/agent-state", "worker-one"))
 
-	if !containsArg(args, "-e", "HYBRID_LOCAL_TARGET_HOST=host.docker.internal") {
-		t.Fatalf("expected HYBRID_LOCAL_TARGET_HOST env in docker args: %#v", args)
+	if !containsArg(args, "-e", types.WorkerEnvRouteLocalTargetHost+"=host.docker.internal") {
+		t.Fatalf("expected route target host env in docker args: %#v", args)
 	}
 	for _, want := range []string{
 		"CACHE_LOCALITY=private",
@@ -116,7 +118,11 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		"CACHE_HOST_NETWORK=true",
 		"BEAM_WORKSPACE_STORAGE_ENDPOINT_URL=http://host.docker.internal:4566",
 		"BEAM_GATEWAY_HTTP_URL=http://host.docker.internal:1994",
-		"BEAM_OCI_REGISTRY_REWRITE=registry.localhost:5000=host.docker.internal:5000,localhost:5000=host.docker.internal:5000,127.0.0.1:5000=host.docker.internal:5000",
+		"BETA9_GATEWAY_HOST=host.docker.internal",
+		"BETA9_GATEWAY_PORT=1993",
+		"BETA9_GATEWAY_HOST_HTTP=host.docker.internal",
+		"BETA9_GATEWAY_PORT_HTTP=1994",
+		"BEAM_OCI_REGISTRY_REWRITE=registry.localhost:5000=host.docker.internal:5001,localhost:5000=host.docker.internal:5001,127.0.0.1:5000=host.docker.internal:5001",
 	} {
 		if !containsArg(args, "-e", want) {
 			t.Fatalf("expected %s env in docker args: %#v", want, args)
@@ -137,12 +143,75 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		t.Fatalf("expected shm size to track worker memory: %#v", args)
 	}
 	for _, want := range []string{
-		"registry.localhost:host-gateway",
+		"registry.localhost:127.0.0.1",
 		"localstack:host-gateway",
 	} {
 		if !containsArg(args, "--add-host", want) {
 			t.Fatalf("expected %s host alias in docker args: %#v", want, args)
 		}
+	}
+}
+
+func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	slot := &pb.AgentWorkerSlot{
+		PoolName:      "private-dev",
+		MachineId:     "machine-a",
+		Cpu:           500,
+		Memory:        256,
+		NetworkPrefix: "10.0.0.0/24",
+	}
+
+	if err := writeWorkerConfig(path, bootstrapConfig{
+		GatewayHTTPURL:  "http://host.docker.internal:1994",
+		GatewayGRPCHost: "host.docker.internal",
+		GatewayGRPCPort: 1993,
+		GatewayGRPCTLS:  false,
+	}, slot, agentWorkerDirs("/tmp/agent-state", "worker-one")); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+
+	gatewayConfig := config["gateway"].(map[string]any)
+	grpcConfig := gatewayConfig["grpc"].(map[string]any)
+	httpConfig := gatewayConfig["http"].(map[string]any)
+	if got := grpcConfig["externalHost"]; got != "host.docker.internal" {
+		t.Fatalf("grpc external host = %v, want host.docker.internal", got)
+	}
+	if got := grpcConfig["externalPort"]; got != float64(1993) {
+		t.Fatalf("grpc external port = %v, want 1993", got)
+	}
+	if got := httpConfig["externalHost"]; got != "host.docker.internal" {
+		t.Fatalf("http external host = %v, want host.docker.internal", got)
+	}
+	if got := httpConfig["externalPort"]; got != float64(1994) {
+		t.Fatalf("http external port = %v, want 1994", got)
+	}
+}
+
+func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
+	got := agentLocalRegistryForwardTarget(bootstrapConfig{
+		GatewayHTTPURL: "http://host.docker.internal:1994",
+	})
+	if got != "host.docker.internal:5001" {
+		t.Fatalf("registry forward target = %q, want host-published k3d registry", got)
+	}
+}
+
+func TestAgentLocalRegistryForwardTargetDisabledForRemoteGateway(t *testing.T) {
+	got := agentLocalRegistryForwardTarget(bootstrapConfig{
+		GatewayHTTPURL: "https://gateway.beam.cloud",
+	})
+	if got != "" {
+		t.Fatalf("registry forward target = %q, want disabled for remote gateway", got)
 	}
 }
 

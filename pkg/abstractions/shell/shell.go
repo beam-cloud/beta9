@@ -422,7 +422,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		}, nil
 	}
 
-	err = ss.scheduler.Run(&types.ContainerRequest{
+	runRequest := &types.ContainerRequest{
 		ContainerId:  containerId,
 		Env:          env,
 		Cpu:          stubConfig.Runtime.Cpu,
@@ -438,7 +438,15 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		Mounts:       mounts,
 		Stub:         *stub,
 		PoolSelector: stubConfig.PoolSelector(),
-	})
+	}
+	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
+		return &pb.CreateStandaloneShellResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	err = ss.scheduler.Run(runRequest)
 	if err != nil {
 		return &pb.CreateStandaloneShellResponse{
 			Ok:     false,

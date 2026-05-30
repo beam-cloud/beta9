@@ -34,9 +34,6 @@ import (
 )
 
 const (
-	workerContainerExecutor = "worker-container"
-	localDevExecutor        = "local-dev"
-
 	agentWorkspaceStorageEndpointEnv             = "BEAM_WORKSPACE_STORAGE_ENDPOINT_URL"
 	agentWorkspaceStorageEndpointRewriteHostsEnv = "BEAM_WORKSPACE_STORAGE_ENDPOINT_REWRITE_HOSTS"
 	agentWorkspaceStorageEndpointOverrideEnv     = "BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_URL"
@@ -161,6 +158,13 @@ func RunJoin(ctx context.Context, opts JoinOptions) error {
 	slotManager := newWorkerSlotManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr)
 	defer slotManager.stopAll()
 
+	registryForwarder, err := startLocalRegistryForwarder(ctx, res.Bootstrap, opts.Stderr)
+	if err != nil {
+		fmt.Fprintf(opts.Stderr, "local registry forwarder disabled: %v\n", err)
+	} else if registryForwarder != nil {
+		defer registryForwarder.Close()
+	}
+
 	transport := normalizeTransport(firstNonEmpty(opts.TransportOverride, res.Bootstrap.Transport))
 	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, slotManager, opts.Stdout, opts.Stderr); err != nil {
 		return fmt.Errorf("route proxy stopped: %w", err)
@@ -254,7 +258,7 @@ func urlHostIsLoopback(value string) bool {
 func join(ctx context.Context, client *Client, token string, devMode bool, executorOverride string) (*joinResponse, error) {
 	hostname, _ := os.Hostname()
 	hostname = firstNonEmpty(os.Getenv("BEAM_AGENT_HOSTNAME"), hostname)
-	executor := workerContainerExecutor
+	executor := types.DefaultAgentWorkerContainerMode
 	if executorOverride != "" {
 		executor = executorOverride
 	}
@@ -377,7 +381,7 @@ func (m *workerSlotManager) reconcile(ctx context.Context, slots []*pb.AgentWork
 		return nil
 	}
 
-	if m.bootstrap.Executor != workerContainerExecutor {
+	if m.bootstrap.Executor != types.DefaultAgentWorkerContainerMode {
 		if len(slots) > 0 {
 			m.noticeOnce.Do(func() {
 				fmt.Fprintf(m.stderr, "agent executor %q does not start worker containers; desired slots are ignored\n", m.bootstrap.Executor)
@@ -608,26 +612,28 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 	}
 
 	env := map[string]string{
-		"CONFIG_PATH":              agentContainerConfigPath,
-		"WORKER_ID":                slot.WorkerId,
-		"WORKER_TOKEN":             slot.WorkerToken,
-		"WORKER_POOL_NAME":         slot.PoolName,
-		"WORKER_MACHINE_ID":        slot.MachineId,
-		"CPU_LIMIT":                strconv.FormatInt(slot.Cpu, 10),
-		"MEMORY_LIMIT":             strconv.FormatInt(slot.Memory, 10),
-		"GPU_TYPE":                 slot.Gpu,
-		"GPU_COUNT":                strconv.FormatUint(uint64(slot.GpuCount), 10),
-		"POD_HOSTNAME":             "127.0.0.1",
-		"POD_IP":                   "127.0.0.1",
-		"NETWORK_PREFIX":           slot.NetworkPrefix,
-		"CACHE_LOCALITY":           slot.PoolName,
-		"CACHE_NODE_ID":            slot.MachineId,
-		"CACHE_HOST_NETWORK":       "true",
-		"WORKER_PERSISTENT":        "true",
-		"HYBRID_WORKER":            "true",
-		"HYBRID_TRANSPORT":         normalizeTransport(bootstrap.Transport),
-		"HYBRID_LOCAL_TARGET_HOST": localTargetHost,
-		"BEAM_GATEWAY_HTTP_URL":    strings.TrimRight(bootstrap.GatewayHTTPURL, "/"),
+		"CONFIG_PATH":                       agentContainerConfigPath,
+		types.WorkerEnvID:                   slot.WorkerId,
+		types.WorkerEnvToken:                slot.WorkerToken,
+		types.WorkerEnvPoolName:             slot.PoolName,
+		types.WorkerEnvMachineID:            slot.MachineId,
+		"CPU_LIMIT":                         strconv.FormatInt(slot.Cpu, 10),
+		"MEMORY_LIMIT":                      strconv.FormatInt(slot.Memory, 10),
+		"GPU_TYPE":                          slot.Gpu,
+		"GPU_COUNT":                         strconv.FormatUint(uint64(slot.GpuCount), 10),
+		"POD_HOSTNAME":                      "127.0.0.1",
+		"POD_IP":                            "127.0.0.1",
+		"NETWORK_PREFIX":                    slot.NetworkPrefix,
+		"CACHE_LOCALITY":                    slot.PoolName,
+		"CACHE_NODE_ID":                     slot.MachineId,
+		"CACHE_HOST_NETWORK":                "true",
+		types.WorkerEnvPersistent:           "true",
+		types.WorkerEnvRouteTransport:       normalizeTransport(bootstrap.Transport),
+		types.WorkerEnvRouteLocalTargetHost: localTargetHost,
+		"BEAM_GATEWAY_HTTP_URL":             strings.TrimRight(bootstrap.GatewayHTTPURL, "/"),
+	}
+	for key, value := range agentGatewayEnv(bootstrap) {
+		env[key] = value
 	}
 	if endpoint := agentWorkspaceStorageEndpointURL(bootstrap); endpoint != "" {
 		env[agentWorkspaceStorageEndpointEnv] = endpoint
@@ -652,6 +658,7 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs map[string]string) error {
 	workspaceStorageMode := firstNonEmpty(os.Getenv("BEAM_AGENT_WORKSPACE_STORAGE_MODE"), storage.StorageModeGeese)
 	cacheDir := pathpkg.Join(agentContainerCachePath, sanitizeDockerName(slot.PoolName), sanitizeDockerName(slot.MachineId))
+	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
 	config := map[string]any{
 		"clusterName": "agent",
 		"debugMode":   false,
@@ -663,7 +670,9 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 				"tls":          bootstrap.GatewayGRPCTLS,
 			},
 			"http": map[string]any{
-				"externalHost": bootstrap.GatewayHTTPURL,
+				"externalHost": httpHost,
+				"externalPort": httpPort,
+				"tls":          httpTLS,
 			},
 		},
 		"storage": map[string]any{
@@ -778,6 +787,42 @@ func agentWorkspaceStorageEndpointURL(bootstrap bootstrapConfig) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
+func agentGatewayEnv(bootstrap bootstrapConfig) map[string]string {
+	httpHost, httpPort, _ := agentGatewayHTTPParts(bootstrap)
+	grpcPort := bootstrap.GatewayGRPCPort
+	if grpcPort <= 0 {
+		grpcPort = 443
+	}
+
+	return map[string]string{
+		types.ContainerEnvGatewayGRPCHost: bootstrap.GatewayGRPCHost,
+		types.ContainerEnvGatewayGRPCPort: strconv.Itoa(grpcPort),
+		types.ContainerEnvGatewayHTTPHost: httpHost,
+		types.ContainerEnvGatewayHTTPPort: strconv.Itoa(httpPort),
+	}
+}
+
+func agentGatewayHTTPParts(bootstrap bootstrapConfig) (string, int, bool) {
+	u, err := url.Parse(bootstrap.GatewayHTTPURL)
+	if err != nil || u.Hostname() == "" {
+		return bootstrap.GatewayHTTPURL, 443, true
+	}
+
+	port := 0
+	if u.Port() != "" {
+		port, _ = strconv.Atoi(u.Port())
+	}
+	if port <= 0 {
+		if u.Scheme == "http" {
+			port = 80
+		} else {
+			port = 443
+		}
+	}
+
+	return u.Hostname(), port, u.Scheme == "https"
+}
+
 func agentOCIRegistryRewrite(bootstrap bootstrapConfig) string {
 	if rewrite := strings.TrimSpace(os.Getenv(agentOCIRegistryRewriteOverrideEnv)); rewrite != "" {
 		return rewrite
@@ -797,7 +842,7 @@ func agentOCIRegistryRewrite(bootstrap bootstrapConfig) string {
 
 	port := strings.TrimSpace(os.Getenv(agentOCIRegistryEndpointPortEnv))
 	if port == "" {
-		port = "5000"
+		port = "5001"
 	}
 	target := net.JoinHostPort(host, port)
 	return strings.Join([]string{
@@ -818,9 +863,95 @@ func agentDockerHostAliases(bootstrap bootstrapConfig) []string {
 	}
 
 	return []string{
-		"registry.localhost:host-gateway",
+		"registry.localhost:127.0.0.1",
 		"localstack:host-gateway",
 	}
+}
+
+func startLocalRegistryForwarder(ctx context.Context, bootstrap bootstrapConfig, stderr io.Writer) (io.Closer, error) {
+	target := agentLocalRegistryForwardTarget(bootstrap)
+	if target == "" {
+		return nil, nil
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:5000")
+	if err != nil {
+		return nil, err
+	}
+
+	forwarder := &tcpForwarder{
+		listener: listener,
+		target:   target,
+		stderr:   stderr,
+	}
+	go forwarder.run(ctx)
+	return forwarder, nil
+}
+
+func agentLocalRegistryForwardTarget(bootstrap bootstrapConfig) string {
+	u, err := url.Parse(bootstrap.GatewayHTTPURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if host == "" || (!isLoopbackHost(host) && !strings.EqualFold(host, "host.docker.internal")) {
+		return ""
+	}
+
+	port := strings.TrimSpace(os.Getenv(agentOCIRegistryEndpointPortEnv))
+	if port == "" {
+		port = "5001"
+	}
+	if port == "5000" {
+		return ""
+	}
+	return net.JoinHostPort(host, port)
+}
+
+type tcpForwarder struct {
+	listener net.Listener
+	target   string
+	stderr   io.Writer
+}
+
+func (f *tcpForwarder) Close() error {
+	return f.listener.Close()
+}
+
+func (f *tcpForwarder) run(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
+		_ = f.listener.Close()
+	}()
+
+	for {
+		conn, err := f.listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "use of closed network connection") {
+				return
+			}
+			if f.stderr != nil {
+				fmt.Fprintf(f.stderr, "local registry forwarder accept failed: %v\n", err)
+			}
+			return
+		}
+		go f.handleConn(conn)
+	}
+}
+
+func (f *tcpForwarder) handleConn(conn net.Conn) {
+	defer conn.Close()
+
+	upstream, err := net.DialTimeout("tcp", f.target, 30*time.Second)
+	if err != nil {
+		if f.stderr != nil {
+			fmt.Fprintf(f.stderr, "local registry forwarder dial failed: %v\n", err)
+		}
+		return
+	}
+	defer upstream.Close()
+
+	copyBoth(conn, upstream)
 }
 
 func agentStateDir() (string, error) {
@@ -1078,6 +1209,11 @@ func proxyConn(conn net.Conn, source io.Reader, localTarget string) error {
 	}
 	defer local.Close()
 
+	copyBuffered(conn, source, local)
+	return nil
+}
+
+func copyBuffered(conn net.Conn, source io.Reader, local net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -1091,7 +1227,10 @@ func proxyConn(conn net.Conn, source io.Reader, localTarget string) error {
 		closeWrite(conn)
 	}()
 	wg.Wait()
-	return nil
+}
+
+func copyBoth(a, b net.Conn) {
+	copyBuffered(a, a, b)
 }
 
 func checkLocalTargetReady(localTarget string) error {
@@ -1249,7 +1388,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 		})
 	}
 
-	workerContainer := executor == workerContainerExecutor
+	workerContainer := executor == types.DefaultAgentWorkerContainerMode
 	production := runtime.GOOS == "linux"
 	linuxOK := production || (devMode && !workerContainer)
 	checks = append(checks, check{

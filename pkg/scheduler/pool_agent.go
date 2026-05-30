@@ -112,14 +112,20 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 	if err != nil {
 		return nil, err
 	}
+	readyMachines := int64(0)
+	for _, machine := range machines {
+		if wpc.machineSchedulable(machine) {
+			readyMachines++
+		}
+	}
 	status := types.WorkerPoolStatusHealthy
-	if len(machines) == 0 {
+	if readyMachines == 0 {
 		status = types.WorkerPoolStatusDegraded
 	}
 	return &types.WorkerPoolState{
 		Status:             status,
 		RegisteredMachines: int64(len(machines)),
-		ReadyMachines:      int64(len(machines)),
+		ReadyMachines:      readyMachines,
 	}, nil
 }
 
@@ -248,6 +254,16 @@ func (wpc *AgentWorkerPoolController) usedGPUAssignments(machineID string) []str
 	}
 	used := make([]string, 0, len(slots))
 	for _, slot := range slots {
+		worker, err := wpc.workerRepo.GetWorkerById(slot.WorkerID)
+		if err != nil {
+			if _, ok := err.(*types.ErrWorkerNotFound); ok {
+				_ = wpc.hybridRepo.DeleteAgentWorkerSlotState(wpc.ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID)
+			}
+			continue
+		}
+		if worker.Status == types.WorkerStatusDisabled {
+			continue
+		}
 		if slot.GPUAssignment != "" {
 			used = append(used, slot.GPUAssignment)
 		}

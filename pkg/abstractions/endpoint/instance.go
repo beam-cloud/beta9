@@ -105,6 +105,9 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Preemptable:       true,
 			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
+		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {
+			return err
+		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
 		i.Rdb.SetEx(

@@ -211,7 +211,6 @@ func (g *Gateway) initHttp() error {
 	e.Use(gatewaymiddleware.Subdomain(g.Config.GatewayService.HTTP.GetExternalURL(), g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
 	e.GET("/install/agent", agentInstallScriptHandler())
-	e.GET("/install/hybrid-worker", agentInstallScriptHandler())
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{

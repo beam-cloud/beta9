@@ -1281,17 +1281,18 @@ func (m *ContainerNetworkManager) networkRestriction(containerId string, request
 	if request == nil {
 		return "", nil
 	}
-	if len(request.AllowList) > 0 {
+	switch request.NetworkPolicy() {
+	case types.ContainerNetworkPolicyAllowList:
 		return "allowlist", func() error {
 			return m.setupAllowList(containerId, request, request.AllowList)
 		}
-	}
-	if request.BlockNetwork {
+	case types.ContainerNetworkPolicyBlock:
 		return "block", func() error {
 			return m.setupBlockNetwork(containerId, request)
 		}
+	default:
+		return "", nil
 	}
-	return "", nil
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
