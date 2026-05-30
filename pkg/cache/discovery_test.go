@@ -5,7 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	proto "github.com/beam-cloud/beta9/proto"
+	rendezvous "github.com/beam-cloud/rendezvous"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 type testHostDirectoryFunc func(context.Context, string) ([]*Host, error)
@@ -163,4 +166,60 @@ func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Empty(t, hosts)
+}
+
+func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("logical-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	active := &Host{
+		HostId:      "logical-host",
+		PrivateAddr: addr,
+	}
+	client := &Client{
+		ctx:            ctx,
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		globalConfig:   cfg.Global,
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         rendezvous.New[*Host](),
+		hostMap:        NewHostMap(cfg.Global, nil),
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			return []*Host{active}, nil
+		}),
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap.onHostAdded = client.addHost
+	defer client.Cleanup()
+
+	client.hostMap.Set(active.LogicalOnly())
+	require.False(t, client.hostMap.Get("logical-host").HasEndpoint())
+
+	require.NoError(t, client.refreshRoutableHosts(ctx))
+
+	refreshed := client.hostMap.Get("logical-host")
+	require.NotNil(t, refreshed)
+	require.True(t, refreshed.HasEndpoint())
+	require.Equal(t, addr, refreshed.PrivateAddr)
+	require.True(t, client.hasCacheClient("logical-host"))
 }
