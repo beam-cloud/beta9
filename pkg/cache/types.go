@@ -360,6 +360,23 @@ type Host struct {
 	CapacityUsagePct float64       `redis:"capacity_usage_pct" json:"capacity_usage_pct"`
 }
 
+func (h *Host) HasEndpoint() bool {
+	return h != nil && (h.Addr != "" || h.PrivateAddr != "")
+}
+
+func (h *Host) LogicalOnly() *Host {
+	if h == nil {
+		return nil
+	}
+	logical := *h
+	logical.RegistrationID = ""
+	logical.Addr = ""
+	logical.PrivateAddr = ""
+	logical.RTT = 0
+	logical.CapacityUsagePct = 0
+	return &logical
+}
+
 // Bytes is needed for the rendezvous hasher
 func (h *Host) Bytes() []byte {
 	// HRW placement is intentionally based only on the stable logical cache

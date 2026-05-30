@@ -116,6 +116,11 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 
 			host, ok := group.firstReachable(ctx, d.GetHostState)
 			if !ok {
+				if logicalHost := group.logicalHost(); logicalHost != nil {
+					mu.Lock()
+					selectedHosts = append(selectedHosts, logicalHost)
+					mu.Unlock()
+				}
 				return
 			}
 
@@ -167,10 +172,13 @@ func cacheHostCandidateGroups(hosts []*Host) []cacheHostCandidateGroup {
 // node/cache-path scoped, so switching between healthy endpoints on the same
 // node only churns connections and can cancel in-flight cache streams.
 func (g cacheHostCandidateGroup) hasEndpoint(host *Host) bool {
-	if host == nil {
+	if host == nil || !host.HasEndpoint() {
 		return false
 	}
 	for _, candidate := range g.candidates {
+		if !candidate.HasEndpoint() {
+			continue
+		}
 		if sameCacheHostEndpoint(candidate, host) {
 			return true
 		}
@@ -178,9 +186,22 @@ func (g cacheHostCandidateGroup) hasEndpoint(host *Host) bool {
 	return false
 }
 
+func (g cacheHostCandidateGroup) logicalHost() *Host {
+	for _, candidate := range g.candidates {
+		if candidate == nil || candidate.HostId == "" {
+			continue
+		}
+		return candidate.LogicalOnly()
+	}
+	return nil
+}
+
 func (g cacheHostCandidateGroup) firstReachable(ctx context.Context, verify cacheHostVerifier) (*Host, bool) {
 	for _, candidate := range g.candidates {
 		if candidate == nil || candidate.HostId == "" {
+			continue
+		}
+		if !candidate.HasEndpoint() {
 			continue
 		}
 
@@ -194,7 +215,7 @@ func (g cacheHostCandidateGroup) firstReachable(ctx context.Context, verify cach
 }
 
 func sameCacheHostEndpoint(a *Host, b *Host) bool {
-	if a == nil || b == nil {
+	if a == nil || b == nil || !a.HasEndpoint() || !b.HasEndpoint() {
 		return false
 	}
 	return a.HostId == b.HostId && a.Addr == b.Addr && a.PrivateAddr == b.PrivateAddr

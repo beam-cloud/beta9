@@ -45,9 +45,17 @@ func TestCacheRedisRepositoryUsesReadableCoordinatorHostIndexKeys(t *testing.T) 
 	keys := server.Keys()
 	require.Contains(t, keys, "cache:coordinator:host_index:default:default")
 	require.Contains(t, keys, "cache:coordinator:host:cache-host-default-node-a-path-0:registrations")
+	require.Contains(t, keys, "cache:coordinator:host:cache-host-default-node-a-path-0:logical")
 	require.Contains(t, keys, "cache:coordinator:host:cache-host-default-node-a-path-0:registration:worker-a")
 	require.Contains(t, keys, "cache:coordinator:host:cache-host-default-node-a-path-0:active_registration")
 	for _, key := range keys {
 		require.NotContains(t, key, "cache:coordinator:index:")
 	}
+
+	logicalHost, ok, err := repo.GetCacheLogicalHost(ctx, host.LogicalHostID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, host.LogicalHostID, logicalHost.LogicalHostID)
+	require.Empty(t, logicalHost.RegistrationID)
+	require.Empty(t, logicalHost.PrivateAddr)
 }

@@ -274,6 +274,33 @@ func (c *Client) GetNearbyHosts() ([]*Host, error) {
 }
 
 func (c *Client) addHost(host *Host) error {
+	if host == nil || host.HostId == "" {
+		return ErrHostNotFound
+	}
+	if !host.HasEndpoint() {
+		logicalHost := host.LogicalOnly()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if oldConn, ok := c.grpcConns[host.HostId]; ok {
+			_ = oldConn.Close()
+			delete(c.grpcConns, host.HostId)
+		}
+		delete(c.grpcClients, host.HostId)
+		if oldPool, ok := c.rawReadPools[host.HostId]; ok {
+			oldPool.close()
+			delete(c.rawReadPools, host.HostId)
+		}
+		c.hasher.Remove(host)
+		c.hasher.Add(logicalHost)
+		for hash, entry := range c.localHostCache {
+			if entry.host != nil && entry.host.HostId == host.HostId {
+				delete(c.localHostCache, hash)
+			}
+		}
+		return nil
+	}
+
 	addr := host.Addr
 	if host.PrivateAddr != "" {
 		addr = host.PrivateAddr
@@ -425,8 +452,11 @@ func (c *Client) removeHost(host *Host) {
 		return
 	}
 
+	logicalHost := host.LogicalOnly()
 	if c.hostMap != nil {
-		if !c.hostMap.Remove(host) {
+		var ok bool
+		logicalHost, ok = c.hostMap.DeactivateEndpoint(host)
+		if !ok {
 			return
 		}
 	}
@@ -435,6 +465,7 @@ func (c *Client) removeHost(host *Host) {
 	defer c.mu.Unlock()
 
 	c.hasher.Remove(host)
+	c.hasher.Add(logicalHost)
 	if conn, ok := c.grpcConns[host.HostId]; ok {
 		_ = conn.Close()
 		delete(c.grpcConns, host.HostId)
@@ -504,6 +535,11 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 		if host, ok := group.firstReachable(refreshCtx, c.verifyCacheHost); ok {
 			c.hostMap.Set(host)
 			routable = true
+			continue
+		}
+		if logicalHost := group.logicalHost(); logicalHost != nil {
+			c.hostMap.Set(logicalHost)
+			routable = true
 		}
 	}
 
@@ -515,6 +551,9 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
 	known := c.hostMap.Get(group.hostID)
+	if known != nil && !known.HasEndpoint() && group.logicalHost() != nil {
+		return true
+	}
 	if !group.hasEndpoint(known) {
 		return false
 	}
@@ -1062,16 +1101,22 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
 	atomic.AddInt64(&cachePathStats.clientReadIntoBytes, length)
 
-	if n, ok := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); ok {
+	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); err == nil {
 		return n, nil
+	} else if c.hostDirectory == nil || c.hostMap == nil {
+		return 0, err
 	}
 
 	return c.readContentIntoAfterHostRefresh(ctx, hash, offset, dst, opts)
 }
 
-func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, bool) {
+func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
 	length := int64(len(dst))
 	checked := make(map[string]struct{})
+	var primaryErr error
+	var sawMiss bool
+	var sawUnavailable bool
+	var lastErr error
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
@@ -1090,6 +1135,10 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 				})
 			}
 			if err != nil {
+				if attempt == 0 {
+					primaryErr = err
+				}
+				lastErr = err
 				continue
 			}
 		}
@@ -1097,35 +1146,72 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 		checked[host.HostId] = struct{}{}
 		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
 		if err == nil && n == length {
-			return n, true
+			return n, nil
+		}
+		if attempt == 0 {
+			primaryErr = err
+		}
+		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+			sawUnavailable = true
+		} else if errors.Is(err, ErrContentNotFound) {
+			sawMiss = true
+		}
+		if err != nil {
+			lastErr = err
 		}
 	}
 
 	for _, host := range c.remainingHostsForRequest(checked) {
 		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
 		if err == nil && n == length {
-			return n, true
+			return n, nil
+		}
+		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+			sawUnavailable = true
+		} else if errors.Is(err, ErrContentNotFound) {
+			sawMiss = true
+		}
+		if err != nil {
+			lastErr = err
 		}
 	}
 
-	return 0, false
+	if primaryErr != nil {
+		if errors.Is(primaryErr, ErrSelectedHostUnavailable) || errors.Is(primaryErr, ErrUnableToReachHost) || errors.Is(primaryErr, ErrHostNotFound) {
+			return 0, ErrSelectedHostUnavailable
+		}
+		if errors.Is(primaryErr, ErrContentNotFound) {
+			return 0, ErrContentNotFound
+		}
+		return 0, primaryErr
+	}
+	if sawUnavailable {
+		return 0, ErrSelectedHostUnavailable
+	}
+	if sawMiss {
+		return 0, ErrContentNotFound
+	}
+	if lastErr != nil {
+		return 0, lastErr
+	}
+	return 0, ErrContentNotFound
 }
 
 func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
 	if c.hostDirectory == nil || c.hostMap == nil {
-		return 0, ErrContentNotFound
+		return 0, ErrHostNotFound
 	}
 
 	c.removeLocalHostCache(hash)
 	if err := c.refreshRoutableHosts(ctx); err != nil && ctx.Err() != nil {
 		return 0, err
 	}
-	if n, ok := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); ok {
+	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); err == nil {
 		Logger.Debugf("cache read-into recovered after host refresh: hash=%s routing_key=%s offset=%d length=%d", hash, opts.RoutingKey, offset, len(dst))
 		return n, nil
+	} else {
+		return 0, err
 	}
-
-	return 0, ErrContentNotFound
 }
 
 func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
@@ -1154,6 +1240,11 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 		}
 	}
 
+	if !host.HasEndpoint() {
+		c.removeLocalHostCache(hash)
+		return 0, ErrSelectedHostUnavailable
+	}
+
 	if c.clientConfig.ReadTransport.Enabled {
 		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
 		if err == nil && n == length {
@@ -1173,8 +1264,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	c.mu.RUnlock()
 	if !exists {
 		c.removeLocalHostCache(hash)
-		_ = c.refreshRoutableHosts(ctx)
-		return 0, ErrHostNotFound
+		return 0, ErrSelectedHostUnavailable
 	}
 
 	start := time.Now()
@@ -1185,7 +1275,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 			cacheReadGRPCCodecV2FallbackTotal.Inc()
 		}
 		c.removeHost(host)
-		return 0, err
+		return 0, ErrSelectedHostUnavailable
 	}
 	if !getContentResponse.Ok || int64(len(getContentResponse.Content)) != length {
 		atomic.AddInt64(&cachePathStats.clientGRPCMisses, 1)
@@ -1338,6 +1428,12 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	if err != nil {
 		return nil, nil, err
 	}
+	if !host.HasEndpoint() {
+		c.mu.Lock()
+		delete(c.localHostCache, request.hash)
+		c.mu.Unlock()
+		return nil, host, ErrSelectedHostUnavailable
+	}
 
 	c.mu.RLock()
 	client, exists := c.grpcClients[host.HostId]
@@ -1347,7 +1443,7 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 		delete(c.localHostCache, request.hash)
 		c.mu.Unlock()
 
-		return nil, nil, ErrHostNotFound
+		return nil, host, ErrSelectedHostUnavailable
 	}
 
 	return client, host, nil

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -57,7 +58,7 @@ func (c *imageContentCache) GetContent(hash string, offset int64, length int64, 
 		return nil, err
 	}
 	if n != length {
-		return nil, cache.ErrContentNotFound
+		return nil, fmt.Errorf("%w: short read", clipStorage.ErrContentCacheMiss)
 	}
 
 	return dst[:n], nil
@@ -107,7 +108,27 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 	ctx, cancel := context.WithTimeout(context.Background(), imageContentCacheReadTimeout)
 	defer cancel()
 
-	return c.client.ReadContentInto(ctx, hash, offset, dest, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	read, err = c.client.ReadContentInto(ctx, hash, offset, dest, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	if err != nil {
+		return read, imageContentCacheError(err)
+	}
+	return read, nil
+}
+
+func imageContentCacheError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, cache.ErrContentNotFound) {
+		return fmt.Errorf("%w: %w", clipStorage.ErrContentCacheMiss, err)
+	}
+	if errors.Is(err, cache.ErrSelectedHostUnavailable) ||
+		errors.Is(err, cache.ErrUnableToReachHost) ||
+		errors.Is(err, cache.ErrHostNotFound) ||
+		errors.Is(err, cache.ErrClientNotFound) {
+		return fmt.Errorf("%w: %w", clipStorage.ErrContentCacheUnavailable, err)
+	}
+	return err
 }
 
 func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey string }) (exists bool, err error) {

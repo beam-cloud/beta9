@@ -66,14 +66,19 @@ func TestHostMapSetRestoresExistingHostWhenUpdateFails(t *testing.T) {
 	require.Equal(t, "10.0.0.1:2049", hostMap.Get("logical-host").PrivateAddr)
 }
 
-func TestHostMapSetRemovesNewHostWhenInitialAddFails(t *testing.T) {
+func TestHostMapSetKeepsLogicalHostWhenInitialEndpointAddFails(t *testing.T) {
 	hostMap := NewHostMap(GlobalConfig{}, func(host *Host) error {
 		return errors.New("dial failed")
 	})
 
-	hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.1:2049"})
+	hostMap.Set(&Host{HostId: "logical-host", NodeID: "node-a", CachePathID: "path", PrivateAddr: "10.0.0.1:2049"})
 
-	require.Empty(t, hostMap.GetAll())
+	require.Len(t, hostMap.GetAll(), 1)
+	host := hostMap.Get("logical-host")
+	require.NotNil(t, host)
+	require.False(t, host.HasEndpoint())
+	require.Equal(t, "node-a", host.NodeID)
+	require.Equal(t, "path", host.CachePathID)
 }
 
 func TestHostMapRemoveIgnoresStaleEndpointForSameLogicalHost(t *testing.T) {
@@ -85,4 +90,19 @@ func TestHostMapRemoveIgnoresStaleEndpointForSameLogicalHost(t *testing.T) {
 
 	require.False(t, removed)
 	require.Equal(t, active.PrivateAddr, hostMap.Get("logical-host").PrivateAddr)
+}
+
+func TestHostMapDeactivateEndpointKeepsLogicalHost(t *testing.T) {
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	active := &Host{HostId: "logical-host", NodeID: "node-a", CachePathID: "path", PrivateAddr: "10.0.0.2:2049"}
+	hostMap.Set(active)
+
+	logical, ok := hostMap.DeactivateEndpoint(active)
+
+	require.True(t, ok)
+	require.NotNil(t, logical)
+	require.False(t, logical.HasEndpoint())
+	require.Equal(t, "node-a", logical.NodeID)
+	require.Equal(t, "path", logical.CachePathID)
+	require.Equal(t, logical, hostMap.Get("logical-host"))
 }
