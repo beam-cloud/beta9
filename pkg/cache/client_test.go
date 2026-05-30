@@ -14,6 +14,7 @@ import (
 	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
+	"github.com/beam-cloud/rendezvous"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -100,6 +101,36 @@ func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T
 	_, err := client.ReadContentInto(context.Background(), "hash", 0, dst, ClientOptions{RoutingKey: "hash"})
 
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+}
+
+func TestLogicalOnlyHostIsNotActiveHRWMember(t *testing.T) {
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                rendezvous.New[*Host](),
+		maxGetContentAttempts: 1,
+	}
+
+	logicalHost := &Host{
+		HostId:      "logical-host",
+		PoolName:    "default",
+		Locality:    "test",
+		NodeID:      "node-a",
+		CachePathID: "path",
+	}
+	require.NoError(t, client.addHost(logicalHost))
+
+	_, err := client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeStorage,
+		hash:      "hash",
+		key:       "hash",
+		hostIndex: 0,
+	})
+	require.ErrorIs(t, err, ErrHostNotFound)
 }
 
 func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
