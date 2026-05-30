@@ -7,7 +7,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -31,17 +31,17 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 
 	workspaceID := "workspace-agent-test"
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
-	hybridRepo := repo.NewHybridRedisRepository(redisClient)
-	poolState := &hybrid.PoolState{
+	computeRepo := repo.NewComputeRedisRepository(redisClient)
+	poolState := &compute.PoolState{
 		Name:     "private-gpu",
 		Selector: "private-gpu",
-		Config: &pb.HybridPoolConfig{
+		Config: &pb.PoolConfig{
 			Name:     "private-gpu",
 			Selector: "private-gpu",
 			Gpu:      []string{"A10G"},
 		},
 	}
-	machine := &hybrid.AgentTokenState{
+	machine := &compute.AgentTokenState{
 		TokenHash:                 "agent-token",
 		WorkspaceID:               workspaceID,
 		PoolName:                  poolState.Name,
@@ -63,7 +63,7 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		CreatedAt:                 time.Now(),
 		LastJoinAt:                time.Now(),
 	}
-	if err := hybridRepo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
+	if err := computeRepo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,9 +85,9 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 			RequiresPoolSelector: true,
 			Priority:             1000,
 		},
-		PoolState:  poolState,
-		WorkerRepo: workerRepo,
-		HybridRepo: hybridRepo,
+		PoolState:   poolState,
+		WorkerRepo:  workerRepo,
+		ComputeRepo: computeRepo,
 	})
 	if err != nil {
 		t.Fatal(err)

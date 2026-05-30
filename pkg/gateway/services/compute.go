@@ -16,83 +16,83 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/hybrid"
-	"github.com/beam-cloud/beta9/pkg/hybrid/shadeform"
-	"github.com/beam-cloud/beta9/pkg/hybrid/solver"
-	"github.com/beam-cloud/beta9/pkg/hybrid/vast"
+	"github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/compute/shadeform"
+	"github.com/beam-cloud/beta9/pkg/compute/solver"
+	"github.com/beam-cloud/beta9/pkg/compute/vast"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	defaultHybridTransport = "tsnet_restricted"
-	defaultHybridFallback  = "internal"
-	defaultHybridPriority  = int32(1000)
-	defaultHybridExecutor  = types.DefaultAgentWorkerContainerMode
-	defaultHybridJoinTTL   = 30 * time.Minute
-	agentStreamRefresh     = 30 * time.Second
+	defaultPrivateTransport = "tsnet_restricted"
+	defaultPrivateFallback  = "internal"
+	defaultPrivatePriority  = int32(1000)
+	defaultPrivateExecutor  = types.DefaultAgentWorkerContainerMode
+	defaultPrivateJoinTTL   = 30 * time.Minute
+	agentStreamRefresh      = 30 * time.Second
 )
 
-func (gws *GatewayService) ListHybridOffers(ctx context.Context, in *pb.ListHybridOffersRequest) (*pb.ListHybridOffersResponse, error) {
-	pool, err := hybridPoolFromProto(normalizeHybridPoolConfig(in.Pool), false)
+func (gws *GatewayService) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersRequest) (*pb.ListPoolOffersResponse, error) {
+	pool, err := computePoolFromProto(normalizePoolConfig(in.Pool), false)
 	if err != nil {
-		return &pb.ListHybridOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.ListPoolOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	offers, err := gws.collectHybridOffers(ctx, pool)
+	offers, err := gws.collectPoolOffers(ctx, pool)
 	if err != nil {
-		return &pb.ListHybridOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.ListPoolOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	sort.SliceStable(offers, func(i, j int) bool {
 		return offers[i].CostPerGPU() < offers[j].CostPerGPU()
 	})
 
-	out := make([]*pb.HybridOffer, 0, len(offers))
+	out := make([]*pb.PoolOffer, 0, len(offers))
 	for _, offer := range offers {
-		out = append(out, hybridOfferToProto(offer))
+		out = append(out, poolOfferToProto(offer))
 	}
-	return &pb.ListHybridOffersResponse{Ok: true, Offers: out}, nil
+	return &pb.ListPoolOffersResponse{Ok: true, Offers: out}, nil
 }
 
-func (gws *GatewayService) ReserveHybridPool(ctx context.Context, in *pb.ReserveHybridPoolRequest) (*pb.ReserveHybridPoolResponse, error) {
+func (gws *GatewayService) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapacityRequest) (*pb.LaunchPoolCapacityResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	workspaceID := hybridWorkspaceID(authInfo)
-	ownerTokenID := hybridOwnerTokenID(authInfo)
+	workspaceID := computeWorkspaceID(authInfo)
+	ownerTokenID := computeOwnerTokenID(authInfo)
 	if workspaceID == "" || ownerTokenID == "" {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	config := normalizeHybridPoolConfig(in.Pool)
-	pool, err := hybridPoolFromProto(config, true)
+	config := normalizePoolConfig(in.Pool)
+	pool, err := computePoolFromProto(config, true)
 	if err != nil {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if pool.Name == "" {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: "pool name is required"}, nil
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool name is required"}, nil
 	}
 	if pool.Selector == "" {
 		pool.Selector = pool.Name
 	}
 
-	offers, err := gws.collectHybridOffers(ctx, pool)
+	offers, err := gws.collectPoolOffers(ctx, pool)
 	if err != nil {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	existing, err := gws.getHybridPoolState(ctx, workspaceID, pool.Name)
+	existing, err := gws.getPrivatePoolState(ctx, workspaceID, pool.Name)
 	if err != nil {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if existing != nil && !hybridPoolCreatedByAuth(existing, authInfo) {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
-	reservations := []hybrid.Reservation{}
+	reservations := []compute.Reservation{}
 	if existing != nil {
 		reservations = existing.Reservations
 	}
 
-	plan := solver.New().Solve(hybrid.SolveInput{
-		Demand: hybrid.Demand{
+	plan := solver.New().Solve(compute.SolveInput{
+		Demand: compute.Demand{
 			PoolName:       pool.Name,
 			Selector:       pool.Selector,
 			GPUs:           pool.GPUs,
@@ -108,38 +108,38 @@ func (gws *GatewayService) ReserveHybridPool(ctx context.Context, in *pb.Reserve
 		Now:          time.Now(),
 	})
 	if !plan.Feasible {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: plan.Reason}, nil
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: plan.Reason}, nil
 	}
 
-	vendors := gws.hybridVendors()
-	newReservations := append([]hybrid.Reservation{}, reservations...)
+	vendors := gws.computeVendors()
+	newReservations := append([]compute.Reservation{}, reservations...)
 	for _, action := range plan.Actions {
-		if action.Type != hybrid.ActionCreate {
+		if action.Type != compute.ActionCreate {
 			continue
 		}
 		vendor := vendors[action.Offer.Provider]
 		if vendor == nil {
-			return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: fmt.Sprintf("vendor %q is not configured", action.Offer.Provider)}, nil
+			return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: fmt.Sprintf("vendor %q is not configured", action.Offer.Provider)}, nil
 		}
 		for i := uint32(0); i < action.Count; i++ {
-			reservation, err := vendor.CreateReservation(ctx, hybrid.ReservationRequest{
+			reservation, err := vendor.CreateReservation(ctx, compute.ReservationRequest{
 				PoolName:       pool.Name,
 				Selector:       pool.Selector,
 				Offer:          action.Offer,
 				Count:          1,
 				TTL:            pool.TTL,
 				MaxSpendMicros: pool.MaxSpendMicros,
-				Source:         hybrid.SourceCLIReservation,
+				Source:         compute.SourceCLIReservation,
 			})
 			if err != nil {
-				return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+				return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 			}
 			newReservations = append(newReservations, *reservation)
 		}
 	}
 
 	now := time.Now()
-	state := &hybrid.PoolState{
+	state := &compute.PoolState{
 		Name:                 pool.Name,
 		Selector:             pool.Selector,
 		Config:               config,
@@ -147,7 +147,7 @@ func (gws *GatewayService) ReserveHybridPool(ctx context.Context, in *pb.Reserve
 		ReservedGPUs:         plan.TotalGPUs,
 		CommittedSpendMicros: plan.CommittedCostMicros,
 		Status:               "active",
-		Source:               hybrid.SourceCLIReservation,
+		Source:               compute.SourceCLIReservation,
 		Mode:                 config.Mode,
 		Transport:            config.Transport,
 		Fallback:             config.Fallback,
@@ -161,76 +161,76 @@ func (gws *GatewayService) ReserveHybridPool(ctx context.Context, in *pb.Reserve
 		state.CreatedAt = existing.CreatedAt
 		state.CreatedByTokenID = existing.CreatedByTokenID
 	}
-	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
-		return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if err := gws.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if gws.scheduler != nil {
 		if err := gws.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
-			return &pb.ReserveHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+			return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 	}
-	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolReserved, ""))
+	gws.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
-	return &pb.ReserveHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
+	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
 }
 
-func (gws *GatewayService) ListHybridPools(ctx context.Context, in *pb.ListHybridPoolsRequest) (*pb.ListHybridPoolsResponse, error) {
+func (gws *GatewayService) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsRequest) (*pb.ListPrivatePoolsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	workspaceID := hybridWorkspaceID(authInfo)
+	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
-		return &pb.ListHybridPoolsResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	states, err := gws.listHybridPoolStates(ctx, workspaceID, 0)
+	states, err := gws.listPrivatePoolStates(ctx, workspaceID, 0)
 	if err != nil {
-		return &pb.ListHybridPoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	states = filterHybridPoolsCreatedByAuth(states, authInfo)
+	states = filterPrivatePoolsCreatedByAuth(states, authInfo)
 	if limit := int(in.Limit); limit > 0 && len(states) > limit {
 		states = states[:limit]
 	}
-	out := make([]*pb.HybridPool, 0, len(states))
+	out := make([]*pb.PrivatePool, 0, len(states))
 	for _, state := range states {
-		out = append(out, hybridPoolStateToProto(state))
+		out = append(out, privatePoolStateToProto(state))
 	}
-	return &pb.ListHybridPoolsResponse{Ok: true, Pools: out}, nil
+	return &pb.ListPrivatePoolsResponse{Ok: true, Pools: out}, nil
 }
 
-func (gws *GatewayService) UpsertHybridPool(ctx context.Context, in *pb.UpsertHybridPoolRequest) (*pb.UpsertHybridPoolResponse, error) {
+func (gws *GatewayService) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	workspaceID := hybridWorkspaceID(authInfo)
-	ownerTokenID := hybridOwnerTokenID(authInfo)
+	workspaceID := computeWorkspaceID(authInfo)
+	ownerTokenID := computeOwnerTokenID(authInfo)
 	if workspaceID == "" || ownerTokenID == "" {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 	if in.Pool == nil {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: "pool config is required"}, nil
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "pool config is required"}, nil
 	}
-	config := normalizeHybridPoolConfig(in.Pool)
+	config := normalizePoolConfig(in.Pool)
 	if config.Name == "" {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: "pool name is required"}, nil
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "pool name is required"}, nil
 	}
-	if err := hybrid.ValidatePoolName(config.Name); err != nil {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if err := compute.ValidatePoolName(config.Name); err != nil {
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if _, err := hybridPoolFromProto(config, false); err != nil {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if _, err := computePoolFromProto(config, false); err != nil {
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	existing, err := gws.getHybridPoolState(ctx, workspaceID, config.Name)
+	existing, err := gws.getPrivatePoolState(ctx, workspaceID, config.Name)
 	if err != nil {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if existing != nil && !hybridPoolCreatedByAuth(existing, authInfo) {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 
 	now := time.Now()
-	state := &hybrid.PoolState{
+	state := &compute.PoolState{
 		Name:             config.Name,
 		Selector:         config.Selector,
 		Config:           config,
 		Status:           "active",
-		Source:           hybrid.SourceManual,
+		Source:           compute.SourceManual,
 		Mode:             config.Mode,
 		Transport:        config.Transport,
 		Fallback:         config.Fallback,
@@ -248,35 +248,35 @@ func (gws *GatewayService) UpsertHybridPool(ctx context.Context, in *pb.UpsertHy
 		state.CreatedAt = existing.CreatedAt
 		state.ExpiresAt = existing.ExpiresAt
 	}
-	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
-		return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if err := gws.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if gws.scheduler != nil {
 		if err := gws.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
-			return &pb.UpsertHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+			return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 	}
-	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolUpserted, ""))
-	return &pb.UpsertHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
+	gws.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreated, ""))
+	return &pb.CreatePoolResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
 }
 
-func (gws *GatewayService) DeleteHybridPool(ctx context.Context, in *pb.DeleteHybridPoolRequest) (*pb.DeleteHybridPoolResponse, error) {
+func (gws *GatewayService) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb.DeletePoolResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	workspaceID := hybridWorkspaceID(authInfo)
+	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
-		return &pb.DeleteHybridPoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	state, err := gws.getOwnedHybridPoolState(ctx, authInfo, in.Name)
+	state, err := gws.getOwnedPrivatePoolState(ctx, authInfo, in.Name)
 	if err != nil {
-		return &pb.DeleteHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if state == nil {
-		return &pb.DeleteHybridPoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 
-	vendors := gws.hybridVendors()
+	vendors := gws.computeVendors()
 	for _, reservation := range state.Reservations {
-		if reservation.Source == hybrid.SourceManual || reservation.Source == hybrid.SourceAutosolver {
+		if reservation.Source == compute.SourceManual || reservation.Source == compute.SourceAutosolver {
 			continue
 		}
 		vendor := vendors[reservation.Provider]
@@ -290,34 +290,34 @@ func (gws *GatewayService) DeleteHybridPool(ctx context.Context, in *pb.DeleteHy
 		_ = vendor.DeleteReservation(ctx, instanceID)
 	}
 
-	if err := gws.deleteHybridPoolState(ctx, workspaceID, in.Name); err != nil {
-		return &pb.DeleteHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if err := gws.deletePrivatePoolState(ctx, workspaceID, in.Name); err != nil {
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if gws.scheduler != nil {
 		gws.scheduler.DeleteAgentPool(firstNonEmpty(state.Selector, state.Name))
 	}
-	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolDeleted, "deleted"))
-	return &pb.DeleteHybridPoolResponse{Ok: true}, nil
+	gws.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolDeleted, "deleted"))
+	return &pb.DeletePoolResponse{Ok: true}, nil
 }
 
-func (gws *GatewayService) ExtendHybridPool(ctx context.Context, in *pb.ExtendHybridPoolRequest) (*pb.ExtendHybridPoolResponse, error) {
+func (gws *GatewayService) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapacityRequest) (*pb.ExtendPoolCapacityResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	workspaceID := hybridWorkspaceID(authInfo)
+	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
-		return &pb.ExtendHybridPoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	state, err := gws.getOwnedHybridPoolState(ctx, authInfo, in.Name)
+	state, err := gws.getOwnedPrivatePoolState(ctx, authInfo, in.Name)
 	if err != nil {
-		return &pb.ExtendHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if state == nil {
-		return &pb.ExtendHybridPoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 	if in.Ttl != "" {
 		state.Config.Ttl = in.Ttl
-		ttl, err := hybrid.ParseTTL(in.Ttl)
+		ttl, err := compute.ParseTTL(in.Ttl)
 		if err != nil {
-			return &pb.ExtendHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+			return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 		state.ExpiresAt = time.Now().Add(ttl)
 	}
@@ -325,73 +325,59 @@ func (gws *GatewayService) ExtendHybridPool(ctx context.Context, in *pb.ExtendHy
 		state.Config.MaxSpend = in.MaxSpend
 	}
 	state.UpdatedAt = time.Now()
-	if err := gws.saveHybridPoolState(ctx, workspaceID, state); err != nil {
-		return &pb.ExtendHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if err := gws.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	gws.emitHybridEvent(types.EventHybridPool, hybridPoolEvent(workspaceID, state, types.EventHybridActionPoolExtended, ""))
-	return &pb.ExtendHybridPoolResponse{Ok: true, Pool: hybridPoolStateToProto(state)}, nil
+	gws.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolExtended, ""))
+	return &pb.ExtendPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
 }
 
-func (gws *GatewayService) AttachHybridPool(ctx context.Context, in *pb.AttachHybridPoolRequest) (*pb.AttachHybridPoolResponse, error) {
-	if in.Name == "" {
-		return &pb.AttachHybridPoolResponse{Ok: false, ErrMsg: "pool name is required"}, nil
-	}
-	command, _, _, err := gws.createHybridPoolJoinCommand(ctx, in.Name, "")
+func (gws *GatewayService) CreatePoolJoinToken(ctx context.Context, in *pb.CreatePoolJoinTokenRequest) (*pb.CreatePoolJoinTokenResponse, error) {
+	token, expiresAt, err := gws.createPrivatePoolJoinToken(ctx, in.PoolName, in.Ttl)
 	if err != nil {
-		return &pb.AttachHybridPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.CreatePoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	return &pb.AttachHybridPoolResponse{
-		Ok:      true,
-		Command: command,
-	}, nil
-}
-
-func (gws *GatewayService) CreateHybridPoolJoinToken(ctx context.Context, in *pb.CreateHybridPoolJoinTokenRequest) (*pb.CreateHybridPoolJoinTokenResponse, error) {
-	token, expiresAt, err := gws.createHybridPoolJoinToken(ctx, in.PoolName, in.Ttl)
-	if err != nil {
-		return &pb.CreateHybridPoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	return &pb.CreateHybridPoolJoinTokenResponse{
+	return &pb.CreatePoolJoinTokenResponse{
 		Ok:        true,
 		Token:     token,
 		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
 }
 
-func (gws *GatewayService) RevokeHybridPoolJoinToken(ctx context.Context, in *pb.RevokeHybridPoolJoinTokenRequest) (*pb.RevokeHybridPoolJoinTokenResponse, error) {
+func (gws *GatewayService) RevokePoolJoinToken(ctx context.Context, in *pb.RevokePoolJoinTokenRequest) (*pb.RevokePoolJoinTokenResponse, error) {
 	if in.Token == "" {
-		return &pb.RevokeHybridPoolJoinTokenResponse{Ok: false, ErrMsg: "join token is required"}, nil
+		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: "join token is required"}, nil
 	}
-	state, err := gws.getHybridJoinTokenState(ctx, in.Token)
+	state, err := gws.getComputeJoinTokenState(ctx, in.Token)
 	if err != nil {
-		return &pb.RevokeHybridPoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if state == nil {
-		return &pb.RevokeHybridPoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
+		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
 	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	if state.WorkspaceID != hybridWorkspaceID(authInfo) || state.CreatedByTokenID != hybridOwnerTokenID(authInfo) {
-		return &pb.RevokeHybridPoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
+	if state.WorkspaceID != computeWorkspaceID(authInfo) || state.CreatedByTokenID != computeOwnerTokenID(authInfo) {
+		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
 	}
 	state.Revoked = true
-	if err := gws.saveHybridJoinTokenState(ctx, state, time.Until(state.ExpiresAt)); err != nil {
-		return &pb.RevokeHybridPoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if err := gws.saveComputeJoinTokenState(ctx, state, time.Until(state.ExpiresAt)); err != nil {
+		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	gws.emitHybridEvent(types.EventHybridJoinToken, types.EventHybridSchema{
+	gws.emitComputeEvent(types.EventComputeJoinToken, types.EventComputeSchema{
 		WorkspaceID: state.WorkspaceID,
 		PoolName:    state.PoolName,
-		Action:      types.EventHybridActionJoinTokenRevoked,
+		Action:      types.EventComputeActionJoinTokenRevoked,
 		Status:      "revoked",
 	})
-	return &pb.RevokeHybridPoolJoinTokenResponse{Ok: true}, nil
+	return &pb.RevokePoolJoinTokenResponse{Ok: true}, nil
 }
 
-func (gws *GatewayService) GetHybridPoolJoinCommand(ctx context.Context, in *pb.GetHybridPoolJoinCommandRequest) (*pb.GetHybridPoolJoinCommandResponse, error) {
-	command, token, expiresAt, err := gws.createHybridPoolJoinCommand(ctx, in.PoolName, in.Ttl)
+func (gws *GatewayService) GetPoolJoinCommand(ctx context.Context, in *pb.GetPoolJoinCommandRequest) (*pb.GetPoolJoinCommandResponse, error) {
+	command, token, expiresAt, err := gws.createPrivatePoolJoinCommand(ctx, in.PoolName, in.Ttl)
 	if err != nil {
-		return &pb.GetHybridPoolJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.GetPoolJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	return &pb.GetHybridPoolJoinCommandResponse{
+	return &pb.GetPoolJoinCommandResponse{
 		Ok:        true,
 		Command:   command,
 		Token:     token,
@@ -399,12 +385,41 @@ func (gws *GatewayService) GetHybridPoolJoinCommand(ctx context.Context, in *pb.
 	}, nil
 }
 
+func (gws *GatewayService) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesRequest) (*pb.ListPoolMachinesResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	workspaceID := computeWorkspaceID(authInfo)
+	if workspaceID == "" {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+	state, err := gws.getOwnedPrivatePoolState(ctx, authInfo, in.PoolName)
+	if err != nil {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if state == nil {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	}
+
+	machines, err := gws.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+	if err != nil {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if limit := int(in.Limit); limit > 0 && len(machines) > limit {
+		machines = machines[:limit]
+	}
+
+	out := make([]*pb.Machine, 0, len(machines))
+	for _, machine := range machines {
+		out = append(out, agentMachineToProto(machine))
+	}
+	return &pb.ListPoolMachinesResponse{Ok: true, Machines: out}, nil
+}
+
 func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.JoinAgentResponse, error) {
 	if strings.TrimSpace(in.JoinToken) == "" {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is required"}, nil
 	}
 
-	tokenState, err := gws.getHybridJoinTokenState(ctx, in.JoinToken)
+	tokenState, err := gws.getComputeJoinTokenState(ctx, in.JoinToken)
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -412,7 +427,7 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 
-	poolState, err := gws.getHybridPoolState(ctx, tokenState.WorkspaceID, tokenState.PoolName)
+	poolState, err := gws.getPrivatePoolState(ctx, tokenState.WorkspaceID, tokenState.PoolName)
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -423,14 +438,14 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 
-	agentToken, err := generateHybridToken()
+	agentToken, err := generateComputeToken()
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	machineID := hybridMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
+	machineID := computeMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
 	now := time.Now()
-	agentState := &hybrid.AgentTokenState{
-		TokenHash:                 hashHybridToken(agentToken),
+	agentState := &compute.AgentTokenState{
+		TokenHash:                 hashComputeToken(agentToken),
 		WorkspaceID:               tokenState.WorkspaceID,
 		PoolName:                  tokenState.PoolName,
 		MachineID:                 machineID,
@@ -444,15 +459,15 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 		GPUs:                      in.Gpu,
 		GPUIDs:                    in.GpuIds,
 		GPUCount:                  in.GpuCount,
-		Executor:                  firstNonEmpty(in.Executor, defaultHybridExecutor),
+		Executor:                  firstNonEmpty(in.Executor, defaultPrivateExecutor),
 		NetworkSlotPoolSize:       in.NetworkSlotPoolSize,
 		ContainerStartConcurrency: in.ContainerStartConcurrency,
 		Schedulable:               in.Schedulable,
-		Preflight:                 hybridPreflightChecksFromProto(in.Preflight),
+		Preflight:                 preflightChecksFromProto(in.Preflight),
 		CreatedAt:                 now,
 		LastJoinAt:                now,
 	}
-	if err := gws.saveHybridAgentTokenState(ctx, agentState); err != nil {
+	if err := gws.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if gws.scheduler != nil {
@@ -460,13 +475,13 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 			return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 	}
-	gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+	gws.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		WorkspaceID: tokenState.WorkspaceID,
 		PoolName:    tokenState.PoolName,
 		MachineID:   machineID,
-		Action:      types.EventHybridActionMachineJoined,
-		Status:      hybridMachineStatus(agentState),
-		Transport:   normalizeHybridPoolConfig(poolState.Config).Transport,
+		Action:      types.EventComputeActionMachineJoined,
+		Status:      computeMachineStatus(agentState),
+		Transport:   normalizePoolConfig(poolState.Config).Transport,
 		Executor:    agentState.Executor,
 		Hostname:    agentState.Hostname,
 		OS:          agentState.OS,
@@ -476,7 +491,7 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 		GPUCount:    agentState.GPUCount,
 		GPUs:        agentState.GPUs,
 		Schedulable: boolPtr(agentState.Schedulable),
-		Message:     hybridPreflightSummary(agentState.Preflight),
+		Message:     preflightSummary(agentState.Preflight),
 		Attrs: map[string]string{
 			"cpu_millicores": strconv.FormatInt(agentState.CPUMillicores, 10),
 			"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
@@ -497,7 +512,7 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 }
 
 func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
-	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
+	agentState, err := gws.getComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -507,21 +522,21 @@ func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, 
 
 	transport := firstNonEmpty(in.Transport, types.BackendRouteTransportTSNet)
 	transport = strings.ReplaceAll(transport, "-", "_")
-	if err := gws.validateHybridTransportConfig(transport); err != nil {
+	if err := gws.validateAgentTransportConfig(transport); err != nil {
 		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	gws.emitHybridEvent(types.EventHybridTransport, types.EventHybridSchema{
+	gws.emitComputeEvent(types.EventComputeTransport, types.EventComputeSchema{
 		WorkspaceID: agentState.WorkspaceID,
 		PoolName:    agentState.PoolName,
 		MachineID:   agentState.MachineID,
-		Action:      types.EventHybridActionTransportCredentialVended,
+		Action:      types.EventComputeActionTransportCredentialVended,
 		Status:      "ready",
 		Transport:   transport,
 	})
 
 	return &pb.RequestAgentTransportCredentialResponse{
 		Ok:         true,
-		AuthKey:    gws.appConfig.Tailscale.HybridWorkerAuthKey,
+		AuthKey:    gws.appConfig.Tailscale.AgentAuthKey,
 		ControlUrl: gws.appConfig.Tailscale.ControlURL,
 		Hostname:   "beam-agent-" + agentState.MachineID,
 		Ephemeral:  true,
@@ -529,7 +544,7 @@ func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, 
 }
 
 func (gws *GatewayService) ListAgentRoutes(ctx context.Context, in *pb.ListAgentRoutesRequest) (*pb.ListAgentRoutesResponse, error) {
-	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
+	agentState, err := gws.getComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -546,7 +561,7 @@ func (gws *GatewayService) ListAgentRoutes(ctx context.Context, in *pb.ListAgent
 
 func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	ctx := stream.Context()
-	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
+	agentState, err := gws.getComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
 	}
@@ -556,7 +571,7 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 
 	sendSnapshot := func() error {
 		if gws.scheduler != nil {
-			if poolState, err := gws.getHybridPoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
+			if poolState, err := gws.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
 				if err := gws.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
 					return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
 				}
@@ -604,7 +619,7 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 	}
 }
 
-func (gws *GatewayService) agentRoutesForMachine(ctx context.Context, agentState *hybrid.AgentTokenState) ([]*pb.AgentRoute, error) {
+func (gws *GatewayService) agentRoutesForMachine(ctx context.Context, agentState *compute.AgentTokenState) ([]*pb.AgentRoute, error) {
 	routes, err := gws.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
 	if err != nil {
 		return nil, err
@@ -620,8 +635,8 @@ func (gws *GatewayService) agentRoutesForMachine(ctx context.Context, agentState
 	return out, nil
 }
 
-func (gws *GatewayService) agentSlotsForMachine(ctx context.Context, agentState *hybrid.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
-	slots, err := gws.hybridRepo.ListAgentWorkerSlotStates(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+func (gws *GatewayService) agentSlotsForMachine(ctx context.Context, agentState *compute.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
+	slots, err := gws.computeRepo.ListAgentWorkerSlotStates(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
 	if err != nil {
 		return nil, err
 	}
@@ -646,8 +661,8 @@ func (gws *GatewayService) agentSlotsForMachine(ctx context.Context, agentState 
 	return []*pb.AgentWorkerSlot{agentWorkerSlotToProto(slot)}, nil
 }
 
-func (gws *GatewayService) agentMachineWorker(agentState *hybrid.AgentTokenState) (*types.Worker, error) {
-	worker, err := gws.workerRepo.GetWorkerById(hybrid.AgentMachineWorkerID(agentState.MachineID))
+func (gws *GatewayService) agentMachineWorker(agentState *compute.AgentTokenState) (*types.Worker, error) {
+	worker, err := gws.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(agentState.MachineID))
 	if err != nil {
 		notFoundErr := &types.ErrWorkerNotFound{}
 		if notFoundErr.From(err) {
@@ -661,8 +676,8 @@ func (gws *GatewayService) agentMachineWorker(agentState *hybrid.AgentTokenState
 	return worker, nil
 }
 
-func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState *hybrid.AgentTokenState, worker *types.Worker, slots []*hybrid.AgentWorkerSlotState) (*hybrid.AgentWorkerSlotState, error) {
-	var existing *hybrid.AgentWorkerSlotState
+func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState *compute.AgentTokenState, worker *types.Worker, slots []*compute.AgentWorkerSlotState) (*compute.AgentWorkerSlotState, error) {
+	var existing *compute.AgentWorkerSlotState
 	for _, slot := range slots {
 		if slot != nil && slot.WorkerID == worker.Id {
 			existing = slot
@@ -689,16 +704,16 @@ func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState
 	if existing != nil {
 		slot.CreatedAt = existing.CreatedAt
 	}
-	if err := gws.hybridRepo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
+	if err := gws.computeRepo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
 		return nil, err
 	}
 	if existing == nil {
-		gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+		gws.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 			WorkspaceID: agentState.WorkspaceID,
 			PoolName:    agentState.PoolName,
 			MachineID:   agentState.MachineID,
 			WorkerID:    worker.Id,
-			Action:      types.EventHybridActionWorkerSlotCreated,
+			Action:      types.EventComputeActionWorkerSlotCreated,
 			Status:      string(worker.Status),
 			CPUCount:    agentState.CPUCount,
 			MemoryMB:    uint64(worker.TotalMemory),
@@ -713,20 +728,20 @@ func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState
 	return slot, nil
 }
 
-func (gws *GatewayService) pruneAgentWorkerSlots(ctx context.Context, agentState *hybrid.AgentTokenState, keepWorkerID string, slots []*hybrid.AgentWorkerSlotState) error {
+func (gws *GatewayService) pruneAgentWorkerSlots(ctx context.Context, agentState *compute.AgentTokenState, keepWorkerID string, slots []*compute.AgentWorkerSlotState) error {
 	for _, slot := range slots {
 		if slot == nil || slot.WorkerID == "" || slot.WorkerID == keepWorkerID {
 			continue
 		}
-		if err := gws.hybridRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); err != nil {
+		if err := gws.computeRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); err != nil {
 			return err
 		}
-		gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+		gws.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 			WorkspaceID: agentState.WorkspaceID,
 			PoolName:    agentState.PoolName,
 			MachineID:   agentState.MachineID,
 			WorkerID:    slot.WorkerID,
-			Action:      types.EventHybridActionWorkerSlotPruned,
+			Action:      types.EventComputeActionWorkerSlotPruned,
 			Status:      "stale",
 			Message:     "removed stale agent worker slot because the scheduler worker no longer owns this machine",
 		})
@@ -734,8 +749,8 @@ func (gws *GatewayService) pruneAgentWorkerSlots(ctx context.Context, agentState
 	return nil
 }
 
-func agentWorkerSlotState(config types.AppConfig, agentState *hybrid.AgentTokenState, worker *types.Worker, token string) *hybrid.AgentWorkerSlotState {
-	return &hybrid.AgentWorkerSlotState{
+func agentWorkerSlotState(config types.AppConfig, agentState *compute.AgentTokenState, worker *types.Worker, token string) *compute.AgentWorkerSlotState {
+	return &compute.AgentWorkerSlotState{
 		WorkerID:                  worker.Id,
 		WorkerToken:               token,
 		WorkspaceID:               agentState.WorkspaceID,
@@ -765,7 +780,7 @@ func agentWorkerImage(config types.AppConfig) string {
 	return image
 }
 
-func agentWorkerSlotToProto(slot *hybrid.AgentWorkerSlotState) *pb.AgentWorkerSlot {
+func agentWorkerSlotToProto(slot *compute.AgentWorkerSlotState) *pb.AgentWorkerSlot {
 	return &pb.AgentWorkerSlot{
 		WorkerId:                  slot.WorkerID,
 		WorkerToken:               slot.WorkerToken,
@@ -784,7 +799,7 @@ func agentWorkerSlotToProto(slot *hybrid.AgentWorkerSlotState) *pb.AgentWorkerSl
 }
 
 func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest) (*pb.UpdateAgentRouteStatusResponse, error) {
-	agentState, err := gws.getHybridAgentTokenState(ctx, in.AgentToken)
+	agentState, err := gws.getComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -811,14 +826,14 @@ func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.Up
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if previousState != route.State || previousProxyTarget != route.ProxyTarget || previousError != route.Error {
-		gws.emitHybridEvent(types.EventHybridRoute, types.EventHybridSchema{
+		gws.emitComputeEvent(types.EventComputeRoute, types.EventComputeSchema{
 			WorkspaceID: agentState.WorkspaceID,
 			PoolName:    agentState.PoolName,
 			MachineID:   agentState.MachineID,
 			WorkerID:    route.WorkerID,
 			ContainerID: route.ContainerID,
 			RouteID:     route.RouteID,
-			Action:      types.EventHybridActionRouteStatusUpdated,
+			Action:      types.EventComputeActionRouteStatusUpdated,
 			Status:      route.State,
 			Transport:   route.Transport,
 			Message:     route.Error,
@@ -832,8 +847,8 @@ func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.Up
 	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
 }
 
-func (gws *GatewayService) hybridVendors() map[string]hybrid.Vendor {
-	vendors := map[string]hybrid.Vendor{}
+func (gws *GatewayService) computeVendors() map[string]compute.Vendor {
+	vendors := map[string]compute.Vendor{}
 	if gws.appConfig.Providers.Vast.ApiKey != "" {
 		vendors["vast"] = vast.New(vast.Config{
 			APIKey:  gws.appConfig.Providers.Vast.ApiKey,
@@ -849,20 +864,20 @@ func (gws *GatewayService) hybridVendors() map[string]hybrid.Vendor {
 	return vendors
 }
 
-func (gws *GatewayService) collectHybridOffers(ctx context.Context, pool hybrid.Pool) ([]hybrid.Offer, error) {
-	vendors := gws.hybridVendors()
+func (gws *GatewayService) collectPoolOffers(ctx context.Context, pool compute.Pool) ([]compute.Offer, error) {
+	vendors := gws.computeVendors()
 	if len(vendors) == 0 {
-		return nil, fmt.Errorf("no hybrid GPU vendors are configured")
+		return nil, fmt.Errorf("no compute GPU vendors are configured")
 	}
 
-	request := hybrid.OfferRequest{
+	request := compute.OfferRequest{
 		GPUs:           pool.GPUs,
 		TotalGPUs:      pool.TotalGPUs,
 		Providers:      pool.Providers,
 		Regions:        pool.Regions,
 		MinReliability: pool.MinReliability,
 	}
-	offers := []hybrid.Offer{}
+	offers := []compute.Offer{}
 	for name, vendor := range vendors {
 		if len(pool.Providers) > 0 {
 			found := false
@@ -889,7 +904,7 @@ func (gws *GatewayService) collectHybridOffers(ctx context.Context, pool hybrid.
 	return offers, nil
 }
 
-func normalizeHybridPoolConfig(in *pb.HybridPoolConfig) *pb.HybridPoolConfig {
+func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	if in == nil {
 		return nil
 	}
@@ -901,65 +916,65 @@ func normalizeHybridPoolConfig(in *pb.HybridPoolConfig) *pb.HybridPoolConfig {
 		out.Selector = out.Name
 	}
 	if out.Mode == "" {
-		out.Mode = "hybrid"
+		out.Mode = "private"
 	}
 	if out.Transport == "" {
-		out.Transport = defaultHybridTransport
+		out.Transport = defaultPrivateTransport
 	}
 	out.Transport = strings.ReplaceAll(out.Transport, "-", "_")
 	if out.Fallback == "" {
-		out.Fallback = defaultHybridFallback
+		out.Fallback = defaultPrivateFallback
 	}
 	if out.Priority == 0 {
-		out.Priority = defaultHybridPriority
+		out.Priority = defaultPrivatePriority
 	}
 	return &out
 }
 
-func hybridPoolFromProto(in *pb.HybridPoolConfig, requireReservation bool) (hybrid.Pool, error) {
+func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (compute.Pool, error) {
 	if in == nil {
-		return hybrid.Pool{}, fmt.Errorf("pool config is required")
+		return compute.Pool{}, fmt.Errorf("pool config is required")
 	}
-	if in.Mode != "" && in.Mode != "hybrid" {
-		return hybrid.Pool{}, fmt.Errorf("hybrid pool mode must be %q", "hybrid")
+	if in.Mode != "" && in.Mode != "private" {
+		return compute.Pool{}, fmt.Errorf("private pool mode must be %q", "private")
 	}
 	switch in.Transport {
-	case "", defaultHybridTransport:
+	case "", defaultPrivateTransport:
 	default:
-		return hybrid.Pool{}, fmt.Errorf("unsupported hybrid transport %q", in.Transport)
+		return compute.Pool{}, fmt.Errorf("unsupported agent transport %q", in.Transport)
 	}
 	switch in.Fallback {
 	case "", "internal", "wait", "fail":
 	default:
-		return hybrid.Pool{}, fmt.Errorf("unsupported hybrid fallback %q", in.Fallback)
+		return compute.Pool{}, fmt.Errorf("unsupported private pool fallback %q", in.Fallback)
 	}
-	ttl, err := hybrid.ParseTTL(in.Ttl)
+	ttl, err := compute.ParseTTL(in.Ttl)
 	if err != nil {
-		return hybrid.Pool{}, err
+		return compute.Pool{}, err
 	}
-	pool := hybrid.Pool{
+	pool := compute.Pool{
 		Name:           in.Name,
 		Selector:       in.Selector,
 		GPUs:           in.Gpu,
 		TotalGPUs:      in.Gpus,
 		TTL:            ttl,
-		MaxSpendMicros: hybrid.DollarsToMicros(in.MaxSpend),
+		MaxSpendMicros: compute.DollarsToMicros(in.MaxSpend),
 		Providers:      in.Providers,
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
 	}
 	if requireReservation {
 		if err := pool.Validate(); err != nil {
-			return hybrid.Pool{}, err
+			return compute.Pool{}, err
 		}
 	} else if pool.MinReliability < 0 || pool.MinReliability > 1 {
-		return hybrid.Pool{}, fmt.Errorf("min_reliability must be between 0 and 1")
+		return compute.Pool{}, fmt.Errorf("min_reliability must be between 0 and 1")
 	}
 	return pool, nil
 }
 
-func hybridOfferToProto(offer hybrid.Offer) *pb.HybridOffer {
-	return &pb.HybridOffer{
+func poolOfferToProto(offer compute.Offer) *pb.PoolOffer {
+	return &pb.PoolOffer{
 		Id:               offer.ID,
 		Provider:         offer.Provider,
 		InstanceType:     offer.InstanceType,
@@ -974,8 +989,8 @@ func hybridOfferToProto(offer hybrid.Offer) *pb.HybridOffer {
 	}
 }
 
-func hybridReservationToProto(reservation hybrid.Reservation) *pb.HybridReservation {
-	return &pb.HybridReservation{
+func providerInstanceToProto(reservation compute.Reservation) *pb.ProviderInstance {
+	return &pb.ProviderInstance{
 		Id:               reservation.ID,
 		PoolName:         reservation.PoolName,
 		Provider:         reservation.Provider,
@@ -1010,13 +1025,13 @@ func agentRouteToProto(route types.BackendRoute) *pb.AgentRoute {
 	}
 }
 
-func hybridPoolStateToProto(state *hybrid.PoolState) *pb.HybridPool {
-	reservations := make([]*pb.HybridReservation, 0, len(state.Reservations))
+func privatePoolStateToProto(state *compute.PoolState) *pb.PrivatePool {
+	reservations := make([]*pb.ProviderInstance, 0, len(state.Reservations))
 	for _, reservation := range state.Reservations {
-		reservations = append(reservations, hybridReservationToProto(reservation))
+		reservations = append(reservations, providerInstanceToProto(reservation))
 	}
-	config := normalizeHybridPoolConfig(state.Config)
-	return &pb.HybridPool{
+	config := normalizePoolConfig(state.Config)
+	return &pb.PrivatePool{
 		Name:                 state.Name,
 		Selector:             state.Selector,
 		Config:               config,
@@ -1037,21 +1052,50 @@ func timestampOrNil(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
 }
 
-func (gws *GatewayService) createHybridPoolJoinCommand(ctx context.Context, poolName, ttlValue string) (string, string, time.Time, error) {
+func agentMachineToProto(state *compute.AgentTokenState) *pb.Machine {
+	if state == nil {
+		return &pb.Machine{}
+	}
+	gpu := ""
+	if len(state.GPUs) > 0 {
+		gpu = strings.Join(state.GPUs, ",")
+	}
+	return &pb.Machine{
+		Id:            state.MachineID,
+		Cpu:           state.CPUMillicores,
+		Memory:        int64(state.MemoryMB),
+		Gpu:           gpu,
+		GpuCount:      state.GPUCount,
+		Status:        computeMachineStatus(state),
+		PoolName:      state.PoolName,
+		ProviderName:  "agent",
+		Created:       formatComputeTime(state.CreatedAt),
+		LastKeepalive: formatComputeTime(state.LastJoinAt),
+	}
+}
+
+func formatComputeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
+func (gws *GatewayService) createPrivatePoolJoinCommand(ctx context.Context, poolName, ttlValue string) (string, string, time.Time, error) {
 	gatewayURL := strings.TrimRight(gws.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	devMode := isLocalGatewayURL(gatewayURL)
 	if authInfo != nil && authInfo.Workspace != nil {
-		if state, err := gws.getOwnedHybridPoolState(ctx, authInfo, poolName); err == nil && state != nil {
-			config := normalizeHybridPoolConfig(state.Config)
-			if err := gws.validateHybridTransportConfig(config.Transport); err != nil {
+		if state, err := gws.getOwnedPrivatePoolState(ctx, authInfo, poolName); err == nil && state != nil {
+			config := normalizePoolConfig(state.Config)
+			if err := gws.validateAgentTransportConfig(config.Transport); err != nil {
 				return "", "", time.Time{}, err
 			}
 		}
 	}
 
-	token, expiresAt, err := gws.createHybridPoolJoinToken(ctx, poolName, ttlValue)
+	token, expiresAt, err := gws.createPrivatePoolJoinToken(ctx, poolName, ttlValue)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
@@ -1063,7 +1107,7 @@ func (gws *GatewayService) createHybridPoolJoinCommand(ctx context.Context, pool
 	return command, token, expiresAt, nil
 }
 
-func (gws *GatewayService) createHybridPoolJoinToken(ctx context.Context, poolName, ttlValue string) (string, time.Time, error) {
+func (gws *GatewayService) createPrivatePoolJoinToken(ctx context.Context, poolName, ttlValue string) (string, time.Time, error) {
 	poolName = strings.TrimSpace(poolName)
 	if poolName == "" {
 		return "", time.Time{}, fmt.Errorf("pool name is required")
@@ -1073,11 +1117,11 @@ func (gws *GatewayService) createHybridPoolJoinToken(ctx context.Context, poolNa
 	if authInfo == nil || authInfo.Workspace == nil {
 		return "", time.Time{}, fmt.Errorf("missing workspace auth")
 	}
-	ownerTokenID := hybridOwnerTokenID(authInfo)
+	ownerTokenID := computeOwnerTokenID(authInfo)
 	if ownerTokenID == "" {
 		return "", time.Time{}, fmt.Errorf("missing workspace auth")
 	}
-	state, err := gws.getOwnedHybridPoolState(ctx, authInfo, poolName)
+	state, err := gws.getOwnedPrivatePoolState(ctx, authInfo, poolName)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -1085,37 +1129,37 @@ func (gws *GatewayService) createHybridPoolJoinToken(ctx context.Context, poolNa
 		return "", time.Time{}, fmt.Errorf("pool not found")
 	}
 
-	ttl, err := hybrid.ParseTTL(ttlValue)
+	ttl, err := compute.ParseTTL(ttlValue)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	if ttl == 0 {
-		ttl = defaultHybridJoinTTL
+		ttl = defaultPrivateJoinTTL
 	}
 	if ttl <= 0 {
 		return "", time.Time{}, fmt.Errorf("join token ttl must be positive")
 	}
 
-	token, err := generateHybridToken()
+	token, err := generateComputeToken()
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	now := time.Now()
-	tokenState := &hybrid.JoinTokenState{
-		TokenHash:        hashHybridToken(token),
+	tokenState := &compute.JoinTokenState{
+		TokenHash:        hashComputeToken(token),
 		WorkspaceID:      authInfo.Workspace.ExternalId,
 		PoolName:         poolName,
 		CreatedByTokenID: ownerTokenID,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(ttl),
 	}
-	if err := gws.saveHybridJoinTokenState(ctx, tokenState, ttl); err != nil {
+	if err := gws.saveComputeJoinTokenState(ctx, tokenState, ttl); err != nil {
 		return "", time.Time{}, err
 	}
-	gws.emitHybridEvent(types.EventHybridJoinToken, types.EventHybridSchema{
+	gws.emitComputeEvent(types.EventComputeJoinToken, types.EventComputeSchema{
 		WorkspaceID: tokenState.WorkspaceID,
 		PoolName:    tokenState.PoolName,
-		Action:      types.EventHybridActionJoinTokenCreated,
+		Action:      types.EventComputeActionJoinTokenCreated,
 		Status:      "active",
 		Attrs: map[string]string{
 			"expires_at":  tokenState.ExpiresAt.UTC().Format(time.RFC3339),
@@ -1125,8 +1169,8 @@ func (gws *GatewayService) createHybridPoolJoinToken(ctx context.Context, poolNa
 	return token, tokenState.ExpiresAt, nil
 }
 
-func (gws *GatewayService) agentBootstrapConfig(workspaceID string, poolState *hybrid.PoolState) *pb.AgentBootstrapConfig {
-	config := normalizeHybridPoolConfig(poolState.Config)
+func (gws *GatewayService) agentBootstrapConfig(workspaceID string, poolState *compute.PoolState) *pb.AgentBootstrapConfig {
+	config := normalizePoolConfig(poolState.Config)
 	return &pb.AgentBootstrapConfig{
 		GatewayHttpUrl:  gws.appConfig.GatewayService.HTTP.GetExternalURL(),
 		GatewayGrpcHost: gws.appConfig.GatewayService.GRPC.ExternalHost,
@@ -1135,7 +1179,7 @@ func (gws *GatewayService) agentBootstrapConfig(workspaceID string, poolState *h
 		WorkspaceId:     workspaceID,
 		PoolName:        poolState.Name,
 		Transport:       config.Transport,
-		Executor:        defaultHybridExecutor,
+		Executor:        defaultPrivateExecutor,
 		Fallback:        config.Fallback,
 		DisabledServices: []string{
 			"redis",
@@ -1149,7 +1193,7 @@ func (gws *GatewayService) agentBootstrapConfig(workspaceID string, poolState *h
 	}
 }
 
-func (gws *GatewayService) validateHybridTransportConfig(transport string) error {
+func (gws *GatewayService) validateAgentTransportConfig(transport string) error {
 	transport = strings.ReplaceAll(firstNonEmpty(transport, types.BackendRouteTransportTSNet), "-", "_")
 	switch transport {
 	case types.BackendRouteTransportTSNet:
@@ -1159,12 +1203,12 @@ func (gws *GatewayService) validateHybridTransportConfig(transport string) error
 		if gws.appConfig.Tailscale.AuthKey == "" {
 			return fmt.Errorf("gateway tailscale auth key is not configured")
 		}
-		if gws.appConfig.Tailscale.HybridWorkerAuthKey == "" {
+		if gws.appConfig.Tailscale.AgentAuthKey == "" {
 			return fmt.Errorf("agent tailscale auth key is not configured")
 		}
 		return nil
 	default:
-		return fmt.Errorf("unsupported hybrid transport %q", transport)
+		return fmt.Errorf("unsupported agent transport %q", transport)
 	}
 }
 
@@ -1184,7 +1228,7 @@ func isLocalGatewayURL(rawURL string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func generateHybridToken() (string, error) {
+func generateComputeToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
@@ -1192,12 +1236,12 @@ func generateHybridToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-func hashHybridToken(token string) string {
+func hashComputeToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
-func hybridMachineID(workspaceID, poolName, fingerprint string) string {
+func computeMachineID(workspaceID, poolName, fingerprint string) string {
 	seed := fingerprint
 	if seed == "" {
 		seed = fmt.Sprintf("%d", time.Now().UnixNano())
@@ -1206,13 +1250,13 @@ func hybridMachineID(workspaceID, poolName, fingerprint string) string {
 	return "machine-" + hex.EncodeToString(sum[:])[:20]
 }
 
-func hybridPreflightChecksFromProto(in []*pb.AgentPreflightCheck) []hybrid.PreflightCheckState {
-	checks := make([]hybrid.PreflightCheckState, 0, len(in))
+func preflightChecksFromProto(in []*pb.AgentPreflightCheck) []compute.PreflightCheckState {
+	checks := make([]compute.PreflightCheckState, 0, len(in))
 	for _, check := range in {
 		if check == nil {
 			continue
 		}
-		checks = append(checks, hybrid.PreflightCheckState{
+		checks = append(checks, compute.PreflightCheckState{
 			Name:     check.Name,
 			OK:       check.Ok,
 			Message:  check.Message,
@@ -1240,78 +1284,78 @@ func firstNonZeroInt64(values ...int64) int64 {
 	return 0
 }
 
-func (gws *GatewayService) saveHybridPoolState(ctx context.Context, workspaceID string, state *hybrid.PoolState) error {
-	return gws.hybridRepo.SavePoolState(ctx, workspaceID, state)
+func (gws *GatewayService) savePrivatePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error {
+	return gws.computeRepo.SavePoolState(ctx, workspaceID, state)
 }
 
-func (gws *GatewayService) getHybridPoolState(ctx context.Context, workspaceID, name string) (*hybrid.PoolState, error) {
-	return gws.hybridRepo.GetPoolState(ctx, workspaceID, name)
+func (gws *GatewayService) getPrivatePoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error) {
+	return gws.computeRepo.GetPoolState(ctx, workspaceID, name)
 }
 
-func (gws *GatewayService) listHybridPoolStates(ctx context.Context, workspaceID string, limit int) ([]*hybrid.PoolState, error) {
-	return gws.hybridRepo.ListPoolStates(ctx, workspaceID, limit)
+func (gws *GatewayService) listPrivatePoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error) {
+	return gws.computeRepo.ListPoolStates(ctx, workspaceID, limit)
 }
 
-func (gws *GatewayService) deleteHybridPoolState(ctx context.Context, workspaceID, name string) error {
-	return gws.hybridRepo.DeletePoolState(ctx, workspaceID, name)
+func (gws *GatewayService) deletePrivatePoolState(ctx context.Context, workspaceID, name string) error {
+	return gws.computeRepo.DeletePoolState(ctx, workspaceID, name)
 }
 
-func (gws *GatewayService) saveHybridJoinTokenState(ctx context.Context, state *hybrid.JoinTokenState, ttl time.Duration) error {
-	return gws.hybridRepo.SaveJoinTokenState(ctx, state, ttl)
+func (gws *GatewayService) saveComputeJoinTokenState(ctx context.Context, state *compute.JoinTokenState, ttl time.Duration) error {
+	return gws.computeRepo.SaveJoinTokenState(ctx, state, ttl)
 }
 
-func (gws *GatewayService) getHybridJoinTokenState(ctx context.Context, token string) (*hybrid.JoinTokenState, error) {
+func (gws *GatewayService) getComputeJoinTokenState(ctx context.Context, token string) (*compute.JoinTokenState, error) {
 	if token == "" {
 		return nil, nil
 	}
-	return gws.hybridRepo.GetJoinTokenState(ctx, hashHybridToken(token))
+	return gws.computeRepo.GetJoinTokenState(ctx, hashComputeToken(token))
 }
 
-func (gws *GatewayService) saveHybridAgentTokenState(ctx context.Context, state *hybrid.AgentTokenState) error {
-	return gws.hybridRepo.SaveAgentTokenState(ctx, state, 24*time.Hour)
+func (gws *GatewayService) saveComputeAgentTokenState(ctx context.Context, state *compute.AgentTokenState) error {
+	return gws.computeRepo.SaveAgentTokenState(ctx, state, 24*time.Hour)
 }
 
-func (gws *GatewayService) getHybridAgentTokenState(ctx context.Context, token string) (*hybrid.AgentTokenState, error) {
+func (gws *GatewayService) getComputeAgentTokenState(ctx context.Context, token string) (*compute.AgentTokenState, error) {
 	if token == "" {
 		return nil, nil
 	}
-	return gws.hybridRepo.GetAgentTokenState(ctx, hashHybridToken(token))
+	return gws.computeRepo.GetAgentTokenState(ctx, hashComputeToken(token))
 }
 
-func (gws *GatewayService) getOwnedHybridPoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*hybrid.PoolState, error) {
-	workspaceID := hybridWorkspaceID(authInfo)
+func (gws *GatewayService) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*compute.PoolState, error) {
+	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
 		return nil, fmt.Errorf("missing workspace auth")
 	}
 
-	state, err := gws.getHybridPoolState(ctx, workspaceID, poolName)
+	state, err := gws.getPrivatePoolState(ctx, workspaceID, poolName)
 	if err != nil {
 		return nil, err
 	}
-	if state == nil || !hybridPoolCreatedByAuth(state, authInfo) {
+	if state == nil || !computePoolCreatedByAuth(state, authInfo) {
 		return nil, nil
 	}
 	return state, nil
 }
 
-func (gws *GatewayService) emitHybridEvent(eventType string, event types.EventHybridSchema) {
+func (gws *GatewayService) emitComputeEvent(eventType string, event types.EventComputeSchema) {
 	if gws.eventRepo == nil {
 		return
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
-	gws.eventRepo.PushHybridEvent(eventType, event)
+	gws.eventRepo.PushComputeEvent(eventType, event)
 }
 
-func hybridPoolEvent(workspaceID string, state *hybrid.PoolState, action, status string) types.EventHybridSchema {
+func computePoolEvent(workspaceID string, state *compute.PoolState, action, status string) types.EventComputeSchema {
 	if state == nil {
-		return types.EventHybridSchema{}
+		return types.EventComputeSchema{}
 	}
 	if status == "" {
 		status = state.Status
 	}
-	event := types.EventHybridSchema{
+	event := types.EventComputeSchema{
 		WorkspaceID: workspaceID,
 		PoolName:    state.Name,
 		Action:      action,
@@ -1338,7 +1382,7 @@ func hybridPoolEvent(workspaceID string, state *hybrid.PoolState, action, status
 	return event
 }
 
-func hybridMachineStatus(state *hybrid.AgentTokenState) string {
+func computeMachineStatus(state *compute.AgentTokenState) string {
 	if state != nil && state.Schedulable {
 		return "schedulable"
 	}
@@ -1349,7 +1393,7 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
-func hybridPreflightSummary(checks []hybrid.PreflightCheckState) string {
+func preflightSummary(checks []compute.PreflightCheckState) string {
 	failed := make([]string, 0)
 	for _, check := range checks {
 		if check.Severity == "error" && !check.OK {
@@ -1362,35 +1406,35 @@ func hybridPreflightSummary(checks []hybrid.PreflightCheckState) string {
 	return "failed preflight checks: " + strings.Join(failed, ", ")
 }
 
-func filterHybridPoolsCreatedByAuth(states []*hybrid.PoolState, authInfo *auth.AuthInfo) []*hybrid.PoolState {
+func filterPrivatePoolsCreatedByAuth(states []*compute.PoolState, authInfo *auth.AuthInfo) []*compute.PoolState {
 	if len(states) == 0 {
 		return states
 	}
 
-	filtered := make([]*hybrid.PoolState, 0, len(states))
+	filtered := make([]*compute.PoolState, 0, len(states))
 	for _, state := range states {
-		if hybridPoolCreatedByAuth(state, authInfo) {
+		if computePoolCreatedByAuth(state, authInfo) {
 			filtered = append(filtered, state)
 		}
 	}
 	return filtered
 }
 
-func hybridPoolCreatedByAuth(state *hybrid.PoolState, authInfo *auth.AuthInfo) bool {
+func computePoolCreatedByAuth(state *compute.PoolState, authInfo *auth.AuthInfo) bool {
 	if state == nil || state.CreatedByTokenID == "" {
 		return false
 	}
-	return state.CreatedByTokenID == hybridOwnerTokenID(authInfo)
+	return state.CreatedByTokenID == computeOwnerTokenID(authInfo)
 }
 
-func hybridOwnerTokenID(authInfo *auth.AuthInfo) string {
+func computeOwnerTokenID(authInfo *auth.AuthInfo) string {
 	if authInfo == nil || authInfo.Token == nil {
 		return ""
 	}
 	return authInfo.Token.ExternalId
 }
 
-func hybridWorkspaceID(authInfo *auth.AuthInfo) string {
+func computeWorkspaceID(authInfo *auth.AuthInfo) string {
 	if authInfo == nil || authInfo.Workspace == nil {
 		return ""
 	}

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/hybrid/httpjson"
+	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"

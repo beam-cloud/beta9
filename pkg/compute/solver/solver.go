@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 )
 
 type Solver struct {
@@ -17,7 +17,7 @@ func New() *Solver {
 	return &Solver{MaxOffers: 32}
 }
 
-func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
+func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 	now := in.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -25,13 +25,13 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 
 	pool := in.Demand.Pool()
 	if err := pool.Validate(); err != nil {
-		return hybrid.SolvePlan{Feasible: false, Reason: err.Error()}
+		return compute.SolvePlan{Feasible: false, Reason: err.Error()}
 	}
 
 	requiredGPUs := in.Demand.TotalGPUs + in.Demand.HeadroomGPUs
 	existingGPUs, committedCost, keepActions, deleteActions := usableReservations(in.Reservations, in.Demand, now)
 	if existingGPUs >= requiredGPUs {
-		return hybrid.SolvePlan{
+		return compute.SolvePlan{
 			Feasible:            true,
 			Actions:             append(keepActions, deleteActions...),
 			TotalGPUs:           existingGPUs,
@@ -53,10 +53,10 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 		candidates = candidates[:maxOffers]
 	}
 
-	leaseHours := hybrid.WholeHours(in.Demand.TTL)
+	leaseHours := compute.WholeHours(in.Demand.TTL)
 	best := solveBounded(candidates, neededGPUs, leaseHours)
 	if !best.ok {
-		return hybrid.SolvePlan{
+		return compute.SolvePlan{
 			Feasible:            false,
 			Reason:              "insufficient compatible capacity",
 			Actions:             append(keepActions, deleteActions...),
@@ -67,7 +67,7 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 
 	totalCommitment := committedCost + best.cost
 	if in.Demand.MaxSpendMicros > 0 && totalCommitment > in.Demand.MaxSpendMicros {
-		return hybrid.SolvePlan{
+		return compute.SolvePlan{
 			Feasible:            false,
 			Reason:              "max spend would be exceeded",
 			Actions:             append(keepActions, deleteActions...),
@@ -76,7 +76,7 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 		}
 	}
 
-	actions := make([]hybrid.SolveAction, 0, len(keepActions)+len(best.counts)+len(deleteActions))
+	actions := make([]compute.SolveAction, 0, len(keepActions)+len(best.counts)+len(deleteActions))
 	actions = append(actions, keepActions...)
 	var newGPUs uint32
 	for idx, count := range best.counts {
@@ -86,8 +86,8 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 		offer := candidates[idx]
 		actionCost := offer.HourlyCostMicros * int64(count) * leaseHours
 		newGPUs += offer.GPUCount * count
-		actions = append(actions, hybrid.SolveAction{
-			Type:       hybrid.ActionCreate,
+		actions = append(actions, compute.SolveAction{
+			Type:       compute.ActionCreate,
 			Offer:      offer,
 			Count:      count,
 			CostMicros: actionCost,
@@ -96,7 +96,7 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 	}
 	actions = append(actions, deleteActions...)
 
-	return hybrid.SolvePlan{
+	return compute.SolvePlan{
 		Feasible:              true,
 		Actions:               actions,
 		TotalGPUs:             existingGPUs + newGPUs,
@@ -107,11 +107,11 @@ func (s *Solver) Solve(in hybrid.SolveInput) hybrid.SolvePlan {
 	}
 }
 
-func usableReservations(reservations []hybrid.Reservation, demand hybrid.Demand, now time.Time) (uint32, int64, []hybrid.SolveAction, []hybrid.SolveAction) {
+func usableReservations(reservations []compute.Reservation, demand compute.Demand, now time.Time) (uint32, int64, []compute.SolveAction, []compute.SolveAction) {
 	var totalGPUs uint32
 	var committedCost int64
-	keepActions := make([]hybrid.SolveAction, 0, len(reservations))
-	deleteActions := []hybrid.SolveAction{}
+	keepActions := make([]compute.SolveAction, 0, len(reservations))
+	deleteActions := []compute.SolveAction{}
 	leaseEnd := now.Add(demand.TTL)
 
 	for _, reservation := range reservations {
@@ -122,10 +122,10 @@ func usableReservations(reservations []hybrid.Reservation, demand hybrid.Demand,
 			continue
 		}
 
-		if reservation.Source == hybrid.SourceManual {
+		if reservation.Source == compute.SourceManual {
 			totalGPUs += reservation.GPUCount
-			keepActions = append(keepActions, hybrid.SolveAction{
-				Type:        hybrid.ActionKeep,
+			keepActions = append(keepActions, compute.SolveAction{
+				Type:        compute.ActionKeep,
 				Reservation: reservation,
 				Count:       1,
 				Reason:      "manual capacity has no incremental provider cost",
@@ -136,8 +136,8 @@ func usableReservations(reservations []hybrid.Reservation, demand hybrid.Demand,
 		totalGPUs += reservation.GPUCount
 		cost := existingReservationCommitment(reservation, now, leaseEnd)
 		committedCost += cost
-		keepActions = append(keepActions, hybrid.SolveAction{
-			Type:        hybrid.ActionKeep,
+		keepActions = append(keepActions, compute.SolveAction{
+			Type:        compute.ActionKeep,
 			Reservation: reservation,
 			Count:       1,
 			CostMicros:  cost,
@@ -146,7 +146,7 @@ func usableReservations(reservations []hybrid.Reservation, demand hybrid.Demand,
 	}
 
 	for _, reservation := range reservations {
-		if reservation.Source == hybrid.SourceManual || !reservation.ActiveAt(now) {
+		if reservation.Source == compute.SourceManual || !reservation.ActiveAt(now) {
 			continue
 		}
 		if reservation.BillingRenewalAt.IsZero() || reservation.BillingRenewalAt.After(now) {
@@ -155,8 +155,8 @@ func usableReservations(reservations []hybrid.Reservation, demand hybrid.Demand,
 		if reservationMatchesDemand(reservation, demand) {
 			continue
 		}
-		deleteActions = append(deleteActions, hybrid.SolveAction{
-			Type:        hybrid.ActionDelete,
+		deleteActions = append(deleteActions, compute.SolveAction{
+			Type:        compute.ActionDelete,
 			Reservation: reservation,
 			Count:       1,
 			Reason:      "reservation reached renewal boundary and is not needed",
@@ -166,8 +166,8 @@ func usableReservations(reservations []hybrid.Reservation, demand hybrid.Demand,
 	return totalGPUs, committedCost, keepActions, deleteActions
 }
 
-func existingReservationCommitment(reservation hybrid.Reservation, now, leaseEnd time.Time) int64 {
-	if reservation.Source == hybrid.SourceManual {
+func existingReservationCommitment(reservation compute.Reservation, now, leaseEnd time.Time) int64 {
+	if reservation.Source == compute.SourceManual {
 		return 0
 	}
 	if reservation.CommittedMicros > 0 {
@@ -181,10 +181,10 @@ func existingReservationCommitment(reservation hybrid.Reservation, now, leaseEnd
 	if start.Before(now) {
 		start = now
 	}
-	return reservation.HourlyCostMicros * hybrid.WholeHours(leaseEnd.Sub(start))
+	return reservation.HourlyCostMicros * compute.WholeHours(leaseEnd.Sub(start))
 }
 
-func reservationMatchesDemand(reservation hybrid.Reservation, demand hybrid.Demand) bool {
+func reservationMatchesDemand(reservation compute.Reservation, demand compute.Demand) bool {
 	if demand.Selector != "" && reservation.Selector != "" && reservation.Selector != demand.Selector {
 		return false
 	}
@@ -200,8 +200,8 @@ func reservationMatchesDemand(reservation hybrid.Reservation, demand hybrid.Dema
 	return true
 }
 
-func filterOffers(offers []hybrid.Offer, pool hybrid.Pool) []hybrid.Offer {
-	candidates := []hybrid.Offer{}
+func filterOffers(offers []compute.Offer, pool compute.Pool) []compute.Offer {
+	candidates := []compute.Offer{}
 	for _, offer := range offers {
 		if pool.MatchesOffer(offer) {
 			candidates = append(candidates, offer)
@@ -228,7 +228,7 @@ type boundedSolution struct {
 	counts []uint32
 }
 
-func solveBounded(offers []hybrid.Offer, neededGPUs uint32, leaseHours int64) boundedSolution {
+func solveBounded(offers []compute.Offer, neededGPUs uint32, leaseHours int64) boundedSolution {
 	if neededGPUs == 0 {
 		return boundedSolution{ok: true, counts: make([]uint32, len(offers))}
 	}

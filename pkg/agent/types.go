@@ -3,7 +3,7 @@ package agent
 import (
 	"io"
 
-	"github.com/beam-cloud/beta9/pkg/hybrid/httpjson"
+	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 )
 
 const (

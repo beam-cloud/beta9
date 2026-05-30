@@ -119,7 +119,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 				readyMachines++
 			}
 		}
-	case types.PoolModeHybrid:
+	case types.PoolModePrivate:
 		poolState, err := p.wpc.State()
 		if err != nil {
 			return nil, err

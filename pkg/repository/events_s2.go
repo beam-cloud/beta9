@@ -770,7 +770,7 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 		return ""
 	case metadata.TaskID != "":
 		return r.taskStreamName(metadata.TaskID)
-	case isHybridEvent(eventType) && metadata.WorkspaceID != "":
+	case isComputeEvent(eventType) && metadata.WorkspaceID != "":
 		return r.workspaceStreamName(metadata.WorkspaceID)
 	case metadata.WorkerID != "":
 		return r.workerStreamName(metadata.WorkerID)
@@ -823,7 +823,7 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	if isWorkspaceContainerRealtimeEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
-	if isHybridEvent(eventType) && metadata.WorkspaceID != "" {
+	if isComputeEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
 	if isTaskEvent(eventType) && metadata.WorkspaceID != "" {
@@ -849,8 +849,8 @@ func isWorkspaceContainerRealtimeEvent(eventType string) bool {
 		eventType == types.EventContainerLifecycle
 }
 
-func isHybridEvent(eventType string) bool {
-	return strings.HasPrefix(eventType, "hybrid.")
+func isComputeEvent(eventType string) bool {
+	return strings.HasPrefix(eventType, "compute.")
 }
 
 func (r *S2EventRepository) primaryLogStreamName(metadata eventMetadata) s2.StreamName {

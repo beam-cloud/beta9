@@ -1,4 +1,4 @@
-package hybrid
+package compute
 
 import (
 	"time"
@@ -7,22 +7,22 @@ import (
 )
 
 type PoolState struct {
-	Name                 string               `json:"name"`
-	Selector             string               `json:"selector"`
-	Config               *pb.HybridPoolConfig `json:"config"`
-	Reservations         []Reservation        `json:"reservations"`
-	ReservedGPUs         uint32               `json:"reserved_gpus"`
-	CommittedSpendMicros int64                `json:"committed_spend_micros"`
-	Status               string               `json:"status"`
-	Source               CapacitySource       `json:"source"`
-	Mode                 string               `json:"mode"`
-	Transport            string               `json:"transport"`
-	Fallback             string               `json:"fallback"`
-	Priority             int32                `json:"priority"`
-	CreatedByTokenID     string               `json:"created_by_token_id"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
-	ExpiresAt            time.Time            `json:"expires_at"`
+	Name                 string         `json:"name"`
+	Selector             string         `json:"selector"`
+	Config               *pb.PoolConfig `json:"config"`
+	Reservations         []Reservation  `json:"reservations"`
+	ReservedGPUs         uint32         `json:"reserved_gpus"`
+	CommittedSpendMicros int64          `json:"committed_spend_micros"`
+	Status               string         `json:"status"`
+	Source               CapacitySource `json:"source"`
+	Mode                 string         `json:"mode"`
+	Transport            string         `json:"transport"`
+	Fallback             string         `json:"fallback"`
+	Priority             int32          `json:"priority"`
+	CreatedByTokenID     string         `json:"created_by_token_id"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
+	ExpiresAt            time.Time      `json:"expires_at"`
 }
 
 type JoinTokenState struct {

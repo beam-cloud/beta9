@@ -135,7 +135,7 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.StartTime.IsZero() {
 			return d.StartTime
 		}
-	case types.EventHybridSchema:
+	case types.EventComputeSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
@@ -747,14 +747,14 @@ func (r *EventClientRepo) PushWorkerDeletedEvent(workerID, machineID, poolName s
 	)
 }
 
-func (r *EventClientRepo) PushHybridEvent(eventType string, event types.EventHybridSchema) {
+func (r *EventClientRepo) PushComputeEvent(eventType string, event types.EventComputeSchema) {
 	if eventType == "" {
 		return
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
-	r.pushEvent(eventType, types.EventHybridSchemaVersion, event)
+	r.pushEvent(eventType, types.EventComputeSchemaVersion, event)
 }
 
 func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
@@ -1034,7 +1034,7 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{PoolName: d.PoolName}
 	case types.EventGatewayEndpointSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID}
-	case types.EventHybridSchema:
+	case types.EventComputeSchema:
 		return eventMetadata{
 			ContainerID: d.ContainerID,
 			WorkspaceID: d.WorkspaceID,

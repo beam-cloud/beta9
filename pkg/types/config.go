@@ -424,7 +424,7 @@ type PoolMode string
 var (
 	PoolModeLocal    PoolMode = "local"
 	PoolModeExternal PoolMode = "external"
-	PoolModeHybrid   PoolMode = "hybrid"
+	PoolModePrivate  PoolMode = "private"
 )
 
 type WorkerPoolConfig struct {
@@ -643,13 +643,13 @@ type OpenMeterConfig struct {
 }
 
 type TailscaleConfig struct {
-	ControlURL          string `key:"controlUrl" json:"control_url"`
-	User                string `key:"user" json:"user"`
-	AuthKey             string `key:"authKey" json:"auth_key"`
-	HybridWorkerAuthKey string `key:"hybridWorkerAuthKey" json:"hybrid_worker_auth_key"`
-	HostName            string `key:"hostName" json:"host_name"`
-	Enabled             bool   `key:"enabled" json:"enabled"`
-	Debug               bool   `key:"debug" json:"debug"`
+	ControlURL   string `key:"controlUrl" json:"control_url"`
+	User         string `key:"user" json:"user"`
+	AuthKey      string `key:"authKey" json:"auth_key"`
+	AgentAuthKey string `key:"agentAuthKey" json:"agent_auth_key"`
+	HostName     string `key:"hostName" json:"host_name"`
+	Enabled      bool   `key:"enabled" json:"enabled"`
+	Debug        bool   `key:"debug" json:"debug"`
 }
 
 type ProxyConfig struct {

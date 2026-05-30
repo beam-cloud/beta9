@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -17,10 +17,10 @@ type AgentWorkerPoolController struct {
 	workspaceID      string
 	config           types.AppConfig
 	workerPoolConfig types.WorkerPoolConfig
-	poolState        *hybrid.PoolState
+	poolState        *compute.PoolState
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
-	hybridRepo       repository.HybridRepository
+	computeRepo      repository.ComputeRepository
 }
 
 type AgentWorkerPoolControllerOptions struct {
@@ -29,10 +29,10 @@ type AgentWorkerPoolControllerOptions struct {
 	WorkspaceID    string
 	Config         types.AppConfig
 	WorkerPool     types.WorkerPoolConfig
-	PoolState      *hybrid.PoolState
+	PoolState      *compute.PoolState
 	WorkerRepo     repository.WorkerRepository
 	WorkerPoolRepo repository.WorkerPoolRepository
-	HybridRepo     repository.HybridRepository
+	ComputeRepo    repository.ComputeRepository
 }
 
 type agentMachineWorker struct {
@@ -57,8 +57,8 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (Worker
 	if opts.Name == "" {
 		return nil, errors.New("pool name is required")
 	}
-	if opts.HybridRepo == nil {
-		return nil, errors.New("hybrid repository is required")
+	if opts.ComputeRepo == nil {
+		return nil, errors.New("compute repository is required")
 	}
 
 	wpc := &AgentWorkerPoolController{
@@ -70,7 +70,7 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (Worker
 		poolState:        opts.PoolState,
 		workerRepo:       opts.WorkerRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
-		hybridRepo:       opts.HybridRepo,
+		computeRepo:      opts.ComputeRepo,
 	}
 	if err := wpc.ensureMachineWorkers(); err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (wpc *AgentWorkerPoolController) RequiresPoolSelector() bool {
 }
 
 func (wpc *AgentWorkerPoolController) Mode() types.PoolMode {
-	return types.PoolModeHybrid
+	return types.PoolModePrivate
 }
 
 func (wpc *AgentWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
@@ -117,7 +117,7 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 		}
 	}
 
-	machines, err := wpc.hybridRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 }
 
 func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
-	machine, err := wpc.findMachine(func(machine *hybrid.AgentTokenState) bool {
+	machine, err := wpc.findMachine(func(machine *compute.AgentTokenState) bool {
 		return wpc.machineCanFit(machine, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	})
 	if err != nil {
@@ -152,7 +152,7 @@ func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCoun
 }
 
 func (wpc *AgentWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineID string) (*types.Worker, error) {
-	machine, err := wpc.findMachine(func(machine *hybrid.AgentTokenState) bool {
+	machine, err := wpc.findMachine(func(machine *compute.AgentTokenState) bool {
 		return machine.MachineID == machineID && wpc.machineCanFit(machine, cpu, memory, gpuType, gpuCount)
 	})
 	if err != nil {
@@ -176,7 +176,7 @@ func (wpc *AgentWorkerPoolController) poolName() string {
 }
 
 func (wpc *AgentWorkerPoolController) ensureMachineWorkers() error {
-	machines, err := wpc.hybridRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {
 		return err
 	}
@@ -194,8 +194,8 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorkers() error {
 	return nil
 }
 
-func (wpc *AgentWorkerPoolController) findMachine(match func(*hybrid.AgentTokenState) bool) (*hybrid.AgentTokenState, error) {
-	machines, err := wpc.hybridRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+func (wpc *AgentWorkerPoolController) findMachine(match func(*compute.AgentTokenState) bool) (*compute.AgentTokenState, error) {
+	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +210,7 @@ func (wpc *AgentWorkerPoolController) findMachine(match func(*hybrid.AgentTokenS
 	return nil, nil
 }
 
-func (wpc *AgentWorkerPoolController) machineSchedulable(machine *hybrid.AgentTokenState) bool {
+func (wpc *AgentWorkerPoolController) machineSchedulable(machine *compute.AgentTokenState) bool {
 	return machine != nil &&
 		machine.Schedulable &&
 		machine.Executor == types.DefaultAgentWorkerContainerMode &&
@@ -218,7 +218,7 @@ func (wpc *AgentWorkerPoolController) machineSchedulable(machine *hybrid.AgentTo
 		machine.PoolName == wpc.poolName()
 }
 
-func (wpc *AgentWorkerPoolController) machineCanFit(machine *hybrid.AgentTokenState, cpu int64, memory int64, gpuType string, gpuCount uint32) bool {
+func (wpc *AgentWorkerPoolController) machineCanFit(machine *compute.AgentTokenState, cpu int64, memory int64, gpuType string, gpuCount uint32) bool {
 	if machine == nil {
 		return false
 	}
@@ -261,11 +261,11 @@ func (wpc *AgentWorkerPoolController) machineCanFit(machine *hybrid.AgentTokenSt
 	return false
 }
 
-func (wpc *AgentWorkerPoolController) machineWorker(machine *hybrid.AgentTokenState) (*types.Worker, error) {
+func (wpc *AgentWorkerPoolController) machineWorker(machine *compute.AgentTokenState) (*types.Worker, error) {
 	if machine == nil {
 		return nil, nil
 	}
-	worker, err := wpc.workerRepo.GetWorkerById(hybrid.AgentMachineWorkerID(machine.MachineID))
+	worker, err := wpc.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
 	if err != nil {
 		notFoundErr := &types.ErrWorkerNotFound{}
 		if notFoundErr.From(err) {
@@ -279,7 +279,7 @@ func (wpc *AgentWorkerPoolController) machineWorker(machine *hybrid.AgentTokenSt
 	return worker, nil
 }
 
-func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *hybrid.AgentTokenState) (*types.Worker, error) {
+func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.AgentTokenState) (*types.Worker, error) {
 	spec := wpc.agentMachineWorker(machine)
 	if worker, err := wpc.machineWorker(machine); err != nil || worker != nil {
 		return worker, err
@@ -292,7 +292,7 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *hybrid.AgentT
 	return worker, nil
 }
 
-func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *hybrid.AgentTokenState) agentMachineWorker {
+func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentTokenState) agentMachineWorker {
 	cpu := int64(machine.CPUCount) * 1000
 	if machine.CPUMillicores > 0 {
 		cpu = machine.CPUMillicores
@@ -302,7 +302,7 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *hybrid.AgentTo
 		gpu = machine.GPUs[0]
 	}
 	return agentMachineWorker{
-		id:                   hybrid.AgentMachineWorkerID(machine.MachineID),
+		id:                   compute.AgentMachineWorkerID(machine.MachineID),
 		cpu:                  cpu,
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,

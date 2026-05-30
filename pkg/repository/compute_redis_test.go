@@ -5,18 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 )
 
-func TestHybridAgentStateIndexesMachinesAndSlots(t *testing.T) {
+func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	repo := NewHybridRedisRepository(rdb)
+	repo := NewComputeRedisRepository(rdb)
 	ctx := context.Background()
-	machine := &hybrid.AgentTokenState{
+	machine := &compute.AgentTokenState{
 		TokenHash:   "token-one",
 		WorkspaceID: "workspace-one",
 		PoolName:    "pool-one",
@@ -26,7 +26,7 @@ func TestHybridAgentStateIndexesMachinesAndSlots(t *testing.T) {
 	if err := repo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveAgentTokenState(ctx, &hybrid.AgentTokenState{
+	if err := repo.SaveAgentTokenState(ctx, &compute.AgentTokenState{
 		TokenHash:   "token-two",
 		WorkspaceID: "workspace-one",
 		PoolName:    "pool-two",
@@ -44,7 +44,7 @@ func TestHybridAgentStateIndexesMachinesAndSlots(t *testing.T) {
 		t.Fatalf("machines = %#v, want only %s", machines, machine.MachineID)
 	}
 
-	slot := &hybrid.AgentWorkerSlotState{
+	slot := &compute.AgentWorkerSlotState{
 		WorkerID:    "worker-one",
 		WorkspaceID: machine.WorkspaceID,
 		PoolName:    machine.PoolName,
@@ -53,7 +53,7 @@ func TestHybridAgentStateIndexesMachinesAndSlots(t *testing.T) {
 	if err := repo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveAgentWorkerSlotState(ctx, &hybrid.AgentWorkerSlotState{
+	if err := repo.SaveAgentWorkerSlotState(ctx, &compute.AgentWorkerSlotState{
 		WorkerID:    "worker-two",
 		WorkspaceID: machine.WorkspaceID,
 		PoolName:    machine.PoolName,

@@ -349,8 +349,8 @@ tailscale:
   user: beta9
   # Gateway tsnet auth key. Use a key tagged for gateway nodes, for example tag:beam-gateway.
   authKey:
-  # Hybrid joined-machine tsnet auth key. Use a separate key tagged for BYO workers, for example tag:beam-byo-worker.
-  hybridWorkerAuthKey:
+  # Private pool agent tsnet auth key. Use a separate key tagged for Beam agents, for example tag:beam-agent.
+  agentAuthKey:
   enabled: false
   debug: false
   hostName: headscale.internal

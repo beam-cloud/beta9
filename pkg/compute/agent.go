@@ -1,4 +1,4 @@
-package hybrid
+package compute
 
 import (
 	"crypto/sha256"

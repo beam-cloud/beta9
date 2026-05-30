@@ -16,7 +16,6 @@ from . import (
     container,
     deployment,
     dev,
-    hybrid,
     machine,
     pool,
     run,
@@ -102,7 +101,6 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(volume)
     cli.register(config)
     cli.register(pool)
-    cli.register(hybrid)
     cli.register(container)
     cli.register(machine)
     cli.register(secret)

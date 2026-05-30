@@ -126,12 +126,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		outputs = types.NewSchemaFromProto(in.Outputs)
 	}
 
-	poolConfig := hybridPoolConfigFromProto(in.Pool)
+	poolConfig := poolConfigFromProto(in.Pool)
 	if poolConfig != nil {
-		configureHybridPoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
+		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
 		if poolConfig.ReservationRequired {
-			res, err := gws.ReserveHybridPool(ctx, &pb.ReserveHybridPoolRequest{
-				Pool: hybridPoolConfigToProto(poolConfig),
+			res, err := gws.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
+				Pool: poolConfigToProto(poolConfig),
 			})
 			if err != nil {
 				return nil, err
@@ -291,11 +291,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}, nil
 }
 
-func hybridPoolConfigFromProto(in *pb.HybridPoolConfig) *types.HybridPoolConfig {
+func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 	if in == nil {
 		return nil
 	}
-	return &types.HybridPoolConfig{
+	return &types.PoolConfig{
 		Name:                in.Name,
 		GPUs:                in.Gpu,
 		TotalGPUs:           in.Gpus,
@@ -309,11 +309,11 @@ func hybridPoolConfigFromProto(in *pb.HybridPoolConfig) *types.HybridPoolConfig 
 	}
 }
 
-func hybridPoolConfigToProto(in *types.HybridPoolConfig) *pb.HybridPoolConfig {
+func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
 	if in == nil {
 		return nil
 	}
-	return &pb.HybridPoolConfig{
+	return &pb.PoolConfig{
 		Name:                in.Name,
 		Gpu:                 in.GPUs,
 		Gpus:                in.TotalGPUs,
@@ -327,7 +327,7 @@ func hybridPoolConfigToProto(in *types.HybridPoolConfig) *pb.HybridPoolConfig {
 	}
 }
 
-func configureHybridPoolSelector(pool *types.HybridPoolConfig, workspaceID, stubName string) {
+func configurePoolSelector(pool *types.PoolConfig, workspaceID, stubName string) {
 	if pool.Selector != "" {
 		if pool.Name == "" && pool.ReservationRequired {
 			pool.Name = pool.Selector
@@ -338,13 +338,13 @@ func configureHybridPoolSelector(pool *types.HybridPoolConfig, workspaceID, stub
 		pool.Selector = pool.Name
 		return
 	}
-	pool.Selector = sanitizeHybridPoolSelector(fmt.Sprintf("hybrid-%s-%s", workspaceID, stubName))
+	pool.Selector = sanitizePoolSelector(fmt.Sprintf("private-%s-%s", workspaceID, stubName))
 	if pool.Name == "" && pool.ReservationRequired {
 		pool.Name = pool.Selector
 	}
 }
 
-func sanitizeHybridPoolSelector(value string) string {
+func sanitizePoolSelector(value string) string {
 	value = strings.ToLower(value)
 	var b strings.Builder
 	lastDash := false
@@ -362,7 +362,7 @@ func sanitizeHybridPoolSelector(value string) string {
 	}
 	out := strings.Trim(b.String(), "-._")
 	if out == "" {
-		return "hybrid-pool"
+		return "private-pool"
 	}
 	if len(out) > 128 {
 		return out[:128]

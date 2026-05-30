@@ -5,7 +5,7 @@ import (
 	"time"
 
 	pkgcommon "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -88,18 +88,18 @@ type WorkerPoolRepository interface {
 	RemoveWorkerCleanerLock(poolName string) error
 }
 
-type HybridRepository interface {
-	SavePoolState(ctx context.Context, workspaceID string, state *hybrid.PoolState) error
-	GetPoolState(ctx context.Context, workspaceID, name string) (*hybrid.PoolState, error)
-	ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*hybrid.PoolState, error)
+type ComputeRepository interface {
+	SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error
+	GetPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error)
+	ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error)
 	DeletePoolState(ctx context.Context, workspaceID, name string) error
-	SaveJoinTokenState(ctx context.Context, state *hybrid.JoinTokenState, ttl time.Duration) error
-	GetJoinTokenState(ctx context.Context, tokenHash string) (*hybrid.JoinTokenState, error)
-	SaveAgentTokenState(ctx context.Context, state *hybrid.AgentTokenState, ttl time.Duration) error
-	GetAgentTokenState(ctx context.Context, tokenHash string) (*hybrid.AgentTokenState, error)
-	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*hybrid.AgentTokenState, error)
-	SaveAgentWorkerSlotState(ctx context.Context, state *hybrid.AgentWorkerSlotState) error
-	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*hybrid.AgentWorkerSlotState, error)
+	SaveJoinTokenState(ctx context.Context, state *compute.JoinTokenState, ttl time.Duration) error
+	GetJoinTokenState(ctx context.Context, tokenHash string) (*compute.JoinTokenState, error)
+	SaveAgentTokenState(ctx context.Context, state *compute.AgentTokenState, ttl time.Duration) error
+	GetAgentTokenState(ctx context.Context, tokenHash string) (*compute.AgentTokenState, error)
+	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error)
+	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
+	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
 }
 
@@ -288,7 +288,7 @@ type EventRepository interface {
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)
-	PushHybridEvent(eventType string, event types.EventHybridSchema)
+	PushComputeEvent(eventType string, event types.EventComputeSchema)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)

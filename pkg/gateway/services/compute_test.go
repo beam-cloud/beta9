@@ -4,33 +4,33 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func TestHybridPoolCreatedByAuthRequiresCreatorToken(t *testing.T) {
+func TestPrivatePoolCreatedByAuthRequiresCreatorToken(t *testing.T) {
 	authInfo := &auth.AuthInfo{
 		Token: &types.Token{ExternalId: "token-owner"},
 	}
 
 	tests := []struct {
 		name  string
-		state *hybrid.PoolState
+		state *compute.PoolState
 		want  bool
 	}{
 		{
 			name:  "matching creator",
-			state: &hybrid.PoolState{CreatedByTokenID: "token-owner"},
+			state: &compute.PoolState{CreatedByTokenID: "token-owner"},
 			want:  true,
 		},
 		{
 			name:  "different creator",
-			state: &hybrid.PoolState{CreatedByTokenID: "other-token"},
+			state: &compute.PoolState{CreatedByTokenID: "other-token"},
 			want:  false,
 		},
 		{
 			name:  "missing creator",
-			state: &hybrid.PoolState{},
+			state: &compute.PoolState{},
 			want:  false,
 		},
 		{
@@ -42,24 +42,24 @@ func TestHybridPoolCreatedByAuthRequiresCreatorToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hybridPoolCreatedByAuth(tt.state, authInfo); got != tt.want {
-				t.Fatalf("hybridPoolCreatedByAuth() = %v, want %v", got, tt.want)
+			if got := computePoolCreatedByAuth(tt.state, authInfo); got != tt.want {
+				t.Fatalf("computePoolCreatedByAuth() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestFilterHybridPoolsCreatedByAuth(t *testing.T) {
+func TestFilterPrivatePoolsCreatedByAuth(t *testing.T) {
 	authInfo := &auth.AuthInfo{
 		Token: &types.Token{ExternalId: "token-owner"},
 	}
-	states := []*hybrid.PoolState{
+	states := []*compute.PoolState{
 		{Name: "owned", CreatedByTokenID: "token-owner"},
 		{Name: "other", CreatedByTokenID: "other-token"},
 		{Name: "legacy"},
 	}
 
-	filtered := filterHybridPoolsCreatedByAuth(states, authInfo)
+	filtered := filterPrivatePoolsCreatedByAuth(states, authInfo)
 	if len(filtered) != 1 {
 		t.Fatalf("expected one owned pool, got %d", len(filtered))
 	}
@@ -88,23 +88,23 @@ func TestIsLocalGatewayURL(t *testing.T) {
 	}
 }
 
-func TestValidateHybridTransportConfig(t *testing.T) {
+func TestValidateAgentTransportConfig(t *testing.T) {
 	gws := &GatewayService{
 		appConfig: types.AppConfig{
 			Tailscale: types.TailscaleConfig{
-				Enabled:             true,
-				AuthKey:             "tskey-auth-gateway",
-				HybridWorkerAuthKey: "tskey-auth-worker",
+				Enabled:      true,
+				AuthKey:      "tskey-auth-gateway",
+				AgentAuthKey: "tskey-auth-worker",
 			},
 		},
 	}
 
-	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportTSNet); err != nil {
+	if err := gws.validateAgentTransportConfig(types.BackendRouteTransportTSNet); err != nil {
 		t.Fatalf("expected configured tsnet transport to pass, got %v", err)
 	}
 
-	gws.appConfig.Tailscale.HybridWorkerAuthKey = ""
-	if err := gws.validateHybridTransportConfig(types.BackendRouteTransportTSNet); err == nil {
+	gws.appConfig.Tailscale.AgentAuthKey = ""
+	if err := gws.validateAgentTransportConfig(types.BackendRouteTransportTSNet); err == nil {
 		t.Fatal("expected missing agent auth key to fail")
 	}
 }

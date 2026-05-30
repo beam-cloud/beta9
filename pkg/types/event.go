@@ -40,11 +40,11 @@ var (
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
 
-	EventHybridPool      = "hybrid.pool"
-	EventHybridJoinToken = "hybrid.join_token"
-	EventHybridMachine   = "hybrid.machine"
-	EventHybridTransport = "hybrid.transport"
-	EventHybridRoute     = "hybrid.route"
+	EventComputePool      = "compute.pool"
+	EventComputeJoinToken = "compute.join_token"
+	EventComputeMachine   = "compute.machine"
+	EventComputeTransport = "compute.transport"
+	EventComputeRoute     = "compute.route"
 )
 
 var (
@@ -98,23 +98,23 @@ type EventWorkerLifecycleSchema struct {
 	Reason    DeletedWorkerReason `json:"reason"`
 }
 
-var EventHybridSchemaVersion = "1.0"
+var EventComputeSchemaVersion = "1.0"
 
 const (
-	EventHybridActionPoolReserved              = "pool.reserved"
-	EventHybridActionPoolUpserted              = "pool.upserted"
-	EventHybridActionPoolDeleted               = "pool.deleted"
-	EventHybridActionPoolExtended              = "pool.extended"
-	EventHybridActionJoinTokenCreated          = "join_token.created"
-	EventHybridActionJoinTokenRevoked          = "join_token.revoked"
-	EventHybridActionMachineJoined             = "machine.joined"
-	EventHybridActionWorkerSlotCreated         = "worker_slot.created"
-	EventHybridActionWorkerSlotPruned          = "worker_slot.pruned"
-	EventHybridActionTransportCredentialVended = "transport.credential_vended"
-	EventHybridActionRouteStatusUpdated        = "route.status_updated"
+	EventComputeActionPoolReserved              = "pool.reserved"
+	EventComputeActionPoolCreated               = "pool.created"
+	EventComputeActionPoolDeleted               = "pool.deleted"
+	EventComputeActionPoolExtended              = "pool.extended"
+	EventComputeActionJoinTokenCreated          = "join_token.created"
+	EventComputeActionJoinTokenRevoked          = "join_token.revoked"
+	EventComputeActionMachineJoined             = "machine.joined"
+	EventComputeActionWorkerSlotCreated         = "worker_slot.created"
+	EventComputeActionWorkerSlotPruned          = "worker_slot.pruned"
+	EventComputeActionTransportCredentialVended = "transport.credential_vended"
+	EventComputeActionRouteStatusUpdated        = "route.status_updated"
 )
 
-type EventHybridSchema struct {
+type EventComputeSchema struct {
 	Timestamp   time.Time         `json:"timestamp"`
 	WorkspaceID string            `json:"workspace_id,omitempty"`
 	PoolName    string            `json:"pool_name,omitempty"`

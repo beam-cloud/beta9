@@ -73,7 +73,7 @@ merge_tailnet_policy() {
     def has_beam_grant:
       any(.grants[]?;
         ((.src // []) | index("tag:beam-gateway")) and
-        ((.dst // []) | index("tag:beam-byo-worker")) and
+        ((.dst // []) | index("tag:beam-agent")) and
         ((.ip // []) | index("tcp:29443"))
       );
     def has_test_src($src):
@@ -85,13 +85,13 @@ merge_tailnet_policy() {
 
     .tagOwners = (.tagOwners // {}) |
     .tagOwners["tag:beam-gateway"] = (((.tagOwners["tag:beam-gateway"] // []) + ["autogroup:admin"]) | uniq_strings) |
-    .tagOwners["tag:beam-byo-worker"] = (((.tagOwners["tag:beam-byo-worker"] // []) + ["autogroup:admin"]) | uniq_strings) |
+    .tagOwners["tag:beam-agent"] = (((.tagOwners["tag:beam-agent"] // []) + ["autogroup:admin"]) | uniq_strings) |
 
     .grants = (.grants // []) |
     if has_beam_grant then . else
       .grants += [{
         src: ["tag:beam-gateway"],
-        dst: ["tag:beam-byo-worker"],
+        dst: ["tag:beam-agent"],
         ip: ["tcp:29443"]
       }]
     end |
@@ -102,14 +102,14 @@ merge_tailnet_policy() {
       if has_test_src("tag:beam-gateway") then . else
         .tests += [{
           src: "tag:beam-gateway",
-          accept: ["tag:beam-byo-worker:29443"],
-          deny: ["tag:beam-byo-worker:22"]
+          accept: ["tag:beam-agent:29443"],
+          deny: ["tag:beam-agent:22"]
         }]
       end |
-      if has_test_src("tag:beam-byo-worker") then . else
+      if has_test_src("tag:beam-agent") then . else
         .tests += [{
-          src: "tag:beam-byo-worker",
-          deny: ["tag:beam-gateway:29443", "tag:beam-byo-worker:29443"]
+          src: "tag:beam-agent",
+          deny: ["tag:beam-gateway:29443", "tag:beam-agent:29443"]
         }]
       end
     else
@@ -130,7 +130,7 @@ ensure_tailnet_policy() {
 
   merge_tailnet_policy "$current" "$merged"
   if cmp -s "$current" "$merged"; then
-    echo "tailscale policy already contains Beam hybrid tags/grant"
+    echo "tailscale policy already contains Beam private tags/grant"
     rm -rf "$tmpdir"
     return
   fi
@@ -154,7 +154,7 @@ ensure_tailnet_policy() {
   fi
   require_success "$status" "${tmpdir}/update.json" "updating Tailscale policy"
 
-  echo "updated tailscale policy with Beam hybrid tags/grant"
+  echo "updated tailscale policy with Beam private tags/grant"
   rm -rf "$tmpdir"
 }
 
@@ -197,19 +197,19 @@ create_key() {
 ensure_tailnet_policy
 
 gateway_key="$(create_key "tag:beam-gateway" "Beam local gateway")"
-worker_key="$(create_key "tag:beam-byo-worker" "Beam local agent")"
+agent_key="$(create_key "tag:beam-agent" "Beam local agent")"
 
 cat > "$CONFIG_PATH" <<YAML
 tailscale:
   enabled: true
   controlUrl: ""
   authKey: "${gateway_key}"
-  hybridWorkerAuthKey: "${worker_key}"
+  agentAuthKey: "${agent_key}"
 YAML
 
 echo "wrote ${CONFIG_PATH}"
 echo "gateway auth key: ${gateway_key:0:18}..."
-echo "worker auth key:  ${worker_key:0:18}..."
+echo "agent auth key:  ${agent_key:0:18}..."
 echo
 echo "Next:"
 echo "  make worker"

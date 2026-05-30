@@ -1,4 +1,4 @@
-package hybrid
+package compute
 
 import (
 	"context"
@@ -198,7 +198,7 @@ func (p Pool) NormalizedSelector(workspaceID, stubID string) string {
 		return p.Name
 	}
 
-	parts := []string{"hybrid"}
+	parts := []string{"private"}
 	if workspaceID != "" {
 		parts = append(parts, workspaceID)
 	}

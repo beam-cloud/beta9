@@ -172,11 +172,11 @@ class Pool:
             raise ValueError("Pool.min_reliability must be between 0 and 1")
 
     def export(self, selector: str = ""):
-        from .clients.gateway import HybridPoolConfig
+        from .clients.gateway import PoolConfig
 
         self.validate()
         name = self.name or ""
-        return HybridPoolConfig(
+        return PoolConfig(
             name=name,
             gpu=self.gpu_values(),
             gpus=self.gpus or 0,

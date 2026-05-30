@@ -136,72 +136,71 @@ service GatewayService {
     };
   }
 
-  // Hybrid reserved pools
-  rpc ListHybridOffers(ListHybridOffersRequest)
-      returns (ListHybridOffersResponse) {
+  // Private compute pools
+  rpc ListPoolOffers(ListPoolOffersRequest)
+      returns (ListPoolOffersResponse) {
     option (google.api.http) = {
-      post : "/hybrid/offers"
+      post : "/pools:offers"
       body : "*"
     };
   }
-  rpc ReserveHybridPool(ReserveHybridPoolRequest)
-      returns (ReserveHybridPoolResponse) {
+  rpc LaunchPoolCapacity(LaunchPoolCapacityRequest)
+      returns (LaunchPoolCapacityResponse) {
     option (google.api.http) = {
-      post : "/hybrid/pools"
+      post : "/pools:launch"
       body : "*"
     };
   }
-  rpc ListHybridPools(ListHybridPoolsRequest) returns (ListHybridPoolsResponse) {
+  rpc ListPrivatePools(ListPrivatePoolsRequest) returns (ListPrivatePoolsResponse) {
     option (google.api.http) = {
-      get : "/hybrid/pools"
+      get : "/pools/private"
     };
   }
-  rpc UpsertHybridPool(UpsertHybridPoolRequest)
-      returns (UpsertHybridPoolResponse) {
+  rpc CreatePool(CreatePoolRequest)
+      returns (CreatePoolResponse) {
     option (google.api.http) = {
-      post : "/hybrid/pools:upsert"
+      post : "/pools"
       body : "*"
     };
   }
-  rpc DeleteHybridPool(DeleteHybridPoolRequest)
-      returns (DeleteHybridPoolResponse) {
+  rpc DeletePool(DeletePoolRequest)
+      returns (DeletePoolResponse) {
     option (google.api.http) = {
-      delete : "/hybrid/pools/{name}"
+      delete : "/pools/{name}"
     };
   }
-  rpc ExtendHybridPool(ExtendHybridPoolRequest)
-      returns (ExtendHybridPoolResponse) {
+  rpc ExtendPoolCapacity(ExtendPoolCapacityRequest)
+      returns (ExtendPoolCapacityResponse) {
     option (google.api.http) = {
-      post : "/hybrid/pools/{name}/extend"
+      post : "/pools/{name}/extend"
       body : "*"
     };
   }
-  rpc AttachHybridPool(AttachHybridPoolRequest)
-      returns (AttachHybridPoolResponse) {
+  rpc CreatePoolJoinToken(CreatePoolJoinTokenRequest)
+      returns (CreatePoolJoinTokenResponse) {
     option (google.api.http) = {
-      post : "/hybrid/pools/{name}/attach"
+      post : "/pools/{pool_name}/join-tokens"
       body : "*"
     };
   }
-  rpc CreateHybridPoolJoinToken(CreateHybridPoolJoinTokenRequest)
-      returns (CreateHybridPoolJoinTokenResponse) {
+  rpc RevokePoolJoinToken(RevokePoolJoinTokenRequest)
+      returns (RevokePoolJoinTokenResponse) {
     option (google.api.http) = {
-      post : "/hybrid/pools/{pool_name}/join-tokens"
+      post : "/pools/join-tokens/revoke"
       body : "*"
     };
   }
-  rpc RevokeHybridPoolJoinToken(RevokeHybridPoolJoinTokenRequest)
-      returns (RevokeHybridPoolJoinTokenResponse) {
+  rpc GetPoolJoinCommand(GetPoolJoinCommandRequest)
+      returns (GetPoolJoinCommandResponse) {
     option (google.api.http) = {
-      post : "/hybrid/join-tokens/revoke"
+      post : "/pools/{pool_name}/join-command"
       body : "*"
     };
   }
-  rpc GetHybridPoolJoinCommand(GetHybridPoolJoinCommandRequest)
-      returns (GetHybridPoolJoinCommandResponse) {
+  rpc ListPoolMachines(ListPoolMachinesRequest)
+      returns (ListPoolMachinesResponse) {
     option (google.api.http) = {
-      post : "/hybrid/pools/{pool_name}/join-command"
-      body : "*"
+      get : "/pools/{pool_name}/machines"
     };
   }
   rpc JoinAgent(JoinAgentRequest) returns (JoinAgentResponse) {
@@ -550,7 +549,7 @@ message GetOrCreateStubRequest {
   bool block_network = 38;
   repeated string allow_list = 39;
   bool docker_enabled = 40;
-  HybridPoolConfig pool = 41;
+  PoolConfig pool = 41;
 }
 
 message GetOrCreateStubResponse {
@@ -653,7 +652,7 @@ message ListPoolsResponse {
   repeated Pool pools = 3;
 }
 
-message HybridPoolConfig {
+message PoolConfig {
   string name = 1;
   repeated string gpu = 2;
   uint32 gpus = 3;
@@ -670,7 +669,7 @@ message HybridPoolConfig {
   int32 priority = 14;
 }
 
-message HybridOffer {
+message PoolOffer {
   string id = 1;
   string provider = 2;
   string instance_type = 3;
@@ -684,7 +683,7 @@ message HybridOffer {
   uint32 available = 11;
 }
 
-message HybridReservation {
+message ProviderInstance {
   string id = 1;
   string pool_name = 2;
   string provider = 3;
@@ -698,11 +697,11 @@ message HybridReservation {
   google.protobuf.Timestamp billing_renewal_at = 11;
 }
 
-message HybridPool {
+message PrivatePool {
   string name = 1;
   string selector = 2;
-  HybridPoolConfig config = 3;
-  repeated HybridReservation reservations = 4;
+  PoolConfig config = 3;
+  repeated ProviderInstance reservations = 4;
   uint32 reserved_gpus = 5;
   int64 committed_spend_micros = 6;
   string status = 7;
@@ -711,98 +710,101 @@ message HybridPool {
   google.protobuf.Timestamp expires_at = 10;
 }
 
-message ListHybridOffersRequest { HybridPoolConfig pool = 1; }
+message ListPoolOffersRequest { PoolConfig pool = 1; }
 
-message ListHybridOffersResponse {
+message ListPoolOffersResponse {
   bool ok = 1;
   string err_msg = 2;
-  repeated HybridOffer offers = 3;
+  repeated PoolOffer offers = 3;
 }
 
-message ReserveHybridPoolRequest { HybridPoolConfig pool = 1; }
+message LaunchPoolCapacityRequest { PoolConfig pool = 1; }
 
-message ReserveHybridPoolResponse {
+message LaunchPoolCapacityResponse {
   bool ok = 1;
   string err_msg = 2;
-  HybridPool pool = 3;
+  PrivatePool pool = 3;
 }
 
-message ListHybridPoolsRequest {
+message ListPrivatePoolsRequest {
   map<string, StringList> filters = 1;
   uint32 limit = 2;
 }
 
-message ListHybridPoolsResponse {
+message ListPrivatePoolsResponse {
   bool ok = 1;
   string err_msg = 2;
-  repeated HybridPool pools = 3;
+  repeated PrivatePool pools = 3;
 }
 
-message UpsertHybridPoolRequest { HybridPoolConfig pool = 1; }
+message CreatePoolRequest { PoolConfig pool = 1; }
 
-message UpsertHybridPoolResponse {
+message CreatePoolResponse {
   bool ok = 1;
   string err_msg = 2;
-  HybridPool pool = 3;
+  PrivatePool pool = 3;
 }
 
-message DeleteHybridPoolRequest { string name = 1; }
+message DeletePoolRequest { string name = 1; }
 
-message DeleteHybridPoolResponse {
+message DeletePoolResponse {
   bool ok = 1;
   string err_msg = 2;
 }
 
-message ExtendHybridPoolRequest {
+message ExtendPoolCapacityRequest {
   string name = 1;
   string ttl = 2;
   double max_spend = 3;
 }
 
-message ExtendHybridPoolResponse {
+message ExtendPoolCapacityResponse {
   bool ok = 1;
   string err_msg = 2;
-  HybridPool pool = 3;
+  PrivatePool pool = 3;
 }
 
-message AttachHybridPoolRequest { string name = 1; }
-
-message AttachHybridPoolResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  string command = 3;
-}
-
-message CreateHybridPoolJoinTokenRequest {
+message CreatePoolJoinTokenRequest {
   string pool_name = 1;
   string ttl = 2;
 }
 
-message CreateHybridPoolJoinTokenResponse {
+message CreatePoolJoinTokenResponse {
   bool ok = 1;
   string err_msg = 2;
   string token = 3;
   google.protobuf.Timestamp expires_at = 4;
 }
 
-message RevokeHybridPoolJoinTokenRequest { string token = 1; }
+message RevokePoolJoinTokenRequest { string token = 1; }
 
-message RevokeHybridPoolJoinTokenResponse {
+message RevokePoolJoinTokenResponse {
   bool ok = 1;
   string err_msg = 2;
 }
 
-message GetHybridPoolJoinCommandRequest {
+message GetPoolJoinCommandRequest {
   string pool_name = 1;
   string ttl = 2;
 }
 
-message GetHybridPoolJoinCommandResponse {
+message GetPoolJoinCommandResponse {
   bool ok = 1;
   string err_msg = 2;
   string command = 3;
   string token = 4;
   google.protobuf.Timestamp expires_at = 5;
+}
+
+message ListPoolMachinesRequest {
+  string pool_name = 1;
+  uint32 limit = 2;
+}
+
+message ListPoolMachinesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Machine machines = 3;
 }
 
 message AgentBootstrapConfig {

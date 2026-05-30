@@ -331,8 +331,8 @@ func TestS2PlatformEventStreamsUseEntityMetadata(t *testing.T) {
 			want:      "events/workspaces/workspace-1",
 		},
 		{
-			name:      "hybrid route",
-			eventType: types.EventHybridRoute,
+			name:      "compute route",
+			eventType: types.EventComputeRoute,
 			metadata:  eventMetadata{WorkspaceID: "workspace-1", WorkerID: "worker-1", RouteID: "route-1"},
 			want:      "events/workspaces/workspace-1",
 		},
@@ -378,16 +378,16 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHybridEventMetadataExtensionsRoundTrip(t *testing.T) {
+func TestComputeEventMetadataExtensionsRoundTrip(t *testing.T) {
 	repo := &EventClientRepo{}
-	event, err := repo.createEventObject(types.EventHybridRoute, types.EventHybridSchemaVersion, types.EventHybridSchema{
+	event, err := repo.createEventObject(types.EventComputeRoute, types.EventComputeSchemaVersion, types.EventComputeSchema{
 		WorkspaceID: "workspace-1",
 		PoolName:    "private-gpu",
 		MachineID:   "machine-1",
 		WorkerID:    "worker-1",
 		ContainerID: "container-1",
 		RouteID:     "route-1",
-		Action:      types.EventHybridActionRouteStatusUpdated,
+		Action:      types.EventComputeActionRouteStatusUpdated,
 		Status:      types.BackendRouteStateReady,
 	})
 	if err != nil {

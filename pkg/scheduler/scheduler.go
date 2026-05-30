@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/hybrid"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -37,7 +37,7 @@ type Scheduler struct {
 	providerRepo          repo.ProviderRepository
 	workerRepo            repo.WorkerRepository
 	workerPoolRepo        repo.WorkerPoolRepository
-	hybridRepo            repo.HybridRepository
+	computeRepo           repo.ComputeRepository
 	workerPoolManager     *WorkerPoolManager
 	requestBacklog        *RequestBacklog
 	containerRepo         repo.ContainerRepository
@@ -56,7 +56,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
-	hybridRepo := repo.NewHybridRedisRepository(redisClient)
+	computeRepo := repo.NewComputeRedisRepository(redisClient)
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewEventClientRepo(config)
@@ -94,8 +94,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				Tailscale:      tailscale,
 				EventRepo:      eventRepo,
 			})
-		case types.PoolModeHybrid:
-			log.Debug().Str("pool_name", name).Msg("skipping static hybrid pool without workspace state")
+		case types.PoolModePrivate:
+			log.Debug().Str("pool_name", name).Msg("skipping static private pool without workspace state")
 			continue
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
@@ -119,7 +119,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		providerRepo:          providerRepo,
 		workerRepo:            workerRepo,
 		workerPoolRepo:        workerPoolRepo,
-		hybridRepo:            hybridRepo,
+		computeRepo:           computeRepo,
 		workerPoolManager:     workerPoolManager,
 		requestBacklog:        requestBacklog,
 		containerRepo:         containerRepo,
@@ -131,7 +131,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}, nil
 }
 
-func (s *Scheduler) RegisterAgentPool(workspaceID string, state *hybrid.PoolState) error {
+func (s *Scheduler) RegisterAgentPool(workspaceID string, state *compute.PoolState) error {
 	if s == nil || state == nil {
 		return nil
 	}
@@ -150,7 +150,7 @@ func (s *Scheduler) RegisterAgentPool(workspaceID string, state *hybrid.PoolStat
 		PoolState:      state,
 		WorkerRepo:     s.workerRepo,
 		WorkerPoolRepo: s.workerPoolRepo,
-		HybridRepo:     s.hybridRepo,
+		ComputeRepo:    s.computeRepo,
 	})
 	if err != nil {
 		return err
@@ -166,9 +166,9 @@ func (s *Scheduler) DeleteAgentPool(selector string) {
 	s.workerPoolManager.DeletePool(selector)
 }
 
-func normalizeAgentWorkerPoolConfig(state *hybrid.PoolState) types.WorkerPoolConfig {
+func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolConfig {
 	config := types.WorkerPoolConfig{
-		Mode:                 types.PoolModeHybrid,
+		Mode:                 types.PoolModePrivate,
 		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
 		RequiresPoolSelector: true,
 		Priority:             int32(1000),

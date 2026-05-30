@@ -351,7 +351,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     block_network: bool = betterproto.bool_field(38)
     allow_list: List[str] = betterproto.string_field(39)
     docker_enabled: bool = betterproto.bool_field(40)
-    pool: "HybridPoolConfig" = betterproto.message_field(41)
+    pool: "PoolConfig" = betterproto.message_field(41)
 
 
 @dataclass(eq=False, repr=False)
@@ -482,7 +482,7 @@ class ListPoolsResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class HybridPoolConfig(betterproto.Message):
+class PoolConfig(betterproto.Message):
     name: str = betterproto.string_field(1)
     gpu: List[str] = betterproto.string_field(2)
     gpus: int = betterproto.uint32_field(3)
@@ -500,7 +500,7 @@ class HybridPoolConfig(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class HybridOffer(betterproto.Message):
+class PoolOffer(betterproto.Message):
     id: str = betterproto.string_field(1)
     provider: str = betterproto.string_field(2)
     instance_type: str = betterproto.string_field(3)
@@ -515,7 +515,7 @@ class HybridOffer(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class HybridReservation(betterproto.Message):
+class ProviderInstance(betterproto.Message):
     id: str = betterproto.string_field(1)
     pool_name: str = betterproto.string_field(2)
     provider: str = betterproto.string_field(3)
@@ -530,11 +530,11 @@ class HybridReservation(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class HybridPool(betterproto.Message):
+class PrivatePool(betterproto.Message):
     name: str = betterproto.string_field(1)
     selector: str = betterproto.string_field(2)
-    config: "HybridPoolConfig" = betterproto.message_field(3)
-    reservations: List["HybridReservation"] = betterproto.message_field(4)
+    config: "PoolConfig" = betterproto.message_field(3)
+    reservations: List["ProviderInstance"] = betterproto.message_field(4)
     reserved_gpus: int = betterproto.uint32_field(5)
     committed_spend_micros: int = betterproto.int64_field(6)
     status: str = betterproto.string_field(7)
@@ -544,31 +544,31 @@ class HybridPool(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ListHybridOffersRequest(betterproto.Message):
-    pool: "HybridPoolConfig" = betterproto.message_field(1)
+class ListPoolOffersRequest(betterproto.Message):
+    pool: "PoolConfig" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class ListHybridOffersResponse(betterproto.Message):
+class ListPoolOffersResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    offers: List["HybridOffer"] = betterproto.message_field(3)
+    offers: List["PoolOffer"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class ReserveHybridPoolRequest(betterproto.Message):
-    pool: "HybridPoolConfig" = betterproto.message_field(1)
+class LaunchPoolCapacityRequest(betterproto.Message):
+    pool: "PoolConfig" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class ReserveHybridPoolResponse(betterproto.Message):
+class LaunchPoolCapacityResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    pool: "HybridPool" = betterproto.message_field(3)
+    pool: "PrivatePool" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class ListHybridPoolsRequest(betterproto.Message):
+class ListPrivatePoolsRequest(betterproto.Message):
     filters: Dict[str, "StringList"] = betterproto.map_field(
         1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
     )
@@ -576,69 +576,57 @@ class ListHybridPoolsRequest(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ListHybridPoolsResponse(betterproto.Message):
+class ListPrivatePoolsResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    pools: List["HybridPool"] = betterproto.message_field(3)
+    pools: List["PrivatePool"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class UpsertHybridPoolRequest(betterproto.Message):
-    pool: "HybridPoolConfig" = betterproto.message_field(1)
+class CreatePoolRequest(betterproto.Message):
+    pool: "PoolConfig" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class UpsertHybridPoolResponse(betterproto.Message):
+class CreatePoolResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    pool: "HybridPool" = betterproto.message_field(3)
+    pool: "PrivatePool" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class DeleteHybridPoolRequest(betterproto.Message):
+class DeletePoolRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class DeleteHybridPoolResponse(betterproto.Message):
+class DeletePoolResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class ExtendHybridPoolRequest(betterproto.Message):
+class ExtendPoolCapacityRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
     ttl: str = betterproto.string_field(2)
     max_spend: float = betterproto.double_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class ExtendHybridPoolResponse(betterproto.Message):
+class ExtendPoolCapacityResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    pool: "HybridPool" = betterproto.message_field(3)
+    pool: "PrivatePool" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class AttachHybridPoolRequest(betterproto.Message):
-    name: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class AttachHybridPoolResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    command: str = betterproto.string_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class CreateHybridPoolJoinTokenRequest(betterproto.Message):
+class CreatePoolJoinTokenRequest(betterproto.Message):
     pool_name: str = betterproto.string_field(1)
     ttl: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class CreateHybridPoolJoinTokenResponse(betterproto.Message):
+class CreatePoolJoinTokenResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     token: str = betterproto.string_field(3)
@@ -646,29 +634,42 @@ class CreateHybridPoolJoinTokenResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class RevokeHybridPoolJoinTokenRequest(betterproto.Message):
+class RevokePoolJoinTokenRequest(betterproto.Message):
     token: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class RevokeHybridPoolJoinTokenResponse(betterproto.Message):
+class RevokePoolJoinTokenResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class GetHybridPoolJoinCommandRequest(betterproto.Message):
+class GetPoolJoinCommandRequest(betterproto.Message):
     pool_name: str = betterproto.string_field(1)
     ttl: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class GetHybridPoolJoinCommandResponse(betterproto.Message):
+class GetPoolJoinCommandResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     command: str = betterproto.string_field(3)
     token: str = betterproto.string_field(4)
     expires_at: datetime = betterproto.message_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolMachinesRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolMachinesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    machines: List["Machine"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -1219,95 +1220,95 @@ class GatewayServiceStub(SyncServiceStub):
             ListPoolsResponse,
         )(list_pools_request)
 
-    def list_hybrid_offers(
-        self, list_hybrid_offers_request: "ListHybridOffersRequest"
-    ) -> "ListHybridOffersResponse":
+    def list_pool_offers(
+        self, list_pool_offers_request: "ListPoolOffersRequest"
+    ) -> "ListPoolOffersResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/ListHybridOffers",
-            ListHybridOffersRequest,
-            ListHybridOffersResponse,
-        )(list_hybrid_offers_request)
+            "/gateway.GatewayService/ListPoolOffers",
+            ListPoolOffersRequest,
+            ListPoolOffersResponse,
+        )(list_pool_offers_request)
 
-    def reserve_hybrid_pool(
-        self, reserve_hybrid_pool_request: "ReserveHybridPoolRequest"
-    ) -> "ReserveHybridPoolResponse":
+    def launch_pool_capacity(
+        self, launch_pool_capacity_request: "LaunchPoolCapacityRequest"
+    ) -> "LaunchPoolCapacityResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/ReserveHybridPool",
-            ReserveHybridPoolRequest,
-            ReserveHybridPoolResponse,
-        )(reserve_hybrid_pool_request)
+            "/gateway.GatewayService/LaunchPoolCapacity",
+            LaunchPoolCapacityRequest,
+            LaunchPoolCapacityResponse,
+        )(launch_pool_capacity_request)
 
-    def list_hybrid_pools(
-        self, list_hybrid_pools_request: "ListHybridPoolsRequest"
-    ) -> "ListHybridPoolsResponse":
+    def list_private_pools(
+        self, list_private_pools_request: "ListPrivatePoolsRequest"
+    ) -> "ListPrivatePoolsResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/ListHybridPools",
-            ListHybridPoolsRequest,
-            ListHybridPoolsResponse,
-        )(list_hybrid_pools_request)
+            "/gateway.GatewayService/ListPrivatePools",
+            ListPrivatePoolsRequest,
+            ListPrivatePoolsResponse,
+        )(list_private_pools_request)
 
-    def upsert_hybrid_pool(
-        self, upsert_hybrid_pool_request: "UpsertHybridPoolRequest"
-    ) -> "UpsertHybridPoolResponse":
+    def create_pool(
+        self, create_pool_request: "CreatePoolRequest"
+    ) -> "CreatePoolResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/UpsertHybridPool",
-            UpsertHybridPoolRequest,
-            UpsertHybridPoolResponse,
-        )(upsert_hybrid_pool_request)
+            "/gateway.GatewayService/CreatePool",
+            CreatePoolRequest,
+            CreatePoolResponse,
+        )(create_pool_request)
 
-    def delete_hybrid_pool(
-        self, delete_hybrid_pool_request: "DeleteHybridPoolRequest"
-    ) -> "DeleteHybridPoolResponse":
+    def delete_pool(
+        self, delete_pool_request: "DeletePoolRequest"
+    ) -> "DeletePoolResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/DeleteHybridPool",
-            DeleteHybridPoolRequest,
-            DeleteHybridPoolResponse,
-        )(delete_hybrid_pool_request)
+            "/gateway.GatewayService/DeletePool",
+            DeletePoolRequest,
+            DeletePoolResponse,
+        )(delete_pool_request)
 
-    def extend_hybrid_pool(
-        self, extend_hybrid_pool_request: "ExtendHybridPoolRequest"
-    ) -> "ExtendHybridPoolResponse":
+    def extend_pool_capacity(
+        self, extend_pool_capacity_request: "ExtendPoolCapacityRequest"
+    ) -> "ExtendPoolCapacityResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/ExtendHybridPool",
-            ExtendHybridPoolRequest,
-            ExtendHybridPoolResponse,
-        )(extend_hybrid_pool_request)
+            "/gateway.GatewayService/ExtendPoolCapacity",
+            ExtendPoolCapacityRequest,
+            ExtendPoolCapacityResponse,
+        )(extend_pool_capacity_request)
 
-    def attach_hybrid_pool(
-        self, attach_hybrid_pool_request: "AttachHybridPoolRequest"
-    ) -> "AttachHybridPoolResponse":
+    def create_pool_join_token(
+        self, create_pool_join_token_request: "CreatePoolJoinTokenRequest"
+    ) -> "CreatePoolJoinTokenResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/AttachHybridPool",
-            AttachHybridPoolRequest,
-            AttachHybridPoolResponse,
-        )(attach_hybrid_pool_request)
+            "/gateway.GatewayService/CreatePoolJoinToken",
+            CreatePoolJoinTokenRequest,
+            CreatePoolJoinTokenResponse,
+        )(create_pool_join_token_request)
 
-    def create_hybrid_pool_join_token(
-        self, create_hybrid_pool_join_token_request: "CreateHybridPoolJoinTokenRequest"
-    ) -> "CreateHybridPoolJoinTokenResponse":
+    def revoke_pool_join_token(
+        self, revoke_pool_join_token_request: "RevokePoolJoinTokenRequest"
+    ) -> "RevokePoolJoinTokenResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/CreateHybridPoolJoinToken",
-            CreateHybridPoolJoinTokenRequest,
-            CreateHybridPoolJoinTokenResponse,
-        )(create_hybrid_pool_join_token_request)
+            "/gateway.GatewayService/RevokePoolJoinToken",
+            RevokePoolJoinTokenRequest,
+            RevokePoolJoinTokenResponse,
+        )(revoke_pool_join_token_request)
 
-    def revoke_hybrid_pool_join_token(
-        self, revoke_hybrid_pool_join_token_request: "RevokeHybridPoolJoinTokenRequest"
-    ) -> "RevokeHybridPoolJoinTokenResponse":
+    def get_pool_join_command(
+        self, get_pool_join_command_request: "GetPoolJoinCommandRequest"
+    ) -> "GetPoolJoinCommandResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/RevokeHybridPoolJoinToken",
-            RevokeHybridPoolJoinTokenRequest,
-            RevokeHybridPoolJoinTokenResponse,
-        )(revoke_hybrid_pool_join_token_request)
+            "/gateway.GatewayService/GetPoolJoinCommand",
+            GetPoolJoinCommandRequest,
+            GetPoolJoinCommandResponse,
+        )(get_pool_join_command_request)
 
-    def get_hybrid_pool_join_command(
-        self, get_hybrid_pool_join_command_request: "GetHybridPoolJoinCommandRequest"
-    ) -> "GetHybridPoolJoinCommandResponse":
+    def list_pool_machines(
+        self, list_pool_machines_request: "ListPoolMachinesRequest"
+    ) -> "ListPoolMachinesResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/GetHybridPoolJoinCommand",
-            GetHybridPoolJoinCommandRequest,
-            GetHybridPoolJoinCommandResponse,
-        )(get_hybrid_pool_join_command_request)
+            "/gateway.GatewayService/ListPoolMachines",
+            ListPoolMachinesRequest,
+            ListPoolMachinesResponse,
+        )(list_pool_machines_request)
 
     def join_agent(self, join_agent_request: "JoinAgentRequest") -> "JoinAgentResponse":
         return self._unary_unary(

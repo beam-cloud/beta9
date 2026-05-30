@@ -789,9 +789,9 @@ func local_request_GatewayService_ListPools_0(ctx context.Context, marshaler run
 	return msg, metadata, err
 }
 
-func request_GatewayService_ListHybridOffers_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_ListPoolOffers_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ListHybridOffersRequest
+		protoReq ListPoolOffersRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
@@ -800,25 +800,25 @@ func request_GatewayService_ListHybridOffers_0(ctx context.Context, marshaler ru
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	msg, err := client.ListHybridOffers(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.ListPoolOffers(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_ListHybridOffers_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_ListPoolOffers_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ListHybridOffersRequest
+		protoReq ListPoolOffersRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.ListHybridOffers(ctx, &protoReq)
+	msg, err := server.ListPoolOffers(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_ReserveHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_LaunchPoolCapacity_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ReserveHybridPoolRequest
+		protoReq LaunchPoolCapacityRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
@@ -827,27 +827,27 @@ func request_GatewayService_ReserveHybridPool_0(ctx context.Context, marshaler r
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	msg, err := client.ReserveHybridPool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.LaunchPoolCapacity(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_ReserveHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_LaunchPoolCapacity_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ReserveHybridPoolRequest
+		protoReq LaunchPoolCapacityRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.ReserveHybridPool(ctx, &protoReq)
+	msg, err := server.LaunchPoolCapacity(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-var filter_GatewayService_ListHybridPools_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+var filter_GatewayService_ListPrivatePools_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
 
-func request_GatewayService_ListHybridPools_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_ListPrivatePools_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ListHybridPoolsRequest
+		protoReq ListPrivatePoolsRequest
 		metadata runtime.ServerMetadata
 	)
 	if req.Body != nil {
@@ -856,31 +856,31 @@ func request_GatewayService_ListHybridPools_0(ctx context.Context, marshaler run
 	if err := req.ParseForm(); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListHybridPools_0); err != nil {
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListPrivatePools_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := client.ListHybridPools(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.ListPrivatePools(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_ListHybridPools_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_ListPrivatePools_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ListHybridPoolsRequest
+		protoReq ListPrivatePoolsRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := req.ParseForm(); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListHybridPools_0); err != nil {
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListPrivatePools_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.ListHybridPools(ctx, &protoReq)
+	msg, err := server.ListPrivatePools(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_UpsertHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_CreatePool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq UpsertHybridPoolRequest
+		protoReq CreatePoolRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
@@ -889,70 +889,28 @@ func request_GatewayService_UpsertHybridPool_0(ctx context.Context, marshaler ru
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	msg, err := client.UpsertHybridPool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.CreatePool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_UpsertHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_CreatePool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq UpsertHybridPoolRequest
+		protoReq CreatePoolRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.UpsertHybridPool(ctx, &protoReq)
+	msg, err := server.CreatePool(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_DeleteHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_DeletePool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq DeleteHybridPoolRequest
+		protoReq DeletePoolRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
-	if req.Body != nil {
-		_, _ = io.Copy(io.Discard, req.Body)
-	}
-	val, ok := pathParams["name"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "name")
-	}
-	protoReq.Name, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "name", err)
-	}
-	msg, err := client.DeleteHybridPool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_GatewayService_DeleteHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq DeleteHybridPoolRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	val, ok := pathParams["name"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "name")
-	}
-	protoReq.Name, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "name", err)
-	}
-	msg, err := server.DeleteHybridPool(ctx, &protoReq)
-	return msg, metadata, err
-}
-
-func request_GatewayService_ExtendHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq ExtendHybridPoolRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -964,19 +922,16 @@ func request_GatewayService_ExtendHybridPool_0(ctx context.Context, marshaler ru
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "name", err)
 	}
-	msg, err := client.ExtendHybridPool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.DeletePool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_ExtendHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_DeletePool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq ExtendHybridPoolRequest
+		protoReq DeletePoolRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	val, ok := pathParams["name"]
 	if !ok {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "name")
@@ -985,13 +940,13 @@ func local_request_GatewayService_ExtendHybridPool_0(ctx context.Context, marsha
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "name", err)
 	}
-	msg, err := server.ExtendHybridPool(ctx, &protoReq)
+	msg, err := server.DeletePool(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_AttachHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_ExtendPoolCapacity_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq AttachHybridPoolRequest
+		protoReq ExtendPoolCapacityRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
@@ -1009,13 +964,13 @@ func request_GatewayService_AttachHybridPool_0(ctx context.Context, marshaler ru
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "name", err)
 	}
-	msg, err := client.AttachHybridPool(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.ExtendPoolCapacity(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_AttachHybridPool_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_ExtendPoolCapacity_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq AttachHybridPoolRequest
+		protoReq ExtendPoolCapacityRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
@@ -1030,13 +985,13 @@ func local_request_GatewayService_AttachHybridPool_0(ctx context.Context, marsha
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "name", err)
 	}
-	msg, err := server.AttachHybridPool(ctx, &protoReq)
+	msg, err := server.ExtendPoolCapacity(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_CreateHybridPoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_CreatePoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq CreateHybridPoolJoinTokenRequest
+		protoReq CreatePoolJoinTokenRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
@@ -1054,13 +1009,13 @@ func request_GatewayService_CreateHybridPoolJoinToken_0(ctx context.Context, mar
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_name", err)
 	}
-	msg, err := client.CreateHybridPoolJoinToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.CreatePoolJoinToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_CreateHybridPoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_CreatePoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq CreateHybridPoolJoinTokenRequest
+		protoReq CreatePoolJoinTokenRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
@@ -1075,13 +1030,13 @@ func local_request_GatewayService_CreateHybridPoolJoinToken_0(ctx context.Contex
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_name", err)
 	}
-	msg, err := server.CreateHybridPoolJoinToken(ctx, &protoReq)
+	msg, err := server.CreatePoolJoinToken(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_RevokeHybridPoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_RevokePoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq RevokeHybridPoolJoinTokenRequest
+		protoReq RevokePoolJoinTokenRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
@@ -1090,25 +1045,25 @@ func request_GatewayService_RevokeHybridPoolJoinToken_0(ctx context.Context, mar
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	msg, err := client.RevokeHybridPoolJoinToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.RevokePoolJoinToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_RevokeHybridPoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_RevokePoolJoinToken_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq RevokeHybridPoolJoinTokenRequest
+		protoReq RevokePoolJoinTokenRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.RevokeHybridPoolJoinToken(ctx, &protoReq)
+	msg, err := server.RevokePoolJoinToken(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_GatewayService_GetHybridPoolJoinCommand_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_GetPoolJoinCommand_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq GetHybridPoolJoinCommandRequest
+		protoReq GetPoolJoinCommandRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
@@ -1126,13 +1081,13 @@ func request_GatewayService_GetHybridPoolJoinCommand_0(ctx context.Context, mars
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_name", err)
 	}
-	msg, err := client.GetHybridPoolJoinCommand(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.GetPoolJoinCommand(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_GetHybridPoolJoinCommand_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_GetPoolJoinCommand_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq GetHybridPoolJoinCommandRequest
+		protoReq GetPoolJoinCommandRequest
 		metadata runtime.ServerMetadata
 		err      error
 	)
@@ -1147,7 +1102,60 @@ func local_request_GatewayService_GetHybridPoolJoinCommand_0(ctx context.Context
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_name", err)
 	}
-	msg, err := server.GetHybridPoolJoinCommand(ctx, &protoReq)
+	msg, err := server.GetPoolJoinCommand(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+var filter_GatewayService_ListPoolMachines_0 = &utilities.DoubleArray{Encoding: map[string]int{"pool_name": 0}, Base: []int{1, 1, 0}, Check: []int{0, 1, 2}}
+
+func request_GatewayService_ListPoolMachines_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ListPoolMachinesRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["pool_name"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "pool_name")
+	}
+	protoReq.PoolName, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_name", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListPoolMachines_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	msg, err := client.ListPoolMachines(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_ListPoolMachines_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ListPoolMachinesRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	val, ok := pathParams["pool_name"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "pool_name")
+	}
+	protoReq.PoolName, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "pool_name", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListPoolMachines_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	msg, err := server.ListPoolMachines(ctx, &protoReq)
 	return msg, metadata, err
 }
 
@@ -2110,205 +2118,205 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListPools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListHybridOffers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_ListPoolOffers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListHybridOffers", runtime.WithHTTPPathPattern("/hybrid/offers"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListPoolOffers", runtime.WithHTTPPathPattern("/pools:offers"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_ListHybridOffers_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_ListPoolOffers_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ListHybridOffers_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ListPoolOffers_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ReserveHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_LaunchPoolCapacity_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ReserveHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/LaunchPoolCapacity", runtime.WithHTTPPathPattern("/pools:launch"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_ReserveHybridPool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_LaunchPoolCapacity_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ReserveHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_LaunchPoolCapacity_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_GatewayService_ListHybridPools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListPrivatePools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListHybridPools", runtime.WithHTTPPathPattern("/hybrid/pools"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListPrivatePools", runtime.WithHTTPPathPattern("/pools/private"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_ListHybridPools_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_ListPrivatePools_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ListHybridPools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ListPrivatePools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_UpsertHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_CreatePool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/UpsertHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools:upsert"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreatePool", runtime.WithHTTPPathPattern("/pools"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_UpsertHybridPool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_CreatePool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_UpsertHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_CreatePool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeletePool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools/{name}"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeletePool", runtime.WithHTTPPathPattern("/pools/{name}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_DeleteHybridPool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_DeletePool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_DeleteHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_DeletePool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ExtendHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_ExtendPoolCapacity_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ExtendHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools/{name}/extend"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ExtendPoolCapacity", runtime.WithHTTPPathPattern("/pools/{name}/extend"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_ExtendHybridPool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_ExtendPoolCapacity_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ExtendHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ExtendPoolCapacity_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_AttachHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_CreatePoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/AttachHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools/{name}/attach"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreatePoolJoinToken", runtime.WithHTTPPathPattern("/pools/{pool_name}/join-tokens"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_AttachHybridPool_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_CreatePoolJoinToken_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_AttachHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_CreatePoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_CreateHybridPoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_RevokePoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateHybridPoolJoinToken", runtime.WithHTTPPathPattern("/hybrid/pools/{pool_name}/join-tokens"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/RevokePoolJoinToken", runtime.WithHTTPPathPattern("/pools/join-tokens/revoke"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_CreateHybridPoolJoinToken_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_RevokePoolJoinToken_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_CreateHybridPoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_RevokePoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_RevokeHybridPoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_GetPoolJoinCommand_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/RevokeHybridPoolJoinToken", runtime.WithHTTPPathPattern("/hybrid/join-tokens/revoke"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetPoolJoinCommand", runtime.WithHTTPPathPattern("/pools/{pool_name}/join-command"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_RevokeHybridPoolJoinToken_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_GetPoolJoinCommand_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_RevokeHybridPoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_GetPoolJoinCommand_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_GetHybridPoolJoinCommand_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListPoolMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetHybridPoolJoinCommand", runtime.WithHTTPPathPattern("/hybrid/pools/{pool_name}/join-command"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListPoolMachines", runtime.WithHTTPPathPattern("/pools/{pool_name}/machines"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_GetHybridPoolJoinCommand_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_ListPoolMachines_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_GetHybridPoolJoinCommand_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ListPoolMachines_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPost, pattern_GatewayService_JoinAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -3051,175 +3059,175 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListPools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListHybridOffers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_ListPoolOffers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListHybridOffers", runtime.WithHTTPPathPattern("/hybrid/offers"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListPoolOffers", runtime.WithHTTPPathPattern("/pools:offers"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_ListHybridOffers_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_ListPoolOffers_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ListHybridOffers_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ListPoolOffers_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ReserveHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_LaunchPoolCapacity_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ReserveHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/LaunchPoolCapacity", runtime.WithHTTPPathPattern("/pools:launch"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_ReserveHybridPool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_LaunchPoolCapacity_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ReserveHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_LaunchPoolCapacity_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_GatewayService_ListHybridPools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListPrivatePools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListHybridPools", runtime.WithHTTPPathPattern("/hybrid/pools"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListPrivatePools", runtime.WithHTTPPathPattern("/pools/private"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_ListHybridPools_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_ListPrivatePools_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ListHybridPools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ListPrivatePools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_UpsertHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_CreatePool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/UpsertHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools:upsert"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreatePool", runtime.WithHTTPPathPattern("/pools"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_UpsertHybridPool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_CreatePool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_UpsertHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_CreatePool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeletePool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools/{name}"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeletePool", runtime.WithHTTPPathPattern("/pools/{name}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_DeleteHybridPool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_DeletePool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_DeleteHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_DeletePool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ExtendHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_ExtendPoolCapacity_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ExtendHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools/{name}/extend"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ExtendPoolCapacity", runtime.WithHTTPPathPattern("/pools/{name}/extend"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_ExtendHybridPool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_ExtendPoolCapacity_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_ExtendHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ExtendPoolCapacity_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_AttachHybridPool_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_CreatePoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/AttachHybridPool", runtime.WithHTTPPathPattern("/hybrid/pools/{name}/attach"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreatePoolJoinToken", runtime.WithHTTPPathPattern("/pools/{pool_name}/join-tokens"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_AttachHybridPool_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_CreatePoolJoinToken_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_AttachHybridPool_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_CreatePoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_CreateHybridPoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_RevokePoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateHybridPoolJoinToken", runtime.WithHTTPPathPattern("/hybrid/pools/{pool_name}/join-tokens"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/RevokePoolJoinToken", runtime.WithHTTPPathPattern("/pools/join-tokens/revoke"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_CreateHybridPoolJoinToken_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_RevokePoolJoinToken_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_CreateHybridPoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_RevokePoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_RevokeHybridPoolJoinToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_GetPoolJoinCommand_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/RevokeHybridPoolJoinToken", runtime.WithHTTPPathPattern("/hybrid/join-tokens/revoke"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetPoolJoinCommand", runtime.WithHTTPPathPattern("/pools/{pool_name}/join-command"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_RevokeHybridPoolJoinToken_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_GetPoolJoinCommand_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_RevokeHybridPoolJoinToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_GetPoolJoinCommand_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_GetHybridPoolJoinCommand_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListPoolMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetHybridPoolJoinCommand", runtime.WithHTTPPathPattern("/hybrid/pools/{pool_name}/join-command"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListPoolMachines", runtime.WithHTTPPathPattern("/pools/{pool_name}/machines"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_GetHybridPoolJoinCommand_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_ListPoolMachines_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_GetHybridPoolJoinCommand_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_ListPoolMachines_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPost, pattern_GatewayService_JoinAgent_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -3536,16 +3544,16 @@ var (
 	pattern_GatewayService_ScaleDeployment_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "scale"}, ""))
 	pattern_GatewayService_DeleteDeployment_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"deployments", "id"}, ""))
 	pattern_GatewayService_ListPools_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
-	pattern_GatewayService_ListHybridOffers_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"hybrid", "offers"}, ""))
-	pattern_GatewayService_ReserveHybridPool_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"hybrid", "pools"}, ""))
-	pattern_GatewayService_ListHybridPools_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"hybrid", "pools"}, ""))
-	pattern_GatewayService_UpsertHybridPool_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"hybrid", "pools"}, "upsert"))
-	pattern_GatewayService_DeleteHybridPool_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"hybrid", "pools", "name"}, ""))
-	pattern_GatewayService_ExtendHybridPool_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"hybrid", "pools", "name", "extend"}, ""))
-	pattern_GatewayService_AttachHybridPool_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"hybrid", "pools", "name", "attach"}, ""))
-	pattern_GatewayService_CreateHybridPoolJoinToken_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"hybrid", "pools", "pool_name", "join-tokens"}, ""))
-	pattern_GatewayService_RevokeHybridPoolJoinToken_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"hybrid", "join-tokens", "revoke"}, ""))
-	pattern_GatewayService_GetHybridPoolJoinCommand_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"hybrid", "pools", "pool_name", "join-command"}, ""))
+	pattern_GatewayService_ListPoolOffers_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, "offers"))
+	pattern_GatewayService_LaunchPoolCapacity_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, "launch"))
+	pattern_GatewayService_ListPrivatePools_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pools", "private"}, ""))
+	pattern_GatewayService_CreatePool_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
+	pattern_GatewayService_DeletePool_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"pools", "name"}, ""))
+	pattern_GatewayService_ExtendPoolCapacity_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "name", "extend"}, ""))
+	pattern_GatewayService_CreatePoolJoinToken_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "join-tokens"}, ""))
+	pattern_GatewayService_RevokePoolJoinToken_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"pools", "join-tokens", "revoke"}, ""))
+	pattern_GatewayService_GetPoolJoinCommand_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "join-command"}, ""))
+	pattern_GatewayService_ListPoolMachines_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "machines"}, ""))
 	pattern_GatewayService_JoinAgent_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "join"}, ""))
 	pattern_GatewayService_RequestAgentTransportCredential_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "transport-credential"}, ""))
 	pattern_GatewayService_ListAgentRoutes_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "routes"}, "list"))
@@ -3588,16 +3596,16 @@ var (
 	forward_GatewayService_ScaleDeployment_0                 = runtime.ForwardResponseMessage
 	forward_GatewayService_DeleteDeployment_0                = runtime.ForwardResponseMessage
 	forward_GatewayService_ListPools_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_ListHybridOffers_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_ReserveHybridPool_0               = runtime.ForwardResponseMessage
-	forward_GatewayService_ListHybridPools_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_UpsertHybridPool_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_DeleteHybridPool_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_ExtendHybridPool_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_AttachHybridPool_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateHybridPoolJoinToken_0       = runtime.ForwardResponseMessage
-	forward_GatewayService_RevokeHybridPoolJoinToken_0       = runtime.ForwardResponseMessage
-	forward_GatewayService_GetHybridPoolJoinCommand_0        = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPoolOffers_0                  = runtime.ForwardResponseMessage
+	forward_GatewayService_LaunchPoolCapacity_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPrivatePools_0                = runtime.ForwardResponseMessage
+	forward_GatewayService_CreatePool_0                      = runtime.ForwardResponseMessage
+	forward_GatewayService_DeletePool_0                      = runtime.ForwardResponseMessage
+	forward_GatewayService_ExtendPoolCapacity_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_CreatePoolJoinToken_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_RevokePoolJoinToken_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_GetPoolJoinCommand_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPoolMachines_0                = runtime.ForwardResponseMessage
 	forward_GatewayService_JoinAgent_0                       = runtime.ForwardResponseMessage
 	forward_GatewayService_RequestAgentTransportCredential_0 = runtime.ForwardResponseMessage
 	forward_GatewayService_ListAgentRoutes_0                 = runtime.ForwardResponseMessage

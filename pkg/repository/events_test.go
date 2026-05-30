@@ -247,17 +247,17 @@ func TestPushContainerResourceMetricsEventIncludesReservedResources(t *testing.T
 	}
 }
 
-func TestPushHybridEventBuildsWorkspaceScopedCloudEvent(t *testing.T) {
+func TestPushComputeEventBuildsWorkspaceScopedCloudEvent(t *testing.T) {
 	sink := &captureEventSink{}
 	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
 	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 
-	repo.PushHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+	repo.PushComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		Timestamp:   now,
 		WorkspaceID: "workspace-1",
 		PoolName:    "private-gpu",
 		MachineID:   "machine-1",
-		Action:      types.EventHybridActionMachineJoined,
+		Action:      types.EventComputeActionMachineJoined,
 		Status:      "schedulable",
 		Transport:   types.BackendRouteTransportTSNet,
 	})
@@ -265,7 +265,7 @@ func TestPushHybridEventBuildsWorkspaceScopedCloudEvent(t *testing.T) {
 	if got, want := len(sink.events), 1; got != want {
 		t.Fatalf("unexpected event count: got %d want %d", got, want)
 	}
-	if got, want := sink.events[0].Type(), types.EventHybridMachine; got != want {
+	if got, want := sink.events[0].Type(), types.EventComputeMachine; got != want {
 		t.Fatalf("unexpected cloud event type: got %q want %q", got, want)
 	}
 	if !sink.events[0].Time().Equal(now) {
@@ -278,11 +278,11 @@ func TestPushHybridEventBuildsWorkspaceScopedCloudEvent(t *testing.T) {
 		t.Fatalf("unexpected machine extension: got %q want %q", got, want)
 	}
 
-	var event types.EventHybridSchema
+	var event types.EventComputeSchema
 	if err := json.Unmarshal(sink.events[0].Data(), &event); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := event.Action, types.EventHybridActionMachineJoined; got != want {
+	if got, want := event.Action, types.EventComputeActionMachineJoined; got != want {
 		t.Fatalf("unexpected action: got %q want %q", got, want)
 	}
 }

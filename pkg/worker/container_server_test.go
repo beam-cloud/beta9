@@ -261,7 +261,7 @@ func TestContainerSandboxExposePortRegistersBackendRoute(t *testing.T) {
 	require.Equal(t, repoClient.lastSetAddressMap.AddressMap[9000], repoClient.lastSetAddressMap.Routes[0].LocalTarget)
 }
 
-func TestContainerSandboxExposePortUsesNetworkManagerAddressForHybridRoute(t *testing.T) {
+func TestContainerSandboxExposePortUsesNetworkManagerAddressForBackendRoute(t *testing.T) {
 	containerId := "sandbox-test"
 	repoClient := &fakeContainerRepoClient{}
 	networkController := &fakeContainerNetworkController{
@@ -287,7 +287,7 @@ func TestContainerSandboxExposePortUsesNetworkManagerAddressForHybridRoute(t *te
 		podAddr:                 "127.0.0.1",
 		backendRoute: func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute {
 			return &pb.BackendRoute{
-				RouteId:     "route-hybrid",
+				RouteId:     "route-backend",
 				WorkspaceId: request.WorkspaceId,
 				ContainerId: request.ContainerId,
 				Kind:        kind,

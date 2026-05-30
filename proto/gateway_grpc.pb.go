@@ -41,16 +41,16 @@ const (
 	GatewayService_ScaleDeployment_FullMethodName                 = "/gateway.GatewayService/ScaleDeployment"
 	GatewayService_DeleteDeployment_FullMethodName                = "/gateway.GatewayService/DeleteDeployment"
 	GatewayService_ListPools_FullMethodName                       = "/gateway.GatewayService/ListPools"
-	GatewayService_ListHybridOffers_FullMethodName                = "/gateway.GatewayService/ListHybridOffers"
-	GatewayService_ReserveHybridPool_FullMethodName               = "/gateway.GatewayService/ReserveHybridPool"
-	GatewayService_ListHybridPools_FullMethodName                 = "/gateway.GatewayService/ListHybridPools"
-	GatewayService_UpsertHybridPool_FullMethodName                = "/gateway.GatewayService/UpsertHybridPool"
-	GatewayService_DeleteHybridPool_FullMethodName                = "/gateway.GatewayService/DeleteHybridPool"
-	GatewayService_ExtendHybridPool_FullMethodName                = "/gateway.GatewayService/ExtendHybridPool"
-	GatewayService_AttachHybridPool_FullMethodName                = "/gateway.GatewayService/AttachHybridPool"
-	GatewayService_CreateHybridPoolJoinToken_FullMethodName       = "/gateway.GatewayService/CreateHybridPoolJoinToken"
-	GatewayService_RevokeHybridPoolJoinToken_FullMethodName       = "/gateway.GatewayService/RevokeHybridPoolJoinToken"
-	GatewayService_GetHybridPoolJoinCommand_FullMethodName        = "/gateway.GatewayService/GetHybridPoolJoinCommand"
+	GatewayService_ListPoolOffers_FullMethodName                  = "/gateway.GatewayService/ListPoolOffers"
+	GatewayService_LaunchPoolCapacity_FullMethodName              = "/gateway.GatewayService/LaunchPoolCapacity"
+	GatewayService_ListPrivatePools_FullMethodName                = "/gateway.GatewayService/ListPrivatePools"
+	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
+	GatewayService_DeletePool_FullMethodName                      = "/gateway.GatewayService/DeletePool"
+	GatewayService_ExtendPoolCapacity_FullMethodName              = "/gateway.GatewayService/ExtendPoolCapacity"
+	GatewayService_CreatePoolJoinToken_FullMethodName             = "/gateway.GatewayService/CreatePoolJoinToken"
+	GatewayService_RevokePoolJoinToken_FullMethodName             = "/gateway.GatewayService/RevokePoolJoinToken"
+	GatewayService_GetPoolJoinCommand_FullMethodName              = "/gateway.GatewayService/GetPoolJoinCommand"
+	GatewayService_ListPoolMachines_FullMethodName                = "/gateway.GatewayService/ListPoolMachines"
 	GatewayService_JoinAgent_FullMethodName                       = "/gateway.GatewayService/JoinAgent"
 	GatewayService_RequestAgentTransportCredential_FullMethodName = "/gateway.GatewayService/RequestAgentTransportCredential"
 	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
@@ -103,17 +103,17 @@ type GatewayServiceClient interface {
 	DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
-	// Hybrid reserved pools
-	ListHybridOffers(ctx context.Context, in *ListHybridOffersRequest, opts ...grpc.CallOption) (*ListHybridOffersResponse, error)
-	ReserveHybridPool(ctx context.Context, in *ReserveHybridPoolRequest, opts ...grpc.CallOption) (*ReserveHybridPoolResponse, error)
-	ListHybridPools(ctx context.Context, in *ListHybridPoolsRequest, opts ...grpc.CallOption) (*ListHybridPoolsResponse, error)
-	UpsertHybridPool(ctx context.Context, in *UpsertHybridPoolRequest, opts ...grpc.CallOption) (*UpsertHybridPoolResponse, error)
-	DeleteHybridPool(ctx context.Context, in *DeleteHybridPoolRequest, opts ...grpc.CallOption) (*DeleteHybridPoolResponse, error)
-	ExtendHybridPool(ctx context.Context, in *ExtendHybridPoolRequest, opts ...grpc.CallOption) (*ExtendHybridPoolResponse, error)
-	AttachHybridPool(ctx context.Context, in *AttachHybridPoolRequest, opts ...grpc.CallOption) (*AttachHybridPoolResponse, error)
-	CreateHybridPoolJoinToken(ctx context.Context, in *CreateHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*CreateHybridPoolJoinTokenResponse, error)
-	RevokeHybridPoolJoinToken(ctx context.Context, in *RevokeHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokeHybridPoolJoinTokenResponse, error)
-	GetHybridPoolJoinCommand(ctx context.Context, in *GetHybridPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetHybridPoolJoinCommandResponse, error)
+	// Private compute pools
+	ListPoolOffers(ctx context.Context, in *ListPoolOffersRequest, opts ...grpc.CallOption) (*ListPoolOffersResponse, error)
+	LaunchPoolCapacity(ctx context.Context, in *LaunchPoolCapacityRequest, opts ...grpc.CallOption) (*LaunchPoolCapacityResponse, error)
+	ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error)
+	CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error)
+	DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error)
+	ExtendPoolCapacity(ctx context.Context, in *ExtendPoolCapacityRequest, opts ...grpc.CallOption) (*ExtendPoolCapacityResponse, error)
+	CreatePoolJoinToken(ctx context.Context, in *CreatePoolJoinTokenRequest, opts ...grpc.CallOption) (*CreatePoolJoinTokenResponse, error)
+	RevokePoolJoinToken(ctx context.Context, in *RevokePoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokePoolJoinTokenResponse, error)
+	GetPoolJoinCommand(ctx context.Context, in *GetPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetPoolJoinCommandResponse, error)
+	ListPoolMachines(ctx context.Context, in *ListPoolMachinesRequest, opts ...grpc.CallOption) (*ListPoolMachinesResponse, error)
 	JoinAgent(ctx context.Context, in *JoinAgentRequest, opts ...grpc.CallOption) (*JoinAgentResponse, error)
 	RequestAgentTransportCredential(ctx context.Context, in *RequestAgentTransportCredentialRequest, opts ...grpc.CallOption) (*RequestAgentTransportCredentialResponse, error)
 	ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error)
@@ -390,90 +390,90 @@ func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsReque
 	return out, nil
 }
 
-func (c *gatewayServiceClient) ListHybridOffers(ctx context.Context, in *ListHybridOffersRequest, opts ...grpc.CallOption) (*ListHybridOffersResponse, error) {
-	out := new(ListHybridOffersResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListHybridOffers_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) ListPoolOffers(ctx context.Context, in *ListPoolOffersRequest, opts ...grpc.CallOption) (*ListPoolOffersResponse, error) {
+	out := new(ListPoolOffersResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPoolOffers_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) ReserveHybridPool(ctx context.Context, in *ReserveHybridPoolRequest, opts ...grpc.CallOption) (*ReserveHybridPoolResponse, error) {
-	out := new(ReserveHybridPoolResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ReserveHybridPool_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) LaunchPoolCapacity(ctx context.Context, in *LaunchPoolCapacityRequest, opts ...grpc.CallOption) (*LaunchPoolCapacityResponse, error) {
+	out := new(LaunchPoolCapacityResponse)
+	err := c.cc.Invoke(ctx, GatewayService_LaunchPoolCapacity_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) ListHybridPools(ctx context.Context, in *ListHybridPoolsRequest, opts ...grpc.CallOption) (*ListHybridPoolsResponse, error) {
-	out := new(ListHybridPoolsResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListHybridPools_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error) {
+	out := new(ListPrivatePoolsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPrivatePools_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) UpsertHybridPool(ctx context.Context, in *UpsertHybridPoolRequest, opts ...grpc.CallOption) (*UpsertHybridPoolResponse, error) {
-	out := new(UpsertHybridPoolResponse)
-	err := c.cc.Invoke(ctx, GatewayService_UpsertHybridPool_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error) {
+	out := new(CreatePoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreatePool_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) DeleteHybridPool(ctx context.Context, in *DeleteHybridPoolRequest, opts ...grpc.CallOption) (*DeleteHybridPoolResponse, error) {
-	out := new(DeleteHybridPoolResponse)
-	err := c.cc.Invoke(ctx, GatewayService_DeleteHybridPool_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error) {
+	out := new(DeletePoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeletePool_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) ExtendHybridPool(ctx context.Context, in *ExtendHybridPoolRequest, opts ...grpc.CallOption) (*ExtendHybridPoolResponse, error) {
-	out := new(ExtendHybridPoolResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ExtendHybridPool_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) ExtendPoolCapacity(ctx context.Context, in *ExtendPoolCapacityRequest, opts ...grpc.CallOption) (*ExtendPoolCapacityResponse, error) {
+	out := new(ExtendPoolCapacityResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ExtendPoolCapacity_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) AttachHybridPool(ctx context.Context, in *AttachHybridPoolRequest, opts ...grpc.CallOption) (*AttachHybridPoolResponse, error) {
-	out := new(AttachHybridPoolResponse)
-	err := c.cc.Invoke(ctx, GatewayService_AttachHybridPool_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) CreatePoolJoinToken(ctx context.Context, in *CreatePoolJoinTokenRequest, opts ...grpc.CallOption) (*CreatePoolJoinTokenResponse, error) {
+	out := new(CreatePoolJoinTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreatePoolJoinToken_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) CreateHybridPoolJoinToken(ctx context.Context, in *CreateHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*CreateHybridPoolJoinTokenResponse, error) {
-	out := new(CreateHybridPoolJoinTokenResponse)
-	err := c.cc.Invoke(ctx, GatewayService_CreateHybridPoolJoinToken_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) RevokePoolJoinToken(ctx context.Context, in *RevokePoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokePoolJoinTokenResponse, error) {
+	out := new(RevokePoolJoinTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RevokePoolJoinToken_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) RevokeHybridPoolJoinToken(ctx context.Context, in *RevokeHybridPoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokeHybridPoolJoinTokenResponse, error) {
-	out := new(RevokeHybridPoolJoinTokenResponse)
-	err := c.cc.Invoke(ctx, GatewayService_RevokeHybridPoolJoinToken_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) GetPoolJoinCommand(ctx context.Context, in *GetPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetPoolJoinCommandResponse, error) {
+	out := new(GetPoolJoinCommandResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetPoolJoinCommand_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) GetHybridPoolJoinCommand(ctx context.Context, in *GetHybridPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetHybridPoolJoinCommandResponse, error) {
-	out := new(GetHybridPoolJoinCommandResponse)
-	err := c.cc.Invoke(ctx, GatewayService_GetHybridPoolJoinCommand_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) ListPoolMachines(ctx context.Context, in *ListPoolMachinesRequest, opts ...grpc.CallOption) (*ListPoolMachinesResponse, error) {
+	out := new(ListPoolMachinesResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPoolMachines_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -689,17 +689,17 @@ type GatewayServiceServer interface {
 	DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
-	// Hybrid reserved pools
-	ListHybridOffers(context.Context, *ListHybridOffersRequest) (*ListHybridOffersResponse, error)
-	ReserveHybridPool(context.Context, *ReserveHybridPoolRequest) (*ReserveHybridPoolResponse, error)
-	ListHybridPools(context.Context, *ListHybridPoolsRequest) (*ListHybridPoolsResponse, error)
-	UpsertHybridPool(context.Context, *UpsertHybridPoolRequest) (*UpsertHybridPoolResponse, error)
-	DeleteHybridPool(context.Context, *DeleteHybridPoolRequest) (*DeleteHybridPoolResponse, error)
-	ExtendHybridPool(context.Context, *ExtendHybridPoolRequest) (*ExtendHybridPoolResponse, error)
-	AttachHybridPool(context.Context, *AttachHybridPoolRequest) (*AttachHybridPoolResponse, error)
-	CreateHybridPoolJoinToken(context.Context, *CreateHybridPoolJoinTokenRequest) (*CreateHybridPoolJoinTokenResponse, error)
-	RevokeHybridPoolJoinToken(context.Context, *RevokeHybridPoolJoinTokenRequest) (*RevokeHybridPoolJoinTokenResponse, error)
-	GetHybridPoolJoinCommand(context.Context, *GetHybridPoolJoinCommandRequest) (*GetHybridPoolJoinCommandResponse, error)
+	// Private compute pools
+	ListPoolOffers(context.Context, *ListPoolOffersRequest) (*ListPoolOffersResponse, error)
+	LaunchPoolCapacity(context.Context, *LaunchPoolCapacityRequest) (*LaunchPoolCapacityResponse, error)
+	ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error)
+	CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error)
+	DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error)
+	ExtendPoolCapacity(context.Context, *ExtendPoolCapacityRequest) (*ExtendPoolCapacityResponse, error)
+	CreatePoolJoinToken(context.Context, *CreatePoolJoinTokenRequest) (*CreatePoolJoinTokenResponse, error)
+	RevokePoolJoinToken(context.Context, *RevokePoolJoinTokenRequest) (*RevokePoolJoinTokenResponse, error)
+	GetPoolJoinCommand(context.Context, *GetPoolJoinCommandRequest) (*GetPoolJoinCommandResponse, error)
+	ListPoolMachines(context.Context, *ListPoolMachinesRequest) (*ListPoolMachinesResponse, error)
 	JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error)
 	RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error)
 	ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error)
@@ -794,35 +794,35 @@ func (UnimplementedGatewayServiceServer) DeleteDeployment(context.Context, *Dele
 func (UnimplementedGatewayServiceServer) ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPools not implemented")
 }
-func (UnimplementedGatewayServiceServer) ListHybridOffers(context.Context, *ListHybridOffersRequest) (*ListHybridOffersResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListHybridOffers not implemented")
+func (UnimplementedGatewayServiceServer) ListPoolOffers(context.Context, *ListPoolOffersRequest) (*ListPoolOffersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPoolOffers not implemented")
 }
-func (UnimplementedGatewayServiceServer) ReserveHybridPool(context.Context, *ReserveHybridPoolRequest) (*ReserveHybridPoolResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReserveHybridPool not implemented")
+func (UnimplementedGatewayServiceServer) LaunchPoolCapacity(context.Context, *LaunchPoolCapacityRequest) (*LaunchPoolCapacityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LaunchPoolCapacity not implemented")
 }
-func (UnimplementedGatewayServiceServer) ListHybridPools(context.Context, *ListHybridPoolsRequest) (*ListHybridPoolsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListHybridPools not implemented")
+func (UnimplementedGatewayServiceServer) ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPrivatePools not implemented")
 }
-func (UnimplementedGatewayServiceServer) UpsertHybridPool(context.Context, *UpsertHybridPoolRequest) (*UpsertHybridPoolResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UpsertHybridPool not implemented")
+func (UnimplementedGatewayServiceServer) CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreatePool not implemented")
 }
-func (UnimplementedGatewayServiceServer) DeleteHybridPool(context.Context, *DeleteHybridPoolRequest) (*DeleteHybridPoolResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteHybridPool not implemented")
+func (UnimplementedGatewayServiceServer) DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeletePool not implemented")
 }
-func (UnimplementedGatewayServiceServer) ExtendHybridPool(context.Context, *ExtendHybridPoolRequest) (*ExtendHybridPoolResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ExtendHybridPool not implemented")
+func (UnimplementedGatewayServiceServer) ExtendPoolCapacity(context.Context, *ExtendPoolCapacityRequest) (*ExtendPoolCapacityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExtendPoolCapacity not implemented")
 }
-func (UnimplementedGatewayServiceServer) AttachHybridPool(context.Context, *AttachHybridPoolRequest) (*AttachHybridPoolResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AttachHybridPool not implemented")
+func (UnimplementedGatewayServiceServer) CreatePoolJoinToken(context.Context, *CreatePoolJoinTokenRequest) (*CreatePoolJoinTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreatePoolJoinToken not implemented")
 }
-func (UnimplementedGatewayServiceServer) CreateHybridPoolJoinToken(context.Context, *CreateHybridPoolJoinTokenRequest) (*CreateHybridPoolJoinTokenResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateHybridPoolJoinToken not implemented")
+func (UnimplementedGatewayServiceServer) RevokePoolJoinToken(context.Context, *RevokePoolJoinTokenRequest) (*RevokePoolJoinTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokePoolJoinToken not implemented")
 }
-func (UnimplementedGatewayServiceServer) RevokeHybridPoolJoinToken(context.Context, *RevokeHybridPoolJoinTokenRequest) (*RevokeHybridPoolJoinTokenResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevokeHybridPoolJoinToken not implemented")
+func (UnimplementedGatewayServiceServer) GetPoolJoinCommand(context.Context, *GetPoolJoinCommandRequest) (*GetPoolJoinCommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPoolJoinCommand not implemented")
 }
-func (UnimplementedGatewayServiceServer) GetHybridPoolJoinCommand(context.Context, *GetHybridPoolJoinCommandRequest) (*GetHybridPoolJoinCommandResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetHybridPoolJoinCommand not implemented")
+func (UnimplementedGatewayServiceServer) ListPoolMachines(context.Context, *ListPoolMachinesRequest) (*ListPoolMachinesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPoolMachines not implemented")
 }
 func (UnimplementedGatewayServiceServer) JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method JoinAgent not implemented")
@@ -1300,182 +1300,182 @@ func _GatewayService_ListPools_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_ListHybridOffers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListHybridOffersRequest)
+func _GatewayService_ListPoolOffers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPoolOffersRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).ListHybridOffers(ctx, in)
+		return srv.(GatewayServiceServer).ListPoolOffers(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_ListHybridOffers_FullMethodName,
+		FullMethod: GatewayService_ListPoolOffers_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).ListHybridOffers(ctx, req.(*ListHybridOffersRequest))
+		return srv.(GatewayServiceServer).ListPoolOffers(ctx, req.(*ListPoolOffersRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_ReserveHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReserveHybridPoolRequest)
+func _GatewayService_LaunchPoolCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LaunchPoolCapacityRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).ReserveHybridPool(ctx, in)
+		return srv.(GatewayServiceServer).LaunchPoolCapacity(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_ReserveHybridPool_FullMethodName,
+		FullMethod: GatewayService_LaunchPoolCapacity_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).ReserveHybridPool(ctx, req.(*ReserveHybridPoolRequest))
+		return srv.(GatewayServiceServer).LaunchPoolCapacity(ctx, req.(*LaunchPoolCapacityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_ListHybridPools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListHybridPoolsRequest)
+func _GatewayService_ListPrivatePools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPrivatePoolsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).ListHybridPools(ctx, in)
+		return srv.(GatewayServiceServer).ListPrivatePools(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_ListHybridPools_FullMethodName,
+		FullMethod: GatewayService_ListPrivatePools_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).ListHybridPools(ctx, req.(*ListHybridPoolsRequest))
+		return srv.(GatewayServiceServer).ListPrivatePools(ctx, req.(*ListPrivatePoolsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_UpsertHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpsertHybridPoolRequest)
+func _GatewayService_CreatePool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePoolRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).UpsertHybridPool(ctx, in)
+		return srv.(GatewayServiceServer).CreatePool(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_UpsertHybridPool_FullMethodName,
+		FullMethod: GatewayService_CreatePool_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).UpsertHybridPool(ctx, req.(*UpsertHybridPoolRequest))
+		return srv.(GatewayServiceServer).CreatePool(ctx, req.(*CreatePoolRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_DeleteHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteHybridPoolRequest)
+func _GatewayService_DeletePool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeletePoolRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).DeleteHybridPool(ctx, in)
+		return srv.(GatewayServiceServer).DeletePool(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_DeleteHybridPool_FullMethodName,
+		FullMethod: GatewayService_DeletePool_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).DeleteHybridPool(ctx, req.(*DeleteHybridPoolRequest))
+		return srv.(GatewayServiceServer).DeletePool(ctx, req.(*DeletePoolRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_ExtendHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExtendHybridPoolRequest)
+func _GatewayService_ExtendPoolCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExtendPoolCapacityRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).ExtendHybridPool(ctx, in)
+		return srv.(GatewayServiceServer).ExtendPoolCapacity(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_ExtendHybridPool_FullMethodName,
+		FullMethod: GatewayService_ExtendPoolCapacity_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).ExtendHybridPool(ctx, req.(*ExtendHybridPoolRequest))
+		return srv.(GatewayServiceServer).ExtendPoolCapacity(ctx, req.(*ExtendPoolCapacityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_AttachHybridPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AttachHybridPoolRequest)
+func _GatewayService_CreatePoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePoolJoinTokenRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).AttachHybridPool(ctx, in)
+		return srv.(GatewayServiceServer).CreatePoolJoinToken(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_AttachHybridPool_FullMethodName,
+		FullMethod: GatewayService_CreatePoolJoinToken_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).AttachHybridPool(ctx, req.(*AttachHybridPoolRequest))
+		return srv.(GatewayServiceServer).CreatePoolJoinToken(ctx, req.(*CreatePoolJoinTokenRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_CreateHybridPoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateHybridPoolJoinTokenRequest)
+func _GatewayService_RevokePoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokePoolJoinTokenRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).CreateHybridPoolJoinToken(ctx, in)
+		return srv.(GatewayServiceServer).RevokePoolJoinToken(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_CreateHybridPoolJoinToken_FullMethodName,
+		FullMethod: GatewayService_RevokePoolJoinToken_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).CreateHybridPoolJoinToken(ctx, req.(*CreateHybridPoolJoinTokenRequest))
+		return srv.(GatewayServiceServer).RevokePoolJoinToken(ctx, req.(*RevokePoolJoinTokenRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_RevokeHybridPoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RevokeHybridPoolJoinTokenRequest)
+func _GatewayService_GetPoolJoinCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPoolJoinCommandRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).RevokeHybridPoolJoinToken(ctx, in)
+		return srv.(GatewayServiceServer).GetPoolJoinCommand(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_RevokeHybridPoolJoinToken_FullMethodName,
+		FullMethod: GatewayService_GetPoolJoinCommand_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).RevokeHybridPoolJoinToken(ctx, req.(*RevokeHybridPoolJoinTokenRequest))
+		return srv.(GatewayServiceServer).GetPoolJoinCommand(ctx, req.(*GetPoolJoinCommandRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_GetHybridPoolJoinCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetHybridPoolJoinCommandRequest)
+func _GatewayService_ListPoolMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPoolMachinesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).GetHybridPoolJoinCommand(ctx, in)
+		return srv.(GatewayServiceServer).ListPoolMachines(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_GetHybridPoolJoinCommand_FullMethodName,
+		FullMethod: GatewayService_ListPoolMachines_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).GetHybridPoolJoinCommand(ctx, req.(*GetHybridPoolJoinCommandRequest))
+		return srv.(GatewayServiceServer).ListPoolMachines(ctx, req.(*ListPoolMachinesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1877,44 +1877,44 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_ListPools_Handler,
 		},
 		{
-			MethodName: "ListHybridOffers",
-			Handler:    _GatewayService_ListHybridOffers_Handler,
+			MethodName: "ListPoolOffers",
+			Handler:    _GatewayService_ListPoolOffers_Handler,
 		},
 		{
-			MethodName: "ReserveHybridPool",
-			Handler:    _GatewayService_ReserveHybridPool_Handler,
+			MethodName: "LaunchPoolCapacity",
+			Handler:    _GatewayService_LaunchPoolCapacity_Handler,
 		},
 		{
-			MethodName: "ListHybridPools",
-			Handler:    _GatewayService_ListHybridPools_Handler,
+			MethodName: "ListPrivatePools",
+			Handler:    _GatewayService_ListPrivatePools_Handler,
 		},
 		{
-			MethodName: "UpsertHybridPool",
-			Handler:    _GatewayService_UpsertHybridPool_Handler,
+			MethodName: "CreatePool",
+			Handler:    _GatewayService_CreatePool_Handler,
 		},
 		{
-			MethodName: "DeleteHybridPool",
-			Handler:    _GatewayService_DeleteHybridPool_Handler,
+			MethodName: "DeletePool",
+			Handler:    _GatewayService_DeletePool_Handler,
 		},
 		{
-			MethodName: "ExtendHybridPool",
-			Handler:    _GatewayService_ExtendHybridPool_Handler,
+			MethodName: "ExtendPoolCapacity",
+			Handler:    _GatewayService_ExtendPoolCapacity_Handler,
 		},
 		{
-			MethodName: "AttachHybridPool",
-			Handler:    _GatewayService_AttachHybridPool_Handler,
+			MethodName: "CreatePoolJoinToken",
+			Handler:    _GatewayService_CreatePoolJoinToken_Handler,
 		},
 		{
-			MethodName: "CreateHybridPoolJoinToken",
-			Handler:    _GatewayService_CreateHybridPoolJoinToken_Handler,
+			MethodName: "RevokePoolJoinToken",
+			Handler:    _GatewayService_RevokePoolJoinToken_Handler,
 		},
 		{
-			MethodName: "RevokeHybridPoolJoinToken",
-			Handler:    _GatewayService_RevokeHybridPoolJoinToken_Handler,
+			MethodName: "GetPoolJoinCommand",
+			Handler:    _GatewayService_GetPoolJoinCommand_Handler,
 		},
 		{
-			MethodName: "GetHybridPoolJoinCommand",
-			Handler:    _GatewayService_GetHybridPoolJoinCommand_Handler,
+			MethodName: "ListPoolMachines",
+			Handler:    _GatewayService_ListPoolMachines_Handler,
 		},
 		{
 			MethodName: "JoinAgent",

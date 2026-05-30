@@ -95,14 +95,14 @@ var (
 )
 
 var (
-	hybridPoolState         string = "hybrid:{%s}:p:%s"
-	hybridPoolIndex         string = "hybrid:{%s}:pools"
-	hybridJoinToken         string = "hybrid:join:%s"
-	hybridAgentToken        string = "agent:token:%s"
-	hybridAgentMachine      string = "agent:{%s}:p:%s:m:%s"
-	hybridAgentMachineIndex string = "agent:{%s}:p:%s:machines"
-	hybridAgentSlot         string = "agent:{%s}:p:%s:m:%s:s:%s"
-	hybridAgentSlotIndex    string = "agent:{%s}:p:%s:m:%s:slots"
+	computePoolState         string = "compute:{%s}:pool:%s"
+	computePoolIndex         string = "compute:{%s}:pools"
+	computeJoinToken         string = "compute:join:%s"
+	computeAgentToken        string = "compute:agent:token:%s"
+	computeAgentMachine      string = "compute:{%s}:pool:%s:machine:%s"
+	computeAgentMachineIndex string = "compute:{%s}:pool:%s:machines"
+	computeAgentSlot         string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
+	computeAgentSlotIndex    string = "compute:{%s}:pool:%s:machine:%s:workers"
 )
 
 var (
@@ -289,37 +289,37 @@ func (rk *redisKeys) WorkerPoolCleanerLock(poolName string) string {
 	return fmt.Sprintf(workerPoolCleanerLock, poolName)
 }
 
-// Hybrid keys
-func (rk *redisKeys) HybridPoolState(workspaceID, poolName string) string {
-	return fmt.Sprintf(hybridPoolState, workspaceID, poolName)
+// Compute keys
+func (rk *redisKeys) ComputePoolState(workspaceID, poolName string) string {
+	return fmt.Sprintf(computePoolState, workspaceID, poolName)
 }
 
-func (rk *redisKeys) HybridPoolIndex(workspaceID string) string {
-	return fmt.Sprintf(hybridPoolIndex, workspaceID)
+func (rk *redisKeys) ComputePoolIndex(workspaceID string) string {
+	return fmt.Sprintf(computePoolIndex, workspaceID)
 }
 
-func (rk *redisKeys) HybridJoinToken(tokenHash string) string {
-	return fmt.Sprintf(hybridJoinToken, tokenHash)
+func (rk *redisKeys) ComputeJoinToken(tokenHash string) string {
+	return fmt.Sprintf(computeJoinToken, tokenHash)
 }
 
-func (rk *redisKeys) HybridAgentToken(tokenHash string) string {
-	return fmt.Sprintf(hybridAgentToken, tokenHash)
+func (rk *redisKeys) ComputeAgentToken(tokenHash string) string {
+	return fmt.Sprintf(computeAgentToken, tokenHash)
 }
 
-func (rk *redisKeys) HybridAgentMachine(workspaceID, poolName, machineID string) string {
-	return fmt.Sprintf(hybridAgentMachine, workspaceID, poolName, machineID)
+func (rk *redisKeys) ComputeAgentMachine(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(computeAgentMachine, workspaceID, poolName, machineID)
 }
 
-func (rk *redisKeys) HybridAgentMachineIndex(workspaceID, poolName string) string {
-	return fmt.Sprintf(hybridAgentMachineIndex, workspaceID, poolName)
+func (rk *redisKeys) ComputeAgentMachineIndex(workspaceID, poolName string) string {
+	return fmt.Sprintf(computeAgentMachineIndex, workspaceID, poolName)
 }
 
-func (rk *redisKeys) HybridAgentSlot(workspaceID, poolName, machineID, workerID string) string {
-	return fmt.Sprintf(hybridAgentSlot, workspaceID, poolName, machineID, workerID)
+func (rk *redisKeys) ComputeAgentSlot(workspaceID, poolName, machineID, workerID string) string {
+	return fmt.Sprintf(computeAgentSlot, workspaceID, poolName, machineID, workerID)
 }
 
-func (rk *redisKeys) HybridAgentSlotIndex(workspaceID, poolName, machineID string) string {
-	return fmt.Sprintf(hybridAgentSlotIndex, workspaceID, poolName, machineID)
+func (rk *redisKeys) ComputeAgentSlotIndex(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(computeAgentSlotIndex, workspaceID, poolName, machineID)
 }
 
 // Task keys

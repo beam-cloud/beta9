@@ -1,16 +1,16 @@
-# Hybrid Local Tailscale Test
+# Private Local Tailscale Test
 
-This path tests the real hybrid join flow locally:
+This path tests the real private join flow locally:
 
 ```text
 beam pool join
-  -> gateway creates/upserts a private hybrid pool
+  -> gateway creates a private pool
   -> gateway mints a short-lived join token
   -> installer starts cmd/agent
   -> on macOS, installer runs the Linux agent inside Docker
   -> agent joins the tailnet with tsnet_restricted
   -> one embedded listener on the joined machine handles all backend routes
-  -> scheduler creates worker slots and the agent starts worker containers
+  -> scheduler ensures one persistent worker for the machine and the agent starts the worker container
 ```
 
 There is no k3s, Flux, system Tailscale daemon, or `local_direct` transport in this flow.
@@ -23,24 +23,24 @@ In the Tailscale admin console, open **Access controls** and merge this into the
 {
   "tagOwners": {
     "tag:beam-gateway": ["autogroup:admin"],
-    "tag:beam-byo-worker": ["autogroup:admin"]
+    "tag:beam-agent": ["autogroup:admin"]
   },
   "grants": [
     {
       "src": ["tag:beam-gateway"],
-      "dst": ["tag:beam-byo-worker"],
+      "dst": ["tag:beam-agent"],
       "ip": ["tcp:29443"]
     }
   ],
   "tests": [
     {
       "src": "tag:beam-gateway",
-      "accept": ["tag:beam-byo-worker:29443"],
-      "deny": ["tag:beam-byo-worker:22"]
+      "accept": ["tag:beam-agent:29443"],
+      "deny": ["tag:beam-agent:22"]
     },
     {
-      "src": "tag:beam-byo-worker",
-      "deny": ["tag:beam-gateway:29443", "tag:beam-byo-worker:29443"]
+      "src": "tag:beam-agent",
+      "deny": ["tag:beam-gateway:29443", "tag:beam-agent:29443"]
     }
   ]
 }
@@ -56,7 +56,7 @@ Gateway key
   Pre-approved: on, if device approval is enabled
 
 Agent key
-  Tags: tag:beam-byo-worker
+  Tags: tag:beam-agent
   Reusable: on
   Ephemeral: on
   Pre-approved: on, if device approval is enabled
@@ -67,7 +67,7 @@ For Tailscale.com, leave `controlUrl` empty. For Headscale, set it to the Headsc
 You can also create the policy entries and the two auth keys from a Tailscale API access token:
 
 ```sh
-TS_API_KEY="tskey-api-..." ./hack/setup_hybrid_tailscale.sh
+TS_API_KEY="tskey-api-..." ./hack/setup_private_pool_tailscale.sh
 ```
 
 The helper non-destructively merges the Beam tags and grant into the tailnet policy, creates a tagged gateway auth key and a tagged agent auth key, then writes the local `config.yaml` used by `make start`.
@@ -75,7 +75,7 @@ The helper non-destructively merges the Beam tags and grant into the tailnet pol
 By default the helper does not remove existing broad access rules in your tailnet. To remove the default allow-all ACL and add the deny tests above, run:
 
 ```sh
-STRICT_TAILSCALE_POLICY=1 TS_API_KEY="tskey-api-..." ./hack/setup_hybrid_tailscale.sh
+STRICT_TAILSCALE_POLICY=1 TS_API_KEY="tskey-api-..." ./hack/setup_private_pool_tailscale.sh
 ```
 
 ## Local Gateway Config
@@ -88,7 +88,7 @@ tailscale:
   enabled: true
   controlUrl: ""
   authKey: "tskey-auth-REPLACE_WITH_GATEWAY_KEY"
-  hybridWorkerAuthKey: "tskey-auth-REPLACE_WITH_WORKER_KEY"
+  agentAuthKey: "tskey-auth-REPLACE_WITH_AGENT_KEY"
 YAML
 ```
 
@@ -111,7 +111,7 @@ From a second terminal in this repo, run:
 uv run --project ./sdk beam pool join private-dev
 ```
 
-That command creates or updates `private-dev`, gets a join token, downloads the local installer from the gateway, and starts `cmd/agent join`. Because the gateway URL is localhost, the generated installer command automatically uses `--dev`; the transport is still `tsnet_restricted`.
+That command creates `private-dev`, gets a join token, downloads the local installer from the gateway, and starts `cmd/agent join`. Because the gateway URL is localhost, the generated installer command automatically uses `--dev`; the transport is still `tsnet_restricted`.
 
 Expected output:
 

@@ -162,7 +162,7 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 			},
 			"pools": map[string]any{
 				slot.PoolName: map[string]any{
-					"mode":                      string(types.PoolModeHybrid),
+					"mode":                      string(types.PoolModePrivate),
 					"gpuType":                   slot.Gpu,
 					"containerRuntime":          "runc",
 					"containerStartConcurrency": int(slot.ContainerStartConcurrency),
