@@ -102,7 +102,7 @@ func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
-func TestReadContentIntoFallsBackToReachableReplicaOutsideTopHosts(t *testing.T) {
+func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
@@ -126,17 +126,14 @@ func TestReadContentIntoFallsBackToReachableReplicaOutsideTopHosts(t *testing.T)
 	client.AttachLocalServer(&Server{cas: store})
 
 	dst := make([]byte, len(content))
-	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), n)
-	require.Equal(t, content, dst)
+	_, err = client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 
-	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
-	require.NoError(t, err)
-	require.Len(t, regions, 2)
+	_, err = client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
+	require.ErrorIs(t, err, ErrContentNotFound)
 }
 
-func TestReadContentIntoRefreshesHostsBeforeDeclaringMiss(t *testing.T) {
+func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -210,10 +207,8 @@ func TestReadContentIntoRefreshesHostsBeforeDeclaringMiss(t *testing.T) {
 	readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer readCancel()
 	dst := make([]byte, len(content))
-	n, err := client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), n)
-	require.Equal(t, content, dst)
+	_, err = client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.ErrorIs(t, err, ErrContentNotFound)
 }
 
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
@@ -713,7 +708,7 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.T) {
+func TestStoreContentFromReaderDoesNotFallbackWhenSelectedHostStreamFails(t *testing.T) {
 	ctx := context.Background()
 	firstHost := &Host{HostId: "first-host", PrivateAddr: "first-host:2049"}
 	secondHost := &Host{HostId: "second-host", PrivateAddr: "second-host:2049"}
@@ -721,7 +716,7 @@ func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.
 	secondStream := &fakeStoreContentStream{}
 	client := &Client{
 		ctx:                   ctx,
-		clientConfig:          ClientConfig{NTopHosts: 1},
+		clientConfig:          ClientConfig{NTopHosts: 2},
 		grpcClients:           map[string]proto.CacheClient{"first-host": &fakeStoreCacheClient{stream: firstStream}, "second-host": &fakeStoreCacheClient{stream: secondStream}},
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		rawReadPools:          make(map[string]*rawReadConnPool),
@@ -735,13 +730,13 @@ func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.
 	expectedHash := hex.EncodeToString(sum[:])
 
 	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
-	require.NoError(t, err)
-	require.Equal(t, expectedHash, got)
+	require.Error(t, err)
+	require.Empty(t, got)
 	require.NotEmpty(t, firstStream.sent.Bytes())
-	require.Equal(t, content, secondStream.sent.Bytes())
+	require.Empty(t, secondStream.sent.Bytes())
 }
 
-func TestStoreContentFromReaderFallsBackWhenSelectedHostUnavailable(t *testing.T) {
+func TestStoreContentFromReaderDoesNotFallbackWhenSelectedHostUnavailable(t *testing.T) {
 	ctx := context.Background()
 	selectedHost := &Host{HostId: "selected-host"}
 	fallbackHost := &Host{HostId: "fallback-host", PrivateAddr: "fallback-host:2049"}
@@ -762,9 +757,9 @@ func TestStoreContentFromReaderFallsBackWhenSelectedHostUnavailable(t *testing.T
 	expectedHash := hex.EncodeToString(sum[:])
 
 	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
-	require.NoError(t, err)
-	require.Equal(t, expectedHash, got)
-	require.Equal(t, content, fallbackStream.sent.Bytes())
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+	require.Empty(t, got)
+	require.Empty(t, fallbackStream.sent.Bytes())
 }
 
 type fakeStoreCacheClient struct {
