@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	defaultHybridPriority  = int32(1000)
 	defaultHybridExecutor  = types.DefaultAgentWorkerContainerMode
 	defaultHybridJoinTTL   = 30 * time.Minute
+	agentStreamRefresh     = 30 * time.Second
 )
 
 func (gws *GatewayService) ListHybridOffers(ctx context.Context, in *pb.ListHybridOffersRequest) (*pb.ListHybridOffersResponse, error) {
@@ -428,23 +430,27 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 	machineID := hybridMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
 	now := time.Now()
 	agentState := &hybrid.AgentTokenState{
-		TokenHash:          hashHybridToken(agentToken),
-		WorkspaceID:        tokenState.WorkspaceID,
-		PoolName:           tokenState.PoolName,
-		MachineID:          machineID,
-		MachineFingerprint: in.MachineFingerprint,
-		Hostname:           in.Hostname,
-		OS:                 in.Os,
-		Arch:               in.Arch,
-		CPUCount:           in.CpuCount,
-		MemoryMB:           in.MemoryMb,
-		GPUs:               in.Gpu,
-		GPUCount:           in.GpuCount,
-		Executor:           firstNonEmpty(in.Executor, defaultHybridExecutor),
-		Schedulable:        in.Schedulable,
-		Preflight:          hybridPreflightChecksFromProto(in.Preflight),
-		CreatedAt:          now,
-		LastJoinAt:         now,
+		TokenHash:                 hashHybridToken(agentToken),
+		WorkspaceID:               tokenState.WorkspaceID,
+		PoolName:                  tokenState.PoolName,
+		MachineID:                 machineID,
+		MachineFingerprint:        in.MachineFingerprint,
+		Hostname:                  in.Hostname,
+		OS:                        in.Os,
+		Arch:                      in.Arch,
+		CPUCount:                  in.CpuCount,
+		CPUMillicores:             firstNonZeroInt64(in.CpuMillicores, int64(in.CpuCount)*1000),
+		MemoryMB:                  in.MemoryMb,
+		GPUs:                      in.Gpu,
+		GPUIDs:                    in.GpuIds,
+		GPUCount:                  in.GpuCount,
+		Executor:                  firstNonEmpty(in.Executor, defaultHybridExecutor),
+		NetworkSlotPoolSize:       in.NetworkSlotPoolSize,
+		ContainerStartConcurrency: in.ContainerStartConcurrency,
+		Schedulable:               in.Schedulable,
+		Preflight:                 hybridPreflightChecksFromProto(in.Preflight),
+		CreatedAt:                 now,
+		LastJoinAt:                now,
 	}
 	if err := gws.saveHybridAgentTokenState(ctx, agentState); err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -471,6 +477,10 @@ func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentReques
 		GPUs:        agentState.GPUs,
 		Schedulable: boolPtr(agentState.Schedulable),
 		Message:     hybridPreflightSummary(agentState.Preflight),
+		Attrs: map[string]string{
+			"cpu_millicores": strconv.FormatInt(agentState.CPUMillicores, 10),
+			"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
+		},
 	})
 
 	bootstrap := gws.agentBootstrapConfig(tokenState.WorkspaceID, poolState)
@@ -545,6 +555,13 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 	}
 
 	sendSnapshot := func() error {
+		if gws.scheduler != nil {
+			if poolState, err := gws.getHybridPoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
+				if err := gws.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
+					return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+				}
+			}
+		}
 		routes, err := gws.agentRoutesForMachine(ctx, agentState)
 		if err != nil {
 			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
@@ -562,12 +579,13 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 
 	events := make(chan common.KeyEvent, 32)
 	if gws.keyEventManager != nil {
-		if err := gws.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerBackendRoute(""), events); err != nil {
+		routeRevisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+		if err := gws.keyEventManager.ListenForPattern(ctx, routeRevisionKey, events); err != nil {
 			return err
 		}
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(agentStreamRefresh)
 	defer ticker.Stop()
 
 	for {
@@ -607,48 +625,161 @@ func (gws *GatewayService) agentSlotsForMachine(ctx context.Context, agentState 
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*pb.AgentWorkerSlot, 0, len(slots))
-	for _, slot := range slots {
-		if slot == nil || slot.WorkerID == "" {
-			continue
-		}
-		if _, err := gws.workerRepo.GetWorkerById(slot.WorkerID); err != nil {
-			notFoundErr := &types.ErrWorkerNotFound{}
-			if notFoundErr.From(err) {
-				if deleteErr := gws.hybridRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); deleteErr != nil {
-					return nil, deleteErr
-				}
-				gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
-					WorkspaceID: slot.WorkspaceID,
-					PoolName:    slot.PoolName,
-					MachineID:   slot.MachineID,
-					WorkerID:    slot.WorkerID,
-					Action:      types.EventHybridActionWorkerSlotPruned,
-					Status:      "stale",
-					Message:     "removed stale agent worker slot because the scheduler worker no longer exists",
-				})
-				continue
-			}
+	worker, err := gws.agentMachineWorker(agentState)
+	if err != nil {
+		return nil, err
+	}
+	if worker == nil {
+		if err := gws.pruneAgentWorkerSlots(ctx, agentState, "", slots); err != nil {
 			return nil, err
 		}
-		out = append(out, agentWorkerSlotToProto(slot))
+		return nil, nil
 	}
-	return out, nil
+
+	slot, err := gws.ensureAgentWorkerSlot(ctx, agentState, worker, slots)
+	if err != nil {
+		return nil, err
+	}
+	if err := gws.pruneAgentWorkerSlots(ctx, agentState, worker.Id, slots); err != nil {
+		return nil, err
+	}
+	return []*pb.AgentWorkerSlot{agentWorkerSlotToProto(slot)}, nil
+}
+
+func (gws *GatewayService) agentMachineWorker(agentState *hybrid.AgentTokenState) (*types.Worker, error) {
+	worker, err := gws.workerRepo.GetWorkerById(hybrid.AgentMachineWorkerID(agentState.MachineID))
+	if err != nil {
+		notFoundErr := &types.ErrWorkerNotFound{}
+		if notFoundErr.From(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if worker.MachineId != agentState.MachineID || worker.PoolName != agentState.PoolName || worker.Status == types.WorkerStatusDisabled {
+		return nil, nil
+	}
+	return worker, nil
+}
+
+func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState *hybrid.AgentTokenState, worker *types.Worker, slots []*hybrid.AgentWorkerSlotState) (*hybrid.AgentWorkerSlotState, error) {
+	var existing *hybrid.AgentWorkerSlotState
+	for _, slot := range slots {
+		if slot != nil && slot.WorkerID == worker.Id {
+			existing = slot
+			break
+		}
+	}
+	token := ""
+	if existing != nil {
+		token = existing.WorkerToken
+	}
+	if token == "" {
+		workspace, err := gws.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
+		if err != nil {
+			return nil, err
+		}
+		createdToken, err := gws.backendRepo.CreateToken(ctx, workspace.Id, types.TokenTypeWorker, true)
+		if err != nil {
+			return nil, err
+		}
+		token = createdToken.Key
+	}
+
+	slot := agentWorkerSlotState(gws.appConfig, agentState, worker, token)
+	if existing != nil {
+		slot.CreatedAt = existing.CreatedAt
+	}
+	if err := gws.hybridRepo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+			WorkspaceID: agentState.WorkspaceID,
+			PoolName:    agentState.PoolName,
+			MachineID:   agentState.MachineID,
+			WorkerID:    worker.Id,
+			Action:      types.EventHybridActionWorkerSlotCreated,
+			Status:      string(worker.Status),
+			CPUCount:    agentState.CPUCount,
+			MemoryMB:    uint64(worker.TotalMemory),
+			GPUCount:    worker.TotalGpuCount,
+			GPUs:        agentState.GPUs,
+			Attrs: map[string]string{
+				"cpu_millicores": fmt.Sprintf("%d", worker.TotalCpu),
+				"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
+			},
+		})
+	}
+	return slot, nil
+}
+
+func (gws *GatewayService) pruneAgentWorkerSlots(ctx context.Context, agentState *hybrid.AgentTokenState, keepWorkerID string, slots []*hybrid.AgentWorkerSlotState) error {
+	for _, slot := range slots {
+		if slot == nil || slot.WorkerID == "" || slot.WorkerID == keepWorkerID {
+			continue
+		}
+		if err := gws.hybridRepo.DeleteAgentWorkerSlotState(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID); err != nil {
+			return err
+		}
+		gws.emitHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
+			WorkspaceID: agentState.WorkspaceID,
+			PoolName:    agentState.PoolName,
+			MachineID:   agentState.MachineID,
+			WorkerID:    slot.WorkerID,
+			Action:      types.EventHybridActionWorkerSlotPruned,
+			Status:      "stale",
+			Message:     "removed stale agent worker slot because the scheduler worker no longer owns this machine",
+		})
+	}
+	return nil
+}
+
+func agentWorkerSlotState(config types.AppConfig, agentState *hybrid.AgentTokenState, worker *types.Worker, token string) *hybrid.AgentWorkerSlotState {
+	return &hybrid.AgentWorkerSlotState{
+		WorkerID:                  worker.Id,
+		WorkerToken:               token,
+		WorkspaceID:               agentState.WorkspaceID,
+		PoolName:                  agentState.PoolName,
+		MachineID:                 agentState.MachineID,
+		CPU:                       worker.TotalCpu,
+		Memory:                    worker.TotalMemory,
+		GPU:                       worker.Gpu,
+		GPUCount:                  worker.TotalGpuCount,
+		GPUAssignment:             strings.Join(agentState.GPUIDs, ","),
+		NetworkPrefix:             common.WorkerNetworkPrefix(config.ClusterName, agentState.MachineID),
+		WorkerImage:               agentWorkerImage(config),
+		NetworkSlotPoolSize:       agentState.NetworkSlotPoolSize,
+		ContainerStartConcurrency: agentState.ContainerStartConcurrency,
+	}
+}
+
+func agentWorkerImage(config types.AppConfig) string {
+	image := strings.TrimSuffix(config.Worker.ImageRegistry, "/")
+	if image != "" {
+		image += "/"
+	}
+	image += config.Worker.ImageName
+	if config.Worker.ImageTag != "" {
+		image += ":" + config.Worker.ImageTag
+	}
+	return image
 }
 
 func agentWorkerSlotToProto(slot *hybrid.AgentWorkerSlotState) *pb.AgentWorkerSlot {
 	return &pb.AgentWorkerSlot{
-		WorkerId:      slot.WorkerID,
-		WorkerToken:   slot.WorkerToken,
-		PoolName:      slot.PoolName,
-		MachineId:     slot.MachineID,
-		Cpu:           slot.CPU,
-		Memory:        slot.Memory,
-		Gpu:           slot.GPU,
-		GpuCount:      slot.GPUCount,
-		GpuAssignment: slot.GPUAssignment,
-		NetworkPrefix: slot.NetworkPrefix,
-		WorkerImage:   slot.WorkerImage,
+		WorkerId:                  slot.WorkerID,
+		WorkerToken:               slot.WorkerToken,
+		PoolName:                  slot.PoolName,
+		MachineId:                 slot.MachineID,
+		Cpu:                       slot.CPU,
+		Memory:                    slot.Memory,
+		Gpu:                       slot.GPU,
+		GpuCount:                  slot.GPUCount,
+		GpuAssignment:             slot.GPUAssignment,
+		NetworkPrefix:             slot.NetworkPrefix,
+		WorkerImage:               slot.WorkerImage,
+		NetworkSlotPoolSize:       slot.NetworkSlotPoolSize,
+		ContainerStartConcurrency: slot.ContainerStartConcurrency,
 	}
 }
 
@@ -1098,6 +1229,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (gws *GatewayService) saveHybridPoolState(ctx context.Context, workspaceID string, state *hybrid.PoolState) error {

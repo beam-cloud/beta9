@@ -699,6 +699,10 @@ class JoinAgentRequest(betterproto.Message):
     preflight: List["AgentPreflightCheck"] = betterproto.message_field(10)
     schedulable: bool = betterproto.bool_field(11)
     executor: str = betterproto.string_field(12)
+    cpu_millicores: int = betterproto.int64_field(13)
+    gpu_ids: List[str] = betterproto.string_field(14)
+    network_slot_pool_size: int = betterproto.uint32_field(15)
+    container_start_concurrency: int = betterproto.uint32_field(16)
 
 
 @dataclass(eq=False, repr=False)
@@ -795,6 +799,8 @@ class AgentWorkerSlot(betterproto.Message):
     gpu_assignment: str = betterproto.string_field(9)
     network_prefix: str = betterproto.string_field(10)
     worker_image: str = betterproto.string_field(11)
+    network_slot_pool_size: int = betterproto.uint32_field(12)
+    container_start_concurrency: int = betterproto.uint32_field(13)
 
 
 @dataclass(eq=False, repr=False)

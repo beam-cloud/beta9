@@ -831,6 +831,10 @@ message JoinAgentRequest {
   repeated AgentPreflightCheck preflight = 10;
   bool schedulable = 11;
   string executor = 12;
+  int64 cpu_millicores = 13;
+  repeated string gpu_ids = 14;
+  uint32 network_slot_pool_size = 15;
+  uint32 container_start_concurrency = 16;
 }
 
 message JoinAgentResponse {
@@ -915,6 +919,8 @@ message AgentWorkerSlot {
   string gpu_assignment = 9;
   string network_prefix = 10;
   string worker_image = 11;
+  uint32 network_slot_pool_size = 12;
+  uint32 container_start_concurrency = 13;
 }
 
 message StreamAgentRequest { string agent_token = 1; }

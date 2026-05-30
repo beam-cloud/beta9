@@ -148,11 +148,9 @@ func (s *Scheduler) RegisterAgentPool(workspaceID string, state *hybrid.PoolStat
 		Config:         s.config,
 		WorkerPool:     config,
 		PoolState:      state,
-		BackendRepo:    s.backendRepo,
 		WorkerRepo:     s.workerRepo,
 		WorkerPoolRepo: s.workerPoolRepo,
 		HybridRepo:     s.hybridRepo,
-		EventRepo:      s.eventRepo,
 	})
 	if err != nil {
 		return err

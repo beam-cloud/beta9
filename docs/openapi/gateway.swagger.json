@@ -1652,6 +1652,14 @@
         },
         "workerImage": {
           "type": "string"
+        },
+        "networkSlotPoolSize": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "containerStartConcurrency": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -2536,6 +2544,24 @@
         },
         "executor": {
           "type": "string"
+        },
+        "cpuMillicores": {
+          "type": "string",
+          "format": "int64"
+        },
+        "gpuIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "networkSlotPoolSize": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "containerStartConcurrency": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

@@ -67,8 +67,20 @@ def test_pool_join_appends_agent_flags():
         agent_bin="/tmp/beam agent",
         executor="worker-container",
         worker_image="registry.localhost:5000/beta9-worker:latest",
+        max_cpu="8",
+        max_memory="32Gi",
+        max_gpus=2,
+        gpu_ids="0,1",
+        network_slots=64,
+        container_start_concurrency=12,
     )
 
     assert "--agent-bin '/tmp/beam agent'" in command
     assert "--executor worker-container" in command
     assert "--worker-image registry.localhost:5000/beta9-worker:latest" in command
+    assert "--max-cpu 8" in command
+    assert "--max-memory 32Gi" in command
+    assert "--max-gpus 2" in command
+    assert "--gpu-ids 0,1" in command
+    assert "--network-slots 64" in command
+    assert "--container-start-concurrency 12" in command

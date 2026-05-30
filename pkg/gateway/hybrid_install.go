@@ -17,6 +17,12 @@ AGENT_CONTAINER_IMAGE="${BEAM_AGENT_CONTAINER_IMAGE:-docker:27-dind}"
 TRANSPORT=""
 EXECUTOR="${BEAM_AGENT_EXECUTOR:-}"
 WORKER_IMAGE="${BEAM_WORKER_IMAGE:-}"
+MAX_CPU=""
+MAX_MEMORY=""
+MAX_GPUS=""
+GPU_IDS=""
+NETWORK_SLOTS=""
+CONTAINER_START_CONCURRENCY=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -46,6 +52,30 @@ while [ "$#" -gt 0 ]; do
       ;;
     --worker-image)
       WORKER_IMAGE="$2"
+      shift 2
+      ;;
+    --max-cpu)
+      MAX_CPU="$2"
+      shift 2
+      ;;
+    --max-memory)
+      MAX_MEMORY="$2"
+      shift 2
+      ;;
+    --max-gpus)
+      MAX_GPUS="$2"
+      shift 2
+      ;;
+    --gpu-ids)
+      GPU_IDS="$2"
+      shift 2
+      ;;
+    --network-slots)
+      NETWORK_SLOTS="$2"
+      shift 2
+      ;;
+    --container-start-concurrency)
+      CONTAINER_START_CONCURRENCY="$2"
       shift 2
       ;;
     *)
@@ -93,6 +123,24 @@ if [ -n "$EXECUTOR" ]; then
 fi
 if [ -n "$WORKER_IMAGE" ]; then
   set -- "$@" --worker-image "$WORKER_IMAGE"
+fi
+if [ -n "$MAX_CPU" ]; then
+  set -- "$@" --max-cpu "$MAX_CPU"
+fi
+if [ -n "$MAX_MEMORY" ]; then
+  set -- "$@" --max-memory "$MAX_MEMORY"
+fi
+if [ -n "$MAX_GPUS" ]; then
+  set -- "$@" --max-gpus "$MAX_GPUS"
+fi
+if [ -n "$GPU_IDS" ]; then
+  set -- "$@" --gpu-ids "$GPU_IDS"
+fi
+if [ -n "$NETWORK_SLOTS" ]; then
+  set -- "$@" --network-slots "$NETWORK_SLOTS"
+fi
+if [ -n "$CONTAINER_START_CONCURRENCY" ]; then
+  set -- "$@" --container-start-concurrency "$CONTAINER_START_CONCURRENCY"
 fi
 
 if [ -n "$AGENT_BIN" ]; then

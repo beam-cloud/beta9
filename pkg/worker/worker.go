@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -716,11 +715,6 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 }
 
-func envBool(key string) bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	return value == "1" || value == "true" || value == "yes" || value == "on"
-}
-
 func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 	ticker := time.NewTicker(containerStatusUpdateInterval)
 	defer ticker.Stop()
@@ -986,10 +980,14 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
-		WorkerId: s.workerId,
-	})); err != nil {
-		errs = errors.Join(errs, err)
+	if s.persistent {
+		s.disableSchedulingForShutdown()
+	} else {
+		if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
+			WorkerId: s.workerId,
+		})); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
 	if s.cacheManager != nil {

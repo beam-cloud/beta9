@@ -2,6 +2,7 @@ package repository_services
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -71,15 +72,11 @@ func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, r
 func (s *ContainerRepositoryService) SetContainerAddress(ctx context.Context, req *pb.SetContainerAddressRequest) (*pb.SetContainerAddressResponse, error) {
 	address := req.Address
 	if req.Route != nil {
-		route := backendRouteFromProto(req.Route)
-		route.ContainerID = req.ContainerId
-		if route.LocalTarget == "" {
-			route.LocalTarget = req.Address
-		}
-		if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+		routeAddress, err := s.registerBackendRoute(ctx, req.ContainerId, req.Route, req.Address)
+		if err != nil {
 			return &pb.SetContainerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
-		address = types.BackendRouteAddress(route.RouteID)
+		address = routeAddress
 	}
 
 	err := s.containerRepo.SetContainerAddress(req.ContainerId, address)
@@ -96,15 +93,14 @@ func (s *ContainerRepositoryService) SetContainerAddressMap(ctx context.Context,
 		addressMap[int32(k)] = v
 	}
 	for _, routeProto := range req.Routes {
-		route := backendRouteFromProto(routeProto)
-		route.ContainerID = req.ContainerId
-		if route.LocalTarget == "" {
-			route.LocalTarget = addressMap[route.Port]
+		if routeProto == nil {
+			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: "backend route is required"}, nil
 		}
-		if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+		routeAddress, err := s.registerBackendRoute(ctx, req.ContainerId, routeProto, addressMap[routeProto.Port])
+		if err != nil {
 			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
-		addressMap[route.Port] = types.BackendRouteAddress(route.RouteID)
+		addressMap[routeProto.Port] = routeAddress
 	}
 
 	err := s.containerRepo.SetContainerAddressMap(req.ContainerId, addressMap)
@@ -132,15 +128,11 @@ func (s *ContainerRepositoryService) GetContainerAddressMap(ctx context.Context,
 func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *pb.SetWorkerAddressRequest) (*pb.SetWorkerAddressResponse, error) {
 	address := req.Address
 	if req.Route != nil {
-		route := backendRouteFromProto(req.Route)
-		route.ContainerID = req.ContainerId
-		if route.LocalTarget == "" {
-			route.LocalTarget = req.Address
-		}
-		if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+		routeAddress, err := s.registerBackendRoute(ctx, req.ContainerId, req.Route, req.Address)
+		if err != nil {
 			return &pb.SetWorkerAddressResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
-		address = types.BackendRouteAddress(route.RouteID)
+		address = routeAddress
 	}
 
 	err := s.containerRepo.SetWorkerAddress(req.ContainerId, address)
@@ -149,6 +141,21 @@ func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *
 	}
 
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, containerID string, routeProto *pb.BackendRoute, defaultLocalTarget string) (string, error) {
+	if routeProto == nil {
+		return "", fmt.Errorf("backend route is required")
+	}
+	route := backendRouteFromProto(routeProto)
+	route.ContainerID = containerID
+	if route.LocalTarget == "" {
+		route.LocalTarget = defaultLocalTarget
+	}
+	if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+		return "", err
+	}
+	return types.BackendRouteAddress(route.RouteID), nil
 }
 
 func backendRouteFromProto(in *pb.BackendRoute) types.BackendRoute {

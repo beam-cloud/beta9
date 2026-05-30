@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,12 +102,16 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		GatewayGRPCHost: "host.docker.internal",
 		GatewayGRPCPort: 1993,
 	}, &pb.AgentWorkerSlot{
-		WorkerId:      "worker-one",
-		WorkerToken:   "token",
-		PoolName:      "private",
-		MachineId:     "machine",
-		Memory:        512,
-		NetworkPrefix: "10.0.0.0/24",
+		WorkerId:                  "worker-one",
+		WorkerToken:               "token",
+		PoolName:                  "private",
+		MachineId:                 "machine",
+		Memory:                    512,
+		GpuCount:                  2,
+		GpuAssignment:             "0,1",
+		NetworkPrefix:             "10.0.0.0/24",
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 12,
 	}, agentWorkerDirs("/tmp/agent-state", "worker-one"))
 
 	if !containsArg(args, "-e", types.WorkerEnvRouteLocalTargetHost+"=host.docker.internal") {
@@ -123,6 +128,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		"BETA9_GATEWAY_HOST_HTTP=host.docker.internal",
 		"BETA9_GATEWAY_PORT_HTTP=1994",
 		"BEAM_OCI_REGISTRY_REWRITE=registry.localhost:5000=host.docker.internal:5001,localhost:5000=host.docker.internal:5001,127.0.0.1:5000=host.docker.internal:5001",
+		"NVIDIA_VISIBLE_DEVICES=0,1",
+		"WORKER_CONTAINER_START_CONCURRENCY=12",
+		"CONTAINER_NETWORK_SLOT_POOL_SIZE=64",
 	} {
 		if !containsArg(args, "-e", want) {
 			t.Fatalf("expected %s env in docker args: %#v", want, args)
@@ -142,6 +150,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	if !containsArg(args, "--shm-size", "256m") {
 		t.Fatalf("expected shm size to track worker memory: %#v", args)
 	}
+	if !containsArg(args, "--gpus", "device=0,1") {
+		t.Fatalf("expected GPU device assignment: %#v", args)
+	}
 	for _, want := range []string{
 		"registry.localhost:127.0.0.1",
 		"localstack:host-gateway",
@@ -155,11 +166,13 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	slot := &pb.AgentWorkerSlot{
-		PoolName:      "private-dev",
-		MachineId:     "machine-a",
-		Cpu:           500,
-		Memory:        256,
-		NetworkPrefix: "10.0.0.0/24",
+		PoolName:                  "private-dev",
+		MachineId:                 "machine-a",
+		Cpu:                       500,
+		Memory:                    256,
+		NetworkPrefix:             "10.0.0.0/24",
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 12,
 	}
 
 	if err := writeWorkerConfig(path, bootstrapConfig{
@@ -245,14 +258,58 @@ func TestMachineFingerprintCanBeProvidedByHost(t *testing.T) {
 	}
 }
 
+func TestResolveAgentCapacityAppliesHardCaps(t *testing.T) {
+	capacity, checks, schedulable := resolveAgentCapacity(JoinOptions{
+		MaxCPU:    "999999",
+		MaxMemory: "999999Ti",
+	}, preflightResult{
+		schedulable: true,
+	})
+
+	if schedulable {
+		t.Fatal("expected over-inventory caps to make machine unschedulable")
+	}
+	if capacity.CPUMillicores <= 0 || capacity.MemoryMB == 0 {
+		t.Fatalf("expected detected fallback capacity, got %#v", capacity)
+	}
+	if len(checks) < 2 {
+		t.Fatalf("expected cap checks, got %#v", checks)
+	}
+}
+
+func TestResolveAgentCapacitySelectsGPUIDs(t *testing.T) {
+	capacity, _, schedulable := resolveAgentCapacity(JoinOptions{
+		GPUIDs: "GPU-a,1",
+	}, preflightResult{
+		gpus: []string{"A10G", "A10G"},
+		gpuDevices: []gpuDevice{
+			{ID: "0", UUID: "GPU-a", Name: "A10G"},
+			{ID: "1", UUID: "GPU-b", Name: "A10G"},
+		},
+		schedulable: true,
+	})
+
+	if !schedulable {
+		t.Fatal("expected selected GPU IDs to be schedulable")
+	}
+	if capacity.GPUCount != 2 {
+		t.Fatalf("gpu count = %d, want 2", capacity.GPUCount)
+	}
+	if got := strings.Join(capacity.GPUIDs, ","); got != "GPU-a,1" {
+		t.Fatalf("gpu ids = %q, want GPU-a,1", got)
+	}
+}
+
 func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	slot := &pb.AgentWorkerSlot{
-		PoolName:      "private-dev",
-		MachineId:     "machine-a",
-		Cpu:           500,
-		Memory:        256,
-		NetworkPrefix: "10.0.0.0/24",
+		PoolName:                  "private-dev",
+		MachineId:                 "machine-a",
+		Cpu:                       500,
+		Memory:                    256,
+		NetworkPrefix:             "10.0.0.0/24",
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 12,
 	}
 
 	if err := writeWorkerConfig(path, bootstrapConfig{}, slot, agentWorkerDirs("/tmp/agent-state", "worker-one")); err != nil {
@@ -303,6 +360,15 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	pool := pools["private-dev"].(map[string]any)
 	if got := pool["storageMode"]; got != storage.StorageModeGeese {
 		t.Fatalf("pool storage mode = %v, want %q", got, storage.StorageModeGeese)
+	}
+	if got := pool["networkPreallocation"]; got != true {
+		t.Fatalf("pool networkPreallocation = %v, want true", got)
+	}
+	if got := pool["networkSlotPoolSize"]; got != float64(64) {
+		t.Fatalf("pool networkSlotPoolSize = %v, want 64", got)
+	}
+	if got := pool["containerStartConcurrency"]; got != float64(12) {
+		t.Fatalf("pool containerStartConcurrency = %v, want 12", got)
 	}
 	poolCache := pool["cache"].(map[string]any)
 	poolDisk := poolCache["disk"].(map[string]any)

@@ -225,6 +225,10 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	if err := repo.SetBackendRoute(ctx, route); err != nil {
 		t.Fatal(err)
 	}
+	revisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision("workspace-one", "pool-one", "machine-one")
+	if rev := rdb.Get(ctx, revisionKey).Val(); rev != "1" {
+		t.Fatalf("route machine revision after create = %q, want 1", rev)
+	}
 	if err := repo.SetBackendRoute(ctx, types.BackendRoute{
 		RouteID:     "route-two",
 		WorkspaceID: "workspace-one",
@@ -247,6 +251,9 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 
 	if err := repo.DeleteBackendRoutesByContainerID(ctx, route.ContainerID); err != nil {
 		t.Fatal(err)
+	}
+	if rev := rdb.Get(ctx, revisionKey).Val(); rev != "2" {
+		t.Fatalf("route machine revision after delete = %q, want 2", rev)
 	}
 	routes, err = repo.ListBackendRoutesByMachine(ctx, "workspace-one", "pool-one", "machine-one")
 	if err != nil {

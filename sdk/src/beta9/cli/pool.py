@@ -318,6 +318,17 @@ def join_command(service: ServiceClient, name: str, ttl: str):
     help="Override the agent executor returned by preflight.",
 )
 @click.option("--worker-image", default="", help="Worker image for the worker-container executor.")
+@click.option("--max-cpu", default="", help="Maximum CPU cores to advertise from this machine.")
+@click.option("--max-memory", default="", help="Maximum memory to advertise, for example 32Gi.")
+@click.option("--max-gpus", type=click.IntRange(0), default=0, help="Maximum GPUs to advertise.")
+@click.option("--gpu-ids", default="", help="Comma-separated GPU device IDs to expose.")
+@click.option("--network-slots", type=click.IntRange(0), default=0, help="Preallocated container network slots.")
+@click.option(
+    "--container-start-concurrency",
+    type=click.IntRange(0),
+    default=0,
+    help="Maximum concurrent container starts.",
+)
 @click.option("--print-only", is_flag=True, help="Only print the generated join command.")
 @extraclick.pass_service_client
 def join(
@@ -332,8 +343,17 @@ def join(
     agent_bin: str,
     executor: str | None,
     worker_image: str,
+    max_cpu: str,
+    max_memory: str,
+    max_gpus: int,
+    gpu_ids: str,
+    network_slots: int,
+    container_start_concurrency: int,
     print_only: bool,
 ):
+    if gpu_ids and max_gpus:
+        return terminal.error("--gpu-ids and --max-gpus cannot both be set.")
+
     transport = _join_transport(service, transport)
     res = service.gateway.upsert_hybrid_pool(
         UpsertHybridPoolRequest(
@@ -361,6 +381,12 @@ def join(
         agent_bin=agent_bin,
         executor=executor,
         worker_image=worker_image,
+        max_cpu=max_cpu,
+        max_memory=max_memory,
+        max_gpus=max_gpus,
+        gpu_ids=gpu_ids,
+        network_slots=network_slots,
+        container_start_concurrency=container_start_concurrency,
     )
     terminal.detail(command, crop=False, overflow="ignore")
     if print_only:
@@ -380,6 +406,12 @@ def _append_join_args(
     agent_bin: str = "",
     executor: str = "",
     worker_image: str = "",
+    max_cpu: str = "",
+    max_memory: str = "",
+    max_gpus: int = 0,
+    gpu_ids: str = "",
+    network_slots: int = 0,
+    container_start_concurrency: int = 0,
 ) -> str:
     extra = []
     if agent_bin:
@@ -388,6 +420,18 @@ def _append_join_args(
         extra.extend(["--executor", executor])
     if worker_image:
         extra.extend(["--worker-image", worker_image])
+    if max_cpu:
+        extra.extend(["--max-cpu", max_cpu])
+    if max_memory:
+        extra.extend(["--max-memory", max_memory])
+    if max_gpus:
+        extra.extend(["--max-gpus", str(max_gpus)])
+    if gpu_ids:
+        extra.extend(["--gpu-ids", gpu_ids])
+    if network_slots:
+        extra.extend(["--network-slots", str(network_slots)])
+    if container_start_concurrency:
+        extra.extend(["--container-start-concurrency", str(container_start_concurrency)])
     if not extra:
         return command
     return command + " " + " ".join(shlex.quote(value) for value in extra)

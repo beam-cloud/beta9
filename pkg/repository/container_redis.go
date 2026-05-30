@@ -399,6 +399,9 @@ func (cr *ContainerRedisRepository) SetBackendRoute(ctx context.Context, route t
 		if err := cr.rdb.SAdd(ctx, common.RedisKeys.SchedulerBackendRouteMachineIndex(route.WorkspaceID, route.PoolName, route.MachineID), route.RouteID).Err(); err != nil {
 			return fmt.Errorf("failed to index backend route %s by machine: %w", route.RouteID, err)
 		}
+		if err := cr.touchBackendRouteMachine(ctx, route.WorkspaceID, route.PoolName, route.MachineID); err != nil {
+			return fmt.Errorf("failed to update backend route machine revision %s: %w", route.RouteID, err)
+		}
 	}
 	return nil
 }
@@ -452,9 +455,19 @@ func (cr *ContainerRedisRepository) DeleteBackendRoutesByContainerID(ctx context
 			if err := cr.rdb.SRem(ctx, common.RedisKeys.SchedulerBackendRouteMachineIndex(route.WorkspaceID, route.PoolName, route.MachineID), routeID).Err(); err != nil {
 				return err
 			}
+			if err := cr.touchBackendRouteMachine(ctx, route.WorkspaceID, route.PoolName, route.MachineID); err != nil {
+				return err
+			}
 		}
 	}
 	return cr.rdb.Del(ctx, indexKey).Err()
+}
+
+func (cr *ContainerRedisRepository) touchBackendRouteMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
+	if workspaceID == "" || poolName == "" || machineID == "" {
+		return nil
+	}
+	return cr.rdb.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID)).Err()
 }
 
 func (cr *ContainerRedisRepository) SetContainerAddressMap(containerId string, addressMap map[int32]string) error {

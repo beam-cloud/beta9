@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
@@ -30,9 +29,7 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	workspace := types.Workspace{Id: 1, ExternalId: "workspace-agent-test", Name: "agent-test"}
-	backendRepo := agentPoolBackendRepoForTest{workspace: workspace}
-
+	workspaceID := "workspace-agent-test"
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
 	hybridRepo := repo.NewHybridRedisRepository(redisClient)
 	poolState := &hybrid.PoolState{
@@ -45,22 +42,26 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		},
 	}
 	machine := &hybrid.AgentTokenState{
-		TokenHash:          "agent-token",
-		WorkspaceID:        workspace.ExternalId,
-		PoolName:           poolState.Name,
-		MachineID:          "machine-1",
-		MachineFingerprint: "machine-1",
-		Hostname:           "agent-machine",
-		OS:                 "linux",
-		Arch:               "amd64",
-		CPUCount:           8,
-		MemoryMB:           32768,
-		GPUs:               []string{"A10G", "A10G"},
-		GPUCount:           2,
-		Executor:           types.DefaultAgentWorkerContainerMode,
-		Schedulable:        true,
-		CreatedAt:          time.Now(),
-		LastJoinAt:         time.Now(),
+		TokenHash:                 "agent-token",
+		WorkspaceID:               workspaceID,
+		PoolName:                  poolState.Name,
+		MachineID:                 "machine-1",
+		MachineFingerprint:        "machine-1",
+		Hostname:                  "agent-machine",
+		OS:                        "linux",
+		Arch:                      "amd64",
+		CPUCount:                  8,
+		CPUMillicores:             7500,
+		MemoryMB:                  32768,
+		GPUs:                      []string{"A10G", "A10G"},
+		GPUIDs:                    []string{"0", "1"},
+		GPUCount:                  2,
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 12,
+		Executor:                  types.DefaultAgentWorkerContainerMode,
+		Schedulable:               true,
+		CreatedAt:                 time.Now(),
+		LastJoinAt:                time.Now(),
 	}
 	if err := hybridRepo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
 		t.Fatal(err)
@@ -69,7 +70,7 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
 		Context:     ctx,
 		Name:        poolState.Selector,
-		WorkspaceID: workspace.ExternalId,
+		WorkspaceID: workspaceID,
 		Config: types.AppConfig{
 			ClusterName: "test",
 			Worker: types.WorkerConfig{
@@ -84,10 +85,9 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 			RequiresPoolSelector: true,
 			Priority:             1000,
 		},
-		PoolState:   poolState,
-		BackendRepo: backendRepo,
-		WorkerRepo:  workerRepo,
-		HybridRepo:  hybridRepo,
+		PoolState:  poolState,
+		WorkerRepo: workerRepo,
+		HybridRepo: hybridRepo,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,46 +106,21 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if worker.MachineId != machine.MachineID {
 		t.Fatalf("worker machine = %q, want %q", worker.MachineId, machine.MachineID)
 	}
+	if worker.TotalCpu != machine.CPUMillicores {
+		t.Fatalf("worker cpu = %d, want %d", worker.TotalCpu, machine.CPUMillicores)
+	}
+	if worker.TotalMemory != int64(machine.MemoryMB) {
+		t.Fatalf("worker memory = %d, want %d", worker.TotalMemory, machine.MemoryMB)
+	}
+	if worker.TotalGpuCount != machine.GPUCount {
+		t.Fatalf("worker gpus = %d, want %d", worker.TotalGpuCount, machine.GPUCount)
+	}
 
-	slots, err := hybridRepo.ListAgentWorkerSlotStates(ctx, workspace.ExternalId, poolState.Name, machine.MachineID)
+	secondWorker, err := controller.AddWorker(1000, 1024, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(slots) != 1 {
-		t.Fatalf("slots len = %d, want 1", len(slots))
+	if secondWorker.Id != worker.Id {
+		t.Fatalf("second worker = %q, want stable worker %q", secondWorker.Id, worker.Id)
 	}
-	slot := slots[0]
-	if slot.WorkerID != worker.Id {
-		t.Fatalf("slot worker = %q, want %q", slot.WorkerID, worker.Id)
-	}
-	if slot.PoolName != poolState.Name {
-		t.Fatalf("slot pool = %q, want %q", slot.PoolName, poolState.Name)
-	}
-	if slot.GPUAssignment != "0" {
-		t.Fatalf("slot gpu assignment = %q, want 0", slot.GPUAssignment)
-	}
-}
-
-type agentPoolBackendRepoForTest struct {
-	repo.BackendRepository
-	workspace types.Workspace
-}
-
-func (r agentPoolBackendRepoForTest) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
-	if externalID != r.workspace.ExternalId {
-		return types.Workspace{}, sql.ErrNoRows
-	}
-	return r.workspace, nil
-}
-
-func (r agentPoolBackendRepoForTest) CreateToken(ctx context.Context, workspaceID uint, tokenType string, reusable bool) (types.Token, error) {
-	return types.Token{
-		Id:          1,
-		ExternalId:  "token-agent-test",
-		Key:         "worker-token-agent-test",
-		Active:      true,
-		Reusable:    reusable,
-		WorkspaceId: &workspaceID,
-		TokenType:   tokenType,
-	}, nil
 }

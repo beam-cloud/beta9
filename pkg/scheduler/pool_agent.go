@@ -4,12 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/hybrid"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -22,11 +18,9 @@ type AgentWorkerPoolController struct {
 	config           types.AppConfig
 	workerPoolConfig types.WorkerPoolConfig
 	poolState        *hybrid.PoolState
-	backendRepo      repository.BackendRepository
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
 	hybridRepo       repository.HybridRepository
-	eventRepo        repository.EventRepository
 }
 
 type AgentWorkerPoolControllerOptions struct {
@@ -36,11 +30,24 @@ type AgentWorkerPoolControllerOptions struct {
 	Config         types.AppConfig
 	WorkerPool     types.WorkerPoolConfig
 	PoolState      *hybrid.PoolState
-	BackendRepo    repository.BackendRepository
 	WorkerRepo     repository.WorkerRepository
 	WorkerPoolRepo repository.WorkerPoolRepository
 	HybridRepo     repository.HybridRepository
-	EventRepo      repository.EventRepository
+}
+
+type agentMachineWorker struct {
+	id                   string
+	cpu                  int64
+	memory               int64
+	gpu                  string
+	gpuCount             uint32
+	poolName             string
+	machineID            string
+	requiresPoolSelector bool
+	priority             int32
+	preemptable          bool
+	runtime              string
+	buildVersion         string
 }
 
 func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (WorkerPoolController, error) {
@@ -54,19 +61,21 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (Worker
 		return nil, errors.New("hybrid repository is required")
 	}
 
-	return &AgentWorkerPoolController{
+	wpc := &AgentWorkerPoolController{
 		ctx:              opts.Context,
 		name:             opts.Name,
 		workspaceID:      opts.WorkspaceID,
 		config:           opts.Config,
 		workerPoolConfig: opts.WorkerPool,
 		poolState:        opts.PoolState,
-		backendRepo:      opts.BackendRepo,
 		workerRepo:       opts.WorkerRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		hybridRepo:       opts.HybridRepo,
-		eventRepo:        opts.EventRepo,
-	}, nil
+	}
+	if err := wpc.ensureMachineWorkers(); err != nil {
+		return nil, err
+	}
+	return wpc, nil
 }
 
 func (wpc *AgentWorkerPoolController) Context() context.Context {
@@ -130,32 +139,29 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 }
 
 func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
-	machine, gpuAssignment, gpuType, err := wpc.selectMachine(cpu, memory, gpuCount)
+	machine, err := wpc.findMachine(func(machine *hybrid.AgentTokenState) bool {
+		return wpc.machineCanFit(machine, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
+	})
 	if err != nil {
 		return nil, err
 	}
-	return wpc.addWorkerToAgentMachine(machine, cpu, memory, gpuType, gpuCount, gpuAssignment)
+	if machine == nil {
+		return nil, fmt.Errorf("no joined agent machine in pool %q has enough capacity", wpc.name)
+	}
+	return wpc.ensureMachineWorker(machine)
 }
 
 func (wpc *AgentWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineID string) (*types.Worker, error) {
-	machines, err := wpc.hybridRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	machine, err := wpc.findMachine(func(machine *hybrid.AgentTokenState) bool {
+		return machine.MachineID == machineID && wpc.machineCanFit(machine, cpu, memory, gpuType, gpuCount)
+	})
 	if err != nil {
 		return nil, err
 	}
-	for _, machine := range machines {
-		if machine.MachineID != machineID {
-			continue
-		}
-		if !wpc.machineSchedulable(machine) {
-			return nil, nil
-		}
-		assignment, resolvedGPU, ok := wpc.availableGPUAssignment(machine, gpuType, gpuCount)
-		if !ok {
-			return nil, nil
-		}
-		return wpc.addWorkerToAgentMachine(machine, cpu, memory, resolvedGPU, gpuCount, assignment)
+	if machine == nil {
+		return nil, nil
 	}
-	return nil, nil
+	return wpc.ensureMachineWorker(machine)
 }
 
 func (wpc *AgentWorkerPoolController) WorkspaceID() string {
@@ -169,25 +175,39 @@ func (wpc *AgentWorkerPoolController) poolName() string {
 	return wpc.name
 }
 
-func (wpc *AgentWorkerPoolController) selectMachine(cpu int64, memory int64, gpuCount uint32) (*hybrid.AgentTokenState, string, string, error) {
+func (wpc *AgentWorkerPoolController) ensureMachineWorkers() error {
 	machines, err := wpc.hybridRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {
-		return nil, "", "", err
+		return err
+	}
+	for _, machine := range machines {
+		if !wpc.machineSchedulable(machine) {
+			if worker, err := wpc.machineWorker(machine); err == nil && worker != nil {
+				_ = wpc.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled)
+			}
+			continue
+		}
+		if _, err := wpc.ensureMachineWorker(machine); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (wpc *AgentWorkerPoolController) findMachine(match func(*hybrid.AgentTokenState) bool) (*hybrid.AgentTokenState, error) {
+	machines, err := wpc.hybridRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	if err != nil {
+		return nil, err
 	}
 	for _, machine := range machines {
 		if !wpc.machineSchedulable(machine) {
 			continue
 		}
-		if !wpc.machineHasCapacity(machine, cpu, memory, gpuCount) {
-			continue
+		if match == nil || match(machine) {
+			return machine, nil
 		}
-		assignment, gpu, ok := wpc.availableGPUAssignment(machine, wpc.workerPoolConfig.GPUType, gpuCount)
-		if !ok {
-			continue
-		}
-		return machine, assignment, gpu, nil
 	}
-	return nil, "", "", fmt.Errorf("no joined agent machine in pool %q has enough capacity", wpc.name)
+	return nil, nil
 }
 
 func (wpc *AgentWorkerPoolController) machineSchedulable(machine *hybrid.AgentTokenState) bool {
@@ -198,157 +218,122 @@ func (wpc *AgentWorkerPoolController) machineSchedulable(machine *hybrid.AgentTo
 		machine.PoolName == wpc.poolName()
 }
 
-func (wpc *AgentWorkerPoolController) machineHasCapacity(machine *hybrid.AgentTokenState, cpu int64, memory int64, gpuCount uint32) bool {
-	usedCPU, usedMemory, usedGPU := wpc.machineAllocatedCapacity(machine.MachineID)
-	return int64(machine.CPUCount)*1000-usedCPU >= cpu &&
-		int64(machine.MemoryMB)-usedMemory >= memory &&
-		int64(machine.GPUCount)-usedGPU >= int64(gpuCount)
-}
-
-func (wpc *AgentWorkerPoolController) machineAllocatedCapacity(machineID string) (int64, int64, int64) {
-	workers, err := wpc.workerRepo.GetAllWorkersOnMachine(machineID)
+func (wpc *AgentWorkerPoolController) machineCanFit(machine *hybrid.AgentTokenState, cpu int64, memory int64, gpuType string, gpuCount uint32) bool {
+	if machine == nil {
+		return false
+	}
+	worker, err := wpc.machineWorker(machine)
 	if err != nil {
-		return 0, 0, 0
+		return false
 	}
-	var cpu int64
-	var memory int64
-	var gpu int64
-	for _, worker := range workers {
-		if worker.PoolName != wpc.name || worker.Status == types.WorkerStatusDisabled {
-			continue
+	capacity := wpc.agentMachineWorker(machine)
+	availableCPU := capacity.cpu
+	availableMemory := capacity.memory
+	availableGPU := capacity.gpuCount
+	if worker != nil {
+		switch worker.Status {
+		case types.WorkerStatusAvailable:
+			availableCPU = worker.FreeCpu
+			availableMemory = worker.FreeMemory
+			availableGPU = worker.FreeGpuCount
+		case types.WorkerStatusPending:
+			availableCPU = worker.TotalCpu
+			availableMemory = worker.TotalMemory
+			availableGPU = worker.TotalGpuCount
+		default:
+			return false
 		}
-		cpu += worker.TotalCpu
-		memory += worker.TotalMemory
-		gpu += int64(worker.TotalGpuCount)
 	}
-	return cpu, memory, gpu
-}
-
-func (wpc *AgentWorkerPoolController) availableGPUAssignment(machine *hybrid.AgentTokenState, requestedGPU string, gpuCount uint32) (string, string, bool) {
+	if availableCPU < cpu || availableMemory < memory || availableGPU < gpuCount {
+		return false
+	}
 	if gpuCount == 0 {
-		return "", "", true
+		return true
 	}
-
-	used := wpc.usedGPUAssignments(machine.MachineID)
-	for i := uint32(0); i < machine.GPUCount; i++ {
-		assignment := strconv.FormatUint(uint64(i), 10)
-		if slices.Contains(used, assignment) {
-			continue
-		}
-		gpuType := requestedGPU
-		if int(i) < len(machine.GPUs) && machine.GPUs[i] != "" {
-			gpuType = machine.GPUs[i]
-		}
-		if requestedGPU != "" && gpuType != "" && !strings.EqualFold(requestedGPU, gpuType) {
-			continue
-		}
-		return assignment, gpuType, true
+	if gpuType == "" || strings.EqualFold(gpuType, string(types.GPU_ANY)) {
+		return true
 	}
-	return "", "", false
+	for _, machineGPU := range machine.GPUs {
+		if strings.EqualFold(machineGPU, gpuType) {
+			return true
+		}
+	}
+	return false
 }
 
-func (wpc *AgentWorkerPoolController) usedGPUAssignments(machineID string) []string {
-	slots, err := wpc.hybridRepo.ListAgentWorkerSlotStates(wpc.ctx, wpc.workspaceID, wpc.poolName(), machineID)
+func (wpc *AgentWorkerPoolController) machineWorker(machine *hybrid.AgentTokenState) (*types.Worker, error) {
+	if machine == nil {
+		return nil, nil
+	}
+	worker, err := wpc.workerRepo.GetWorkerById(hybrid.AgentMachineWorkerID(machine.MachineID))
 	if err != nil {
-		return nil
-	}
-	used := make([]string, 0, len(slots))
-	for _, slot := range slots {
-		worker, err := wpc.workerRepo.GetWorkerById(slot.WorkerID)
-		if err != nil {
-			if _, ok := err.(*types.ErrWorkerNotFound); ok {
-				_ = wpc.hybridRepo.DeleteAgentWorkerSlotState(wpc.ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID, slot.WorkerID)
-			}
-			continue
+		notFoundErr := &types.ErrWorkerNotFound{}
+		if notFoundErr.From(err) {
+			return nil, nil
 		}
-		if worker.Status == types.WorkerStatusDisabled {
-			continue
-		}
-		if slot.GPUAssignment != "" {
-			used = append(used, slot.GPUAssignment)
-		}
-	}
-	return used
-}
-
-func (wpc *AgentWorkerPoolController) addWorkerToAgentMachine(machine *hybrid.AgentTokenState, cpu int64, memory int64, gpuType string, gpuCount uint32, gpuAssignment string) (*types.Worker, error) {
-	workspace, err := wpc.backendRepo.GetWorkspaceByExternalId(wpc.ctx, wpc.workspaceID)
-	if err != nil {
 		return nil, err
 	}
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, workspace.Id, types.TokenTypeWorker, true)
-	if err != nil {
-		return nil, err
-	}
-
-	workerID := GenerateWorkerId()
-	worker := &types.Worker{
-		Id:                   workerID,
-		Status:               types.WorkerStatusPending,
-		TotalCpu:             cpu,
-		TotalMemory:          memory,
-		TotalGpuCount:        gpuCount,
-		FreeCpu:              cpu,
-		FreeMemory:           memory,
-		FreeGpuCount:         gpuCount,
-		Gpu:                  gpuType,
-		PoolName:             wpc.name,
-		MachineId:            machine.MachineID,
-		RequiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
-		Priority:             wpc.workerPoolConfig.Priority,
-		Preemptable:          wpc.workerPoolConfig.Preemptable,
-		Runtime:              wpc.ContainerRuntime(),
-		BuildVersion:         wpc.config.Worker.ImageTag,
-	}
-	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		return nil, err
-	}
-
-	slot := &hybrid.AgentWorkerSlotState{
-		WorkerID:      workerID,
-		WorkerToken:   token.Key,
-		WorkspaceID:   wpc.workspaceID,
-		PoolName:      wpc.poolName(),
-		MachineID:     machine.MachineID,
-		CPU:           cpu,
-		Memory:        memory,
-		GPU:           gpuType,
-		GPUCount:      gpuCount,
-		GPUAssignment: gpuAssignment,
-		NetworkPrefix: common.WorkerNetworkPrefix(wpc.config.ClusterName, machine.MachineID),
-		WorkerImage:   agentWorkerImage(wpc.config),
-		CreatedAt:     time.Now(),
-	}
-	if err := wpc.hybridRepo.SaveAgentWorkerSlotState(wpc.ctx, slot); err != nil {
-		_ = wpc.workerRepo.RemoveWorker(workerID)
-		return nil, err
-	}
-
-	if wpc.eventRepo != nil {
-		wpc.eventRepo.PushHybridEvent(types.EventHybridMachine, types.EventHybridSchema{
-			WorkspaceID: wpc.workspaceID,
-			PoolName:    wpc.poolName(),
-			MachineID:   machine.MachineID,
-			WorkerID:    workerID,
-			Action:      types.EventHybridActionWorkerSlotCreated,
-			Status:      string(types.WorkerStatusPending),
-			CPUCount:    uint32(cpu),
-			MemoryMB:    uint64(memory),
-			GPUCount:    gpuCount,
-			GPUs:        []string{gpuType},
-		})
+	if worker.PoolName != wpc.name || worker.MachineId != machine.MachineID {
+		return nil, nil
 	}
 	return worker, nil
 }
 
-func agentWorkerImage(config types.AppConfig) string {
-	image := strings.TrimSuffix(config.Worker.ImageRegistry, "/")
-	if image != "" {
-		image += "/"
+func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *hybrid.AgentTokenState) (*types.Worker, error) {
+	spec := wpc.agentMachineWorker(machine)
+	if worker, err := wpc.machineWorker(machine); err != nil || worker != nil {
+		return worker, err
 	}
-	image += config.Worker.ImageName
-	if config.Worker.ImageTag != "" {
-		image += ":" + config.Worker.ImageTag
+
+	worker := spec.worker()
+	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+		return nil, err
 	}
-	return image
+	return worker, nil
+}
+
+func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *hybrid.AgentTokenState) agentMachineWorker {
+	cpu := int64(machine.CPUCount) * 1000
+	if machine.CPUMillicores > 0 {
+		cpu = machine.CPUMillicores
+	}
+	gpu := wpc.workerPoolConfig.GPUType
+	if gpu == "" && len(machine.GPUs) > 0 {
+		gpu = machine.GPUs[0]
+	}
+	return agentMachineWorker{
+		id:                   hybrid.AgentMachineWorkerID(machine.MachineID),
+		cpu:                  cpu,
+		memory:               int64(machine.MemoryMB),
+		gpu:                  gpu,
+		gpuCount:             machine.GPUCount,
+		poolName:             wpc.poolName(),
+		machineID:            machine.MachineID,
+		requiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
+		priority:             wpc.workerPoolConfig.Priority,
+		preemptable:          wpc.workerPoolConfig.Preemptable,
+		runtime:              wpc.ContainerRuntime(),
+		buildVersion:         wpc.config.Worker.ImageTag,
+	}
+}
+
+func (m agentMachineWorker) worker() *types.Worker {
+	return &types.Worker{
+		Id:                   m.id,
+		Status:               types.WorkerStatusPending,
+		TotalCpu:             m.cpu,
+		TotalMemory:          m.memory,
+		TotalGpuCount:        m.gpuCount,
+		FreeCpu:              m.cpu,
+		FreeMemory:           m.memory,
+		FreeGpuCount:         m.gpuCount,
+		Gpu:                  m.gpu,
+		PoolName:             m.poolName,
+		MachineId:            m.machineID,
+		RequiresPoolSelector: m.requiresPoolSelector,
+		Priority:             m.priority,
+		Preemptable:          m.preemptable,
+		Runtime:              m.runtime,
+		BuildVersion:         m.buildVersion,
+	}
 }

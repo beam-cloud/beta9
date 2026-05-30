@@ -36,40 +36,46 @@ type JoinTokenState struct {
 }
 
 type AgentTokenState struct {
-	TokenHash          string                `json:"token_hash"`
-	WorkspaceID        string                `json:"workspace_id"`
-	PoolName           string                `json:"pool_name"`
-	MachineID          string                `json:"machine_id"`
-	MachineFingerprint string                `json:"machine_fingerprint"`
-	Hostname           string                `json:"hostname"`
-	OS                 string                `json:"os"`
-	Arch               string                `json:"arch"`
-	CPUCount           uint32                `json:"cpu_count"`
-	MemoryMB           uint64                `json:"memory_mb"`
-	GPUs               []string              `json:"gpus"`
-	GPUCount           uint32                `json:"gpu_count"`
-	Executor           string                `json:"executor"`
-	Schedulable        bool                  `json:"schedulable"`
-	Preflight          []PreflightCheckState `json:"preflight"`
-	CreatedAt          time.Time             `json:"created_at"`
-	LastJoinAt         time.Time             `json:"last_join_at"`
+	TokenHash                 string                `json:"token_hash"`
+	WorkspaceID               string                `json:"workspace_id"`
+	PoolName                  string                `json:"pool_name"`
+	MachineID                 string                `json:"machine_id"`
+	MachineFingerprint        string                `json:"machine_fingerprint"`
+	Hostname                  string                `json:"hostname"`
+	OS                        string                `json:"os"`
+	Arch                      string                `json:"arch"`
+	CPUCount                  uint32                `json:"cpu_count"`
+	CPUMillicores             int64                 `json:"cpu_millicores"`
+	MemoryMB                  uint64                `json:"memory_mb"`
+	GPUs                      []string              `json:"gpus"`
+	GPUIDs                    []string              `json:"gpu_ids"`
+	GPUCount                  uint32                `json:"gpu_count"`
+	Executor                  string                `json:"executor"`
+	NetworkSlotPoolSize       uint32                `json:"network_slot_pool_size"`
+	ContainerStartConcurrency uint32                `json:"container_start_concurrency"`
+	Schedulable               bool                  `json:"schedulable"`
+	Preflight                 []PreflightCheckState `json:"preflight"`
+	CreatedAt                 time.Time             `json:"created_at"`
+	LastJoinAt                time.Time             `json:"last_join_at"`
 }
 
 type AgentWorkerSlotState struct {
-	WorkerID      string    `json:"worker_id"`
-	WorkerToken   string    `json:"worker_token"`
-	WorkspaceID   string    `json:"workspace_id"`
-	PoolName      string    `json:"pool_name"`
-	MachineID     string    `json:"machine_id"`
-	CPU           int64     `json:"cpu"`
-	Memory        int64     `json:"memory"`
-	GPU           string    `json:"gpu"`
-	GPUCount      uint32    `json:"gpu_count"`
-	GPUAssignment string    `json:"gpu_assignment"`
-	NetworkPrefix string    `json:"network_prefix"`
-	WorkerImage   string    `json:"worker_image"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	WorkerID                  string    `json:"worker_id"`
+	WorkerToken               string    `json:"worker_token"`
+	WorkspaceID               string    `json:"workspace_id"`
+	PoolName                  string    `json:"pool_name"`
+	MachineID                 string    `json:"machine_id"`
+	CPU                       int64     `json:"cpu"`
+	Memory                    int64     `json:"memory"`
+	GPU                       string    `json:"gpu"`
+	GPUCount                  uint32    `json:"gpu_count"`
+	GPUAssignment             string    `json:"gpu_assignment"`
+	NetworkPrefix             string    `json:"network_prefix"`
+	WorkerImage               string    `json:"worker_image"`
+	NetworkSlotPoolSize       uint32    `json:"network_slot_pool_size"`
+	ContainerStartConcurrency uint32    `json:"container_start_concurrency"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
 }
 
 type PreflightCheckState struct {
