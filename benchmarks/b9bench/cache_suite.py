@@ -945,6 +945,24 @@ class Kube:
         arch = (proc.stdout or "").strip().lower()
         return "arm64" if arch in {"arm64", "aarch64"} else "amd64"
 
+    def node_names(self) -> set[str]:
+        proc = run(
+            ["kubectl", "get", "nodes", "-o", "json"],
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return set()
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return set()
+        return {
+            item.get("metadata", {}).get("name", "")
+            for item in payload.get("items", [])
+            if item.get("metadata", {}).get("name", "")
+        }
+
 
 class ReadPathParser:
     @staticmethod
@@ -1263,6 +1281,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             worker.get("nodeName") or "": int(worker.get("chunks") or 0)
             for worker in page_proof.get("workers") or []
         }
+        live_nodes = self.kube.node_names()
         routes = json.loads(proc.stdout)
         checked = []
         ok = True
@@ -1270,14 +1289,20 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             selected = (route.get("hosts") or [{}])[0]
             node = selected.get("nodeName") or selected.get("nodeId") or ""
             pages = pages_by_node.get(node, 0)
+            endpoint_available = bool(
+                selected.get("endpointAvailable", bool(selected.get("privateAddr") or selected.get("addr")))
+            )
+            node_gone = bool(node and live_nodes and node not in live_nodes)
             item = {
                 "hash": route.get("key") or "",
                 "selectedHostId": selected.get("hostId") or "",
                 "selectedRegistrationId": selected.get("registrationId") or "",
                 "selectedNode": node,
                 "selectedPod": selected.get("pod") or "",
+                "selectedEndpointAvailable": endpoint_available,
+                "selectedNodeGone": node_gone,
                 "pagesOnSelectedNode": pages,
-                "ok": pages > 0,
+                "ok": pages > 0 or node_gone,
             }
             if remote_read:
                 target_host = remote_read.get("targetHost") or {}
@@ -1870,6 +1895,37 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                     logical_host_ids.append(logical_host_id)
         hosts = []
         for logical_host_id in logical_host_ids:
+            logical_raw = redis_cli(
+                self.config.namespace,
+                redis_pod,
+                "GET",
+                f"cache:coordinator:host:{logical_host_id}:logical",
+            )
+            logical: dict[str, Any] = {}
+            if logical_raw:
+                try:
+                    logical = json.loads(logical_raw)
+                except json.JSONDecodeError:
+                    logical = {}
+            logical_host = {
+                "hostId": logical.get("logical_host_id")
+                or logical.get("logicalHostId")
+                or logical_host_id,
+                "registrationId": "",
+                "poolName": logical.get("pool_name")
+                or logical.get("poolName")
+                or self.config.cache_pool_name,
+                "nodeId": logical.get("node_id") or logical.get("nodeId") or "",
+                "nodeName": logical.get("node_id") or logical.get("nodeId") or "",
+                "cachePathId": logical.get("cache_path_id")
+                or logical.get("cachePathId")
+                or "",
+                "addr": "",
+                "privateAddr": "",
+                "endpointAvailable": False,
+                "source": "coordinator_logical",
+            }
+            added_registration = False
             registration_ids = self._registration_ids(redis_pod, logical_host_id)
             for registration_id in registration_ids:
                 raw = redis_cli(
@@ -1908,10 +1964,14 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "privateAddr": registration.get("private_addr")
                         or registration.get("privateAddr")
                         or "",
+                        "endpointAvailable": True,
                         "source": "coordinator",
                     }
                 )
+                added_registration = True
                 break
+            if not added_registration and logical_host["nodeName"]:
+                hosts.append(logical_host)
         if hosts:
             return {"available": True, "indexKeys": index_keys, "hosts": hosts}
         return self.cache_hosts_from_worker_logs()
@@ -1972,6 +2032,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "addr": addr,
                         "privateAddr": addr,
                         "pod": pod_name,
+                        "endpointAvailable": True,
                         "source": "worker_logs",
                     }
                 )
@@ -2711,11 +2772,13 @@ class Reporter:
                 for proof in read_path_proofs
             )
             cache_hits = 0
+            cloud_reads = 0
             for proof in read_path_proofs:
                 summary = proof.get("geesefsSummary") or {}
                 cache_hits += int(summary.get("mmapHits") or 0)
                 cache_hits += int(summary.get("readIntoHits") or 0)
                 cache_hits += int(summary.get("bufferHits") or 0)
+                cloud_reads += int(summary.get("cloudReq") or 0)
             if self.config.require_read_path_proof and (
                 cache_hits <= 0 and external_page_hits <= 0
             ):
@@ -2726,6 +2789,14 @@ class Reporter:
             if not hrw_proof.get("ok"):
                 failures.append(
                     f"{row['accessType']}:{row['sizeMiB']}MiB HRW route proof failed: {hrw_proof.get('error') or hrw_proof.get('routes')}"
+                )
+            selected_node_gone = any(
+                bool(route.get("selectedNodeGone"))
+                for route in hrw_proof.get("routes") or []
+            )
+            if cloud_reads > 0 and not selected_node_gone:
+                failures.append(
+                    f"{row['accessType']}:{row['sizeMiB']}MiB cloud read observed while HRW-selected node still exists"
                 )
             remote = row.get("remoteRead")
             if self.config.require_remote_read:

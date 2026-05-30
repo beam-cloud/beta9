@@ -458,6 +458,11 @@ class CacheSuiteProbe(ScriptProbeBase):
                     "hrw_selected_registration": hrw_route.get("selectedRegistrationId"),
                     "hrw_selected_node": hrw_route.get("selectedNode"),
                     "hrw_pages_on_selected_node": hrw_route.get("pagesOnSelectedNode"),
+                    "selected_logical_host_id": hrw_route.get("selectedHostId"),
+                    "selected_node": hrw_route.get("selectedNode"),
+                    "selected_endpoint_available": hrw_route.get("selectedEndpointAvailable"),
+                    "node_gone": hrw_route.get("selectedNodeGone"),
+                    "pages_on_selected_host": hrw_route.get("pagesOnSelectedNode"),
                     "remote_target_matches_hrw": hrw_route.get("remoteTargetMatchesHRW"),
                     "remote_target_registration_matches_hrw": hrw_route.get("remoteTargetRegistrationMatchesHRW"),
                 }

@@ -990,39 +990,20 @@ func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int6
 	if offset < 0 || length <= 0 {
 		return nil, nil
 	}
-	checked := make(map[string]struct{})
-	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
-		host, err := c.getHostForRequest(&ClientRequest{
-			rt:        ClientRequestTypeRetrieval,
-			hash:      hash,
-			key:       opts.RoutingKey,
-			hostIndex: attempt,
-		})
-		if err != nil {
-			if err == ErrHostNotFound {
-				_ = c.refreshRoutableHosts(c.ctx)
-				host, err = c.getHostForRequest(&ClientRequest{
-					rt:        ClientRequestTypeRetrieval,
-					hash:      hash,
-					key:       opts.RoutingKey,
-					hostIndex: attempt,
-				})
-			}
-			if err != nil {
-				continue
-			}
-		}
 
-		checked[host.HostId] = struct{}{}
-		if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-			return views, nil
+	host, err := c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+	if err != nil {
+		if err == ErrHostNotFound {
+			_ = c.refreshRoutableHosts(c.ctx)
+			host, err = c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+		}
+		if err != nil {
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
+			return nil, err
 		}
 	}
-
-	for _, host := range c.remainingHostsForRequest(checked) {
-		if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-			return views, nil
-		}
+	if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
+		return views, nil
 	}
 
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
@@ -1109,87 +1090,33 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 
 func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
 	length := int64(len(dst))
-	checked := make(map[string]struct{})
-	var primaryErr error
-	var sawMiss bool
-	var sawUnavailable bool
-	var lastErr error
-	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
-		host, err := c.getHostForRequest(&ClientRequest{
-			rt:        ClientRequestTypeRetrieval,
-			hash:      hash,
-			key:       opts.RoutingKey,
-			hostIndex: attempt,
-		})
+
+	host, err := c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+	if err != nil {
+		if err == ErrHostNotFound {
+			_ = c.refreshRoutableHosts(c.ctx)
+			host, err = c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+		}
 		if err != nil {
-			if err == ErrHostNotFound {
-				_ = c.refreshRoutableHosts(c.ctx)
-				host, err = c.getHostForRequest(&ClientRequest{
-					rt:        ClientRequestTypeRetrieval,
-					hash:      hash,
-					key:       opts.RoutingKey,
-					hostIndex: attempt,
-				})
+			if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+				return 0, ErrSelectedHostUnavailable
 			}
-			if err != nil {
-				if attempt == 0 {
-					primaryErr = err
-				}
-				lastErr = err
-				continue
-			}
-		}
-
-		checked[host.HostId] = struct{}{}
-		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
-		if err == nil && n == length {
-			return n, nil
-		}
-		if attempt == 0 {
-			primaryErr = err
-		}
-		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-			sawUnavailable = true
-		} else if errors.Is(err, ErrContentNotFound) {
-			sawMiss = true
-		}
-		if err != nil {
-			lastErr = err
+			return 0, err
 		}
 	}
 
-	for _, host := range c.remainingHostsForRequest(checked) {
-		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
-		if err == nil && n == length {
-			return n, nil
-		}
-		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-			sawUnavailable = true
-		} else if errors.Is(err, ErrContentNotFound) {
-			sawMiss = true
-		}
-		if err != nil {
-			lastErr = err
-		}
+	n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
+	if err == nil && n == length {
+		return n, nil
 	}
-
-	if primaryErr != nil {
-		if errors.Is(primaryErr, ErrSelectedHostUnavailable) || errors.Is(primaryErr, ErrUnableToReachHost) || errors.Is(primaryErr, ErrHostNotFound) {
-			return 0, ErrSelectedHostUnavailable
-		}
-		if errors.Is(primaryErr, ErrContentNotFound) {
-			return 0, ErrContentNotFound
-		}
-		return 0, primaryErr
-	}
-	if sawUnavailable {
+	if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
 		return 0, ErrSelectedHostUnavailable
 	}
-	if sawMiss {
+	if errors.Is(err, ErrContentNotFound) {
 		return 0, ErrContentNotFound
 	}
-	if lastErr != nil {
-		return 0, lastErr
+	if err != nil {
+		return 0, err
 	}
 	return 0, ErrContentNotFound
 }
@@ -1446,6 +1373,37 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	return client, host, nil
 }
 
+func (c *Client) getSelectedHostForRequest(rt ClientRequestType, hash string, routingKey string) (*Host, error) {
+	return c.getHostForRequest(&ClientRequest{
+		rt:        rt,
+		hash:      hash,
+		key:       routingKey,
+		hostIndex: 0,
+	})
+}
+
+func (c *Client) getSelectedGRPCClient(ctx context.Context, rt ClientRequestType, hash string, routingKey string) (proto.CacheClient, *Host, error) {
+	client, host, err := c.getGRPCClient(&ClientRequest{
+		rt:        rt,
+		hash:      hash,
+		key:       routingKey,
+		hostIndex: 0,
+	})
+	if err == nil {
+		return client, host, nil
+	}
+	if isStoreHostUnavailable(err) && c.hostDirectory != nil && c.hostMap != nil {
+		_ = c.refreshRoutableHosts(ctx)
+		client, host, err = c.getGRPCClient(&ClientRequest{
+			rt:        rt,
+			hash:      hash,
+			key:       routingKey,
+			hostIndex: 0,
+		})
+	}
+	return client, host, err
+}
+
 func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 	var host *Host = nil
 
@@ -1648,23 +1606,7 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 		routingKey = hash
 	}
 
-	var client proto.CacheClient
-	var err error
-	for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
-		client, _, err = c.getGRPCClient(&ClientRequest{
-			rt:        ClientRequestTypeStorage,
-			hash:      hash,
-			key:       routingKey,
-			hostIndex: hostIndex,
-		})
-		if err == nil {
-			break
-		}
-		if isStoreHostUnavailable(err) {
-			_ = c.refreshRoutableHosts(ctx)
-			continue
-		}
-	}
+	client, _, err := c.getSelectedGRPCClient(ctx, ClientRequestTypeStorage, hash, routingKey)
 	if err != nil {
 		return "", err
 	}
@@ -1711,43 +1653,33 @@ func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader i
 	seeker, retryable := reader.(io.Seeker)
 	var lastErr error
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
-			if retryable {
-				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-					return "", err
-				}
-			} else if attempt > 0 || hostIndex > 0 {
-				break
+		if retryable {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return "", err
 			}
-
-			_, host, err := c.getGRPCClient(&ClientRequest{
-				rt:        ClientRequestTypeStorage,
-				hash:      routingKey,
-				key:       routingKey,
-				hostIndex: hostIndex,
-			})
-			if err != nil {
-				lastErr = err
-				if isStoreHostUnavailable(err) {
-					_ = c.refreshRoutableHosts(ctx)
-				}
-				continue
-			}
-
-			hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
-			if err == nil {
-				return hash, nil
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return "", ctxErr
-			}
-			lastErr = err
-			c.removeHost(host)
-			_ = c.refreshRoutableHosts(ctx)
-			if !retryable {
-				break
-			}
+		} else if attempt > 0 {
+			break
 		}
+
+		_, host, err := c.getSelectedGRPCClient(ctx, ClientRequestTypeStorage, routingKey, routingKey)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+		if err == nil {
+			return hash, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		lastErr = err
+		c.removeHost(host)
+		if c.hostDirectory == nil || c.hostMap == nil {
+			break
+		}
+		_ = c.refreshRoutableHosts(ctx)
 		if !retryable {
 			break
 		}
@@ -1967,67 +1899,56 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
-			client, host, err := c.getGRPCClient(&ClientRequest{
-				rt:        ClientRequestTypeStorage,
-				hash:      hash,
-				key:       routingKey,
-				hostIndex: hostIndex,
-			})
-			if err != nil {
-				lastErr = err
-				if isStoreHostUnavailable(err) {
-					_ = c.refreshRoutableHosts(ctx)
-				}
-				continue
-			}
+		client, host, err := c.getSelectedGRPCClient(ctx, ClientRequestTypeStorage, hash, routingKey)
+		if err != nil {
+			lastErr = err
+			continue
+		}
 
-			if lock {
-				resp, err := client.StoreContentFromSourceWithLock(ctx, req)
-				if err != nil {
-					lastErr = err
-					c.removeHost(host)
-					_ = c.refreshRoutableHosts(ctx)
-					continue
-				}
-
-				if resp == nil {
-					return "", ErrUnableToPopulateContent
-				}
-				if resp.FailedToAcquireLock {
-					return "", ErrUnableToAcquireLock
-				}
-				if !resp.Ok {
-					return "", ErrUnableToPopulateContent
-				}
-				return resp.Hash, nil
-			}
-
-			resp, err := client.StoreContentFromSource(ctx, req)
+		if lock {
+			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
 			if err != nil {
 				lastErr = err
 				c.removeHost(host)
+				if c.hostDirectory == nil || c.hostMap == nil {
+					break
+				}
 				_ = c.refreshRoutableHosts(ctx)
 				continue
 			}
-			if resp == nil || !resp.Ok {
+
+			if resp == nil {
+				return "", ErrUnableToPopulateContent
+			}
+			if resp.FailedToAcquireLock {
+				return "", ErrUnableToAcquireLock
+			}
+			if !resp.Ok {
 				return "", ErrUnableToPopulateContent
 			}
 			return resp.Hash, nil
 		}
+
+		resp, err := client.StoreContentFromSource(ctx, req)
+		if err != nil {
+			lastErr = err
+			c.removeHost(host)
+			if c.hostDirectory == nil || c.hostMap == nil {
+				break
+			}
+			_ = c.refreshRoutableHosts(ctx)
+			continue
+		}
+		if resp == nil || !resp.Ok {
+			return "", ErrUnableToPopulateContent
+		}
+		return resp.Hash, nil
 	}
 
 	if lastErr != nil {
 		return "", lastErr
 	}
 	return "", ErrHostNotFound
-}
-
-func (c *Client) storeHostAttempts() int {
-	if c == nil || c.clientConfig.NTopHosts <= 0 {
-		return 1
-	}
-	return c.clientConfig.NTopHosts
 }
 
 func isStoreHostUnavailable(err error) bool {

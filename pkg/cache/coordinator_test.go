@@ -251,6 +251,34 @@ func TestCoordinatorListsLogicalHostWhenNoEndpointRegistrationIsActive(t *testin
 	require.Empty(t, hosts[0].PrivateAddr)
 }
 
+func TestCoordinatorUnregisterPreservesLogicalHostForEndpointChurn(t *testing.T) {
+	repo := newMemoryCoordinatorRepository()
+	coordinator := NewCoordinator(repo)
+	ctx := context.Background()
+
+	host := CoordinatorHost{
+		LogicalHostID:  "cache-host-default-node-a-path-0",
+		RegistrationID: "worker-a",
+		PoolName:       "default",
+		Locality:       "default",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		Addr:           "10.0.0.1:2049",
+		PrivateAddr:    "10.0.0.1:2049",
+	}
+	require.NoError(t, coordinator.RegisterHost(ctx, host, 30*time.Second))
+	require.NoError(t, coordinator.UnregisterHost(ctx, host.PoolName, host.Locality, host.LogicalHostID, host.RegistrationID))
+
+	hosts, err := coordinator.ListHosts(ctx, "default", "default")
+	require.NoError(t, err)
+	require.Len(t, hosts, 1)
+	require.Equal(t, host.LogicalHostID, hosts[0].LogicalHostID)
+	require.Equal(t, host.NodeID, hosts[0].NodeID)
+	require.Equal(t, host.CachePathID, hosts[0].CachePathID)
+	require.Empty(t, hosts[0].RegistrationID)
+	require.Empty(t, hosts[0].PrivateAddr)
+}
+
 func TestCoordinatorCanListCacheHostsAcrossWorkerPools(t *testing.T) {
 	repo := newMemoryCoordinatorRepository()
 	coordinator := NewCoordinator(repo)

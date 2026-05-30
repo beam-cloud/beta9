@@ -215,5 +215,13 @@ func (c *Coordinator) pruneLogicalHost(ctx context.Context, poolName, locality, 
 		return nil
 	}
 
+	logicalHost, ok, err := c.repository.GetCacheLogicalHost(ctx, logicalHostID)
+	if err != nil {
+		return err
+	}
+	if ok && logicalHost.Locality == locality && (poolName == "" || logicalHost.PoolName == poolName) {
+		return nil
+	}
+
 	return c.repository.RemoveCacheLogicalHost(ctx, poolName, locality, logicalHostID)
 }
