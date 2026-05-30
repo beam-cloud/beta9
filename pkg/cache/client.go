@@ -551,9 +551,6 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
 	known := c.hostMap.Get(group.hostID)
-	if known != nil && !known.HasEndpoint() && group.logicalHost() != nil {
-		return true
-	}
 	if !group.hasEndpoint(known) {
 		return false
 	}
