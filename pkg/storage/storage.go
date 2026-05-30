@@ -18,6 +18,7 @@ const (
 	StorageModeMountPoint string = "mountpoint"
 	StorageModeGeese      string = "geese"
 	StorageModeAlluxio    string = "alluxio"
+	StorageModeLocal      string = "local"
 )
 
 type Storage interface {
@@ -135,6 +136,13 @@ func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage,
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
 			log.Fatal().Err(err).Msg("unable to mount filesystem")
+		}
+
+		return s, nil
+	case StorageModeLocal:
+		s := NewLocalStorage()
+		if err := s.Mount(config.FilesystemPath); err != nil {
+			return nil, err
 		}
 
 		return s, nil

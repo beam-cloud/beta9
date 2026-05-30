@@ -178,22 +178,28 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		log.Debug().Err(err).Str("task_id", t.msg.TaskId).Msg("failed to mark function container request ready phase")
 	}
 
-	err = t.fs.scheduler.Run(&types.ContainerRequest{
-		ContainerId: t.containerId,
-		Env:         env,
-		Cpu:         stubConfig.Runtime.Cpu,
-		Memory:      stubConfig.Runtime.Memory,
-		GpuRequest:  gpuRequest,
-		GpuCount:    uint32(gpuCount),
-		ImageId:     stubConfig.Runtime.ImageId,
-		StubId:      stub.ExternalId,
-		AppId:       stub.App.ExternalId,
-		WorkspaceId: stub.Workspace.ExternalId,
-		Workspace:   stub.Workspace,
-		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
-		Mounts:      mounts,
-		Stub:        *stub,
-	})
+	runRequest := &types.ContainerRequest{
+		ContainerId:  t.containerId,
+		Env:          env,
+		Cpu:          stubConfig.Runtime.Cpu,
+		Memory:       stubConfig.Runtime.Memory,
+		GpuRequest:   gpuRequest,
+		GpuCount:     uint32(gpuCount),
+		ImageId:      stubConfig.Runtime.ImageId,
+		StubId:       stub.ExternalId,
+		AppId:        stub.App.ExternalId,
+		WorkspaceId:  stub.Workspace.ExternalId,
+		Workspace:    stub.Workspace,
+		EntryPoint:   []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
+		Mounts:       mounts,
+		Stub:         *stub,
+		PoolSelector: stubConfig.PoolSelector(),
+	}
+	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
+		return err
+	}
+
+	err = t.fs.scheduler.Run(runRequest)
 	if err != nil {
 		if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 			log.Info().Str("task_id", task.ExternalId).Str("reason", err.Error()).Msg("task cancelled due to concurrency limit")

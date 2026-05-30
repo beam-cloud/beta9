@@ -242,6 +242,14 @@ type ContainerRequest struct {
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker (gVisor only)
 }
 
+type ContainerNetworkPolicy string
+
+const (
+	ContainerNetworkPolicyOpen      ContainerNetworkPolicy = "open"
+	ContainerNetworkPolicyBlock     ContainerNetworkPolicy = "block"
+	ContainerNetworkPolicyAllowList ContainerNetworkPolicy = "allowlist"
+)
+
 func (c *ContainerRequest) RequiresGPU() bool {
 	for _, gpu := range c.GpuRequest {
 		if gpu != "" && gpu != string(NO_GPU) {
@@ -309,6 +317,23 @@ func (c *ContainerRequest) VolumeCacheCompatible() bool {
 
 func (c *ContainerRequest) StorageAvailable() bool {
 	return c.Workspace.StorageAvailable()
+}
+
+func (c *ContainerRequest) NetworkPolicy() ContainerNetworkPolicy {
+	if c == nil {
+		return ContainerNetworkPolicyOpen
+	}
+	if len(c.AllowList) > 0 {
+		return ContainerNetworkPolicyAllowList
+	}
+	if c.BlockNetwork {
+		return ContainerNetworkPolicyBlock
+	}
+	return ContainerNetworkPolicyOpen
+}
+
+func (c *ContainerRequest) NetworkRestricted() bool {
+	return c.NetworkPolicy() != ContainerNetworkPolicyOpen
 }
 
 func (c *ContainerRequest) ToProto() *pb.ContainerRequest {

@@ -48,16 +48,19 @@ type ContainerRuntimeServer struct {
 	pb.UnimplementedContainerServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	containerRepoClient     pb.ContainerRepositoryServiceClient
-	containerNetworkManager *ContainerNetworkManager
+	containerNetworkManager ContainerNetwork
 	imageClient             *ImageClient
 	runtime                 runtime.Runtime // The worker's configured runtime (from pool config)
 	port                    int
 	podAddr                 string
+	backendRoute            backendRouteFunc
 	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
 }
+
+type backendRouteFunc func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
 
 type ContainerRuntimeServerOpts struct {
 	PodAddr                 string
@@ -65,7 +68,8 @@ type ContainerRuntimeServerOpts struct {
 	ContainerInstances      *common.SafeMap[*ContainerInstance]
 	ImageClient             *ImageClient
 	ContainerRepoClient     pb.ContainerRepositoryServiceClient
-	ContainerNetworkManager *ContainerNetworkManager
+	ContainerNetworkManager ContainerNetwork
+	BackendRoute            backendRouteFunc
 	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 }
 
@@ -89,6 +93,7 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		imageClient:             opts.ImageClient,
 		containerRepoClient:     opts.ContainerRepoClient,
 		containerNetworkManager: opts.ContainerNetworkManager,
+		backendRoute:            opts.BackendRoute,
 		createCheckpoint:        opts.CreateCheckpoint,
 	}, nil
 }
@@ -1193,7 +1198,21 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	}
 
 	addressMap := writableContainerAddressMap(getAddressMapResponse.AddressMap)
-	if _, exists := addressMap[int32(in.Port)]; exists {
+	port := int32(in.Port)
+	if existingTarget, exists := addressMap[port]; exists {
+		if route := s.backendRouteForContainerPort(instance, port, existingTarget); route != nil {
+			setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+				ContainerId: in.ContainerId,
+				AddressMap:  addressMap,
+				Routes:      []*pb.BackendRoute{route},
+			}))
+			if err != nil {
+				return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			}
+			if !setAddressMapResponse.Ok {
+				return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: setAddressMapResponse.ErrorMsg}, nil
+			}
+		}
 		recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
 		return &pb.ContainerSandboxExposePortResponse{Ok: true}, nil
 	}
@@ -1203,16 +1222,30 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	err = s.containerNetworkManager.ExposePort(in.ContainerId, bindPort, int(in.Port))
+	if s.containerNetworkManager == nil {
+		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: "container network manager unavailable"}, nil
+	}
+
+	binding := PortBinding{HostPort: bindPort, ContainerPort: int(in.Port)}
+	err = s.containerNetworkManager.ExposePort(in.ContainerId, binding.HostPort, binding.ContainerPort)
 	if err != nil {
 		log.Error().Str("container_id", in.ContainerId).Msgf("failed to expose container bind port: %v", err)
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	addressMap[int32(in.Port)] = fmt.Sprintf("%s:%d", s.podAddr, bindPort)
+	localTarget, err := s.containerPortAddress(in.ContainerId, binding)
+	if err != nil {
+		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	addressMap[port] = localTarget
+	routes := make([]*pb.BackendRoute, 0, 1)
+	if route := s.backendRouteForContainerPort(instance, port, localTarget); route != nil {
+		routes = append(routes, route)
+	}
 	setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
 		ContainerId: in.ContainerId,
 		AddressMap:  addressMap,
+		Routes:      routes,
 	}))
 	if err != nil {
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -1220,9 +1253,26 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 
 	recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
 
-	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
+	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[port])
 
 	return &pb.ContainerSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
+}
+
+func (s *ContainerRuntimeServer) containerPortAddress(containerId string, binding PortBinding) (string, error) {
+	if s.containerNetworkManager == nil {
+		return "", fmt.Errorf("container network manager unavailable")
+	}
+	return s.containerNetworkManager.ContainerPortAddress(containerId, binding)
+}
+
+func (s *ContainerRuntimeServer) backendRouteForContainerPort(instance *ContainerInstance, port int32, localTarget string) *pb.BackendRoute {
+	if s.backendRoute == nil || instance == nil || instance.Request == nil || localTarget == "" {
+		return nil
+	}
+	if _, isRoute := types.ParseBackendRouteAddress(localTarget); isRoute {
+		return nil
+	}
+	return s.backendRoute(instance.Request, types.BackendRouteKindContainer, port, localTarget)
 }
 
 func writableContainerAddressMap(addressMap map[int32]string) map[int32]string {
@@ -1257,6 +1307,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx co
 	request := &types.ContainerRequest{
 		BlockNetwork: in.BlockNetwork,
 		AllowList:    in.AllowList,
+	}
+
+	if s.containerNetworkManager == nil {
+		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: "container network manager unavailable"}, nil
 	}
 
 	// Update network permissions via the network manager

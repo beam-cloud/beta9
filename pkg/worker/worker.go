@@ -49,6 +49,7 @@ type Worker struct {
 	workerId                string
 	workerToken             string
 	poolName                string
+	machineID               string
 	poolConfig              types.WorkerPoolConfig
 	cpuLimit                int64
 	memoryLimit             int64
@@ -56,6 +57,7 @@ type Worker struct {
 	gpuCount                uint32
 	podAddr                 string
 	podHostName             string
+	routeLocalTargetHost    string
 	imageMountPath          string
 	runtime                 runtime.Runtime
 	runcRuntime             runtime.Runtime
@@ -64,7 +66,7 @@ type Worker struct {
 	cacheManager            *WorkerCacheManager
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
-	containerNetworkManager *ContainerNetworkManager
+	containerNetworkManager ContainerNetwork
 	containerGPUManager     GPUManager
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
@@ -85,6 +87,8 @@ type Worker struct {
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
+	persistent              bool
+	routeTransport          string
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -148,10 +152,17 @@ func NewWorker() (*Worker, error) {
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
 	gpuType := os.Getenv("GPU_TYPE")
-	workerId := os.Getenv("WORKER_ID")
-	workerToken := os.Getenv("WORKER_TOKEN")
-	workerPoolName := os.Getenv("WORKER_POOL_NAME")
+	workerId := os.Getenv(types.WorkerEnvID)
+	workerToken := os.Getenv(types.WorkerEnvToken)
+	workerPoolName := os.Getenv(types.WorkerEnvPoolName)
+	machineID := os.Getenv(types.WorkerEnvMachineID)
 	podHostName := os.Getenv("HOSTNAME")
+	persistent := envBool(types.WorkerEnvPersistent)
+	routeTransport := firstNonEmptyWorkerValue(os.Getenv(types.WorkerEnvRouteTransport))
+	if routeTransport == "" && persistent {
+		routeTransport = types.BackendRouteTransportTSNet
+	}
+	routeLocalTargetHost := firstNonEmptyWorkerValue(os.Getenv(types.WorkerEnvRouteLocalTargetHost))
 
 	podAddr, err := GetPodAddr()
 	if err != nil {
@@ -307,17 +318,19 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
+	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport)
 
 	worker := &Worker{
 		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
 		poolName:                workerPoolName,
+		machineID:               machineID,
 		poolConfig:              poolConfig,
 		cancel:                  cancel,
 		config:                  config,
@@ -336,6 +349,7 @@ func NewWorker() (*Worker, error) {
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
+		routeLocalTargetHost:    routeLocalTargetHost,
 		imageClient:             imageClient,
 		criuManager:             criuManager,
 		podHostName:             podHostName,
@@ -359,6 +373,8 @@ func NewWorker() (*Worker, error) {
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
 		checkpointStorage:   checkpointStorage,
+		persistent:          persistent,
+		routeTransport:      routeTransport,
 	}
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
@@ -368,6 +384,7 @@ func NewWorker() (*Worker, error) {
 		ImageClient:             imageClient,
 		ContainerRepoClient:     containerRepoClient,
 		ContainerNetworkManager: containerNetworkManager,
+		BackendRoute:            worker.backendRouteFor,
 		CreateCheckpoint:        worker.createCheckpoint,
 	})
 	if err != nil {
@@ -682,6 +699,9 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	case <-s.ctx.Done():
 		return true
 	default:
+		if s.persistent {
+			return false
+		}
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
 			err := s.storageManager.Cleanup()
 			if err != nil {
@@ -960,10 +980,14 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
-		WorkerId: s.workerId,
-	})); err != nil {
-		errs = errors.Join(errs, err)
+	if s.persistent {
+		s.disableSchedulingForShutdown()
+	} else {
+		if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
+			WorkerId: s.workerId,
+		})); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
 	if s.cacheManager != nil {

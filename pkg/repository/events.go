@@ -58,6 +58,8 @@ type eventMetadata struct {
 	StubID      string
 	AppID       string
 	WorkerID    string
+	MachineID   string
+	RouteID     string
 	ServiceName string
 	InstanceID  string
 	PoolName    string
@@ -132,6 +134,10 @@ func eventTimeForData(data interface{}) time.Time {
 	case types.EventContainerLifecycleSchema:
 		if !d.StartTime.IsZero() {
 			return d.StartTime
+		}
+	case types.EventComputeSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
 		}
 	}
 
@@ -741,6 +747,16 @@ func (r *EventClientRepo) PushWorkerDeletedEvent(workerID, machineID, poolName s
 	)
 }
 
+func (r *EventClientRepo) PushComputeEvent(eventType string, event types.EventComputeSchema) {
+	if eventType == "" {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	r.pushEvent(eventType, types.EventComputeSchemaVersion, event)
+}
+
 func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
 	r.pushEvent(
 		types.EventContainerMetrics,
@@ -1013,11 +1029,20 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 	case types.EventStubStateSchema:
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
 	case types.EventWorkerLifecycleSchema:
-		return eventMetadata{WorkerID: d.WorkerID, PoolName: d.PoolName}
+		return eventMetadata{WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
 	case types.EventWorkerPoolStateSchema:
 		return eventMetadata{PoolName: d.PoolName}
 	case types.EventGatewayEndpointSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID}
+	case types.EventComputeSchema:
+		return eventMetadata{
+			ContainerID: d.ContainerID,
+			WorkspaceID: d.WorkspaceID,
+			WorkerID:    d.WorkerID,
+			MachineID:   d.MachineID,
+			RouteID:     d.RouteID,
+			PoolName:    d.PoolName,
+		}
 	default:
 		return eventMetadata{}
 	}
@@ -1038,6 +1063,12 @@ func setEventExtensions(event *cloudevents.Event, metadata eventMetadata) {
 	}
 	if metadata.WorkerID != "" {
 		event.SetExtension("workerid", metadata.WorkerID)
+	}
+	if metadata.MachineID != "" {
+		event.SetExtension("machineid", metadata.MachineID)
+	}
+	if metadata.RouteID != "" {
+		event.SetExtension("routeid", metadata.RouteID)
 	}
 	if metadata.ServiceName != "" {
 		event.SetExtension("servicename", metadata.ServiceName)

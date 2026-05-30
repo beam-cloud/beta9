@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -204,6 +205,166 @@ func TestRecordSandboxExposedPortOnlyAppendsMissingPort(t *testing.T) {
 	require.Equal(t, []uint32{8000, 9000}, got.Request.Ports)
 }
 
+func TestContainerSandboxExposePortRegistersBackendRoute(t *testing.T) {
+	containerId := "sandbox-test"
+	repoClient := &fakeContainerRepoClient{
+		addressMap: map[int32]string{
+			8080: "route://existing",
+		},
+	}
+	networkController := &fakeContainerNetworkController{}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerId, &ContainerInstance{
+		Id:   containerId,
+		Spec: &specs.Spec{},
+		Request: &types.ContainerRequest{
+			ContainerId: containerId,
+			WorkspaceId: "workspace-1",
+			Ports:       []uint32{8080},
+		},
+	})
+
+	server := &ContainerRuntimeServer{
+		containerInstances:      instances,
+		containerRepoClient:     repoClient,
+		containerNetworkManager: networkController,
+		runtime:                 &stateCountingRuntime{},
+		podAddr:                 "10.0.0.2",
+		backendRoute: func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute {
+			return &pb.BackendRoute{
+				RouteId:     "route-new",
+				WorkspaceId: request.WorkspaceId,
+				ContainerId: request.ContainerId,
+				Kind:        kind,
+				Port:        port,
+				Transport:   types.BackendRouteTransportTSNet,
+				LocalTarget: localTarget,
+			}
+		},
+	}
+
+	resp, err := server.ContainerSandboxExposePort(context.Background(), &pb.ContainerSandboxExposePortRequest{
+		ContainerId: containerId,
+		Port:        9000,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Len(t, networkController.exposedPorts, 1)
+	require.Equal(t, 9000, networkController.exposedPorts[0].containerPort)
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "route://existing", repoClient.lastSetAddressMap.AddressMap[8080])
+	require.Contains(t, repoClient.lastSetAddressMap.AddressMap[9000], "10.0.0.2:")
+	require.Len(t, repoClient.lastSetAddressMap.Routes, 1)
+	require.Equal(t, "route-new", repoClient.lastSetAddressMap.Routes[0].RouteId)
+	require.Equal(t, int32(9000), repoClient.lastSetAddressMap.Routes[0].Port)
+	require.Equal(t, repoClient.lastSetAddressMap.AddressMap[9000], repoClient.lastSetAddressMap.Routes[0].LocalTarget)
+}
+
+func TestContainerSandboxExposePortUsesNetworkManagerAddressForBackendRoute(t *testing.T) {
+	containerId := "sandbox-test"
+	repoClient := &fakeContainerRepoClient{}
+	networkController := &fakeContainerNetworkController{
+		addresses: map[int]string{
+			9000: "192.168.0.44:9000",
+		},
+	}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerId, &ContainerInstance{
+		Id:   containerId,
+		Spec: &specs.Spec{},
+		Request: &types.ContainerRequest{
+			ContainerId: containerId,
+			WorkspaceId: "workspace-1",
+		},
+	})
+
+	server := &ContainerRuntimeServer{
+		containerInstances:      instances,
+		containerRepoClient:     repoClient,
+		containerNetworkManager: networkController,
+		runtime:                 &stateCountingRuntime{},
+		podAddr:                 "127.0.0.1",
+		backendRoute: func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute {
+			return &pb.BackendRoute{
+				RouteId:     "route-backend",
+				WorkspaceId: request.WorkspaceId,
+				ContainerId: request.ContainerId,
+				Kind:        kind,
+				Port:        port,
+				Transport:   types.BackendRouteTransportTSNet,
+				LocalTarget: localTarget,
+			}
+		},
+	}
+
+	resp, err := server.ContainerSandboxExposePort(context.Background(), &pb.ContainerSandboxExposePortRequest{
+		ContainerId: containerId,
+		Port:        9000,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Len(t, networkController.exposedPorts, 1)
+	require.Equal(t, 9000, networkController.exposedPorts[0].containerPort)
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "192.168.0.44:9000", repoClient.lastSetAddressMap.AddressMap[9000])
+	require.Len(t, repoClient.lastSetAddressMap.Routes, 1)
+	require.Equal(t, "192.168.0.44:9000", repoClient.lastSetAddressMap.Routes[0].LocalTarget)
+}
+
+func TestContainerSandboxExposePortUpgradesExistingRawAddressToBackendRoute(t *testing.T) {
+	containerId := "sandbox-test"
+	repoClient := &fakeContainerRepoClient{
+		addressMap: map[int32]string{
+			9000: "10.0.0.2:32000",
+		},
+	}
+	networkController := &fakeContainerNetworkController{}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerId, &ContainerInstance{
+		Id:   containerId,
+		Spec: &specs.Spec{},
+		Request: &types.ContainerRequest{
+			ContainerId: containerId,
+			WorkspaceId: "workspace-1",
+		},
+	})
+
+	server := &ContainerRuntimeServer{
+		containerInstances:      instances,
+		containerRepoClient:     repoClient,
+		containerNetworkManager: networkController,
+		runtime:                 &stateCountingRuntime{},
+		podAddr:                 "10.0.0.2",
+		backendRoute: func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute {
+			return &pb.BackendRoute{
+				RouteId:     "route-existing",
+				WorkspaceId: request.WorkspaceId,
+				ContainerId: request.ContainerId,
+				Kind:        kind,
+				Port:        port,
+				Transport:   types.BackendRouteTransportTSNet,
+				LocalTarget: localTarget,
+			}
+		},
+	}
+
+	resp, err := server.ContainerSandboxExposePort(context.Background(), &pb.ContainerSandboxExposePortRequest{
+		ContainerId: containerId,
+		Port:        9000,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Empty(t, networkController.exposedPorts)
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "10.0.0.2:32000", repoClient.lastSetAddressMap.AddressMap[9000])
+	require.Len(t, repoClient.lastSetAddressMap.Routes, 1)
+	require.Equal(t, "route-existing", repoClient.lastSetAddressMap.Routes[0].RouteId)
+	require.Equal(t, "10.0.0.2:32000", repoClient.lastSetAddressMap.Routes[0].LocalTarget)
+}
+
 type stateCountingRuntime struct {
 	mockRuntime
 	stateCalls atomic.Int32
@@ -212,4 +373,70 @@ type stateCountingRuntime struct {
 func (r *stateCountingRuntime) State(ctx context.Context, containerID string) (betaruntime.State, error) {
 	r.stateCalls.Add(1)
 	return betaruntime.State{ID: containerID, Pid: 1, Status: types.RuncContainerStatusRunning}, nil
+}
+
+type fakeContainerNetworkController struct {
+	exposedPorts []fakeExposedPort
+	addresses    map[int]string
+}
+
+type fakeExposedPort struct {
+	containerID   string
+	hostPort      int
+	containerPort int
+}
+
+func (f *fakeContainerNetworkController) ExposePort(containerId string, hostPort, containerPort int) error {
+	f.exposedPorts = append(f.exposedPorts, fakeExposedPort{
+		containerID:   containerId,
+		hostPort:      hostPort,
+		containerPort: containerPort,
+	})
+	return nil
+}
+
+func (f *fakeContainerNetworkController) ExposePorts(containerId string, bindings []PortBinding) error {
+	for _, binding := range bindings {
+		if err := f.ExposePort(containerId, binding.HostPort, binding.ContainerPort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeContainerNetworkController) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
+	return nil
+}
+
+func (f *fakeContainerNetworkController) TearDown(containerId string) error {
+	return nil
+}
+
+func (f *fakeContainerNetworkController) UpdateNetworkPermissions(containerId string, request *types.ContainerRequest) error {
+	return nil
+}
+
+func (f *fakeContainerNetworkController) ContainerPortAddress(containerId string, binding PortBinding) (string, error) {
+	if f.addresses != nil {
+		if address, ok := f.addresses[binding.ContainerPort]; ok {
+			return address, nil
+		}
+	}
+	return fmt.Sprintf("10.0.0.2:%d", binding.HostPort), nil
+}
+
+func (f *fakeContainerNetworkController) ContainerPortAddressMap(containerId string, bindings []PortBinding) (map[int32]string, error) {
+	addressMap := make(map[int32]string, len(bindings))
+	for _, binding := range bindings {
+		address, err := f.ContainerPortAddress(containerId, binding)
+		if err != nil {
+			return nil, err
+		}
+		addressMap[int32(binding.ContainerPort)] = address
+	}
+	return addressMap, nil
+}
+
+func (f *fakeContainerNetworkController) Close() error {
+	return nil
 }

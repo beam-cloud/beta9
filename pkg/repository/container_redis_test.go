@@ -201,6 +201,69 @@ func TestUpdateContainerStatusDoesNotMoveStoppingBackToRunning(t *testing.T) {
 	}
 }
 
+func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	route := types.BackendRoute{
+		RouteID:     "route-one",
+		WorkspaceID: "workspace-one",
+		PoolName:    "pool-one",
+		MachineID:   "machine-one",
+		WorkerID:    "worker-one",
+		ContainerID: "container-one",
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8001,
+		Transport:   types.BackendRouteTransportTSNet,
+		ProxyTarget: "machine-one.tailnet:29443",
+		State:       types.BackendRouteStateReady,
+	}
+	if err := repo.SetBackendRoute(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+	revisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision("workspace-one", "pool-one", "machine-one")
+	if rev := rdb.Get(ctx, revisionKey).Val(); rev != "1" {
+		t.Fatalf("route machine revision after create = %q, want 1", rev)
+	}
+	if err := repo.SetBackendRoute(ctx, types.BackendRoute{
+		RouteID:     "route-two",
+		WorkspaceID: "workspace-one",
+		PoolName:    "pool-one",
+		MachineID:   "machine-two",
+		ContainerID: "container-two",
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8001,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	routes, err := repo.ListBackendRoutesByMachine(ctx, "workspace-one", "pool-one", "machine-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 || routes[0].RouteID != route.RouteID {
+		t.Fatalf("routes = %#v, want only %s", routes, route.RouteID)
+	}
+
+	if err := repo.DeleteBackendRoutesByContainerID(ctx, route.ContainerID); err != nil {
+		t.Fatal(err)
+	}
+	if rev := rdb.Get(ctx, revisionKey).Val(); rev != "2" {
+		t.Fatalf("route machine revision after delete = %q, want 2", rev)
+	}
+	routes, err = repo.ListBackendRoutesByMachine(ctx, "workspace-one", "pool-one", "machine-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("routes after delete = %#v, want empty", routes)
+	}
+}
+
 func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFailure(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

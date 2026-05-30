@@ -360,6 +360,9 @@ type fakeContainerRepoClient struct {
 	lastDeleteContainerID string
 	updateStatusCalls     int
 	lastUpdateStatus      *pb.UpdateContainerStatusRequest
+	addressMap            map[int32]string
+	lastSetAddress        *pb.SetContainerAddressRequest
+	lastSetAddressMap     *pb.SetContainerAddressMapRequest
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
@@ -395,15 +398,17 @@ func (f *fakeContainerRepoClient) SetContainerExitCode(ctx context.Context, in *
 }
 
 func (f *fakeContainerRepoClient) SetContainerAddress(ctx context.Context, in *pb.SetContainerAddressRequest, opts ...grpc.CallOption) (*pb.SetContainerAddressResponse, error) {
+	f.lastSetAddress = in
 	return &pb.SetContainerAddressResponse{Ok: true}, nil
 }
 
 func (f *fakeContainerRepoClient) SetContainerAddressMap(ctx context.Context, in *pb.SetContainerAddressMapRequest, opts ...grpc.CallOption) (*pb.SetContainerAddressMapResponse, error) {
+	f.lastSetAddressMap = in
 	return &pb.SetContainerAddressMapResponse{Ok: true}, nil
 }
 
 func (f *fakeContainerRepoClient) GetContainerAddressMap(ctx context.Context, in *pb.GetContainerAddressMapRequest, opts ...grpc.CallOption) (*pb.GetContainerAddressMapResponse, error) {
-	return &pb.GetContainerAddressMapResponse{Ok: true}, nil
+	return &pb.GetContainerAddressMapResponse{Ok: true, AddressMap: f.addressMap}, nil
 }
 
 func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.SetWorkerAddressRequest, opts ...grpc.CallOption) (*pb.SetWorkerAddressResponse, error) {

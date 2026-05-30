@@ -136,6 +136,102 @@ service GatewayService {
     };
   }
 
+  // Private compute pools
+  rpc ListPoolOffers(ListPoolOffersRequest)
+      returns (ListPoolOffersResponse) {
+    option (google.api.http) = {
+      post : "/pools:offers"
+      body : "*"
+    };
+  }
+  rpc LaunchPoolCapacity(LaunchPoolCapacityRequest)
+      returns (LaunchPoolCapacityResponse) {
+    option (google.api.http) = {
+      post : "/pools:launch"
+      body : "*"
+    };
+  }
+  rpc ListPrivatePools(ListPrivatePoolsRequest) returns (ListPrivatePoolsResponse) {
+    option (google.api.http) = {
+      get : "/pools/private"
+    };
+  }
+  rpc CreatePool(CreatePoolRequest)
+      returns (CreatePoolResponse) {
+    option (google.api.http) = {
+      post : "/pools"
+      body : "*"
+    };
+  }
+  rpc DeletePool(DeletePoolRequest)
+      returns (DeletePoolResponse) {
+    option (google.api.http) = {
+      delete : "/pools/{name}"
+    };
+  }
+  rpc ExtendPoolCapacity(ExtendPoolCapacityRequest)
+      returns (ExtendPoolCapacityResponse) {
+    option (google.api.http) = {
+      post : "/pools/{name}/extend"
+      body : "*"
+    };
+  }
+  rpc CreatePoolJoinToken(CreatePoolJoinTokenRequest)
+      returns (CreatePoolJoinTokenResponse) {
+    option (google.api.http) = {
+      post : "/pools/{pool_name}/join-tokens"
+      body : "*"
+    };
+  }
+  rpc RevokePoolJoinToken(RevokePoolJoinTokenRequest)
+      returns (RevokePoolJoinTokenResponse) {
+    option (google.api.http) = {
+      post : "/pools/join-tokens/revoke"
+      body : "*"
+    };
+  }
+  rpc GetPoolJoinCommand(GetPoolJoinCommandRequest)
+      returns (GetPoolJoinCommandResponse) {
+    option (google.api.http) = {
+      post : "/pools/{pool_name}/join-command"
+      body : "*"
+    };
+  }
+  rpc ListPoolMachines(ListPoolMachinesRequest)
+      returns (ListPoolMachinesResponse) {
+    option (google.api.http) = {
+      get : "/pools/{pool_name}/machines"
+    };
+  }
+  rpc JoinAgent(JoinAgentRequest) returns (JoinAgentResponse) {
+    option (google.api.http) = {
+      post : "/agent/join"
+      body : "*"
+    };
+  }
+  rpc RequestAgentTransportCredential(RequestAgentTransportCredentialRequest)
+      returns (RequestAgentTransportCredentialResponse) {
+    option (google.api.http) = {
+      post : "/agent/transport-credential"
+      body : "*"
+    };
+  }
+  rpc ListAgentRoutes(ListAgentRoutesRequest)
+      returns (ListAgentRoutesResponse) {
+    option (google.api.http) = {
+      post : "/agent/routes:list"
+      body : "*"
+    };
+  }
+  rpc UpdateAgentRouteStatus(UpdateAgentRouteStatusRequest)
+      returns (UpdateAgentRouteStatusResponse) {
+    option (google.api.http) = {
+      post : "/agent/routes/status"
+      body : "*"
+    };
+  }
+  rpc StreamAgent(StreamAgentRequest) returns (stream StreamAgentResponse);
+
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse) {
     option (google.api.http) = {
@@ -453,6 +549,7 @@ message GetOrCreateStubRequest {
   bool block_network = 38;
   repeated string allow_list = 39;
   bool docker_enabled = 40;
+  PoolConfig pool = 41;
 }
 
 message GetOrCreateStubResponse {
@@ -553,6 +650,288 @@ message ListPoolsResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Pool pools = 3;
+}
+
+message PoolConfig {
+  string name = 1;
+  repeated string gpu = 2;
+  uint32 gpus = 3;
+  string ttl = 4;
+  double max_spend = 5;
+  repeated string providers = 6;
+  repeated string regions = 7;
+  double min_reliability = 8;
+  bool reservation_required = 9;
+  string selector = 10;
+  string mode = 11;
+  string transport = 12;
+  string fallback = 13;
+  int32 priority = 14;
+}
+
+message PoolOffer {
+  string id = 1;
+  string provider = 2;
+  string instance_type = 3;
+  string region = 4;
+  string gpu = 5;
+  uint32 gpu_count = 6;
+  int64 cpu_millicores = 7;
+  int64 memory_mb = 8;
+  int64 hourly_cost_micros = 9;
+  double reliability = 10;
+  uint32 available = 11;
+}
+
+message ProviderInstance {
+  string id = 1;
+  string pool_name = 2;
+  string provider = 3;
+  string offer_id = 4;
+  string status = 5;
+  uint32 gpu_count = 6;
+  int64 hourly_cost_micros = 7;
+  string source = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  google.protobuf.Timestamp billing_renewal_at = 11;
+}
+
+message PrivatePool {
+  string name = 1;
+  string selector = 2;
+  PoolConfig config = 3;
+  repeated ProviderInstance reservations = 4;
+  uint32 reserved_gpus = 5;
+  int64 committed_spend_micros = 6;
+  string status = 7;
+  string source = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+}
+
+message ListPoolOffersRequest { PoolConfig pool = 1; }
+
+message ListPoolOffersResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated PoolOffer offers = 3;
+}
+
+message LaunchPoolCapacityRequest { PoolConfig pool = 1; }
+
+message LaunchPoolCapacityResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+}
+
+message ListPrivatePoolsRequest {
+  map<string, StringList> filters = 1;
+  uint32 limit = 2;
+}
+
+message ListPrivatePoolsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated PrivatePool pools = 3;
+}
+
+message CreatePoolRequest { PoolConfig pool = 1; }
+
+message CreatePoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+}
+
+message DeletePoolRequest { string name = 1; }
+
+message DeletePoolResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message ExtendPoolCapacityRequest {
+  string name = 1;
+  string ttl = 2;
+  double max_spend = 3;
+}
+
+message ExtendPoolCapacityResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+}
+
+message CreatePoolJoinTokenRequest {
+  string pool_name = 1;
+  string ttl = 2;
+}
+
+message CreatePoolJoinTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message RevokePoolJoinTokenRequest { string token = 1; }
+
+message RevokePoolJoinTokenResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message GetPoolJoinCommandRequest {
+  string pool_name = 1;
+  string ttl = 2;
+}
+
+message GetPoolJoinCommandResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string command = 3;
+  string token = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message ListPoolMachinesRequest {
+  string pool_name = 1;
+  uint32 limit = 2;
+}
+
+message ListPoolMachinesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Machine machines = 3;
+}
+
+message AgentBootstrapConfig {
+  string gateway_http_url = 1;
+  string gateway_grpc_host = 2;
+  int32 gateway_grpc_port = 3;
+  bool gateway_grpc_tls = 4;
+  string workspace_id = 5;
+  string pool_name = 6;
+  string transport = 7;
+  string executor = 8;
+  string fallback = 9;
+  repeated string disabled_services = 10;
+}
+
+message JoinAgentRequest {
+  string join_token = 1;
+  string machine_fingerprint = 2;
+  string hostname = 3;
+  string os = 4;
+  string arch = 5;
+  uint32 cpu_count = 6;
+  uint64 memory_mb = 7;
+  repeated string gpu = 8;
+  uint32 gpu_count = 9;
+  repeated AgentPreflightCheck preflight = 10;
+  bool schedulable = 11;
+  string executor = 12;
+  int64 cpu_millicores = 13;
+  repeated string gpu_ids = 14;
+  uint32 network_slot_pool_size = 15;
+  uint32 container_start_concurrency = 16;
+}
+
+message JoinAgentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string workspace_id = 3;
+  string pool_name = 4;
+  string machine_id = 5;
+  string agent_token = 6;
+  AgentBootstrapConfig bootstrap = 7;
+}
+
+message AgentPreflightCheck {
+  string name = 1;
+  bool ok = 2;
+  string message = 3;
+  string severity = 4;
+}
+
+message AgentRoute {
+  string route_id = 1;
+  string workspace_id = 2;
+  string pool_name = 3;
+  string machine_id = 4;
+  string worker_id = 5;
+  string container_id = 6;
+  string kind = 7;
+  int32 port = 8;
+  string protocol = 9;
+  string transport = 10;
+  string local_target = 11;
+  string proxy_target = 12;
+  string state = 13;
+  string error = 14;
+  int64 updated_at = 15;
+}
+
+message RequestAgentTransportCredentialRequest {
+  string agent_token = 1;
+  string transport = 2;
+}
+
+message RequestAgentTransportCredentialResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string auth_key = 3;
+  string control_url = 4;
+  string hostname = 5;
+  bool ephemeral = 6;
+}
+
+message ListAgentRoutesRequest { string agent_token = 1; }
+
+message ListAgentRoutesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated AgentRoute routes = 3;
+}
+
+message UpdateAgentRouteStatusRequest {
+  string agent_token = 1;
+  string route_id = 2;
+  string state = 3;
+  string proxy_target = 4;
+  string error = 5;
+}
+
+message UpdateAgentRouteStatusResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message AgentWorkerSlot {
+  string worker_id = 1;
+  string worker_token = 2;
+  string pool_name = 3;
+  string machine_id = 4;
+  int64 cpu = 5;
+  int64 memory = 6;
+  string gpu = 7;
+  uint32 gpu_count = 8;
+  string gpu_assignment = 9;
+  string network_prefix = 10;
+  string worker_image = 11;
+  uint32 network_slot_pool_size = 12;
+  uint32 container_start_concurrency = 13;
+}
+
+message StreamAgentRequest { string agent_token = 1; }
+
+message StreamAgentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated AgentRoute routes = 3;
+  repeated AgentWorkerSlot slots = 4;
 }
 
 message Machine {

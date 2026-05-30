@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"slices"
@@ -89,6 +90,9 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	var err error
 	switch sm.poolConfig.StorageMode {
 	case storage.StorageModeGeese:
+		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
+			return nil, err
+		}
 		os.MkdirAll(mountPath, 0755)
 
 		mount, err = storage.NewStorage(types.StorageConfig{
@@ -132,6 +136,9 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		}
 
 	case storage.StorageModeAlluxio:
+		if err := validateWorkspaceStorage(workspaceStorage); err != nil {
+			return nil, err
+		}
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
@@ -159,6 +166,16 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 			return nil, err
 		}
 
+	case storage.StorageModeLocal:
+		mount, err = storage.NewStorage(types.StorageConfig{
+			Mode:           storage.StorageModeLocal,
+			FilesystemName: workspaceName,
+			FilesystemPath: mountPath,
+		}, sm.cacheClient)
+		if err != nil {
+			return nil, err
+		}
+
 	default:
 		return nil, errors.New("invalid storage mode")
 	}
@@ -166,6 +183,16 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	sm.mounts.Set(workspaceName, mount)
 
 	return mount, nil
+}
+
+func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
+	if workspaceStorage == nil {
+		return errors.New("workspace storage metadata is required")
+	}
+	if workspaceStorage.EndpointUrl == nil || workspaceStorage.BucketName == nil || workspaceStorage.AccessKey == nil || workspaceStorage.SecretKey == nil || workspaceStorage.Region == nil {
+		return fmt.Errorf("workspace storage metadata is incomplete")
+	}
+	return nil
 }
 
 func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
@@ -192,6 +219,10 @@ func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		}
 
 		os.RemoveAll(localPath)
+	case storage.StorageModeLocal:
+		if err := mount.Unmount(localPath); err != nil {
+			return err
+		}
 	case storage.StorageModeAlluxio:
 		fallthrough
 	default:

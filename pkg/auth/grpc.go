@@ -37,6 +37,11 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
 			"/gateway.GatewayService/Authorize":                         true,
+			"/gateway.GatewayService/JoinAgent":                         true,
+			"/gateway.GatewayService/ListAgentRoutes":                   true,
+			"/gateway.GatewayService/RequestAgentTransportCredential":   true,
+			"/gateway.GatewayService/StreamAgent":                       true,
+			"/gateway.GatewayService/UpdateAgentRouteStatus":            true,
 			"/grpc.health.v1.Health/Check":                              true,
 			"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo": config.DebugMode,
 		},

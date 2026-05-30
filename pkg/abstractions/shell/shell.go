@@ -185,7 +185,7 @@ func (ss *SSHShellService) ensureShellPortExposed(ctx context.Context, container
 }
 
 func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, addr string) bool {
-	conn, err := network.ConnectToHost(ctx, addr, time.Second*30, ss.tailscale, ss.config.Tailscale)
+	conn, err := network.ConnectToBackend(ctx, addr, time.Second*30, ss.tailscale, ss.config.Tailscale, ss.containerRepo)
 	if err != nil {
 		return false
 	}
@@ -280,7 +280,7 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 		}, nil
 	}
 
-	conn, err := network.ConnectToHost(ctx, containerAddr, time.Second*30, ss.tailscale, ss.config.Tailscale)
+	conn, err := network.ConnectToBackend(ctx, containerAddr, time.Second*30, ss.tailscale, ss.config.Tailscale, ss.containerRepo)
 	if err != nil {
 		return &pb.CreateShellInExistingContainerResponse{
 			Ok:     false,
@@ -422,22 +422,31 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		}, nil
 	}
 
-	err = ss.scheduler.Run(&types.ContainerRequest{
-		ContainerId: containerId,
-		Env:         env,
-		Cpu:         stubConfig.Runtime.Cpu,
-		Memory:      stubConfig.Runtime.Memory,
-		GpuRequest:  gpuRequest,
-		GpuCount:    uint32(gpuCount),
-		ImageId:     stubConfig.Runtime.ImageId,
-		StubId:      stub.ExternalId,
-		AppId:       stub.App.ExternalId,
-		WorkspaceId: authInfo.Workspace.ExternalId,
-		Workspace:   *authInfo.Workspace,
-		EntryPoint:  entryPoint,
-		Mounts:      mounts,
-		Stub:        *stub,
-	})
+	runRequest := &types.ContainerRequest{
+		ContainerId:  containerId,
+		Env:          env,
+		Cpu:          stubConfig.Runtime.Cpu,
+		Memory:       stubConfig.Runtime.Memory,
+		GpuRequest:   gpuRequest,
+		GpuCount:     uint32(gpuCount),
+		ImageId:      stubConfig.Runtime.ImageId,
+		StubId:       stub.ExternalId,
+		AppId:        stub.App.ExternalId,
+		WorkspaceId:  authInfo.Workspace.ExternalId,
+		Workspace:    *authInfo.Workspace,
+		EntryPoint:   entryPoint,
+		Mounts:       mounts,
+		Stub:         *stub,
+		PoolSelector: stubConfig.PoolSelector(),
+	}
+	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
+		return &pb.CreateStandaloneShellResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	err = ss.scheduler.Run(runRequest)
 	if err != nil {
 		return &pb.CreateStandaloneShellResponse{
 			Ok:     false,

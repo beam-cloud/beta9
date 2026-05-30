@@ -351,6 +351,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     block_network: bool = betterproto.bool_field(38)
     allow_list: List[str] = betterproto.string_field(39)
     docker_enabled: bool = betterproto.bool_field(40)
+    pool: "PoolConfig" = betterproto.message_field(41)
 
 
 @dataclass(eq=False, repr=False)
@@ -478,6 +479,342 @@ class ListPoolsResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     pools: List["Pool"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PoolConfig(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    gpu: List[str] = betterproto.string_field(2)
+    gpus: int = betterproto.uint32_field(3)
+    ttl: str = betterproto.string_field(4)
+    max_spend: float = betterproto.double_field(5)
+    providers: List[str] = betterproto.string_field(6)
+    regions: List[str] = betterproto.string_field(7)
+    min_reliability: float = betterproto.double_field(8)
+    reservation_required: bool = betterproto.bool_field(9)
+    selector: str = betterproto.string_field(10)
+    mode: str = betterproto.string_field(11)
+    transport: str = betterproto.string_field(12)
+    fallback: str = betterproto.string_field(13)
+    priority: int = betterproto.int32_field(14)
+
+
+@dataclass(eq=False, repr=False)
+class PoolOffer(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    provider: str = betterproto.string_field(2)
+    instance_type: str = betterproto.string_field(3)
+    region: str = betterproto.string_field(4)
+    gpu: str = betterproto.string_field(5)
+    gpu_count: int = betterproto.uint32_field(6)
+    cpu_millicores: int = betterproto.int64_field(7)
+    memory_mb: int = betterproto.int64_field(8)
+    hourly_cost_micros: int = betterproto.int64_field(9)
+    reliability: float = betterproto.double_field(10)
+    available: int = betterproto.uint32_field(11)
+
+
+@dataclass(eq=False, repr=False)
+class ProviderInstance(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    pool_name: str = betterproto.string_field(2)
+    provider: str = betterproto.string_field(3)
+    offer_id: str = betterproto.string_field(4)
+    status: str = betterproto.string_field(5)
+    gpu_count: int = betterproto.uint32_field(6)
+    hourly_cost_micros: int = betterproto.int64_field(7)
+    source: str = betterproto.string_field(8)
+    created_at: datetime = betterproto.message_field(9)
+    expires_at: datetime = betterproto.message_field(10)
+    billing_renewal_at: datetime = betterproto.message_field(11)
+
+
+@dataclass(eq=False, repr=False)
+class PrivatePool(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    selector: str = betterproto.string_field(2)
+    config: "PoolConfig" = betterproto.message_field(3)
+    reservations: List["ProviderInstance"] = betterproto.message_field(4)
+    reserved_gpus: int = betterproto.uint32_field(5)
+    committed_spend_micros: int = betterproto.int64_field(6)
+    status: str = betterproto.string_field(7)
+    source: str = betterproto.string_field(8)
+    created_at: datetime = betterproto.message_field(9)
+    expires_at: datetime = betterproto.message_field(10)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolOffersRequest(betterproto.Message):
+    pool: "PoolConfig" = betterproto.message_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolOffersResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    offers: List["PoolOffer"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class LaunchPoolCapacityRequest(betterproto.Message):
+    pool: "PoolConfig" = betterproto.message_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class LaunchPoolCapacityResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pool: "PrivatePool" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ListPrivatePoolsRequest(betterproto.Message):
+    filters: Dict[str, "StringList"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListPrivatePoolsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pools: List["PrivatePool"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreatePoolRequest(betterproto.Message):
+    pool: "PoolConfig" = betterproto.message_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class CreatePoolResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pool: "PrivatePool" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeletePoolRequest(betterproto.Message):
+    name: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeletePoolResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ExtendPoolCapacityRequest(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    ttl: str = betterproto.string_field(2)
+    max_spend: float = betterproto.double_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ExtendPoolCapacityResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pool: "PrivatePool" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreatePoolJoinTokenRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    ttl: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class CreatePoolJoinTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    token: str = betterproto.string_field(3)
+    expires_at: datetime = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class RevokePoolJoinTokenRequest(betterproto.Message):
+    token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class RevokePoolJoinTokenResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class GetPoolJoinCommandRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    ttl: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class GetPoolJoinCommandResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    command: str = betterproto.string_field(3)
+    token: str = betterproto.string_field(4)
+    expires_at: datetime = betterproto.message_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolMachinesRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListPoolMachinesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    machines: List["Machine"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class AgentBootstrapConfig(betterproto.Message):
+    gateway_http_url: str = betterproto.string_field(1)
+    gateway_grpc_host: str = betterproto.string_field(2)
+    gateway_grpc_port: int = betterproto.int32_field(3)
+    gateway_grpc_tls: bool = betterproto.bool_field(4)
+    workspace_id: str = betterproto.string_field(5)
+    pool_name: str = betterproto.string_field(6)
+    transport: str = betterproto.string_field(7)
+    executor: str = betterproto.string_field(8)
+    fallback: str = betterproto.string_field(9)
+    disabled_services: List[str] = betterproto.string_field(10)
+
+
+@dataclass(eq=False, repr=False)
+class JoinAgentRequest(betterproto.Message):
+    join_token: str = betterproto.string_field(1)
+    machine_fingerprint: str = betterproto.string_field(2)
+    hostname: str = betterproto.string_field(3)
+    os: str = betterproto.string_field(4)
+    arch: str = betterproto.string_field(5)
+    cpu_count: int = betterproto.uint32_field(6)
+    memory_mb: int = betterproto.uint64_field(7)
+    gpu: List[str] = betterproto.string_field(8)
+    gpu_count: int = betterproto.uint32_field(9)
+    preflight: List["AgentPreflightCheck"] = betterproto.message_field(10)
+    schedulable: bool = betterproto.bool_field(11)
+    executor: str = betterproto.string_field(12)
+    cpu_millicores: int = betterproto.int64_field(13)
+    gpu_ids: List[str] = betterproto.string_field(14)
+    network_slot_pool_size: int = betterproto.uint32_field(15)
+    container_start_concurrency: int = betterproto.uint32_field(16)
+
+
+@dataclass(eq=False, repr=False)
+class JoinAgentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    workspace_id: str = betterproto.string_field(3)
+    pool_name: str = betterproto.string_field(4)
+    machine_id: str = betterproto.string_field(5)
+    agent_token: str = betterproto.string_field(6)
+    bootstrap: "AgentBootstrapConfig" = betterproto.message_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class AgentPreflightCheck(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    ok: bool = betterproto.bool_field(2)
+    message: str = betterproto.string_field(3)
+    severity: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class AgentRoute(betterproto.Message):
+    route_id: str = betterproto.string_field(1)
+    workspace_id: str = betterproto.string_field(2)
+    pool_name: str = betterproto.string_field(3)
+    machine_id: str = betterproto.string_field(4)
+    worker_id: str = betterproto.string_field(5)
+    container_id: str = betterproto.string_field(6)
+    kind: str = betterproto.string_field(7)
+    port: int = betterproto.int32_field(8)
+    protocol: str = betterproto.string_field(9)
+    transport: str = betterproto.string_field(10)
+    local_target: str = betterproto.string_field(11)
+    proxy_target: str = betterproto.string_field(12)
+    state: str = betterproto.string_field(13)
+    error: str = betterproto.string_field(14)
+    updated_at: int = betterproto.int64_field(15)
+
+
+@dataclass(eq=False, repr=False)
+class RequestAgentTransportCredentialRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+    transport: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class RequestAgentTransportCredentialResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    auth_key: str = betterproto.string_field(3)
+    control_url: str = betterproto.string_field(4)
+    hostname: str = betterproto.string_field(5)
+    ephemeral: bool = betterproto.bool_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class ListAgentRoutesRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ListAgentRoutesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    routes: List["AgentRoute"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentRouteStatusRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+    route_id: str = betterproto.string_field(2)
+    state: str = betterproto.string_field(3)
+    proxy_target: str = betterproto.string_field(4)
+    error: str = betterproto.string_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentRouteStatusResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class AgentWorkerSlot(betterproto.Message):
+    worker_id: str = betterproto.string_field(1)
+    worker_token: str = betterproto.string_field(2)
+    pool_name: str = betterproto.string_field(3)
+    machine_id: str = betterproto.string_field(4)
+    cpu: int = betterproto.int64_field(5)
+    memory: int = betterproto.int64_field(6)
+    gpu: str = betterproto.string_field(7)
+    gpu_count: int = betterproto.uint32_field(8)
+    gpu_assignment: str = betterproto.string_field(9)
+    network_prefix: str = betterproto.string_field(10)
+    worker_image: str = betterproto.string_field(11)
+    network_slot_pool_size: int = betterproto.uint32_field(12)
+    container_start_concurrency: int = betterproto.uint32_field(13)
+
+
+@dataclass(eq=False, repr=False)
+class StreamAgentRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StreamAgentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    routes: List["AgentRoute"] = betterproto.message_field(3)
+    slots: List["AgentWorkerSlot"] = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -882,6 +1219,141 @@ class GatewayServiceStub(SyncServiceStub):
             ListPoolsRequest,
             ListPoolsResponse,
         )(list_pools_request)
+
+    def list_pool_offers(
+        self, list_pool_offers_request: "ListPoolOffersRequest"
+    ) -> "ListPoolOffersResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListPoolOffers",
+            ListPoolOffersRequest,
+            ListPoolOffersResponse,
+        )(list_pool_offers_request)
+
+    def launch_pool_capacity(
+        self, launch_pool_capacity_request: "LaunchPoolCapacityRequest"
+    ) -> "LaunchPoolCapacityResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/LaunchPoolCapacity",
+            LaunchPoolCapacityRequest,
+            LaunchPoolCapacityResponse,
+        )(launch_pool_capacity_request)
+
+    def list_private_pools(
+        self, list_private_pools_request: "ListPrivatePoolsRequest"
+    ) -> "ListPrivatePoolsResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListPrivatePools",
+            ListPrivatePoolsRequest,
+            ListPrivatePoolsResponse,
+        )(list_private_pools_request)
+
+    def create_pool(
+        self, create_pool_request: "CreatePoolRequest"
+    ) -> "CreatePoolResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreatePool",
+            CreatePoolRequest,
+            CreatePoolResponse,
+        )(create_pool_request)
+
+    def delete_pool(
+        self, delete_pool_request: "DeletePoolRequest"
+    ) -> "DeletePoolResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeletePool",
+            DeletePoolRequest,
+            DeletePoolResponse,
+        )(delete_pool_request)
+
+    def extend_pool_capacity(
+        self, extend_pool_capacity_request: "ExtendPoolCapacityRequest"
+    ) -> "ExtendPoolCapacityResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ExtendPoolCapacity",
+            ExtendPoolCapacityRequest,
+            ExtendPoolCapacityResponse,
+        )(extend_pool_capacity_request)
+
+    def create_pool_join_token(
+        self, create_pool_join_token_request: "CreatePoolJoinTokenRequest"
+    ) -> "CreatePoolJoinTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreatePoolJoinToken",
+            CreatePoolJoinTokenRequest,
+            CreatePoolJoinTokenResponse,
+        )(create_pool_join_token_request)
+
+    def revoke_pool_join_token(
+        self, revoke_pool_join_token_request: "RevokePoolJoinTokenRequest"
+    ) -> "RevokePoolJoinTokenResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/RevokePoolJoinToken",
+            RevokePoolJoinTokenRequest,
+            RevokePoolJoinTokenResponse,
+        )(revoke_pool_join_token_request)
+
+    def get_pool_join_command(
+        self, get_pool_join_command_request: "GetPoolJoinCommandRequest"
+    ) -> "GetPoolJoinCommandResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetPoolJoinCommand",
+            GetPoolJoinCommandRequest,
+            GetPoolJoinCommandResponse,
+        )(get_pool_join_command_request)
+
+    def list_pool_machines(
+        self, list_pool_machines_request: "ListPoolMachinesRequest"
+    ) -> "ListPoolMachinesResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListPoolMachines",
+            ListPoolMachinesRequest,
+            ListPoolMachinesResponse,
+        )(list_pool_machines_request)
+
+    def join_agent(self, join_agent_request: "JoinAgentRequest") -> "JoinAgentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/JoinAgent",
+            JoinAgentRequest,
+            JoinAgentResponse,
+        )(join_agent_request)
+
+    def request_agent_transport_credential(
+        self,
+        request_agent_transport_credential_request: "RequestAgentTransportCredentialRequest",
+    ) -> "RequestAgentTransportCredentialResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/RequestAgentTransportCredential",
+            RequestAgentTransportCredentialRequest,
+            RequestAgentTransportCredentialResponse,
+        )(request_agent_transport_credential_request)
+
+    def list_agent_routes(
+        self, list_agent_routes_request: "ListAgentRoutesRequest"
+    ) -> "ListAgentRoutesResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListAgentRoutes",
+            ListAgentRoutesRequest,
+            ListAgentRoutesResponse,
+        )(list_agent_routes_request)
+
+    def update_agent_route_status(
+        self, update_agent_route_status_request: "UpdateAgentRouteStatusRequest"
+    ) -> "UpdateAgentRouteStatusResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/UpdateAgentRouteStatus",
+            UpdateAgentRouteStatusRequest,
+            UpdateAgentRouteStatusResponse,
+        )(update_agent_route_status_request)
+
+    def stream_agent(
+        self, stream_agent_request: "StreamAgentRequest"
+    ) -> Iterator["StreamAgentResponse"]:
+        for response in self._unary_stream(
+            "/gateway.GatewayService/StreamAgent",
+            StreamAgentRequest,
+            StreamAgentResponse,
+        )(stream_agent_request):
+            yield response
 
     def list_machines(
         self, list_machines_request: "ListMachinesRequest"

@@ -15,6 +15,10 @@ var (
 	schedulerContainerState          string = "scheduler:container:state:%s"
 	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
 	schedulerContainerAddressMap     string = "scheduler:container:container_addr_map:%s"
+	schedulerBackendRoute            string = "scheduler:route:%s"
+	schedulerBackendRouteIndex       string = "scheduler:route:index:%s"
+	schedulerBackendRouteMachine     string = "scheduler:route:machine:{%s}:%s:%s"
+	schedulerBackendRouteMachineRev  string = "scheduler:route:machine:{%s}:%s:%s:rev"
 	schedulerContainerRequestStatus  string = "scheduler:container:request_status:%s"
 	schedulerContainerIndex          string = "scheduler:container:index:%s"
 	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
@@ -91,6 +95,17 @@ var (
 )
 
 var (
+	computePoolState         string = "compute:{%s}:pool:%s"
+	computePoolIndex         string = "compute:{%s}:pools"
+	computeJoinToken         string = "compute:join:%s"
+	computeAgentToken        string = "compute:agent:token:%s"
+	computeAgentMachine      string = "compute:{%s}:pool:%s:machine:%s"
+	computeAgentMachineIndex string = "compute:{%s}:pool:%s:machines"
+	computeAgentSlot         string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
+	computeAgentSlotIndex    string = "compute:{%s}:pool:%s:machine:%s:workers"
+)
+
+var (
 	containerName string = "%s-%s-%s" // prefix, stub-id, containerId
 )
 
@@ -161,6 +176,22 @@ func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerAddressMap(containerId string) string {
 	return fmt.Sprintf(schedulerContainerAddressMap, containerId)
+}
+
+func (rk *redisKeys) SchedulerBackendRoute(routeId string) string {
+	return fmt.Sprintf(schedulerBackendRoute, routeId)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteIndex(containerId string) string {
+	return fmt.Sprintf(schedulerBackendRouteIndex, containerId)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteMachineIndex(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(schedulerBackendRouteMachine, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(schedulerBackendRouteMachineRev, workspaceID, poolName, machineID)
 }
 
 func (rk *redisKeys) SchedulerContainerRequestStatus(containerId string) string {
@@ -256,6 +287,39 @@ func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
 
 func (rk *redisKeys) WorkerPoolCleanerLock(poolName string) string {
 	return fmt.Sprintf(workerPoolCleanerLock, poolName)
+}
+
+// Compute keys
+func (rk *redisKeys) ComputePoolState(workspaceID, poolName string) string {
+	return fmt.Sprintf(computePoolState, workspaceID, poolName)
+}
+
+func (rk *redisKeys) ComputePoolIndex(workspaceID string) string {
+	return fmt.Sprintf(computePoolIndex, workspaceID)
+}
+
+func (rk *redisKeys) ComputeJoinToken(tokenHash string) string {
+	return fmt.Sprintf(computeJoinToken, tokenHash)
+}
+
+func (rk *redisKeys) ComputeAgentToken(tokenHash string) string {
+	return fmt.Sprintf(computeAgentToken, tokenHash)
+}
+
+func (rk *redisKeys) ComputeAgentMachine(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(computeAgentMachine, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) ComputeAgentMachineIndex(workspaceID, poolName string) string {
+	return fmt.Sprintf(computeAgentMachineIndex, workspaceID, poolName)
+}
+
+func (rk *redisKeys) ComputeAgentSlot(workspaceID, poolName, machineID, workerID string) string {
+	return fmt.Sprintf(computeAgentSlot, workspaceID, poolName, machineID, workerID)
+}
+
+func (rk *redisKeys) ComputeAgentSlotIndex(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(computeAgentSlotIndex, workspaceID, poolName, machineID)
 }
 
 // Task keys

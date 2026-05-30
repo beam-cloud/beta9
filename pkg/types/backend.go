@@ -481,6 +481,33 @@ type StubConfigV1 struct {
 	BlockNetwork       bool            `json:"block_network"`
 	AllowList          []string        `json:"allow_list"`
 	DockerEnabled      bool            `json:"docker_enabled"`
+	Pool               *PoolConfig     `json:"pool,omitempty"`
+}
+
+type PoolConfig struct {
+	Name                string   `json:"name,omitempty"`
+	GPUs                []string `json:"gpu,omitempty"`
+	TotalGPUs           uint32   `json:"gpus,omitempty"`
+	TTL                 string   `json:"ttl,omitempty"`
+	MaxSpend            float64  `json:"max_spend,omitempty"`
+	Providers           []string `json:"providers,omitempty"`
+	Regions             []string `json:"regions,omitempty"`
+	MinReliability      float64  `json:"min_reliability,omitempty"`
+	ReservationRequired bool     `json:"reservation_required,omitempty"`
+	Selector            string   `json:"selector,omitempty"`
+}
+
+func (c *StubConfigV1) PoolSelector() string {
+	if c == nil || c.Pool == nil {
+		return ""
+	}
+	if c.Pool.Selector != "" {
+		return c.Pool.Selector
+	}
+	if c.Pool.Name != "" {
+		return c.Pool.Name
+	}
+	return ""
 }
 
 type StubConfigLimitedValues struct {

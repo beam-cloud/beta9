@@ -28,6 +28,7 @@ from ..type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    Pool,
     PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
@@ -155,6 +156,7 @@ class TaskQueue(RunnerAbstraction):
         pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
+        pool: Optional[Union[str, Pool]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -182,6 +184,7 @@ class TaskQueue(RunnerAbstraction):
             pricing=pricing,
             inputs=inputs,
             outputs=outputs,
+            pool=pool,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []

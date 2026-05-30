@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -49,6 +50,7 @@ const (
 	containerNetworkCleanupInterval     time.Duration = time.Minute * 1
 	defaultContainerNetworkSlotPoolSize               = 16
 	containerNetworkSlotPoolEnv         string        = "CONTAINER_NETWORK_SLOT_POOL_SIZE"
+	workerIptablesModeEnv               string        = "WORKER_IPTABLES_MODE"
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 )
@@ -345,6 +347,75 @@ func iptablesRuleDestinationIP(rule string) (string, bool) {
 	return "", false
 }
 
+func iptablesRuleMatchesIP(rule string, ip string) bool {
+	if ip == "" {
+		return false
+	}
+
+	if destination, ok := iptablesRuleDestinationIP(rule); ok && iptablesAddressMatches(destination, ip) {
+		return true
+	}
+
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		switch fields[i] {
+		case "-s", "--source", "-d", "--destination":
+			if iptablesAddressMatches(fields[i+1], ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func iptablesRuleMatchesSourceIP(rule string, ip string) bool {
+	if ip == "" {
+		return false
+	}
+
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		switch fields[i] {
+		case "-s", "--source":
+			if iptablesAddressMatches(fields[i+1], ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func iptablesRuleTarget(rule string) string {
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "-j" || fields[i] == "--jump" {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+func iptablesRuleFields(rule string) []string {
+	fields := strings.Fields(rule)
+	for i, field := range fields {
+		fields[i] = strings.Trim(strings.ReplaceAll(field, `"`, ""), "[]")
+	}
+	return fields
+}
+
+func iptablesAddressMatches(value string, ip string) bool {
+	target := net.ParseIP(ip)
+	if target == nil {
+		return false
+	}
+
+	value = strings.Trim(strings.Trim(value, `"`), "[]")
+	if parsed, _, err := net.ParseCIDR(value); err == nil {
+		return parsed.Equal(target)
+	}
+	return net.ParseIP(value).Equal(target)
+}
+
 func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
@@ -357,10 +428,11 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	ipv6Path := ""
 	switch ipTablesMode {
 	case "nftables":
-		ipv4Path = "/usr/sbin/iptables-nft"
-		ipv6Path = "/usr/sbin/ip6tables-nft"
+		ipv4Path = firstExistingPath("/usr/sbin/iptables-nft", "/usr/sbin/iptables")
+		ipv6Path = firstExistingPath("/usr/sbin/ip6tables-nft", "/usr/sbin/ip6tables")
 	case "legacy":
-		fallthrough
+		ipv4Path = firstExistingPath("/usr/sbin/iptables-legacy", "/usr/sbin/iptables")
+		ipv6Path = firstExistingPath("/usr/sbin/ip6tables-legacy", "/usr/sbin/ip6tables")
 	default:
 		ipv4Path = "/usr/sbin/iptables"
 		ipv6Path = "/usr/sbin/ip6tables"
@@ -1087,24 +1159,60 @@ func taskIDFromContainerRequestEnv(env []string) string {
 	return ""
 }
 
-// detectIptablesMode detects which iptables version is use on the host based on where the KUBE-FORWARD chain has been setup
+// detectIptablesMode detects the host iptables backend without assuming Kubernetes chains exist.
 func detectIptablesMode() string {
-	iptNft, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-nft"))
-	if err == nil {
-		if exists, _ := iptNft.ChainExists("filter", "KUBE-FORWARD"); exists {
-			return "nftables"
-		}
+	switch strings.TrimSpace(os.Getenv(workerIptablesModeEnv)) {
+	case "nftables":
+		return "nftables"
+	case "legacy":
+		return "legacy"
 	}
 
-	iptLegacy, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path("/usr/sbin/iptables-legacy"))
-	if err == nil {
-		if exists, _ := iptLegacy.ChainExists("filter", "KUBE-FORWARD"); exists {
-			return "legacy"
-		}
+	if iptablesChainExists("/usr/sbin/iptables-nft", "filter", "KUBE-FORWARD") {
+		return "nftables"
+	}
+	if iptablesChainExists("/usr/sbin/iptables-legacy", "filter", "KUBE-FORWARD") {
+		return "legacy"
 	}
 
-	// Default to legacy if no KUBE-FORWARD chain found
-	return "legacy"
+	if iptablesTableAvailable("/usr/sbin/iptables-nft", "nat") {
+		return "nftables"
+	}
+	if iptablesTableAvailable("/usr/sbin/iptables-legacy", "nat") {
+		return "legacy"
+	}
+
+	return "default"
+}
+
+func iptablesChainExists(path, table, chain string) bool {
+	ipt, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path(path))
+	if err != nil {
+		return false
+	}
+	exists, err := ipt.ChainExists(table, chain)
+	return err == nil && exists
+}
+
+func iptablesTableAvailable(path, table string) bool {
+	ipt, err := iptables.New(iptables.IPFamily(iptables.ProtocolIPv4), iptables.Path(path))
+	if err != nil {
+		return false
+	}
+	_, err = ipt.List(table, "POSTROUTING")
+	return err == nil
+}
+
+func firstExistingPath(paths ...string) string {
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[len(paths)-1]
 }
 
 func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
@@ -1242,17 +1350,18 @@ func (m *ContainerNetworkManager) networkRestriction(containerId string, request
 	if request == nil {
 		return "", nil
 	}
-	if len(request.AllowList) > 0 {
+	switch request.NetworkPolicy() {
+	case types.ContainerNetworkPolicyAllowList:
 		return "allowlist", func() error {
 			return m.setupAllowList(containerId, request, request.AllowList)
 		}
-	}
-	if request.BlockNetwork {
+	case types.ContainerNetworkPolicyBlock:
 		return "block", func() error {
 			return m.setupBlockNetwork(containerId, request)
 		}
+	default:
+		return "", nil
 	}
-	return "", nil
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
@@ -2052,17 +2161,16 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 			}
 
 			for _, rule := range rules {
-				if strings.Contains(rule, ip) {
-					parts := strings.Fields(rule)
+				if !iptablesRuleMatchesIP(rule, ip) {
+					continue
+				}
 
-					// Remove any double quotes
-					for i, part := range parts {
-						parts[i] = strings.ReplaceAll(part, `"`, "")
-					}
-
-					if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
-						return err
-					}
+				parts := iptablesRuleFields(rule)
+				if len(parts) < 3 {
+					continue
+				}
+				if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
+					return err
 				}
 			}
 		}
@@ -2186,19 +2294,20 @@ func (m *ContainerNetworkManager) removeNetworkRestrictionRules(ip string, ipt *
 			}
 
 			for _, rule := range rules {
-				if strings.Contains(rule, ip) {
-					if strings.Contains(rule, "DROP") || strings.Contains(rule, "ACCEPT") {
-						parts := strings.Fields(rule)
+				target := iptablesRuleTarget(rule)
+				if target != "DROP" && target != "ACCEPT" {
+					continue
+				}
+				if !iptablesRuleMatchesSourceIP(rule, ip) {
+					continue
+				}
 
-						// Remove any double quotes
-						for i, part := range parts {
-							parts[i] = strings.ReplaceAll(part, `"`, "")
-						}
-
-						if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
-							return err
-						}
-					}
+				parts := iptablesRuleFields(rule)
+				if len(parts) < 3 {
+					continue
+				}
+				if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
+					return err
 				}
 			}
 		}
@@ -2235,31 +2344,97 @@ func GetPodAddr() (string, error) {
 
 // getDefaultInterface returns the link that goes to the internet.
 func getDefaultInterface() (netlink.Link, error) {
-	file, err := os.Open("/proc/net/route")
-	if err != nil {
-		return nil, err
+	if name := strings.TrimSpace(os.Getenv("WORKER_DEFAULT_INTERFACE")); name != "" {
+		return netlink.LinkByName(name)
 	}
-	defer file.Close()
 
-	linkName := ""
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if fields[1] == "00000000" { // Destination of default route
-			linkName = fields[0]
+	file, err := os.Open("/proc/net/route")
+	if err == nil {
+		defer file.Close()
+		if linkName, err := defaultInterfaceNameFromProcRoute(file); err == nil {
+			return netlink.LinkByName(linkName)
 		}
 	}
 
-	if linkName == "" {
-		return nil, fmt.Errorf("default route not found")
+	if link, err := defaultInterfaceFromNetlinkRoutes(); err == nil {
+		return link, nil
 	}
 
-	link, err := netlink.LinkByName(linkName)
+	if link, err := firstUsableInterface(); err == nil {
+		log.Warn().Str("interface", link.Attrs().Name).Msg("default route not found; using first usable interface")
+		return link, nil
+	}
+
+	return nil, fmt.Errorf("default route not found")
+}
+
+func defaultInterfaceNameFromProcRoute(r io.Reader) (string, error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 || fields[0] == "Iface" {
+			continue
+		}
+		if fields[1] == "00000000" && fields[0] != "" { // Destination of default route
+			return fields[0], nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("default route not found")
+}
+
+func defaultInterfaceFromNetlinkRoutes() (netlink.Link, error) {
+	routes, err := netlink.RouteList(nil, unix.AF_INET)
+	if err != nil {
+		return nil, err
+	}
+	for _, route := range routes {
+		if route.Dst != nil || route.LinkIndex == 0 {
+			continue
+		}
+		link, err := netlink.LinkByIndex(route.LinkIndex)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, fmt.Errorf("default route not found")
+}
+
+func firstUsableInterface() (netlink.Link, error) {
+	links, err := netlink.LinkList()
 	if err != nil {
 		return nil, err
 	}
 
-	return link, nil
+	var fallback netlink.Link
+	for _, link := range links {
+		attrs := link.Attrs()
+		if attrs == nil ||
+			attrs.Name == "lo" ||
+			attrs.MTU <= 0 ||
+			attrs.Flags&net.FlagUp == 0 ||
+			attrs.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if fallback == nil {
+			fallback = link
+		}
+		addrs, err := netlink.AddrList(link, unix.AF_INET)
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if addr.IP != nil && !addr.IP.IsLoopback() && !addr.IP.IsLinkLocalUnicast() {
+				return link, nil
+			}
+		}
+	}
+	if fallback != nil {
+		return fallback, nil
+	}
+	return nil, fmt.Errorf("default route not found")
 }
 
 // getIPFromEnv gets the IP address from an environment variable.
