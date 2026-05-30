@@ -741,6 +741,32 @@ func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.
 	require.Equal(t, content, secondStream.sent.Bytes())
 }
 
+func TestStoreContentFromReaderFallsBackWhenSelectedHostUnavailable(t *testing.T) {
+	ctx := context.Background()
+	selectedHost := &Host{HostId: "selected-host"}
+	fallbackHost := &Host{HostId: "fallback-host", PrivateAddr: "fallback-host:2049"}
+	fallbackStream := &fakeStoreContentStream{}
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          ClientConfig{NTopHosts: 2},
+		grpcClients:           map[string]proto.CacheClient{"fallback-host": &fakeStoreCacheClient{stream: fallbackStream}},
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{selectedHost, fallbackHost}},
+		maxGetContentAttempts: 1,
+	}
+
+	content := []byte("fallback-cache-through-when-primary-endpoint-is-gone")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.Equal(t, content, fallbackStream.sent.Bytes())
+}
+
 type fakeStoreCacheClient struct {
 	stream proto.Cache_StoreContentClient
 }

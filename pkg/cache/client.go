@@ -1651,12 +1651,23 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 		routingKey = hash
 	}
 
-	client, _, err := c.getGRPCClient(&ClientRequest{
-		rt:        ClientRequestTypeStorage,
-		hash:      hash,
-		key:       routingKey,
-		hostIndex: 0,
-	})
+	var client proto.CacheClient
+	var err error
+	for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
+		client, _, err = c.getGRPCClient(&ClientRequest{
+			rt:        ClientRequestTypeStorage,
+			hash:      hash,
+			key:       routingKey,
+			hostIndex: hostIndex,
+		})
+		if err == nil {
+			break
+		}
+		if isStoreHostUnavailable(err) {
+			_ = c.refreshRoutableHosts(ctx)
+			continue
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -1703,38 +1714,43 @@ func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader i
 	seeker, retryable := reader.(io.Seeker)
 	var lastErr error
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		if retryable {
-			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-				return "", err
+		for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
+			if retryable {
+				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+					return "", err
+				}
+			} else if attempt > 0 || hostIndex > 0 {
+				break
 			}
-		} else if attempt > 0 {
-			break
-		}
 
-		_, host, err := c.getGRPCClient(&ClientRequest{
-			rt:        ClientRequestTypeStorage,
-			hash:      routingKey,
-			key:       routingKey,
-			hostIndex: 0,
-		})
-		if err != nil {
+			_, host, err := c.getGRPCClient(&ClientRequest{
+				rt:        ClientRequestTypeStorage,
+				hash:      routingKey,
+				key:       routingKey,
+				hostIndex: hostIndex,
+			})
+			if err != nil {
+				lastErr = err
+				if isStoreHostUnavailable(err) {
+					_ = c.refreshRoutableHosts(ctx)
+				}
+				continue
+			}
+
+			hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+			if err == nil {
+				return hash, nil
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
 			lastErr = err
-			if err == ErrHostNotFound {
-				_ = c.refreshRoutableHosts(ctx)
+			c.removeHost(host)
+			_ = c.refreshRoutableHosts(ctx)
+			if !retryable {
+				break
 			}
-			continue
 		}
-
-		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
-		if err == nil {
-			return hash, nil
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
-		}
-		lastErr = err
-		c.removeHost(host)
-		_ = c.refreshRoutableHosts(ctx)
 		if !retryable {
 			break
 		}
@@ -1954,58 +1970,74 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		client, host, err := c.getGRPCClient(&ClientRequest{
-			rt:        ClientRequestTypeStorage,
-			hash:      hash,
-			key:       routingKey,
-			hostIndex: 0,
-		})
-		if err != nil {
-			lastErr = err
-			if err == ErrHostNotFound {
-				_ = c.refreshRoutableHosts(ctx)
+		for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
+			client, host, err := c.getGRPCClient(&ClientRequest{
+				rt:        ClientRequestTypeStorage,
+				hash:      hash,
+				key:       routingKey,
+				hostIndex: hostIndex,
+			})
+			if err != nil {
+				lastErr = err
+				if isStoreHostUnavailable(err) {
+					_ = c.refreshRoutableHosts(ctx)
+				}
+				continue
 			}
-			continue
-		}
 
-		if lock {
-			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
+			if lock {
+				resp, err := client.StoreContentFromSourceWithLock(ctx, req)
+				if err != nil {
+					lastErr = err
+					c.removeHost(host)
+					_ = c.refreshRoutableHosts(ctx)
+					continue
+				}
+
+				if resp == nil {
+					return "", ErrUnableToPopulateContent
+				}
+				if resp.FailedToAcquireLock {
+					return "", ErrUnableToAcquireLock
+				}
+				if !resp.Ok {
+					return "", ErrUnableToPopulateContent
+				}
+				return resp.Hash, nil
+			}
+
+			resp, err := client.StoreContentFromSource(ctx, req)
 			if err != nil {
 				lastErr = err
 				c.removeHost(host)
 				_ = c.refreshRoutableHosts(ctx)
 				continue
 			}
-
-			if resp == nil {
-				return "", ErrUnableToPopulateContent
-			}
-			if resp.FailedToAcquireLock {
-				return "", ErrUnableToAcquireLock
-			}
-			if !resp.Ok {
+			if resp == nil || !resp.Ok {
 				return "", ErrUnableToPopulateContent
 			}
 			return resp.Hash, nil
 		}
-
-		resp, err := client.StoreContentFromSource(ctx, req)
-		if err != nil {
-			lastErr = err
-			c.removeHost(host)
-			_ = c.refreshRoutableHosts(ctx)
-			continue
-		}
-		if resp == nil || !resp.Ok {
-			return "", ErrUnableToPopulateContent
-		}
-		return resp.Hash, nil
 	}
 
 	if lastErr != nil {
 		return "", lastErr
 	}
 	return "", ErrHostNotFound
+}
+
+func (c *Client) storeHostAttempts() int {
+	if c == nil || c.clientConfig.NTopHosts <= 0 {
+		return 1
+	}
+	return c.clientConfig.NTopHosts
+}
+
+func isStoreHostUnavailable(err error) bool {
+	return errors.Is(err, ErrHostNotFound) ||
+		errors.Is(err, ErrSelectedHostUnavailable) ||
+		errors.Is(err, ErrUnableToReachHost) ||
+		errors.Is(err, ErrClientNotFound)
 }
 
 func (c *Client) HostsAvailable() bool {
