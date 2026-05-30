@@ -2900,7 +2900,12 @@ class CacheBenchmark:
                 "path": entry["path"],
                 "proof": self.cache.wait_ready(
                     entry,
-                    timeout_seconds=min(120, self.config.cache_proof_timeout_seconds),
+                    timeout_seconds=self.config.cache_proof_timeout_seconds,
+                    required=(
+                        self.config.reset_workers_after_prepare
+                        and self.config.require_read_path_proof
+                        and not self.config.force_read_through_after_prepare
+                    ),
                     context="prepare cache proof",
                 ),
             }
@@ -3078,6 +3083,14 @@ class CacheBenchmark:
                 ) = self._ensure_workspace_fuse_mounted(sandbox, token, paths, entry)
 
             if not ready.get("ready"):
+                if (
+                    self.config.require_read_path_proof
+                    and not self.config.force_read_through_after_prepare
+                ):
+                    raise RuntimeError(
+                        f"embedded cache proof not ready for {entry['path']} "
+                        "before hot-read measurement"
+                    )
                 log(
                     f"Embedded cache proof not ready for {entry['path']}; "
                     "running one verified read-through warmup before measuring hot cache"
