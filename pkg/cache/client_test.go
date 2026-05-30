@@ -110,6 +110,86 @@ func TestReadContentIntoFallsBackToReachableReplicaOutsideTopHosts(t *testing.T)
 	require.Len(t, regions, 2)
 }
 
+func TestReadContentIntoRefreshesHostsBeforeDeclaringMiss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+			ReadTransport:        ServerReadTransportConfig{Enabled: true, Sendfile: true},
+		},
+		Client: ClientConfig{
+			NTopHosts:     1,
+			ReadTransport: ClientReadTransportConfig{Enabled: true, MaxActiveConnsPerHost: 2, MaxIdleConnsPerHost: 1},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+
+	localServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("local-host"))
+	require.NoError(t, err)
+	localAddr, err := localServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, localServer.Close()) }()
+
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	remoteAddr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, remoteServer.Close()) }()
+
+	content := []byte("content-appears-after-host-refresh")
+	hash, _, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := localServer.Host()
+	require.NotNil(t, localHost)
+	localHost.Addr = localAddr
+	localHost.PrivateAddr = localAddr
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = remoteAddr
+	remoteHost.PrivateAddr = remoteAddr
+
+	metadataStore := NewMockCacheMetadataStore()
+	require.NoError(t, metadataStore.AddHostToIndex(ctx, "test", localHost))
+	require.NoError(t, metadataStore.AddHostToIndex(ctx, "test", remoteHost))
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{},
+		hostDirectory:         metadataStore,
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap = NewHostMap(cfg.Global, client.addHost)
+	client.hostMap.Set(localHost)
+	defer client.Cleanup()
+
+	readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer readCancel()
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
