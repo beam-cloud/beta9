@@ -32,6 +32,14 @@ type CoordinatorHost struct {
 	CapacityUsagePct float64
 }
 
+func (h CoordinatorHost) LogicalOnly() CoordinatorHost {
+	h.RegistrationID = ""
+	h.Addr = ""
+	h.PrivateAddr = ""
+	h.CapacityUsagePct = 0
+	return h
+}
+
 type CoordinatorRepository interface {
 	SetCacheRegistration(ctx context.Context, host CoordinatorHost, ttl time.Duration) error
 	GetActiveCacheRegistration(ctx context.Context, logicalHostID string) (registrationID string, found bool, err error)
@@ -39,6 +47,7 @@ type CoordinatorRepository interface {
 	ListCacheLogicalHosts(ctx context.Context, poolName, locality string) ([]string, error)
 	ListCacheRegistrations(ctx context.Context, logicalHostID string) ([]string, error)
 	GetCacheRegistration(ctx context.Context, logicalHostID, registrationID string) (CoordinatorHost, bool, error)
+	GetCacheLogicalHost(ctx context.Context, logicalHostID string) (CoordinatorHost, bool, error)
 	RemoveCacheRegistration(ctx context.Context, logicalHostID, registrationID string) error
 	CountCacheRegistrations(ctx context.Context, logicalHostID string) (int64, error)
 	RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error
@@ -152,6 +161,13 @@ func (c *Coordinator) logicalHosts(ctx context.Context, poolName, locality, logi
 	}
 
 	if len(hosts) == 0 {
+		logicalHost, ok, err := c.repository.GetCacheLogicalHost(ctx, logicalHostID)
+		if err != nil {
+			return nil, err
+		}
+		if ok && logicalHost.Locality == locality && (poolName == "" || logicalHost.PoolName == poolName) {
+			return []CoordinatorHost{logicalHost.LogicalOnly()}, nil
+		}
 		return nil, c.pruneLogicalHost(ctx, poolName, locality, logicalHostID)
 	}
 

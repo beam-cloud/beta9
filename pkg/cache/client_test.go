@@ -66,7 +66,7 @@ func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T)
 
 	dst := make([]byte, len(content))
 	_, err = client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
-	require.ErrorIs(t, err, ErrContentNotFound)
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 
 	client.removeLocalHostCache(hash)
 	client.hasher = &orderedTestHasher{hosts: []*Host{localHost}}
@@ -74,6 +74,32 @@ func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+}
+
+func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T) {
+	logicalHost := &Host{
+		HostId:      "logical-host",
+		PoolName:    "default",
+		Locality:    "test",
+		NodeID:      "node-a",
+		CachePathID: "path",
+	}
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{logicalHost}},
+		maxGetContentAttempts: 1,
+	}
+
+	dst := make([]byte, 8)
+	_, err := client.ReadContentInto(context.Background(), "hash", 0, dst, ClientOptions{RoutingKey: "hash"})
+
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
 func TestReadContentIntoFallsBackToReachableReplicaOutsideTopHosts(t *testing.T) {
@@ -689,8 +715,8 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 
 func TestStoreContentFromReaderRetriesSeekableReaderAfterStreamError(t *testing.T) {
 	ctx := context.Background()
-	firstHost := &Host{HostId: "first-host"}
-	secondHost := &Host{HostId: "second-host"}
+	firstHost := &Host{HostId: "first-host", PrivateAddr: "first-host:2049"}
+	secondHost := &Host{HostId: "second-host", PrivateAddr: "second-host:2049"}
 	firstStream := &fakeStoreContentStream{failOnSend: true}
 	secondStream := &fakeStoreContentStream{}
 	client := &Client{

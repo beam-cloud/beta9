@@ -12,6 +12,7 @@ import (
 type memoryCoordinatorRepository struct {
 	index         map[string]map[string]struct{}
 	registrations map[string]map[string]CoordinatorHost
+	logicalHosts  map[string]CoordinatorHost
 	active        map[string]string
 }
 
@@ -19,6 +20,7 @@ func newMemoryCoordinatorRepository() *memoryCoordinatorRepository {
 	return &memoryCoordinatorRepository{
 		index:         map[string]map[string]struct{}{},
 		registrations: map[string]map[string]CoordinatorHost{},
+		logicalHosts:  map[string]CoordinatorHost{},
 		active:        map[string]string{},
 	}
 }
@@ -34,6 +36,7 @@ func (r *memoryCoordinatorRepository) SetCacheRegistration(ctx context.Context, 
 		r.registrations[host.LogicalHostID] = map[string]CoordinatorHost{}
 	}
 	r.registrations[host.LogicalHostID][host.RegistrationID] = host
+	r.logicalHosts[host.LogicalHostID] = host.LogicalOnly()
 	return nil
 }
 
@@ -88,6 +91,11 @@ func (r *memoryCoordinatorRepository) GetCacheRegistration(ctx context.Context, 
 	return host, ok, nil
 }
 
+func (r *memoryCoordinatorRepository) GetCacheLogicalHost(ctx context.Context, logicalHostID string) (CoordinatorHost, bool, error) {
+	host, ok := r.logicalHosts[logicalHostID]
+	return host.LogicalOnly(), ok, nil
+}
+
 func (r *memoryCoordinatorRepository) RemoveCacheRegistration(ctx context.Context, logicalHostID, registrationID string) error {
 	delete(r.registrations[logicalHostID], registrationID)
 	if r.active[logicalHostID] == registrationID {
@@ -103,6 +111,7 @@ func (r *memoryCoordinatorRepository) CountCacheRegistrations(ctx context.Contex
 func (r *memoryCoordinatorRepository) RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error {
 	delete(r.index[fmt.Sprintf("%s:%s", poolName, locality)], logicalHostID)
 	delete(r.registrations, logicalHostID)
+	delete(r.logicalHosts, logicalHostID)
 	delete(r.active, logicalHostID)
 	return nil
 }
@@ -211,6 +220,35 @@ func TestCoordinatorPromotesRegisteringRegistrationWhenActiveRegistrationIsGone(
 	host.PrivateAddr = "10.0.0.2:2049"
 	require.NoError(t, coordinator.RegisterHost(ctx, host, 30*time.Second))
 	require.Equal(t, "worker-b", repo.active[host.LogicalHostID])
+}
+
+func TestCoordinatorListsLogicalHostWhenNoEndpointRegistrationIsActive(t *testing.T) {
+	repo := newMemoryCoordinatorRepository()
+	coordinator := NewCoordinator(repo)
+	ctx := context.Background()
+
+	host := CoordinatorHost{
+		LogicalHostID:  "cache-host-default-node-a-path-0",
+		RegistrationID: "worker-a",
+		PoolName:       "default",
+		Locality:       "default",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		Addr:           "10.0.0.1:2049",
+		PrivateAddr:    "10.0.0.1:2049",
+	}
+	require.NoError(t, coordinator.RegisterHost(ctx, host, 30*time.Second))
+
+	require.NoError(t, repo.RemoveCacheRegistration(ctx, host.LogicalHostID, host.RegistrationID))
+
+	hosts, err := coordinator.ListHosts(ctx, "default", "default")
+	require.NoError(t, err)
+	require.Len(t, hosts, 1)
+	require.Equal(t, host.LogicalHostID, hosts[0].LogicalHostID)
+	require.Equal(t, host.NodeID, hosts[0].NodeID)
+	require.Equal(t, host.CachePathID, hosts[0].CachePathID)
+	require.Empty(t, hosts[0].RegistrationID)
+	require.Empty(t, hosts[0].PrivateAddr)
 }
 
 func TestCoordinatorCanListCacheHostsAcrossWorkerPools(t *testing.T) {

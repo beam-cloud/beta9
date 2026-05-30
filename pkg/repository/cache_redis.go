@@ -39,8 +39,15 @@ func (r *CacheRedisRepository) SetCacheRegistration(ctx context.Context, host ca
 	if err != nil {
 		return err
 	}
+	logicalPayload, err := json.Marshal(cacheCoordinatorHostRecord(host.LogicalOnly()))
+	if err != nil {
+		return err
+	}
 
 	if err := r.rdb.SAdd(ctx, cacheCoordinatorIndexKey(host.PoolName, host.Locality), host.LogicalHostID).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.Set(ctx, cacheCoordinatorLogicalHostKey(host.LogicalHostID), logicalPayload, cacheCoordinatorLogicalHostTTL(ttl)).Err(); err != nil {
 		return err
 	}
 	if err := r.rdb.SAdd(ctx, cacheCoordinatorRegistrationSetKey(host.LogicalHostID), host.RegistrationID).Err(); err != nil {
@@ -120,6 +127,23 @@ func (r *CacheRedisRepository) GetCacheRegistration(ctx context.Context, logical
 	return cache.CoordinatorHost(record), true, nil
 }
 
+func (r *CacheRedisRepository) GetCacheLogicalHost(ctx context.Context, logicalHostID string) (cache.CoordinatorHost, bool, error) {
+	payload, err := r.rdb.Get(ctx, cacheCoordinatorLogicalHostKey(logicalHostID)).Bytes()
+	if err == redis.Nil {
+		return cache.CoordinatorHost{}, false, nil
+	}
+	if err != nil {
+		return cache.CoordinatorHost{}, false, err
+	}
+
+	record := cacheCoordinatorHostRecord{}
+	if err := json.Unmarshal(payload, &record); err != nil {
+		return cache.CoordinatorHost{}, false, err
+	}
+
+	return cache.CoordinatorHost(record).LogicalOnly(), true, nil
+}
+
 func (r *CacheRedisRepository) RemoveCacheRegistration(ctx context.Context, logicalHostID, registrationID string) error {
 	if err := r.rdb.Del(ctx, cacheCoordinatorRegistrationKey(logicalHostID, registrationID)).Err(); err != nil {
 		return err
@@ -143,7 +167,7 @@ func (r *CacheRedisRepository) RemoveCacheLogicalHost(ctx context.Context, poolN
 	if err := r.rdb.SRem(ctx, cacheCoordinatorIndexKey(poolName, locality), logicalHostID).Err(); err != nil {
 		return err
 	}
-	return r.rdb.Del(ctx, cacheCoordinatorActiveRegistrationKey(logicalHostID), cacheCoordinatorRegistrationSetKey(logicalHostID)).Err()
+	return r.rdb.Del(ctx, cacheCoordinatorActiveRegistrationKey(logicalHostID), cacheCoordinatorRegistrationSetKey(logicalHostID), cacheCoordinatorLogicalHostKey(logicalHostID)).Err()
 }
 
 func cacheCoordinatorIndexKey(poolName, locality string) string {
@@ -154,10 +178,22 @@ func cacheCoordinatorRegistrationSetKey(logicalHostID string) string {
 	return fmt.Sprintf("%s:host:%s:registrations", cacheCoordinatorKeyPrefix, logicalHostID)
 }
 
+func cacheCoordinatorLogicalHostKey(logicalHostID string) string {
+	return fmt.Sprintf("%s:host:%s:logical", cacheCoordinatorKeyPrefix, logicalHostID)
+}
+
 func cacheCoordinatorRegistrationKey(logicalHostID, registrationID string) string {
 	return fmt.Sprintf("%s:host:%s:registration:%s", cacheCoordinatorKeyPrefix, logicalHostID, registrationID)
 }
 
 func cacheCoordinatorActiveRegistrationKey(logicalHostID string) string {
 	return fmt.Sprintf("%s:host:%s:active_registration", cacheCoordinatorKeyPrefix, logicalHostID)
+}
+
+func cacheCoordinatorLogicalHostTTL(registrationTTL time.Duration) time.Duration {
+	ttl := registrationTTL * 4
+	if ttl < 2*time.Minute {
+		return 2 * time.Minute
+	}
+	return ttl
 }
