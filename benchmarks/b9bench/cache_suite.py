@@ -6,6 +6,7 @@ import os
 import re
 import select
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1164,6 +1165,139 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             "exists": False,
             "checked": checked,
         }
+
+    def object_page_proof(self, content_hash: str, expected_size: int) -> dict[str, Any]:
+        proof: dict[str, Any] = {
+            "hash": content_hash,
+            "expectedBytes": expected_size,
+            "ok": False,
+            "workers": [],
+        }
+        seen_nodes = set()
+        for pod in self.kube.running_workers():
+            node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
+            if node_key in seen_nodes:
+                continue
+            seen_nodes.add(node_key)
+            candidates = self._candidate_shell_paths(pod, content_hash)
+            script = (
+                f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
+                "found=''; for candidate in "
+                f'{candidates}; do [ -d "$candidate" ] && found="$candidate" && break; done; '
+                'if [ -z "$found" ]; then printf \'{"exists":false,"ready":false,"bytes":0,"chunks":0}\\n\'; exit 0; fi; '
+                "i=0; bytes=0; "
+                'while [ -f "$found/$hash-$i" ]; do size=$(stat -c %s "$found/$hash-$i"); bytes=$((bytes + size)); i=$((i + 1)); done; '
+                'ready=false; [ "$bytes" -eq "$expected" ] && ready=true; '
+                'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s}\\n\' "$ready" "$found" "$i" "$bytes"'
+            )
+            proc = self.kube.worker_shell(pod["name"], script, timeout=30)
+            row: dict[str, Any] = {
+                "pod": pod["name"],
+                "nodeName": pod.get("nodeName", ""),
+                "returnCode": proc.returncode,
+            }
+            if proc.returncode == 0:
+                try:
+                    row.update(parse_json_output(proc.stdout))
+                except Exception as exc:
+                    row["error"] = str(exc)
+            else:
+                row["error"] = proc.stderr.strip() or proc.stdout.strip()
+            proof["workers"].append(row)
+            proof["ok"] = bool(proof["ok"] or row.get("ready"))
+        return proof
+
+    def hrw_routing_proof(
+        self,
+        content_hash: str,
+        page_proof: dict[str, Any],
+        remote_read: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        hosts_snapshot = self.cache_hosts_snapshot()
+        proof: dict[str, Any] = {
+            "ok": False,
+            "hash": content_hash,
+            "routingKey": content_hash,
+            "hostsSnapshot": hosts_snapshot,
+            "routes": [],
+        }
+        hosts = hosts_snapshot.get("hosts") or []
+        if not hosts:
+            proof["error"] = "no active cache hosts found"
+            return proof
+
+        go = shutil.which("go")
+        if not go:
+            proof["error"] = "go not found"
+            return proof
+
+        env = dict(os.environ)
+        bundled_goroot = "/opt/homebrew/Cellar/go/1.24.2/libexec"
+        if Path(bundled_goroot).exists():
+            env["GOROOT"] = bundled_goroot
+
+        proc = subprocess.run(
+            [
+                go,
+                "run",
+                "./benchmarks/b9bench/cache_tools/hrw_routing.go",
+                "--hosts-json",
+                json.dumps(hosts, sort_keys=True),
+                "--keys",
+                content_hash,
+                "--n",
+                "1",
+            ],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        if proc.returncode != 0:
+            proof["error"] = proc.stderr.strip()[-1000:] or f"hrw helper exited {proc.returncode}"
+            return proof
+
+        pages_by_node = {
+            worker.get("nodeName") or "": int(worker.get("chunks") or 0)
+            for worker in page_proof.get("workers") or []
+        }
+        routes = json.loads(proc.stdout)
+        checked = []
+        ok = True
+        for route in routes:
+            selected = (route.get("hosts") or [{}])[0]
+            node = selected.get("nodeName") or selected.get("nodeId") or ""
+            pages = pages_by_node.get(node, 0)
+            item = {
+                "hash": route.get("key") or "",
+                "selectedHostId": selected.get("hostId") or "",
+                "selectedRegistrationId": selected.get("registrationId") or "",
+                "selectedNode": node,
+                "selectedPod": selected.get("pod") or "",
+                "pagesOnSelectedNode": pages,
+                "ok": pages > 0,
+            }
+            if remote_read:
+                target_host = remote_read.get("targetHost") or {}
+                item["remoteTargetHostId"] = target_host.get("hostId") or ""
+                item["remoteTargetRegistrationId"] = target_host.get("registrationId") or ""
+                item["remoteTargetNode"] = remote_read.get("targetNode") or target_host.get("nodeName") or ""
+                item["remoteTargetMatchesHRW"] = bool(
+                    item["selectedHostId"]
+                    and item["selectedHostId"] == item["remoteTargetHostId"]
+                )
+                item["remoteTargetRegistrationMatchesHRW"] = bool(
+                    item["selectedRegistrationId"]
+                    and item["selectedRegistrationId"] == item["remoteTargetRegistrationId"]
+                )
+            checked.append(item)
+            ok = ok and item["ok"]
+
+        proof["routes"] = checked
+        proof["ok"] = ok
+        return proof
 
     def object_proof(self, content_hash: str) -> dict[str, Any]:
         for pod in self.kube.running_workers():
@@ -2588,6 +2722,11 @@ class Reporter:
                 failures.append(
                     f"{row['accessType']}:{row['sizeMiB']}MiB did not prove geesefs external-cache hits"
                 )
+            hrw_proof = row.get("hrwRoutingProof") or {}
+            if not hrw_proof.get("ok"):
+                failures.append(
+                    f"{row['accessType']}:{row['sizeMiB']}MiB HRW route proof failed: {hrw_proof.get('error') or hrw_proof.get('routes')}"
+                )
             remote = row.get("remoteRead")
             if self.config.require_remote_read:
                 if not remote or not remote.get("ok"):
@@ -2612,6 +2751,12 @@ class Reporter:
                     else:
                         failures.append(
                             f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below {self.config.min_remote_cache_socket_mbps:.2f} MB/s"
+                        )
+                else:
+                    route = ((hrw_proof.get("routes") or []) + [{}])[0]
+                    if route and not route.get("remoteTargetMatchesHRW", True):
+                        failures.append(
+                            f"{row['accessType']}:{row['sizeMiB']}MiB remote target {route.get('remoteTargetHostId')} does not match HRW-selected host {route.get('selectedHostId')}"
                         )
             remote_object = row.get("remoteObject")
             if self.config.require_remote_object_proof and (
@@ -2638,8 +2783,8 @@ class Reporter:
             f"- Namespace: `{report['config']['namespace']}`",
             f"- Volume: `{report['config']['volumeName']}` mounted at `/{report['config']['volumeMountPath']}`",
             "",
-            "| Access | Size | Hot MB/s | File-read MB/s | Read Method | SHA OK | Cache Ready | Remote Object | Cache Path | Worker dd MB/s | Sandbox dd MB/s | Remote MB/s | Network MB/s | Direct Disk MB/s |",
-            "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+            "| Access | Size | Hot MB/s | File-read MB/s | Read Method | SHA OK | Cache Ready | HRW Route | Remote Target | Remote Object | Cache Path | Worker dd MB/s | Sandbox dd MB/s | Remote MB/s | Network MB/s | Direct Disk MB/s |",
+            "| --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
         direct = report.get("directDiskProbe") or {}
         for row in report["rows"]:
@@ -2653,12 +2798,29 @@ class Reporter:
                 + self._cache_path_label(row.get("ddReadPathProof") or {})
                 + ")"
             )
+            route = (((row.get("hrwRoutingProof") or {}).get("routes") or []) + [{}])[0]
+            hrw_route = ""
+            if route:
+                hrw_route = (
+                    f"{route.get('selectedNode', '')}/"
+                    f"{route.get('selectedHostId', '')}"
+                    f" pages={route.get('pagesOnSelectedNode', 0)}"
+                )
+            remote_target = ""
+            if route:
+                remote_target = (
+                    f"{route.get('remoteTargetNode', '')}/"
+                    f"{route.get('remoteTargetHostId', '')}"
+                    f" match={route.get('remoteTargetMatchesHRW', '')}"
+                )
             lines.append(
                 "| "
                 f"{row['accessType']} | {row['sizeMiB']} MiB | "
                 f"{read.get('mbps', 0):.2f} | {read.get('fileReadMBps', 0):.2f} | "
                 f"`{read.get('timing', {}).get('readMethod', '')}` | {row.get('shaOK', False)} | "
                 f"{(row.get('cacheReady') or {}).get('ready', False)} | "
+                f"`{hrw_route}` | "
+                f"`{remote_target}` | "
                 f"{(row.get('remoteObject') or {}).get('ok', False)} | "
                 f"`{cache_path}` | "
                 f"{(row.get('workerDD') or {}).get('mbps', 0):.2f} | "
@@ -2977,6 +3139,7 @@ class CacheBenchmark:
                     geesefs_path,
                 )
             cas_proof = self.cache.object_proof(entry["sha256"])
+            page_proof = self.cache.object_page_proof(entry["sha256"], entry["size"])
             remote_object = self._remote_object_proof(workspace, paths, entry)
             worker_dd = None
             if self.config.worker_dd_reads:
@@ -3001,6 +3164,9 @@ class CacheBenchmark:
                 if self.config.require_remote_read
                 else None
             )
+            hrw_proof = self.cache.hrw_routing_proof(
+                entry["sha256"], page_proof, remote
+            )
             content_sha_ok = (
                 not self.config.verify_reads
                 or hot_payload.get("digest") == entry["sha256"]
@@ -3018,6 +3184,8 @@ class CacheBenchmark:
                 "readThroughWarmup": read_through_warmup,
                 "cachePageEviction": cache_page_eviction,
                 "casProof": cas_proof,
+                "pageProof": page_proof,
+                "hrwRoutingProof": hrw_proof,
                 "remoteObject": remote_object,
                 "workspaceMountProbe": workspace_mount_probe,
                 "mountedFileEviction": mounted_eviction,

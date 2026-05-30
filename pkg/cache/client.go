@@ -1061,6 +1061,16 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 	}()
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
 	atomic.AddInt64(&cachePathStats.clientReadIntoBytes, length)
+
+	if n, ok := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); ok {
+		return n, nil
+	}
+
+	return c.readContentIntoAfterHostRefresh(ctx, hash, offset, dst, opts)
+}
+
+func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, bool) {
+	length := int64(len(dst))
 	checked := make(map[string]struct{})
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 		host, err := c.getHostForRequest(&ClientRequest{
@@ -1087,15 +1097,32 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 		checked[host.HostId] = struct{}{}
 		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
 		if err == nil && n == length {
-			return n, nil
+			return n, true
 		}
 	}
 
 	for _, host := range c.remainingHostsForRequest(checked) {
 		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
 		if err == nil && n == length {
-			return n, nil
+			return n, true
 		}
+	}
+
+	return 0, false
+}
+
+func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
+	if c.hostDirectory == nil || c.hostMap == nil {
+		return 0, ErrContentNotFound
+	}
+
+	c.removeLocalHostCache(hash)
+	if err := c.refreshRoutableHosts(ctx); err != nil && ctx.Err() != nil {
+		return 0, err
+	}
+	if n, ok := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); ok {
+		Logger.Debugf("cache read-into recovered after host refresh: hash=%s routing_key=%s offset=%d length=%d", hash, opts.RoutingKey, offset, len(dst))
+		return n, nil
 	}
 
 	return 0, ErrContentNotFound
