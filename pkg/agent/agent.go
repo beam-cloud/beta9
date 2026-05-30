@@ -44,7 +44,7 @@ func RunJoin(ctx context.Context, opts JoinOptions) error {
 	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr)
 	defer workers.stopAll()
 
-	registryForwarder, err := startLocalRegistryForwarder(ctx, res.Bootstrap, opts.Stderr)
+	registryForwarder, err := startLocalRegistryForwarder(ctx, opts.Stderr)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "local registry forwarder disabled: %v\n", err)
 	} else if registryForwarder != nil {

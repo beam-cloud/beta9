@@ -14,6 +14,12 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const (
+	routeProxyPrefaceTimeout   = 10 * time.Second
+	routeProxyLocalDialTimeout = 2 * time.Second
+	routeProxyReadyDialTimeout = 250 * time.Millisecond
+)
+
 func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener net.Listener, proxyTarget string, workers *workerRuntimeManager, stderr io.Writer) *routeProxy {
 	if stderr == nil {
 		stderr = io.Discard
@@ -184,7 +190,7 @@ func (p *routeProxy) handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(routeProxyPrefaceTimeout))
 	lineBytes, err := reader.ReadSlice('\n')
 	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
@@ -252,7 +258,7 @@ func copyBoth(a, b net.Conn) {
 }
 
 func checkLocalTargetReady(localTarget string) error {
-	conn, err := dialLocalTargetWithTimeout(localTarget, 250*time.Millisecond)
+	conn, err := dialLocalTargetWithTimeout(localTarget, routeProxyReadyDialTimeout)
 	if err != nil {
 		return err
 	}
@@ -260,7 +266,7 @@ func checkLocalTargetReady(localTarget string) error {
 }
 
 func dialLocalTarget(localTarget string) (net.Conn, error) {
-	return dialLocalTargetWithTimeout(localTarget, 30*time.Second)
+	return dialLocalTargetWithTimeout(localTarget, routeProxyLocalDialTimeout)
 }
 
 func dialLocalTargetWithTimeout(localTarget string, timeout time.Duration) (net.Conn, error) {
@@ -292,7 +298,9 @@ func isLocalTargetUnavailable(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "no route to host") ||
-		strings.Contains(msg, "connection reset by peer")
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "deadline exceeded")
 }
 
 type closeWriter interface {

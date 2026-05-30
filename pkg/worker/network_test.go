@@ -628,6 +628,40 @@ func TestContainerNetworkRuleInfoFromIptablesRule(t *testing.T) {
 	}
 }
 
+func TestIPTablesRuleMatchesExactIP(t *testing.T) {
+	rule := `-A PREROUTING -p tcp -m tcp --dport 12345 -j DNAT --to-destination 192.168.0.44:8080 -m comment --comment "b9habcdef123456:sandbox-123"`
+
+	if !iptablesRuleMatchesIP(rule, "192.168.0.44") {
+		t.Fatal("expected exact destination IP to match")
+	}
+	if iptablesRuleMatchesIP(rule, "192.168.0.4") {
+		t.Fatal("did not expect substring IP to match")
+	}
+}
+
+func TestIPTablesRuleMatchesCIDRSourceIP(t *testing.T) {
+	rule := `-A FORWARD -s 192.168.0.44/32 -o eth0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP -m comment --comment "b9habcdef123456:sandbox-123"`
+
+	if !iptablesRuleMatchesSourceIP(rule, "192.168.0.44") {
+		t.Fatal("expected source CIDR to match")
+	}
+	if iptablesRuleMatchesSourceIP(rule, "192.168.0.4") {
+		t.Fatal("did not expect substring source IP to match")
+	}
+}
+
+func TestNetworkRestrictionMatcherPreservesExposeForwardRule(t *testing.T) {
+	exposeRule := `-A FORWARD -p tcp -d 192.168.0.44/32 --dport 8001 -j ACCEPT -m comment --comment "b9habcdef123456:sandbox-123"`
+	restrictionRule := `-A FORWARD -s 192.168.0.44/32 -o eth0 -d 10.0.0.0/8 -j ACCEPT -m comment --comment "b9habcdef123456:sandbox-123"`
+
+	if iptablesRuleMatchesSourceIP(exposeRule, "192.168.0.44") {
+		t.Fatal("exposed-port rule should not be treated as a network restriction")
+	}
+	if !iptablesRuleMatchesSourceIP(restrictionRule, "192.168.0.44") {
+		t.Fatal("allowlist rule should be treated as a network restriction")
+	}
+}
+
 func TestContainerNetworkInfoFromSlotUsesSlotResources(t *testing.T) {
 	slot := &containerNetworkSlot{
 		id:        "network-slot-abc",

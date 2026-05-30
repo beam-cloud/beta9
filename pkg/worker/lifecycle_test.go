@@ -831,42 +831,6 @@ func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	assert.Equal(t, "registry.example.com/team/image:latest", sourceRef)
 }
 
-func TestRewriteOCIMetadataRegistryUsesConfiguredAgentMapping(t *testing.T) {
-	t.Setenv(ociRegistryRewriteEnv, "registry.localhost:5000=host.docker.internal:5000")
-
-	meta := &clipCommon.ClipArchiveMetadata{
-		StorageInfo: &clipCommon.OCIStorageInfo{
-			RegistryURL: "registry.localhost:5000",
-			Repository:  "beta9-users",
-			Reference:   "latest",
-		},
-	}
-
-	rewriteOCIMetadataRegistry(meta, "image-one")
-
-	ociInfo, ok := meta.StorageInfo.(*clipCommon.OCIStorageInfo)
-	require.True(t, ok)
-	assert.Equal(t, "host.docker.internal:5000", ociInfo.RegistryURL)
-}
-
-func TestRewriteOCIMetadataRegistryUpdatesValueStorageInfo(t *testing.T) {
-	t.Setenv(ociRegistryRewriteEnv, "registry.localhost:5000=host.docker.internal:5000")
-
-	meta := &clipCommon.ClipArchiveMetadata{
-		StorageInfo: clipCommon.OCIStorageInfo{
-			RegistryURL: "registry.localhost:5000",
-			Repository:  "beta9-users",
-			Reference:   "latest",
-		},
-	}
-
-	rewriteOCIMetadataRegistry(meta, "image-one")
-
-	ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo)
-	require.True(t, ok)
-	assert.Equal(t, "host.docker.internal:5000", ociInfo.RegistryURL)
-}
-
 func TestMountedImageReadyVerifiesMountPath(t *testing.T) {
 	imageId := "warm-image"
 	mountRoot := t.TempDir()

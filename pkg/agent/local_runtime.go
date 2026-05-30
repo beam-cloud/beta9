@@ -16,30 +16,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func agentWorkspaceStorageEndpointURL(bootstrap bootstrapConfig) string {
-	if endpoint := strings.TrimSpace(os.Getenv(agentWorkspaceStorageEndpointOverrideEnv)); endpoint != "" {
-		return endpoint
-	}
-
-	u, err := url.Parse(bootstrap.GatewayHTTPURL)
-	if err != nil {
-		return ""
-	}
-	host := u.Hostname()
-	if host == "" {
-		return ""
-	}
-	if !isLoopbackHost(host) && !strings.EqualFold(host, "host.docker.internal") {
-		return ""
-	}
-
-	port := strings.TrimSpace(os.Getenv(agentWorkspaceStorageEndpointPortEnv))
-	if port == "" {
-		port = "4566"
-	}
-	return "http://" + net.JoinHostPort(host, port)
-}
-
 func agentGatewayEnv(bootstrap bootstrapConfig) map[string]string {
 	httpHost, httpPort, _ := agentGatewayHTTPParts(bootstrap)
 	grpcPort := bootstrap.GatewayGRPCPort
@@ -76,53 +52,25 @@ func agentGatewayHTTPParts(bootstrap bootstrapConfig) (string, int, bool) {
 	return u.Hostname(), port, u.Scheme == "https"
 }
 
-func agentOCIRegistryRewrite(bootstrap bootstrapConfig) string {
-	if rewrite := strings.TrimSpace(os.Getenv(agentOCIRegistryRewriteOverrideEnv)); rewrite != "" {
-		return rewrite
-	}
-
-	u, err := url.Parse(bootstrap.GatewayHTTPURL)
-	if err != nil {
-		return ""
-	}
-	host := u.Hostname()
-	if host == "" {
-		return ""
-	}
-	if !isLoopbackHost(host) && !strings.EqualFold(host, "host.docker.internal") {
-		return ""
-	}
-
-	port := strings.TrimSpace(os.Getenv(agentOCIRegistryEndpointPortEnv))
-	if port == "" {
-		port = "5001"
-	}
-	target := net.JoinHostPort(host, port)
-	return strings.Join([]string{
-		"registry.localhost:5000=" + target,
-		"localhost:5000=" + target,
-		"127.0.0.1:5000=" + target,
-	}, ",")
-}
-
-func agentDockerHostAliases(bootstrap bootstrapConfig) []string {
-	u, err := url.Parse(bootstrap.GatewayHTTPURL)
-	if err != nil {
-		return nil
-	}
-	host := u.Hostname()
-	if host == "" || (!isLoopbackHost(host) && !strings.EqualFold(host, "host.docker.internal")) {
+func agentDockerHostAliases() []string {
+	raw := strings.TrimSpace(os.Getenv(agentDockerHostAliasesEnv))
+	if raw == "" {
 		return nil
 	}
 
-	return []string{
-		"registry.localhost:127.0.0.1",
-		"localstack:host-gateway",
+	aliases := []string{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		aliases = append(aliases, entry)
 	}
+	return aliases
 }
 
-func startLocalRegistryForwarder(ctx context.Context, bootstrap bootstrapConfig, stderr io.Writer) (io.Closer, error) {
-	target := agentLocalRegistryForwardTarget(bootstrap)
+func startLocalRegistryForwarder(ctx context.Context, stderr io.Writer) (io.Closer, error) {
+	target := agentLocalRegistryForwardTarget()
 	if target == "" {
 		return nil, nil
 	}
@@ -141,24 +89,8 @@ func startLocalRegistryForwarder(ctx context.Context, bootstrap bootstrapConfig,
 	return forwarder, nil
 }
 
-func agentLocalRegistryForwardTarget(bootstrap bootstrapConfig) string {
-	u, err := url.Parse(bootstrap.GatewayHTTPURL)
-	if err != nil {
-		return ""
-	}
-	host := u.Hostname()
-	if host == "" || (!isLoopbackHost(host) && !strings.EqualFold(host, "host.docker.internal")) {
-		return ""
-	}
-
-	port := strings.TrimSpace(os.Getenv(agentOCIRegistryEndpointPortEnv))
-	if port == "" {
-		port = "5001"
-	}
-	if port == "5000" {
-		return ""
-	}
-	return net.JoinHostPort(host, port)
+func agentLocalRegistryForwardTarget() string {
+	return strings.TrimSpace(os.Getenv(agentLocalRegistryForwardEnv))
 }
 
 type tcpForwarder struct {

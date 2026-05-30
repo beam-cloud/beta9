@@ -347,6 +347,75 @@ func iptablesRuleDestinationIP(rule string) (string, bool) {
 	return "", false
 }
 
+func iptablesRuleMatchesIP(rule string, ip string) bool {
+	if ip == "" {
+		return false
+	}
+
+	if destination, ok := iptablesRuleDestinationIP(rule); ok && iptablesAddressMatches(destination, ip) {
+		return true
+	}
+
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		switch fields[i] {
+		case "-s", "--source", "-d", "--destination":
+			if iptablesAddressMatches(fields[i+1], ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func iptablesRuleMatchesSourceIP(rule string, ip string) bool {
+	if ip == "" {
+		return false
+	}
+
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		switch fields[i] {
+		case "-s", "--source":
+			if iptablesAddressMatches(fields[i+1], ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func iptablesRuleTarget(rule string) string {
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "-j" || fields[i] == "--jump" {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+func iptablesRuleFields(rule string) []string {
+	fields := strings.Fields(rule)
+	for i, field := range fields {
+		fields[i] = strings.Trim(strings.ReplaceAll(field, `"`, ""), "[]")
+	}
+	return fields
+}
+
+func iptablesAddressMatches(value string, ip string) bool {
+	target := net.ParseIP(ip)
+	if target == nil {
+		return false
+	}
+
+	value = strings.Trim(strings.Trim(value, `"`), "[]")
+	if parsed, _, err := net.ParseCIDR(value); err == nil {
+		return parsed.Equal(target)
+	}
+	return net.ParseIP(value).Equal(target)
+}
+
 func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
@@ -2092,17 +2161,16 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 			}
 
 			for _, rule := range rules {
-				if strings.Contains(rule, ip) {
-					parts := strings.Fields(rule)
+				if !iptablesRuleMatchesIP(rule, ip) {
+					continue
+				}
 
-					// Remove any double quotes
-					for i, part := range parts {
-						parts[i] = strings.ReplaceAll(part, `"`, "")
-					}
-
-					if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
-						return err
-					}
+				parts := iptablesRuleFields(rule)
+				if len(parts) < 3 {
+					continue
+				}
+				if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
+					return err
 				}
 			}
 		}
@@ -2226,19 +2294,20 @@ func (m *ContainerNetworkManager) removeNetworkRestrictionRules(ip string, ipt *
 			}
 
 			for _, rule := range rules {
-				if strings.Contains(rule, ip) {
-					if strings.Contains(rule, "DROP") || strings.Contains(rule, "ACCEPT") {
-						parts := strings.Fields(rule)
+				target := iptablesRuleTarget(rule)
+				if target != "DROP" && target != "ACCEPT" {
+					continue
+				}
+				if !iptablesRuleMatchesSourceIP(rule, ip) {
+					continue
+				}
 
-						// Remove any double quotes
-						for i, part := range parts {
-							parts[i] = strings.ReplaceAll(part, `"`, "")
-						}
-
-						if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
-							return err
-						}
-					}
+				parts := iptablesRuleFields(rule)
+				if len(parts) < 3 {
+					continue
+				}
+				if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
+					return err
 				}
 			}
 		}

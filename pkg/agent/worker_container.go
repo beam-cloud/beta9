@@ -22,7 +22,7 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 		"--network", "host",
 		"--cgroupns", "host",
 	}
-	for _, alias := range agentDockerHostAliases(bootstrap) {
+	for _, alias := range agentDockerHostAliases() {
 		args = append(args, "--add-host", alias)
 	}
 
@@ -96,15 +96,6 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 	}
 	for key, value := range agentGatewayEnv(bootstrap) {
 		env[key] = value
-	}
-	if endpoint := agentWorkspaceStorageEndpointURL(bootstrap); endpoint != "" {
-		env[agentWorkspaceStorageEndpointEnv] = endpoint
-	}
-	if rewriteHosts := strings.TrimSpace(os.Getenv("BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_REWRITE_HOSTS")); rewriteHosts != "" {
-		env[agentWorkspaceStorageEndpointRewriteHostsEnv] = rewriteHosts
-	}
-	if rewrite := agentOCIRegistryRewrite(bootstrap); rewrite != "" {
-		env[agentOCIRegistryRewriteEnv] = rewrite
 	}
 	if slot.GpuCount > 0 && slot.GpuAssignment != "" {
 		env["NVIDIA_VISIBLE_DEVICES"] = slot.GpuAssignment

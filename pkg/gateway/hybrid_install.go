@@ -23,6 +23,7 @@ MAX_GPUS=""
 GPU_IDS=""
 NETWORK_SLOTS=""
 CONTAINER_START_CONCURRENCY=""
+LOCAL_DEV_GATEWAY="0"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -111,6 +112,26 @@ if [ "$OS" = "darwin" ] && [ -z "$AGENT_BIN" ] && [ "${BEAM_AGENT_NATIVE:-0}" !=
   RUN_GATEWAY="$(printf '%s' "$GATEWAY" | sed -e 's#://localhost:#://host.docker.internal:#' -e 's#://localhost/#://host.docker.internal/#' -e 's#://127\.0\.0\.1:#://host.docker.internal:#' -e 's#://127\.0\.0\.1/#://host.docker.internal/#')"
 fi
 
+case "$GATEWAY" in
+  http://localhost:*|http://localhost/*|http://127.0.0.1:*|http://127.0.0.1/*)
+    LOCAL_DEV_GATEWAY="1"
+    ;;
+esac
+
+if [ "$DEV" = "1" ] && [ "$LOCAL_DEV_GATEWAY" = "1" ]; then
+  REGISTRY_PORT="${BEAM_AGENT_OCI_REGISTRY_ENDPOINT_PORT:-5001}"
+  if [ -z "${BEAM_AGENT_DOCKER_HOST_ALIASES:-}" ]; then
+    export BEAM_AGENT_DOCKER_HOST_ALIASES="registry.localhost:127.0.0.1,localstack:host-gateway,localstack.beta9:host-gateway,localstack.beta9.svc:host-gateway,localstack.beta9.svc.cluster.local:host-gateway"
+  fi
+  if [ -z "${BEAM_AGENT_LOCAL_REGISTRY_FORWARD:-}" ]; then
+    if [ "$OS" = "darwin" ] && [ -z "$AGENT_BIN" ] && [ "${BEAM_AGENT_NATIVE:-0}" != "1" ]; then
+      export BEAM_AGENT_LOCAL_REGISTRY_FORWARD="host.docker.internal:${REGISTRY_PORT}"
+    else
+      export BEAM_AGENT_LOCAL_REGISTRY_FORWARD="127.0.0.1:${REGISTRY_PORT}"
+    fi
+  fi
+fi
+
 set -- join --gateway "$RUN_GATEWAY" --join-token "$JOIN_TOKEN"
 if [ "$DEV" = "1" ]; then
   set -- "$@" --dev
@@ -187,11 +208,8 @@ if [ "$OS" = "darwin" ] && [ "${BEAM_AGENT_NATIVE:-0}" != "1" ]; then
     -e BEAM_AGENT_MACHINE_FINGERPRINT="$HOST_FINGERPRINT" \
     -e BEAM_AGENT_STATE_DIR="$HOST_STATE_DIR" \
     -e BEAM_WORKER_IMAGE="$WORKER_IMAGE" \
-    -e BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_URL \
-    -e BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_PORT \
-    -e BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_REWRITE_HOSTS \
-    -e BEAM_AGENT_OCI_REGISTRY_REWRITE \
-    -e BEAM_AGENT_OCI_REGISTRY_ENDPOINT_PORT \
+    -e BEAM_AGENT_DOCKER_HOST_ALIASES \
+    -e BEAM_AGENT_LOCAL_REGISTRY_FORWARD \
     "$AGENT_CONTAINER_IMAGE" /usr/local/bin/beam-agent "$@"
 fi
 

@@ -7,13 +7,8 @@ import (
 )
 
 const (
-	agentWorkspaceStorageEndpointEnv             = "BEAM_WORKSPACE_STORAGE_ENDPOINT_URL"
-	agentWorkspaceStorageEndpointRewriteHostsEnv = "BEAM_WORKSPACE_STORAGE_ENDPOINT_REWRITE_HOSTS"
-	agentWorkspaceStorageEndpointOverrideEnv     = "BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_URL"
-	agentWorkspaceStorageEndpointPortEnv         = "BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_PORT"
-	agentOCIRegistryRewriteEnv                   = "BEAM_OCI_REGISTRY_REWRITE"
-	agentOCIRegistryRewriteOverrideEnv           = "BEAM_AGENT_OCI_REGISTRY_REWRITE"
-	agentOCIRegistryEndpointPortEnv              = "BEAM_AGENT_OCI_REGISTRY_ENDPOINT_PORT"
+	agentDockerHostAliasesEnv    = "BEAM_AGENT_DOCKER_HOST_ALIASES"
+	agentLocalRegistryForwardEnv = "BEAM_AGENT_LOCAL_REGISTRY_FORWARD"
 
 	agentContainerImagesPath           = "/images"
 	agentContainerTmpPath              = "/tmp"

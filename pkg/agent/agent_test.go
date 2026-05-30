@@ -96,6 +96,7 @@ func TestNormalizeBootstrapForAgentContainerUsesReachableGatewayHost(t *testing.
 
 func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv("BEAM_AGENT_LOCAL_TARGET_HOST", "host.docker.internal")
+	t.Setenv(agentDockerHostAliasesEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")
 
 	args := dockerRunArgs("slot-one", "worker:dev", "/tmp/config.json", bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
@@ -121,13 +122,11 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		"CACHE_LOCALITY=private",
 		"CACHE_NODE_ID=machine",
 		"CACHE_HOST_NETWORK=true",
-		"BEAM_WORKSPACE_STORAGE_ENDPOINT_URL=http://host.docker.internal:4566",
 		"BEAM_GATEWAY_HTTP_URL=http://host.docker.internal:1994",
 		"BETA9_GATEWAY_HOST=host.docker.internal",
 		"BETA9_GATEWAY_PORT=1993",
 		"BETA9_GATEWAY_HOST_HTTP=host.docker.internal",
 		"BETA9_GATEWAY_PORT_HTTP=1994",
-		"BEAM_OCI_REGISTRY_REWRITE=registry.localhost:5000=host.docker.internal:5001,localhost:5000=host.docker.internal:5001,127.0.0.1:5000=host.docker.internal:5001",
 		"NVIDIA_VISIBLE_DEVICES=0,1",
 		"WORKER_CONTAINER_START_CONCURRENCY=12",
 		"CONTAINER_NETWORK_SLOT_POOL_SIZE=64",
@@ -211,42 +210,27 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
-	got := agentLocalRegistryForwardTarget(bootstrapConfig{
-		GatewayHTTPURL: "http://host.docker.internal:1994",
-	})
+	t.Setenv(agentLocalRegistryForwardEnv, "host.docker.internal:5001")
+
+	got := agentLocalRegistryForwardTarget()
 	if got != "host.docker.internal:5001" {
 		t.Fatalf("registry forward target = %q, want host-published k3d registry", got)
 	}
 }
 
-func TestAgentLocalRegistryForwardTargetDisabledForRemoteGateway(t *testing.T) {
-	got := agentLocalRegistryForwardTarget(bootstrapConfig{
-		GatewayHTTPURL: "https://gateway.beam.cloud",
-	})
-	if got != "" {
-		t.Fatalf("registry forward target = %q, want disabled for remote gateway", got)
+func TestAgentLocalRegistryForwardTargetDisabledByDefault(t *testing.T) {
+	if got := agentLocalRegistryForwardTarget(); got != "" {
+		t.Fatalf("registry forward target = %q, want disabled", got)
 	}
 }
 
-func TestAgentOCIRegistryRewriteCanBeOverridden(t *testing.T) {
-	t.Setenv("BEAM_AGENT_OCI_REGISTRY_REWRITE", "registry.internal:5000=registry.example.com")
+func TestAgentDockerHostAliasesAreEnvironmentDriven(t *testing.T) {
+	t.Setenv(agentDockerHostAliasesEnv, "registry.localhost:127.0.0.1, localstack:host-gateway")
 
-	got := agentOCIRegistryRewrite(bootstrapConfig{
-		GatewayHTTPURL: "https://gateway.example.com",
-	})
-	if got != "registry.internal:5000=registry.example.com" {
-		t.Fatalf("registry rewrite = %q, want configured value", got)
-	}
-}
-
-func TestAgentWorkspaceStorageEndpointURLCanBeOverridden(t *testing.T) {
-	t.Setenv("BEAM_AGENT_WORKSPACE_STORAGE_ENDPOINT_URL", "https://storage.example.com")
-
-	got := agentWorkspaceStorageEndpointURL(bootstrapConfig{
-		GatewayHTTPURL: "https://gateway.example.com",
-	})
-	if got != "https://storage.example.com" {
-		t.Fatalf("endpoint override = %q, want configured value", got)
+	got := agentDockerHostAliases()
+	want := []string{"registry.localhost:127.0.0.1", "localstack:host-gateway"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("aliases = %#v, want %#v", got, want)
 	}
 }
 

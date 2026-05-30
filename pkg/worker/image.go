@@ -48,7 +48,6 @@ const (
 	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
 	agentGatewayHTTPURLEnv                   = "BEAM_GATEWAY_HTTP_URL"
-	ociRegistryRewriteEnv                    = "BEAM_OCI_REGISTRY_REWRITE"
 )
 
 var (
@@ -264,94 +263,6 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	}
 
 	return nil, false
-}
-
-func rewriteOCIMetadataRegistry(meta *clipCommon.ClipArchiveMetadata, imageId string) {
-	if meta == nil || meta.StorageInfo == nil {
-		return
-	}
-
-	switch ociInfo := meta.StorageInfo.(type) {
-	case clipCommon.OCIStorageInfo:
-		rewritten := rewriteOCIRegistryURL(ociInfo.RegistryURL)
-		if rewritten == ociInfo.RegistryURL {
-			return
-		}
-		log.Info().
-			Str("image_id", imageId).
-			Str("original_registry", ociInfo.RegistryURL).
-			Str("registry", rewritten).
-			Msg("rewrote OCI registry for agent worker")
-		ociInfo.RegistryURL = rewritten
-		meta.StorageInfo = ociInfo
-	case *clipCommon.OCIStorageInfo:
-		if ociInfo == nil {
-			return
-		}
-		rewritten := rewriteOCIRegistryURL(ociInfo.RegistryURL)
-		if rewritten == ociInfo.RegistryURL {
-			return
-		}
-		log.Info().
-			Str("image_id", imageId).
-			Str("original_registry", ociInfo.RegistryURL).
-			Str("registry", rewritten).
-			Msg("rewrote OCI registry for agent worker")
-		ociInfo.RegistryURL = rewritten
-	}
-}
-
-func rewriteOCIRegistryURL(registryURL string) string {
-	registryURL = strings.TrimSpace(registryURL)
-	if registryURL == "" {
-		return registryURL
-	}
-
-	rewriteMap := ociRegistryRewriteMap()
-	if len(rewriteMap) == 0 {
-		return registryURL
-	}
-
-	if rewritten, ok := rewriteMap[registryRewriteKey(registryURL)]; ok {
-		return rewritten
-	}
-	return registryURL
-}
-
-func ociRegistryRewriteMap() map[string]string {
-	config := strings.TrimSpace(os.Getenv(ociRegistryRewriteEnv))
-	if config == "" {
-		return nil
-	}
-
-	rewriteMap := map[string]string{}
-	for _, entry := range strings.Split(config, ",") {
-		from, to, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		from = registryRewriteKey(from)
-		to = registryRewriteValue(to)
-		if from == "" || to == "" {
-			continue
-		}
-		rewriteMap[from] = to
-	}
-	return rewriteMap
-}
-
-func registryRewriteKey(value string) string {
-	return strings.ToLower(registryRewriteValue(value))
-}
-
-func registryRewriteValue(value string) string {
-	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "https://")
-	value = strings.TrimPrefix(value, "http://")
-	if i := strings.IndexByte(value, '/'); i >= 0 {
-		value = value[:i]
-	}
-	return strings.TrimRight(value, "/")
 }
 
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
@@ -619,7 +530,6 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 	// Check if this is an OCI v2 image
 	isOCI := false
 	if meta != nil {
-		rewriteOCIMetadataRegistry(meta, imageId)
 		if ociInfo, ok := ociStorageInfo(meta); ok {
 			isOCI = ociInfo.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(ociInfo.Type()) == "oci"
 		} else if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
@@ -706,7 +616,6 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to extract metadata from clip archive")
 		return nil, false
 	}
-	rewriteOCIMetadataRegistry(meta, imageId)
 
 	// Check if this is an OCI archive with metadata
 	c.cacheOCIMetadata(imageId, meta)
@@ -1231,7 +1140,6 @@ func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, 
 	if err != nil {
 		return fmt.Errorf("restored v2 image archive metadata invalid: image_id=%s: %w", imageId, err)
 	}
-	rewriteOCIMetadataRegistry(meta, imageId)
 
 	ociInfo, ok := ociStorageInfo(meta)
 	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {

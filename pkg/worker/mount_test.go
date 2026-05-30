@@ -125,51 +125,6 @@ func TestSetupContainerMountsPrefersDirectWorkspaceStorageForStubCode(t *testing
 	require.Equal(t, "direct\n", string(workspaceBytes))
 }
 
-func TestSetupContainerMountsRewritesDirectWorkspaceStorageEndpoint(t *testing.T) {
-	manager := NewContainerMountManager(types.AppConfig{
-		Storage: types.StorageConfig{
-			WorkspaceStorage: types.WorkspaceStorageConfig{
-				BaseMountPath: t.TempDir(),
-			},
-		},
-	})
-	manager.codeCacheRoot = t.TempDir()
-
-	directObject, err := zipObjectBytes(map[string]string{
-		"main.py": "rewritten\n",
-	})
-	require.NoError(t, err)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/bucket/objects/object-direct", r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(directObject)
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv(workspaceStorageEndpointEnv, server.URL)
-
-	request := stubCodeMountRequest("container-direct-rewrite", "workspace-direct", "object-direct")
-	bucket := "bucket"
-	accessKey := "access"
-	secretKey := "secret"
-	region := "us-east-1"
-	endpoint := "http://localstack:4566"
-	storageID := uint(1)
-	request.Workspace.Storage = &types.WorkspaceStorage{
-		Id:          &storageID,
-		BucketName:  &bucket,
-		AccessKey:   &accessKey,
-		SecretKey:   &secretKey,
-		Region:      &region,
-		EndpointUrl: &endpoint,
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
-
-	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
-	require.FileExists(t, filepath.Join(request.Mounts[0].LocalPath, "main.py"))
-}
-
 func TestRequiresWorkspaceStorageMount(t *testing.T) {
 	manager := NewContainerMountManager(types.AppConfig{})
 
