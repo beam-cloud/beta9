@@ -810,6 +810,18 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount type
 	return true
 }
 
+func ensureBindMountSourceDirs(mounts []types.Mount) error {
+	for _, mount := range mounts {
+		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
+			continue
+		}
+		if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
+			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
+		}
+	}
+	return nil
+}
+
 func bindMountMode(mount types.Mount) string {
 	if mount.ReadOnly {
 		return "ro"
@@ -1029,6 +1041,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Prepare spec for the selected runtime
 	phaseStart = time.Now()
+	if err := ensureBindMountSourceDirs(request.Mounts); err != nil {
+		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
+			"runtime": s.runtime.Name(),
+			"reason":  "bind_mount_source",
+			"success": "false",
+		})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, false, map[string]string{
+			"reason":  "bind_mount_source",
+			"runtime": s.runtime.Name(),
+		})
+		log.Error().Err(err).Str("container_id", containerId).Msg("failed to create bind mount source directories")
+		return
+	}
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
 			"runtime": s.runtime.Name(),

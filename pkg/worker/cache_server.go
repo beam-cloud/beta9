@@ -68,7 +68,7 @@ func RunCacheServer() error {
 		Str("pool_name", poolName).
 		Str("node_id", manager.nodeID).
 		Str("locality", manager.locality).
-		Bool("serving", manager.serving()).
+		Bool("running_cache_server", manager.runningCacheServer()).
 		Msg("cache server process started")
 
 	terminate := make(chan os.Signal, 1)

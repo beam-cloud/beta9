@@ -1080,10 +1080,7 @@ set -eu
 for pages in /var/lib/beta9/cache/default/*/pages; do
   [ -d "$pages" ] && find "$pages" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 done
-for volume_root in /cache/volumes/*; do
-  [ -d "$volume_root" ] && find "$volume_root" -mindepth 1 -maxdepth 1 -name "run-*" -exec rm -rf {} +
-done
-rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/null || true
+rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
 """
         result: dict[str, Any] = {"ok": True, "pods": []}
         seen_nodes = set()

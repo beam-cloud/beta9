@@ -117,14 +117,15 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 
 	m.client = client
 	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
-	serving, err := m.tryStartEmbeddedServer(cacheConfig, hostID)
+	nodeCacheServer := m.nodeCacheServer(cacheConfig, hostID)
+	startedCacheServer, err := nodeCacheServer.Start()
 	if err != nil {
 		_ = client.Cleanup()
 		m.cancel()
 		return nil, err
 	}
-	if !serving {
-		m.startCacheServerStandbyLoop(cacheConfig, hostID)
+	if !startedCacheServer {
+		nodeCacheServer.Watch()
 	}
 
 	if err := client.WaitForHosts(defaultCacheWaitTime); err != nil {
@@ -164,7 +165,7 @@ func (m *WorkerCacheManager) Close() error {
 	return errs
 }
 
-func (m *WorkerCacheManager) serving() bool {
+func (m *WorkerCacheManager) runningCacheServer() bool {
 	if m == nil {
 		return false
 	}
@@ -236,7 +237,22 @@ func (m *WorkerCacheManager) createEmbeddedServer(cacheConfig cache.Config, host
 	return server, advertisedAddr, nil
 }
 
-func (m *WorkerCacheManager) tryStartEmbeddedServer(cacheConfig cache.Config, hostID string) (bool, error) {
+type nodeCacheServer struct {
+	manager *WorkerCacheManager
+	config  cache.Config
+	hostID  string
+}
+
+func (m *WorkerCacheManager) nodeCacheServer(cacheConfig cache.Config, hostID string) nodeCacheServer {
+	return nodeCacheServer{
+		manager: m,
+		config:  cacheConfig,
+		hostID:  hostID,
+	}
+}
+
+func (s nodeCacheServer) Start() (bool, error) {
+	m := s.manager
 	m.mu.Lock()
 	if m.draining || m.server != nil {
 		m.mu.Unlock()
@@ -244,18 +260,18 @@ func (m *WorkerCacheManager) tryStartEmbeddedServer(cacheConfig cache.Config, ho
 	}
 	m.mu.Unlock()
 
-	lock, acquired, err := acquireCacheServerLock(cacheConfig.Server.DiskCacheDir)
+	lock, acquired, err := acquireCacheServerLock(s.config.Server.DiskCacheDir)
 	if err != nil || !acquired {
 		return false, err
 	}
 
-	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
+	server, advertisedAddr, err := m.createEmbeddedServer(s.config, s.hostID)
 	if err != nil {
 		_ = releaseCacheServerLock(lock)
 		return false, err
 	}
 
-	registration := newGatewayCacheRegistration(m, server, cacheConfig, advertisedAddr)
+	registration := newGatewayCacheRegistration(m, server, s.config, advertisedAddr)
 	if err := registration.registerOnce(m.ctx); err != nil {
 		_ = server.Close()
 		_ = releaseCacheServerLock(lock)
@@ -296,12 +312,13 @@ func (m *WorkerCacheManager) tryStartEmbeddedServer(cacheConfig cache.Config, ho
 	return true, nil
 }
 
-func (m *WorkerCacheManager) startCacheServerStandbyLoop(cacheConfig cache.Config, hostID string) {
+func (s nodeCacheServer) Watch() {
+	m := s.manager
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
 
-		interval := time.Duration(cacheConfig.Coordinator.HostWatchIntervalSeconds) * time.Second
+		interval := time.Duration(s.config.Coordinator.HostWatchIntervalSeconds) * time.Second
 		if interval <= 0 {
 			interval = cacheDefaultHostWatchInterval
 		}
@@ -319,8 +336,13 @@ func (m *WorkerCacheManager) startCacheServerStandbyLoop(cacheConfig cache.Confi
 				if done {
 					return
 				}
-				if _, err := m.tryStartEmbeddedServer(cacheConfig, hostID); err != nil {
+				startedCacheServer, err := s.Start()
+				if err != nil {
 					log.Warn().Err(err).Msg("failed to start standby cache server")
+					continue
+				}
+				if startedCacheServer {
+					return
 				}
 			}
 		}

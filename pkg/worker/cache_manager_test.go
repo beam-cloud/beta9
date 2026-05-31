@@ -157,10 +157,10 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 	}()
 
 	require.Eventually(t, func() bool {
-		return countServingCacheManagers(managers) == 1 && len(repo.activeHosts()) == 1
+		return countRunningCacheServers(managers) == 1 && len(repo.activeHosts()) == 1
 	}, 5*time.Second, 50*time.Millisecond)
 
-	active := servingCacheManagers(managers)[0]
+	active := runningCacheServers(managers)[0]
 	require.Equal(t, "worker-a", active.workerID)
 	logicalHostID := active.registration.logicalHostID
 
@@ -179,7 +179,7 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 	standbys := managers[1:]
 	require.Eventually(t, func() bool {
 		activeHosts := repo.activeHosts()
-		if countServingCacheManagers(standbys) != 1 || len(activeHosts) != 1 {
+		if countRunningCacheServers(standbys) != 1 || len(activeHosts) != 1 {
 			return false
 		}
 		for _, host := range activeHosts {
@@ -188,7 +188,7 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 		return false
 	}, 5*time.Second, 50*time.Millisecond)
 
-	newActive := servingCacheManagers(standbys)[0]
+	newActive := runningCacheServers(standbys)[0]
 	require.Equal(t, logicalHostID, newActive.registration.logicalHostID)
 
 	readBack := make([]byte, len(content))
@@ -255,18 +255,18 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 	}
 }
 
-func countServingCacheManagers(managers []*WorkerCacheManager) int {
-	return len(servingCacheManagers(managers))
+func countRunningCacheServers(managers []*WorkerCacheManager) int {
+	return len(runningCacheServers(managers))
 }
 
-func servingCacheManagers(managers []*WorkerCacheManager) []*WorkerCacheManager {
-	serving := make([]*WorkerCacheManager, 0, len(managers))
+func runningCacheServers(managers []*WorkerCacheManager) []*WorkerCacheManager {
+	running := make([]*WorkerCacheManager, 0, len(managers))
 	for _, manager := range managers {
-		if manager.serving() {
-			serving = append(serving, manager)
+		if manager.runningCacheServer() {
+			running = append(running, manager)
 		}
 	}
-	return serving
+	return running
 }
 
 type testCacheCoordinator struct {
