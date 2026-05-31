@@ -69,7 +69,7 @@ VOLUME_CONTAINER_PREFIX = "/volumes"
 GEESEFS_SUMMARY_RE = re.compile(
     r"geesefs read path summary: .*?"
     r"mmap_page\(attempt=(\d+) hit=(\d+) miss=(\d+) mmap_fail=(\d+) ([0-9.]+)MiB[^)]*\).*?"
-    r"read_into\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"read_into\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB[^)]*\).*?"
     r"stream\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"unary\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"cloud\(req=(\d+) ([0-9.]+)MiB\)"
@@ -80,12 +80,14 @@ GEESEFS_BUFFER_RE = re.compile(
 CACHE_SUMMARY_RE = re.compile(
     r"cache read path summary: .*?"
     r"client\(read_into=(\d+) ([0-9.]+)MiB local_hit=(\d+) local_miss=(\d+) "
-    r"raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"raw_req=(\d+) raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"raw_wait_avg=[^ ]+ raw_header_avg=[^ ]+ raw_body_avg=[^ ]+ "
     r"grpc_hit=(\d+) grpc_miss=(\d+) grpc_err=(\d+)\).*?"
     r"client_local_page_file\(req=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"server\(grpc_req=(\d+) grpc_hit=(\d+) grpc_miss=(\d+) ([0-9.]+)MiB "
     r"stream_req=(\d+) stream_chunks=(\d+) ([0-9.]+)MiB stream_err=(\d+) "
-    r"raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+)\)"
+    r"(?:raw_conn=(\d+) )?raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"[0-9.]+MiB raw_region_avg=[^ ]+ raw_open_avg=[^ ]+ raw_send_avg=[^ )]+\)"
 )
 FUSE_RESPONSE_RE = re.compile(
     r"geesefs fuse read response complete: .*?"
@@ -985,6 +987,7 @@ class ReadPathParser:
         cache_summary: dict[str, Any] = {
             "summaryLines": 0,
             "clientLocalHits": 0,
+            "clientRawRequests": 0,
             "clientRawHits": 0,
             "clientRawMisses": 0,
             "clientRawErrors": 0,
@@ -1007,20 +1010,21 @@ class ReadPathParser:
             if m:
                 cache_summary["summaryLines"] += 1
                 cache_summary["clientLocalHits"] += int(m.group(3))
-                cache_summary["clientRawHits"] += int(m.group(5))
-                cache_summary["clientRawMisses"] += int(m.group(6))
-                cache_summary["clientRawErrors"] += int(m.group(7))
-                cache_summary["clientGRPCHits"] += int(m.group(8))
-                cache_summary["clientGRPCMisses"] += int(m.group(9))
-                cache_summary["clientGRPCErrors"] += int(m.group(10))
-                cache_summary["clientLocalPageFileHits"] += int(m.group(12))
-                cache_summary["serverGRPCHits"] += int(m.group(16))
-                cache_summary["serverStreamChunks"] += int(m.group(20))
-                cache_summary["serverRawRequests"] += int(m.group(22))
-                cache_summary["serverRawSendfile"] += int(m.group(23))
-                cache_summary["serverRawCopy"] += int(m.group(24))
-                cache_summary["serverRawReadAt"] += int(m.group(25))
-                cache_summary["serverRawErrors"] += int(m.group(28))
+                cache_summary["clientRawRequests"] += int(m.group(5))
+                cache_summary["clientRawHits"] += int(m.group(6))
+                cache_summary["clientRawMisses"] += int(m.group(7))
+                cache_summary["clientRawErrors"] += int(m.group(8))
+                cache_summary["clientGRPCHits"] += int(m.group(9))
+                cache_summary["clientGRPCMisses"] += int(m.group(10))
+                cache_summary["clientGRPCErrors"] += int(m.group(11))
+                cache_summary["clientLocalPageFileHits"] += int(m.group(13))
+                cache_summary["serverGRPCHits"] += int(m.group(17))
+                cache_summary["serverStreamChunks"] += int(m.group(21))
+                cache_summary["serverRawRequests"] += int(m.group(25))
+                cache_summary["serverRawSendfile"] += int(m.group(26))
+                cache_summary["serverRawCopy"] += int(m.group(27))
+                cache_summary["serverRawReadAt"] += int(m.group(28))
+                cache_summary["serverRawErrors"] += int(m.group(30))
             if "geesefs external page hit" in line and geesefs_path in line:
                 external_hit_lines += 1
             m = FUSE_RESPONSE_RE.search(line)
@@ -1618,6 +1622,22 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
     def remote_read(
         self, entry: dict[str, Any], cas_proof: dict[str, Any]
     ) -> dict[str, Any]:
+        last_payload: dict[str, Any] = {}
+        for attempt in range(3):
+            payload = self._remote_read_once(entry, cas_proof)
+            payload["attempt"] = attempt + 1
+            last_payload = payload
+            if payload.get("ok"):
+                return payload
+            error = str(payload.get("error") or "")
+            if not self._retry_worker_probe(error):
+                return payload
+            time.sleep(2)
+        return last_payload
+
+    def _remote_read_once(
+        self, entry: dict[str, Any], cas_proof: dict[str, Any]
+    ) -> dict[str, Any]:
         hosts = self.cache_hosts_snapshot()
         target_host = self._choose_cache_host(hosts, cas_proof)
         if target_host is None:
@@ -1883,6 +1903,11 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             index_keys = [
                 f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
             ]
+        running_workers_by_ip = {
+            pod.get("podIP", ""): pod
+            for pod in self.kube.running_workers()
+            if pod.get("podIP", "")
+        }
         logical_host_ids = []
         seen_logical_hosts = set()
         for index_key in index_keys:
@@ -1940,6 +1965,16 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                     registration = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                addr = registration.get("addr") or ""
+                private_addr = (
+                    registration.get("private_addr")
+                    or registration.get("privateAddr")
+                    or ""
+                )
+                endpoint_ip = self._host_part(private_addr or addr)
+                endpoint_pod = running_workers_by_ip.get(endpoint_ip)
+                if endpoint_ip and endpoint_pod is None:
+                    continue
                 hosts.append(
                     {
                         "hostId": registration.get("logical_host_id")
@@ -1954,16 +1989,16 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "nodeId": registration.get("node_id")
                         or registration.get("nodeId")
                         or "",
-                        "nodeName": registration.get("node_id")
+                        "nodeName": (endpoint_pod or {}).get("nodeName", "")
+                        or registration.get("node_id")
                         or registration.get("nodeId")
                         or "",
                         "cachePathId": registration.get("cache_path_id")
                         or registration.get("cachePathId")
                         or "",
-                        "addr": registration.get("addr") or "",
-                        "privateAddr": registration.get("private_addr")
-                        or registration.get("privateAddr")
-                        or "",
+                        "addr": addr,
+                        "privateAddr": private_addr,
+                        "pod": (endpoint_pod or {}).get("name", ""),
                         "endpointAvailable": True,
                         "source": "coordinator",
                     }
@@ -2125,8 +2160,15 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
     ) -> Tuple[Optional[dict[str, str]], Optional[dict[str, str]]]:
         target_ip = self._host_part(self._cache_host_addr(target_host))
         workers = self.kube.running_workers()
+        target_pod_name = target_host.get("pod") or ""
         target_pod = next(
-            (pod for pod in workers if pod.get("podIP") == target_ip), None
+            (
+                pod
+                for pod in workers
+                if (target_pod_name and pod["name"] == target_pod_name)
+                or (target_ip and pod.get("podIP") == target_ip)
+            ),
+            None,
         )
         target_node = (target_pod or {}).get("nodeName") or target_host.get("nodeName", "")
         source_pod = None

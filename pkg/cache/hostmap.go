@@ -90,6 +90,24 @@ func (hm *HostMap) Remove(host *Host) bool {
 	return true
 }
 
+func (hm *HostMap) RemoveLogicalHost(hostID string) (*Host, bool) {
+	if hostID == "" {
+		return nil, false
+	}
+
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+
+	existing, exists := hm.hosts[hostID]
+	if !exists {
+		return nil, false
+	}
+
+	Logger.Infof("Removed logical cache host @ %s", hostID)
+	delete(hm.hosts, hostID)
+	return existing, true
+}
+
 func (hm *HostMap) DeactivateEndpoint(host *Host) (*Host, bool) {
 	if host == nil || host.HostId == "" {
 		return nil, false

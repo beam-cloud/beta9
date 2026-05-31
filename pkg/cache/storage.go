@@ -1017,7 +1017,9 @@ func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64
 	pageLock := cas.pageLock(hash, chunkIdx)
 	lockStart := time.Now()
 	pageLock.RLock()
-	cachePageLockWaitMs.Update(float64(time.Since(lockStart).Milliseconds()))
+	lockElapsed := time.Since(lockStart)
+	cachePageLockWaitMs.Update(float64(lockElapsed.Milliseconds()))
+	atomic.AddInt64(&cachePathStats.storeDiskLockNanos, lockElapsed.Nanoseconds())
 	defer pageLock.RUnlock()
 
 	if cas.memoryCacheEnabled {
@@ -1049,7 +1051,9 @@ func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64
 	readLength := min(maxLength, min(info.Size()-pageOffset, int64(len(dst))))
 
 	// Use fadvise to hint sequential/random access patterns
+	openStarted := time.Now()
 	file, err := os.Open(chunkPath)
+	atomic.AddInt64(&cachePathStats.storeDiskOpenNanos, time.Since(openStarted).Nanoseconds())
 	if err != nil {
 		return 0, ErrContentNotFound
 	}
@@ -1067,7 +1071,9 @@ func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64
 
 	readStart := time.Now()
 	n, err := file.ReadAt(dst[:readLength], pageOffset)
-	cachePageReadLatencyMs.Update(float64(time.Since(readStart).Milliseconds()))
+	readElapsed := time.Since(readStart)
+	cachePageReadLatencyMs.Update(float64(readElapsed.Milliseconds()))
+	atomic.AddInt64(&cachePathStats.storeDiskReadNanos, readElapsed.Nanoseconds())
 	if err != nil && !errors.Is(err, io.EOF) {
 		atomic.AddInt64(&cachePathStats.storeMisses, 1)
 		return int64(n), ErrContentNotFound
@@ -1137,10 +1143,14 @@ func (cas *Store) PageRegion(hash string, offset int64, length int64) (path stri
 	}
 
 	pageLock := cas.pageLock(hash, pageIdx)
+	lockStarted := time.Now()
 	pageLock.RLock()
+	atomic.AddInt64(&cachePathStats.storePageRegionLockNanos, time.Since(lockStarted).Nanoseconds())
 	defer pageLock.RUnlock()
 
+	pathStarted := time.Now()
 	pagePath, info, err := cas.existingPagePath(hash, pageIdx)
+	atomic.AddInt64(&cachePathStats.storePageRegionPathNanos, time.Since(pathStarted).Nanoseconds())
 	if err != nil {
 		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, err
