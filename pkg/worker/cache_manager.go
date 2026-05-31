@@ -65,8 +65,6 @@ type WorkerCacheManager struct {
 	client             *cache.Client
 	server             *cache.Server
 	serverLock         *os.File
-	cacheRole          string
-	cachePriority      int
 	registration       *gatewayCacheRegistration
 	registrationCancel context.CancelFunc
 	draining           bool
@@ -93,7 +91,6 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		podAddr:    podAddr,
 		nodeID:     nodeID,
 		locality:   locality,
-		cacheRole:  cacheServerRole(),
 	}
 }
 
@@ -106,7 +103,6 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
-	m.cachePriority = cacheServerPriority(cacheConfig, m.cacheRole)
 	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
 
@@ -121,12 +117,15 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 
 	m.client = client
 	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
-	if _, err := m.tryStartEmbeddedServer(cacheConfig, hostID); err != nil {
+	serving, err := m.tryStartEmbeddedServer(cacheConfig, hostID)
+	if err != nil {
 		_ = client.Cleanup()
 		m.cancel()
 		return nil, err
 	}
-	m.startCacheServerStandbyLoop(cacheConfig, hostID)
+	if !serving {
+		m.startCacheServerStandbyLoop(cacheConfig, hostID)
+	}
 
 	if err := client.WaitForHosts(defaultCacheWaitTime); err != nil {
 		log.Warn().
@@ -163,6 +162,15 @@ func (m *WorkerCacheManager) Close() error {
 
 	m.wg.Wait()
 	return errs
+}
+
+func (m *WorkerCacheManager) serving() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.server != nil
 }
 
 func (m *WorkerCacheManager) Drain() error {
@@ -283,8 +291,6 @@ func (m *WorkerCacheManager) tryStartEmbeddedServer(cacheConfig cache.Config, ho
 	log.Info().
 		Str("logical_host_id", registration.logicalHostID).
 		Str("registration_id", registration.registrationID).
-		Str("role", m.cacheRole).
-		Int("priority", m.cachePriority).
 		Msg("acquired node-local cache server lock")
 
 	return true, nil
@@ -405,12 +411,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Coordinator.HostWatchIntervalSeconds == 0 {
 		cacheConfig.Coordinator.HostWatchIntervalSeconds = int(cacheDefaultHostWatchInterval / time.Second)
-	}
-	if cacheConfig.Coordinator.WorkerServerPriority == 0 {
-		cacheConfig.Coordinator.WorkerServerPriority = cache.DefaultWorkerCacheServerPriority
-	}
-	if cacheConfig.Coordinator.AgentServerPriority == 0 {
-		cacheConfig.Coordinator.AgentServerPriority = cache.DefaultAgentCacheServerPriority
 	}
 	if cacheConfig.Disk.MountPath == "" {
 		cacheConfig.Disk.MountPath = cacheDefaultDiskPath
@@ -539,41 +539,6 @@ func cacheHostNetwork(config types.AppConfig) bool {
 	}
 
 	return config.Worker.HostNetwork
-}
-
-func cacheServerRole() string {
-	role := os.Getenv("CACHE_SERVER_ROLE")
-	if role == "" && cacheAgentOnly() {
-		role = cache.DefaultCacheServerRoleAgent
-	}
-	if role == "" {
-		return cache.DefaultCacheServerRoleWorker
-	}
-	return safeCacheName(role)
-}
-
-func cacheServerPriority(config cache.Config, role string) int {
-	if value := os.Getenv("CACHE_SERVER_PRIORITY"); value != "" {
-		priority, err := strconv.Atoi(value)
-		if err == nil && priority > 0 {
-			return priority
-		}
-	}
-	if role == cache.DefaultCacheServerRoleAgent {
-		if config.Coordinator.AgentServerPriority > 0 {
-			return config.Coordinator.AgentServerPriority
-		}
-		return cache.DefaultAgentCacheServerPriority
-	}
-	if config.Coordinator.WorkerServerPriority > 0 {
-		return config.Coordinator.WorkerServerPriority
-	}
-	return cache.DefaultWorkerCacheServerPriority
-}
-
-func cacheAgentOnly() bool {
-	enabled, err := strconv.ParseBool(os.Getenv("CACHE_AGENT_ONLY"))
-	return err == nil && enabled
 }
 
 func cacheWorkerInstanceID(workerID string) string {

@@ -1004,45 +1004,6 @@ func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostUnavailab
 	require.Equal(t, content, fallbackStream.sent.Bytes())
 }
 
-func TestStoreContentFromReaderReplicatesToConfiguredTopHosts(t *testing.T) {
-	ctx := context.Background()
-	hosts := []*Host{
-		{HostId: "rank-1", PrivateAddr: "rank-1:2049"},
-		{HostId: "rank-2", PrivateAddr: "rank-2:2049"},
-		{HostId: "rank-3", PrivateAddr: "rank-3:2049"},
-	}
-	streams := []*fakeStoreContentStream{
-		{},
-		{},
-		{},
-	}
-	client := &Client{
-		ctx:          ctx,
-		clientConfig: ClientConfig{NTopHosts: 3},
-		grpcClients: map[string]proto.CacheClient{
-			"rank-1": &fakeStoreCacheClient{stream: streams[0]},
-			"rank-2": &fakeStoreCacheClient{stream: streams[1]},
-			"rank-3": &fakeStoreCacheClient{stream: streams[2]},
-		},
-		grpcConns:             make(map[string]*grpc.ClientConn),
-		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: hosts},
-		maxGetContentAttempts: 1,
-	}
-
-	content := []byte("replicate-cache-through-to-top-three")
-	sum := sha256.Sum256(content)
-	expectedHash := hex.EncodeToString(sum[:])
-
-	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
-	require.NoError(t, err)
-	require.Equal(t, expectedHash, got)
-	for _, stream := range streams {
-		require.Equal(t, content, stream.sent.Bytes())
-	}
-}
-
 type fakeStoreCacheClient struct {
 	stream   proto.Cache_StoreContentClient
 	state    *proto.CacheGetStateResponse

@@ -100,7 +100,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	sem := make(chan struct{}, maxConcurrency)
 
 	for _, group := range hostGroups {
-		if group.usesPreferredEndpoint(d.hostMap.Get(group.hostID)) {
+		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
 			continue
 		}
 
@@ -182,22 +182,6 @@ func (g cacheHostCandidateGroup) hasEndpoint(host *Host) bool {
 		if sameCacheHostEndpoint(candidate, host) {
 			return true
 		}
-	}
-	return false
-}
-
-// usesPreferredEndpoint reports whether the client is already using the
-// coordinator's preferred live registration for this logical cache host. The
-// preferred registration is the first candidate returned by the coordinator.
-func (g cacheHostCandidateGroup) usesPreferredEndpoint(host *Host) bool {
-	if host == nil || !host.HasEndpoint() {
-		return false
-	}
-	for _, candidate := range g.candidates {
-		if candidate == nil || !candidate.HasEndpoint() {
-			continue
-		}
-		return sameCacheHostEndpoint(candidate, host)
 	}
 	return false
 }

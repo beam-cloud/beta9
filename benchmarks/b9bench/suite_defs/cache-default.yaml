@@ -22,7 +22,7 @@ defaults:
   reset_workers: false
   reset_workers_after_prepare: true
   remote_cache_proof_chunk_bytes: 4194304
-  remote_cache_proof_concurrency: 4
+  remote_cache_proof_concurrency: 2
   min_hot_file_read_mbps: 2000
   min_remote_cache_socket_mbps: 2000
   min_throughput_size_mb: 1024

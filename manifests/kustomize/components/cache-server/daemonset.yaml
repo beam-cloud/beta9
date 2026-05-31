@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: beta9-cache-agent
+  name: beta9-cache-server
   namespace: beta9
   labels:
     app.kubernetes.io/name: beta9
-    app.kubernetes.io/component: cache-agent
+    app.kubernetes.io/component: cache-server
 spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: beta9
-      app.kubernetes.io/component: cache-agent
+      app.kubernetes.io/component: cache-server
   template:
     metadata:
       labels:
         app.kubernetes.io/name: beta9
-        app.kubernetes.io/component: cache-agent
+        app.kubernetes.io/component: cache-server
     spec:
       automountServiceAccountToken: true
       serviceAccountName: gateway
@@ -27,10 +27,8 @@ spec:
         env:
         - name: CONFIG_PATH
           value: /etc/beta9/.config.yaml
-        - name: CACHE_AGENT_ONLY
+        - name: CACHE_SERVER_ONLY
           value: "true"
-        - name: CACHE_SERVER_ROLE
-          value: agent
         - name: WORKER_POOL_NAME
           value: default
         - name: CACHE_LOCALITY
@@ -48,11 +46,11 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         - name: WORKER_ID
-          value: cache-agent-$(CACHE_NODE_ID)-$(POD_UID)
+          value: cache-server-$(CACHE_NODE_ID)-$(POD_UID)
         - name: WORKER_TOKEN
           valueFrom:
             secretKeyRef:
-              name: beta9-cache-agent-token
+              name: beta9-cache-server-token
               key: token
         volumeMounts:
         - mountPath: /etc/beta9

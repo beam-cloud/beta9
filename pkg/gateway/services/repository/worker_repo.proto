@@ -197,8 +197,6 @@ message CacheCoordinatorHost {
   string addr = 8;
   string private_addr = 9;
   float capacity_usage_pct = 10;
-  string role = 11;
-  int32 priority = 12;
 }
 
 message RegisterCacheHostRequest {

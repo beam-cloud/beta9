@@ -147,11 +147,11 @@ func TestCoordinatorListsLiveRegistrationsWithActiveFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, hosts, 2)
 	require.Equal(t, logicalHostID, hosts[0].LogicalHostID)
-	require.Equal(t, "worker-a", hosts[0].RegistrationID)
-	require.Equal(t, "10.0.0.1:2049", hosts[0].PrivateAddr)
+	require.Equal(t, "worker-b", hosts[0].RegistrationID)
+	require.Equal(t, "10.0.0.2:2049", hosts[0].PrivateAddr)
 	require.Equal(t, logicalHostID, hosts[1].LogicalHostID)
-	require.Equal(t, "worker-b", hosts[1].RegistrationID)
-	require.Equal(t, "10.0.0.2:2049", hosts[1].PrivateAddr)
+	require.Equal(t, "worker-a", hosts[1].RegistrationID)
+	require.Equal(t, "10.0.0.1:2049", hosts[1].PrivateAddr)
 
 	err = coordinator.UnregisterHost(ctx, "default", "default", logicalHostID, "worker-a")
 	require.NoError(t, err)
@@ -162,87 +162,6 @@ func TestCoordinatorListsLiveRegistrationsWithActiveFirst(t *testing.T) {
 	require.Equal(t, logicalHostID, hosts[0].LogicalHostID)
 	require.Equal(t, "worker-b", hosts[0].RegistrationID)
 	require.Equal(t, "10.0.0.2:2049", hosts[0].PrivateAddr)
-}
-
-func TestCoordinatorPrefersHigherPriorityRegistration(t *testing.T) {
-	repo := newMemoryCoordinatorRepository()
-	coordinator := NewCoordinator(repo)
-	ctx := context.Background()
-
-	logicalHostID := "cache-host-default-node-a-path-0"
-	worker := CoordinatorHost{
-		LogicalHostID:  logicalHostID,
-		RegistrationID: "worker-a",
-		Role:           DefaultCacheServerRoleWorker,
-		Priority:       DefaultWorkerCacheServerPriority,
-		PoolName:       "default",
-		Locality:       "default",
-		NodeID:         "node-a",
-		CachePathID:    "path",
-		Addr:           "10.0.0.1:2049",
-		PrivateAddr:    "10.0.0.1:2049",
-	}
-	agent := worker
-	agent.RegistrationID = "cache-agent-a"
-	agent.Role = DefaultCacheServerRoleAgent
-	agent.Priority = DefaultAgentCacheServerPriority
-	agent.Addr = "10.0.0.2:2049"
-	agent.PrivateAddr = "10.0.0.2:2049"
-
-	require.NoError(t, coordinator.RegisterHost(ctx, worker, 30*time.Second))
-	require.Equal(t, worker.RegistrationID, repo.active[logicalHostID])
-	require.NoError(t, coordinator.RegisterHost(ctx, agent, 30*time.Second))
-	require.Equal(t, agent.RegistrationID, repo.active[logicalHostID])
-
-	worker.RegistrationID = "worker-b"
-	worker.Addr = "10.0.0.3:2049"
-	worker.PrivateAddr = "10.0.0.3:2049"
-	require.NoError(t, coordinator.RegisterHost(ctx, worker, 30*time.Second))
-	require.Equal(t, agent.RegistrationID, repo.active[logicalHostID])
-
-	hosts, err := coordinator.ListHosts(ctx, "default", "default")
-	require.NoError(t, err)
-	require.Len(t, hosts, 3)
-	require.Equal(t, agent.RegistrationID, hosts[0].RegistrationID)
-	require.Equal(t, DefaultCacheServerRoleAgent, hosts[0].Role)
-}
-
-func TestCoordinatorFallsBackToWorkerWhenAgentRegistrationLeaves(t *testing.T) {
-	repo := newMemoryCoordinatorRepository()
-	coordinator := NewCoordinator(repo)
-	ctx := context.Background()
-
-	logicalHostID := "cache-host-default-node-a-path-0"
-	agent := CoordinatorHost{
-		LogicalHostID:  logicalHostID,
-		RegistrationID: "cache-agent-a",
-		Role:           DefaultCacheServerRoleAgent,
-		Priority:       DefaultAgentCacheServerPriority,
-		PoolName:       "default",
-		Locality:       "default",
-		NodeID:         "node-a",
-		CachePathID:    "path",
-		Addr:           "10.0.0.1:2049",
-		PrivateAddr:    "10.0.0.1:2049",
-	}
-	worker := agent
-	worker.RegistrationID = "worker-a"
-	worker.Role = DefaultCacheServerRoleWorker
-	worker.Priority = DefaultWorkerCacheServerPriority
-	worker.Addr = "10.0.0.2:2049"
-	worker.PrivateAddr = "10.0.0.2:2049"
-
-	require.NoError(t, coordinator.RegisterHost(ctx, agent, 30*time.Second))
-	require.NoError(t, coordinator.RegisterHost(ctx, worker, 30*time.Second))
-	require.Equal(t, agent.RegistrationID, repo.active[logicalHostID])
-
-	require.NoError(t, coordinator.UnregisterHost(ctx, "default", "default", logicalHostID, agent.RegistrationID))
-
-	hosts, err := coordinator.ListHosts(ctx, "default", "default")
-	require.NoError(t, err)
-	require.Len(t, hosts, 1)
-	require.Equal(t, worker.RegistrationID, hosts[0].RegistrationID)
-	require.Equal(t, worker.RegistrationID, repo.active[logicalHostID])
 }
 
 func TestCoordinatorListsBackupRegistrationWhenActiveRegistrationStillExists(t *testing.T) {

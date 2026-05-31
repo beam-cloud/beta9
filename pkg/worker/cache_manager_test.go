@@ -82,28 +82,6 @@ func TestWorkerCacheManagerDrainStopsRegistrationLoopOnce(t *testing.T) {
 	require.Equal(t, 1, cancelCount)
 }
 
-func TestCacheServerRoleDefaultsToAgentInAgentOnlyMode(t *testing.T) {
-	t.Setenv("CACHE_AGENT_ONLY", "true")
-	t.Setenv("CACHE_SERVER_ROLE", "")
-
-	require.Equal(t, cache.DefaultCacheServerRoleAgent, cacheServerRole())
-}
-
-func TestCacheServerPriorityUsesRoleDefaultsAndOverrides(t *testing.T) {
-	config := cache.Config{}
-
-	require.Equal(t, cache.DefaultWorkerCacheServerPriority, cacheServerPriority(config, cache.DefaultCacheServerRoleWorker))
-	require.Equal(t, cache.DefaultAgentCacheServerPriority, cacheServerPriority(config, cache.DefaultCacheServerRoleAgent))
-
-	config.Coordinator.WorkerServerPriority = 25
-	config.Coordinator.AgentServerPriority = 125
-	require.Equal(t, 25, cacheServerPriority(config, cache.DefaultCacheServerRoleWorker))
-	require.Equal(t, 125, cacheServerPriority(config, cache.DefaultCacheServerRoleAgent))
-
-	t.Setenv("CACHE_SERVER_PRIORITY", "200")
-	require.Equal(t, 200, cacheServerPriority(config, cache.DefaultCacheServerRoleWorker))
-}
-
 func TestCacheServerLockAllowsSingleNodeLocalOwner(t *testing.T) {
 	cacheDir := t.TempDir()
 
