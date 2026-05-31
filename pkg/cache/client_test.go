@@ -950,20 +950,22 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostStreamFails(t *testing.T) {
+func TestStoreContentFromReaderDoesNotFanOutAfterSelectedHostSuccess(t *testing.T) {
 	ctx := context.Background()
 	firstHost := &Host{HostId: "first-host", PrivateAddr: "first-host:2049"}
 	secondHost := &Host{HostId: "second-host", PrivateAddr: "second-host:2049"}
-	firstStream := &fakeStoreContentStream{failOnSend: true}
+	thirdHost := &Host{HostId: "third-host", PrivateAddr: "third-host:2049"}
+	firstStream := &fakeStoreContentStream{}
 	secondStream := &fakeStoreContentStream{}
+	thirdStream := &fakeStoreContentStream{}
 	client := &Client{
 		ctx:                   ctx,
-		clientConfig:          ClientConfig{NTopHosts: 2},
-		grpcClients:           map[string]proto.CacheClient{"first-host": &fakeStoreCacheClient{stream: firstStream}, "second-host": &fakeStoreCacheClient{stream: secondStream}},
+		clientConfig:          ClientConfig{NTopHosts: 3},
+		grpcClients:           map[string]proto.CacheClient{"first-host": &fakeStoreCacheClient{stream: firstStream}, "second-host": &fakeStoreCacheClient{stream: secondStream}, "third-host": &fakeStoreCacheClient{stream: thirdStream}},
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: []*Host{firstHost, secondHost}},
+		hasher:                &orderedTestHasher{hosts: []*Host{firstHost, secondHost, thirdHost}},
 		maxGetContentAttempts: 2,
 	}
 
@@ -974,11 +976,12 @@ func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostStreamFai
 	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
-	require.NotEmpty(t, firstStream.sent.Bytes())
-	require.Equal(t, content, secondStream.sent.Bytes())
+	require.Equal(t, content, firstStream.sent.Bytes())
+	require.Empty(t, secondStream.sent.Bytes())
+	require.Empty(t, thirdStream.sent.Bytes())
 }
 
-func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostUnavailable(t *testing.T) {
+func TestStoreContentFromReaderDoesNotUseRankedReplicaWhenSelectedHostUnavailable(t *testing.T) {
 	ctx := context.Background()
 	selectedHost := &Host{HostId: "selected-host"}
 	fallbackHost := &Host{HostId: "fallback-host", PrivateAddr: "fallback-host:2049"}
@@ -999,9 +1002,9 @@ func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostUnavailab
 	expectedHash := hex.EncodeToString(sum[:])
 
 	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
-	require.NoError(t, err)
-	require.Equal(t, expectedHash, got)
-	require.Equal(t, content, fallbackStream.sent.Bytes())
+	require.Error(t, err)
+	require.Empty(t, got)
+	require.Empty(t, fallbackStream.sent.Bytes())
 }
 
 type fakeStoreCacheClient struct {

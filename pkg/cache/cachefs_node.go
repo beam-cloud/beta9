@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path"
 	"strings"
@@ -151,7 +150,8 @@ func (h *cacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fus
 
 func (n *FSNode) log(format string, v ...interface{}) {
 	if n.filesystem.verbose {
-		Logger.Infof(fmt.Sprintf("(%s) %s", n.bfsNode.Path, format), v...)
+		args := append([]interface{}{n.bfsNode.Path}, v...)
+		Logger.Debugf("cachefs path=%q "+format, args...)
 	}
 }
 

@@ -384,6 +384,32 @@ func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
 	require.Empty(t, spec.Mounts)
 }
 
+func TestEnsureBindMountSourceDirsCreatesMissingSources(t *testing.T) {
+	root := t.TempDir()
+	outputPath := filepath.Join(root, "outputs", "stub")
+	mountPointPath := filepath.Join(root, "external")
+	require.NoError(t, os.MkdirAll(mountPointPath, 0755))
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Mounts: []types.Mount{
+			{
+				LocalPath: outputPath,
+				MountPath: types.WorkerUserOutputVolume,
+			},
+			{
+				LocalPath: mountPointPath,
+				MountPath: "/mnt/external",
+				MountType: storage.StorageModeMountPoint,
+			},
+		},
+	}
+
+	require.NoError(t, ensureBindMountSourceDirs(request.Mounts))
+	require.DirExists(t, outputPath)
+	require.DirExists(t, mountPointPath)
+}
+
 // TestV2ImageEnvironmentFlow tests that v2 images correctly extract metadata from CLIP archives
 // Note: Without actual CLIP archives, this test verifies graceful handling
 func TestV2ImageEnvironmentFlow(t *testing.T) {

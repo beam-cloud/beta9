@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -63,8 +64,10 @@ type WorkerCacheManager struct {
 	metadataStore      cache.CacheMetadataStore
 	client             *cache.Client
 	server             *cache.Server
+	serverLock         *os.File
 	registration       *gatewayCacheRegistration
 	registrationCancel context.CancelFunc
+	draining           bool
 	mu                 sync.Mutex
 	wg                 sync.WaitGroup
 	drainOnce          sync.Once
@@ -103,41 +106,27 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
 
-	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
-	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
-	if err != nil {
-		m.cancel()
-		return nil, err
-	}
-
-	registration := newGatewayCacheRegistration(m, server, cacheConfig, advertisedAddr)
-	if err := registration.registerOnce(m.ctx); err != nil {
-		_ = server.Close()
-		m.cancel()
-		return nil, err
-	}
-	m.registration = registration
-	registrationCtx, registrationCancel := context.WithCancel(m.ctx)
-	m.registrationCancel = registrationCancel
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		runGatewayCacheRegistration(registrationCtx, registration)
-	}()
-
 	hostDirectory := &gatewayCacheHostDirectory{
 		client: m.workerRepo,
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
-		_ = m.Drain()
-		_ = server.Close()
 		m.cancel()
 		return nil, err
 	}
 
 	m.client = client
-	client.AttachLocalServer(server)
+	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
+	nodeCacheServer := m.nodeCacheServer(cacheConfig, hostID)
+	startedCacheServer, err := nodeCacheServer.Start()
+	if err != nil {
+		_ = client.Cleanup()
+		m.cancel()
+		return nil, err
+	}
+	if !startedCacheServer {
+		nodeCacheServer.Watch()
+	}
 
 	if err := client.WaitForHosts(defaultCacheWaitTime); err != nil {
 		log.Warn().
@@ -158,6 +147,8 @@ func (m *WorkerCacheManager) Close() error {
 	m.mu.Lock()
 	server := m.server
 	client := m.client
+	lock := m.serverLock
+	m.serverLock = nil
 	m.mu.Unlock()
 
 	if client != nil {
@@ -166,9 +157,21 @@ func (m *WorkerCacheManager) Close() error {
 	if server != nil {
 		errs = errors.Join(errs, server.Close())
 	}
+	if lock != nil {
+		errs = errors.Join(errs, releaseCacheServerLock(lock))
+	}
 
 	m.wg.Wait()
 	return errs
+}
+
+func (m *WorkerCacheManager) runningCacheServer() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.server != nil
 }
 
 func (m *WorkerCacheManager) Drain() error {
@@ -178,6 +181,7 @@ func (m *WorkerCacheManager) Drain() error {
 
 	m.drainOnce.Do(func() {
 		m.mu.Lock()
+		m.draining = true
 		cancel := m.registrationCancel
 		registration := m.registration
 		server := m.server
@@ -230,11 +234,146 @@ func (m *WorkerCacheManager) createEmbeddedServer(cacheConfig cache.Config, host
 		return nil, "", err
 	}
 
+	return server, advertisedAddr, nil
+}
+
+type nodeCacheServer struct {
+	manager *WorkerCacheManager
+	config  cache.Config
+	hostID  string
+}
+
+func (m *WorkerCacheManager) nodeCacheServer(cacheConfig cache.Config, hostID string) nodeCacheServer {
+	return nodeCacheServer{
+		manager: m,
+		config:  cacheConfig,
+		hostID:  hostID,
+	}
+}
+
+func (s nodeCacheServer) Start() (bool, error) {
+	m := s.manager
 	m.mu.Lock()
-	m.server = server
+	if m.draining || m.server != nil {
+		m.mu.Unlock()
+		return m.server != nil, nil
+	}
 	m.mu.Unlock()
 
-	return server, advertisedAddr, nil
+	lock, acquired, err := acquireCacheServerLock(s.config.Server.DiskCacheDir)
+	if err != nil || !acquired {
+		return false, err
+	}
+
+	server, advertisedAddr, err := m.createEmbeddedServer(s.config, s.hostID)
+	if err != nil {
+		_ = releaseCacheServerLock(lock)
+		return false, err
+	}
+
+	registration := newGatewayCacheRegistration(m, server, s.config, advertisedAddr)
+	if err := registration.registerOnce(m.ctx); err != nil {
+		_ = server.Close()
+		_ = releaseCacheServerLock(lock)
+		return false, err
+	}
+
+	registrationCtx, registrationCancel := context.WithCancel(m.ctx)
+	m.mu.Lock()
+	if m.draining || m.server != nil {
+		m.mu.Unlock()
+		registrationCancel()
+		_ = registration.unregister(context.Background())
+		_ = server.Close()
+		_ = releaseCacheServerLock(lock)
+		return false, nil
+	}
+	m.server = server
+	m.serverLock = lock
+	m.registration = registration
+	m.registrationCancel = registrationCancel
+	m.wg.Add(1)
+	m.mu.Unlock()
+
+	if m.client != nil {
+		m.client.AttachLocalServer(server)
+	}
+
+	go func() {
+		defer m.wg.Done()
+		runGatewayCacheRegistration(registrationCtx, registration)
+	}()
+
+	log.Info().
+		Str("logical_host_id", registration.logicalHostID).
+		Str("registration_id", registration.registrationID).
+		Msg("acquired node-local cache server lock")
+
+	return true, nil
+}
+
+func (s nodeCacheServer) Watch() {
+	m := s.manager
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+
+		interval := time.Duration(s.config.Coordinator.HostWatchIntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = cacheDefaultHostWatchInterval
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				m.mu.Lock()
+				done := m.draining || m.server != nil
+				m.mu.Unlock()
+				if done {
+					return
+				}
+				startedCacheServer, err := s.Start()
+				if err != nil {
+					log.Warn().Err(err).Msg("failed to start standby cache server")
+					continue
+				}
+				if startedCacheServer {
+					return
+				}
+			}
+		}
+	}()
+}
+
+func acquireCacheServerLock(cacheDir string) (*os.File, bool, error) {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return nil, false, err
+	}
+	lockPath := filepath.Join(cacheDir, ".cache-server.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return lock, true, nil
+}
+
+func releaseCacheServerLock(lock *os.File) error {
+	if lock == nil {
+		return nil
+	}
+	errs := errors.Join(syscall.Flock(int(lock.Fd()), syscall.LOCK_UN), lock.Close())
+	return errs
 }
 
 func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
