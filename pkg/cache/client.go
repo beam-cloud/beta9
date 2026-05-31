@@ -292,6 +292,7 @@ func (c *Client) addHost(host *Host) error {
 			delete(c.rawReadPools, host.HostId)
 		}
 		c.hasher.Remove(host)
+		c.hasher.Add(host.LogicalOnly())
 		for hash, entry := range c.localHostCache {
 			if entry.host != nil && entry.host.HostId == host.HostId {
 				delete(c.localHostCache, hash)
@@ -451,16 +452,22 @@ func (c *Client) removeHost(host *Host) {
 		return
 	}
 
+	logicalHost := host.LogicalOnly()
 	if c.hostMap != nil {
-		if _, ok := c.hostMap.DeactivateEndpoint(host); !ok {
+		deactivated, ok := c.hostMap.DeactivateEndpoint(host)
+		if !ok {
 			return
 		}
+		logicalHost = deactivated
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.hasher.Remove(host)
+	if logicalHost != nil && logicalHost.HostId != "" {
+		c.hasher.Add(logicalHost)
+	}
 	if conn, ok := c.grpcConns[host.HostId]; ok {
 		_ = conn.Close()
 		delete(c.grpcConns, host.HostId)
@@ -517,10 +524,12 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 	}
 
 	routable := false
+	seenHosts := map[string]struct{}{}
 	for _, group := range cacheHostCandidateGroups(hosts) {
 		if group.hostID == "" {
 			continue
 		}
+		seenHosts[group.hostID] = struct{}{}
 
 		if c.keepExistingCacheHost(group) {
 			routable = true
@@ -537,11 +546,48 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 			routable = true
 		}
 	}
+	c.removeUndiscoveredLogicalHosts(seenHosts)
 
 	if !routable && len(c.hostMap.GetAll()) == 0 {
 		return ErrHostNotFound
 	}
 	return nil
+}
+
+func (c *Client) removeUndiscoveredLogicalHosts(seenHosts map[string]struct{}) {
+	if c.hostMap == nil {
+		return
+	}
+	for _, known := range c.hostMap.GetAll() {
+		if known == nil || known.HostId == "" {
+			continue
+		}
+		if _, ok := seenHosts[known.HostId]; ok {
+			continue
+		}
+		removed, ok := c.hostMap.RemoveLogicalHost(known.HostId)
+		if !ok {
+			continue
+		}
+
+		c.mu.Lock()
+		c.hasher.Remove(removed)
+		if conn, ok := c.grpcConns[removed.HostId]; ok {
+			_ = conn.Close()
+			delete(c.grpcConns, removed.HostId)
+		}
+		delete(c.grpcClients, removed.HostId)
+		if pool, ok := c.rawReadPools[removed.HostId]; ok {
+			pool.close()
+			delete(c.rawReadPools, removed.HostId)
+		}
+		for hash, entry := range c.localHostCache {
+			if entry.host != nil && entry.host.HostId == removed.HostId {
+				delete(c.localHostCache, hash)
+			}
+		}
+		c.mu.Unlock()
+	}
 }
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
@@ -772,29 +818,46 @@ func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, e
 
 func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
 	started := time.Now()
+	reqCount := atomic.AddInt64(&cachePathStats.clientRawRequests, 1)
+	status := "unknown"
+	hostID := ""
+	addr := ""
+	var waitElapsed time.Duration
+	var headerElapsed time.Duration
+	var bodyElapsed time.Duration
 	defer func() {
-		if elapsed := time.Since(started); elapsed > time.Second || err != nil {
-			hostID := ""
-			addr := ""
-			if host != nil {
-				hostID = host.HostId
-				addr = host.PrivateAddr
-				if addr == "" {
-					addr = host.Addr
-				}
-			}
-			Logger.Debugf("cache remote page-region raw read result: host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hostID, addr, hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
+		elapsed := time.Since(started)
+		if shouldTraceCachePath(reqCount, elapsed, err != nil || status != "ok") {
+			Logger.Debugf(
+				"cache raw client read trace: seq=%d status=%s host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s wait=%s header=%s body=%s",
+				reqCount,
+				status,
+				hostID,
+				addr,
+				hash,
+				offset,
+				len(dst),
+				read,
+				err,
+				elapsed.Truncate(time.Millisecond),
+				waitElapsed.Truncate(time.Microsecond),
+				headerElapsed.Truncate(time.Microsecond),
+				bodyElapsed.Truncate(time.Microsecond),
+			)
 		}
 	}()
 	if host == nil || !c.clientConfig.ReadTransport.Enabled {
+		status = "disabled_or_missing_host"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
-	addr := host.Addr
+	hostID = host.HostId
+	addr = host.Addr
 	if host.PrivateAddr != "" {
 		addr = host.PrivateAddr
 	}
 	if addr == "" {
+		status = "missing_addr"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
@@ -807,8 +870,12 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	}
 	c.mu.Unlock()
 
+	waitStarted := time.Now()
 	conn, err := pool.get(ctx.Done())
+	waitElapsed = time.Since(waitStarted)
+	atomic.AddInt64(&cachePathStats.clientRawWaitNanos, waitElapsed.Nanoseconds())
 	if err != nil {
+		status = "conn_wait_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
@@ -828,32 +895,48 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	}
 
 	length := int64(len(dst))
+	headerStarted := time.Now()
 	if err := writeRawReadRequest(conn, hash, offset, length); err != nil {
+		headerElapsed = time.Since(headerStarted)
+		atomic.AddInt64(&cachePathStats.clientRawHeaderNanos, headerElapsed.Nanoseconds())
+		status = "write_request_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
-	status, responseLength, err := readRawReadResponseHeader(conn)
+	respStatus, responseLength, err := readRawReadResponseHeader(conn)
+	headerElapsed = time.Since(headerStarted)
+	atomic.AddInt64(&cachePathStats.clientRawHeaderNanos, headerElapsed.Nanoseconds())
 	if err != nil {
+		status = "read_header_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
-	if status == rawReadStatusMiss {
+	if respStatus == rawReadStatusMiss {
+		status = "miss"
 		cacheReadRawFallbackTotal.Inc()
 		atomic.AddInt64(&cachePathStats.clientRawMisses, 1)
 		reusable = true
 		return 0, ErrContentNotFound
 	}
-	if status != rawReadStatusOK || responseLength != length {
+	if respStatus != rawReadStatusOK || responseLength != length {
+		status = "bad_response"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
+	bodyStarted := time.Now()
 	if _, err := io.ReadFull(conn, dst); err != nil {
+		bodyElapsed = time.Since(bodyStarted)
+		atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
+		status = "body_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
+	bodyElapsed = time.Since(bodyStarted)
+	atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
 	cacheReadRawTransportTotal.Inc()
 	atomic.AddInt64(&cachePathStats.clientRawHits, 1)
 	reusable = true
+	status = "ok"
 	return length, nil
 }
 

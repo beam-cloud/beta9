@@ -223,3 +223,58 @@ func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {
 	require.Equal(t, addr, refreshed.PrivateAddr)
 	require.True(t, client.hasCacheClient("logical-host"))
 }
+
+func TestRefreshRoutableHostsRemovesUndiscoveredLogicalHost(t *testing.T) {
+	ctx := context.Background()
+	oldHost := (&Host{
+		HostId:      "cache-host-default-node-old-path",
+		Locality:    "default",
+		NodeID:      "node-old",
+		CachePathID: "path",
+	}).LogicalOnly()
+	stillHost := (&Host{
+		HostId:      "cache-host-default-node-live-path",
+		Locality:    "default",
+		NodeID:      "node-live",
+		CachePathID: "path",
+	}).LogicalOnly()
+	client := &Client{
+		ctx:            ctx,
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{},
+		hostMap:        NewHostMap(GlobalConfig{}, nil),
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			return []*Host{stillHost}, nil
+		}),
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap.onHostAdded = client.addHost
+	client.hostMap.Set(oldHost)
+	client.hostMap.Set(stillHost)
+
+	selected, err := client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      "hash",
+		key:       "hash",
+		hostIndex: 0,
+	})
+	require.NoError(t, err)
+	require.Equal(t, oldHost.HostId, selected.HostId)
+
+	require.NoError(t, client.refreshRoutableHosts(ctx))
+	client.removeLocalHostCache("hash")
+
+	require.Nil(t, client.hostMap.Get(oldHost.HostId))
+	selected, err = client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      "hash",
+		key:       "hash",
+		hostIndex: 0,
+	})
+	require.NoError(t, err)
+	require.Equal(t, stillHost.HostId, selected.HostId)
+}

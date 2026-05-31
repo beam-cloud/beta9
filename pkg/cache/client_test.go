@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,71 @@ func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
+func TestClientEndpointFailureKeepsLogicalHostInHRW(t *testing.T) {
+	hostA := &Host{
+		HostId:         "cache-host-default-node-a-path",
+		RegistrationID: "worker-a",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.1:2049",
+	}
+	hostB := &Host{
+		HostId:         "cache-host-default-node-b-path",
+		RegistrationID: "worker-b",
+		NodeID:         "node-b",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.2:2049",
+	}
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(hostA)
+	hostMap.Set(hostB)
+
+	hash := rendezvous.New[*Host]()
+	hash.Add(hostMap.GetAll()...)
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 2},
+		hostMap:        hostMap,
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         hash,
+	}
+
+	var routingKey string
+	for i := 0; i < 10000; i++ {
+		key := "key-" + strconv.Itoa(i)
+		selected, _ := client.getHostForRequest(&ClientRequest{
+			rt:        ClientRequestTypeRetrieval,
+			hash:      "hash",
+			key:       key,
+			hostIndex: 0,
+		})
+		client.removeLocalHostCache("hash")
+		if selected != nil && selected.HostId == hostA.HostId {
+			routingKey = key
+			break
+		}
+	}
+	require.NotEmpty(t, routingKey)
+
+	client.removeHost(hostA)
+	client.removeLocalHostCache("hash")
+	selected, err := client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      "hash",
+		key:       routingKey,
+		hostIndex: 0,
+	})
+	require.NoError(t, err)
+	require.Equal(t, hostA.HostId, selected.HostId)
+	require.False(t, selected.HasEndpoint())
+	require.Equal(t, hostA.NodeID, selected.NodeID)
+	require.Equal(t, hostA.CachePathID, selected.CachePathID)
+}
+
 func TestReadContentIntoDoesNotMaskPrimaryUnavailableWithReplicaMiss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -159,7 +225,7 @@ func TestReadContentIntoDoesNotMaskPrimaryUnavailableWithReplicaMiss(t *testing.
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
-func TestLogicalOnlyHostIsNotActiveHRWMember(t *testing.T) {
+func TestLogicalOnlyHostRemainsHRWMemberWithoutEndpoint(t *testing.T) {
 	client := &Client{
 		ctx:                   context.Background(),
 		clientConfig:          ClientConfig{NTopHosts: 1},
@@ -180,13 +246,15 @@ func TestLogicalOnlyHostIsNotActiveHRWMember(t *testing.T) {
 	}
 	require.NoError(t, client.addHost(logicalHost))
 
-	_, err := client.getHostForRequest(&ClientRequest{
+	host, err := client.getHostForRequest(&ClientRequest{
 		rt:        ClientRequestTypeStorage,
 		hash:      "hash",
 		key:       "hash",
 		hostIndex: 0,
 	})
-	require.ErrorIs(t, err, ErrHostNotFound)
+	require.NoError(t, err)
+	require.Equal(t, logicalHost.HostId, host.HostId)
+	require.False(t, host.HasEndpoint())
 }
 
 func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
