@@ -387,6 +387,10 @@ func (c *Client) monitorHost(host *Host) {
 		interval = 30 * time.Second
 	}
 
+	if !c.checkHostEndpoint(host) {
+		return
+	}
+
 	if jitter := time.Duration(time.Now().UnixNano() % int64(interval)); jitter > 0 {
 		timer := time.NewTimer(jitter)
 		select {
@@ -403,40 +407,7 @@ func (c *Client) monitorHost(host *Host) {
 	for {
 		select {
 		case <-ticker.C:
-			if !c.isCurrentHostEndpoint(host) {
-				return
-			}
-
-			err := func() error {
-				c.mu.RLock()
-				client, exists := c.grpcClients[host.HostId]
-				c.mu.RUnlock()
-				if !exists {
-					return ErrHostNotFound
-				}
-
-				timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
-				if timeout <= 0 {
-					timeout = time.Second
-				}
-				ctx, cancel := context.WithTimeout(c.ctx, timeout)
-				defer cancel()
-
-				resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
-				if err != nil {
-					return ErrInvalidHostVersion
-				}
-
-				if resp.GetVersion() != Version {
-					return ErrInvalidHostVersion
-				}
-
-				return nil
-			}()
-
-			// We were unable to reach the host for some reason, remove it as a possible client
-			if err != nil {
-				c.removeHost(host)
+			if !c.checkHostEndpoint(host) {
 				return
 			}
 
@@ -444,6 +415,45 @@ func (c *Client) monitorHost(host *Host) {
 			return
 		}
 	}
+}
+
+func (c *Client) checkHostEndpoint(host *Host) bool {
+	if !c.isCurrentHostEndpoint(host) {
+		return false
+	}
+
+	err := func() error {
+		c.mu.RLock()
+		client, exists := c.grpcClients[host.HostId]
+		c.mu.RUnlock()
+		if !exists {
+			return ErrHostNotFound
+		}
+
+		timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
+		if timeout <= 0 {
+			timeout = time.Second
+		}
+		ctx, cancel := context.WithTimeout(c.ctx, timeout)
+		defer cancel()
+
+		resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
+		if err != nil {
+			return ErrInvalidHostVersion
+		}
+
+		if resp.GetVersion() != Version {
+			return ErrInvalidHostVersion
+		}
+
+		return nil
+	}()
+
+	if err != nil {
+		c.removeHost(host)
+		return false
+	}
+	return true
 }
 
 func (c *Client) removeHost(host *Host) {

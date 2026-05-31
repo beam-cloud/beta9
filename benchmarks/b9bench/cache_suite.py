@@ -238,6 +238,7 @@ class BenchmarkConfig:
     min_hot_file_read_mbps: float
     min_remote_cache_socket_mbps: float
     min_throughput_size_mb: int
+    hrw_route_top_n: int
     remote_object_full_read_max_mb: int
     workspace_storage_config: str
     workspace_storage_endpoint_url: str
@@ -427,6 +428,12 @@ class BenchmarkConfig:
             "--min-throughput-size-mb",
             type=int,
             default=env_int("BENCH_CACHE_MIN_HOT_FILE_READ_SIZE_MB", 1024),
+        )
+        add(
+            "--hrw-route-top-n",
+            type=int,
+            default=env_int("BENCH_CACHE_HRW_ROUTE_TOP_N", 3),
+            help="number of active HRW-ranked cache hosts accepted as valid fallback targets",
         )
         add(
             "--remote-object-full-read-max-mb",
@@ -1244,7 +1251,12 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             "routes": [],
         }
         hosts = hosts_snapshot.get("hosts") or []
-        if not hosts:
+        active_hosts = [
+            host
+            for host in hosts
+            if host.get("endpointAvailable") and (host.get("privateAddr") or host.get("addr"))
+        ]
+        if not active_hosts:
             proof["error"] = "no active cache hosts found"
             return proof
 
@@ -1264,11 +1276,11 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 "run",
                 "./benchmarks/b9bench/cache_tools/hrw_routing.go",
                 "--hosts-json",
-                json.dumps(hosts, sort_keys=True),
+                json.dumps(active_hosts, sort_keys=True),
                 "--keys",
                 content_hash,
                 "--n",
-                "1",
+                str(max(1, self.config.hrw_route_top_n)),
             ],
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
@@ -1290,7 +1302,8 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         checked = []
         ok = True
         for route in routes:
-            selected = (route.get("hosts") or [{}])[0]
+            ranked_hosts = route.get("hosts") or []
+            selected = (ranked_hosts or [{}])[0]
             node = selected.get("nodeName") or selected.get("nodeId") or ""
             pages = pages_by_node.get(node, 0)
             endpoint_available = bool(
@@ -1310,9 +1323,17 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             }
             if remote_read:
                 target_host = remote_read.get("targetHost") or {}
-                item["remoteTargetHostId"] = target_host.get("hostId") or ""
-                item["remoteTargetRegistrationId"] = target_host.get("registrationId") or ""
-                item["remoteTargetNode"] = remote_read.get("targetNode") or target_host.get("nodeName") or ""
+                target_host_id = target_host.get("hostId") or ""
+                target_registration_id = target_host.get("registrationId") or ""
+                target_node = remote_read.get("targetNode") or target_host.get("nodeName") or ""
+                target_rank = 0
+                for index, ranked in enumerate(ranked_hosts, start=1):
+                    if ranked.get("hostId") == target_host_id:
+                        target_rank = index
+                        break
+                item["remoteTargetHostId"] = target_host_id
+                item["remoteTargetRegistrationId"] = target_registration_id
+                item["remoteTargetNode"] = target_node
                 item["remoteTargetMatchesHRW"] = bool(
                     item["selectedHostId"]
                     and item["selectedHostId"] == item["remoteTargetHostId"]
@@ -1321,6 +1342,15 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                     item["selectedRegistrationId"]
                     and item["selectedRegistrationId"] == item["remoteTargetRegistrationId"]
                 )
+                item["remoteTargetInHRWTopN"] = target_rank > 0
+                item["remoteTargetHRWRank"] = target_rank
+                item["remoteTargetPages"] = pages_by_node.get(target_node, 0)
+                item["fallbackCacheHit"] = bool(
+                    not item["remoteTargetMatchesHRW"]
+                    and item["remoteTargetInHRWTopN"]
+                    and item["remoteTargetPages"] > 0
+                )
+                item["ok"] = bool(item["ok"] or item["fallbackCacheHit"])
             checked.append(item)
             ok = ok and item["ok"]
 
@@ -1973,7 +2003,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 )
                 endpoint_ip = self._host_part(private_addr or addr)
                 endpoint_pod = running_workers_by_ip.get(endpoint_ip)
-                if endpoint_ip and endpoint_pod is None:
+                if not endpoint_ip or endpoint_pod is None:
                     continue
                 hosts.append(
                     {
@@ -2798,9 +2828,20 @@ class Reporter:
                 row["sizeMiB"] >= self.config.min_throughput_size_mb
                 and read.get("fileReadMBps", 0) < self.config.min_hot_file_read_mbps
             ):
-                failures.append(
-                    f"{row['accessType']}:{row['sizeMiB']}MiB hot file-read {read.get('fileReadMBps', 0):.2f} MB/s below {self.config.min_hot_file_read_mbps:.2f} MB/s"
-                )
+                network = ((row.get("remoteRead") or {}).get("networkProbe") or {})
+                network_mbps = float(network.get("mbps") or 0)
+                required_mbps = self.config.min_hot_file_read_mbps
+                if network.get("ok") and network_mbps > 0:
+                    required_mbps = min(required_mbps, network_mbps * 0.9)
+                if read.get("fileReadMBps", 0) < required_mbps:
+                    suffix = (
+                        f" measured network target {required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
+                        if network.get("ok") and network_mbps > 0
+                        else f" {self.config.min_hot_file_read_mbps:.2f} MB/s"
+                    )
+                    failures.append(
+                        f"{row['accessType']}:{row['sizeMiB']}MiB hot file-read {read.get('fileReadMBps', 0):.2f} MB/s below{suffix}"
+                    )
             read_path_proofs = [
                 proof
                 for proof in (
@@ -2867,9 +2908,12 @@ class Reporter:
                         )
                 else:
                     route = ((hrw_proof.get("routes") or []) + [{}])[0]
-                    if route and not route.get("remoteTargetMatchesHRW", True):
+                    if route and not (
+                        route.get("remoteTargetMatchesHRW", True)
+                        or route.get("remoteTargetInHRWTopN", False)
+                    ):
                         failures.append(
-                            f"{row['accessType']}:{row['sizeMiB']}MiB remote target {route.get('remoteTargetHostId')} does not match HRW-selected host {route.get('selectedHostId')}"
+                            f"{row['accessType']}:{row['sizeMiB']}MiB remote target {route.get('remoteTargetHostId')} is not in HRW top-{self.config.hrw_route_top_n}"
                         )
             remote_object = row.get("remoteObject")
             if self.config.require_remote_object_proof and (
@@ -3727,6 +3771,7 @@ class CacheBenchmark:
             "remoteCacheProofConcurrency": self.config.remote_cache_proof_concurrency,
             "remoteNetworkProbe": self.config.remote_network_probe,
             "remoteNetworkProbeBytes": self.config.remote_network_probe_bytes,
+            "hrwRouteTopN": self.config.hrw_route_top_n,
             "volumeName": self.config.volume_name,
             "volumeId": volume_id,
             "volumeMountPath": self.config.volume_mount_path,

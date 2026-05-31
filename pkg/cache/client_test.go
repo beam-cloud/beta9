@@ -151,6 +151,44 @@ func TestClientEndpointFailureRemovesHostFromActiveHRW(t *testing.T) {
 	require.Equal(t, hostB.HostId, selected.HostId)
 }
 
+func TestCheckHostEndpointPrunesUnreachableEndpoint(t *testing.T) {
+	host := &Host{
+		HostId:         "cache-host-default-node-a-path",
+		RegistrationID: "worker-a",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.1:2049",
+	}
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(host)
+
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		hostMap:        hostMap,
+		grpcClients:    map[string]proto.CacheClient{host.HostId: &fakeStoreCacheClient{stateErr: errors.New("connection refused")}},
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{host}},
+	}
+
+	require.False(t, client.checkHostEndpoint(host))
+
+	deactivated := hostMap.Get(host.HostId)
+	require.NotNil(t, deactivated)
+	require.False(t, deactivated.HasEndpoint())
+
+	_, err := client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      "hash",
+		key:       "hash",
+		hostIndex: 0,
+	})
+	require.ErrorIs(t, err, ErrHostNotFound)
+}
+
 func TestReadContentIntoDoesNotMaskPrimaryUnavailableWithReplicaMiss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -967,7 +1005,9 @@ func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostUnavailab
 }
 
 type fakeStoreCacheClient struct {
-	stream proto.Cache_StoreContentClient
+	stream   proto.Cache_StoreContentClient
+	state    *proto.CacheGetStateResponse
+	stateErr error
 }
 
 func (f *fakeStoreCacheClient) GetContent(ctx context.Context, in *proto.CacheGetContentRequest, opts ...grpc.CallOption) (*proto.CacheGetContentResponse, error) {
@@ -995,6 +1035,12 @@ func (f *fakeStoreCacheClient) StoreContentFromSourceWithLock(ctx context.Contex
 }
 
 func (f *fakeStoreCacheClient) GetState(ctx context.Context, in *proto.CacheGetStateRequest, opts ...grpc.CallOption) (*proto.CacheGetStateResponse, error) {
+	if f.stateErr != nil {
+		return nil, f.stateErr
+	}
+	if f.state != nil {
+		return f.state, nil
+	}
 	return nil, errors.New("not implemented")
 }
 
