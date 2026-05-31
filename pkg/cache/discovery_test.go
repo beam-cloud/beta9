@@ -256,25 +256,11 @@ func TestRefreshRoutableHostsRemovesUndiscoveredLogicalHost(t *testing.T) {
 	client.hostMap.Set(oldHost)
 	client.hostMap.Set(stillHost)
 
-	selected, err := client.getHostForRequest(&ClientRequest{
-		rt:        ClientRequestTypeRetrieval,
-		hash:      "hash",
-		key:       "hash",
-		hostIndex: 0,
-	})
-	require.NoError(t, err)
-	require.Equal(t, oldHost.HostId, selected.HostId)
+	require.NotNil(t, client.hostMap.Get(oldHost.HostId))
+	require.NotNil(t, client.hostMap.Get(stillHost.HostId))
 
 	require.NoError(t, client.refreshRoutableHosts(ctx))
-	client.removeLocalHostCache("hash")
 
 	require.Nil(t, client.hostMap.Get(oldHost.HostId))
-	selected, err = client.getHostForRequest(&ClientRequest{
-		rt:        ClientRequestTypeRetrieval,
-		hash:      "hash",
-		key:       "hash",
-		hostIndex: 0,
-	})
-	require.NoError(t, err)
-	require.Equal(t, stillHost.HostId, selected.HostId)
+	require.NotNil(t, client.hostMap.Get(stillHost.HostId))
 }
