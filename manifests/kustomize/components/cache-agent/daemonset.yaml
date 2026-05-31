@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: beta9-cache-agent
+  namespace: beta9
+  labels:
+    app.kubernetes.io/name: beta9
+    app.kubernetes.io/component: cache-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: beta9
+      app.kubernetes.io/component: cache-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: beta9
+        app.kubernetes.io/component: cache-agent
+    spec:
+      automountServiceAccountToken: true
+      serviceAccountName: gateway
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: worker
+        image: registry.localhost:5000/beta9-worker:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: CONFIG_PATH
+          value: /etc/beta9/.config.yaml
+        - name: CACHE_AGENT_ONLY
+          value: "true"
+        - name: CACHE_SERVER_ROLE
+          value: agent
+        - name: WORKER_POOL_NAME
+          value: default
+        - name: CACHE_LOCALITY
+          value: default
+        - name: CACHE_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: WORKER_ID
+          value: cache-agent-$(CACHE_NODE_ID)-$(POD_UID)
+        - name: WORKER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: beta9-cache-agent-token
+              key: token
+        volumeMounts:
+        - mountPath: /etc/beta9
+          name: config
+        - mountPath: /var/lib/beta9/cache
+          name: cache
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+      volumes:
+      - name: config
+        secret:
+          secretName: beta9-config
+      - name: cache
+        hostPath:
+          path: /var/lib/beta9/cache
+          type: DirectoryOrCreate

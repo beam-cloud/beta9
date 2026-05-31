@@ -21,6 +21,8 @@ type CacheRedisRepository struct {
 type cacheCoordinatorHostRecord struct {
 	LogicalHostID    string  `json:"logical_host_id"`
 	RegistrationID   string  `json:"registration_id"`
+	Role             string  `json:"role"`
+	Priority         int     `json:"priority"`
 	PoolName         string  `json:"pool_name"`
 	Locality         string  `json:"locality"`
 	NodeID           string  `json:"node_id"`

@@ -36,6 +36,8 @@ func (hm *HostMap) Set(host *Host) {
 		existing.PrivateAddr == host.PrivateAddr &&
 		existing.CapacityUsagePct == host.CapacityUsagePct &&
 		existing.RegistrationID == host.RegistrationID &&
+		existing.Role == host.Role &&
+		existing.Priority == host.Priority &&
 		existing.PoolName == host.PoolName &&
 		existing.Locality == host.Locality &&
 		existing.NodeID == host.NodeID &&

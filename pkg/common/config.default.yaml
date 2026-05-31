@@ -295,6 +295,8 @@ cache:
     registrationTTLSeconds: 30
     heartbeatIntervalSeconds: 10
     hostWatchIntervalSeconds: 5
+    workerServerPriority: 10
+    agentServerPriority: 100
   global:
     defaultLocality: default
     serverPort: 2049

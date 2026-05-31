@@ -38,6 +38,8 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 		hosts = append(hosts, &cache.Host{
 			HostId:           host.LogicalHostId,
 			RegistrationID:   host.RegistrationId,
+			Role:             host.Role,
+			Priority:         int(host.Priority),
 			PoolName:         host.PoolName,
 			Locality:         host.Locality,
 			NodeID:           host.NodeId,
@@ -126,6 +128,8 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		logger.
 			Str("logical_host_id", host.LogicalHostId).
 			Str("registration_id", host.RegistrationId).
+			Str("role", host.Role).
+			Int32("priority", host.Priority).
 			Str("pool_name", host.PoolName).
 			Str("locality", host.Locality).
 			Str("node_id", host.NodeId).
@@ -172,6 +176,8 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 	return &pb.CacheCoordinatorHost{
 		LogicalHostId:    r.logicalHostID,
 		RegistrationId:   r.registrationID,
+		Role:             r.manager.cacheRole,
+		Priority:         int32(r.manager.cachePriority),
 		PoolName:         r.manager.poolName,
 		Locality:         r.manager.locality,
 		NodeId:           r.manager.nodeID,

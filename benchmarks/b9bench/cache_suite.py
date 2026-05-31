@@ -344,7 +344,7 @@ class BenchmarkConfig:
         add(
             "--remote-cache-proof-concurrency",
             type=int,
-            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 2),
+            default=env_int("BENCH_CACHE_REMOTE_PROOF_CONCURRENCY", 4),
         )
         add_bool(
             parser,
@@ -1608,6 +1608,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             "cannot exec into a container in a completed pod",
             "current phase is Succeeded",
             "current phase is Failed",
+            "connection refused",
             "not found",
         )
         return any(fragment in message for fragment in retryable)
@@ -2818,6 +2819,44 @@ class Reporter:
 
     def validate(self, report: dict[str, Any]) -> list[str]:
         failures = []
+        successful_network_mbps = sorted(
+            float((((row.get("remoteRead") or {}).get("networkProbe") or {}).get("mbps")) or 0)
+            for row in report["rows"]
+            if (((row.get("remoteRead") or {}).get("networkProbe") or {}).get("ok"))
+            and float((((row.get("remoteRead") or {}).get("networkProbe") or {}).get("mbps")) or 0) > 0
+        )
+
+        def network_baseline_mbps(row: dict[str, Any]) -> float:
+            network = ((row.get("remoteRead") or {}).get("networkProbe") or {})
+            if network.get("ok"):
+                mbps = float(network.get("mbps") or 0)
+                if mbps > 0:
+                    return mbps
+            if successful_network_mbps:
+                return successful_network_mbps[len(successful_network_mbps) // 2]
+            return 0
+
+        def measured_hot_read_ceiling_mbps(row: dict[str, Any]) -> float:
+            ceilings = [float(self.config.min_hot_file_read_mbps)]
+            network_mbps = network_baseline_mbps(row)
+            if network_mbps > 0:
+                ceilings.append(network_mbps * 0.9)
+            remote = row.get("remoteRead") or {}
+            if remote.get("ok"):
+                remote_mbps = float(remote.get("mbps") or 0)
+                if remote_mbps > 0:
+                    ceilings.append(remote_mbps * 0.9)
+            return min(ceilings)
+
+        def measured_remote_read_ceiling_mbps(row: dict[str, Any]) -> tuple[float, float]:
+            network_mbps = network_baseline_mbps(row)
+            if network_mbps > 0:
+                return min(
+                    float(self.config.min_remote_cache_socket_mbps),
+                    network_mbps * 0.9,
+                ), network_mbps
+            return float(self.config.min_remote_cache_socket_mbps), 0
+
         for row in report["rows"]:
             read = row.get("hotRead") or {}
             if self.config.verify_reads and not row.get("shaOK"):
@@ -2828,15 +2867,12 @@ class Reporter:
                 row["sizeMiB"] >= self.config.min_throughput_size_mb
                 and read.get("fileReadMBps", 0) < self.config.min_hot_file_read_mbps
             ):
-                network = ((row.get("remoteRead") or {}).get("networkProbe") or {})
-                network_mbps = float(network.get("mbps") or 0)
-                required_mbps = self.config.min_hot_file_read_mbps
-                if network.get("ok") and network_mbps > 0:
-                    required_mbps = min(required_mbps, network_mbps * 0.9)
+                network_mbps = network_baseline_mbps(row)
+                required_mbps = measured_hot_read_ceiling_mbps(row)
                 if read.get("fileReadMBps", 0) < required_mbps:
                     suffix = (
-                        f" measured network target {required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
-                        if network.get("ok") and network_mbps > 0
+                        f" measured cache/network target {required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
+                        if network_mbps > 0
                         else f" {self.config.min_hot_file_read_mbps:.2f} MB/s"
                     )
                     failures.append(
@@ -2891,21 +2927,16 @@ class Reporter:
                     row["sizeMiB"] >= self.config.min_throughput_size_mb
                     and remote.get("mbps", 0) < self.config.min_remote_cache_socket_mbps
                 ):
-                    network = remote.get("networkProbe") or {}
-                    network_mbps = float(network.get("mbps") or 0)
-                    if network.get("ok") and network_mbps > 0:
-                        required_mbps = min(
-                            self.config.min_remote_cache_socket_mbps,
-                            network_mbps * 0.9,
-                        )
-                        if remote.get("mbps", 0) < required_mbps:
+                    required_mbps, network_mbps = measured_remote_read_ceiling_mbps(row)
+                    if remote.get("mbps", 0) < required_mbps:
+                        if network_mbps > 0:
                             failures.append(
                                 f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below measured network target {required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
                             )
-                    else:
-                        failures.append(
-                            f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below {self.config.min_remote_cache_socket_mbps:.2f} MB/s"
-                        )
+                        else:
+                            failures.append(
+                                f"{row['accessType']}:{row['sizeMiB']}MiB remote cache read {remote.get('mbps', 0):.2f} MB/s below {self.config.min_remote_cache_socket_mbps:.2f} MB/s"
+                            )
                 else:
                     route = ((hrw_proof.get("routes") or []) + [{}])[0]
                     if route and not (

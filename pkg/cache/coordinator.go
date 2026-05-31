@@ -10,6 +10,10 @@ import (
 
 const (
 	defaultCoordinatorHostRegistrationTTL = 30 * time.Second
+	DefaultCacheServerRoleWorker          = "worker"
+	DefaultCacheServerRoleAgent           = "agent"
+	DefaultWorkerCacheServerPriority      = 10
+	DefaultAgentCacheServerPriority       = 100
 )
 
 var (
@@ -23,6 +27,8 @@ type CoordinatorHost struct {
 	LogicalHostID string
 	// RegistrationID identifies one live worker/cache-server process lease.
 	RegistrationID   string
+	Role             string
+	Priority         int
 	PoolName         string
 	Locality         string
 	NodeID           string
@@ -74,17 +80,13 @@ func (c *Coordinator) RegisterHost(ctx context.Context, host CoordinatorHost, tt
 	if ttl <= 0 {
 		ttl = defaultCoordinatorHostRegistrationTTL
 	}
+	host = normalizeCoordinatorHost(host)
 
 	if err := c.repository.SetCacheRegistration(ctx, host, ttl); err != nil {
 		return err
 	}
 
-	// A logical host represents one node-local cache path, not one worker
-	// process. Any live registration for that logical host can serve the same
-	// disk cache, so prefer the freshest registration. This avoids a worker
-	// cycle leaving clients routed to a dead pod until the previous active lease
-	// expires.
-	return c.repository.SetActiveCacheRegistration(ctx, host.LogicalHostID, host.RegistrationID, ttl)
+	return c.refreshActiveRegistration(ctx, host, ttl)
 }
 
 func (c *Coordinator) UnregisterHost(ctx context.Context, poolName, locality, logicalHostID, registrationID string) error {
@@ -139,7 +141,6 @@ func (c *Coordinator) logicalHosts(ctx context.Context, poolName, locality, logi
 		return nil, err
 	}
 
-	registrationIDs = orderedCacheRegistrations(registrationIDs, activeRegistrationID)
 	hosts := make([]CoordinatorHost, 0, len(registrationIDs))
 	for _, registrationID := range registrationIDs {
 		host, ok, err := c.getRegistration(ctx, logicalHostID, registrationID)
@@ -171,10 +172,12 @@ func (c *Coordinator) logicalHosts(ctx context.Context, poolName, locality, logi
 		return nil, c.pruneLogicalHost(ctx, poolName, locality, logicalHostID)
 	}
 
-	if !found || activeRegistrationID == "" || hosts[0].RegistrationID != activeRegistrationID {
-		_ = c.repository.SetActiveCacheRegistration(ctx, logicalHostID, hosts[0].RegistrationID, defaultCoordinatorHostRegistrationTTL)
+	selected := selectActiveCoordinatorHost(hosts, activeRegistrationID)
+	if selected.RegistrationID != "" && (!found || activeRegistrationID == "" || selected.RegistrationID != activeRegistrationID) {
+		_ = c.repository.SetActiveCacheRegistration(ctx, logicalHostID, selected.RegistrationID, defaultCoordinatorHostRegistrationTTL)
 	}
 
+	hosts = orderCoordinatorHosts(hosts, selected.RegistrationID)
 	return hosts, nil
 }
 
@@ -182,27 +185,131 @@ func (c *Coordinator) getRegistration(ctx context.Context, logicalHostID, regist
 	return c.repository.GetCacheRegistration(ctx, logicalHostID, registrationID)
 }
 
-func orderedCacheRegistrations(registrationIDs []string, activeRegistrationID string) []string {
-	ordered := make([]string, 0, len(registrationIDs))
-	seen := make(map[string]struct{}, len(registrationIDs))
+func (c *Coordinator) refreshActiveRegistration(ctx context.Context, registering CoordinatorHost, ttl time.Duration) error {
+	activeRegistrationID, found, err := c.repository.GetActiveCacheRegistration(ctx, registering.LogicalHostID)
+	if err != nil {
+		return err
+	}
 
-	if activeRegistrationID != "" {
-		for _, registrationID := range registrationIDs {
-			if registrationID == activeRegistrationID {
-				ordered = append(ordered, registrationID)
-				seen[registrationID] = struct{}{}
-				break
+	if found && activeRegistrationID != "" {
+		active, ok, err := c.getRegistration(ctx, registering.LogicalHostID, activeRegistrationID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if registering.RegistrationID == activeRegistrationID || coordinatorHostPreempts(registering, active) {
+				return c.repository.SetActiveCacheRegistration(ctx, registering.LogicalHostID, registering.RegistrationID, ttl)
 			}
+			return nil
 		}
 	}
 
-	sort.Strings(registrationIDs)
+	hosts, err := c.liveRegistrations(ctx, registering.PoolName, registering.Locality, registering.LogicalHostID)
+	if err != nil {
+		return err
+	}
+	selected := selectActiveCoordinatorHost(hosts, "")
+	if selected.RegistrationID == "" {
+		selected = registering
+	}
+	return c.repository.SetActiveCacheRegistration(ctx, registering.LogicalHostID, selected.RegistrationID, ttl)
+}
+
+func (c *Coordinator) liveRegistrations(ctx context.Context, poolName, locality, logicalHostID string) ([]CoordinatorHost, error) {
+	registrationIDs, err := c.repository.ListCacheRegistrations(ctx, logicalHostID)
+	if err != nil {
+		return nil, err
+	}
+
+	hosts := make([]CoordinatorHost, 0, len(registrationIDs))
 	for _, registrationID := range registrationIDs {
-		if _, ok := seen[registrationID]; ok {
+		host, ok, err := c.getRegistration(ctx, logicalHostID, registrationID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			_ = c.repository.RemoveCacheRegistration(ctx, logicalHostID, registrationID)
 			continue
 		}
-		ordered = append(ordered, registrationID)
+		if host.Locality != locality {
+			continue
+		}
+		if poolName != "" && host.PoolName != poolName {
+			continue
+		}
+		hosts = append(hosts, normalizeCoordinatorHost(host))
 	}
+	return hosts, nil
+}
+
+func normalizeCoordinatorHost(host CoordinatorHost) CoordinatorHost {
+	if host.Role == "" {
+		host.Role = DefaultCacheServerRoleWorker
+	}
+	if host.Priority == 0 {
+		if host.Role == DefaultCacheServerRoleAgent {
+			host.Priority = DefaultAgentCacheServerPriority
+		} else {
+			host.Priority = DefaultWorkerCacheServerPriority
+		}
+	}
+	return host
+}
+
+func selectActiveCoordinatorHost(hosts []CoordinatorHost, activeRegistrationID string) CoordinatorHost {
+	var active CoordinatorHost
+	var best CoordinatorHost
+	for _, host := range hosts {
+		host = normalizeCoordinatorHost(host)
+		if host.RegistrationID == activeRegistrationID {
+			active = host
+		}
+		if best.RegistrationID == "" || coordinatorHostSortsBefore(host, best) {
+			best = host
+		}
+	}
+	if active.RegistrationID == "" {
+		return best
+	}
+	if best.RegistrationID != "" && coordinatorHostPreempts(best, active) {
+		return best
+	}
+	return active
+}
+
+func coordinatorHostPreempts(candidate, current CoordinatorHost) bool {
+	candidate = normalizeCoordinatorHost(candidate)
+	current = normalizeCoordinatorHost(current)
+	return candidate.Priority > current.Priority
+}
+
+func coordinatorHostSortsBefore(candidate, current CoordinatorHost) bool {
+	candidate = normalizeCoordinatorHost(candidate)
+	current = normalizeCoordinatorHost(current)
+	if candidate.Priority != current.Priority {
+		return candidate.Priority > current.Priority
+	}
+	return candidate.RegistrationID < current.RegistrationID
+}
+
+func orderCoordinatorHosts(hosts []CoordinatorHost, activeRegistrationID string) []CoordinatorHost {
+	ordered := make([]CoordinatorHost, 0, len(hosts))
+	rest := make([]CoordinatorHost, 0, len(hosts))
+	for _, host := range hosts {
+		host = normalizeCoordinatorHost(host)
+		if host.RegistrationID == activeRegistrationID {
+			ordered = append(ordered, host)
+			continue
+		}
+		rest = append(rest, host)
+	}
+	sort.SliceStable(rest, func(i, j int) bool {
+		if rest[i].Priority != rest[j].Priority {
+			return rest[i].Priority > rest[j].Priority
+		}
+		return rest[i].RegistrationID < rest[j].RegistrationID
+	})
+	ordered = append(ordered, rest...)
 	return ordered
 }
 

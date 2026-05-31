@@ -51,6 +51,8 @@ type CoordinatorConfig struct {
 	RegistrationTTLSeconds   int `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
 	HeartbeatIntervalSeconds int `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
 	HostWatchIntervalSeconds int `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
+	WorkerServerPriority     int `key:"workerServerPriority" json:"worker_server_priority"`
+	AgentServerPriority      int `key:"agentServerPriority" json:"agent_server_priority"`
 }
 
 type GlobalConfig struct {
@@ -351,6 +353,8 @@ type Host struct {
 	RTT              time.Duration `redis:"rtt" json:"rtt"`
 	HostId           string        `redis:"host_id" json:"host_id"`
 	RegistrationID   string        `redis:"registration_id" json:"registration_id"`
+	Role             string        `redis:"role" json:"role"`
+	Priority         int           `redis:"priority" json:"priority"`
 	PoolName         string        `redis:"pool_name" json:"pool_name"`
 	Locality         string        `redis:"locality" json:"locality"`
 	NodeID           string        `redis:"node_id" json:"node_id"`

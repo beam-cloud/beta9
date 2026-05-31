@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -23,6 +24,13 @@ func main() {
 	}
 
 	metrics.InitializeMetricsRepository(config.Monitoring.VictoriaMetrics)
+
+	if enabled, _ := strconv.ParseBool(os.Getenv("CACHE_AGENT_ONLY")); enabled {
+		if err := worker.RunCacheAgent(); err != nil {
+			log.Fatal().Err(err).Msg("cache agent failed")
+		}
+		return
+	}
 
 	notFoundErr := &types.ErrWorkerNotFound{}
 	s, err := worker.NewWorker()

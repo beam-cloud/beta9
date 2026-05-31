@@ -62,6 +62,16 @@ func TestCacheHostCandidateGroupHasEndpoint(t *testing.T) {
 		Addr:        "public-c:2049",
 		PrivateAddr: "10.0.0.3:2049",
 	}))
+	require.True(t, group.usesPreferredEndpoint(&Host{
+		HostId:      "logical-host",
+		Addr:        "public-a:2049",
+		PrivateAddr: "10.0.0.1:2049",
+	}))
+	require.False(t, group.usesPreferredEndpoint(&Host{
+		HostId:      "logical-host",
+		Addr:        "public-b:2049",
+		PrivateAddr: "10.0.0.2:2049",
+	}))
 }
 
 func TestCacheHostCandidateGroupFirstReachableFallsBackInOrder(t *testing.T) {
@@ -114,7 +124,7 @@ func TestCacheHostCandidateGroupLogicalHostIgnoresEndpointFields(t *testing.T) {
 	require.False(t, host.HasEndpoint())
 }
 
-func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
+func TestDiscoverySwitchesToPreferredRegisteredEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -165,7 +175,8 @@ func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
 	hosts, err := discovery.discoverHosts(context.Background())
 
 	require.NoError(t, err)
-	require.Empty(t, hosts)
+	require.Len(t, hosts, 1)
+	require.Equal(t, active.PrivateAddr, hosts[0].PrivateAddr)
 }
 
 func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {

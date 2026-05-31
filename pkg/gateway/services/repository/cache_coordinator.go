@@ -67,6 +67,8 @@ func cacheCoordinatorHostFromProto(host *pb.CacheCoordinatorHost) cache.Coordina
 	return cache.CoordinatorHost{
 		LogicalHostID:    host.LogicalHostId,
 		RegistrationID:   host.RegistrationId,
+		Role:             host.Role,
+		Priority:         int(host.Priority),
 		PoolName:         host.PoolName,
 		Locality:         host.Locality,
 		NodeID:           host.NodeId,
@@ -81,6 +83,8 @@ func cacheCoordinatorHostToProto(host cache.CoordinatorHost) *pb.CacheCoordinato
 	return &pb.CacheCoordinatorHost{
 		LogicalHostId:    host.LogicalHostID,
 		RegistrationId:   host.RegistrationID,
+		Role:             host.Role,
+		Priority:         int32(host.Priority),
 		PoolName:         host.PoolName,
 		Locality:         host.Locality,
 		NodeId:           host.NodeID,

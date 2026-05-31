@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -63,8 +64,12 @@ type WorkerCacheManager struct {
 	metadataStore      cache.CacheMetadataStore
 	client             *cache.Client
 	server             *cache.Server
+	serverLock         *os.File
+	cacheRole          string
+	cachePriority      int
 	registration       *gatewayCacheRegistration
 	registrationCancel context.CancelFunc
+	draining           bool
 	mu                 sync.Mutex
 	wg                 sync.WaitGroup
 	drainOnce          sync.Once
@@ -88,6 +93,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		podAddr:    podAddr,
 		nodeID:     nodeID,
 		locality:   locality,
+		cacheRole:  cacheServerRole(),
 	}
 }
 
@@ -100,44 +106,27 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
+	m.cachePriority = cacheServerPriority(cacheConfig, m.cacheRole)
 	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
-
-	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
-	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
-	if err != nil {
-		m.cancel()
-		return nil, err
-	}
-
-	registration := newGatewayCacheRegistration(m, server, cacheConfig, advertisedAddr)
-	if err := registration.registerOnce(m.ctx); err != nil {
-		_ = server.Close()
-		m.cancel()
-		return nil, err
-	}
-	m.registration = registration
-	registrationCtx, registrationCancel := context.WithCancel(m.ctx)
-	m.registrationCancel = registrationCancel
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		runGatewayCacheRegistration(registrationCtx, registration)
-	}()
 
 	hostDirectory := &gatewayCacheHostDirectory{
 		client: m.workerRepo,
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
-		_ = m.Drain()
-		_ = server.Close()
 		m.cancel()
 		return nil, err
 	}
 
 	m.client = client
-	client.AttachLocalServer(server)
+	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
+	if _, err := m.tryStartEmbeddedServer(cacheConfig, hostID); err != nil {
+		_ = client.Cleanup()
+		m.cancel()
+		return nil, err
+	}
+	m.startCacheServerStandbyLoop(cacheConfig, hostID)
 
 	if err := client.WaitForHosts(defaultCacheWaitTime); err != nil {
 		log.Warn().
@@ -158,6 +147,8 @@ func (m *WorkerCacheManager) Close() error {
 	m.mu.Lock()
 	server := m.server
 	client := m.client
+	lock := m.serverLock
+	m.serverLock = nil
 	m.mu.Unlock()
 
 	if client != nil {
@@ -165,6 +156,9 @@ func (m *WorkerCacheManager) Close() error {
 	}
 	if server != nil {
 		errs = errors.Join(errs, server.Close())
+	}
+	if lock != nil {
+		errs = errors.Join(errs, releaseCacheServerLock(lock))
 	}
 
 	m.wg.Wait()
@@ -178,6 +172,7 @@ func (m *WorkerCacheManager) Drain() error {
 
 	m.drainOnce.Do(func() {
 		m.mu.Lock()
+		m.draining = true
 		cancel := m.registrationCancel
 		registration := m.registration
 		server := m.server
@@ -230,11 +225,127 @@ func (m *WorkerCacheManager) createEmbeddedServer(cacheConfig cache.Config, host
 		return nil, "", err
 	}
 
+	return server, advertisedAddr, nil
+}
+
+func (m *WorkerCacheManager) tryStartEmbeddedServer(cacheConfig cache.Config, hostID string) (bool, error) {
 	m.mu.Lock()
-	m.server = server
+	if m.draining || m.server != nil {
+		m.mu.Unlock()
+		return m.server != nil, nil
+	}
 	m.mu.Unlock()
 
-	return server, advertisedAddr, nil
+	lock, acquired, err := acquireCacheServerLock(cacheConfig.Server.DiskCacheDir)
+	if err != nil || !acquired {
+		return false, err
+	}
+
+	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
+	if err != nil {
+		_ = releaseCacheServerLock(lock)
+		return false, err
+	}
+
+	registration := newGatewayCacheRegistration(m, server, cacheConfig, advertisedAddr)
+	if err := registration.registerOnce(m.ctx); err != nil {
+		_ = server.Close()
+		_ = releaseCacheServerLock(lock)
+		return false, err
+	}
+
+	registrationCtx, registrationCancel := context.WithCancel(m.ctx)
+	m.mu.Lock()
+	if m.draining || m.server != nil {
+		m.mu.Unlock()
+		registrationCancel()
+		_ = registration.unregister(context.Background())
+		_ = server.Close()
+		_ = releaseCacheServerLock(lock)
+		return false, nil
+	}
+	m.server = server
+	m.serverLock = lock
+	m.registration = registration
+	m.registrationCancel = registrationCancel
+	m.wg.Add(1)
+	m.mu.Unlock()
+
+	if m.client != nil {
+		m.client.AttachLocalServer(server)
+	}
+
+	go func() {
+		defer m.wg.Done()
+		runGatewayCacheRegistration(registrationCtx, registration)
+	}()
+
+	log.Info().
+		Str("logical_host_id", registration.logicalHostID).
+		Str("registration_id", registration.registrationID).
+		Str("role", m.cacheRole).
+		Int("priority", m.cachePriority).
+		Msg("acquired node-local cache server lock")
+
+	return true, nil
+}
+
+func (m *WorkerCacheManager) startCacheServerStandbyLoop(cacheConfig cache.Config, hostID string) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+
+		interval := time.Duration(cacheConfig.Coordinator.HostWatchIntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = cacheDefaultHostWatchInterval
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				m.mu.Lock()
+				done := m.draining || m.server != nil
+				m.mu.Unlock()
+				if done {
+					return
+				}
+				if _, err := m.tryStartEmbeddedServer(cacheConfig, hostID); err != nil {
+					log.Warn().Err(err).Msg("failed to start standby cache server")
+				}
+			}
+		}
+	}()
+}
+
+func acquireCacheServerLock(cacheDir string) (*os.File, bool, error) {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return nil, false, err
+	}
+	lockPath := filepath.Join(cacheDir, ".cache-server.lock")
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return lock, true, nil
+}
+
+func releaseCacheServerLock(lock *os.File) error {
+	if lock == nil {
+		return nil
+	}
+	errs := errors.Join(syscall.Flock(int(lock.Fd()), syscall.LOCK_UN), lock.Close())
+	return errs
 }
 
 func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
@@ -294,6 +405,12 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Coordinator.HostWatchIntervalSeconds == 0 {
 		cacheConfig.Coordinator.HostWatchIntervalSeconds = int(cacheDefaultHostWatchInterval / time.Second)
+	}
+	if cacheConfig.Coordinator.WorkerServerPriority == 0 {
+		cacheConfig.Coordinator.WorkerServerPriority = cache.DefaultWorkerCacheServerPriority
+	}
+	if cacheConfig.Coordinator.AgentServerPriority == 0 {
+		cacheConfig.Coordinator.AgentServerPriority = cache.DefaultAgentCacheServerPriority
 	}
 	if cacheConfig.Disk.MountPath == "" {
 		cacheConfig.Disk.MountPath = cacheDefaultDiskPath
@@ -422,6 +539,41 @@ func cacheHostNetwork(config types.AppConfig) bool {
 	}
 
 	return config.Worker.HostNetwork
+}
+
+func cacheServerRole() string {
+	role := os.Getenv("CACHE_SERVER_ROLE")
+	if role == "" && cacheAgentOnly() {
+		role = cache.DefaultCacheServerRoleAgent
+	}
+	if role == "" {
+		return cache.DefaultCacheServerRoleWorker
+	}
+	return safeCacheName(role)
+}
+
+func cacheServerPriority(config cache.Config, role string) int {
+	if value := os.Getenv("CACHE_SERVER_PRIORITY"); value != "" {
+		priority, err := strconv.Atoi(value)
+		if err == nil && priority > 0 {
+			return priority
+		}
+	}
+	if role == cache.DefaultCacheServerRoleAgent {
+		if config.Coordinator.AgentServerPriority > 0 {
+			return config.Coordinator.AgentServerPriority
+		}
+		return cache.DefaultAgentCacheServerPriority
+	}
+	if config.Coordinator.WorkerServerPriority > 0 {
+		return config.Coordinator.WorkerServerPriority
+	}
+	return cache.DefaultWorkerCacheServerPriority
+}
+
+func cacheAgentOnly() bool {
+	enabled, err := strconv.ParseBool(os.Getenv("CACHE_AGENT_ONLY"))
+	return err == nil && enabled
 }
 
 func cacheWorkerInstanceID(workerID string) string {

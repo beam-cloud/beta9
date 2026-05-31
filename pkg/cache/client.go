@@ -36,7 +36,7 @@ const (
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
 	defaultRawReadWindowPartBytes   = 4 * 1024 * 1024
-	defaultStoreReplicaHosts        = 2
+	defaultStoreReplicaHosts        = 3
 
 	// NOTE: This value for readAheadKB is separate from the cachefs config since the FUSE library does
 	// weird stuff with the other read_ahead_kb value internally
@@ -595,7 +595,7 @@ func (c *Client) removeUndiscoveredLogicalHosts(seenHosts map[string]struct{}) {
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
 	known := c.hostMap.Get(group.hostID)
-	if !group.hasEndpoint(known) {
+	if !group.usesPreferredEndpoint(known) {
 		return false
 	}
 	if c.hasCacheClient(known.HostId) {
