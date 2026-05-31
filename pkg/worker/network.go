@@ -51,6 +51,7 @@ const (
 	containerNetworkSlotPoolEnv         string        = "CONTAINER_NETWORK_SLOT_POOL_SIZE"
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
+	containerNetworkCleanupLockRetries                = 14
 )
 
 type ContainerNetworkManager struct {
@@ -1889,7 +1890,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(cleanupCtx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
-		Retries:       10,
+		Retries:       containerNetworkCleanupLockRetries,
 	}))
 	if err != nil {
 		return err

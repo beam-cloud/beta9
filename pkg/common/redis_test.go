@@ -71,11 +71,15 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 	// NOTE: I wanted to test this using a TTL, but unfortunately miniredis doesn't support true TTL like redis
 	// TTL'd keys technically still exist. Instead we're relying on manually releasing the lock (which deletes the key)
 	go func() {
-		err := secondLock.Acquire(context.Background(), key, RedisLockOptions{TtlS: 10, Retries: 5})
+		err := secondLock.Acquire(context.Background(), key, RedisLockOptions{
+			TtlS:          10,
+			Retries:       20,
+			RetryInterval: 50 * time.Millisecond,
+		})
 		resultCh <- err
 	}()
 
-	time.Sleep(time.Millisecond * 500)
+	time.Sleep(time.Millisecond * 100)
 
 	// Release lock so the secondLock can acquire it
 	err = firstLock.Release(key)
