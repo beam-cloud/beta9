@@ -36,6 +36,7 @@ const (
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
 	defaultRawReadWindowPartBytes   = 4 * 1024 * 1024
+	defaultStoreReplicaHosts        = 2
 
 	// NOTE: This value for readAheadKB is separate from the cachefs config since the FUSE library does
 	// weird stuff with the other read_ahead_kb value internally
@@ -579,6 +580,26 @@ func (c *Client) getContentAttempts(length int64) int {
 	return attempts
 }
 
+func (c *Client) readReplicaHostCount() int {
+	if c.clientConfig.NTopHosts < 1 {
+		return 1
+	}
+	return c.clientConfig.NTopHosts
+}
+
+func (c *Client) storeReplicaHostCount(replayable bool) int {
+	if !replayable {
+		return 1
+	}
+	if c.clientConfig.NTopHosts < 1 {
+		return 1
+	}
+	if c.clientConfig.NTopHosts < defaultStoreReplicaHosts {
+		return c.clientConfig.NTopHosts
+	}
+	return defaultStoreReplicaHosts
+}
+
 func (c *Client) dataCallOptions() []grpc.CallOption {
 	if !c.globalConfig.GRPCPayloadCodecV2 {
 		return nil
@@ -1084,35 +1105,94 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 
 func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
 	length := int64(len(dst))
+	var lastErr error
+	primaryUnavailable := false
+	selectedUnavailable := false
+	contentMissing := false
+	checked := make(map[string]struct{}, c.readReplicaHostCount())
 
-	host, err := c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
-	if err != nil {
+	for hostIndex := 0; hostIndex < c.readReplicaHostCount(); hostIndex++ {
+		host, err := c.getHostForRequest(&ClientRequest{
+			rt:        ClientRequestTypeRetrieval,
+			hash:      hash,
+			key:       opts.RoutingKey,
+			hostIndex: hostIndex,
+		})
+		if err != nil {
+			if err == ErrHostNotFound {
+				_ = c.refreshRoutableHosts(c.ctx)
+				host, err = c.getHostForRequest(&ClientRequest{
+					rt:        ClientRequestTypeRetrieval,
+					hash:      hash,
+					key:       opts.RoutingKey,
+					hostIndex: hostIndex,
+				})
+			}
+			if err != nil {
+				if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+					if hostIndex == 0 {
+						primaryUnavailable = true
+					}
+					selectedUnavailable = true
+					lastErr = ErrSelectedHostUnavailable
+					continue
+				}
+				lastErr = err
+				continue
+			}
+		}
+		if host == nil || host.HostId == "" {
+			lastErr = ErrHostNotFound
+			continue
+		}
+		if _, ok := checked[host.HostId]; ok {
+			continue
+		}
+		checked[host.HostId] = struct{}{}
+
+		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
+		if err == nil && n == length {
+			return n, nil
+		}
+		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+			if hostIndex == 0 {
+				primaryUnavailable = true
+			}
+			selectedUnavailable = true
+			lastErr = ErrSelectedHostUnavailable
+			continue
+		}
+		if errors.Is(err, ErrContentNotFound) {
+			contentMissing = true
+			lastErr = ErrContentNotFound
+			continue
+		}
 		if err == ErrHostNotFound {
-			_ = c.refreshRoutableHosts(c.ctx)
-			host, err = c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+			if hostIndex == 0 {
+				primaryUnavailable = true
+			}
+			selectedUnavailable = true
+			lastErr = ErrSelectedHostUnavailable
+			continue
 		}
 		if err != nil {
-			if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-				return 0, ErrSelectedHostUnavailable
-			}
-			return 0, err
+			lastErr = err
+			continue
 		}
+		contentMissing = true
+		lastErr = ErrContentNotFound
 	}
 
-	n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
-	if err == nil && n == length {
-		return n, nil
-	}
-	if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+	if primaryUnavailable || (selectedUnavailable && !contentMissing) {
 		return 0, ErrSelectedHostUnavailable
 	}
-	if errors.Is(err, ErrContentNotFound) {
+	if contentMissing {
 		return 0, ErrContentNotFound
 	}
-	if err != nil {
-		return 0, err
+	if lastErr != nil {
+		return 0, lastErr
 	}
-	return 0, ErrContentNotFound
+	return 0, ErrHostNotFound
 }
 
 func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
@@ -1377,11 +1457,15 @@ func (c *Client) getSelectedHostForRequest(rt ClientRequestType, hash string, ro
 }
 
 func (c *Client) getSelectedGRPCClient(ctx context.Context, rt ClientRequestType, hash string, routingKey string) (proto.CacheClient, *Host, error) {
+	return c.getGRPCClientForHostIndex(ctx, rt, hash, routingKey, 0)
+}
+
+func (c *Client) getGRPCClientForHostIndex(ctx context.Context, rt ClientRequestType, hash string, routingKey string, hostIndex int) (proto.CacheClient, *Host, error) {
 	client, host, err := c.getGRPCClient(&ClientRequest{
 		rt:        rt,
 		hash:      hash,
 		key:       routingKey,
-		hostIndex: 0,
+		hostIndex: hostIndex,
 	})
 	if err == nil {
 		return client, host, nil
@@ -1392,7 +1476,7 @@ func (c *Client) getSelectedGRPCClient(ctx context.Context, rt ClientRequestType
 			rt:        rt,
 			hash:      hash,
 			key:       routingKey,
-			hostIndex: 0,
+			hostIndex: hostIndex,
 		})
 	}
 	return client, host, err
@@ -1646,37 +1730,61 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
 	seeker, retryable := reader.(io.Seeker)
 	var lastErr error
-	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		if retryable {
-			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-				return "", err
+	var storedHash string
+	successes := 0
+	replicaHosts := c.storeReplicaHostCount(retryable)
+
+	for hostIndex := 0; hostIndex < replicaHosts; hostIndex++ {
+		hostStored := false
+		for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
+			if retryable {
+				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+					return "", err
+				}
+			} else if attempt > 0 || hostIndex > 0 {
+				break
 			}
-		} else if attempt > 0 {
-			break
-		}
 
-		_, host, err := c.getSelectedGRPCClient(ctx, ClientRequestTypeStorage, routingKey, routingKey)
-		if err != nil {
+			_, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, routingKey, routingKey, hostIndex)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+
+			hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+			if err == nil {
+				if storedHash == "" {
+					storedHash = hash
+				} else if hash != storedHash {
+					return storedHash, fmt.Errorf("stored content hash mismatch across replicas: expected %s, got %s", storedHash, hash)
+				}
+				successes++
+				hostStored = true
+				break
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
 			lastErr = err
-			continue
+			if c.hostDirectory == nil || c.hostMap == nil {
+				break
+			}
+			c.removeHost(host)
+			_ = c.refreshRoutableHosts(ctx)
+			if !retryable {
+				break
+			}
 		}
+		if !retryable || (!hostStored && hostIndex == 0 && replicaHosts == 1) {
+			break
+		}
+	}
 
-		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
-		if err == nil {
-			return hash, nil
+	if successes > 0 {
+		if lastErr != nil && successes < replicaHosts {
+			Logger.Debugf("StoreContent replica population partially succeeded: hash=%s routing_key=%s successes=%d/%d last_err=%v", storedHash, routingKey, successes, replicaHosts, lastErr)
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
-		}
-		lastErr = err
-		c.removeHost(host)
-		if c.hostDirectory == nil || c.hostMap == nil {
-			break
-		}
-		_ = c.refreshRoutableHosts(ctx)
-		if !retryable {
-			break
-		}
+		return storedHash, nil
 	}
 
 	if lastErr != nil {
@@ -1892,51 +2000,85 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
 	var lastErr error
-	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		client, host, err := c.getSelectedGRPCClient(ctx, ClientRequestTypeStorage, hash, routingKey)
-		if err != nil {
-			lastErr = err
-			continue
-		}
+	var storedHash string
+	successes := 0
+	replicaHosts := c.storeReplicaHostCount(true)
 
-		if lock {
-			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
+	for hostIndex := 0; hostIndex < replicaHosts; hostIndex++ {
+		hostStored := false
+		for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
+			client, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, hash, routingKey, hostIndex)
 			if err != nil {
 				lastErr = err
-				c.removeHost(host)
-				if c.hostDirectory == nil || c.hostMap == nil {
-					break
-				}
-				_ = c.refreshRoutableHosts(ctx)
 				continue
 			}
 
-			if resp == nil {
-				return "", ErrUnableToPopulateContent
-			}
-			if resp.FailedToAcquireLock {
-				return "", ErrUnableToAcquireLock
-			}
-			if !resp.Ok {
-				return "", ErrUnableToPopulateContent
-			}
-			return resp.Hash, nil
-		}
+			if lock {
+				resp, err := client.StoreContentFromSourceWithLock(ctx, req)
+				if err != nil {
+					lastErr = err
+					if c.hostDirectory == nil || c.hostMap == nil {
+						break
+					}
+					c.removeHost(host)
+					_ = c.refreshRoutableHosts(ctx)
+					continue
+				}
 
-		resp, err := client.StoreContentFromSource(ctx, req)
-		if err != nil {
-			lastErr = err
-			c.removeHost(host)
-			if c.hostDirectory == nil || c.hostMap == nil {
+				if resp == nil {
+					lastErr = ErrUnableToPopulateContent
+					break
+				}
+				if resp.FailedToAcquireLock {
+					return "", ErrUnableToAcquireLock
+				}
+				if !resp.Ok {
+					lastErr = ErrUnableToPopulateContent
+					break
+				}
+				if storedHash == "" {
+					storedHash = resp.Hash
+				} else if resp.Hash != storedHash {
+					return storedHash, fmt.Errorf("stored content hash mismatch across replicas: expected %s, got %s", storedHash, resp.Hash)
+				}
+				successes++
+				hostStored = true
 				break
 			}
-			_ = c.refreshRoutableHosts(ctx)
-			continue
+
+			resp, err := client.StoreContentFromSource(ctx, req)
+			if err != nil {
+				lastErr = err
+				if c.hostDirectory == nil || c.hostMap == nil {
+					break
+				}
+				c.removeHost(host)
+				_ = c.refreshRoutableHosts(ctx)
+				continue
+			}
+			if resp == nil || !resp.Ok {
+				lastErr = ErrUnableToPopulateContent
+				break
+			}
+			if storedHash == "" {
+				storedHash = resp.Hash
+			} else if resp.Hash != storedHash {
+				return storedHash, fmt.Errorf("stored content hash mismatch across replicas: expected %s, got %s", storedHash, resp.Hash)
+			}
+			successes++
+			hostStored = true
+			break
 		}
-		if resp == nil || !resp.Ok {
-			return "", ErrUnableToPopulateContent
+		if !hostStored && hostIndex == 0 && replicaHosts == 1 {
+			break
 		}
-		return resp.Hash, nil
+	}
+
+	if successes > 0 {
+		if lastErr != nil && successes < replicaHosts {
+			Logger.Debugf("StoreFromContent replica population partially succeeded: hash=%s routing_key=%s successes=%d/%d last_err=%v", storedHash, routingKey, successes, replicaHosts, lastErr)
+		}
+		return storedHash, nil
 	}
 
 	if lastErr != nil {

@@ -103,6 +103,62 @@ func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
+func TestReadContentIntoDoesNotMaskPrimaryUnavailableWithReplicaMiss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{NTopHosts: 2},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+
+	replicaServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("replica-host"))
+	require.NoError(t, err)
+	replicaAddr, err := replicaServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, replicaServer.Close()) }()
+
+	primaryHost := &Host{
+		HostId:      "primary-host",
+		PoolName:    "default",
+		Locality:    "test",
+		NodeID:      "node-a",
+		CachePathID: "path",
+	}
+	replicaHost := replicaServer.Host()
+	require.NotNil(t, replicaHost)
+	replicaHost.Addr = replicaAddr
+	replicaHost.PrivateAddr = replicaAddr
+
+	client := &Client{
+		ctx:                   ctx,
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(replicaHost))
+	defer client.Cleanup()
+
+	dst := make([]byte, 8)
+	_, err = client.ReadContentInto(ctx, "missing-hash", 0, dst, ClientOptions{RoutingKey: "missing-hash"})
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+}
+
 func TestLogicalOnlyHostIsNotActiveHRWMember(t *testing.T) {
 	client := &Client{
 		ctx:                   context.Background(),
@@ -240,6 +296,75 @@ func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.
 	dst := make([]byte, len(content))
 	_, err = client.ReadContentInto(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
 	require.ErrorIs(t, err, ErrContentNotFound)
+}
+
+func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{NTopHosts: 2},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+
+	primaryServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("primary-host"))
+	require.NoError(t, err)
+	primaryAddr, err := primaryServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, primaryServer.Close()) }()
+
+	replicaCfg := cfg
+	replicaCfg.Server.DiskCacheDir = t.TempDir()
+	replicaServer, err := NewServerWithOptions(ctx, replicaCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("replica-host"))
+	require.NoError(t, err)
+	replicaAddr, err := replicaServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, replicaServer.Close()) }()
+
+	content := []byte("content-on-ranked-replica")
+	hash, _, err := replicaServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	primaryHost := primaryServer.Host()
+	require.NotNil(t, primaryHost)
+	primaryHost.Addr = primaryAddr
+	primaryHost.PrivateAddr = primaryAddr
+	replicaHost := replicaServer.Host()
+	require.NotNil(t, replicaHost)
+	replicaHost.Addr = replicaAddr
+	replicaHost.PrivateAddr = replicaAddr
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(primaryHost))
+	require.NoError(t, client.addHost(replicaHost))
+	defer client.Cleanup()
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
 }
 
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
@@ -739,7 +864,7 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestStoreContentFromReaderDoesNotFallbackWhenSelectedHostStreamFails(t *testing.T) {
+func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostStreamFails(t *testing.T) {
 	ctx := context.Background()
 	firstHost := &Host{HostId: "first-host", PrivateAddr: "first-host:2049"}
 	secondHost := &Host{HostId: "second-host", PrivateAddr: "second-host:2049"}
@@ -761,13 +886,13 @@ func TestStoreContentFromReaderDoesNotFallbackWhenSelectedHostStreamFails(t *tes
 	expectedHash := hex.EncodeToString(sum[:])
 
 	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
-	require.Error(t, err)
-	require.Empty(t, got)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
 	require.NotEmpty(t, firstStream.sent.Bytes())
-	require.Empty(t, secondStream.sent.Bytes())
+	require.Equal(t, content, secondStream.sent.Bytes())
 }
 
-func TestStoreContentFromReaderDoesNotFallbackWhenSelectedHostUnavailable(t *testing.T) {
+func TestStoreContentFromReaderFallsBackToRankedReplicaWhenSelectedHostUnavailable(t *testing.T) {
 	ctx := context.Background()
 	selectedHost := &Host{HostId: "selected-host"}
 	fallbackHost := &Host{HostId: "fallback-host", PrivateAddr: "fallback-host:2049"}
@@ -788,9 +913,9 @@ func TestStoreContentFromReaderDoesNotFallbackWhenSelectedHostUnavailable(t *tes
 	expectedHash := hex.EncodeToString(sum[:])
 
 	got, err := client.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), expectedHash, "/cache/file.bin", nil)
-	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
-	require.Empty(t, got)
-	require.Empty(t, fallbackStream.sent.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.Equal(t, content, fallbackStream.sent.Bytes())
 }
 
 type fakeStoreCacheClient struct {
