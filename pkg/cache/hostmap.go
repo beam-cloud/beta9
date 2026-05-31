@@ -51,11 +51,14 @@ func (hm *HostMap) Set(host *Host) {
 		return
 	}
 
-	if exists {
+	if !host.HasEndpoint() {
+		Logger.Debugf("Tracked logical cache host @ %s without active endpoint", host.HostId)
+	} else if exists {
 		Logger.Debugf("Updated host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	} else {
 		Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	}
+
 	if err := hm.onHostAdded(host); err != nil {
 		Logger.Warnf("failed to initialize cache host %s: %v", host.HostId, err)
 		hm.mu.Lock()

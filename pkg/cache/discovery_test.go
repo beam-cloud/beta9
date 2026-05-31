@@ -259,7 +259,7 @@ func TestRefreshRoutableHostsRemovesUndiscoveredLogicalHost(t *testing.T) {
 	require.NotNil(t, client.hostMap.Get(oldHost.HostId))
 	require.NotNil(t, client.hostMap.Get(stillHost.HostId))
 
-	require.NoError(t, client.refreshRoutableHosts(ctx))
+	require.ErrorIs(t, client.refreshRoutableHosts(ctx), ErrHostNotFound)
 
 	require.Nil(t, client.hostMap.Get(oldHost.HostId))
 	require.NotNil(t, client.hostMap.Get(stillHost.HostId))

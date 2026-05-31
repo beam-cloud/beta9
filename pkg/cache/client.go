@@ -545,12 +545,11 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 		}
 		if logicalHost := group.logicalHost(); logicalHost != nil {
 			c.hostMap.Set(logicalHost)
-			routable = true
 		}
 	}
 	c.removeUndiscoveredLogicalHosts(seenHosts)
 
-	if !routable && len(c.hostMap.GetAll()) == 0 {
+	if !routable {
 		return ErrHostNotFound
 	}
 	return nil
