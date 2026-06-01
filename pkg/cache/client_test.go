@@ -24,6 +24,16 @@ type orderedTestHasher struct {
 	hosts []*Host
 }
 
+type countingCacheMetadataStore struct {
+	*MockCacheMetadataStore
+	setStoreFromContentLockCalls int
+}
+
+func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
+	m.setStoreFromContentLockCalls++
+	return m.MockCacheMetadataStore.SetStoreFromContentLock(ctx, locality, sourcePath)
+}
+
 func (h *orderedTestHasher) Add(hosts ...*Host) {
 	h.hosts = append(h.hosts, hosts...)
 }
@@ -61,6 +71,51 @@ func (h *keyedTestHasher) GetN(n int, key string) []*Host {
 	return hosts[:n]
 }
 
+func newSharedLocalDiskClient(store *Store, host *Host) *Client {
+	return &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		localDiskStore:        store,
+		localNodeID:           host.NodeID,
+		localCachePathID:      host.CachePathID,
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+}
+
+func TestCachePathIDForConfigUsesCanonicalPhysicalPath(t *testing.T) {
+	base := t.TempDir()
+	hostPath := filepath.Join(base, "host-cache")
+	cfgA := Config{
+		Disk: DiskConfig{
+			HostPath:  hostPath,
+			MountPath: "/container-a/cache",
+		},
+		Server: ServerConfig{
+			DiskCacheDir: "/container-a/cache/default/node-a",
+		},
+	}
+	cfgB := Config{
+		Disk: DiskConfig{
+			HostPath:  hostPath,
+			MountPath: "/container-b/cache",
+		},
+		Server: ServerConfig{
+			DiskCacheDir: "/container-b/cache/default/node-a",
+		},
+	}
+	cfgC := cfgA
+	cfgC.Disk.HostPath = filepath.Join(base, "other-host-cache")
+
+	require.Equal(t, cachePathIDForConfig(cfgA), cachePathIDForConfig(cfgB))
+	require.NotEqual(t, cachePathIDForConfig(cfgA), cachePathIDForConfig(cfgC))
+}
+
 func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
@@ -92,6 +147,37 @@ func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+}
+
+func TestReadContentIntoUsesSelectedSharedLocalDiskStore(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("shared-daemonset-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	host := &Host{HostId: "daemon-host", NodeID: "node-a", CachePathID: "cache-path-a"}
+	client := newSharedLocalDiskClient(store, host)
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestReadContentIntoDoesNotUseSharedLocalDiskStoreForDifferentNode(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("shared-daemonset-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	host := &Host{HostId: "daemon-host", NodeID: "node-b", CachePathID: "cache-path-a"}
+	client := newSharedLocalDiskClient(store, host)
+	client.localNodeID = "node-a"
+
+	dst := make([]byte, len(content))
+	_, err = client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
 func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T) {
@@ -650,6 +736,41 @@ func TestClientLocalPageFileViewsReturnsSelectedClientLocalPageFiles(t *testing.
 	require.FileExists(t, regions[1].Path)
 }
 
+func TestClientLocalPageFileViewsUsesSelectedSharedLocalDiskStore(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijkl")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	host := &Host{HostId: "daemon-host", NodeID: "node-a", CachePathID: "cache-path-a"}
+	client := newSharedLocalDiskClient(store, host)
+
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
+	require.NoError(t, err)
+	require.Len(t, regions, 2)
+	require.Equal(t, int64(3), regions[0].Offset)
+	require.Equal(t, 2, regions[0].Length)
+	require.Equal(t, int64(0), regions[1].Offset)
+	require.Equal(t, 4, regions[1].Length)
+	require.FileExists(t, regions[0].Path)
+	require.FileExists(t, regions[1].Path)
+}
+
+func TestClientLocalPageFileViewsDoesNotUseSharedLocalDiskStoreForDifferentCachePath(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijkl")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	host := &Host{HostId: "daemon-host", NodeID: "node-a", CachePathID: "cache-path-b"}
+	client := newSharedLocalDiskClient(store, host)
+	client.localCachePathID = "cache-path-a"
+
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Empty(t, regions)
+}
+
 func TestClientLocalPageFileViewsUsesSelectedLocalServer(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("abcdefghijkl")
@@ -882,6 +1003,76 @@ func TestStoreContentFromLocalFileWaitsForLockedHashAlreadyPublished(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, hash, got)
+}
+
+func TestStoreContentFromLocalFileWithHashSkipsSelectedHostWhenAlreadyCachedWithoutMetadata(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	content := []byte("already published content")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	hash, _, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, hash)
+
+	sourcePath := filepath.Join(t.TempDir(), "source.bin")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+
+	metadataStore := &countingCacheMetadataStore{MockCacheMetadataStore: NewMockCacheMetadataStore()}
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	got, err := client.StoreContentFromLocalFile(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: sourcePath,
+	}, StoreContentOptions{
+		RoutingKey: expectedHash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.Zero(t, metadataStore.setStoreFromContentLockCalls)
 }
 
 func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T) {

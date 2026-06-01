@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,6 +93,9 @@ type Client struct {
 	grpcClients           map[string]proto.CacheClient
 	grpcConns             map[string]*grpc.ClientConn
 	localServers          map[string]*Server
+	localDiskStore        *Store
+	localNodeID           string
+	localCachePathID      string
 	rawReadPools          map[string]*rawReadConnPool
 	hostMap               *HostMap
 	mu                    sync.RWMutex
@@ -160,6 +165,8 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
+		localNodeID:           os.Getenv("CACHE_NODE_ID"),
+		localCachePathID:      cachePathIDForConfig(cfg),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		mu:                    sync.RWMutex{},
@@ -172,6 +179,7 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 
 	bc.hostMap = NewHostMap(cfg.Global, bc.addHost)
 	bc.discoveryClient = NewDiscoveryClient(cfg.Global, bc.hostMap, hostDirectory, locality)
+	bc.initLocalDiskStore(cfg, locality)
 
 	// Start searching for nearby cache hosts
 	go bc.discoveryClient.Start(bc.ctx)
@@ -222,6 +230,10 @@ func (c *Client) Cleanup() error {
 	for hostID, pool := range c.rawReadPools {
 		pool.close()
 		delete(c.rawReadPools, hostID)
+	}
+	if c.localDiskStore != nil {
+		c.localDiskStore.Cleanup()
+		c.localDiskStore = nil
 	}
 	return nil
 }
@@ -274,6 +286,87 @@ func (c *Client) localServersSnapshot() []*Server {
 		}
 	}
 	return servers
+}
+
+func (c *Client) initLocalDiskStore(cfg Config, locality string) {
+	if cfg.Server.DiskCacheDir == "" || cfg.Server.PageSizeBytes <= 0 {
+		return
+	}
+
+	// A worker and the cache-server DaemonSet can share the same node hostPath
+	// while only the DaemonSet owns the active endpoint. Keep a local Store view
+	// so selected same-node content can still use local reads and page views.
+	localHost := &Host{
+		HostId:      "client-local-disk",
+		Locality:    locality,
+		NodeID:      c.localNodeID,
+		CachePathID: c.localCachePathID,
+	}
+	store, err := NewStore(c.ctx, localHost, locality, c.metadataStore, cfg)
+	if err != nil {
+		Logger.Warnf("failed to initialize local cache disk view: %v", err)
+		return
+	}
+	c.localDiskStore = store
+}
+
+func cachePathIDForConfig(config Config) string {
+	identity := canonicalPhysicalCacheIdentityPath(config)
+	if identity == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("%x", sum[:6])
+}
+
+func canonicalPhysicalCacheIdentityPath(config Config) string {
+	if config.Server.DiskCacheDir == "" {
+		return ""
+	}
+	diskCacheDir := filepath.Clean(config.Server.DiskCacheDir)
+	if config.Disk.MountPath == "" || config.Disk.HostPath == "" {
+		return diskCacheDir
+	}
+
+	mountPath := filepath.Clean(config.Disk.MountPath)
+	hostPath := filepath.Clean(config.Disk.HostPath)
+	rel, err := filepath.Rel(mountPath, diskCacheDir)
+	if err != nil || relEscapesBase(rel) {
+		return diskCacheDir
+	}
+	return filepath.Clean(filepath.Join(hostPath, rel))
+}
+
+func relEscapesBase(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
+}
+
+func (c *Client) localDiskStoreForHost(host *Host) *Store {
+	if c == nil || host == nil || c.localDiskStore == nil {
+		return nil
+	}
+	if c.localNodeID != "" && host.NodeID != "" && host.NodeID != c.localNodeID {
+		return nil
+	}
+	if c.localCachePathID == "" || host.CachePathID == "" || host.CachePathID != c.localCachePathID {
+		return nil
+	}
+	return c.localDiskStore
+}
+
+func (c *Client) selectedLocalDiskStore(ctx context.Context, rt ClientRequestType, hash string, routingKey string) (*Store, *Host, error) {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	host, err := c.getSelectedHostForRequest(rt, hash, routingKey)
+	if err == ErrHostNotFound && c.hostDirectory != nil && c.hostMap != nil {
+		_ = c.refreshRoutableHosts(ctx)
+		host, err = c.getSelectedHostForRequest(rt, hash, routingKey)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.localDiskStoreForHost(host), host, nil
 }
 
 func (c *Client) GetNearbyHosts() ([]*Host, error) {
@@ -714,6 +807,14 @@ func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info
 	return metadata.Hash, true
 }
 
+func (c *Client) cachedContentHash(ctx context.Context, hash string, expectedSize int64) bool {
+	if c == nil || !isContentHash(hash) {
+		return false
+	}
+	exists, err := c.IsCachedOnSelectedHost(hash, hash, expectedSize)
+	return err == nil && exists
+}
+
 func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool {
 	if metadata == nil || metadata.Hash == "" || info == nil || info.IsDir() || info.Size() < 0 {
 		return false
@@ -810,6 +911,18 @@ func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string, expected
 	}
 	if routingKey == "" {
 		routingKey = hash
+	}
+
+	localStore, _, err := c.selectedLocalDiskStore(c.ctx, ClientRequestTypeStorage, hash, routingKey)
+	if err != nil {
+		return false, err
+	}
+	if localStore != nil {
+		exists := localStore.Exists(hash, size)
+		if !exists {
+			c.removeLocalHostCache(hash, routingKey)
+		}
+		return exists, nil
 	}
 
 	client, host, err := c.getGRPCClient(&ClientRequest{
@@ -1080,18 +1193,24 @@ func (c *Client) ClientLocalPageFileView(hash string, offset int64, length int64
 	c.mu.RLock()
 	localServer := c.localServers[host.HostId]
 	c.mu.RUnlock()
-	if localServer == nil || localServer.cas == nil {
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
-		return "", 0, 0, false, nil
+	if localServer != nil && localServer.cas != nil {
+		path, pageOffset, n, ok, err = localServer.cas.PageRegion(hash, offset, length)
+		if err == nil && ok {
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
+			return path, pageOffset, n, ok, err
+		}
 	}
-	path, pageOffset, n, ok, err = localServer.cas.PageRegion(hash, offset, length)
-	if err == nil && ok {
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
-	} else {
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
+	if localStore := c.localDiskStoreForHost(host); localStore != nil {
+		path, pageOffset, n, ok, err = localStore.PageRegion(hash, offset, length)
+		if err == nil && ok {
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
+			return path, pageOffset, n, ok, err
+		}
 	}
-	return path, pageOffset, n, ok, err
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
+	return "", 0, 0, false, err
 }
 
 func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int64, opts ClientOptions) (views []ClientLocalPageFileView, err error) {
@@ -1138,6 +1257,15 @@ func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offse
 	c.mu.RUnlock()
 	if localServer != nil && localServer.cas != nil {
 		if views, ok := clientLocalPageFileViewsFromStore(localServer.cas, hash, offset, length); ok {
+			cacheReadClientLocalPageFileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+			return views, true
+		}
+	}
+
+	if localStore := c.localDiskStoreForHost(host); localStore != nil {
+		if views, ok := clientLocalPageFileViewsFromStore(localStore, hash, offset, length); ok {
 			cacheReadClientLocalPageFileTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
 			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
@@ -1326,6 +1454,23 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	c.mu.RUnlock()
 	if localServer != nil && localServer.cas != nil {
 		n, err := localServer.cas.ReadAt(hash, offset, dst)
+		if err == nil && n == length {
+			cacheReadLocalTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
+			return n, nil
+		}
+		if err == ErrContentNotFound {
+			atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+			c.removeLocalHostCache(hash)
+			return 0, err
+		}
+		if err != nil {
+			atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+		}
+	}
+
+	if localStore := c.localDiskStoreForHost(host); localStore != nil {
+		n, err := localStore.ReadAt(hash, offset, dst)
 		if err == nil && n == length {
 			cacheReadLocalTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
@@ -1675,6 +1820,9 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 	if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
 		return hash, nil
 	}
+	if c.cachedContentHash(ctx, opts.RoutingKey, info.Size()) {
+		return opts.RoutingKey, nil
+	}
 
 	file, err := os.Open(source.Path)
 	if err != nil {
@@ -1685,6 +1833,9 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 	store := func() (string, error) {
 		if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
 			return hash, nil
+		}
+		if c.cachedContentHash(ctx, opts.RoutingKey, info.Size()) {
+			return opts.RoutingKey, nil
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return "", err
