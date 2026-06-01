@@ -214,6 +214,9 @@ func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 
 	localViews, err := c.client.ClientLocalPageFileViews(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 	if err != nil {
+		if errors.Is(err, cache.ErrContentNotFound) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	views = make([]clipStorage.ClientLocalPageFileView, 0, len(localViews))

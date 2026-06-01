@@ -203,6 +203,41 @@ func BenchmarkClientLocalReadInto(b *testing.B) {
 	}
 }
 
+func BenchmarkClientSharedLocalDiskReadInto(b *testing.B) {
+	store, hash, _ := benchmarkStoreWithContent(b, 1024*1024, 64*1024*1024)
+	host := &Host{HostId: "daemon-bench-host", NodeID: "node-a", CachePathID: "cache-path-a"}
+	client := newSharedLocalDiskClient(store, host)
+	dst := make([]byte, 1024*1024)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(dst)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := int64(i%64) * int64(len(dst))
+		n, err := client.ReadContentInto(context.Background(), hash, offset, dst, ClientOptions{RoutingKey: hash})
+		if err != nil || n != int64(len(dst)) {
+			b.Fatalf("shared local disk read offset %d: n=%d err=%v", offset, n, err)
+		}
+	}
+}
+
+func BenchmarkClientSharedLocalDiskPageViews(b *testing.B) {
+	store, hash, _ := benchmarkStoreWithContent(b, 1024*1024, 64*1024*1024)
+	host := &Host{HostId: "daemon-bench-host", NodeID: "node-a", CachePathID: "cache-path-a"}
+	client := newSharedLocalDiskClient(store, host)
+
+	b.ReportAllocs()
+	b.SetBytes(1024 * 1024)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := int64(i%64) * 1024 * 1024
+		views, err := client.ClientLocalPageFileViews(hash, offset, 1024*1024, ClientOptions{RoutingKey: hash})
+		if err != nil || len(views) != 1 || views[0].Length != 1024*1024 {
+			b.Fatalf("shared local disk page views offset %d: views=%d err=%v", offset, len(views), err)
+		}
+	}
+}
+
 func BenchmarkClientRawReadInto(b *testing.B) {
 	InitLogger(false, false)
 	ctx, cancel := context.WithCancel(context.Background())

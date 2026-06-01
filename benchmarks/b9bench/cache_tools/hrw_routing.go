@@ -15,6 +15,7 @@ type host struct {
 	RegistrationID string `json:"registrationId,omitempty"`
 	NodeID         string `json:"nodeId,omitempty"`
 	NodeName       string `json:"nodeName,omitempty"`
+	CachePathID    string `json:"cachePathId,omitempty"`
 	Addr           string `json:"addr,omitempty"`
 	PrivateAddr    string `json:"privateAddr,omitempty"`
 	Pod            string `json:"pod,omitempty"`
