@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -127,6 +128,96 @@ func TestCacheServerLockAllowsSingleNodeLocalOwner(t *testing.T) {
 	require.NoError(t, releaseCacheServerLock(second))
 }
 
+func TestEmbeddedWorkerSkipsCacheServerWhenDaemonSetMarkerFresh(t *testing.T) {
+	t.Setenv("CACHE_SERVER_ONLY", "false")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cacheDir := t.TempDir()
+	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-node", "pod-a"))
+
+	config := testCacheManagerConfig(cacheDir)
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, nil, "worker-a", "default", "127.0.0.1")
+	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")
+	started, err := manager.nodeCacheServer(cacheConfig, "cache-host").Start()
+
+	require.NoError(t, err)
+	require.False(t, started)
+	require.False(t, manager.runningCacheServer())
+}
+
+func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
+	t.Setenv("CACHE_SERVER_ONLY", "false")
+	t.Setenv("CACHE_NODE_ID", "single-node")
+	t.Setenv("CACHE_LOCALITY", "test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	repoClient, repo, cleanup := startTestCacheCoordinator(t)
+	defer cleanup()
+
+	cacheDir := t.TempDir()
+	config := testCacheManagerConfig(cacheDir)
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, "worker-a", "default", "127.0.0.1")
+	client, err := manager.Start()
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	defer func() { _ = manager.Close() }()
+
+	require.Eventually(t, func() bool {
+		return manager.runningCacheServer() && len(repo.activeHosts()) == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-single-node", "pod-a"))
+
+	require.Eventually(t, func() bool {
+		return !manager.runningCacheServer() && len(repo.activeHosts()) == 0
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestCacheServerDaemonSetMarkerFreshUsesTTL(t *testing.T) {
+	cacheDir := t.TempDir()
+	require.False(t, cacheServerDaemonSetMarkerFresh(cacheDir, time.Second))
+
+	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-node", "pod-a"))
+	require.True(t, cacheServerDaemonSetMarkerFresh(cacheDir, time.Second))
+
+	stale := time.Now().Add(-2 * time.Second)
+	require.NoError(t, os.Chtimes(cacheServerDaemonSetMarkerPath(cacheDir), stale, stale))
+	require.False(t, cacheServerDaemonSetMarkerFresh(cacheDir, time.Second))
+}
+
+func TestCacheServerDaemonSetMarkerLoopStopsOnClose(t *testing.T) {
+	t.Setenv("CACHE_SERVER_ONLY", "true")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cacheDir := t.TempDir()
+	config := testCacheManagerConfig(cacheDir)
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, nil, "cache-server-single-node", "default", "127.0.0.1")
+	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")
+	manager.nodeCacheServer(cacheConfig, "cache-host").StartDaemonSetPresence()
+
+	require.Eventually(t, func() bool {
+		return cacheServerDaemonSetMarkerFresh(cacheDir, time.Second)
+	}, time.Second, 10*time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.Close()
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("cache server daemonset marker loop did not stop on close")
+	}
+}
+
 func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testing.T) {
 	t.Setenv("CACHE_NODE_ID", "single-node")
 	t.Setenv("CACHE_LOCALITY", "test")
@@ -163,6 +254,7 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 	active := runningCacheServers(managers)[0]
 	require.Equal(t, "worker-a", active.workerID)
 	logicalHostID := active.registration.logicalHostID
+	activeRegistrationID := active.registration.registrationID
 
 	content := []byte("node-local-cache-content-survives-worker-churn")
 	sum := sha256.Sum256(content)
@@ -183,7 +275,7 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 			return false
 		}
 		for _, host := range activeHosts {
-			return host.GetLogicalHostId() == logicalHostID && host.GetRegistrationId() != active.registration.registrationID
+			return host.GetLogicalHostId() == logicalHostID && host.GetRegistrationId() != activeRegistrationID
 		}
 		return false
 	}, 5*time.Second, 50*time.Millisecond)

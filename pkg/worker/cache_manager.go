@@ -47,32 +47,35 @@ const (
 	cacheDefaultRegistrationTTL         = 30 * time.Second
 	cacheDefaultRegistrationHeartbeat   = 10 * time.Second
 	cacheDefaultHostWatchInterval       = 5 * time.Second
+	cacheServerDaemonSetMarkerName      = ".beta9-cache-server-daemonset"
 )
 
 type WorkerCacheManager struct {
-	ctx                context.Context
-	cancel             context.CancelFunc
-	config             types.AppConfig
-	poolConfig         types.WorkerPoolConfig
-	workerRepo         pb.WorkerRepositoryServiceClient
-	workerID           string
-	instanceID         string
-	poolName           string
-	podAddr            string
-	nodeID             string
-	locality           string
-	cacheIdentityPath  string
-	metadataStore      cache.CacheMetadataStore
-	client             *cache.Client
-	server             *cache.Server
-	serverLock         *os.File
-	registration       *gatewayCacheRegistration
-	registrationCancel context.CancelFunc
-	draining           bool
-	mu                 sync.Mutex
-	wg                 sync.WaitGroup
-	drainOnce          sync.Once
-	drainErr           error
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	config                types.AppConfig
+	poolConfig            types.WorkerPoolConfig
+	workerRepo            pb.WorkerRepositoryServiceClient
+	workerID              string
+	instanceID            string
+	poolName              string
+	podAddr               string
+	nodeID                string
+	locality              string
+	cacheIdentityPath     string
+	metadataStore         cache.CacheMetadataStore
+	client                *cache.Client
+	server                *cache.Server
+	serverLock            *os.File
+	registration          *gatewayCacheRegistration
+	registrationCancel    context.CancelFunc
+	registrationDone      <-chan struct{}
+	daemonSetPresenceDone <-chan struct{}
+	draining              bool
+	mu                    sync.Mutex
+	wg                    sync.WaitGroup
+	drainOnce             sync.Once
+	drainErr              error
 }
 
 func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, workerRepo pb.WorkerRepositoryServiceClient, workerID, poolName, podAddr string) *WorkerCacheManager {
@@ -120,13 +123,14 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	m.client = client
 	hostID := cacheLogicalHostID(m.locality, m.nodeID, m.cacheIdentityPath)
 	nodeCacheServer := m.nodeCacheServer(cacheConfig, hostID)
+	nodeCacheServer.StartDaemonSetPresence()
 	startedCacheServer, err := nodeCacheServer.Start()
 	if err != nil {
 		_ = client.Cleanup()
 		m.cancel()
 		return nil, err
 	}
-	if !startedCacheServer {
+	if !startedCacheServer || !cacheServerOnlyMode() {
 		nodeCacheServer.Watch()
 	}
 
@@ -150,7 +154,13 @@ func (m *WorkerCacheManager) Close() error {
 	server := m.server
 	client := m.client
 	lock := m.serverLock
+	daemonSetPresenceDone := m.daemonSetPresenceDone
+	m.server = nil
 	m.serverLock = nil
+	m.registration = nil
+	m.registrationCancel = nil
+	m.registrationDone = nil
+	m.daemonSetPresenceDone = nil
 	m.mu.Unlock()
 
 	if client != nil {
@@ -161,6 +171,13 @@ func (m *WorkerCacheManager) Close() error {
 	}
 	if lock != nil {
 		errs = errors.Join(errs, releaseCacheServerLock(lock))
+	}
+	if daemonSetPresenceDone != nil {
+		select {
+		case <-daemonSetPresenceDone:
+		case <-time.After(cacheCoordinatorRPCTimeout):
+			errs = errors.Join(errs, errors.New("timed out waiting for cache server daemonset marker loop to stop"))
+		}
 	}
 
 	m.wg.Wait()
@@ -186,6 +203,7 @@ func (m *WorkerCacheManager) Drain() error {
 		m.draining = true
 		cancel := m.registrationCancel
 		registration := m.registration
+		registrationDone := m.registrationDone
 		server := m.server
 		m.mu.Unlock()
 
@@ -195,10 +213,16 @@ func (m *WorkerCacheManager) Drain() error {
 		if cancel != nil {
 			cancel()
 		}
-		m.wg.Wait()
+		if registrationDone != nil {
+			select {
+			case <-registrationDone:
+			case <-time.After(cacheCoordinatorRPCTimeout):
+				m.drainErr = errors.Join(m.drainErr, errors.New("timed out waiting for cache registration loop to stop"))
+			}
+		}
 
 		if registration != nil {
-			m.drainErr = registration.unregister(context.Background())
+			m.drainErr = errors.Join(m.drainErr, registration.unregister(context.Background()))
 		}
 	})
 
@@ -262,6 +286,10 @@ func (s nodeCacheServer) Start() (bool, error) {
 	}
 	m.mu.Unlock()
 
+	if !cacheServerOnlyMode() && cacheServerDaemonSetMarkerFresh(s.config.Server.DiskCacheDir, cacheRegistrationTTL(s.config)) {
+		return false, nil
+	}
+
 	lock, acquired, err := acquireCacheServerLock(s.config.Server.DiskCacheDir)
 	if err != nil || !acquired {
 		return false, err
@@ -294,6 +322,8 @@ func (s nodeCacheServer) Start() (bool, error) {
 	m.serverLock = lock
 	m.registration = registration
 	m.registrationCancel = registrationCancel
+	registrationDone := make(chan struct{})
+	m.registrationDone = registrationDone
 	m.wg.Add(1)
 	m.mu.Unlock()
 
@@ -303,6 +333,7 @@ func (s nodeCacheServer) Start() (bool, error) {
 
 	go func() {
 		defer m.wg.Done()
+		defer close(registrationDone)
 		runGatewayCacheRegistration(registrationCtx, registration)
 	}()
 
@@ -312,6 +343,44 @@ func (s nodeCacheServer) Start() (bool, error) {
 		Msg("acquired node-local cache server lock")
 
 	return true, nil
+}
+
+func (s nodeCacheServer) StartDaemonSetPresence() {
+	if !cacheServerOnlyMode() {
+		return
+	}
+
+	m := s.manager
+	interval := cacheRegistrationHeartbeat(s.config)
+	if interval <= 0 {
+		interval = cacheDefaultRegistrationHeartbeat
+	}
+
+	done := make(chan struct{})
+	m.mu.Lock()
+	m.daemonSetPresenceDone = done
+	m.mu.Unlock()
+
+	if err := writeCacheServerDaemonSetMarker(s.config.Server.DiskCacheDir, m.workerID, m.instanceID); err != nil {
+		log.Warn().Err(err).Msg("failed to write cache server daemonset marker")
+	}
+
+	go func() {
+		defer close(done)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				if err := writeCacheServerDaemonSetMarker(s.config.Server.DiskCacheDir, m.workerID, m.instanceID); err != nil {
+					log.Warn().Err(err).Msg("failed to refresh cache server daemonset marker")
+				}
+			}
+		}
+	}()
 }
 
 func (s nodeCacheServer) Watch() {
@@ -333,22 +402,87 @@ func (s nodeCacheServer) Watch() {
 				return
 			case <-ticker.C:
 				m.mu.Lock()
-				done := m.draining || m.server != nil
+				draining := m.draining
+				running := m.server != nil
 				m.mu.Unlock()
-				if done {
+				if draining {
 					return
+				}
+				if !cacheServerOnlyMode() && cacheServerDaemonSetMarkerFresh(s.config.Server.DiskCacheDir, cacheRegistrationTTL(s.config)) {
+					if running {
+						if err := m.stopNodeCacheServer("cache server daemonset marker is fresh"); err != nil {
+							log.Warn().Err(err).Msg("failed to stop embedded cache server")
+						}
+					}
+					continue
+				}
+				if running {
+					if cacheServerOnlyMode() {
+						return
+					}
+					continue
 				}
 				startedCacheServer, err := s.Start()
 				if err != nil {
 					log.Warn().Err(err).Msg("failed to start standby cache server")
 					continue
 				}
-				if startedCacheServer {
+				if startedCacheServer && cacheServerOnlyMode() {
 					return
 				}
 			}
 		}
 	}()
+}
+
+func (m *WorkerCacheManager) stopNodeCacheServer(reason string) error {
+	m.mu.Lock()
+	server := m.server
+	lock := m.serverLock
+	registration := m.registration
+	cancel := m.registrationCancel
+	done := m.registrationDone
+	if server == nil && lock == nil && registration == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	m.server = nil
+	m.serverLock = nil
+	m.registration = nil
+	m.registrationCancel = nil
+	m.registrationDone = nil
+	m.mu.Unlock()
+
+	var errs error
+	if registration != nil && m.client != nil {
+		m.client.DetachLocalServer(registration.logicalHostID)
+	}
+	if server != nil {
+		server.Drain()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(cacheCoordinatorRPCTimeout):
+			errs = errors.Join(errs, errors.New("timed out waiting for cache registration loop to stop"))
+		}
+	}
+	if registration != nil {
+		errs = errors.Join(errs, registration.unregister(context.Background()))
+	}
+	if server != nil {
+		errs = errors.Join(errs, server.Close())
+	}
+	if lock != nil {
+		errs = errors.Join(errs, releaseCacheServerLock(lock))
+	}
+	if errs == nil {
+		log.Info().Str("reason", reason).Msg("stopped embedded cache server")
+	}
+	return errs
 }
 
 func acquireCacheServerLock(cacheDir string) (*os.File, bool, error) {
@@ -368,6 +502,46 @@ func acquireCacheServerLock(cacheDir string) (*os.File, bool, error) {
 		return nil, false, err
 	}
 	return lock, true, nil
+}
+
+func writeCacheServerDaemonSetMarker(cacheDir, workerID, instanceID string) error {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return err
+	}
+	markerPath := cacheServerDaemonSetMarkerPath(cacheDir)
+	tmp, err := os.CreateTemp(cacheDir, cacheServerDaemonSetMarkerName+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	body := fmt.Sprintf("worker_id=%s\ninstance_id=%s\nupdated_unix_nano=%d\n", workerID, instanceID, time.Now().UnixNano())
+	if _, err := tmp.WriteString(body); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, markerPath)
+}
+
+func cacheServerDaemonSetMarkerFresh(cacheDir string, ttl time.Duration) bool {
+	if ttl <= 0 {
+		ttl = cacheDefaultRegistrationTTL
+	}
+	info, err := os.Stat(cacheServerDaemonSetMarkerPath(cacheDir))
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) <= ttl
+}
+
+func cacheServerDaemonSetMarkerPath(cacheDir string) string {
+	return filepath.Join(cacheDir, cacheServerDaemonSetMarkerName)
 }
 
 func releaseCacheServerLock(lock *os.File) error {
@@ -574,6 +748,11 @@ func cacheHostNetwork(config types.AppConfig) bool {
 	}
 
 	return config.Worker.HostNetwork
+}
+
+func cacheServerOnlyMode() bool {
+	enabled, err := strconv.ParseBool(os.Getenv("CACHE_SERVER_ONLY"))
+	return err == nil && enabled
 }
 
 func cacheWorkerInstanceID(workerID string) string {
