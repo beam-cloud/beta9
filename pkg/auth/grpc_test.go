@@ -15,6 +15,15 @@ func TestAuthInterceptorLetsCacheRepositoryMethodsSelfAuthenticate(t *testing.T)
 		pb.WorkerRepositoryService_UnregisterCacheHost_FullMethodName,
 		pb.WorkerRepositoryService_ListCacheHosts_FullMethodName,
 		pb.WorkerRepositoryService_SetCacheClientLock_FullMethodName,
+		pb.WorkerRepositoryService_RemoveCacheClientLock_FullMethodName,
+		pb.WorkerRepositoryService_SetCacheStoreFromContentLock_FullMethodName,
+		pb.WorkerRepositoryService_RemoveCacheStoreFromContentLock_FullMethodName,
+		pb.WorkerRepositoryService_RefreshCacheStoreFromContentLock_FullMethodName,
+		pb.WorkerRepositoryService_SetCacheFsNode_FullMethodName,
+		pb.WorkerRepositoryService_GetCacheFsNode_FullMethodName,
+		pb.WorkerRepositoryService_AddCacheFsNodeChild_FullMethodName,
+		pb.WorkerRepositoryService_RemoveCacheFsNode_FullMethodName,
+		pb.WorkerRepositoryService_RemoveCacheFsNodeChild_FullMethodName,
 		pb.WorkerRepositoryService_GetCacheFsNodeChildren_FullMethodName,
 	} {
 		if interceptor.isAuthRequired(method) {

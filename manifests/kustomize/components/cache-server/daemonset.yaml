@@ -28,7 +28,7 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: CONFIG_PATH
-          value: /etc/beta9/config.yaml
+          value: /etc/beta9/.config.yaml
         - name: CACHE_SERVER_ONLY
           value: "true"
         - name: WORKER_POOL_NAME
@@ -57,9 +57,9 @@ spec:
               name: beta9-cache-server-token
               key: token
         volumeMounts:
-        - mountPath: /etc/beta9/config.yaml
+        - mountPath: /etc/beta9/.config.yaml
           name: config
-          subPath: config.yaml
+          subPath: .config.yaml
           readOnly: true
         - mountPath: /var/lib/beta9/cache
           name: cache
