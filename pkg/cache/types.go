@@ -48,9 +48,10 @@ type MetricsConfig struct {
 }
 
 type CoordinatorConfig struct {
-	RegistrationTTLSeconds   int `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
-	HeartbeatIntervalSeconds int `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
-	HostWatchIntervalSeconds int `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
+	Token                    string `key:"token" json:"token"`
+	RegistrationTTLSeconds   int    `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
+	HeartbeatIntervalSeconds int    `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
+	HostWatchIntervalSeconds int    `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
 }
 
 type GlobalConfig struct {

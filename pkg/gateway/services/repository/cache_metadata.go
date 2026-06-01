@@ -8,6 +8,9 @@ import (
 )
 
 func (s *WorkerRepositoryService) SetCacheClientLock(ctx context.Context, req *pb.SetCacheClientLockRequest) (*pb.SetCacheClientLockResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.SetCacheClientLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.SetCacheClientLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -18,6 +21,9 @@ func (s *WorkerRepositoryService) SetCacheClientLock(ctx context.Context, req *p
 }
 
 func (s *WorkerRepositoryService) RemoveCacheClientLock(ctx context.Context, req *pb.RemoveCacheClientLockRequest) (*pb.RemoveCacheClientLockResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RemoveCacheClientLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.RemoveCacheClientLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -28,6 +34,9 @@ func (s *WorkerRepositoryService) RemoveCacheClientLock(ctx context.Context, req
 }
 
 func (s *WorkerRepositoryService) SetCacheStoreFromContentLock(ctx context.Context, req *pb.SetCacheStoreFromContentLockRequest) (*pb.SetCacheStoreFromContentLockResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.SetCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.SetCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -38,6 +47,9 @@ func (s *WorkerRepositoryService) SetCacheStoreFromContentLock(ctx context.Conte
 }
 
 func (s *WorkerRepositoryService) RemoveCacheStoreFromContentLock(ctx context.Context, req *pb.RemoveCacheStoreFromContentLockRequest) (*pb.RemoveCacheStoreFromContentLockResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RemoveCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.RemoveCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -48,6 +60,9 @@ func (s *WorkerRepositoryService) RemoveCacheStoreFromContentLock(ctx context.Co
 }
 
 func (s *WorkerRepositoryService) RefreshCacheStoreFromContentLock(ctx context.Context, req *pb.RefreshCacheStoreFromContentLockRequest) (*pb.RefreshCacheStoreFromContentLockResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RefreshCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.RefreshCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -58,6 +73,9 @@ func (s *WorkerRepositoryService) RefreshCacheStoreFromContentLock(ctx context.C
 }
 
 func (s *WorkerRepositoryService) SetCacheFsNode(ctx context.Context, req *pb.SetCacheFsNodeRequest) (*pb.SetCacheFsNodeResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.SetCacheFsNodeResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.SetCacheFsNodeResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -71,6 +89,9 @@ func (s *WorkerRepositoryService) SetCacheFsNode(ctx context.Context, req *pb.Se
 }
 
 func (s *WorkerRepositoryService) GetCacheFsNode(ctx context.Context, req *pb.GetCacheFsNodeRequest) (*pb.GetCacheFsNodeResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.GetCacheFsNodeResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.GetCacheFsNodeResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -82,6 +103,9 @@ func (s *WorkerRepositoryService) GetCacheFsNode(ctx context.Context, req *pb.Ge
 }
 
 func (s *WorkerRepositoryService) AddCacheFsNodeChild(ctx context.Context, req *pb.AddCacheFsNodeChildRequest) (*pb.AddCacheFsNodeChildResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.AddCacheFsNodeChildResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.AddCacheFsNodeChildResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -92,6 +116,9 @@ func (s *WorkerRepositoryService) AddCacheFsNodeChild(ctx context.Context, req *
 }
 
 func (s *WorkerRepositoryService) RemoveCacheFsNode(ctx context.Context, req *pb.RemoveCacheFsNodeRequest) (*pb.RemoveCacheFsNodeResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RemoveCacheFsNodeResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.RemoveCacheFsNodeResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -102,6 +129,9 @@ func (s *WorkerRepositoryService) RemoveCacheFsNode(ctx context.Context, req *pb
 }
 
 func (s *WorkerRepositoryService) RemoveCacheFsNodeChild(ctx context.Context, req *pb.RemoveCacheFsNodeChildRequest) (*pb.RemoveCacheFsNodeChildResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RemoveCacheFsNodeChildResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.RemoveCacheFsNodeChildResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -112,6 +142,9 @@ func (s *WorkerRepositoryService) RemoveCacheFsNodeChild(ctx context.Context, re
 }
 
 func (s *WorkerRepositoryService) GetCacheFsNodeChildren(ctx context.Context, req *pb.GetCacheFsNodeChildrenRequest) (*pb.GetCacheFsNodeChildrenResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.GetCacheFsNodeChildrenResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheMetadata == nil {
 		return &pb.GetCacheFsNodeChildrenResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}

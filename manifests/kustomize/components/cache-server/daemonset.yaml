@@ -18,15 +18,17 @@ spec:
         app.kubernetes.io/component: cache-server
     spec:
       automountServiceAccountToken: true
-      serviceAccountName: gateway
+      serviceAccountName: beta9-control-plane
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       terminationGracePeriodSeconds: 60
       containers:
       - name: worker
-        image: registry.localhost:5000/beta9-worker:latest
+        image: public.ecr.aws/n4e0e1y0/beta9-worker:latest
         imagePullPolicy: IfNotPresent
         env:
         - name: CONFIG_PATH
-          value: /etc/beta9/.config.yaml
+          value: /etc/beta9/config.yaml
         - name: CACHE_SERVER_ONLY
           value: "true"
         - name: WORKER_POOL_NAME
@@ -46,15 +48,19 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         - name: WORKER_ID
-          value: cache-server-$(CACHE_NODE_ID)-$(POD_UID)
+          value: cache-server-$(CACHE_NODE_ID)
+        - name: CACHE_HOST_NETWORK
+          value: "true"
         - name: WORKER_TOKEN
           valueFrom:
             secretKeyRef:
               name: beta9-cache-server-token
               key: token
         volumeMounts:
-        - mountPath: /etc/beta9
+        - mountPath: /etc/beta9/config.yaml
           name: config
+          subPath: config.yaml
+          readOnly: true
         - mountPath: /var/lib/beta9/cache
           name: cache
         resources:

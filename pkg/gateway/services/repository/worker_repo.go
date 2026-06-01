@@ -13,11 +13,12 @@ import (
 )
 
 type WorkerRepositoryService struct {
-	ctx              context.Context
-	cacheCoordinator *cache.Coordinator
-	cacheMetadata    cache.CacheMetadataStore
-	workerEvents     *workerEventBroker
-	workerRepo       repository.WorkerRepository
+	ctx                   context.Context
+	cacheCoordinator      *cache.Coordinator
+	cacheCoordinatorToken string
+	cacheMetadata         cache.CacheMetadataStore
+	workerEvents          *workerEventBroker
+	workerRepo            repository.WorkerRepository
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 
@@ -25,8 +26,17 @@ const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient) *WorkerRepositoryService {
-	service := &WorkerRepositoryService{ctx: ctx, workerRepo: workerRepo}
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient, cacheCoordinatorToken ...string) *WorkerRepositoryService {
+	configuredToken := ""
+	if len(cacheCoordinatorToken) > 0 {
+		configuredToken = cacheCoordinatorToken[0]
+	}
+
+	service := &WorkerRepositoryService{
+		ctx:                   ctx,
+		workerRepo:            workerRepo,
+		cacheCoordinatorToken: configuredCacheCoordinatorToken(configuredToken),
+	}
 	if rdb != nil {
 		service.cacheCoordinator = cache.NewCoordinator(repository.NewCacheRedisRepository(rdb))
 		service.cacheMetadata = cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb.UniversalClient)

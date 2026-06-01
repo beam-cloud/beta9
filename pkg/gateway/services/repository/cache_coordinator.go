@@ -9,6 +9,9 @@ import (
 )
 
 func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb.RegisterCacheHostRequest) (*pb.RegisterCacheHostResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheCoordinator == nil {
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -24,6 +27,9 @@ func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb
 }
 
 func (s *WorkerRepositoryService) UnregisterCacheHost(ctx context.Context, req *pb.UnregisterCacheHostRequest) (*pb.UnregisterCacheHostResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.UnregisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheCoordinator == nil {
 		return &pb.UnregisterCacheHostResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -38,6 +44,9 @@ func (s *WorkerRepositoryService) UnregisterCacheHost(ctx context.Context, req *
 }
 
 func (s *WorkerRepositoryService) ListCacheHosts(ctx context.Context, req *pb.ListCacheHostsRequest) (*pb.ListCacheHostsResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheCoordinator == nil {
 		return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}

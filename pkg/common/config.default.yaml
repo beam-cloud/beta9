@@ -292,6 +292,7 @@ cache:
     enabled: false
     maxCachePct: 0
   coordinator:
+    token:
     registrationTTLSeconds: 30
     heartbeatIntervalSeconds: 10
     hostWatchIntervalSeconds: 5
