@@ -26,6 +26,13 @@ spec:
       - name: worker
         image: registry.localhost:5000/beta9-worker:latest
         imagePullPolicy: IfNotPresent
+        command:
+        - /usr/bin/tini
+        - -g
+        - --
+        - /usr/local/bin/worker
+        securityContext:
+          privileged: true
         env:
         - name: CONFIG_PATH
           value: /etc/beta9/.config.yaml

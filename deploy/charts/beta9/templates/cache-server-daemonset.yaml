@@ -44,6 +44,15 @@ spec:
       - name: worker
         image: {{ .Values.images.worker.repository }}:{{ .Values.images.worker.tag | default .Chart.AppVersion }}
         imagePullPolicy: {{ .Values.images.worker.pullPolicy | default "IfNotPresent" }}
+        command:
+        - /usr/bin/tini
+        - -g
+        - --
+        - /usr/local/bin/worker
+        {{- with .Values.cacheServer.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         env:
         - name: CONFIG_PATH
           value: /etc/beta9/config.yaml
