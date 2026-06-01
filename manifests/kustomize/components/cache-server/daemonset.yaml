@@ -51,11 +51,6 @@ spec:
           value: cache-server-$(CACHE_NODE_ID)
         - name: CACHE_HOST_NETWORK
           value: "true"
-        - name: WORKER_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: beta9-cache-server-token
-              key: token
         volumeMounts:
         - mountPath: /etc/beta9/.config.yaml
           name: config

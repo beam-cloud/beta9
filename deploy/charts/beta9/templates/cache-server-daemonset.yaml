@@ -69,11 +69,6 @@ spec:
           value: {{ .Values.cacheServer.hostNetwork | quote }}
         - name: WORKER_ID
           value: cache-server-$(CACHE_NODE_ID)
-        - name: WORKER_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.cacheServer.tokenSecretName }}
-              key: token
         volumeMounts:
         - name: config
           mountPath: /etc/beta9/config.yaml

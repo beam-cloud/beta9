@@ -27,8 +27,7 @@ images:
 
 cacheServer:
   enabled: false
-  tokenSecretName: beta9-cache-server-token
-  configSecretName: beta9-config
+  configSecretName: beta9-config-helm
   poolName: default
   locality: default
   hostPath: /var/lib/beta9/cache
