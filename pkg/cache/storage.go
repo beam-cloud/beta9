@@ -24,6 +24,7 @@ import (
 const (
 	diskCacheUsageCheckInterval = 1 * time.Minute
 	pageLockStripeCount         = 4096
+	cacheCompleteMarkerName     = "_complete"
 )
 
 type Store struct {
@@ -164,6 +165,10 @@ func (cas *Store) pagePath(hash string, pageIdx int64) string {
 	return filepath.Join(cas.pageDir(hash), cas.pageKey(hash, pageIdx))
 }
 
+func (cas *Store) completeMarkerPath(hash string) string {
+	return filepath.Join(cas.pageDir(hash), cacheCompleteMarkerName)
+}
+
 func (cas *Store) legacyPagePath(hash string, pageIdx int64) string {
 	return filepath.Join(cas.legacyPageDir(hash), cas.pageKey(hash, pageIdx))
 }
@@ -249,6 +254,11 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 		added := cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
 		if !added {
 			return errors.New("unable to cache: set dropped")
+		}
+	}
+	if !cas.diskCachedUsageExceeded {
+		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil {
+			return err
 		}
 	}
 
@@ -359,6 +369,9 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			return "", size, errors.New("unable to cache: set dropped")
 		}
 	}
+	if err := cas.writeCompleteMarker(hash, size, chunkCount); err != nil {
+		return "", size, err
+	}
 
 	Logger.Debugf("Added object: %s, size: %d bytes", hash, size)
 	return hash, size, nil
@@ -439,7 +452,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 		return actualHash, size, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
 
-	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, chunkCount); err != nil {
+	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, chunkCount, size); err != nil {
 		cleanupInstalled()
 		return "", size, err
 	}
@@ -491,6 +504,9 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		}
 		if err := os.MkdirAll(cas.pageDir(expectedHash), 0755); err != nil {
 			return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
+		}
+		if err := cas.writeCompleteMarker(expectedHash, 0, 0); err != nil {
+			return "", 0, err
 		}
 		return actualHash, 0, nil
 	}
@@ -620,7 +636,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		return actualHash, size, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
 
-	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, pageCount); err != nil {
+	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, pageCount, size); err != nil {
 		cleanupInstalled()
 		return "", size, err
 	}
@@ -642,48 +658,33 @@ func (cas *Store) newExpectedHashTempDir(hash string) (string, error) {
 	return tmpDir, nil
 }
 
-func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64) error {
+func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {
 	finalDir := cas.pageDir(hash)
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	published := make([]string, 0)
 	for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
 		pageKey := cas.pageKey(hash, pageIdx)
 		tmpPath := filepath.Join(tmpDir, pageKey)
-		tmpInfo, err := os.Stat(tmpPath)
-		if err != nil {
+		if _, err := os.Stat(tmpPath); err != nil {
 			return fmt.Errorf("missing verified cache chunk %s: %w", tmpPath, err)
 		}
 
 		pagePath := cas.pagePath(hash, pageIdx)
 		pageLock := cas.pageLock(hash, pageIdx)
 		pageLock.Lock()
-		if _, info, err := cas.existingPagePath(hash, pageIdx); err == nil && info.Size() == tmpInfo.Size() {
-			pageLock.Unlock()
-			_ = os.Remove(tmpPath)
-			continue
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrContentNotFound) {
-			pageLock.Unlock()
-			return err
-		}
-
 		if err := os.Remove(pagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			pageLock.Unlock()
 			return err
 		}
 		if err := os.Rename(tmpPath, pagePath); err != nil {
 			pageLock.Unlock()
-			for _, path := range published {
-				_ = os.Remove(path)
-			}
 			return err
 		}
-		published = append(published, pagePath)
 		pageLock.Unlock()
 	}
-	return nil
+	return cas.writeCompleteMarker(hash, size, pageCount)
 }
 
 func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
@@ -866,24 +867,87 @@ func linkCacheChunkAtomic(tmpPath, filePath string) error {
 	return nil
 }
 
-func (cas *Store) Exists(hash string) bool {
+func (cas *Store) writeCompleteMarker(hash string, size int64, pageCount int64) error {
+	if size < 0 || pageCount < 0 {
+		return fmt.Errorf("invalid complete marker metadata: size=%d pages=%d", size, pageCount)
+	}
+	if err := os.MkdirAll(cas.pageDir(hash), 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+	marker := fmt.Sprintf("v1 size=%d page_size=%d pages=%d\n", size, cas.serverConfig.PageSizeBytes, pageCount)
+	if err := writeCacheMetadataAtomic(cas.completeMarkerPath(hash), []byte(marker)); err != nil {
+		return fmt.Errorf("failed to write cache complete marker: %w", err)
+	}
+	return nil
+}
+
+func writeCacheMetadataAtomic(filePath string, data []byte) error {
+	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, filePath)
+}
+
+func (cas *Store) completeMarker(hash string) (size int64, pageSize int64, pageCount int64, ok bool) {
+	data, err := os.ReadFile(cas.completeMarkerPath(hash))
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	var version string
+	if _, err := fmt.Sscanf(string(data), "%s size=%d page_size=%d pages=%d", &version, &size, &pageSize, &pageCount); err != nil {
+		return 0, 0, 0, false
+	}
+	if version != "v1" || size < 0 || pageSize <= 0 || pageCount < 0 {
+		return 0, 0, 0, false
+	}
+	return size, pageSize, pageCount, true
+}
+
+func (cas *Store) Exists(hash string, expectedSize ...int64) bool {
 	var exists bool = false
+	hasExpectedSize := len(expectedSize) > 0 && expectedSize[0] > 0
 
 	if cas.memoryCacheEnabled {
 		_, exists = cas.cache.GetTTL(hash)
-		if exists {
+		if exists && !hasExpectedSize {
 			return true
 		}
 	}
 
-	for _, dir := range []string{cas.pageDir(hash), cas.legacyPageDir(hash)} {
-		info, err := os.Stat(dir)
-		if err == nil && info.IsDir() {
-			return true
-		}
+	if cas.serverConfig.PageSizeBytes <= 0 {
+		return false
 	}
 
-	return false
+	pageSize := cas.serverConfig.PageSizeBytes
+	markerSize, markerPageSize, markerPageCount, ok := cas.completeMarker(hash)
+	if !ok || markerPageSize != pageSize {
+		return false
+	}
+	if !hasExpectedSize {
+		return true
+	}
+
+	size := expectedSize[0]
+	pageCount := (size + pageSize - 1) / pageSize
+	return markerSize == size && markerPageCount == pageCount
 }
 
 func (cas *Store) Get(hash string, offset, length int64, dst []byte) (int64, error) {

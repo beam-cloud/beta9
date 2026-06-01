@@ -679,7 +679,7 @@ func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info
 	if routingKey == "" {
 		routingKey = cachePath
 	}
-	exists, err := c.IsCachedOnSelectedHost(metadata.Hash, routingKey)
+	exists, err := c.IsCachedOnSelectedHost(metadata.Hash, routingKey, info.Size())
 	if err != nil || !exists {
 		return "", false
 	}
@@ -775,7 +775,11 @@ func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error)
 // This is intentionally stricter than IsCachedReachable: cache-through writers use
 // it to avoid treating a fallback replica as proof that the primary placement is
 // already populated.
-func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, error) {
+func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string, expectedSize ...int64) (bool, error) {
+	size := int64(0)
+	if len(expectedSize) > 0 {
+		size = expectedSize[0]
+	}
 	if routingKey == "" {
 		routingKey = hash
 	}
@@ -793,7 +797,7 @@ func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, e
 		return false, err
 	}
 
-	resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+	resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash, ExpectedSize: size})
 	if err != nil {
 		c.removeHost(host)
 		return false, err
@@ -1666,7 +1670,7 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 
 	hash, err := c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), storeContentLockWaitTimeout) {
 			return opts.RoutingKey, nil
 		}
 		hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
@@ -1678,7 +1682,7 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 	return hash, nil
 }
 
-func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, timeout time.Duration) bool {
+func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, expectedSize int64, timeout time.Duration) bool {
 	if hash == "" || timeout <= 0 {
 		return false
 	}
@@ -1688,7 +1692,7 @@ func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingK
 	defer ticker.Stop()
 
 	for {
-		exists, err := c.IsCachedOnSelectedHost(hash, routingKey)
+		exists, err := c.IsCachedOnSelectedHost(hash, routingKey, expectedSize)
 		if err == nil && exists {
 			return true
 		}
@@ -1979,7 +1983,7 @@ func (c *Client) StoreContentFromLocalSource(source LocalContentSource, opts Sto
 	}
 	hash, err := c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
 			return opts.RoutingKey, nil
 		}
 		hash, err = c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
@@ -2035,7 +2039,7 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 	}
 	hash, err := c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
 			return opts.RoutingKey, nil
 		}
 		hash, err = c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)

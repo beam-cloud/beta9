@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	writeBufferSizeBytes      int   = 1024 * 1024
-	getContentStreamChunkSize int64 = 4 * 1024 * 1024 // 4MB
+	writeBufferSizeBytes           int   = 1024 * 1024
+	getContentStreamChunkSize      int64 = 4 * 1024 * 1024 // 4MB
+	cacheServerGracefulStopTimeout       = 30 * time.Second
 )
 
 type ServerOpts struct {
@@ -350,7 +351,7 @@ func (cs *Server) Close() error {
 			}()
 			select {
 			case <-stopped:
-			case <-time.After(5 * time.Second):
+			case <-time.After(cacheServerGracefulStopTimeout):
 				cs.grpcServer.Stop()
 			}
 		}
@@ -423,6 +424,9 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 		return nil, err
 	}
 	exists := cs.cas.Exists(req.Hash)
+	if req.ExpectedSize > 0 {
+		exists = cs.cas.Exists(req.Hash, req.ExpectedSize)
+	}
 	return &proto.CacheHasContentResponse{Exists: exists, Ok: true}, nil
 }
 

@@ -29,6 +29,7 @@ message CacheGetContentResponse {
 
 message CacheHasContentRequest {
   string hash = 1; // Hash of the content to check
+  int64 expected_size = 2; // Optional content size; when set, cache marker must match it
 }
 
 message CacheHasContentResponse {
