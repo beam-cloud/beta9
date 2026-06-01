@@ -184,7 +184,7 @@ func BenchmarkClientLocalReadInto(b *testing.B) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -261,7 +261,7 @@ func BenchmarkClientRawReadInto(b *testing.B) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{host}},
 		maxGetContentAttempts: 1,
 	}

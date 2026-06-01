@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -65,8 +67,18 @@ type gatewayCacheRegistration struct {
 }
 
 func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) *gatewayCacheRegistration {
-	cachePathID := cachePathID(cacheConfig.Server.DiskCacheDir)
-	logicalHostID := cacheLogicalHostID(manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
+	cacheIdentityPath := ""
+	if manager != nil {
+		cacheIdentityPath = manager.cacheIdentityPath
+	}
+	if cacheIdentityPath == "" && manager != nil {
+		cacheIdentityPath = cachePlacementIdentityPath(manager.config, cacheConfig)
+	}
+	if cacheIdentityPath == "" {
+		cacheIdentityPath = cacheCanonicalPhysicalIdentityPath(cacheConfig)
+	}
+	cachePathID := cachePathID(cacheIdentityPath)
+	logicalHostID := cacheLogicalHostID(manager.locality, manager.nodeID, cacheIdentityPath)
 
 	return &gatewayCacheRegistration{
 		manager:        manager,
@@ -183,15 +195,15 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 }
 
 // cacheLogicalHostID is the stable routing identity for one cache placement
-// target. It is intentionally based on locality, node, and cache path, not the
+// target. It is intentionally based on locality, node, and cache identity path, not the
 // worker pool or process ID; restarted or colocated cache servers register
 // under this same logical host when they serve the same disk cache target.
-func cacheLogicalHostID(locality, nodeID, diskCacheDir string) string {
+func cacheLogicalHostID(locality, nodeID, cacheIdentityPath string) string {
 	return fmt.Sprintf(
 		"cache-host-%s-%s-%s",
 		safeCacheName(locality),
 		safeCacheName(nodeID),
-		cachePathID(diskCacheDir),
+		cachePathID(cacheIdentityPath),
 	)
 }
 
@@ -208,6 +220,28 @@ func cacheRegistrationID(workerID, instanceID string) string {
 func cachePathID(path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return fmt.Sprintf("%x", sum[:6])
+}
+
+func cacheCanonicalPhysicalIdentityPath(config cache.Config) string {
+	if config.Server.DiskCacheDir == "" {
+		return ""
+	}
+	diskCacheDir := filepath.Clean(config.Server.DiskCacheDir)
+	if config.Disk.MountPath == "" || config.Disk.HostPath == "" {
+		return diskCacheDir
+	}
+	mountPath := filepath.Clean(config.Disk.MountPath)
+	hostPath := filepath.Clean(config.Disk.HostPath)
+
+	rel, err := filepath.Rel(mountPath, diskCacheDir)
+	if err != nil || relEscapesBase(rel) {
+		return diskCacheDir
+	}
+	return filepath.Clean(filepath.Join(hostPath, rel))
+}
+
+func relEscapesBase(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
 }
 
 func cacheRegistrationTTL(config cache.Config) time.Duration {

@@ -96,7 +96,7 @@ type Client struct {
 	mu                    sync.RWMutex
 	discoveryClient       *DiscoveryClient
 	metadataStore         CacheMetadataStore
-	localHostCache        map[string]*localClientCache
+	localHostCache        map[localHostCacheKey]*localClientCache
 	cachefsServer         *fuse.Server
 	hasher                RendezvousHasher
 	hostDirectory         HostDirectory
@@ -104,9 +104,21 @@ type Client struct {
 	maxGetContentAttempts int64
 }
 
+type localHostCacheKey struct {
+	hash       string
+	routingKey string
+}
+
 type localClientCache struct {
 	host      *Host
 	timestamp time.Time
+}
+
+func newLocalHostCacheKey(hash, routingKey string) localHostCacheKey {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	return localHostCacheKey{hash: hash, routingKey: routingKey}
 }
 
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
@@ -149,7 +161,7 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		mu:                    sync.RWMutex{},
 		metadataStore:         metadataStore,
 		hasher:                rendezvous.New[*Host](),
@@ -239,9 +251,9 @@ func (c *Client) DetachLocalServer(hostID string) {
 		detachedHost = server.Host()
 	}
 	delete(c.localServers, hostID)
-	for hash, entry := range c.localHostCache {
+	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == hostID {
-			delete(c.localHostCache, hash)
+			delete(c.localHostCache, key)
 		}
 	}
 	c.mu.Unlock()
@@ -292,9 +304,9 @@ func (c *Client) addHost(host *Host) error {
 		}
 		c.hasher.Remove(host)
 		c.hasher.Add(host.LogicalOnly())
-		for hash, entry := range c.localHostCache {
+		for key, entry := range c.localHostCache {
 			if entry.host != nil && entry.host.HostId == host.HostId {
-				delete(c.localHostCache, hash)
+				delete(c.localHostCache, key)
 			}
 		}
 		return nil
@@ -371,9 +383,9 @@ func (c *Client) addHost(host *Host) error {
 	c.grpcClients[host.HostId] = proto.NewCacheClient(conn)
 	c.grpcConns[host.HostId] = conn
 	c.hasher.Add(host)
-	for hash, entry := range c.localHostCache {
+	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == host.HostId {
-			delete(c.localHostCache, hash)
+			delete(c.localHostCache, key)
 		}
 	}
 
@@ -487,9 +499,9 @@ func (c *Client) removeHost(host *Host) {
 		pool.close()
 		delete(c.rawReadPools, host.HostId)
 	}
-	for hash, entry := range c.localHostCache {
+	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == host.HostId {
-			delete(c.localHostCache, hash)
+			delete(c.localHostCache, key)
 		}
 	}
 }
@@ -504,10 +516,18 @@ func (c *Client) isCurrentHostEndpoint(host *Host) bool {
 	return sameCacheHostEndpoint(c.hostMap.Get(host.HostId), host)
 }
 
-func (c *Client) removeLocalHostCache(hash string) {
+func (c *Client) removeLocalHostCache(hash string, routingKey ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.localHostCache, hash)
+	if len(routingKey) > 0 {
+		delete(c.localHostCache, newLocalHostCacheKey(hash, routingKey[0]))
+		return
+	}
+	for key := range c.localHostCache {
+		if key.hash == hash {
+			delete(c.localHostCache, key)
+		}
+	}
 }
 
 func (c *Client) refreshRoutableHosts(ctx context.Context) error {
@@ -590,9 +610,9 @@ func (c *Client) removeUndiscoveredLogicalHosts(seenHosts map[string]struct{}) {
 			pool.close()
 			delete(c.rawReadPools, removed.HostId)
 		}
-		for hash, entry := range c.localHostCache {
+		for key, entry := range c.localHostCache {
 			if entry.host != nil && entry.host.HostId == removed.HostId {
-				delete(c.localHostCache, hash)
+				delete(c.localHostCache, key)
 			}
 		}
 		c.mu.Unlock()
@@ -1481,19 +1501,19 @@ func (c *Client) manageLocalClientCache(ttl time.Duration, interval time.Duratio
 			select {
 			case <-ticker.C:
 				now := time.Now()
-				stale := make([]string, 0)
+				stale := make([]localHostCacheKey, 0)
 
 				c.mu.RLock()
-				for hash, entry := range c.localHostCache {
+				for key, entry := range c.localHostCache {
 					if now.Sub(entry.timestamp) > ttl {
-						stale = append(stale, hash)
+						stale = append(stale, key)
 					}
 				}
 				c.mu.RUnlock()
 
 				c.mu.Lock()
-				for _, hash := range stale {
-					delete(c.localHostCache, hash)
+				for _, key := range stale {
+					delete(c.localHostCache, key)
 				}
 				c.mu.Unlock()
 
@@ -1511,7 +1531,7 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	}
 	if !host.HasEndpoint() {
 		c.mu.Lock()
-		delete(c.localHostCache, request.hash)
+		delete(c.localHostCache, newLocalHostCacheKey(request.hash, request.key))
 		c.mu.Unlock()
 		return nil, host, ErrSelectedHostUnavailable
 	}
@@ -1521,7 +1541,7 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	c.mu.RUnlock()
 	if !exists {
 		c.mu.Lock()
-		delete(c.localHostCache, request.hash)
+		delete(c.localHostCache, newLocalHostCacheKey(request.hash, request.key))
 		c.mu.Unlock()
 
 		return nil, host, ErrSelectedHostUnavailable
@@ -1579,7 +1599,8 @@ func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 
 	case ClientRequestTypeRetrieval:
 		c.mu.RLock()
-		cachedHost, hostFound := c.localHostCache[request.hash]
+		cacheKey := newLocalHostCacheKey(request.hash, request.key)
+		cachedHost, hostFound := c.localHostCache[cacheKey]
 		c.mu.RUnlock()
 
 		if hostFound && request.hostIndex == 0 {
@@ -1594,7 +1615,7 @@ func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 			} else {
 				host = hosts[request.hostIndex]
 				if request.hostIndex == 0 {
-					c.localHostCache[request.hash] = &localClientCache{
+					c.localHostCache[cacheKey] = &localClientCache{
 						host:      host,
 						timestamp: time.Now(),
 					}
