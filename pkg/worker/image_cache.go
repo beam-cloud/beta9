@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,7 @@ type imageContentCache struct {
 	client  *cache.Client
 	imageID string
 	kind    string
+	observe imageContentCacheObserver
 
 	readRequests     atomic.Int64
 	readBytes        atomic.Int64
@@ -46,15 +48,39 @@ type imageContentCache struct {
 	lastSummaryNS    atomic.Int64
 }
 
-func newImageContentCache(client *cache.Client, imageID string, kind ...string) *imageContentCache {
+type imageContentCacheObserver func(imageContentCacheTrace)
+
+type imageContentCacheTrace struct {
+	Operation  string
+	Result     string
+	ImageID    string
+	Kind       string
+	Hash       string
+	RoutingKey string
+	Offset     int64
+	Length     int64
+	Read       int64
+	Views      int
+	Bytes      int64
+	StartedAt  time.Time
+	Duration   time.Duration
+	Error      string
+	Trace      cache.OperationTrace
+}
+
+func newImageContentCache(client *cache.Client, imageID string, kind string, observers ...imageContentCacheObserver) *imageContentCache {
 	if client == nil {
 		return nil
 	}
 	cacheKind := "content"
-	if len(kind) > 0 && kind[0] != "" {
-		cacheKind = kind[0]
+	if kind != "" {
+		cacheKind = kind
 	}
-	return &imageContentCache{client: client, imageID: imageID, kind: cacheKind}
+	var observer imageContentCacheObserver
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
+	return &imageContentCache{client: client, imageID: imageID, kind: cacheKind, observe: observer}
 }
 
 func (c *imageContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
@@ -84,6 +110,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 
 	started := time.Now()
 	length := int64(len(dest))
+	var cacheTrace cache.OperationTrace
 	c.readRequests.Add(1)
 	c.readBytes.Add(length)
 	defer func() {
@@ -126,12 +153,28 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 				Msg("clip image content cache slow read")
 		}
 		c.maybeLogSummary()
+		c.observeContentCacheTrace(imageContentCacheTrace{
+			Operation:  "read_into",
+			Result:     result,
+			ImageID:    c.imageID,
+			Kind:       c.kind,
+			Hash:       hash,
+			RoutingKey: opts.RoutingKey,
+			Offset:     offset,
+			Length:     length,
+			Read:       read,
+			Bytes:      read,
+			StartedAt:  started,
+			Duration:   elapsed,
+			Error:      imageContentCacheErrorString(err),
+			Trace:      cacheTrace,
+		})
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), imageContentCacheReadTimeout)
 	defer cancel()
 
-	read, err = c.client.ReadContentInto(ctx, hash, offset, dest, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	read, cacheTrace, err = c.client.ReadContentIntoWithTrace(ctx, hash, offset, dest, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 	if err != nil {
 		return read, imageContentCacheError(err)
 	}
@@ -206,6 +249,7 @@ func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 	}
 
 	started := time.Now()
+	var cacheTrace cache.OperationTrace
 	c.pageViewRequests.Add(1)
 	defer func() {
 		elapsed := time.Since(started)
@@ -246,9 +290,25 @@ func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 				Msg("clip image content cache client-local page-file views result")
 		}
 		c.maybeLogSummary()
+		c.observeContentCacheTrace(imageContentCacheTrace{
+			Operation:  "page_file_views",
+			Result:     result,
+			ImageID:    c.imageID,
+			Kind:       c.kind,
+			Hash:       hash,
+			RoutingKey: opts.RoutingKey,
+			Offset:     offset,
+			Length:     length,
+			Views:      len(views),
+			Bytes:      length,
+			StartedAt:  started,
+			Duration:   elapsed,
+			Error:      imageContentCacheErrorString(err),
+			Trace:      cacheTrace,
+		})
 	}()
 
-	localViews, err := c.client.ClientLocalPageFileViews(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	localViews, cacheTrace, err := c.client.ClientLocalPageFileViewsWithTrace(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 	if err != nil {
 		if errors.Is(err, cache.ErrContentNotFound) {
 			return nil, nil
@@ -298,7 +358,9 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	actualHash, err := c.client.StoreContent(countingChunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
 	close(done)
 	elapsed := time.Since(started)
+	result := "stored_or_present"
 	if err != nil {
+		result = "error"
 		c.storeErrors.Add(1)
 		log.Warn().
 			Err(err).
@@ -326,6 +388,18 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 			Msg("clip image content cache store result")
 	}
 	c.maybeLogSummary()
+	c.observeContentCacheTrace(imageContentCacheTrace{
+		Operation:  "store_stream",
+		Result:     result,
+		ImageID:    c.imageID,
+		Kind:       c.kind,
+		Hash:       hash,
+		RoutingKey: opts.RoutingKey,
+		Bytes:      storeBytes.Load(),
+		StartedAt:  started,
+		Duration:   elapsed,
+		Error:      imageContentCacheErrorString(err),
+	})
 
 	return actualHash, err
 }
@@ -370,6 +444,22 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 				Msg("clip image content cache local-path store result")
 		}
 		c.maybeLogSummary()
+		result := "stored_or_present"
+		if err != nil {
+			result = "error"
+		}
+		c.observeContentCacheTrace(imageContentCacheTrace{
+			Operation:  "store_local_path",
+			Result:     result,
+			ImageID:    c.imageID,
+			Kind:       c.kind,
+			Hash:       hash,
+			RoutingKey: opts.RoutingKey,
+			Bytes:      fileSize(path),
+			StartedAt:  started,
+			Duration:   elapsed,
+			Error:      imageContentCacheErrorString(err),
+		})
 	}()
 
 	return c.client.StoreContentFromLocalFile(cache.LocalContentSource{
@@ -384,6 +474,13 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 func drainImageContentChunks(chunks <-chan []byte) {
 	for range chunks {
 	}
+}
+
+func (c *imageContentCache) observeContentCacheTrace(event imageContentCacheTrace) {
+	if c == nil || c.observe == nil {
+		return
+	}
+	c.observe(event)
 }
 
 func (c *imageContentCache) maybeLogSummary() {
@@ -419,6 +516,21 @@ func (c *imageContentCache) maybeLogSummary() {
 		Int64("store_successes", c.storeSuccesses.Load()).
 		Int64("store_errors", c.storeErrors.Load()).
 		Msg("clip image content cache summary")
+}
+
+func imageContentCacheErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func fileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 func imageContentCacheReadResult(err error, read int64, length int64) string {

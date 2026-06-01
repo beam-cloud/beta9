@@ -420,7 +420,7 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 	if archive.usesOCIStorage() {
 		cacheKind = "oci-layer-runtime"
 	}
-	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind)
+	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind, c.imageContentCacheObserver(request))
 	mountOptions := clip.MountOptions{
 		ArchivePath:           archive.path,
 		MountPoint:            c.imageMountPoint(request.ImageId),
