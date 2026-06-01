@@ -319,7 +319,7 @@ class BenchmarkConfig:
         add("--volume-subdir", default=os.getenv("BENCH_CACHE_VOLUME_SUBDIR", ""))
         add(
             "--worker-workspace-root",
-            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/workspace/data"),
+            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/storage"),
         )
         add(
             "--cache-mount-path",
@@ -1830,9 +1830,12 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
                 "targetHost": target_host,
                 "differentWorkerPod": bool(target_pod)
                 and source_pod["name"] != target_pod["name"],
-                "differentNode": bool(target_pod)
+                "differentNode": bool(source_pod.get("nodeName", ""))
                 and source_pod.get("nodeName", "")
-                != target_pod.get("nodeName", ""),
+                != (
+                    (target_pod or {}).get("nodeName", "")
+                    or target_host.get("nodeName", "")
+                ),
             }
         )
         if self.config.remote_network_probe and target_pod:
@@ -2127,7 +2130,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
 
     def cache_hosts_from_worker_logs(self) -> dict[str, Any]:
         hosts: list[dict[str, Any]] = []
-        workers = {pod["name"]: pod for pod in self.kube.cache_endpoint_pods()}
+        workers = {pod["name"]: pod for pod in self.kube.cache_probe_pods()}
         for pod_name, pod in workers.items():
             proc = run(
                 [

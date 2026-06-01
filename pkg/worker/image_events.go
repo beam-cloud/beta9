@@ -32,6 +32,7 @@ type clipReadAggregate struct {
 	byAccess    map[string]*clipReadRollup
 	byOperation map[string]*clipReadRollup
 	bySource    map[string]*clipReadRollup
+	byResult    map[string]*clipReadRollup
 	byLayer     map[string]*clipReadRollup
 	byContent   map[string]*clipReadRollup
 	firstError  string
@@ -45,6 +46,8 @@ type clipReadRollup struct {
 	LayerDigest      string `json:"layer_digest,omitempty"`
 	DecompressedHash string `json:"decompressed_hash,omitempty"`
 	ContentHash      string `json:"content_hash,omitempty"`
+	CacheResult      string `json:"cache_result,omitempty"`
+	CacheTier        string `json:"cache_tier,omitempty"`
 	Count            int64  `json:"count"`
 	ErrorCount       int64  `json:"error_count,omitempty"`
 	TotalUs          int64  `json:"total_us"`
@@ -112,6 +115,7 @@ func newClipReadAggregate(request *types.ContainerRequest) *clipReadAggregate {
 		byAccess:    map[string]*clipReadRollup{},
 		byOperation: map[string]*clipReadRollup{},
 		bySource:    map[string]*clipReadRollup{},
+		byResult:    map[string]*clipReadRollup{},
 		byLayer:     map[string]*clipReadRollup{},
 		byContent:   map[string]*clipReadRollup{},
 		sampleAttrs: map[string]string{},
@@ -136,13 +140,17 @@ func (a *clipReadAggregate) add(event clipCommon.ReadTraceEvent) {
 			continue
 		}
 		switch key {
-		case "cached_locally", "content_cache_available", "storage_mode":
+		case "cache_result", "cache_tier", "cached_locally", "content_cache_available", "content_cache_result", "content_cache_warm", "fallback", "storage_mode":
 			a.sampleAttrs[key] = value
 		}
 	}
 
 	contentHash := event.Attrs["content_hash"]
+	cacheResult := clipReadCacheResult(event)
 	a.addRollup(a.byOperation, event.Operation, event)
+	if cacheResult != "" {
+		a.addRollup(a.byResult, clipReadRollupKey(event.Operation, event.Source, cacheResult), event)
+	}
 
 	if isCanonicalClipRead(event.Operation) {
 		if a.startedAt.IsZero() || event.StartedAt.Before(a.startedAt) {
@@ -154,7 +162,7 @@ func (a *clipReadAggregate) add(event clipCommon.ReadTraceEvent) {
 		a.readCount++
 		a.bytesRead += event.BytesRead
 		a.total += event.Duration
-		a.addRollup(a.byAccess, clipReadRollupKey(event.Operation, event.Path, event.Source, event.LayerDigest, event.DecompressedHash, contentHash), event)
+		a.addRollup(a.byAccess, clipReadRollupKey(event.Operation, event.Path, event.Source, event.LayerDigest, event.DecompressedHash, contentHash, cacheResult), event)
 		a.addRollup(a.bySource, event.Source, event)
 		if event.LayerDigest != "" {
 			a.addRollup(a.byLayer, event.LayerDigest, event)
@@ -178,6 +186,8 @@ func (a *clipReadAggregate) addRollup(target map[string]*clipReadRollup, key str
 			LayerDigest:      event.LayerDigest,
 			DecompressedHash: event.DecompressedHash,
 			ContentHash:      event.Attrs["content_hash"],
+			CacheResult:      clipReadCacheResult(event),
+			CacheTier:        event.Attrs["cache_tier"],
 		}
 		target[key] = rollup
 	}
@@ -223,6 +233,7 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		"top_layers_json":     clipReadRollupsJSON(aggregate.byLayer, clipReadAggregateTopN),
 		"top_operations_json": clipReadRollupsJSON(aggregate.byOperation, clipReadAggregateTopN),
 		"top_paths_json":      clipReadRollupsJSON(aggregate.byAccess, clipReadAggregateTopN),
+		"top_results_json":    clipReadRollupsJSON(aggregate.byResult, clipReadAggregateTopN),
 		"top_sources_json":    clipReadRollupsJSON(aggregate.bySource, clipReadAggregateTopN),
 		"total_duration_us":   strconv.FormatInt(aggregate.total.Microseconds(), 10),
 		"wall_duration_us":    strconv.FormatInt(wallDuration.Microseconds(), 10),
@@ -249,6 +260,7 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		Str("top_sources_json", attrs["top_sources_json"]).
 		Str("top_paths_json", attrs["top_paths_json"]).
 		Str("top_operations_json", attrs["top_operations_json"]).
+		Str("top_results_json", attrs["top_results_json"]).
 		Str("top_content_json", attrs["top_content_json"]).
 		Str("first_error", aggregate.firstError).
 		Msg("clip read path summary")
@@ -274,6 +286,13 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 
 func isCanonicalClipRead(operation string) bool {
 	return operation == string(types.ContainerLifecycleClipRead) || operation == string(types.ContainerLifecycleClipOCIRead)
+}
+
+func clipReadCacheResult(event clipCommon.ReadTraceEvent) string {
+	return firstNonEmptyImageValue(
+		event.Attrs["cache_result"],
+		event.Attrs["content_cache_result"],
+	)
 }
 
 func clipReadRollupKey(parts ...string) string {

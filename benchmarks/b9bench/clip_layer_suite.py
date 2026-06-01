@@ -460,7 +460,7 @@ def registration_ids(namespace: str, redis_pod: str, logical_host_id: str) -> li
 
 def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
     hosts_by_id: dict[str, dict[str, Any]] = {}
-    for pod in kube.cache_endpoint_pods():
+    for pod in kube.cache_probe_pods():
         proc = run(
             [
                 "kubectl",
