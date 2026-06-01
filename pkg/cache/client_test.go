@@ -950,6 +950,94 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestStoreContentFromLocalFileRepairsPartialSelectedHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{
+			NTopHosts: 1,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	selectedServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("selected-host"))
+	require.NoError(t, err)
+	selectedAddr, err := selectedServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, selectedServer.Close()) })
+
+	selectedHost := selectedServer.Host()
+	require.NotNil(t, selectedHost)
+	selectedHost.Addr = selectedAddr
+	selectedHost.PrivateAddr = selectedAddr
+
+	content := []byte("partial-selected-host-content")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	sourcePath := filepath.Join(t.TempDir(), "source.bin")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+	info, err := os.Stat(sourcePath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(selectedServer.cas.pageDir(expectedHash), 0755))
+	require.NoError(t, os.WriteFile(selectedServer.cas.pagePath(expectedHash, 0), content[:int(cfg.Server.PageSizeBytes)], 0644))
+	require.False(t, selectedServer.cas.Exists(expectedHash))
+	require.False(t, selectedServer.cas.Exists(expectedHash, info.Size()))
+
+	cachePath := "/images/cache/" + expectedHash
+	metadataStore := NewMockCacheMetadataStore()
+	require.NoError(t, metadataStore.SetFsNode(ctx, GenerateFsID(cachePath), &FSMetadata{
+		Path:      cachePath,
+		Hash:      expectedHash,
+		Size:      uint64(info.Size()),
+		Mtime:     uint64(info.ModTime().Unix()),
+		Mtimensec: uint32(info.ModTime().Nanosecond()),
+	}))
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		metadataStore:         metadataStore,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{selectedHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(selectedHost))
+	defer client.Cleanup()
+
+	got, err := client.StoreContentFromLocalFile(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: cachePath,
+	}, StoreContentOptions{
+		RoutingKey: expectedHash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.True(t, selectedServer.cas.Exists(expectedHash, info.Size()))
+
+	selected := make([]byte, len(content))
+	n, err := selectedServer.cas.ReadAt(expectedHash, 0, selected)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, selected)
+}
+
 func TestStoreContentFromReaderDoesNotFanOutAfterSelectedHostSuccess(t *testing.T) {
 	ctx := context.Background()
 	firstHost := &Host{HostId: "first-host", PrivateAddr: "first-host:2049"}

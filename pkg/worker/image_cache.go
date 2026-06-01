@@ -166,7 +166,12 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 		c.maybeLogSummary()
 	}()
 
-	return c.client.IsCachedOnSelectedHost(hash, opts.RoutingKey)
+	// CLIP's ContentExists hook does not include the decompressed layer size, so
+	// a positive response cannot distinguish a complete layer from a stale
+	// partially-published page directory. Let the following StoreContentFromLocalPath
+	// call do a size-aware selected-host completeness check before it decides
+	// whether the store can be skipped.
+	return false, nil
 }
 
 func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (views []clipStorage.ClientLocalPageFileView, err error) {

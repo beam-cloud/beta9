@@ -210,6 +210,39 @@ func TestStoreAddReaderWithExpectedHashRemovesNewPagesOnMismatch(t *testing.T) {
 	require.Error(t, pageErr)
 }
 
+func TestStoreAddReaderWithExpectedHashCancellationDoesNotPublishCache(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("firstsecondtail")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reader, writer := io.Pipe()
+	type result struct {
+		hash string
+		size int64
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		hash, size, err := store.AddReaderWithExpectedHash(ctx, reader, expectedHash)
+		done <- result{hash: hash, size: size, err: err}
+	}()
+
+	_, err := writer.Write(content[:5])
+	require.NoError(t, err)
+	cancel()
+	require.NoError(t, writer.CloseWithError(context.Canceled))
+
+	res := <-done
+	require.Error(t, res.err)
+	require.False(t, store.Exists(expectedHash))
+
+	_, _, _, ok, pageErr := store.PageRegion(expectedHash, 0, 5)
+	require.False(t, ok)
+	require.Error(t, pageErr)
+}
+
 func TestStoreAddPageSourceWithExpectedHashInstallsPagesOutOfOrder(t *testing.T) {
 	store := newTestStore(t, 4)
 	content := []byte("abcdefghijklmnopqr")
