@@ -26,16 +26,11 @@ const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient, cacheCoordinatorToken ...string) *WorkerRepositoryService {
-	configuredToken := ""
-	if len(cacheCoordinatorToken) > 0 {
-		configuredToken = cacheCoordinatorToken[0]
-	}
-
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient, cacheCoordinatorToken string) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
 		workerRepo:            workerRepo,
-		cacheCoordinatorToken: configuredCacheCoordinatorToken(configuredToken),
+		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
 	}
 	if rdb != nil {
 		service.cacheCoordinator = cache.NewCoordinator(repository.NewCacheRedisRepository(rdb))
