@@ -166,6 +166,10 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 }
 
 func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *AuthInfo) context.Context {
+	return ContextWithAuthInfo(ctx, authInfo)
+}
+
+func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Context {
 	return context.WithValue(ctx, authContextKey, authInfo)
 }
 

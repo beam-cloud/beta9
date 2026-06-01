@@ -10,6 +10,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc/metadata"
 )
@@ -26,9 +27,13 @@ func configuredCacheCoordinatorToken(configured string) string {
 }
 
 func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Context) error {
-	if _, ok := auth.AuthInfoFromContext(ctx); ok {
-		return nil
+	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil {
+		if authInfo.Token.TokenType == types.TokenTypeWorker {
+			return nil
+		}
+		return errCacheCoordinatorUnauthorized
 	}
+
 	if s == nil || s.cacheCoordinatorToken == "" {
 		return errCacheCoordinatorUnauthorized
 	}
