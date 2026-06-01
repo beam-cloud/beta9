@@ -664,6 +664,37 @@ class Kube:
             ),
         )
 
+    def running_cache_servers(self) -> list[dict[str, str]]:
+        return sorted(
+            [
+                pod
+                for pod in self.cache_server_pods()
+                if pod.get("phase") == "Running"
+                and not pod.get("deleting")
+                and pod.get("ready")
+            ],
+            key=lambda pod: (pod.get("nodeName", ""), pod["name"]),
+        )
+
+    def cache_probe_pods(self) -> list[dict[str, str]]:
+        pods: list[dict[str, str]] = []
+        seen_nodes: set[str] = set()
+        for pod in [*self.running_cache_servers(), *self.running_workers()]:
+            node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
+            if node_key in seen_nodes:
+                continue
+            seen_nodes.add(node_key)
+            pods.append(pod)
+        return pods
+
+    def cache_endpoint_pods(self) -> list[dict[str, str]]:
+        pods_by_ip: dict[str, dict[str, str]] = {}
+        for pod in [*self.running_cache_servers(), *self.running_workers()]:
+            pod_ip = pod.get("podIP", "")
+            if pod_ip:
+                pods_by_ip[pod_ip] = pod
+        return list(pods_by_ip.values())
+
     def worker_pod_for_container(self, container_id: str) -> Optional[dict[str, str]]:
         if not container_id:
             return None
@@ -731,6 +762,54 @@ class Kube:
                     "poolName": item.get("metadata", {})
                     .get("labels", {})
                     .get("run.beam.cloud/worker-pool-name", ""),
+                    "restartCount": int(
+                        worker_statuses[0].get("restartCount", 0)
+                        if worker_statuses
+                        else 0
+                    ),
+                    "ready": any(status.get("ready") for status in worker_statuses),
+                }
+            )
+        return pods
+
+    def cache_server_pods(self) -> list[dict[str, str]]:
+        proc = run(
+            [
+                "kubectl",
+                "-n",
+                self.config.namespace,
+                "get",
+                "pods",
+                "-l",
+                "app.kubernetes.io/component=cache-server",
+                "-o",
+                "json",
+            ],
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return []
+        pods = []
+        for item in json.loads(proc.stdout).get("items", []):
+            worker_statuses = [
+                status
+                for status in item.get("status", {}).get("containerStatuses", [])
+                if status.get("name") == "worker"
+            ]
+            pods.append(
+                {
+                    "name": item.get("metadata", {}).get("name", ""),
+                    "uid": item.get("metadata", {}).get("uid", ""),
+                    "jobName": "",
+                    "deleting": bool(
+                        item.get("metadata", {}).get("deletionTimestamp", "")
+                    ),
+                    "nodeName": item.get("spec", {}).get("nodeName", ""),
+                    "podIP": item.get("status", {}).get("podIP", ""),
+                    "hostIP": item.get("status", {}).get("hostIP", ""),
+                    "phase": item.get("status", {}).get("phase", ""),
+                    "poolName": "cache-server",
                     "restartCount": int(
                         worker_statuses[0].get("restartCount", 0)
                         if worker_statuses
@@ -1072,9 +1151,9 @@ class CacheStore:
         self.tools = tools
 
     def cleanup_worker_cache(self) -> dict[str, Any]:
-        workers = self.kube.running_workers()
+        workers = self.kube.cache_probe_pods()
         if not workers:
-            return {"ok": False, "error": "no running workers"}
+            return {"ok": False, "error": "no running cache probe pods"}
         script = r"""
 set -eu
 for pages in /var/lib/beta9/cache/default/*/pages; do
@@ -1150,7 +1229,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
 
     def object_ready(self, content_hash: str, expected_size: int) -> dict[str, Any]:
         checked = []
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             candidates = self._candidate_shell_paths(pod, content_hash)
             script = (
                 f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
@@ -1200,7 +1279,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             "workers": [],
         }
         seen_nodes = set()
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
             if node_key in seen_nodes:
                 continue
@@ -1364,7 +1443,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
         return proof
 
     def object_proof(self, content_hash: str, expected_size: int = 0) -> dict[str, Any]:
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             candidates = self._candidate_shell_paths(pod, content_hash)
             script = (
                 f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
@@ -1403,7 +1482,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
         result: dict[str, Any] = {"ok": False, "pods": []}
         source = self.tools.source("evict_cache_object.py")
         seen_nodes = set()
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
             if node_key in seen_nodes:
                 continue
@@ -1435,7 +1514,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
     def remove_cache_pages(self, entry: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {"ok": False, "pods": []}
         seen_nodes = set()
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
             if node_key in seen_nodes:
                 continue
@@ -1620,9 +1699,9 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
     def direct_disk_probe(self) -> Optional[dict[str, Any]]:
         if not self.config.direct_cache_disk_probe:
             return None
-        workers = self.kube.running_workers()
+        workers = self.kube.cache_probe_pods()
         if not workers:
-            return {"ok": False, "error": "no running workers"}
+            return {"ok": False, "error": "no running cache probe pods"}
         pod = workers[0]
         proc = self.kube.worker_exec(
             pod["name"],
@@ -1940,7 +2019,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             ]
         running_workers_by_ip = {
             pod.get("podIP", ""): pod
-            for pod in self.kube.running_workers()
+            for pod in self.kube.cache_endpoint_pods()
             if pod.get("podIP", "")
         }
         logical_host_ids = []
@@ -2048,7 +2127,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
 
     def cache_hosts_from_worker_logs(self) -> dict[str, Any]:
         hosts: list[dict[str, Any]] = []
-        workers = {pod["name"]: pod for pod in self.kube.running_workers()}
+        workers = {pod["name"]: pod for pod in self.kube.cache_endpoint_pods()}
         for pod_name, pod in workers.items():
             proc = run(
                 [
@@ -2070,7 +2149,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             if proc.returncode != 0:
                 continue
             for line in proc.stdout.splitlines():
-                if "Registered cache host" not in line:
+                if "Registered cache host" not in line and "registered cache host" not in line:
                     continue
                 start = line.find("{")
                 end = line.rfind("}")
@@ -3077,14 +3156,20 @@ class CacheBenchmark:
         ]
         worker_restart_after_prepare = None
         if self.config.reset_workers_after_prepare:
+            worker_pod_names = {pod["name"] for pod in self.kube.worker_pods()}
             pods_to_restart = sorted(
                 {
                     proof["proof"].get("pod", "")
                     for proof in prepare_cache_proofs
                     if proof.get("proof", {}).get("ready")
                     and proof.get("proof", {}).get("pod")
+                    and proof["proof"].get("pod", "") in worker_pod_names
                 }
             )
+            if not pods_to_restart:
+                pods_to_restart = sorted(
+                    pod["name"] for pod in self.kube.running_workers()
+                )
             log(
                 "Restarting worker container(s) after write prepare to clear in-memory state while preserving node-local disk cache"
             )
