@@ -124,7 +124,7 @@ func TestClientLocalPageFileViewsDoesNotPromoteRemotePageRegion(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -165,7 +165,7 @@ func TestClientLocalPageFileViewsReturnsLocalFinalPartialPage(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}

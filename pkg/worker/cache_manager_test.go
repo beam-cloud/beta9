@@ -214,6 +214,85 @@ func TestCacheLogicalHostIDIgnoresWorkerPool(t *testing.T) {
 	require.Equal(t, defaultPool, buildPool)
 }
 
+func TestCachePlacementIdentityUsesHostPathForDefaultDiskDir(t *testing.T) {
+	base := types.AppConfig{
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:     true,
+				HostPath:    "/mnt/cache",
+				MountPath:   "/cache-a",
+				MaxUsagePct: 0.95,
+			},
+		},
+	}
+	alternateMount := base
+	alternateMount.Cache.Disk.MountPath = "/cache-b"
+
+	first := normalizeCacheConfig(base, types.WorkerPoolConfig{}, "node-a", "default")
+	second := normalizeCacheConfig(alternateMount, types.WorkerPoolConfig{}, "node-a", "default")
+	firstIdentity := cachePlacementIdentityPath(base, first)
+	secondIdentity := cachePlacementIdentityPath(alternateMount, second)
+
+	require.Equal(t, filepath.Join("/cache-a", "default", "node-a"), first.Server.DiskCacheDir)
+	require.Equal(t, filepath.Join("/cache-b", "default", "node-a"), second.Server.DiskCacheDir)
+	require.Equal(t, filepath.Join("/mnt/cache", "default", "node-a"), firstIdentity)
+	require.Equal(t, firstIdentity, secondIdentity)
+	require.Equal(t,
+		cacheLogicalHostID("default", "node-a", firstIdentity),
+		cacheLogicalHostID("default", "node-a", secondIdentity),
+	)
+}
+
+func TestCachePlacementIdentityChangesWithHostPath(t *testing.T) {
+	base := types.AppConfig{
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:     true,
+				HostPath:    "/mnt/cache-a",
+				MountPath:   "/cache",
+				MaxUsagePct: 0.95,
+			},
+		},
+	}
+	otherHostPath := base
+	otherHostPath.Cache.Disk.HostPath = "/mnt/cache-b"
+
+	firstIdentity := cachePlacementIdentityPath(base, normalizeCacheConfig(base, types.WorkerPoolConfig{}, "node-a", "default"))
+	secondIdentity := cachePlacementIdentityPath(otherHostPath, normalizeCacheConfig(otherHostPath, types.WorkerPoolConfig{}, "node-a", "default"))
+
+	require.NotEqual(t, firstIdentity, secondIdentity)
+	require.NotEqual(t,
+		cacheLogicalHostID("default", "node-a", firstIdentity),
+		cacheLogicalHostID("default", "node-a", secondIdentity),
+	)
+}
+
+func TestCachePlacementIdentityKeepsExplicitDiskCacheDir(t *testing.T) {
+	config := types.AppConfig{
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:     true,
+				HostPath:    "/mnt/cache",
+				MountPath:   "/cache",
+				MaxUsagePct: 0.95,
+			},
+			Server: cache.ServerConfig{
+				DiskCacheDir: "/cache/custom/../explicit",
+			},
+		},
+	}
+
+	normalized := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "node-a", "default")
+	identity := cachePlacementIdentityPath(config, normalized)
+
+	require.Equal(t, filepath.Clean("/cache/explicit"), normalized.Server.DiskCacheDir)
+	require.Equal(t, filepath.Clean("/cache/explicit"), identity)
+	require.NotEqual(t, filepath.Clean("/mnt/cache/explicit"), identity)
+}
+
 func testCacheManagerConfig(cacheDir string) types.AppConfig {
 	return types.AppConfig{
 		Worker: types.WorkerConfig{

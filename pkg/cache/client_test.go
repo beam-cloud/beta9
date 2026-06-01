@@ -45,6 +45,22 @@ func (h *orderedTestHasher) GetN(n int, key string) []*Host {
 	return h.hosts[:n]
 }
 
+type keyedTestHasher struct {
+	routes map[string][]*Host
+}
+
+func (h *keyedTestHasher) Add(hosts ...*Host) {}
+
+func (h *keyedTestHasher) Remove(host *Host) {}
+
+func (h *keyedTestHasher) GetN(n int, key string) []*Host {
+	hosts := h.routes[key]
+	if n > len(hosts) {
+		n = len(hosts)
+	}
+	return hosts[:n]
+}
+
 func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
@@ -60,7 +76,7 @@ func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T)
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
 		maxGetContentAttempts: 1,
 	}
@@ -93,7 +109,7 @@ func TestReadContentIntoKeepsLogicalHostUnavailableDistinctFromMiss(t *testing.T
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{logicalHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -110,7 +126,7 @@ func TestFallbackHostSelectionDoesNotPoisonPrimaryCache(t *testing.T) {
 	client := &Client{
 		ctx:            context.Background(),
 		clientConfig:   ClientConfig{NTopHosts: 2},
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         &orderedTestHasher{hosts: []*Host{primaryHost, fallbackHost}},
 	}
 
@@ -132,6 +148,40 @@ func TestFallbackHostSelectionDoesNotPoisonPrimaryCache(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, primaryHost.HostId, selected.HostId)
+}
+
+func TestRetrievalHostCacheIncludesRoutingKey(t *testing.T) {
+	hash := "shared-content-hash"
+	hostA := &Host{HostId: "host-a"}
+	hostB := &Host{HostId: "host-b"}
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher: &keyedTestHasher{routes: map[string][]*Host{
+			"/images/a.clip": {hostA},
+			"/images/b.clip": {hostB},
+		}},
+	}
+
+	selected, err := client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      hash,
+		key:       "/images/a.clip",
+		hostIndex: 0,
+	})
+	require.NoError(t, err)
+	require.Equal(t, hostA.HostId, selected.HostId)
+
+	selected, err = client.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      hash,
+		key:       "/images/b.clip",
+		hostIndex: 0,
+	})
+	require.NoError(t, err)
+	require.Equal(t, hostB.HostId, selected.HostId)
+	require.Len(t, client.localHostCache, 2)
 }
 
 func TestClientEndpointFailureKeepsLogicalHostInHRW(t *testing.T) {
@@ -173,7 +223,7 @@ func TestClientEndpointFailureKeepsLogicalHostInHRW(t *testing.T) {
 		grpcConns:      make(map[string]*grpc.ClientConn),
 		localServers:   make(map[string]*Server),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         hasher,
 	}
 
@@ -217,7 +267,7 @@ func TestCheckHostEndpointPrunesUnreachableEndpoint(t *testing.T) {
 		grpcConns:      make(map[string]*grpc.ClientConn),
 		localServers:   make(map[string]*Server),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         &orderedTestHasher{hosts: []*Host{host}},
 	}
 
@@ -285,7 +335,7 @@ func TestReadContentIntoDoesNotMaskPrimaryUnavailableWithReplicaMiss(t *testing.
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -304,7 +354,7 @@ func TestLogicalOnlyHostStaysInHRWButHasNoEndpoint(t *testing.T) {
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                rendezvous.New[*Host](),
 		maxGetContentAttempts: 1,
 	}
@@ -347,7 +397,7 @@ func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
 		hostMap:               NewHostMap(GlobalConfig{}, nil),
 		maxGetContentAttempts: 1,
@@ -425,7 +475,7 @@ func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{},
 		hostDirectory:         metadataStore,
 		maxGetContentAttempts: 1,
@@ -495,7 +545,7 @@ func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -525,7 +575,7 @@ func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -555,7 +605,7 @@ func TestContentReadHotPathDoesNotUseCacheFSMetadata(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -584,7 +634,7 @@ func TestClientLocalPageFileViewsReturnsSelectedClientLocalPageFiles(t *testing.
 		clientConfig:   ClientConfig{NTopHosts: 1},
 		localServers:   make(map[string]*Server),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         &orderedTestHasher{hosts: []*Host{localHost}},
 	}
 	client.AttachLocalServer(&Server{cas: store})
@@ -613,7 +663,7 @@ func TestClientLocalPageFileViewsUsesSelectedLocalServer(t *testing.T) {
 		clientConfig:   ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
 		localServers:   make(map[string]*Server),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         &orderedTestHasher{hosts: []*Host{localHost}},
 	}
 	client.AttachLocalServer(&Server{cas: store})
@@ -672,13 +722,14 @@ func TestAddHostClearsCachedRoutingForReplacedHost(t *testing.T) {
 		grpcClients:    make(map[string]proto.CacheClient),
 		grpcConns:      make(map[string]*grpc.ClientConn),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         &orderedTestHasher{},
 	}
 	defer client.Cleanup()
 
 	oldHost := &Host{HostId: "host-a", Addr: "127.0.0.1:1"}
-	client.localHostCache["content-hash"] = &localClientCache{
+	cacheKey := newLocalHostCacheKey("content-hash", "content-hash")
+	client.localHostCache[cacheKey] = &localClientCache{
 		host:      oldHost,
 		timestamp: time.Now(),
 	}
@@ -686,7 +737,7 @@ func TestAddHostClearsCachedRoutingForReplacedHost(t *testing.T) {
 	err := client.addHost(&Host{HostId: "host-a", Addr: "127.0.0.1:1"})
 	require.NoError(t, err)
 
-	_, exists := client.localHostCache["content-hash"]
+	_, exists := client.localHostCache[cacheKey]
 	require.False(t, exists)
 }
 
@@ -747,7 +798,7 @@ func TestStoreContentFromLocalFileUsesMatchingCacheMetadata(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -815,7 +866,7 @@ func TestStoreContentFromLocalFileWaitsForLockedHashAlreadyPublished(t *testing.
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -873,7 +924,7 @@ func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T)
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -982,7 +1033,7 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{selectedHost, fallbackHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1070,7 +1121,7 @@ func TestStoreContentFromLocalFileRepairsPartialSelectedHost(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{selectedHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1109,7 +1160,7 @@ func TestStoreContentFromReaderDoesNotFanOutAfterSelectedHostSuccess(t *testing.
 		grpcClients:           map[string]proto.CacheClient{"first-host": &fakeStoreCacheClient{stream: firstStream}, "second-host": &fakeStoreCacheClient{stream: secondStream}, "third-host": &fakeStoreCacheClient{stream: thirdStream}},
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{firstHost, secondHost, thirdHost}},
 		maxGetContentAttempts: 2,
 	}
@@ -1137,7 +1188,7 @@ func TestStoreContentFromReaderDoesNotUseRankedReplicaWhenSelectedHostUnavailabl
 		grpcClients:           map[string]proto.CacheClient{"fallback-host": &fakeStoreCacheClient{stream: fallbackStream}},
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{selectedHost, fallbackHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1251,7 +1302,7 @@ func TestStoreContentUsesSelectedRemoteHost(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1290,7 +1341,7 @@ func TestStoreContentDoesNotSilentlyFallbackToLocalWhenSelectedHostUnavailable(t
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1346,7 +1397,7 @@ func TestStoreContentStreamWritesSelectedRemoteHost(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1414,7 +1465,7 @@ func TestStoreContentFromS3SourceWaitsForLockedHashAlreadyPublished(t *testing.T
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1474,7 +1525,7 @@ func TestStoreContentUsesSelectedLocalLogicalHost(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost, remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1510,7 +1561,7 @@ func TestStoreContentUsesSelectedLocalLogicalHost(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -1571,7 +1622,7 @@ func TestReadContentIntoSurvivesLogicalHostRegistrationReplacement(t *testing.T)
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{},
 		maxGetContentAttempts: 1,
 	}

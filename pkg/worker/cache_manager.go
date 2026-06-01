@@ -61,6 +61,7 @@ type WorkerCacheManager struct {
 	podAddr            string
 	nodeID             string
 	locality           string
+	cacheIdentityPath  string
 	metadataStore      cache.CacheMetadataStore
 	client             *cache.Client
 	server             *cache.Server
@@ -103,6 +104,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
+	m.cacheIdentityPath = cachePlacementIdentityPath(m.config, cacheConfig)
 	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
 
@@ -116,7 +118,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	m.client = client
-	hostID := cacheLogicalHostID(m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir)
+	hostID := cacheLogicalHostID(m.locality, m.nodeID, m.cacheIdentityPath)
 	nodeCacheServer := m.nodeCacheServer(cacheConfig, hostID)
 	startedCacheServer, err := nodeCacheServer.Start()
 	if err != nil {
@@ -444,9 +446,13 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 		cacheConfig.Disk.MaxUsagePct = cacheDefaultDiskMaxUsage
 	}
 	applyWorkerPoolCacheOverrides(&cacheConfig, poolConfig)
+	cacheConfig.Disk.MountPath = filepath.Clean(cacheConfig.Disk.MountPath)
+	cacheConfig.Disk.HostPath = filepath.Clean(cacheConfig.Disk.HostPath)
 
 	if cacheConfig.Server.DiskCacheDir == "" {
 		cacheConfig.Server.DiskCacheDir = filepath.Join(cacheConfig.Disk.MountPath, safeCacheName(locality), safeCacheName(nodeID))
+	} else {
+		cacheConfig.Server.DiskCacheDir = filepath.Clean(cacheConfig.Server.DiskCacheDir)
 	}
 	if cacheConfig.Server.DiskCacheMaxUsagePct == 0 {
 		cacheConfig.Server.DiskCacheMaxUsagePct = cacheConfig.Disk.MaxUsagePct
@@ -507,6 +513,13 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 
 	return cacheConfig
+}
+
+func cachePlacementIdentityPath(config types.AppConfig, cacheConfig cache.Config) string {
+	if config.Cache.Server.DiskCacheDir != "" {
+		return filepath.Clean(cacheConfig.Server.DiskCacheDir)
+	}
+	return cacheCanonicalPhysicalIdentityPath(cacheConfig)
 }
 
 func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.WorkerPoolConfig) {

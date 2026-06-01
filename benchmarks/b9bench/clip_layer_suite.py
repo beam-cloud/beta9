@@ -299,7 +299,14 @@ def embedded_cache_page_proof(kube: Kube, hashes: list[str]) -> dict[str, Any]:
     for hash_value in hashes:
         prefix = hash_value[:2]
         script_parts.append(
-            f"h={hash_value}; count=$(find /var/lib/beta9/cache/default -path '*/pages/{prefix}/{hash_value}/{hash_value}-*' -type f 2>/dev/null | wc -l); echo \"$h $count\""
+            f"h={hash_value}; "
+            f"found=$(find /var/lib/beta9/cache/default -path '*/pages/{prefix}/{hash_value}' -type d 2>/dev/null | head -n1); "
+            "if [ -z \"$found\" ]; then echo \"$h 0 0 false false\"; "
+            "else count=0; bytes=0; "
+            "while [ -f \"$found/$h-$count\" ]; do size=$(stat -c %s \"$found/$h-$count\"); bytes=$((bytes + size)); count=$((count + 1)); done; "
+            "marker=false; [ -f \"$found/_complete\" ] && marker=true; "
+            "ready=false; [ \"$marker\" = true ] && [ \"$count\" -gt 0 ] && ready=true; "
+            "echo \"$h $count $bytes $marker $ready\"; fi"
         )
     script = "; ".join(script_parts)
     ok = False
@@ -308,9 +315,16 @@ def embedded_cache_page_proof(kube: Kube, hashes: list[str]) -> dict[str, Any]:
         rows = []
         for line in proc.stdout.splitlines():
             parts = line.split()
-            if len(parts) == 2:
-                rows.append({"hash": parts[0], "pages": int(parts[1])})
-                ok = ok or int(parts[1]) > 0
+            if len(parts) == 5:
+                row = {
+                    "hash": parts[0],
+                    "pages": int(parts[1]),
+                    "bytes": int(parts[2]),
+                    "completeMarker": parts[3] == "true",
+                    "ready": parts[4] == "true",
+                }
+                rows.append(row)
+                ok = ok or bool(row["ready"])
         proof["workers"].append(
             {
                 "pod": pod["name"],
@@ -520,8 +534,9 @@ def hrw_routing_proof(
     if not hashes:
         proof["error"] = "no hashes provided"
         return proof
-    if not hosts:
-        proof["error"] = "no active cache hosts found"
+    hrw_hosts = [host for host in hosts if host.get("hostId")]
+    if not hrw_hosts:
+        proof["error"] = "no cache hosts found"
         return proof
 
     go = shutil.which("go")
@@ -540,7 +555,7 @@ def hrw_routing_proof(
             "run",
             "./benchmarks/b9bench/cache_tools/hrw_routing.go",
             "--hosts-json",
-            json.dumps(hosts, sort_keys=True),
+            json.dumps(hrw_hosts, sort_keys=True),
             "--keys",
             ",".join(hashes),
             "--n",
@@ -558,11 +573,11 @@ def hrw_routing_proof(
         return proof
 
     routes = json.loads(proc.stdout)
-    pages_by_hash_node: dict[tuple[str, str], int] = {}
+    pages_by_hash_node: dict[tuple[str, str], dict[str, Any]] = {}
     for worker in page_proof.get("workers") or []:
         node = worker.get("nodeName") or ""
         for row in worker.get("rows") or []:
-            pages_by_hash_node[(row.get("hash") or "", node)] = int(row.get("pages") or 0)
+            pages_by_hash_node[(row.get("hash") or "", node)] = row
 
     live_nodes = kube.node_names()
     checked = []
@@ -571,7 +586,10 @@ def hrw_routing_proof(
         key = route.get("key") or ""
         selected = (route.get("hosts") or [{}])[0]
         node = selected.get("nodeName") or selected.get("nodeId") or ""
-        pages = pages_by_hash_node.get((key, node), 0)
+        selected_page = pages_by_hash_node.get((key, node)) or {}
+        pages = int(selected_page.get("pages") or 0)
+        complete_marker = bool(selected_page.get("completeMarker"))
+        selected_ready = bool(selected_page.get("ready") and complete_marker)
         endpoint_available = bool(
             selected.get("endpointAvailable", bool(selected.get("privateAddr") or selected.get("addr")))
         )
@@ -582,10 +600,13 @@ def hrw_routing_proof(
             "selectedRegistrationId": selected.get("registrationId") or "",
             "selectedNode": node,
             "selectedPod": selected.get("pod") or "",
+            "selectedCachePathId": selected.get("cachePathId") or "",
             "selectedEndpointAvailable": endpoint_available,
             "selectedNodeGone": node_gone,
             "pagesOnSelectedNode": pages,
-            "ok": pages > 0 or node_gone,
+            "completeMarkerOnSelectedNode": complete_marker,
+            "bytesOnSelectedNode": int(selected_page.get("bytes") or 0),
+            "ok": (selected_ready and endpoint_available) or node_gone,
         }
         checked.append(item)
         ok = ok and item["ok"]

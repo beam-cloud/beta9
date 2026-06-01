@@ -1210,11 +1210,12 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
                 f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
                 "found=''; for candidate in "
                 f'{candidates}; do [ -d "$candidate" ] && found="$candidate" && break; done; '
-                'if [ -z "$found" ]; then printf \'{"exists":false,"ready":false,"bytes":0,"chunks":0}\\n\'; exit 0; fi; '
+                'if [ -z "$found" ]; then printf \'{"exists":false,"ready":false,"bytes":0,"chunks":0,"completeMarker":false}\\n\'; exit 0; fi; '
                 "i=0; bytes=0; "
                 'while [ -f "$found/$hash-$i" ]; do size=$(stat -c %s "$found/$hash-$i"); bytes=$((bytes + size)); i=$((i + 1)); done; '
-                'ready=false; [ "$bytes" -eq "$expected" ] && ready=true; '
-                'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s}\\n\' "$ready" "$found" "$i" "$bytes"'
+                'marker=false; [ -f "$found/_complete" ] && marker=true; '
+                'ready=false; [ "$marker" = true ] && [ "$bytes" -eq "$expected" ] && ready=true; '
+                'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s,"completeMarker":%s}\\n\' "$ready" "$found" "$i" "$bytes" "$marker"'
             )
             proc = self.kube.worker_shell(pod["name"], script, timeout=30)
             row: dict[str, Any] = {
@@ -1248,13 +1249,9 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             "routes": [],
         }
         hosts = hosts_snapshot.get("hosts") or []
-        active_hosts = [
-            host
-            for host in hosts
-            if host.get("endpointAvailable") and (host.get("privateAddr") or host.get("addr"))
-        ]
-        if not active_hosts:
-            proof["error"] = "no active cache hosts found"
+        hrw_hosts = [host for host in hosts if host.get("hostId")]
+        if not hrw_hosts:
+            proof["error"] = "no cache hosts found"
             return proof
 
         go = shutil.which("go")
@@ -1273,7 +1270,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
                 "run",
                 "./benchmarks/b9bench/cache_tools/hrw_routing.go",
                 "--hosts-json",
-                json.dumps(active_hosts, sort_keys=True),
+                json.dumps(hrw_hosts, sort_keys=True),
                 "--keys",
                 content_hash,
                 "--n",
@@ -1290,8 +1287,8 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             proof["error"] = proc.stderr.strip()[-1000:] or f"hrw helper exited {proc.returncode}"
             return proof
 
-        pages_by_node = {
-            worker.get("nodeName") or "": int(worker.get("chunks") or 0)
+        page_rows_by_node = {
+            worker.get("nodeName") or "": worker
             for worker in page_proof.get("workers") or []
         }
         live_nodes = self.kube.node_names()
@@ -1302,7 +1299,10 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             ranked_hosts = route.get("hosts") or []
             selected = (ranked_hosts or [{}])[0]
             node = selected.get("nodeName") or selected.get("nodeId") or ""
-            pages = pages_by_node.get(node, 0)
+            selected_page = page_rows_by_node.get(node) or {}
+            pages = int(selected_page.get("chunks") or 0)
+            complete_marker = bool(selected_page.get("completeMarker"))
+            selected_ready = bool(selected_page.get("ready") and complete_marker)
             endpoint_available = bool(
                 selected.get("endpointAvailable", bool(selected.get("privateAddr") or selected.get("addr")))
             )
@@ -1313,10 +1313,15 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
                 "selectedRegistrationId": selected.get("registrationId") or "",
                 "selectedNode": node,
                 "selectedPod": selected.get("pod") or "",
+                "selectedCachePathId": selected.get("cachePathId") or "",
                 "selectedEndpointAvailable": endpoint_available,
                 "selectedNodeGone": node_gone,
                 "pagesOnSelectedNode": pages,
-                "ok": pages > 0 or node_gone,
+                "completeMarkerOnSelectedNode": complete_marker,
+                "bytesOnSelectedNode": int(selected_page.get("bytes") or 0),
+                "expectedBytes": int(page_proof.get("expectedBytes") or 0),
+                "selectedCachePath": selected_page.get("path") or "",
+                "ok": (selected_ready and endpoint_available) or node_gone,
             }
             if remote_read:
                 target_host = remote_read.get("targetHost") or {}
@@ -1341,11 +1346,14 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
                 )
                 item["remoteTargetInHRWTopN"] = target_rank > 0
                 item["remoteTargetHRWRank"] = target_rank
-                item["remoteTargetPages"] = pages_by_node.get(target_node, 0)
+                target_page = page_rows_by_node.get(target_node) or {}
+                item["remoteTargetPages"] = int(target_page.get("chunks") or 0)
+                item["remoteTargetCompleteMarker"] = bool(target_page.get("completeMarker"))
                 item["fallbackCacheHit"] = bool(
                     not item["remoteTargetMatchesHRW"]
                     and item["remoteTargetInHRWTopN"]
                     and item["remoteTargetPages"] > 0
+                    and item["remoteTargetCompleteMarker"]
                 )
                 item["ok"] = bool(item["ok"] or item["fallbackCacheHit"])
             checked.append(item)
@@ -2959,6 +2967,8 @@ class Reporter:
                     f"{route.get('selectedNode', '')}/"
                     f"{route.get('selectedHostId', '')}"
                     f" pages={route.get('pagesOnSelectedNode', 0)}"
+                    f" complete={route.get('completeMarkerOnSelectedNode', False)}"
+                    f" endpoint={route.get('selectedEndpointAvailable', False)}"
                 )
             remote_target = ""
             if route:

@@ -201,7 +201,7 @@ func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {
 		grpcClients:    make(map[string]proto.CacheClient),
 		grpcConns:      make(map[string]*grpc.ClientConn),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         rendezvous.New[*Host](),
 		hostMap:        NewHostMap(cfg.Global, nil),
 		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
@@ -244,7 +244,7 @@ func TestRefreshRoutableHostsRemovesUndiscoveredLogicalHost(t *testing.T) {
 		grpcClients:    make(map[string]proto.CacheClient),
 		grpcConns:      make(map[string]*grpc.ClientConn),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         &orderedTestHasher{},
 		hostMap:        NewHostMap(GlobalConfig{}, nil),
 		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
