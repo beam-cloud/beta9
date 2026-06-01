@@ -130,10 +130,12 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		TtlSeconds: int32(cacheRegistrationTTL(r.cacheConfig) / time.Second),
 	}))
 	if err == nil {
-		logger := log.Debug()
+		logger := log.Trace()
+		message := "refreshed cache host registration"
 		if !r.loggedSuccess {
 			logger = log.Info()
 			r.loggedSuccess = true
+			message = "registered cache host"
 		}
 		logger.
 			Str("logical_host_id", host.LogicalHostId).
@@ -143,7 +145,9 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 			Str("node_id", host.NodeId).
 			Str("cache_path_id", host.CachePathId).
 			Str("addr", host.PrivateAddr).
-			Msg("Registered cache host")
+			Int32("ttl_seconds", int32(cacheRegistrationTTL(r.cacheConfig)/time.Second)).
+			Float32("capacity_usage_pct", host.CapacityUsagePct).
+			Msg(message)
 	}
 	return err
 }
