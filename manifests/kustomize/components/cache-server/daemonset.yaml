@@ -24,7 +24,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: worker
-        image: public.ecr.aws/n4e0e1y0/beta9-worker:latest
+        image: registry.localhost:5000/beta9-worker:latest
         imagePullPolicy: IfNotPresent
         env:
         - name: CONFIG_PATH
