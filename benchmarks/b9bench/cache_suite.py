@@ -1355,18 +1355,19 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
         proof["ok"] = ok
         return proof
 
-    def object_proof(self, content_hash: str) -> dict[str, Any]:
+    def object_proof(self, content_hash: str, expected_size: int = 0) -> dict[str, Any]:
         for pod in self.kube.running_workers():
             candidates = self._candidate_shell_paths(pod, content_hash)
             script = (
-                f"hash={shlex.quote(content_hash)}; "
+                f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
                 "found=''; for candidate in "
                 f'{candidates}; do [ -d "$candidate" ] && found="$candidate" && break; done; '
                 'if [ -z "$found" ]; then printf \'{"exists":false}\\n\'; exit 0; fi; '
-                "i=0; bytes=0; tmp=$(mktemp); "
-                'while [ -f "$found/$hash-$i" ]; do cat "$found/$hash-$i" >> "$tmp"; bytes=$((bytes + $(wc -c < "$found/$hash-$i"))); i=$((i + 1)); done; '
-                'sha=$(sha256sum "$tmp" | awk \'{print $1}\'); rm -f "$tmp"; '
-                'printf \'{"exists":true,"path":"%s","chunks":%s,"bytes":%s,"sha256":"%s"}\\n\' "$found" "$i" "$bytes" "$sha"'
+                "i=0; bytes=0; "
+                'while [ -f "$found/$hash-$i" ]; do bytes=$((bytes + $(stat -c %s "$found/$hash-$i"))); i=$((i + 1)); done; '
+                'marker=false; [ -f "$found/_complete" ] && marker=true; '
+                'matches=false; if [ "$marker" = true ] && { [ "$expected" -eq 0 ] || [ "$bytes" -eq "$expected" ]; }; then matches=true; fi; '
+                'printf \'{"exists":true,"path":"%s","chunks":%s,"bytes":%s,"completeMarker":%s,"matchesHash":%s}\\n\' "$found" "$i" "$bytes" "$marker" "$matches"'
             )
             proc = self.kube.worker_shell(
                 pod["name"],
@@ -1387,7 +1388,6 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
                 }
             )
             if proof.get("exists"):
-                proof["matchesHash"] = proof.get("sha256") == content_hash
                 return proof
         return {"hash": content_hash, "exists": False}
 
@@ -3305,7 +3305,7 @@ class CacheBenchmark:
                     entry,
                     geesefs_path,
                 )
-            cas_proof = self.cache.object_proof(entry["sha256"])
+            cas_proof = self.cache.object_proof(entry["sha256"], entry["size"])
             page_proof = self.cache.object_page_proof(entry["sha256"], entry["size"])
             remote_object = self._remote_object_proof(workspace, paths, entry)
             worker_dd = None

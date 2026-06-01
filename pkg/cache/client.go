@@ -291,6 +291,7 @@ func (c *Client) addHost(host *Host) error {
 			delete(c.rawReadPools, host.HostId)
 		}
 		c.hasher.Remove(host)
+		c.hasher.Add(host.LogicalOnly())
 		for hash, entry := range c.localHostCache {
 			if entry.host != nil && entry.host.HostId == host.HostId {
 				delete(c.localHostCache, hash)
@@ -460,16 +461,23 @@ func (c *Client) removeHost(host *Host) {
 		return
 	}
 
+	var logicalHost *Host
 	if c.hostMap != nil {
-		if _, ok := c.hostMap.DeactivateEndpoint(host); !ok {
+		var ok bool
+		logicalHost, ok = c.hostMap.DeactivateEndpoint(host)
+		if !ok {
 			return
 		}
+	}
+	if logicalHost == nil {
+		logicalHost = host.LogicalOnly()
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.hasher.Remove(host)
+	c.hasher.Add(logicalHost)
 	if conn, ok := c.grpcConns[host.HostId]; ok {
 		_ = conn.Close()
 		delete(c.grpcConns, host.HostId)
@@ -1585,9 +1593,11 @@ func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 				host = nil
 			} else {
 				host = hosts[request.hostIndex]
-				c.localHostCache[request.hash] = &localClientCache{
-					host:      host,
-					timestamp: time.Now(),
+				if request.hostIndex == 0 {
+					c.localHostCache[request.hash] = &localClientCache{
+						host:      host,
+						timestamp: time.Now(),
+					}
 				}
 			}
 
