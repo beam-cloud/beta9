@@ -49,6 +49,10 @@ spec:
         - -g
         - --
         - /usr/local/bin/worker
+        {{- with .Values.cacheServer.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         env:
         - name: CONFIG_PATH
           value: /etc/beta9/config.yaml

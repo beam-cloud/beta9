@@ -36,6 +36,8 @@ cacheServer:
   nodeSelector: {}
   affinity: {}
   tolerations: []
+  securityContext:
+    privileged: true
   resources:
     requests:
       cpu: 100m

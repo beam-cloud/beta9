@@ -31,6 +31,8 @@ spec:
         - -g
         - --
         - /usr/local/bin/worker
+        securityContext:
+          privileged: true
         env:
         - name: CONFIG_PATH
           value: /etc/beta9/.config.yaml
