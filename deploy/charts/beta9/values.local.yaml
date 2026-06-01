@@ -6,6 +6,10 @@ images:
     repository: registry.localhost:5000/beta9-gateway
     tag: latest
     pullPolicy: Always
+  worker:
+    repository: registry.localhost:5000/beta9-worker
+    tag: latest
+    pullPolicy: Always
 
 service:
   gateway:

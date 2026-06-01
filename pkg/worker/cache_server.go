@@ -26,12 +26,12 @@ func RunCacheServer() error {
 	}
 	config := configManager.GetConfig()
 
-	workerToken := os.Getenv("WORKER_TOKEN")
-	if workerToken == "" {
-		return errors.New("WORKER_TOKEN is required for cache server mode")
+	coordinatorToken := config.Cache.Coordinator.Token
+	if coordinatorToken == "" {
+		return errors.New("cache.coordinator.token is required for cache server mode")
 	}
 
-	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
+	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, coordinatorToken)
 	if err != nil {
 		return err
 	}
