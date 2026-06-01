@@ -310,7 +310,7 @@ def embedded_cache_page_proof(kube: Kube, hashes: list[str]) -> dict[str, Any]:
         )
     script = "; ".join(script_parts)
     ok = False
-    for pod in kube.running_workers():
+    for pod in kube.cache_probe_pods():
         proc = kube.worker_shell(pod["name"], script, timeout=30)
         rows = []
         for line in proc.stdout.splitlines():
@@ -460,7 +460,7 @@ def registration_ids(namespace: str, redis_pod: str, logical_host_id: str) -> li
 
 def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
     hosts_by_id: dict[str, dict[str, Any]] = {}
-    for pod in kube.running_workers():
+    for pod in kube.cache_endpoint_pods():
         proc = run(
             [
                 "kubectl",
@@ -482,7 +482,7 @@ def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
             continue
         latest: dict[str, Any] | None = None
         for line in proc.stdout.splitlines():
-            if "Registered cache host" not in line:
+            if "Registered cache host" not in line and "registered cache host" not in line:
                 continue
             start = line.find("{")
             end = line.rfind("}")
