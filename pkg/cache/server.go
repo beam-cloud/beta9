@@ -16,6 +16,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache/cachegrpc"
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/djherbis/atime"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -847,6 +850,27 @@ func (cs *Server) s3ClientForSource(source *proto.CacheSource) (*S3Client, error
 	return s3Client, nil
 }
 
+func (cs *Server) openOCIOriginSource(ctx context.Context, sourcePath string) (io.ReadCloser, error) {
+	source, ok := ParseOCIRequiredContentOriginPath(sourcePath)
+	if !ok {
+		return nil, fmt.Errorf("invalid OCI origin path: %s", sourcePath)
+	}
+
+	ref, err := name.NewDigest(fmt.Sprintf("%s/%s@%s", source.Registry, source.Repository, source.LayerDigest))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse OCI layer digest: %w", err)
+	}
+	layer, err := remote.Layer(ref, remote.WithContext(ctx), remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OCI layer %s: %w", source.LayerDigest, err)
+	}
+	reader, err := layer.Uncompressed()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open uncompressed OCI layer %s: %w", source.LayerDigest, err)
+	}
+	return reader, nil
+}
+
 func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
 	if err := cs.rejectIfDraining(); err != nil {
 		return nil, err
@@ -864,7 +888,7 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	if req.Source.CachePath != "" {
 		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
-	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
+	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s bucket=%s expected_hash=%s]", req.Source.Path, cachePath, req.Source.BucketName, req.Source.ExpectedHash)
 	if req.Source.CachePath == "" && isContentHash(req.Source.ExpectedHash) && cs.cas.Exists(req.Source.ExpectedHash) {
 		Logger.Debugf("StoreFromContent[EXISTS] - [%s]", req.Source.ExpectedHash)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: req.Source.ExpectedHash}, nil
@@ -875,7 +899,15 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		size uint64
 		err  error
 	)
-	if req.Source.BucketName == "" {
+	if _, ok := ParseOCIRequiredContentOriginPath(req.Source.Path); ok {
+		var reader io.ReadCloser
+		reader, err = cs.openOCIOriginSource(ctx, req.Source.Path)
+		if err != nil {
+			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
+		}
+		defer reader.Close()
+		hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
+	} else if req.Source.BucketName == "" {
 		var reader io.ReadCloser
 		reader, err = cs.openLocalSource(localPath)
 		if err != nil {
@@ -884,7 +916,8 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		defer reader.Close()
 		hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
 	} else {
-		s3Client, err := cs.s3ClientForSource(req.Source)
+		var s3Client *S3Client
+		s3Client, err = cs.s3ClientForSource(req.Source)
 		if err != nil {
 			Logger.Errorf("StoreFromContent[ERR] - error caching source: %v", err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
@@ -906,6 +939,15 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 
 	if err != nil {
 		Logger.Warnf("StoreFromContent[ERR] - error storing data in cache: %v", err)
+		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	Logger.Debugf("StoreFromContent[STORE] - [source=%s cache_path=%s hash=%s size=%d expected_hash=%s]", req.Source.Path, cachePath, hash, size, req.Source.ExpectedHash)
+	if hash == "" {
+		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: "stored content hash is empty"}, nil
+	}
+	if isContentHash(req.Source.ExpectedHash) && hash != req.Source.ExpectedHash {
+		err := fmt.Errorf("stored content hash mismatch: expected %s, got %s", req.Source.ExpectedHash, hash)
+		Logger.Warnf("StoreFromContent[ERR] - %v", err)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 

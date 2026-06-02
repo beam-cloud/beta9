@@ -141,7 +141,7 @@ func (s *WorkerRepositoryService) SetRequiredContentReconciliationStatus(ctx con
 		Status:      req.Status,
 		ItemCount:   1,
 		Error:       req.ErrorMsg,
-		Source:      "reconciliation",
+		Source:      "lifecycle",
 		Timestamp:   time.Now().UTC(),
 	})
 	return &pb.SetRequiredContentReconciliationStatusResponse{Ok: true}, nil
@@ -163,25 +163,50 @@ func (s *WorkerRepositoryService) ResolveRequiredContentOrigin(ctx context.Conte
 	}
 
 	item := requiredContentItemFromProto(req.Item)
+	if item.Source.Type == cache.RequiredContentSourceOCIRegistry {
+		originPath := cache.OCIRequiredContentOriginPath(item.Source)
+		if originPath == "" {
+			return &pb.ResolveRequiredContentOriginResponse{Ok: true, OriginAvailable: false}, nil
+		}
+		expectedHash := item.ExpectedHash
+		if expectedHash == "" {
+			expectedHash = item.Hash
+		}
+		return &pb.ResolveRequiredContentOriginResponse{
+			Ok:              true,
+			OriginAvailable: true,
+			Origin: &pb.RequiredContentOrigin{
+				Path:         originPath,
+				CachePath:    item.RoutingKey,
+				ExpectedHash: expectedHash,
+			},
+		}, nil
+	}
+
 	if item.Source.Type != cache.RequiredContentSourceS3 || item.Source.ObjectPath == "" || s.backendRepo == nil {
 		return &pb.ResolveRequiredContentOriginResponse{Ok: true, OriginAvailable: false}, nil
 	}
 
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, item.WorkspaceID)
-	if err != nil || !workspace.StorageAvailable() {
+	if err != nil {
+		return &pb.ResolveRequiredContentOriginResponse{Ok: true, OriginAvailable: false}, nil
+	}
+	fullWorkspace, err := s.backendRepo.GetWorkspace(ctx, workspace.Id)
+	if err != nil || fullWorkspace == nil || !fullWorkspace.StorageAvailable() {
 		return &pb.ResolveRequiredContentOriginResponse{Ok: true, OriginAvailable: false}, nil
 	}
 
-	storage := workspace.Storage
+	storage := fullWorkspace.Storage
+	endpointURL := firstNonEmptyString(item.Source.EndpointURL, ptrString(storage.EndpointUrl))
 	origin := &pb.RequiredContentOrigin{
 		Path:           item.Source.ObjectPath,
 		BucketName:     firstNonEmptyString(item.Source.BucketName, ptrString(storage.BucketName)),
 		Region:         firstNonEmptyString(item.Source.Region, ptrString(storage.Region)),
-		EndpointUrl:    firstNonEmptyString(item.Source.EndpointURL, ptrString(storage.EndpointUrl)),
+		EndpointUrl:    endpointURL,
 		AccessKey:      ptrString(storage.AccessKey),
 		SecretKey:      ptrString(storage.SecretKey),
 		CachePath:      item.RoutingKey,
-		ForcePathStyle: item.Source.ForcePathStyle,
+		ForcePathStyle: item.Source.ForcePathStyle || endpointURL != "",
 		ExpectedHash:   item.ExpectedHash,
 	}
 	if origin.ExpectedHash == "" {

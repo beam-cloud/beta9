@@ -933,6 +933,11 @@ func (cas *Store) Exists(hash string, expectedSize ...int64) bool {
 	return cas.ContentStatus(hash, expectedSize...) == contentStatusComplete
 }
 
+func (cas *Store) ContentSize(hash string) (int64, bool) {
+	size, _, _, ok := cas.completeMarker(hash)
+	return size, ok
+}
+
 func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {
 	hasExpectedSize := len(expectedSize) > 0 && expectedSize[0] > 0
 	if cas.memoryCacheEnabled {

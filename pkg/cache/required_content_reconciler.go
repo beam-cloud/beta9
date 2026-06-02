@@ -7,7 +7,6 @@ import (
 	"io"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
@@ -81,6 +80,7 @@ func (r *requiredContentReconciler) reconcileOnce() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
 	since := time.Now().UTC().Add(-r.config.StubTTL)
 	stubs, err := r.repository.ListRecentStubLocalities(ctx, r.server.locality, since, r.config.BatchSize)
 	if err != nil {
@@ -113,44 +113,54 @@ func (r *requiredContentReconciler) reconcileOnce() {
 		}()
 	}
 
-	var queuedBytes int64
-	queue := func(item RequiredContentItem) bool {
-		item = item.Normalized()
-		if item.Hash == "" {
-			return true
-		}
-		if !r.ownsItem(hasher, item) {
-			return true
-		}
-		if item.SizeBytes > 0 && r.config.MaxBytesPerCycle > 0 {
-			next := atomic.AddInt64(&queuedBytes, item.SizeBytes)
-			if next > r.config.MaxBytesPerCycle {
-				return false
-			}
-		}
-		select {
-		case jobs <- item:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-
-sendLoop:
+	budget := requiredContentCycleBudget{max: r.config.MaxBytesPerCycle}
+	stop := false
 	for _, stub := range stubs {
+		if stop {
+			break
+		}
 		items, err := r.repository.ListRequiredContentForStub(ctx, stub.Locality, stub.WorkspaceID, stub.StubID, r.config.BatchSize)
 		if err != nil {
 			Logger.Debugf("required content reconciliation list items failed: locality=%s workspace=%s stub=%s err=%v", stub.Locality, stub.WorkspaceID, stub.StubID, err)
 			continue
 		}
 		for _, item := range items {
-			if !queue(item) {
-				break sendLoop
+			item = item.Normalized()
+			if item.Hash == "" || !r.ownsItem(hasher, item) {
+				continue
+			}
+			if !budget.take(item.SizeBytes) {
+				stop = true
+				break
+			}
+			select {
+			case jobs <- item:
+			case <-ctx.Done():
+				stop = true
+			}
+			if stop {
+				break
 			}
 		}
 	}
 	close(jobs)
 	wg.Wait()
+}
+
+type requiredContentCycleBudget struct {
+	max  int64
+	used int64
+}
+
+func (b *requiredContentCycleBudget) take(size int64) bool {
+	if size <= 0 || b.max <= 0 {
+		return true
+	}
+	if b.used+size > b.max {
+		return false
+	}
+	b.used += size
+	return true
 }
 
 func (r *requiredContentReconciler) currentHasher(ctx context.Context) (RendezvousHasher, error) {
@@ -199,11 +209,7 @@ func (r *requiredContentReconciler) reconcileItem(ctx context.Context, item Requ
 		return
 	}
 	if r.localContentComplete(item) {
-		r.setStatus(ctx, item, RequiredContentStatusPresent, "")
-		return
-	}
-	if item.SizeBytes <= 0 {
-		r.setStatus(ctx, item, RequiredContentStatusSkipped, "content size is unknown")
+		r.markPresent(ctx, item)
 		return
 	}
 
@@ -227,11 +233,11 @@ func (r *requiredContentReconciler) reconcileItem(ctx context.Context, item Requ
 
 	r.setStatus(ctx, item, RequiredContentStatusMaterializing, "")
 	if r.localContentComplete(item) {
-		r.setStatus(ctx, item, RequiredContentStatusPresent, "")
+		r.markPresent(ctx, item)
 		return
 	}
 	if err := r.materializeFromReplica(ctx, item); err == nil {
-		r.setStatus(ctx, item, RequiredContentStatusPresent, "")
+		r.markPresent(ctx, item)
 		return
 	} else if !errors.Is(err, ErrContentNotFound) && !errors.Is(err, ErrSelectedHostUnavailable) && !errors.Is(err, ErrHostNotFound) {
 		Logger.Debugf("required content replica materialization failed: hash=%s routing_key=%s err=%v", item.Hash, item.RoutingKey, err)
@@ -249,7 +255,26 @@ func (r *requiredContentReconciler) reconcileItem(ctx context.Context, item Requ
 		r.setStatus(ctx, item, RequiredContentStatusError, err.Error())
 		return
 	}
+	r.markPresent(ctx, item)
+}
+
+func (r *requiredContentReconciler) markPresent(ctx context.Context, item RequiredContentItem) {
+	r.recordLocalContentSize(ctx, item)
 	r.setStatus(ctx, item, RequiredContentStatusPresent, "")
+}
+
+func (r *requiredContentReconciler) recordLocalContentSize(ctx context.Context, item RequiredContentItem) {
+	if item.SizeBytes > 0 || r.repository == nil || r.server == nil || r.server.cas == nil {
+		return
+	}
+	size, ok := r.server.cas.ContentSize(item.Hash)
+	if !ok || size <= 0 {
+		return
+	}
+	item.SizeBytes = size
+	if err := r.repository.UpsertRequiredContent(ctx, item, r.config.StubTTL); err != nil {
+		Logger.Debugf("required content size update failed: hash=%s size=%d err=%v", item.Hash, size, err)
+	}
 }
 
 func refreshRequiredContentLock(ctx context.Context, lock RequiredContentReconciliationLock, ttl time.Duration, done <-chan struct{}) {
@@ -294,9 +319,9 @@ func (r *requiredContentReconciler) materializeFromReplica(ctx context.Context, 
 	if concurrency <= 0 {
 		concurrency = 1
 	}
-	_, storedSize, err := r.server.cas.AddPageSourceWithExpectedHash(ctx, hash, item.SizeBytes, concurrency, func(ctx context.Context, _ int64, start int64, length int64) ([]byte, error) {
+	_, storedSize, err := r.server.cas.AddPageSourceWithExpectedHash(ctx, hash, item.SizeBytes, concurrency, func(ctx context.Context, _ int64, offset int64, length int64) ([]byte, error) {
 		buf := make([]byte, int(length))
-		n, err := r.server.peerClient.ReadContentInto(ctx, item.Hash, start, buf, ClientOptions{RoutingKey: item.RoutingKey})
+		n, err := r.server.peerClient.ReadContentInto(ctx, item.Hash, offset, buf, ClientOptions{RoutingKey: item.RoutingKey})
 		if err != nil {
 			return nil, err
 		}
@@ -323,6 +348,19 @@ func (r *requiredContentReconciler) materializeFromOrigin(ctx context.Context, i
 	if !ok {
 		return ErrContentNotFound
 	}
+	expectedHash := firstNonEmpty(instruction.ExpectedHash, item.ExpectedHash, item.Hash)
+	if !isContentHash(expectedHash) {
+		return fmt.Errorf("valid expected hash is required for origin materialization")
+	}
+	Logger.Debugf(
+		"required content origin resolved: hash=%s routing_key=%s source=%s bucket=%s cache_path=%s expected_hash=%s",
+		item.Hash,
+		item.RoutingKey,
+		instruction.Path,
+		instruction.BucketName,
+		instruction.CachePath,
+		expectedHash,
+	)
 	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
 		Path:           instruction.Path,
 		BucketName:     instruction.BucketName,
@@ -332,7 +370,7 @@ func (r *requiredContentReconciler) materializeFromOrigin(ctx context.Context, i
 		SecretKey:      instruction.SecretKey,
 		CachePath:      instruction.CachePath,
 		ForcePathStyle: instruction.ForcePathStyle,
-		ExpectedHash:   firstNonEmpty(instruction.ExpectedHash, item.ExpectedHash, item.Hash),
+		ExpectedHash:   expectedHash,
 	}}
 	resp, err := r.server.storeContentFromSource(ctx, req)
 	if err != nil {
@@ -343,6 +381,15 @@ func (r *requiredContentReconciler) materializeFromOrigin(ctx context.Context, i
 			return fmt.Errorf("%s", resp.ErrorMsg)
 		}
 		return ErrUnableToPopulateContent
+	}
+	if resp.Hash != expectedHash {
+		return fmt.Errorf("origin materialized unexpected hash: expected %s got %s", expectedHash, resp.Hash)
+	}
+	completeItem := item
+	completeItem.Hash = expectedHash
+	completeItem.ExpectedHash = expectedHash
+	if !r.localContentComplete(completeItem) {
+		return fmt.Errorf("origin materialized hash %s but local content is incomplete", expectedHash)
 	}
 	return nil
 }

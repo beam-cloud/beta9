@@ -96,6 +96,154 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromReplica(t *
 	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, routingKey))
 }
 
+func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromOrigin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
+	selectedStore := newTestStore(t, 8)
+	content := bytes.Repeat([]byte("required-content-origin-"), 4)
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	sourcePath := t.TempDir() + "/required-content.bin"
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+
+	item := RequiredContentItem{
+		Locality:     "default",
+		WorkspaceID:  "workspace-1",
+		StubID:       "stub-1",
+		Kind:         RequiredContentKindVolume,
+		Hash:         hash,
+		RoutingKey:   "volumes/workspace/file.bin",
+		ExpectedHash: hash,
+		SizeBytes:    int64(len(content)),
+		Status:       RequiredContentStatusPending,
+	}
+	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
+	repo.origin = RequiredContentOriginInstruction{
+		Path:         sourcePath,
+		CachePath:    item.RoutingKey,
+		ExpectedHash: hash,
+	}
+	repo.originOK = true
+
+	reconciler := &requiredContentReconciler{
+		server: &Server{
+			ctx:           ctx,
+			hostId:        selectedHost.HostId,
+			locality:      "default",
+			cas:           selectedStore,
+			metadataStore: NewMockCacheMetadataStore(),
+		},
+		config:         NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 2, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2}),
+		repository:     repo,
+		hostDirectory:  repo,
+		originResolver: repo,
+	}
+
+	reconciler.reconcileOnce()
+
+	require.Equal(t, contentStatusComplete, selectedStore.ContentStatus(hash, int64(len(content))))
+	dst := make([]byte, len(content))
+	n, err := selectedStore.ReadAt(hash, 0, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, item.RoutingKey))
+}
+
+func TestRequiredContentReconcilerBackfillsUnknownSizeFromCompleteMarker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
+	selectedStore := newTestStore(t, 8)
+	content := []byte("complete content with missing required-content size")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	storedHash, size, err := selectedStore.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.Equal(t, hash, storedHash)
+	require.Equal(t, int64(len(content)), size)
+
+	item := RequiredContentItem{
+		Locality:     "default",
+		WorkspaceID:  "workspace-1",
+		StubID:       "stub-1",
+		Kind:         RequiredContentKindClipOCI,
+		Hash:         hash,
+		RoutingKey:   hash,
+		ExpectedHash: hash,
+		Status:       RequiredContentStatusPending,
+	}
+	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
+	reconciler := &requiredContentReconciler{
+		server: &Server{
+			ctx:      ctx,
+			hostId:   selectedHost.HostId,
+			locality: "default",
+			cas:      selectedStore,
+		},
+		config:        NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, ReconcileConcurrency: 1, BatchSize: 16}),
+		repository:    repo,
+		hostDirectory: repo,
+	}
+
+	reconciler.reconcileOnce()
+
+	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, item.RoutingKey))
+	require.Equal(t, int64(len(content)), repo.item.SizeBytes)
+}
+
+func TestRequiredContentReconcilerMaterializesUnknownSizeContentFromOrigin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
+	selectedStore := newTestStore(t, 8)
+	content := []byte("origin content with missing required-content size")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	sourcePath := t.TempDir() + "/required-content.bin"
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+
+	item := RequiredContentItem{
+		Locality:     "default",
+		WorkspaceID:  "workspace-1",
+		StubID:       "stub-1",
+		Kind:         RequiredContentKindClipOCI,
+		Hash:         hash,
+		RoutingKey:   hash,
+		ExpectedHash: hash,
+		Status:       RequiredContentStatusPending,
+	}
+	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
+	repo.origin = RequiredContentOriginInstruction{
+		Path:         sourcePath,
+		CachePath:    item.RoutingKey,
+		ExpectedHash: hash,
+	}
+	repo.originOK = true
+	reconciler := &requiredContentReconciler{
+		server: &Server{
+			ctx:      ctx,
+			hostId:   selectedHost.HostId,
+			locality: "default",
+			cas:      selectedStore,
+		},
+		config:         NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 1, BatchSize: 16}),
+		repository:     repo,
+		hostDirectory:  repo,
+		originResolver: repo,
+	}
+
+	reconciler.reconcileOnce()
+
+	require.Equal(t, contentStatusComplete, selectedStore.ContentStatus(hash, int64(len(content))))
+	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, item.RoutingKey))
+	require.Equal(t, int64(len(content)), repo.item.SizeBytes)
+}
+
 func routingKeyOwnedBy(t *testing.T, selectedHost, replicaHost *Host) string {
 	t.Helper()
 
@@ -115,6 +263,8 @@ type requiredContentMemoryRepository struct {
 	mu       sync.Mutex
 	hosts    []*Host
 	item     RequiredContentItem
+	origin   RequiredContentOriginInstruction
+	originOK bool
 	statuses map[string]RequiredContentReconciliationStatus
 	locks    map[string]bool
 }
@@ -184,7 +334,7 @@ func (r *requiredContentMemoryRepository) AcquireRequiredContentReconciliationLo
 }
 
 func (r *requiredContentMemoryRepository) ResolveRequiredContentOrigin(ctx context.Context, item RequiredContentItem) (RequiredContentOriginInstruction, bool, error) {
-	return RequiredContentOriginInstruction{}, false, nil
+	return r.origin, r.originOK, nil
 }
 
 func (r *requiredContentMemoryRepository) statusFor(hash, routingKey string) RequiredContentReconciliationStatus {

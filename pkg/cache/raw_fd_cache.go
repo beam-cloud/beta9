@@ -20,13 +20,13 @@ type rawPageFDCacheEntry struct {
 }
 
 type rawPageHandle struct {
-	file  *os.File
-	cache bool
-	hit   bool
+	file   *os.File
+	pooled bool
+	hit    bool
 }
 
 func (h rawPageHandle) Close() error {
-	if h.file == nil || h.cache {
+	if h.file == nil || h.pooled {
 		return nil
 	}
 	return h.file.Close()
@@ -62,7 +62,7 @@ func (c *rawPageFDCache) open(path string) (rawPageHandle, error) {
 		entry := elem.Value.(*rawPageFDCacheEntry)
 		if sameFileInfo(entry.info, info) {
 			c.lru.MoveToFront(elem)
-			handle := rawPageHandle{file: entry.file, cache: true, hit: true}
+			handle := rawPageHandle{file: entry.file, pooled: true, hit: true}
 			c.mu.Unlock()
 			return handle, nil
 		}
@@ -89,7 +89,7 @@ func (c *rawPageFDCache) open(path string) (rawPageHandle, error) {
 		entry := elem.Value.(*rawPageFDCacheEntry)
 		if sameFileInfo(entry.info, info) {
 			c.lru.MoveToFront(elem)
-			handle := rawPageHandle{file: entry.file, cache: true, hit: true}
+			handle := rawPageHandle{file: entry.file, pooled: true, hit: true}
 			c.mu.Unlock()
 			_ = file.Close()
 			return handle, nil
@@ -104,7 +104,7 @@ func (c *rawPageFDCache) open(path string) (rawPageHandle, error) {
 		c.removeElementLocked(c.lru.Back())
 	}
 	c.mu.Unlock()
-	return rawPageHandle{file: file, cache: true}, nil
+	return rawPageHandle{file: file, pooled: true}, nil
 }
 
 func (c *rawPageFDCache) close() {

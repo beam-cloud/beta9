@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net"
+	"strings"
 	"testing"
+	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -66,6 +68,48 @@ func TestStoreContentFromSourceWithExpectedHashIsIdempotent(t *testing.T) {
 	require.NotNil(t, resp)
 	require.True(t, resp.Ok)
 	require.Equal(t, hash, resp.Hash)
+}
+
+func TestStoreContentFromSourcePropagatesS3StoreError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	server := &Server{ctx: ctx, cas: newTestStore(t, 4)}
+	resp, err := server.storeContentFromSource(ctx, &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
+		Path:         "missing/source",
+		BucketName:   "bucket",
+		Region:       "us-east-1",
+		EndpointUrl:  "http://127.0.0.1:1",
+		AccessKey:    "access-key",
+		SecretKey:    "secret-key",
+		ExpectedHash: strings.Repeat("a", sha256.Size*2),
+	}})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.False(t, resp.Ok)
+	require.NotEmpty(t, resp.ErrorMsg)
+	require.NotEqual(t, "stored content hash is empty", resp.ErrorMsg)
+}
+
+func TestOCIRequiredContentOriginPathRoundTrips(t *testing.T) {
+	source := RequiredContentSource{
+		Type:        RequiredContentSourceOCIRegistry,
+		Registry:    "registry.localhost:5000",
+		Repository:  "stage/beta9-users",
+		Reference:   "sha256:manifest",
+		LayerDigest: "sha256:layer",
+	}
+
+	path := OCIRequiredContentOriginPath(source)
+	got, ok := ParseOCIRequiredContentOriginPath(path)
+
+	require.True(t, ok)
+	require.Equal(t, source.Type, got.Type)
+	require.Equal(t, source.Registry, got.Registry)
+	require.Equal(t, source.Repository, got.Repository)
+	require.Equal(t, source.Reference, got.Reference)
+	require.Equal(t, source.LayerDigest, got.LayerDigest)
 }
 
 func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {

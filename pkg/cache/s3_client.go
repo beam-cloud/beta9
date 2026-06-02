@@ -64,7 +64,7 @@ func NewS3Client(ctx context.Context, sourceConfig S3SourceConfig, serverConfig 
 	}
 
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.UsePathStyle = sourceConfig.ForcePathStyle
+		o.UsePathStyle = sourceConfig.ForcePathStyle || sourceConfig.EndpointURL != ""
 	})
 	return &S3Client{
 		Client:              s3Client,

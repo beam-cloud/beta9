@@ -233,32 +233,7 @@ func (r *CacheRedisRepository) UpsertRequiredContent(ctx context.Context, item c
 	if err != nil {
 		return err
 	}
-	if found {
-		if !existing.FirstSeen.IsZero() {
-			item.FirstSeen = existing.FirstSeen
-		}
-		item.AccessCount = existing.AccessCount + 1
-		if item.SizeBytes <= 0 {
-			item.SizeBytes = existing.SizeBytes
-		}
-		if item.Source.Type == cache.RequiredContentSourceUnknown && existing.Source.Type != "" {
-			item.Source = existing.Source
-		}
-		if existing.Status != "" && item.Status == cache.RequiredContentStatusPending {
-			item.Status = existing.Status
-			item.LastStatusAt = existing.LastStatusAt
-			item.LastError = existing.LastError
-		}
-	} else {
-		item.AccessCount = 1
-	}
-	if item.FirstSeen.IsZero() {
-		item.FirstSeen = now
-	}
-	item.LastSeen = now
-	if item.LastStatusAt.IsZero() {
-		item.LastStatusAt = now
-	}
+	item = mergeRequiredContentItem(item, existing, found, now)
 
 	payload, err := json.Marshal(item)
 	if err != nil {
@@ -275,6 +250,44 @@ func (r *CacheRedisRepository) UpsertRequiredContent(ctx context.Context, item c
 	pipe.Expire(ctx, recentKey, ttl)
 	_, err = pipe.Exec(ctx)
 	return err
+}
+
+func mergeRequiredContentItem(item, existing cache.RequiredContentItem, found bool, now time.Time) cache.RequiredContentItem {
+	if !found {
+		item.AccessCount = 1
+		if item.FirstSeen.IsZero() {
+			item.FirstSeen = now
+		}
+		item.LastSeen = now
+		if item.LastStatusAt.IsZero() {
+			item.LastStatusAt = now
+		}
+		return item
+	}
+
+	if !existing.FirstSeen.IsZero() {
+		item.FirstSeen = existing.FirstSeen
+	}
+	item.AccessCount = existing.AccessCount + 1
+	if item.SizeBytes <= 0 {
+		item.SizeBytes = existing.SizeBytes
+	}
+	if item.Source.Type == cache.RequiredContentSourceUnknown && existing.Source.Type != "" {
+		item.Source = existing.Source
+	}
+	if existing.Status != "" && item.Status == cache.RequiredContentStatusPending {
+		item.Status = existing.Status
+		item.LastStatusAt = existing.LastStatusAt
+		item.LastError = existing.LastError
+	}
+	if item.FirstSeen.IsZero() {
+		item.FirstSeen = now
+	}
+	item.LastSeen = now
+	if item.LastStatusAt.IsZero() {
+		item.LastStatusAt = now
+	}
+	return item
 }
 
 func (r *CacheRedisRepository) UpsertRequiredContentBatch(ctx context.Context, items []cache.RequiredContentItem, ttl time.Duration) error {
@@ -466,19 +479,42 @@ func requiredContentLockTTL(ttl time.Duration) time.Duration {
 }
 
 func requiredContentRecentStubsKey(locality string) string {
-	return fmt.Sprintf("%s:locality:%s:stubs", cacheRequiredContentKeyPrefix, requiredContentKeyPart(locality))
+	return fmt.Sprintf(
+		"%s:locality:%s:stubs",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+	)
 }
 
 func requiredContentStubItemsKey(locality, workspaceID, stubID string) string {
-	return fmt.Sprintf("%s:locality:%s:workspace:%s:stub:%s:items", cacheRequiredContentKeyPrefix, requiredContentKeyPart(locality), requiredContentKeyPart(workspaceID), requiredContentKeyPart(stubID))
+	return fmt.Sprintf(
+		"%s:locality:%s:workspace:%s:stub:%s:items",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(workspaceID),
+		requiredContentKeyPart(stubID),
+	)
 }
 
 func requiredContentItemKey(locality, workspaceID, stubID, hash, routingKey string) string {
-	return fmt.Sprintf("%s:locality:%s:workspace:%s:stub:%s:item:%s", cacheRequiredContentKeyPrefix, requiredContentKeyPart(locality), requiredContentKeyPart(workspaceID), requiredContentKeyPart(stubID), requiredContentItemID(hash, routingKey))
+	return fmt.Sprintf(
+		"%s:locality:%s:workspace:%s:stub:%s:item:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(workspaceID),
+		requiredContentKeyPart(stubID),
+		requiredContentItemID(hash, routingKey),
+	)
 }
 
 func requiredContentLockKey(locality, logicalHostID, hash string) string {
-	return fmt.Sprintf("%s:lock:%s:%s:%s", cacheRequiredContentKeyPrefix, requiredContentKeyPart(locality), requiredContentKeyPart(logicalHostID), requiredContentKeyPart(hash))
+	return fmt.Sprintf(
+		"%s:lock:%s:%s:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(logicalHostID),
+		requiredContentKeyPart(hash),
+	)
 }
 
 func requiredContentStubMember(workspaceID, stubID string) string {

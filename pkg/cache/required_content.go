@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -55,6 +57,43 @@ type RequiredContentSource struct {
 	EndpointURL    string                    `json:"endpoint_url,omitempty"`
 	ObjectPath     string                    `json:"object_path,omitempty"`
 	ForcePathStyle bool                      `json:"force_path_style,omitempty"`
+}
+
+func OCIRequiredContentOriginPath(source RequiredContentSource) string {
+	if source.Registry == "" || source.Repository == "" || source.LayerDigest == "" {
+		return ""
+	}
+	u := url.URL{
+		Scheme: "oci",
+		Host:   source.Registry,
+		Path:   "/" + strings.TrimPrefix(source.Repository, "/"),
+	}
+	query := u.Query()
+	query.Set("layer_digest", source.LayerDigest)
+	if source.Reference != "" {
+		query.Set("reference", source.Reference)
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func ParseOCIRequiredContentOriginPath(rawPath string) (RequiredContentSource, bool) {
+	u, err := url.Parse(rawPath)
+	if err != nil || u.Scheme != "oci" || u.Host == "" {
+		return RequiredContentSource{}, false
+	}
+	query := u.Query()
+	source := RequiredContentSource{
+		Type:        RequiredContentSourceOCIRegistry,
+		Registry:    u.Host,
+		Repository:  strings.TrimPrefix(u.Path, "/"),
+		Reference:   query.Get("reference"),
+		LayerDigest: query.Get("layer_digest"),
+	}
+	if source.Repository == "" || source.LayerDigest == "" {
+		return RequiredContentSource{}, false
+	}
+	return source, true
 }
 
 type RequiredContentOriginInstruction struct {
