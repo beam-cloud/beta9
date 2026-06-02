@@ -18,14 +18,15 @@ const (
 )
 
 type Config struct {
-	Enabled     bool              `key:"enabled" json:"enabled"`
-	Disk        DiskConfig        `key:"disk" json:"disk"`
-	Memory      MemoryConfig      `key:"memory" json:"memory"`
-	Coordinator CoordinatorConfig `key:"coordinator" json:"coordinator"`
-	Server      ServerConfig      `key:"server" json:"server"`
-	Client      ClientConfig      `key:"client" json:"client"`
-	Global      GlobalConfig      `key:"global" json:"global"`
-	Metrics     MetricsConfig     `key:"metrics" json:"metrics"`
+	Enabled         bool                  `key:"enabled" json:"enabled"`
+	Disk            DiskConfig            `key:"disk" json:"disk"`
+	Memory          MemoryConfig          `key:"memory" json:"memory"`
+	Coordinator     CoordinatorConfig     `key:"coordinator" json:"coordinator"`
+	RequiredContent RequiredContentConfig `key:"requiredContent" json:"required_content"`
+	Server          ServerConfig          `key:"server" json:"server"`
+	Client          ClientConfig          `key:"client" json:"client"`
+	Global          GlobalConfig          `key:"global" json:"global"`
+	Metrics         MetricsConfig         `key:"metrics" json:"metrics"`
 }
 
 type DiskConfig struct {
@@ -52,6 +53,17 @@ type CoordinatorConfig struct {
 	RegistrationTTLSeconds   int    `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
 	HeartbeatIntervalSeconds int    `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
 	HostWatchIntervalSeconds int    `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
+}
+
+type RequiredContentConfig struct {
+	Enabled               bool          `key:"enabled" json:"enabled"`
+	StubTTL               time.Duration `key:"stubTTL" json:"stub_ttl"`
+	VolumeMinBytes        int64         `key:"volumeMinBytes" json:"volume_min_bytes"`
+	ReconcileInterval     time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
+	ReconcileConcurrency  int           `key:"reconcileConcurrency" json:"reconcile_concurrency"`
+	BatchSize             int           `key:"batchSize" json:"batch_size"`
+	MaxBytesPerCycle      int64         `key:"maxBytesPerCycle" json:"max_bytes_per_cycle"`
+	OriginFallbackEnabled bool          `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 }
 
 type GlobalConfig struct {
@@ -102,8 +114,9 @@ type ServerConfig struct {
 }
 
 type ServerReadTransportConfig struct {
-	Enabled  bool `key:"enabled" json:"enabled"`
-	Sendfile bool `key:"sendfile" json:"sendfile"`
+	Enabled         bool `key:"enabled" json:"enabled"`
+	Sendfile        bool `key:"sendfile" json:"sendfile"`
+	PageFDCacheSize int  `key:"pageFDCacheSize" json:"page_fd_cache_size"`
 }
 
 type ClientConfig struct {
@@ -119,9 +132,10 @@ type ClientConfig struct {
 }
 
 type ClientReadTransportConfig struct {
-	Enabled               bool `key:"enabled" json:"enabled"`
-	MaxActiveConnsPerHost int  `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
-	MaxIdleConnsPerHost   int  `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
+	Enabled                      bool  `key:"enabled" json:"enabled"`
+	MaxActiveConnsPerHost        int   `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
+	MaxIdleConnsPerHost          int   `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
+	SmallRangeCopyThresholdBytes int64 `key:"smallRangeCopyThresholdBytes" json:"small_range_copy_threshold_bytes"`
 }
 
 type ReadPrefetchConfig struct {

@@ -665,6 +665,10 @@ func (s *Worker) listenForShutdown() {
 }
 
 func (s *Worker) disableSchedulingForShutdown() {
+	if s.workerRepoClient == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -683,6 +687,8 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 		return true
 	default:
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			s.disableSchedulingForShutdown()
+
 			err := s.storageManager.Cleanup()
 			if err != nil {
 				log.Error().Err(err).Msg("failed to cleanup workspace storage")

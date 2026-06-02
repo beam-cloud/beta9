@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -25,6 +26,13 @@ type Storage interface {
 	Unmount(localPath string) error
 	Format(fsName string) error
 	Mode() string
+}
+
+type RequiredContentReporter func(ctx context.Context, item cache.RequiredContentItem)
+
+type StorageOptions struct {
+	RequiredContentReporter       RequiredContentReporter
+	RequiredContentVolumeMinBytes int64
 }
 
 // IsMounted reports whether mountPoint is present in mountinfo without touching
@@ -78,6 +86,10 @@ func unescapeMountInfoPath(path string) string {
 }
 
 func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
+	return NewStorageWithOptions(config, cacheClient, StorageOptions{})
+}
+
+func NewStorageWithOptions(config types.StorageConfig, cacheClient *cache.Client, opts StorageOptions) (Storage, error) {
 	switch config.Mode {
 	case StorageModeJuiceFS:
 		s, err := NewJuiceFsStorage(config.JuiceFS)
@@ -100,7 +112,7 @@ func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage,
 
 		return s, nil
 	case StorageModeGeese:
-		s, err := NewGeeseStorage(config.Geese, cacheClient)
+		s, err := NewGeeseStorageWithOptions(config.Geese, cacheClient, opts)
 		if err != nil {
 			return nil, err
 		}

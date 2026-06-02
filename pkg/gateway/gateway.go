@@ -290,7 +290,7 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 
 // Register repository services
 func (g *Gateway) registerRepositoryServices() error {
-	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo, g.RedisClient, g.Config.Cache.Coordinator.Token)
+	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo, g.RedisClient, g.Config.Cache.Coordinator.Token, g.EventRepo, g.BackendRepo)
 	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)

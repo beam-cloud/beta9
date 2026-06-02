@@ -93,6 +93,28 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2RequiredContentEventsUseStubCacheStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456/cache",
+		"events/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected required content stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected required content stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
 func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

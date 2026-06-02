@@ -24,16 +24,17 @@ var (
 	EventTaskCreated = "task.created"
 	EventStubState   = "stub.state.%s" // healthy, degraded, warning
 
-	EventContainerLifecycle = "container.lifecycle"
-	EventContainerMetrics   = "container.metrics"
-	EventContainerEvent     = "container.event"
-	EventContainerLog       = "container.log"
-	EventPlatformLog        = "platform.log"
-	EventWorkerLifecycle    = "worker.lifecycle"
-	EventStubDeploy         = "stub.deploy"
-	EventStubServe          = "stub.serve"
-	EventStubRun            = "stub.run"
-	EventStubClone          = "stub.clone"
+	EventContainerLifecycle       = "container.lifecycle"
+	EventContainerMetrics         = "container.metrics"
+	EventContainerEvent           = "container.event"
+	EventContainerLog             = "container.log"
+	EventPlatformLog              = "platform.log"
+	EventWorkerLifecycle          = "worker.lifecycle"
+	EventStubDeploy               = "stub.deploy"
+	EventStubServe                = "stub.serve"
+	EventStubRun                  = "stub.run"
+	EventStubClone                = "stub.clone"
+	EventStubCacheRequiredContent = "stub.cache.required_content"
 
 	EventWorkerPoolDegraded = "workerpool.degraded"
 	EventWorkerPoolHealthy  = "workerpool.healthy"
@@ -142,6 +143,24 @@ type EventStubStateSchema struct {
 	PreviousState    string   `json:"previous_state"`
 	Reason           string   `json:"reason"`
 	FailedContainers []string `json:"failed_containers"`
+}
+
+var EventStubCacheRequiredContentSchemaVersion = "1.0"
+
+type EventStubCacheRequiredContentSchema struct {
+	WorkspaceID      string    `json:"workspace_id"`
+	StubID           string    `json:"stub_id"`
+	Locality         string    `json:"locality"`
+	LogicalHostID    string    `json:"logical_host_id,omitempty"`
+	Kind             string    `json:"kind,omitempty"`
+	Status           string    `json:"status,omitempty"`
+	ItemCount        int64     `json:"item_count"`
+	Bytes            int64     `json:"bytes"`
+	MissCount        int64     `json:"miss_count,omitempty"`
+	UnavailableCount int64     `json:"unavailable_count,omitempty"`
+	Source           string    `json:"source,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	Timestamp        time.Time `json:"timestamp"`
 }
 
 var EventWorkerPoolStateSchemaVersion = "1.0"

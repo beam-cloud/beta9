@@ -272,6 +272,7 @@ type EventRepository interface {
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
 	PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub)
+	PushStubCacheRequiredContentEvent(event types.EventStubCacheRequiredContentSchema)
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)

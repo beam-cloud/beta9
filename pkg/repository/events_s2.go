@@ -770,6 +770,9 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 	if eventType == types.EventPlatformLog {
 		return r.platformLogStreamName(metadata)
 	}
+	if eventType == types.EventStubCacheRequiredContent && metadata.WorkspaceID != "" && metadata.StubID != "" {
+		return r.stubCacheStreamName(metadata.WorkspaceID, metadata.StubID)
+	}
 
 	switch {
 	case isTaskEvent(eventType) && metadata.TaskID != "":
@@ -803,6 +806,16 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 			return nil
 		}
 		return []s2.StreamName{stream}
+	}
+	if eventType == types.EventStubCacheRequiredContent {
+		streams := []s2.StreamName{}
+		if metadata.WorkspaceID != "" && metadata.StubID != "" {
+			streams = append(streams, r.stubCacheStreamName(metadata.WorkspaceID, metadata.StubID))
+		}
+		if metadata.WorkspaceID != "" {
+			streams = append(streams, r.workspaceStreamName(metadata.WorkspaceID))
+		}
+		return streams
 	}
 
 	streams := []s2.StreamName{}
@@ -940,6 +953,10 @@ func (r *S2EventRepository) workspaceStreamName(workspaceID string) s2.StreamNam
 
 func (r *S2EventRepository) stubStreamName(workspaceID, stubID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/stubs/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
+}
+
+func (r *S2EventRepository) stubCacheStreamName(workspaceID, stubID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/stubs/%s/cache", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
 }
 
 func (r *S2EventRepository) appStreamName(workspaceID, appID string) s2.StreamName {

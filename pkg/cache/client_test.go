@@ -509,6 +509,49 @@ func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
 	require.ErrorIs(t, err, ErrContentNotFound)
 }
 
+func TestClientLocalPageFileViewsFallsBackToRankedSameNodeHost(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("local-page-view-fallback-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	primaryHost := &Host{HostId: "primary-host", NodeID: "node-a", CachePathID: "other-cache-path"}
+	replicaHost := &Host{HostId: "replica-host", NodeID: "node-a", CachePathID: "cache-path-a"}
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 2},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		localDiskStore:        store,
+		localNodeID:           "node-a",
+		localCachePathID:      "cache-path-a",
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
+		maxGetContentAttempts: 1,
+	}
+
+	views, trace, err := client.ClientLocalPageFileViewsWithTrace(hash, 0, 4, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, 4, views[0].Length)
+	require.Len(t, trace.Attempts, 2)
+	require.Equal(t, primaryHost.HostId, trace.Attempts[0].HostID)
+	require.Equal(t, "miss", trace.Attempts[0].Result)
+	require.Equal(t, replicaHost.HostId, trace.Attempts[1].HostID)
+	require.Equal(t, "hit", trace.Attempts[1].Result)
+
+	cached := client.localHostCache[newLocalHostCacheKey(hash, hash)]
+	require.NotNil(t, cached)
+	require.Equal(t, replicaHost.HostId, cached.host.HostId)
+
+	client.hasher = &orderedTestHasher{hosts: []*Host{primaryHost}}
+	views, err = client.ClientLocalPageFileViews(hash, 0, 4, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+}
+
 func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -651,6 +694,18 @@ func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
 
 	dst := make([]byte, len(content))
 	n, err := client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+
+	cacheKey := newLocalHostCacheKey(hash, hash)
+	cached := client.localHostCache[cacheKey]
+	require.NotNil(t, cached)
+	require.Equal(t, replicaHost.HostId, cached.host.HostId)
+
+	client.hasher = &orderedTestHasher{hosts: []*Host{primaryHost}}
+	dst = make([]byte, len(content))
+	n, err = client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)

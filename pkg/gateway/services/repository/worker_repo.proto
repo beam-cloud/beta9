@@ -30,6 +30,17 @@ service WorkerRepositoryService {
   rpc UnregisterCacheHost(UnregisterCacheHostRequest)
       returns (UnregisterCacheHostResponse) {}
   rpc ListCacheHosts(ListCacheHostsRequest) returns (ListCacheHostsResponse) {}
+  rpc ReportRequiredContent(ReportRequiredContentRequest)
+      returns (ReportRequiredContentResponse) {}
+  rpc ListRecentRequiredContentStubs(ListRecentRequiredContentStubsRequest)
+      returns (ListRecentRequiredContentStubsResponse) {}
+  rpc ListRequiredContentForStub(ListRequiredContentForStubRequest)
+      returns (ListRequiredContentForStubResponse) {}
+  rpc SetRequiredContentReconciliationStatus(
+      SetRequiredContentReconciliationStatusRequest)
+      returns (SetRequiredContentReconciliationStatusResponse) {}
+  rpc ResolveRequiredContentOrigin(ResolveRequiredContentOriginRequest)
+      returns (ResolveRequiredContentOriginResponse) {}
   rpc SetCacheClientLock(SetCacheClientLockRequest)
       returns (SetCacheClientLockResponse) {}
   rpc RemoveCacheClientLock(RemoveCacheClientLockRequest)
@@ -230,6 +241,120 @@ message ListCacheHostsResponse {
   bool ok = 1;
   repeated CacheCoordinatorHost hosts = 2;
   string error_msg = 3;
+}
+
+message RequiredContentSource {
+  string type = 1;
+  string descriptor = 2;
+  string registry = 3;
+  string repository = 4;
+  string reference = 5;
+  string layer_digest = 6;
+  string bucket_name = 7;
+  string region = 8;
+  string endpoint_url = 9;
+  string object_path = 10;
+  bool force_path_style = 11;
+}
+
+message RequiredContentItem {
+  string locality = 1;
+  string workspace_id = 2;
+  string stub_id = 3;
+  string kind = 4;
+  string hash = 5;
+  string routing_key = 6;
+  int64 size_bytes = 7;
+  string expected_hash = 8;
+  RequiredContentSource source = 9;
+  int64 first_seen_unix_ms = 10;
+  int64 last_seen_unix_ms = 11;
+  int64 access_count = 12;
+  string status = 13;
+  int64 last_status_unix_ms = 14;
+  string last_error = 15;
+}
+
+message RequiredContentStubLocality {
+  string locality = 1;
+  string workspace_id = 2;
+  string stub_id = 3;
+  int64 last_seen_unix_ms = 4;
+}
+
+message ReportRequiredContentRequest {
+  string locality = 1;
+  string workspace_id = 2;
+  string stub_id = 3;
+  repeated RequiredContentItem items = 4;
+  int64 ttl_ms = 5;
+}
+
+message ReportRequiredContentResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message ListRecentRequiredContentStubsRequest {
+  string locality = 1;
+  int64 since_unix_ms = 2;
+  int32 limit = 3;
+}
+
+message ListRecentRequiredContentStubsResponse {
+  bool ok = 1;
+  repeated RequiredContentStubLocality stubs = 2;
+  string error_msg = 3;
+}
+
+message ListRequiredContentForStubRequest {
+  string locality = 1;
+  string workspace_id = 2;
+  string stub_id = 3;
+  int32 limit = 4;
+}
+
+message ListRequiredContentForStubResponse {
+  bool ok = 1;
+  repeated RequiredContentItem items = 2;
+  string error_msg = 3;
+}
+
+message SetRequiredContentReconciliationStatusRequest {
+  string locality = 1;
+  string workspace_id = 2;
+  string stub_id = 3;
+  string hash = 4;
+  string routing_key = 5;
+  string status = 6;
+  string error_msg = 7;
+  int64 ttl_ms = 8;
+}
+
+message SetRequiredContentReconciliationStatusResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RequiredContentOrigin {
+  string path = 1;
+  string bucket_name = 2;
+  string region = 3;
+  string endpoint_url = 4;
+  string access_key = 5;
+  string secret_key = 6;
+  string cache_path = 7;
+  bool force_path_style = 8;
+  string expected_hash = 9;
+}
+
+message ResolveRequiredContentOriginRequest { RequiredContentItem item = 1; }
+
+message ResolveRequiredContentOriginResponse {
+  bool ok = 1;
+  bool origin_available = 2;
+  RequiredContentOrigin origin = 3;
+  string error_msg = 4;
 }
 
 message SetCacheClientLockRequest {

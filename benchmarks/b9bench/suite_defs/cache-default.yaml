@@ -26,6 +26,7 @@ defaults:
   min_hot_file_read_mbps: 2000
   min_remote_cache_socket_mbps: 2000
   min_throughput_size_mb: 1024
+  worker_workspace_root: /workspace/data
 scenarios:
   - name: volume-strict-sequential-1024
     access: volume_mount

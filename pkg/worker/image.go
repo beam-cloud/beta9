@@ -385,6 +385,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
 	}
+	c.reportClipRequiredContentMetadata(ctx, request, meta)
 
 	return archive, nil
 }

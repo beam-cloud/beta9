@@ -35,15 +35,22 @@ const (
 )
 
 type GeeseStorage struct {
-	config      types.GeeseConfig
-	mfs         core.MountedFS
-	fs          *core.Goofys
-	mu          sync.Mutex
-	cacheClient *cache.Client
+	config                  types.GeeseConfig
+	mfs                     core.MountedFS
+	fs                      *core.Goofys
+	mu                      sync.Mutex
+	cacheClient             *cache.Client
+	requiredContentReporter RequiredContentReporter
+	requiredContentMinBytes int64
 }
 
 type geeseContentCache struct {
-	client *cache.Client
+	client                  *cache.Client
+	requiredContentReporter RequiredContentReporter
+	requiredContentMinBytes int64
+	bucketName              string
+	region                  string
+	endpointURL             string
 }
 
 var _ cfg.ContentCache = (*geeseContentCache)(nil)
@@ -51,11 +58,18 @@ var _ cfg.ContentCacheReadInto = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheStoreLocalPath = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheClientLocalPageFileViews = (*geeseContentCache)(nil)
 
-func newGeeseContentCache(client *cache.Client) *geeseContentCache {
+func newGeeseContentCache(client *cache.Client, reporter RequiredContentReporter, minBytes int64, config types.GeeseConfig) *geeseContentCache {
 	if client == nil {
 		return nil
 	}
-	return &geeseContentCache{client: client}
+	return &geeseContentCache{
+		client:                  client,
+		requiredContentReporter: reporter,
+		requiredContentMinBytes: minBytes,
+		bucketName:              config.BucketName,
+		region:                  config.Region,
+		endpointURL:             config.EndpointUrl,
+	}
 }
 
 func (c *geeseContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
@@ -69,7 +83,24 @@ func (c *geeseContentCache) GetContentStream(hash string, offset int64, length i
 }
 
 func (c *geeseContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {
-	return c.client.StoreContent(chunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
+	var sizeBytes int64
+	countingChunks := make(chan []byte)
+	go func() {
+		defer close(countingChunks)
+		for chunk := range chunks {
+			sizeBytes += int64(len(chunk))
+			countingChunks <- chunk
+		}
+	}()
+
+	actualHash, err := c.client.StoreContent(countingChunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
+	if err == nil {
+		c.reportStoredContent(actualHash, opts.RoutingKey, sizeBytes, cache.RequiredContentSource{
+			Type:       cache.RequiredContentSourceUnknown,
+			Descriptor: "geesefs content stream",
+		})
+	}
+	return actualHash, err
 }
 
 func (c *geeseContentCache) StoreContentFromS3(source struct {
@@ -97,12 +128,55 @@ func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
 	RoutingKey string
 	Lock       bool
 }) (string, error) {
-	return c.client.StoreContentFromLocalFile(cache.LocalContentSource{
+	var sizeBytes int64
+	if info, err := os.Stat(source.Path); err == nil {
+		sizeBytes = info.Size()
+	}
+
+	actualHash, err := c.client.StoreContentFromLocalFile(cache.LocalContentSource{
 		Path:      source.Path,
 		CachePath: source.CachePath,
 	}, cache.StoreContentOptions{
 		RoutingKey: opts.RoutingKey,
 		Lock:       opts.Lock,
+	})
+	if err == nil {
+		c.reportStoredContent(actualHash, opts.RoutingKey, sizeBytes, cache.RequiredContentSource{
+			Type:        cache.RequiredContentSourceS3,
+			Descriptor:  c.s3Descriptor(source.CachePath),
+			BucketName:  c.bucketName,
+			Region:      c.region,
+			EndpointURL: c.endpointURL,
+			ObjectPath:  source.CachePath,
+		})
+	}
+	return actualHash, err
+}
+
+func (c *geeseContentCache) s3Descriptor(objectPath string) string {
+	if c == nil || c.bucketName == "" || objectPath == "" {
+		return objectPath
+	}
+	return fmt.Sprintf("s3://%s/%s", c.bucketName, strings.TrimPrefix(objectPath, "/"))
+}
+
+func (c *geeseContentCache) reportStoredContent(hash, routingKey string, sizeBytes int64, source cache.RequiredContentSource) {
+	if c == nil || c.requiredContentReporter == nil || hash == "" {
+		return
+	}
+	if routingKey == "" {
+		routingKey = hash
+	}
+	if c.requiredContentMinBytes > 0 && sizeBytes < c.requiredContentMinBytes {
+		return
+	}
+	c.requiredContentReporter(context.Background(), cache.RequiredContentItem{
+		Kind:         cache.RequiredContentKindVolume,
+		Hash:         hash,
+		RoutingKey:   routingKey,
+		ExpectedHash: hash,
+		SizeBytes:    sizeBytes,
+		Source:       source,
 	})
 }
 
@@ -124,11 +198,17 @@ func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 }
 
 func NewGeeseStorage(config types.GeeseConfig, cacheClient *cache.Client) (Storage, error) {
+	return NewGeeseStorageWithOptions(config, cacheClient, StorageOptions{})
+}
+
+func NewGeeseStorageWithOptions(config types.GeeseConfig, cacheClient *cache.Client, opts StorageOptions) (Storage, error) {
 	return &GeeseStorage{
-		config:      config,
-		mfs:         nil,
-		fs:          nil,
-		cacheClient: cacheClient,
+		config:                  config,
+		mfs:                     nil,
+		fs:                      nil,
+		cacheClient:             cacheClient,
+		requiredContentReporter: opts.RequiredContentReporter,
+		requiredContentMinBytes: opts.RequiredContentVolumeMinBytes,
 	}, nil
 }
 
@@ -240,7 +320,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
-		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient)
+		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient, s.requiredContentReporter, s.requiredContentMinBytes, s.config)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
 		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
 	}

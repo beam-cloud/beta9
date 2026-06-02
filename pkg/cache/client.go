@@ -101,6 +101,8 @@ type Client struct {
 	mu                    sync.RWMutex
 	discoveryClient       *DiscoveryClient
 	metadataStore         CacheMetadataStore
+	requiredContentRepo   RequiredContentRepository
+	requiredContentConfig RequiredContentConfig
 	localHostCache        map[localHostCacheKey]*localClientCache
 	cachefsServer         *fuse.Server
 	hasher                RendezvousHasher
@@ -171,6 +173,7 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		mu:                    sync.RWMutex{},
 		metadataStore:         metadataStore,
+		requiredContentConfig: NormalizeRequiredContentConfig(cfg.RequiredContent),
 		hasher:                rendezvous.New[*Host](),
 		hostDirectory:         hostDirectory,
 		minRetryLengthBytes:   cfg.Client.MinRetryLengthBytes,
@@ -178,6 +181,9 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 	}
 
 	bc.hostMap = NewHostMap(cfg.Global, bc.addHost)
+	if repo, ok := metadataStore.(RequiredContentRepository); ok {
+		bc.requiredContentRepo = repo
+	}
 	bc.discoveryClient = NewDiscoveryClient(cfg.Global, bc.hostMap, hostDirectory, locality)
 	bc.initLocalDiskStore(cfg, locality)
 
@@ -213,6 +219,62 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 	}
 
 	return bc, nil
+}
+
+func (c *Client) Locality() string {
+	if c == nil {
+		return ""
+	}
+	return c.locality
+}
+
+func (c *Client) RequiredContentVolumeMinBytes() int64 {
+	if c == nil {
+		return DefaultRequiredContentVolumeMinBytes
+	}
+	return c.requiredContentConfig.VolumeMinBytes
+}
+
+func (c *Client) ReportRequiredContent(ctx context.Context, item RequiredContentItem) error {
+	return c.ReportRequiredContentBatch(ctx, []RequiredContentItem{item})
+}
+
+func (c *Client) ReportRequiredContentBatch(ctx context.Context, items []RequiredContentItem) error {
+	if c == nil || !c.requiredContentConfig.Enabled || c.requiredContentRepo == nil {
+		return nil
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	normalized := make([]RequiredContentItem, 0, len(items))
+	for _, item := range items {
+		item = item.Normalized()
+		if item.Locality == "" {
+			item.Locality = c.locality
+		}
+		if item.Locality == "" || item.WorkspaceID == "" || item.StubID == "" || item.Hash == "" {
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	if batchRepo, ok := c.requiredContentRepo.(RequiredContentBatchRepository); ok {
+		return batchRepo.UpsertRequiredContentBatch(ctx, normalized, c.requiredContentConfig.StubTTL)
+	}
+	for _, item := range normalized {
+		if err := c.requiredContentRepo.UpsertRequiredContent(ctx, item, c.requiredContentConfig.StubTTL); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Client) Cleanup() error {
@@ -620,6 +682,19 @@ func (c *Client) removeLocalHostCache(hash string, routingKey ...string) {
 		if key.hash == hash {
 			delete(c.localHostCache, key)
 		}
+	}
+}
+
+func (c *Client) setLocalHostCache(hash string, routingKey string, host *Host) {
+	if c == nil || hash == "" || host == nil || host.HostId == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.localHostCache[newLocalHostCacheKey(hash, routingKey)] = &localClientCache{
+		host:      host,
+		timestamp: time.Now(),
 	}
 }
 
@@ -1309,6 +1384,7 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 		trace.Offset = offset
 		trace.Length = length
 		trace.Views = len(views)
+		trace.SizeBucket = TraceSizeBucket(length)
 		trace.DurationUs = elapsed.Microseconds()
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || err != nil {
 			Logger.Debugf("cache client-local page-file views result: hash=%s offset=%d length=%d views=%d err=%v elapsed=%s", hash, offset, length, len(views), err, elapsed.Truncate(time.Millisecond))
@@ -1335,12 +1411,39 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 			return nil, trace, err
 		}
 	}
-	if views, source, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-		trace.addAttempt(0, host, source, "hit", int64(len(views)), time.Since(started), nil)
-		return views, trace, nil
+	checked := make(map[string]struct{}, c.readReplicaHostCount())
+	for hostIndex := 0; hostIndex < c.readReplicaHostCount(); hostIndex++ {
+		if hostIndex > 0 {
+			host, err = c.getHostForRequest(&ClientRequest{
+				rt:        ClientRequestTypeRetrieval,
+				hash:      hash,
+				key:       opts.RoutingKey,
+				hostIndex: hostIndex,
+			})
+			if err != nil {
+				trace.addAttempt(hostIndex, host, "host_select", operationTraceReadResult(err, 0, length), 0, time.Since(started), err)
+				continue
+			}
+		}
+		if host == nil || host.HostId == "" {
+			continue
+		}
+		if _, ok := checked[host.HostId]; ok {
+			continue
+		}
+		checked[host.HostId] = struct{}{}
+
+		if views, source, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
+			if hostIndex > 0 {
+				c.setLocalHostCache(hash, opts.RoutingKey, host)
+			}
+			trace.addAttempt(hostIndex, host, source, "hit", int64(len(views)), time.Since(started), nil)
+			return views, trace, nil
+		}
+
+		trace.addAttempt(hostIndex, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
 	}
 
-	trace.addAttempt(0, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	return nil, trace, ErrContentNotFound
 }
@@ -1429,6 +1532,7 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 		trace.Offset = offset
 		trace.Length = length
 		trace.Read = read
+		trace.SizeBucket = TraceSizeBucket(length)
 		trace.DurationUs = elapsed.Microseconds()
 		if elapsed := time.Since(started); elapsed > time.Second || err != nil {
 			Logger.Debugf("cache read-into result: hash=%s routing_key=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, opts.RoutingKey, offset, length, read, err, elapsed.Truncate(time.Millisecond))
@@ -1496,7 +1600,7 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 		}
 		checked[host.HostId] = struct{}{}
 
-		n, err := c.readContentIntoFromHost(ctx, host, hostIndex, hash, offset, dst, trace)
+		n, err := c.readContentIntoFromHost(ctx, host, hostIndex, hash, opts.RoutingKey, offset, dst, trace)
 		if err == nil && n == length {
 			return n, nil
 		}
@@ -1559,7 +1663,7 @@ func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash strin
 	}
 }
 
-func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
+func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, routingKey string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
 	if host == nil {
 		trace.addAttempt(hostIndex, host, "host_select", "unavailable", 0, 0, ErrHostNotFound)
 		return 0, ErrHostNotFound
@@ -1574,6 +1678,9 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		n, err := localServer.cas.ReadAt(hash, offset, dst)
 		trace.addAttempt(hostIndex, host, "local_server", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
+			if hostIndex > 0 {
+				c.setLocalHostCache(hash, routingKey, host)
+			}
 			cacheReadLocalTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
 			return n, nil
@@ -1593,6 +1700,9 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		n, err := localStore.ReadAt(hash, offset, dst)
 		trace.addAttempt(hostIndex, host, "local_disk", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
+			if hostIndex > 0 {
+				c.setLocalHostCache(hash, routingKey, host)
+			}
 			cacheReadLocalTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
 			return n, nil
@@ -1616,8 +1726,11 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 	if c.clientConfig.ReadTransport.Enabled {
 		attemptStarted := time.Now()
 		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
-		trace.addAttempt(hostIndex, host, "raw", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
+		trace.addAttempt(hostIndex, host, c.rawReadTraceSource(length), operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
+			if hostIndex > 0 {
+				c.setLocalHostCache(hash, routingKey, host)
+			}
 			return n, nil
 		}
 		if err == ErrContentNotFound {
@@ -1662,12 +1775,26 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 
 	copy(dst, getContentResponse.Content)
 	trace.addAttempt(hostIndex, host, "grpc", "hit", length, time.Since(start), nil)
+	if hostIndex > 0 {
+		c.setLocalHostCache(hash, routingKey, host)
+	}
 	atomic.AddInt64(&cachePathStats.clientGRPCHits, 1)
 	if c.globalConfig.GRPCPayloadCodecV2 {
 		cacheReadGRPCCodecV2Total.Inc()
 	}
 	Logger.Debugf("Elapsed time to get content: %v", time.Since(start))
 	return length, nil
+}
+
+func (c *Client) rawReadTraceSource(length int64) string {
+	if c == nil {
+		return "raw"
+	}
+	threshold := c.clientConfig.ReadTransport.SmallRangeCopyThresholdBytes
+	if threshold > 0 && length <= threshold {
+		return "raw_copy"
+	}
+	return "raw_sendfile"
 }
 
 func (c *Client) remainingHostsForRequest(checked map[string]struct{}) []*Host {
@@ -1957,6 +2084,7 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 	}
 	trace.Bytes = info.Size()
 	trace.ExpectedSize = info.Size()
+	trace.SizeBucket = TraceSizeBucket(info.Size())
 	metadata := cacheFSMetadataFromFileInfo(source.CachePath, info)
 
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)

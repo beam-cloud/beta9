@@ -22,6 +22,7 @@ type OperationTraceAttempt struct {
 	Bytes          int64  `json:"bytes,omitempty"`
 	ExpectedSize   int64  `json:"expected_size,omitempty"`
 	ContentStatus  string `json:"content_status,omitempty"`
+	SizeBucket     string `json:"size_bucket,omitempty"`
 	ElapsedUs      int64  `json:"elapsed_us,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
@@ -37,6 +38,7 @@ type OperationTrace struct {
 	Bytes         int64                   `json:"bytes,omitempty"`
 	ExpectedSize  int64                   `json:"expected_size,omitempty"`
 	Views         int                     `json:"views,omitempty"`
+	SizeBucket    string                  `json:"size_bucket,omitempty"`
 	DurationUs    int64                   `json:"duration_us,omitempty"`
 	HostRefreshes int                     `json:"host_refreshes,omitempty"`
 	Attempts      []OperationTraceAttempt `json:"attempts,omitempty"`
@@ -63,6 +65,7 @@ func (t *OperationTrace) addAttemptWithDetails(hostIndex int, host *Host, source
 		Bytes:         bytes,
 		ExpectedSize:  expectedSize,
 		ContentStatus: contentStatus,
+		SizeBucket:    TraceSizeBucket(firstPositiveInt64(bytes, read, expectedSize)),
 		ElapsedUs:     elapsed.Microseconds(),
 		HasEndpoint:   host.HasEndpoint(),
 	}
@@ -124,4 +127,34 @@ func operationTracePageViewResult(err error, viewCount int) string {
 	default:
 		return "error"
 	}
+}
+
+func TraceSizeBucket(size int64) string {
+	switch {
+	case size <= 0:
+		return "unknown"
+	case size <= 16*1024:
+		return "<=16KiB"
+	case size <= 32*1024:
+		return "<=32KiB"
+	case size <= 64*1024:
+		return "<=64KiB"
+	case size <= 128*1024:
+		return "<=128KiB"
+	case size <= 1024*1024:
+		return "<=1MiB"
+	case size <= 4*1024*1024:
+		return "<=4MiB"
+	default:
+		return ">4MiB"
+	}
+}
+
+func firstPositiveInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }

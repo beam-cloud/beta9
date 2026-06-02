@@ -47,6 +47,8 @@ type clipReadAggregate struct {
 	byCacheResult         map[string]*clipCacheRollup
 	byCacheSource         map[string]*clipCacheRollup
 	byCacheHost           map[string]*clipCacheRollup
+	byCacheMethod         map[string]*clipCacheRollup
+	byCacheSize           map[string]*clipCacheRollup
 	firstError            string
 	sampleAttrs           map[string]string
 }
@@ -73,6 +75,8 @@ type clipCacheRollup struct {
 	Operation      string `json:"operation,omitempty"`
 	Result         string `json:"result,omitempty"`
 	Source         string `json:"source,omitempty"`
+	Method         string `json:"method,omitempty"`
+	SizeBucket     string `json:"size_bucket,omitempty"`
 	HostIndex      int    `json:"host_index,omitempty"`
 	HostID         string `json:"host_id,omitempty"`
 	RegistrationID string `json:"registration_id,omitempty"`
@@ -162,6 +166,7 @@ func (c *ImageClient) recordImageContentCacheEvent(request *types.ContainerReque
 	}
 	aggregate.addContentCache(event)
 	c.clipRuntimeMu.Unlock()
+	c.reportClipRequiredContentCacheEvent(request, event)
 }
 
 func newClipReadAggregate(request *types.ContainerRequest) *clipReadAggregate {
@@ -178,6 +183,8 @@ func newClipReadAggregate(request *types.ContainerRequest) *clipReadAggregate {
 		byCacheResult:    map[string]*clipCacheRollup{},
 		byCacheSource:    map[string]*clipCacheRollup{},
 		byCacheHost:      map[string]*clipCacheRollup{},
+		byCacheMethod:    map[string]*clipCacheRollup{},
+		byCacheSize:      map[string]*clipCacheRollup{},
 		sampleAttrs:      map[string]string{},
 	}
 }
@@ -282,11 +289,14 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 		a.firstError = event.Error
 	}
 
-	a.addCacheRollup(a.byCacheOperation, clipReadRollupKey(event.Operation, event.Result), event.Operation, event.Result, "", nil, durationUs, event.Bytes, event.Read, event.Error)
-	a.addCacheRollup(a.byCacheResult, clipReadRollupKey(event.Result, event.Operation), event.Operation, event.Result, "", nil, durationUs, event.Bytes, event.Read, event.Error)
+	sizeBucket := imageContentCacheTraceSizeBucket(event)
+	a.addCacheRollup(a.byCacheOperation, clipReadRollupKey(event.Operation, event.Result), event.Operation, event.Result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+	a.addCacheRollup(a.byCacheResult, clipReadRollupKey(event.Result, event.Operation), event.Operation, event.Result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+	a.addCacheRollup(a.byCacheSize, clipReadRollupKey(sizeBucket, event.Operation, event.Result), event.Operation, event.Result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
 
 	if len(event.Trace.Attempts) == 0 {
-		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, "content_cache", event.Result), event.Operation, event.Result, "content_cache", nil, durationUs, event.Bytes, event.Read, event.Error)
+		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, "content_cache", event.Result), event.Operation, event.Result, "content_cache", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+		a.addCacheRollup(a.byCacheMethod, clipReadRollupKey("content_cache", event.Operation, event.Result), event.Operation, event.Result, "content_cache", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
 		return
 	}
 
@@ -303,10 +313,47 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 		if result == "" {
 			result = event.Result
 		}
-		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, source, result, attempt.ContentStatus), event.Operation, result, source, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
-		if attempt.HostID != "" {
-			a.addCacheRollup(a.byCacheHost, clipReadRollupKey(attempt.HostID, source, result, attempt.ContentStatus), event.Operation, result, source, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
+		method := imageContentCacheAttemptMethod(source)
+		attemptSizeBucket := sizeBucket
+		if attempt.SizeBucket != "" && attempt.SizeBucket != "unknown" {
+			attemptSizeBucket = attempt.SizeBucket
 		}
+		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, source, result, attempt.ContentStatus), event.Operation, result, source, method, attemptSizeBucket, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
+		a.addCacheRollup(a.byCacheMethod, clipReadRollupKey(method, event.Operation, result), event.Operation, result, source, method, attemptSizeBucket, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
+		if attempt.HostID != "" {
+			a.addCacheRollup(a.byCacheHost, clipReadRollupKey(attempt.HostID, source, result, attempt.ContentStatus), event.Operation, result, source, method, attemptSizeBucket, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
+		}
+	}
+}
+
+func imageContentCacheTraceSizeBucket(event imageContentCacheTrace) string {
+	size := event.Length
+	if size <= 0 {
+		size = event.Trace.Length
+	}
+	if size <= 0 {
+		size = event.Bytes
+	}
+	if size <= 0 {
+		size = event.Read
+	}
+	return cache.TraceSizeBucket(size)
+}
+
+func imageContentCacheAttemptMethod(source string) string {
+	switch source {
+	case "client_local_page_file", "local_server_page_file", "local_disk_page_file":
+		return "page_view"
+	case "raw", "raw_copy", "raw_sendfile":
+		return source
+	case "grpc":
+		return "grpc"
+	case "local_server", "local_disk":
+		return source
+	case "":
+		return "unknown"
+	default:
+		return source
 	}
 }
 
@@ -343,16 +390,24 @@ func (a *clipReadAggregate) addRollup(target map[string]*clipReadRollup, key str
 	}
 }
 
-func (a *clipReadAggregate) addCacheRollup(target map[string]*clipCacheRollup, key string, operation string, result string, source string, attempt *cache.OperationTraceAttempt, durationUs int64, bytes int64, read int64, err string) {
+func (a *clipReadAggregate) addCacheRollup(target map[string]*clipCacheRollup, key string, operation string, result string, source string, method string, sizeBucket string, attempt *cache.OperationTraceAttempt, durationUs int64, bytes int64, read int64, err string) {
 	if key == "" {
 		key = "unknown"
+	}
+	if method == "" {
+		method = source
+	}
+	if sizeBucket == "" {
+		sizeBucket = "unknown"
 	}
 	rollup := target[key]
 	if rollup == nil {
 		rollup = &clipCacheRollup{
-			Operation: operation,
-			Result:    result,
-			Source:    source,
+			Operation:  operation,
+			Result:     result,
+			Source:     source,
+			Method:     method,
+			SizeBucket: sizeBucket,
 		}
 		if attempt != nil {
 			rollup.HostIndex = attempt.HostIndex
@@ -413,8 +468,10 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		"last_access_at":            aggregate.lastAt.UTC().Format(time.RFC3339Nano),
 		"read_count":                strconv.FormatInt(aggregate.readCount, 10),
 		"top_cache_hosts_json":      clipCacheRollupsJSON(aggregate.byCacheHost, clipReadAggregateTopN),
+		"top_cache_methods_json":    clipCacheRollupsJSON(aggregate.byCacheMethod, clipReadAggregateTopN),
 		"top_cache_operations_json": clipCacheRollupsJSON(aggregate.byCacheOperation, clipReadAggregateTopN),
 		"top_cache_results_json":    clipCacheRollupsJSON(aggregate.byCacheResult, clipReadAggregateTopN),
+		"top_cache_sizes_json":      clipCacheRollupsJSON(aggregate.byCacheSize, clipReadAggregateTopN),
 		"top_cache_sources_json":    clipCacheRollupsJSON(aggregate.byCacheSource, clipReadAggregateTopN),
 		"top_content_json":          clipReadRollupsJSON(aggregate.byContent, clipReadAggregateTopN),
 		"top_layers_json":           clipReadRollupsJSON(aggregate.byLayer, clipReadAggregateTopN),
@@ -455,6 +512,8 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		Str("top_operations_json", attrs["top_operations_json"]).
 		Str("top_results_json", attrs["top_results_json"]).
 		Str("top_cache_sources_json", attrs["top_cache_sources_json"]).
+		Str("top_cache_methods_json", attrs["top_cache_methods_json"]).
+		Str("top_cache_sizes_json", attrs["top_cache_sizes_json"]).
 		Str("top_cache_hosts_json", attrs["top_cache_hosts_json"]).
 		Str("top_content_json", attrs["top_content_json"]).
 		Str("first_error", aggregate.firstError).

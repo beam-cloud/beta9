@@ -483,6 +483,34 @@ func TestGetAllWorkers(t *testing.T) {
 	assert.Equal(t, nWorkers, pendingCount)
 }
 
+func TestGetAllWorkersSkipsNearExpiredWorkers(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-near-expiry",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
+	err = rdb.Expire(context.TODO(), stateKey, time.Second).Err()
+	assert.Nil(t, err)
+
+	workers, err := repo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Empty(t, workers)
+
+	indexed, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerIndex(), stateKey).Result()
+	assert.Nil(t, err)
+	assert.True(t, indexed)
+}
+
 func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
@@ -509,6 +537,46 @@ func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T
 
 	err = repo.ScheduleContainerRequest(worker, request)
 	assert.Error(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
+}
+
+func TestScheduleContainerRequestRejectsNearExpiredWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-near-expiry-schedule",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	selectedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+
+	err = rdb.Expire(context.TODO(), common.RedisKeys.SchedulerWorkerState(worker.Id), time.Second).Err()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-near-expiry-schedule",
+		Cpu:         100,
+		Memory:      100,
+	}
+	err = repo.ScheduleContainerRequest(selectedWorker, request)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not live enough to schedule")
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), queueDepth)
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)

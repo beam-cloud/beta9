@@ -133,6 +133,10 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.StartTime.IsZero() {
 			return d.StartTime
 		}
+	case types.EventStubCacheRequiredContentSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
 	}
 
 	return time.Now()
@@ -811,6 +815,14 @@ func (r *EventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stu
 	)
 }
 
+func (r *EventClientRepo) PushStubCacheRequiredContentEvent(event types.EventStubCacheRequiredContentSchema) {
+	r.pushEvent(
+		types.EventStubCacheRequiredContent,
+		types.EventStubCacheRequiredContentSchemaVersion,
+		event,
+	)
+}
+
 func (r *EventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 	r.pushEvent(
 		types.EventTaskUpdated,
@@ -1012,6 +1024,8 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
 	case types.EventStubStateSchema:
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
+	case types.EventStubCacheRequiredContentSchema:
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
 	case types.EventWorkerLifecycleSchema:
 		return eventMetadata{WorkerID: d.WorkerID, PoolName: d.PoolName}
 	case types.EventWorkerPoolStateSchema:

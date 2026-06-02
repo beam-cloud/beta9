@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	mathrand "math/rand"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	proto "github.com/beam-cloud/beta9/proto"
@@ -245,14 +248,130 @@ func BenchmarkClientRawReadInto(b *testing.B) {
 
 	cfg := Config{
 		Server: ServerConfig{
-			DiskCacheDir:         b.TempDir(),
-			DiskCacheMaxUsagePct: 90,
-			MaxCachePct:          0,
-			PageSizeBytes:        1024 * 1024,
-			ObjectTtlS:           300,
+			DiskCacheDir:                 b.TempDir(),
+			DiskCacheMaxUsagePct:         90,
+			MaxCachePct:                  0,
+			PageSizeBytes:                1024 * 1024,
+			SmallRangeCopyThresholdBytes: 128 * 1024,
+			ObjectTtlS:                   300,
 			ReadTransport: ServerReadTransportConfig{
 				Enabled:  true,
 				Sendfile: false,
+			},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "local", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("raw-bench-host"))
+	if err != nil {
+		b.Fatalf("new server: %v", err)
+	}
+	b.Cleanup(func() { _ = server.Close() })
+	addr, err := server.Serve("127.0.0.1:0", "")
+	if err != nil {
+		b.Fatalf("serve: %v", err)
+	}
+
+	content := make([]byte, 64*1024*1024)
+	if _, err := rand.Read(content); err != nil {
+		b.Fatalf("random content: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	if err := server.cas.Add(context.Background(), hash, content); err != nil {
+		b.Fatalf("add content: %v", err)
+	}
+
+	host := &Host{HostId: "raw-bench-host", Addr: addr, PrivateAddr: addr}
+	client := &Client{
+		ctx: context.Background(),
+		clientConfig: ClientConfig{
+			NTopHosts: 1,
+			ReadTransport: ClientReadTransportConfig{
+				Enabled:                      true,
+				MaxActiveConnsPerHost:        64,
+				MaxIdleConnsPerHost:          16,
+				SmallRangeCopyThresholdBytes: 128 * 1024,
+			},
+		},
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	dst := make([]byte, 1024*1024)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(dst)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := int64(i%64) * int64(len(dst))
+		n, err := client.ReadContentInto(context.Background(), hash, offset, dst, ClientOptions{})
+		if err != nil || n != int64(len(dst)) {
+			b.Fatalf("raw read offset %d: n=%d err=%v", offset, n, err)
+		}
+	}
+}
+
+func BenchmarkClientRawReadIntoMatrix(b *testing.B) {
+	sizes := []int{16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 1024 * 1024}
+	patterns := []string{"sequential", "random"}
+	concurrencyLevels := []int{1, 8, 32, 64}
+	sendfileModes := []bool{false, true}
+	thresholdModes := []struct {
+		name      string
+		threshold int64
+	}{
+		{name: "threshold_off", threshold: 0},
+		{name: "threshold_128KiB", threshold: 128 * 1024},
+	}
+
+	for _, size := range sizes {
+		size := size
+		for _, pattern := range patterns {
+			pattern := pattern
+			for _, concurrency := range concurrencyLevels {
+				concurrency := concurrency
+				for _, sendfile := range sendfileModes {
+					sendfile := sendfile
+					for _, thresholdMode := range thresholdModes {
+						thresholdMode := thresholdMode
+						name := fmt.Sprintf("size_%s/%s/concurrency_%d/sendfile_%t/%s", rawBenchSizeName(size), pattern, concurrency, sendfile, thresholdMode.name)
+						b.Run(name, func(b *testing.B) {
+							client, hash := newRawReadBenchmarkClient(b, sendfile, thresholdMode.threshold)
+							runRawReadBenchmark(b, client, hash, size, pattern, concurrency)
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func newRawReadBenchmarkClient(b *testing.B, sendfile bool, smallRangeThreshold int64) (*Client, string) {
+	b.Helper()
+	InitLogger(false, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	b.Cleanup(cancel)
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:                 b.TempDir(),
+			DiskCacheMaxUsagePct:         90,
+			MaxCachePct:                  0,
+			PageSizeBytes:                4 * 1024 * 1024,
+			SmallRangeCopyThresholdBytes: smallRangeThreshold,
+			ObjectTtlS:                   300,
+			ReadTransport: ServerReadTransportConfig{
+				Enabled:         true,
+				Sendfile:        sendfile,
+				PageFDCacheSize: 1024,
 			},
 		},
 		Global: GlobalConfig{
@@ -300,16 +419,69 @@ func BenchmarkClientRawReadInto(b *testing.B) {
 		hasher:                &orderedTestHasher{hosts: []*Host{host}},
 		maxGetContentAttempts: 1,
 	}
-	dst := make([]byte, 1024*1024)
+	return client, hash
+}
 
+func runRawReadBenchmark(b *testing.B, client *Client, hash string, size int, pattern string, concurrency int) {
+	b.Helper()
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	const fileSize = int64(64 * 1024 * 1024)
 	b.ReportAllocs()
-	b.SetBytes(int64(len(dst)))
+	b.SetBytes(int64(size))
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		offset := int64(i%64) * int64(len(dst))
-		n, err := client.ReadContentInto(context.Background(), hash, offset, dst, ClientOptions{})
-		if err != nil || n != int64(len(dst)) {
-			b.Fatalf("raw read offset %d: n=%d err=%v", offset, n, err)
-		}
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dst := make([]byte, size)
+			for {
+				i := next.Add(1) - 1
+				if i >= int64(b.N) {
+					return
+				}
+				offset := rawBenchOffset(i, int64(size), fileSize, pattern)
+				n, err := client.ReadContentInto(context.Background(), hash, offset, dst, ClientOptions{})
+				if err != nil || n != int64(size) {
+					b.Errorf("raw read offset %d: n=%d err=%v", offset, n, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func rawBenchOffset(i int64, size int64, fileSize int64, pattern string) int64 {
+	limit := fileSize - size
+	if limit <= 0 {
+		return 0
+	}
+	switch pattern {
+	case "random":
+		return int64((uint64(i)*11400714819323198485 + 0x9e3779b97f4a7c15) % uint64(limit+1))
+	default:
+		return (int64(i) * size) % (limit + 1)
+	}
+}
+
+func rawBenchSizeName(size int) string {
+	switch size {
+	case 16 * 1024:
+		return "16KiB"
+	case 32 * 1024:
+		return "32KiB"
+	case 64 * 1024:
+		return "64KiB"
+	case 128 * 1024:
+		return "128KiB"
+	case 1024 * 1024:
+		return "1MiB"
+	default:
+		return fmt.Sprintf("%dB", size)
 	}
 }
