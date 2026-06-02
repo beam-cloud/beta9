@@ -140,6 +140,7 @@ type ImageClient struct {
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
+	requiredContent    *requiredContentBatcher
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
@@ -189,6 +190,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
 	}
+	c.requiredContent = newRequiredContentBatcher(c.cacheClient)
 	go c.runClipReadEventReporter()
 
 	if config.DebugMode {

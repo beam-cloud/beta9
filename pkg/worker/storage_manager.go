@@ -29,6 +29,7 @@ type WorkspaceStorageManager struct {
 	mountLocks         map[string]*sync.Mutex
 	mountLocksMu       sync.Mutex
 	cacheClient        *cache.Client
+	requiredContent    *requiredContentBatcher
 }
 
 func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *cache.Client) (*WorkspaceStorageManager, error) {
@@ -40,6 +41,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		containerInstances: containerInstances,
 		mountLocks:         make(map[string]*sync.Mutex),
 		cacheClient:        cacheClient,
+		requiredContent:    newRequiredContentBatcher(cacheClient),
 	}
 
 	if sm.poolConfig.StorageMode == "" {
@@ -179,7 +181,7 @@ func (sm *WorkspaceStorageManager) requiredContentVolumeMinBytes() int64 {
 }
 
 func (sm *WorkspaceStorageManager) requiredContentReporterForWorkspace(workspaceName string) storage.RequiredContentReporter {
-	if sm == nil || sm.cacheClient == nil {
+	if sm == nil || sm.requiredContent == nil {
 		return nil
 	}
 	return func(ctx context.Context, item cache.RequiredContentItem) {
@@ -206,11 +208,7 @@ func (sm *WorkspaceStorageManager) requiredContentReporterForWorkspace(workspace
 			if reportItem.ExpectedHash == "" {
 				reportItem.ExpectedHash = reportItem.Hash
 			}
-			go func() {
-				reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-				defer cancel()
-				_ = sm.cacheClient.ReportRequiredContent(reportCtx, reportItem)
-			}()
+			sm.requiredContent.Enqueue(reportItem)
 
 			return true
 		})

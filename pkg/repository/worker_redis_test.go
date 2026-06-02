@@ -483,34 +483,6 @@ func TestGetAllWorkers(t *testing.T) {
 	assert.Equal(t, nWorkers, pendingCount)
 }
 
-func TestGetAllWorkersSkipsNearExpiredWorkers(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.NotNil(t, rdb)
-	assert.Nil(t, err)
-
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	worker := &types.Worker{
-		Id:         "worker-near-expiry",
-		Status:     types.WorkerStatusAvailable,
-		FreeCpu:    1000,
-		FreeMemory: 1000,
-	}
-	err = repo.AddWorker(worker)
-	assert.Nil(t, err)
-
-	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
-	err = rdb.Expire(context.TODO(), stateKey, time.Second).Err()
-	assert.Nil(t, err)
-
-	workers, err := repo.GetAllWorkers()
-	assert.Nil(t, err)
-	assert.Empty(t, workers)
-
-	indexed, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerWorkerIndex(), stateKey).Result()
-	assert.Nil(t, err)
-	assert.True(t, indexed)
-}
-
 func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -21,8 +20,15 @@ import (
 
 const cacheCoordinatorTokenEnv = "CACHE_COORDINATOR_TOKEN"
 const requiredContentEventLimit = 4096
+const requiredContentEventMaxItems = 256
+const requiredContentEventFlushDelay = 200 * time.Millisecond
 
 var errCacheCoordinatorUnauthorized = errors.New("unauthorized cache coordinator request")
+
+type pendingRequiredContentEvent struct {
+	event types.EventStubCacheRequiredContentSchema
+	timer *time.Timer
+}
 
 type requiredContentStatusReader interface {
 	GetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (cache.RequiredContentReconciliationStatus, time.Time, string, bool, error)
@@ -139,17 +145,16 @@ func (s *WorkerRepositoryService) ReportRequiredContent(ctx context.Context, req
 		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: repository.ErrEventReadUnsupported.Error()}, nil
 	}
 
-	items := s.requiredContentReportItems(req)
-	eventItems, err := s.newRequiredContentEventItems(ctx, req.WorkspaceId, req.StubId, items)
+	ttl := time.Duration(req.TtlMs) * time.Millisecond
+	coalescer, ok := s.requiredContent.(cache.RequiredContentReportCoalescer)
+	if !ok {
+		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
+	}
+	items, err := coalescer.MarkRequiredContentReported(ctx, req.Locality, req.WorkspaceId, req.StubId, s.requiredContentReportItems(req), ttl)
 	if err != nil {
 		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
-	ttl := time.Duration(req.TtlMs) * time.Millisecond
-	if err := s.requiredContent.MarkStubLocalityAccessed(ctx, req.Locality, req.WorkspaceId, req.StubId, ttl); err != nil {
-		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if len(eventItems) > 0 {
+	for _, eventItems := range requiredContentEventItemBatches(items) {
 		s.pushRequiredContentEvent(requiredContentEvent(req.WorkspaceId, req.StubId, req.Locality, eventItems))
 	}
 	return &pb.ReportRequiredContentResponse{Ok: true}, nil
@@ -347,7 +352,86 @@ func (s *WorkerRepositoryService) pushRequiredContentEvent(event types.EventStub
 	if s == nil || s.eventRepo == nil || event.WorkspaceID == "" || event.StubID == "" {
 		return
 	}
-	s.eventRepo.PushStubCacheRequiredContentEvent(event)
+	key := requiredContentPendingEventKey(event.WorkspaceID, event.StubID, event.Locality, event.Kind)
+	var flushNow *pendingRequiredContentEvent
+	s.requiredContentEventsMu.Lock()
+	if s.requiredContentEvents == nil {
+		s.requiredContentEvents = map[string]*pendingRequiredContentEvent{}
+	}
+	pending := s.requiredContentEvents[key]
+	if pending != nil {
+		merged := mergeRequiredContentEvents(pending.event, event)
+		if len(merged.Items) <= requiredContentEventMaxItems {
+			pending.event = merged
+			s.requiredContentEventsMu.Unlock()
+			return
+		}
+		if pending.timer != nil {
+			pending.timer.Stop()
+		}
+		delete(s.requiredContentEvents, key)
+		flushNow = pending
+	}
+	if len(event.Items) > 0 {
+		pending = &pendingRequiredContentEvent{event: event}
+		pending.timer = time.AfterFunc(requiredContentEventFlushDelay, func() {
+			s.flushRequiredContentEvent(key)
+		})
+		s.requiredContentEvents[key] = pending
+	}
+	s.requiredContentEventsMu.Unlock()
+	if flushNow != nil && len(flushNow.event.Items) > 0 {
+		s.eventRepo.PushStubCacheRequiredContentEvent(flushNow.event)
+	}
+}
+
+func (s *WorkerRepositoryService) flushRequiredContentEvent(key string) {
+	s.requiredContentEventsMu.Lock()
+	pending := s.requiredContentEvents[key]
+	delete(s.requiredContentEvents, key)
+	s.requiredContentEventsMu.Unlock()
+	if pending == nil || len(pending.event.Items) == 0 || s.eventRepo == nil {
+		return
+	}
+	s.eventRepo.PushStubCacheRequiredContentEvent(pending.event)
+}
+
+func mergeRequiredContentEvents(existing, next types.EventStubCacheRequiredContentSchema) types.EventStubCacheRequiredContentSchema {
+	workspaceID := firstNonEmptyString(next.WorkspaceID, existing.WorkspaceID)
+	stubID := firstNonEmptyString(next.StubID, existing.StubID)
+	locality := firstNonEmptyString(next.Locality, existing.Locality)
+	byID := map[string]cache.RequiredContentItem{}
+
+	add := func(event types.EventStubCacheRequiredContentSchema) {
+		for _, eventItem := range event.Items {
+			item := requiredContentItemFromEventItem(locality, workspaceID, stubID, eventItem)
+			if item.Hash == "" {
+				continue
+			}
+			id := requiredContentItemKey(item.Hash, item.RoutingKey)
+			if existing, ok := byID[id]; ok {
+				item = cache.MergeRequiredContentItem(existing, item)
+			}
+			byID[id] = item
+		}
+	}
+	add(existing)
+	add(next)
+
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	items := make([]cache.RequiredContentItem, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, byID[id])
+	}
+	return requiredContentEvent(workspaceID, stubID, locality, requiredContentEventItems(items))
+}
+
+func requiredContentPendingEventKey(workspaceID, stubID, locality, kind string) string {
+	return workspaceID + "\x00" + stubID + "\x00" + locality + "\x00" + kind
 }
 
 func (s *WorkerRepositoryService) pushPlatformCacheEvent(event types.EventPlatformCacheSchema) {
@@ -414,47 +498,38 @@ func requiredContentEventItems(items []cache.RequiredContentItem) []types.EventS
 	return eventItems
 }
 
-func (s *WorkerRepositoryService) newRequiredContentEventItems(ctx context.Context, workspaceID, stubID string, items []cache.RequiredContentItem) ([]types.EventStubCacheRequiredContentItem, error) {
-	eventItems := requiredContentEventItems(items)
-	if len(eventItems) == 0 {
-		return nil, nil
-	}
-	existing, err := s.requiredContentEventItemIndex(ctx, workspaceID, stubID)
-	if err != nil {
-		return nil, err
+func requiredContentEventItemBatches(items []cache.RequiredContentItem) [][]types.EventStubCacheRequiredContentItem {
+	byKind := map[string][]cache.RequiredContentItem{}
+	for _, item := range items {
+		item = item.Normalized()
+		if item.Hash == "" {
+			continue
+		}
+		kind := string(item.Kind)
+		if kind == "" {
+			kind = string(cache.RequiredContentKindImageArchive)
+		}
+		byKind[kind] = append(byKind[kind], item)
 	}
 
-	newItems := make([]types.EventStubCacheRequiredContentItem, 0, len(eventItems))
-	for _, item := range eventItems {
-		id := requiredContentItemKey(item.Hash, item.RoutingKey)
-		if existingItem, ok := existing[id]; ok && requiredContentEventItemsEqual(existingItem, item) {
-			continue
-		}
-		newItems = append(newItems, item)
+	kinds := make([]string, 0, len(byKind))
+	for kind := range byKind {
+		kinds = append(kinds, kind)
 	}
-	return newItems, nil
-}
+	sort.Strings(kinds)
 
-func (s *WorkerRepositoryService) requiredContentEventItemIndex(ctx context.Context, workspaceID, stubID string) (map[string]types.EventStubCacheRequiredContentItem, error) {
-	history, err := s.requiredContentEventHistory(ctx, workspaceID, stubID)
-	if err != nil {
-		return nil, err
-	}
-	byID := map[string]types.EventStubCacheRequiredContentItem{}
-	for _, record := range history.Events {
-		if record.Type != types.EventStubCacheRequiredContent || len(record.Data) == 0 {
-			continue
-		}
-		event := types.EventStubCacheRequiredContentSchema{}
-		if err := json.Unmarshal(record.Data, &event); err != nil {
-			continue
-		}
-		for _, item := range event.Items {
-			item = normalizeRequiredContentEventItem(item)
-			byID[requiredContentItemKey(item.Hash, item.RoutingKey)] = item
+	batches := [][]types.EventStubCacheRequiredContentItem{}
+	for _, kind := range kinds {
+		eventItems := requiredContentEventItems(byKind[kind])
+		for start := 0; start < len(eventItems); start += requiredContentEventMaxItems {
+			end := start + requiredContentEventMaxItems
+			if end > len(eventItems) {
+				end = len(eventItems)
+			}
+			batches = append(batches, eventItems[start:end])
 		}
 	}
-	return byID, nil
+	return batches
 }
 
 func (s *WorkerRepositoryService) requiredContentEventHistory(ctx context.Context, workspaceID, stubID string) (*types.EventHistoryResponse, error) {
@@ -489,7 +564,11 @@ func (s *WorkerRepositoryService) listRequiredContentFromEvents(ctx context.Cont
 			if item.Hash == "" {
 				continue
 			}
-			byID[requiredContentItemKey(item.Hash, item.RoutingKey)] = item
+			id := requiredContentItemKey(item.Hash, item.RoutingKey)
+			if existing, ok := byID[id]; ok {
+				item = cache.MergeRequiredContentItem(existing, item)
+			}
+			byID[id] = item
 		}
 	}
 
@@ -596,14 +675,6 @@ func requiredContentItemFromEventItem(locality, workspaceID, stubID string, even
 			ForcePathStyle: eventItem.Source.ForcePathStyle,
 		},
 	}.Normalized()
-}
-
-func normalizeRequiredContentEventItem(item types.EventStubCacheRequiredContentItem) types.EventStubCacheRequiredContentItem {
-	return requiredContentEventItemFromCacheItem(requiredContentItemFromEventItem("", "", "", item))
-}
-
-func requiredContentEventItemsEqual(a, b types.EventStubCacheRequiredContentItem) bool {
-	return reflect.DeepEqual(normalizeRequiredContentEventItem(a), normalizeRequiredContentEventItem(b))
 }
 
 func requiredContentItemKey(hash, routingKey string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -11,17 +12,152 @@ import (
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 )
 
-const imageRequiredContentReportBatchSize = 256
+const (
+	requiredContentBatchFlushInterval = 250 * time.Millisecond
+	requiredContentBatchQueueSize     = 8192
+)
+
+type requiredContentBatcher struct {
+	client requiredContentBatchReporter
+	ch     chan cache.RequiredContentItem
+}
+
+type requiredContentBatchReporter interface {
+	Locality() string
+	ReportRequiredContentBatch(ctx context.Context, items []cache.RequiredContentItem) error
+}
+
+type requiredContentBatchGroup struct {
+	items map[string]cache.RequiredContentItem
+}
+
+func newRequiredContentBatcher(client *cache.Client) *requiredContentBatcher {
+	if client == nil {
+		return nil
+	}
+	b := &requiredContentBatcher{
+		client: client,
+		ch:     make(chan cache.RequiredContentItem, requiredContentBatchQueueSize),
+	}
+	go b.run()
+	return b
+}
+
+func (b *requiredContentBatcher) Enqueue(item cache.RequiredContentItem) {
+	if b == nil || b.client == nil || item.Hash == "" {
+		return
+	}
+	item = b.normalize(item)
+	select {
+	case b.ch <- item:
+	default:
+		go b.ReportNow(context.Background(), []cache.RequiredContentItem{item})
+	}
+}
+
+func (b *requiredContentBatcher) ReportNow(ctx context.Context, items []cache.RequiredContentItem) {
+	if b == nil || b.client == nil || len(items) == 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	groups := map[string]*requiredContentBatchGroup{}
+	for _, item := range items {
+		item = b.normalize(item)
+		if item.Hash == "" || item.Locality == "" || item.WorkspaceID == "" || item.StubID == "" {
+			continue
+		}
+		groupKey := requiredContentBatchGroupKey(item)
+		group := groups[groupKey]
+		if group == nil {
+			group = &requiredContentBatchGroup{items: map[string]cache.RequiredContentItem{}}
+			groups[groupKey] = group
+		}
+		itemKey := requiredContentBatchItemKey(item)
+		if existing, ok := group.items[itemKey]; ok {
+			item = cache.MergeRequiredContentItem(existing, item)
+		}
+		group.items[itemKey] = item
+	}
+	b.flushGroups(ctx, groups)
+}
+
+func (b *requiredContentBatcher) run() {
+	ticker := time.NewTicker(requiredContentBatchFlushInterval)
+	defer ticker.Stop()
+
+	groups := map[string]*requiredContentBatchGroup{}
+	for {
+		select {
+		case item := <-b.ch:
+			groupKey := requiredContentBatchGroupKey(item)
+			group := groups[groupKey]
+			if group == nil {
+				group = &requiredContentBatchGroup{items: map[string]cache.RequiredContentItem{}}
+				groups[groupKey] = group
+			}
+			itemKey := requiredContentBatchItemKey(item)
+			if existing, ok := group.items[itemKey]; ok {
+				item = cache.MergeRequiredContentItem(existing, item)
+			}
+			group.items[itemKey] = item
+		case <-ticker.C:
+			b.flushGroups(context.Background(), groups)
+			groups = map[string]*requiredContentBatchGroup{}
+		}
+	}
+}
+
+func (b *requiredContentBatcher) flushGroups(ctx context.Context, groups map[string]*requiredContentBatchGroup) {
+	var wg sync.WaitGroup
+	for _, group := range groups {
+		if group == nil || len(group.items) == 0 {
+			continue
+		}
+		items := make([]cache.RequiredContentItem, 0, len(group.items))
+		for _, item := range group.items {
+			items = append(items, item)
+		}
+		wg.Add(1)
+		go func(items []cache.RequiredContentItem) {
+			defer wg.Done()
+			reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			_ = b.client.ReportRequiredContentBatch(reportCtx, items)
+		}(items)
+	}
+	wg.Wait()
+}
+
+func (b *requiredContentBatcher) normalize(item cache.RequiredContentItem) cache.RequiredContentItem {
+	item = item.Normalized()
+	if item.Locality == "" {
+		item.Locality = b.client.Locality()
+	}
+	return item
+}
+
+func requiredContentBatchGroupKey(item cache.RequiredContentItem) string {
+	return item.Locality + "\x00" + item.WorkspaceID + "\x00" + item.StubID + "\x00" + string(item.Kind)
+}
+
+func requiredContentBatchItemKey(item cache.RequiredContentItem) string {
+	if item.RoutingKey == "" {
+		item.RoutingKey = item.Hash
+	}
+	return item.Hash + "\x00" + item.RoutingKey
+}
 
 func (c *ImageClient) reportClipRequiredContentMetadata(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
-	if c == nil || c.cacheClient == nil || request == nil || meta == nil {
+	if c == nil || c.requiredContent == nil || request == nil || meta == nil {
 		return
 	}
 	items := c.clipRequiredContentItems(request, meta)
 	if len(items) == 0 {
 		return
 	}
-	go c.reportImageRequiredContentItems(ctx, items)
+	go c.requiredContent.ReportNow(ctx, items)
 }
 
 func (c *ImageClient) clipRequiredContentItems(request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) []cache.RequiredContentItem {
@@ -95,7 +231,7 @@ func (c *ImageClient) clipV1RequiredContentItems(request *types.ContainerRequest
 }
 
 func (c *ImageClient) reportClipRequiredContentCacheEvent(request *types.ContainerRequest, event imageContentCacheTrace) {
-	if c == nil || c.cacheClient == nil || request == nil {
+	if c == nil || c.requiredContent == nil || request == nil {
 		return
 	}
 	if !strings.HasPrefix(event.Operation, "store_") || event.Result == "error" || event.Hash == "" {
@@ -122,23 +258,5 @@ func (c *ImageClient) reportClipRequiredContentCacheEvent(request *types.Contain
 			Descriptor: fmt.Sprintf("image:%s kind:%s", request.ImageId, event.Kind),
 		},
 	}
-	go c.reportImageRequiredContentItems(context.Background(), []cache.RequiredContentItem{item})
-}
-
-func (c *ImageClient) reportImageRequiredContentItems(ctx context.Context, items []cache.RequiredContentItem) {
-	if c == nil || c.cacheClient == nil || len(items) == 0 {
-		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	for start := 0; start < len(items); start += imageRequiredContentReportBatchSize {
-		end := start + imageRequiredContentReportBatchSize
-		if end > len(items) {
-			end = len(items)
-		}
-		reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_ = c.cacheClient.ReportRequiredContentBatch(reportCtx, items[start:end])
-		cancel()
-	}
+	c.requiredContent.Enqueue(item)
 }

@@ -165,6 +165,10 @@ type RequiredContentIndexRepository interface {
 	AcquireRequiredContentReconciliationLock(ctx context.Context, locality, logicalHostID, hash string, ttl time.Duration) (RequiredContentReconciliationLock, bool, error)
 }
 
+type RequiredContentReportCoalescer interface {
+	MarkRequiredContentReported(ctx context.Context, locality, workspaceID, stubID string, items []RequiredContentItem, ttl time.Duration) ([]RequiredContentItem, error)
+}
+
 type RequiredContentRepository interface {
 	RequiredContentIndexRepository
 	ListRequiredContentForStub(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]RequiredContentItem, error)
@@ -194,4 +198,51 @@ func NormalizeRequiredContentConfig(config RequiredContentConfig) RequiredConten
 		config.MaxBytesPerCycle = DefaultRequiredContentMaxBytesPerCycle
 	}
 	return config
+}
+
+func MergeRequiredContentItem(existing, next RequiredContentItem) RequiredContentItem {
+	existing = existing.Normalized()
+	next = next.Normalized()
+	merged := existing
+	if next.Locality != "" {
+		merged.Locality = next.Locality
+	}
+	if next.WorkspaceID != "" {
+		merged.WorkspaceID = next.WorkspaceID
+	}
+	if next.StubID != "" {
+		merged.StubID = next.StubID
+	}
+	if next.Kind != "" {
+		merged.Kind = next.Kind
+	}
+	if next.Hash != "" {
+		merged.Hash = next.Hash
+	}
+	if next.RoutingKey != "" {
+		merged.RoutingKey = next.RoutingKey
+	}
+	if next.SizeBytes > merged.SizeBytes {
+		merged.SizeBytes = next.SizeBytes
+	}
+	if next.ExpectedHash != "" {
+		merged.ExpectedHash = next.ExpectedHash
+	}
+	if RequiredContentSourceScore(next.Source) > RequiredContentSourceScore(merged.Source) {
+		merged.Source = next.Source
+	}
+	return merged.Normalized()
+}
+
+func RequiredContentSourceScore(source RequiredContentSource) int {
+	switch source.Type {
+	case RequiredContentSourceS3, RequiredContentSourceOCIRegistry:
+		return 3
+	case RequiredContentSourceCacheReplica:
+		return 2
+	case RequiredContentSourceUnknown, "":
+		return 0
+	default:
+		return 1
+	}
 }

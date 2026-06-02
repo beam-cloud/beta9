@@ -193,29 +193,115 @@ func TestReportRequiredContentWritesEventAndRedisStubIndex(t *testing.T) {
 		t.Fatalf("unexpected required content item hash: got %q want %q", got, want)
 	}
 
-	eventRepo.history = &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
-		requiredContentHistoryRecord(t, event),
-	}}
 	resp, err = service.ReportRequiredContent(ctx, req)
 	if err != nil || !resp.Ok {
 		t.Fatalf("duplicate ReportRequiredContent failed: resp=%+v err=%v", resp, err)
 	}
 	eventRepo.requireNoEvent(t)
+	if len(eventRepo.queries) != 0 {
+		t.Fatalf("ReportRequiredContent should not scan event history: %+v", eventRepo.queries)
+	}
 
-	req.Items[0].SizeBytes = 123
+	runtimeSizeOnly := &pb.ReportRequiredContentRequest{
+		Locality:    "default",
+		WorkspaceId: "workspace-1",
+		StubId:      "stub-1",
+		TtlMs:       int64((2 * time.Second).Milliseconds()),
+		Items: []*pb.RequiredContentItem{{
+			Kind:         string(cache.RequiredContentKindClipOCI),
+			Hash:         "hash-a",
+			RoutingKey:   "hash-a",
+			SizeBytes:    456,
+			ExpectedHash: "hash-a",
+			Source: &pb.RequiredContentSource{
+				Type:        string(cache.RequiredContentSourceUnknown),
+				Descriptor_: "runtime access",
+			},
+		}},
+	}
+	resp, err = service.ReportRequiredContent(ctx, runtimeSizeOnly)
+	if err != nil || !resp.Ok {
+		t.Fatalf("runtime ReportRequiredContent failed: resp=%+v err=%v", resp, err)
+	}
+	eventRepo.requireNoEvent(t)
+
+	req.Items[0].Hash = "hash-b"
+	req.Items[0].RoutingKey = "hash-b"
+	req.Items[0].ExpectedHash = "hash-b"
 	resp, err = service.ReportRequiredContent(ctx, req)
 	if err != nil || !resp.Ok {
 		t.Fatalf("changed ReportRequiredContent failed: resp=%+v err=%v", resp, err)
 	}
 	event = eventRepo.waitEvent(t)
-	if got, want := event.Items[0].SizeBytes, int64(123); got != want {
-		t.Fatalf("changed required content item was not emitted: got %d want %d", got, want)
+	if got, want := event.Items[0].Hash, "hash-b"; got != want {
+		t.Fatalf("new required content item was not emitted: got %q want %q", got, want)
+	}
+	if event.Items[0].Source.Type != string(cache.RequiredContentSourceOCIRegistry) {
+		t.Fatalf("changed required content item lost origin source: %+v", event.Items[0].Source)
 	}
 	for _, key := range redisServer.Keys() {
 		if strings.Contains(key, ":catalog:") || strings.Contains(key, ":item:") {
 			t.Fatalf("required content catalog leaked into redis key %q", key)
 		}
 	}
+}
+
+func TestReportRequiredContentSplitsEventsByKindAndPayloadSize(t *testing.T) {
+	eventRepo := newRequiredContentEventRepo()
+	service, _, cleanup := newRequiredContentServiceForTest(t, eventRepo)
+	defer cleanup()
+
+	items := make([]*pb.RequiredContentItem, 0, requiredContentEventMaxItems+2)
+	for i := 0; i < requiredContentEventMaxItems+1; i++ {
+		hash := "clip-hash-" + strings.Repeat("0", 4) + "-" + time.UnixMilli(int64(i)).Format("150405.000")
+		items = append(items, &pb.RequiredContentItem{
+			Kind:       string(cache.RequiredContentKindClipV1),
+			Hash:       hash,
+			RoutingKey: hash,
+			Source: &pb.RequiredContentSource{
+				Type: string(cache.RequiredContentSourceUnknown),
+			},
+		})
+	}
+	items = append(items, &pb.RequiredContentItem{
+		Kind:       string(cache.RequiredContentKindVolume),
+		Hash:       "volume-hash",
+		RoutingKey: "volumes/path/file.bin",
+		Source: &pb.RequiredContentSource{
+			Type: string(cache.RequiredContentSourceS3),
+		},
+	})
+
+	resp, err := service.ReportRequiredContent(cacheRepositoryAuthContext(types.TokenTypeWorker), &pb.ReportRequiredContentRequest{
+		Locality:    "default",
+		WorkspaceId: "workspace-1",
+		StubId:      "stub-1",
+		TtlMs:       int64((2 * time.Second).Milliseconds()),
+		Items:       items,
+	})
+	if err != nil || !resp.Ok {
+		t.Fatalf("ReportRequiredContent failed: resp=%+v err=%v", resp, err)
+	}
+
+	events := []types.EventStubCacheRequiredContentSchema{
+		eventRepo.waitEvent(t),
+		eventRepo.waitEvent(t),
+		eventRepo.waitEvent(t),
+	}
+	countsByKind := map[string][]int{}
+	for _, event := range events {
+		if len(event.Items) > requiredContentEventMaxItems {
+			t.Fatalf("event exceeded payload cap: %d", len(event.Items))
+		}
+		countsByKind[event.Kind] = append(countsByKind[event.Kind], len(event.Items))
+	}
+	if got := countsByKind[string(cache.RequiredContentKindClipV1)]; len(got) != 2 || got[0]+got[1] != requiredContentEventMaxItems+1 {
+		t.Fatalf("unexpected clip v1 event split: %+v", countsByKind)
+	}
+	if got := countsByKind[string(cache.RequiredContentKindVolume)]; len(got) != 1 || got[0] != 1 {
+		t.Fatalf("unexpected volume event split: %+v", countsByKind)
+	}
+	eventRepo.requireNoEvent(t)
 }
 
 func TestReportRequiredContentRequiresPersistentEvents(t *testing.T) {
@@ -275,8 +361,44 @@ func TestListRequiredContentForStubReadsRequiredContentFromEvents(t *testing.T) 
 			},
 		}},
 	})
+	origin := requiredContentHistoryRecord(t, types.EventStubCacheRequiredContentSchema{
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Locality:    "old-locality",
+		Source:      "worker_report",
+		Items: []types.EventStubCacheRequiredContentItem{{
+			Kind:         string(cache.RequiredContentKindClipOCI),
+			Hash:         "hash-b",
+			RoutingKey:   "hash-b",
+			ExpectedHash: "hash-b",
+			Source: types.EventStubCacheRequiredContentSource{
+				Type:        string(cache.RequiredContentSourceOCIRegistry),
+				Registry:    "registry.localhost:5000",
+				Repository:  "beta9-runner",
+				Reference:   "sha256:image",
+				LayerDigest: "sha256:layer",
+			},
+		}},
+	})
+	runtimeSize := requiredContentHistoryRecord(t, types.EventStubCacheRequiredContentSchema{
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Locality:    "old-locality",
+		Source:      "worker_report",
+		Items: []types.EventStubCacheRequiredContentItem{{
+			Kind:         string(cache.RequiredContentKindClipOCI),
+			Hash:         "hash-b",
+			RoutingKey:   "hash-b",
+			SizeBytes:    456,
+			ExpectedHash: "hash-b",
+			Source: types.EventStubCacheRequiredContentSource{
+				Type:       string(cache.RequiredContentSourceUnknown),
+				Descriptor: "image:image kind:oci-layer-runtime",
+			},
+		}},
+	})
 	eventRepo := newRequiredContentEventRepo()
-	eventRepo.history = &types.EventHistoryResponse{Events: []types.ContainerEventRecord{first, second}}
+	eventRepo.history = &types.EventHistoryResponse{Events: []types.ContainerEventRecord{first, second, origin, runtimeSize}}
 	service, _, cleanup := newRequiredContentServiceForTest(t, eventRepo)
 	defer cleanup()
 
@@ -289,12 +411,22 @@ func TestListRequiredContentForStubReadsRequiredContentFromEvents(t *testing.T) 
 	if err != nil || !resp.Ok {
 		t.Fatalf("ListRequiredContentForStub failed: resp=%+v err=%v", resp, err)
 	}
-	if got, want := len(resp.Items), 1; got != want {
+	if got, want := len(resp.Items), 2; got != want {
 		t.Fatalf("unexpected item count: got %d want %d", got, want)
 	}
-	item := resp.Items[0]
-	if item.Locality != "new-locality" || item.SizeBytes != 456 || item.RoutingKey != "route-a" {
+	byHash := map[string]*pb.RequiredContentItem{}
+	for _, item := range resp.Items {
+		byHash[item.Hash] = item
+	}
+	if item := byHash["hash-a"]; item == nil || item.Locality != "new-locality" || item.SizeBytes != 456 || item.RoutingKey != "route-a" {
 		t.Fatalf("unexpected required content item from events: %+v", item)
+	}
+	item := byHash["hash-b"]
+	if item == nil || item.SizeBytes != 456 || item.Source == nil || item.Source.Type != string(cache.RequiredContentSourceOCIRegistry) {
+		t.Fatalf("expected OCI source and runtime size to merge: %+v", item)
+	}
+	if item.Source.LayerDigest != "sha256:layer" || item.Source.Repository != "beta9-runner" {
+		t.Fatalf("unexpected OCI source: %+v", item.Source)
 	}
 	if len(eventRepo.queries) != 1 || eventRepo.queries[0].EventTypes[0] != types.EventStubCacheRequiredContent {
 		t.Fatalf("unexpected event query: %+v", eventRepo.queries)
