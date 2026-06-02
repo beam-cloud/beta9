@@ -19,6 +19,9 @@ type OperationTraceAttempt struct {
 	Source         string `json:"source"`
 	Result         string `json:"result"`
 	Read           int64  `json:"read,omitempty"`
+	Bytes          int64  `json:"bytes,omitempty"`
+	ExpectedSize   int64  `json:"expected_size,omitempty"`
+	ContentStatus  string `json:"content_status,omitempty"`
 	ElapsedUs      int64  `json:"elapsed_us,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
@@ -31,6 +34,8 @@ type OperationTrace struct {
 	Offset        int64                   `json:"offset,omitempty"`
 	Length        int64                   `json:"length,omitempty"`
 	Read          int64                   `json:"read,omitempty"`
+	Bytes         int64                   `json:"bytes,omitempty"`
+	ExpectedSize  int64                   `json:"expected_size,omitempty"`
 	Views         int                     `json:"views,omitempty"`
 	DurationUs    int64                   `json:"duration_us,omitempty"`
 	HostRefreshes int                     `json:"host_refreshes,omitempty"`
@@ -38,17 +43,28 @@ type OperationTrace struct {
 }
 
 func (t *OperationTrace) addAttempt(hostIndex int, host *Host, source string, result string, read int64, elapsed time.Duration, err error) {
+	t.addAttemptWithDetails(hostIndex, host, source, result, 0, 0, "", read, elapsed, err)
+}
+
+func (t *OperationTrace) addStoreAttempt(hostIndex int, host *Host, source string, result string, bytes int64, expectedSize int64, contentStatus string, elapsed time.Duration, err error) {
+	t.addAttemptWithDetails(hostIndex, host, source, result, bytes, expectedSize, contentStatus, 0, elapsed, err)
+}
+
+func (t *OperationTrace) addAttemptWithDetails(hostIndex int, host *Host, source string, result string, bytes int64, expectedSize int64, contentStatus string, read int64, elapsed time.Duration, err error) {
 	if t == nil {
 		return
 	}
 
 	attempt := OperationTraceAttempt{
-		HostIndex:   hostIndex,
-		Source:      source,
-		Result:      result,
-		Read:        read,
-		ElapsedUs:   elapsed.Microseconds(),
-		HasEndpoint: host.HasEndpoint(),
+		HostIndex:     hostIndex,
+		Source:        source,
+		Result:        result,
+		Read:          read,
+		Bytes:         bytes,
+		ExpectedSize:  expectedSize,
+		ContentStatus: contentStatus,
+		ElapsedUs:     elapsed.Microseconds(),
+		HasEndpoint:   host.HasEndpoint(),
 	}
 	if err != nil {
 		attempt.Error = err.Error()
@@ -65,6 +81,19 @@ func (t *OperationTrace) addAttempt(hostIndex int, host *Host, source string, re
 	}
 
 	t.Attempts = append(t.Attempts, attempt)
+}
+
+func operationTraceStoreResult(err error) string {
+	switch {
+	case err == nil:
+		return "stored"
+	case errors.Is(err, ErrUnableToAcquireLock):
+		return "lock_unavailable"
+	case errors.Is(err, ErrSelectedHostUnavailable), errors.Is(err, ErrUnableToReachHost), errors.Is(err, ErrHostNotFound), errors.Is(err, ErrClientNotFound):
+		return "unavailable"
+	default:
+		return "error"
+	}
 }
 
 func operationTraceReadResult(err error, read int64, length int64) string {

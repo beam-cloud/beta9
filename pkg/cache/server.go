@@ -423,11 +423,11 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 	if err := cs.rejectIfDraining(); err != nil {
 		return nil, err
 	}
-	exists := cs.cas.Exists(req.Hash)
+	status := cs.cas.ContentStatus(req.Hash)
 	if req.ExpectedSize > 0 {
-		exists = cs.cas.Exists(req.Hash, req.ExpectedSize)
+		status = cs.cas.ContentStatus(req.Hash, req.ExpectedSize)
 	}
-	return &proto.CacheHasContentResponse{Exists: exists, Ok: true}, nil
+	return &proto.CacheHasContentResponse{Exists: status == contentStatusComplete, Status: status, Ok: true}, nil
 }
 
 func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream proto.Cache_GetContentStreamServer) error {

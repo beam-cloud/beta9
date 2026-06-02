@@ -81,6 +81,7 @@ type clipCacheRollup struct {
 	NodeID         string `json:"node_id,omitempty"`
 	CachePathID    string `json:"cache_path_id,omitempty"`
 	HasEndpoint    bool   `json:"has_endpoint,omitempty"`
+	ContentStatus  string `json:"content_status,omitempty"`
 	Count          int64  `json:"count"`
 	ErrorCount     int64  `json:"error_count,omitempty"`
 	TotalUs        int64  `json:"total_us"`
@@ -252,14 +253,23 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 	a.cacheCount++
 	a.cacheBytes += event.Bytes
 	a.cacheTotal += event.Duration
-	switch event.Result {
-	case "hit", "stored_or_present":
+	switch {
+	case event.Result == "hit" ||
+		event.Result == "stored_or_present" ||
+		event.Result == "already_present" ||
+		event.Result == "already_present_after_lock" ||
+		event.Result == "lock_wait_present":
 		a.cacheHitCount++
-	case "miss":
+	case event.Result == "miss" ||
+		event.Result == "missing" ||
+		event.Result == "partial" ||
+		event.Result == "size_mismatch" ||
+		event.Result == "stored" ||
+		strings.HasPrefix(event.Result, "stored_"):
 		a.cacheMissCount++
-	case "unavailable":
+	case event.Result == "unavailable" || event.Result == "lock_unavailable":
 		a.cacheUnavailableCount++
-	case "error":
+	case event.Result == "error":
 		a.cacheErrorCount++
 	}
 	if event.Error != "" && event.Result != "error" {
@@ -293,9 +303,9 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 		if result == "" {
 			result = event.Result
 		}
-		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, source, result), event.Operation, result, source, &attempt, attemptDurationUs, 0, attempt.Read, attempt.Error)
+		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, source, result, attempt.ContentStatus), event.Operation, result, source, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
 		if attempt.HostID != "" {
-			a.addCacheRollup(a.byCacheHost, clipReadRollupKey(attempt.HostID, source, result), event.Operation, result, source, &attempt, attemptDurationUs, 0, attempt.Read, attempt.Error)
+			a.addCacheRollup(a.byCacheHost, clipReadRollupKey(attempt.HostID, source, result, attempt.ContentStatus), event.Operation, result, source, &attempt, attemptDurationUs, attempt.Bytes, attempt.Read, attempt.Error)
 		}
 	}
 }
@@ -353,6 +363,7 @@ func (a *clipReadAggregate) addCacheRollup(target map[string]*clipCacheRollup, k
 			rollup.NodeID = attempt.NodeID
 			rollup.CachePathID = attempt.CachePathID
 			rollup.HasEndpoint = attempt.HasEndpoint
+			rollup.ContentStatus = attempt.ContentStatus
 		}
 		target[key] = rollup
 	}
