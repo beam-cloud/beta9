@@ -17,7 +17,7 @@ type WorkerRepositoryService struct {
 	cacheCoordinator      *cache.Coordinator
 	cacheCoordinatorToken string
 	cacheMetadata         cache.CacheMetadataStore
-	requiredContent       cache.RequiredContentRepository
+	requiredContent       cache.RequiredContentIndexRepository
 	eventRepo             repository.EventRepository
 	backendRepo           repository.BackendRepository
 	workerEvents          *workerEventBroker

@@ -123,12 +123,7 @@ func (s *gatewayCacheMetadataStore) MarkStubLocalityAccessed(ctx context.Context
 	return err
 }
 
-func (s *gatewayCacheMetadataStore) UpsertRequiredContent(ctx context.Context, item cache.RequiredContentItem, ttl time.Duration) error {
-	item = item.Normalized()
-	return s.UpsertRequiredContentBatch(ctx, []cache.RequiredContentItem{item}, ttl)
-}
-
-func (s *gatewayCacheMetadataStore) UpsertRequiredContentBatch(ctx context.Context, items []cache.RequiredContentItem, ttl time.Duration) error {
+func (s *gatewayCacheMetadataStore) ReportRequiredContentBatch(ctx context.Context, items []cache.RequiredContentItem, ttl time.Duration) error {
 	if len(items) == 0 {
 		return nil
 	}

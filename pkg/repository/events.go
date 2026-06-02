@@ -51,6 +51,10 @@ type EventClientRepo struct {
 
 var ErrEventReadUnsupported = errors.New("event read unsupported")
 
+func (r *EventClientRepo) PersistentEventStoreConfigured() bool {
+	return r != nil && r.reader != nil && len(r.storageSinks) > 0
+}
+
 type eventMetadata struct {
 	ContainerID string
 	WorkspaceID string

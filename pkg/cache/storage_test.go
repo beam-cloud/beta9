@@ -295,6 +295,18 @@ func TestStoreAddPageSourceWithExpectedHashCleansUpOnMismatch(t *testing.T) {
 	require.Error(t, pageErr)
 }
 
+func TestWriteCacheChunkAtomicReplaceOverwritesStalePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chunk")
+	require.NoError(t, os.Symlink("missing-target", path))
+
+	require.NoError(t, writeCacheChunkAtomicReplace(path, []byte("verified")))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, []byte("verified"), got)
+}
+
 func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 	InitLogger(false, false)
 

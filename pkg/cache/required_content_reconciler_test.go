@@ -136,7 +136,6 @@ func TestRequiredContentReconcilerBackfillsUnknownSizeFromCompleteMarker(t *test
 	reconciler.reconcileOnce()
 
 	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, item.RoutingKey))
-	require.Equal(t, int64(len(content)), repo.item.SizeBytes)
 }
 
 func TestRequiredContentReconcilerSkipsUnknownSizeContentWhenBudgetLimited(t *testing.T) {
@@ -168,6 +167,95 @@ func TestRequiredContentReconcilerSkipsUnknownSizeContentWhenBudgetLimited(t *te
 	require.Equal(t, contentStatusMissing, selectedStore.ContentStatus(hash, int64(len(content))))
 	require.Equal(t, RequiredContentStatusSkipped, repo.statusFor(hash, item.RoutingKey))
 	require.Zero(t, repo.item.SizeBytes)
+}
+
+func TestRequiredContentReconcilerMaterializesUnknownSizeOriginContent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	selectedHost := requiredContentTestHost("node-a", "cache-a")
+	selectedStore := newTestStore(t, 8)
+	content := []byte("origin content with missing required-content size but known origin")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	sourcePath := t.TempDir() + "/required-content.bin"
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+
+	item := requiredContentTestItem(RequiredContentKindClipOCI, hash, hash, 0)
+	item.Source = RequiredContentSource{
+		Type:        RequiredContentSourceOCIRegistry,
+		Registry:    "registry.localhost:5000",
+		Repository:  "stage/beta9-users",
+		LayerDigest: "sha256:layer",
+	}
+	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
+	repo.origin = RequiredContentOriginInstruction{
+		Path:         sourcePath,
+		ExpectedHash: hash,
+	}
+	repo.originOK = true
+	reconciler := requiredContentTestReconciler(ctx, selectedHost, selectedStore, repo,
+		RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 1, BatchSize: 16},
+	)
+
+	reconciler.reconcileOnce()
+
+	require.Equal(t, contentStatusComplete, selectedStore.ContentStatus(hash, int64(len(content))))
+	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, item.RoutingKey))
+}
+
+func TestRequiredContentReconcilerMaterializesWhenHRWOwnerChanges(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	newOwner := requiredContentTestHost("node-new", "cache-new")
+	oldOwner := requiredContentTestHost("node-old", "cache-old")
+	routingKey := routingKeyOwnedBy(t, newOwner, oldOwner)
+
+	newStore := newTestStore(t, 8)
+	oldStore := newTestStore(t, 8)
+	content := bytes.Repeat([]byte("required-content-owner-change-"), 4)
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	storedHash, size, err := oldStore.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	require.Equal(t, hash, storedHash)
+	require.Equal(t, int64(len(content)), size)
+
+	item := requiredContentTestItem(RequiredContentKindClipOCI, hash, routingKey, size)
+	repo := newRequiredContentMemoryRepository([]*Host{newOwner, oldOwner}, item)
+	peerClient := &Client{
+		ctx:          ctx,
+		clientConfig: ClientConfig{NTopHosts: 2},
+		grpcClients:  make(map[string]proto.CacheClient),
+		grpcConns:    make(map[string]*grpc.ClientConn),
+		localServers: map[string]*Server{
+			newOwner.HostId: {hostId: newOwner.HostId, cas: newStore},
+			oldOwner.HostId: {hostId: oldOwner.HostId, cas: oldStore},
+		},
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &keyedTestHasher{routes: map[string][]*Host{routingKey: {newOwner, oldOwner}}},
+		maxGetContentAttempts: 1,
+	}
+
+	oldReconciler := requiredContentTestReconciler(ctx, oldOwner, oldStore, repo,
+		RequiredContentConfig{Enabled: true, ReconcileConcurrency: 1, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2},
+	)
+	oldReconciler.reconcileOnce()
+	require.Equal(t, contentStatusMissing, newStore.ContentStatus(hash, size))
+	require.Empty(t, repo.statusFor(hash, routingKey))
+
+	newReconciler := requiredContentTestReconciler(ctx, newOwner, newStore, repo,
+		RequiredContentConfig{Enabled: true, ReconcileConcurrency: 1, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2},
+		func(server *Server, reconciler *requiredContentReconciler) {
+			server.peerClient = peerClient
+		},
+	)
+	newReconciler.reconcileOnce()
+
+	require.Equal(t, contentStatusComplete, newStore.ContentStatus(hash, size))
+	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, routingKey))
 }
 
 func requiredContentTestHost(nodeID, cachePathID string) *Host {
@@ -219,7 +307,7 @@ func requiredContentTestReconciler(ctx context.Context, host *Host, store *Store
 func routingKeyOwnedBy(t *testing.T, selectedHost, replicaHost *Host) string {
 	t.Helper()
 
-	hasher := newRequiredContentMemoryRepository([]*Host{selectedHost, replicaHost}, RequiredContentItem{}).testHasher()
+	hasher := newRequiredContentMemoryRepository([]*Host{selectedHost, replicaHost}, RequiredContentItem{}).testHasher(t)
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("required-content-routing-key-%d", i)
 		hosts := hasher.GetN(2, key)
@@ -267,13 +355,6 @@ func (r *requiredContentMemoryRepository) MarkStubLocalityAccessed(ctx context.C
 	return nil
 }
 
-func (r *requiredContentMemoryRepository) UpsertRequiredContent(ctx context.Context, item RequiredContentItem, ttl time.Duration) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.item = item.Normalized()
-	return nil
-}
-
 func (r *requiredContentMemoryRepository) ListRecentStubLocalities(ctx context.Context, locality string, since time.Time, limit int) ([]RequiredContentStubLocality, error) {
 	return []RequiredContentStubLocality{{
 		Locality:    r.item.Locality,
@@ -315,14 +396,14 @@ func (r *requiredContentMemoryRepository) statusFor(hash, routingKey string) Req
 	return r.statuses[hash+":"+routingKey]
 }
 
-func (r *requiredContentMemoryRepository) testHasher() RendezvousHasher {
+func (r *requiredContentMemoryRepository) testHasher(t *testing.T) RendezvousHasher {
+	t.Helper()
+
 	hasher, err := (&requiredContentReconciler{
 		server:        &Server{locality: "default"},
 		hostDirectory: r,
 	}).currentHasher(context.Background())
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 	return hasher
 }
 

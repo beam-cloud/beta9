@@ -2,10 +2,7 @@ package repository_services
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"sort"
 	"time"
 
@@ -15,10 +12,14 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-const requiredContentCatalogEventLimit = 4096
+const requiredContentEventLimit = 4096
 
-type requiredContentCatalogClaimer interface {
-	ClaimRequiredContentCatalogItems(ctx context.Context, workspaceID, stubID string, fingerprints map[string]string, ttl time.Duration) (map[string]bool, error)
+type requiredContentStatusReader interface {
+	GetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (cache.RequiredContentReconciliationStatus, time.Time, string, bool, error)
+}
+
+type persistentEventStore interface {
+	PersistentEventStoreConfigured() bool
 }
 
 func (s *WorkerRepositoryService) ReportRequiredContent(ctx context.Context, req *pb.ReportRequiredContentRequest) (*pb.ReportRequiredContentResponse, error) {
@@ -31,27 +32,19 @@ func (s *WorkerRepositoryService) ReportRequiredContent(ctx context.Context, req
 	if req == nil {
 		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: "request is required"}, nil
 	}
+	if !requiredContentEventsConfigured(s.eventRepo) {
+		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: repository.ErrEventReadUnsupported.Error()}, nil
+	}
 
 	ttl := time.Duration(req.TtlMs) * time.Millisecond
 	if err := s.requiredContent.MarkStubLocalityAccessed(ctx, req.Locality, req.WorkspaceId, req.StubId, ttl); err != nil {
 		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	items := s.requiredContentReportItems(req)
-	if s.eventRepo == nil {
-		for _, item := range items {
-			if err := s.requiredContent.UpsertRequiredContent(ctx, item, ttl); err != nil {
-				return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: err.Error()}, nil
-			}
-		}
-		return &pb.ReportRequiredContentResponse{Ok: true}, nil
-	}
 
-	eventItems, err := s.requiredContentCatalogItemsToPublish(ctx, req.WorkspaceId, req.StubId, items, ttl)
-	if err != nil {
-		return &pb.ReportRequiredContentResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
+	eventItems := requiredContentEventItems(items)
 	if len(eventItems) > 0 {
-		s.pushRequiredContentEvent(requiredContentCatalogEvent(req.WorkspaceId, req.StubId, req.Locality, eventItems))
+		s.pushRequiredContentEvent(requiredContentEvent(req.WorkspaceId, req.StubId, req.Locality, eventItems))
 	}
 	return &pb.ReportRequiredContentResponse{Ok: true}, nil
 }
@@ -92,8 +85,11 @@ func (s *WorkerRepositoryService) ListRequiredContentForStub(ctx context.Context
 	if req == nil {
 		return &pb.ListRequiredContentForStubResponse{Ok: false, ErrorMsg: "request is required"}, nil
 	}
+	if !requiredContentEventsConfigured(s.eventRepo) {
+		return &pb.ListRequiredContentForStubResponse{Ok: false, ErrorMsg: repository.ErrEventReadUnsupported.Error()}, nil
+	}
 
-	items, err := s.listRequiredContentCatalog(ctx, req.Locality, req.WorkspaceId, req.StubId, int(req.Limit))
+	items, err := s.listRequiredContentFromEvents(ctx, req.Locality, req.WorkspaceId, req.StubId, int(req.Limit))
 	if err != nil {
 		return &pb.ListRequiredContentForStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -178,7 +174,7 @@ func (s *WorkerRepositoryService) requiredContentReportItems(req *pb.ReportRequi
 		if item.Hash == "" {
 			continue
 		}
-		byID[requiredContentCatalogItemID(item.Hash, item.RoutingKey)] = item
+		byID[requiredContentItemKey(item.Hash, item.RoutingKey)] = item
 	}
 	ids := make([]string, 0, len(byID))
 	for id := range byID {
@@ -192,61 +188,30 @@ func (s *WorkerRepositoryService) requiredContentReportItems(req *pb.ReportRequi
 	return items
 }
 
-func (s *WorkerRepositoryService) requiredContentCatalogItemsToPublish(ctx context.Context, workspaceID, stubID string, items []cache.RequiredContentItem, ttl time.Duration) ([]types.EventStubCacheRequiredContentItem, error) {
+func requiredContentEventItems(items []cache.RequiredContentItem) []types.EventStubCacheRequiredContentItem {
 	byID := map[string]types.EventStubCacheRequiredContentItem{}
-	fingerprints := map[string]string{}
 	for _, item := range items {
 		eventItem := requiredContentEventItemFromCacheItem(item)
-		id := requiredContentCatalogItemID(eventItem.Hash, eventItem.RoutingKey)
+		id := requiredContentItemKey(eventItem.Hash, eventItem.RoutingKey)
 		byID[id] = eventItem
-		fingerprints[id] = requiredContentCatalogFingerprint(eventItem)
 	}
 	if len(byID) == 0 {
-		return nil, nil
+		return nil
 	}
 
-	claimed := map[string]bool{}
-	if claimer, ok := s.requiredContent.(requiredContentCatalogClaimer); ok {
-		var err error
-		claimed, err = claimer.ClaimRequiredContentCatalogItems(ctx, workspaceID, stubID, fingerprints, ttl)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		for id := range byID {
-			claimed[id] = true
-		}
-	}
-
-	ids := make([]string, 0, len(claimed))
-	for id, ok := range claimed {
-		if ok {
-			ids = append(ids, id)
-		}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	eventItems := make([]types.EventStubCacheRequiredContentItem, 0, len(ids))
 	for _, id := range ids {
 		eventItems = append(eventItems, byID[id])
 	}
-	return eventItems, nil
+	return eventItems
 }
 
-func (s *WorkerRepositoryService) listRequiredContentCatalog(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]cache.RequiredContentItem, error) {
-	if s.eventRepo == nil {
-		return s.requiredContent.ListRequiredContentForStub(ctx, locality, workspaceID, stubID, limit)
-	}
-	items, err := s.listRequiredContentCatalogFromEvents(ctx, locality, workspaceID, stubID, limit)
-	if err == nil {
-		return items, nil
-	}
-	if errors.Is(err, repository.ErrEventReadUnsupported) {
-		return s.requiredContent.ListRequiredContentForStub(ctx, locality, workspaceID, stubID, limit)
-	}
-	return nil, err
-}
-
-func (s *WorkerRepositoryService) listRequiredContentCatalogFromEvents(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]cache.RequiredContentItem, error) {
+func (s *WorkerRepositoryService) listRequiredContentFromEvents(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]cache.RequiredContentItem, error) {
 	if limit <= 0 {
 		limit = cache.DefaultRequiredContentBatchSize
 	}
@@ -254,7 +219,7 @@ func (s *WorkerRepositoryService) listRequiredContentCatalogFromEvents(ctx conte
 		WorkspaceID: workspaceID,
 		StubID:      stubID,
 		EventTypes:  []string{types.EventStubCacheRequiredContent},
-		Limit:       requiredContentCatalogEventLimit,
+		Limit:       requiredContentEventLimit,
 	})
 	if err != nil {
 		return nil, err
@@ -274,7 +239,7 @@ func (s *WorkerRepositoryService) listRequiredContentCatalogFromEvents(ctx conte
 			if item.Hash == "" {
 				continue
 			}
-			byID[requiredContentCatalogItemID(item.Hash, item.RoutingKey)] = item
+			byID[requiredContentItemKey(item.Hash, item.RoutingKey)] = item
 		}
 	}
 
@@ -288,12 +253,27 @@ func (s *WorkerRepositoryService) listRequiredContentCatalogFromEvents(ctx conte
 	}
 	items := make([]cache.RequiredContentItem, 0, len(ids))
 	for _, id := range ids {
-		items = append(items, byID[id])
+		items = append(items, s.withRequiredContentStatus(ctx, byID[id]))
 	}
 	return items, nil
 }
 
-func requiredContentCatalogEvent(workspaceID, stubID, locality string, items []types.EventStubCacheRequiredContentItem) types.EventStubCacheRequiredContentSchema {
+func (s *WorkerRepositoryService) withRequiredContentStatus(ctx context.Context, item cache.RequiredContentItem) cache.RequiredContentItem {
+	reader, ok := s.requiredContent.(requiredContentStatusReader)
+	if !ok {
+		return item
+	}
+	status, at, errMsg, found, err := reader.GetRequiredContentReconciliationStatus(ctx, item.Locality, item.WorkspaceID, item.StubID, item.Hash, item.RoutingKey)
+	if err != nil || !found {
+		return item
+	}
+	item.Status = status
+	item.LastStatusAt = at
+	item.LastError = errMsg
+	return item
+}
+
+func requiredContentEvent(workspaceID, stubID, locality string, items []types.EventStubCacheRequiredContentItem) types.EventStubCacheRequiredContentSchema {
 	var bytes int64
 	var kind string
 	for _, item := range items {
@@ -312,7 +292,7 @@ func requiredContentCatalogEvent(workspaceID, stubID, locality string, items []t
 		Status:      string(cache.RequiredContentStatusPending),
 		ItemCount:   int64(len(items)),
 		Bytes:       bytes,
-		Source:      "catalog",
+		Source:      "worker_report",
 		Items:       items,
 		Timestamp:   time.Now().UTC(),
 	}
@@ -368,17 +348,19 @@ func requiredContentItemFromEventItem(locality, workspaceID, stubID string, even
 	}.Normalized()
 }
 
-func requiredContentCatalogFingerprint(item types.EventStubCacheRequiredContentItem) string {
-	payload, _ := json.Marshal(item)
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
-}
-
-func requiredContentCatalogItemID(hash, routingKey string) string {
+func requiredContentItemKey(hash, routingKey string) string {
 	if routingKey == "" {
 		routingKey = hash
 	}
 	return hash + "\x00" + routingKey
+}
+
+func requiredContentEventsConfigured(eventRepo repository.EventRepository) bool {
+	if eventRepo == nil {
+		return false
+	}
+	store, ok := eventRepo.(persistentEventStore)
+	return !ok || store.PersistentEventStoreConfigured()
 }
 
 func (s *WorkerRepositoryService) ResolveRequiredContentOrigin(ctx context.Context, req *pb.ResolveRequiredContentOriginRequest) (*pb.ResolveRequiredContentOriginResponse, error) {

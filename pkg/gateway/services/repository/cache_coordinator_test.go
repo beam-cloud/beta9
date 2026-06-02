@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -152,9 +153,9 @@ func TestResolveRequiredContentOriginReturnsOCIOrigin(t *testing.T) {
 	}
 }
 
-func TestReportRequiredContentWritesDedupedCatalogEvents(t *testing.T) {
+func TestReportRequiredContentWritesEventAndRedisStubIndex(t *testing.T) {
 	eventRepo := newRequiredContentEventRepo()
-	service, cleanup := newRequiredContentServiceForTest(t, eventRepo)
+	service, redisServer, cleanup := newRequiredContentServiceForTest(t, eventRepo)
 	defer cleanup()
 	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
 	req := &pb.ReportRequiredContentRequest{
@@ -182,21 +183,15 @@ func TestReportRequiredContentWritesDedupedCatalogEvents(t *testing.T) {
 		t.Fatalf("ReportRequiredContent failed: resp=%+v err=%v", resp, err)
 	}
 	event := eventRepo.waitEvent(t)
-	if got, want := event.Source, "catalog"; got != want {
+	if got, want := event.Source, "worker_report"; got != want {
 		t.Fatalf("unexpected event source: got %q want %q", got, want)
 	}
 	if got, want := len(event.Items), 1; got != want {
-		t.Fatalf("unexpected catalog item count: got %d want %d", got, want)
+		t.Fatalf("unexpected required content item count: got %d want %d", got, want)
 	}
 	if got, want := event.Items[0].Hash, "hash-a"; got != want {
-		t.Fatalf("unexpected catalog item hash: got %q want %q", got, want)
+		t.Fatalf("unexpected required content item hash: got %q want %q", got, want)
 	}
-
-	resp, err = service.ReportRequiredContent(ctx, req)
-	if err != nil || !resp.Ok {
-		t.Fatalf("second ReportRequiredContent failed: resp=%+v err=%v", resp, err)
-	}
-	eventRepo.requireNoEvent(t)
 
 	req.Items[0].SizeBytes = 123
 	resp, err = service.ReportRequiredContent(ctx, req)
@@ -205,16 +200,48 @@ func TestReportRequiredContentWritesDedupedCatalogEvents(t *testing.T) {
 	}
 	event = eventRepo.waitEvent(t)
 	if got, want := event.Items[0].SizeBytes, int64(123); got != want {
-		t.Fatalf("changed catalog item was not emitted: got %d want %d", got, want)
+		t.Fatalf("changed required content item was not emitted: got %d want %d", got, want)
+	}
+	for _, key := range redisServer.Keys() {
+		if strings.Contains(key, ":catalog:") || strings.Contains(key, ":item:") {
+			t.Fatalf("required content catalog leaked into redis key %q", key)
+		}
 	}
 }
 
-func TestListRequiredContentForStubReadsCatalogFromEvents(t *testing.T) {
+func TestReportRequiredContentRequiresPersistentEvents(t *testing.T) {
+	service, redisServer, cleanup := newRequiredContentServiceWithRepoForTest(t, repository.NewEventClientRepo(types.AppConfig{}))
+	defer cleanup()
+
+	resp, err := service.ReportRequiredContent(cacheRepositoryAuthContext(types.TokenTypeWorker), &pb.ReportRequiredContentRequest{
+		Locality:    "default",
+		WorkspaceId: "workspace-1",
+		StubId:      "stub-1",
+		TtlMs:       int64((2 * time.Second).Milliseconds()),
+		Items: []*pb.RequiredContentItem{{
+			Kind: string(cache.RequiredContentKindClipOCI),
+			Hash: "hash-a",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ReportRequiredContent returned grpc error: %v", err)
+	}
+	if resp.Ok || resp.ErrorMsg != repository.ErrEventReadUnsupported.Error() {
+		t.Fatalf("expected event-read unsupported response: %+v", resp)
+	}
+	for _, key := range redisServer.Keys() {
+		if strings.HasPrefix(key, "cache:required_content:") {
+			t.Fatalf("required content index was written without persistent events: %q", key)
+		}
+	}
+}
+
+func TestListRequiredContentForStubReadsRequiredContentFromEvents(t *testing.T) {
 	first := requiredContentHistoryRecord(t, types.EventStubCacheRequiredContentSchema{
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
 		Locality:    "old-locality",
-		Source:      "catalog",
+		Source:      "worker_report",
 		Items: []types.EventStubCacheRequiredContentItem{{
 			Kind:       string(cache.RequiredContentKindClipV1),
 			Hash:       "hash-a",
@@ -228,7 +255,7 @@ func TestListRequiredContentForStubReadsCatalogFromEvents(t *testing.T) {
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
 		Locality:    "old-locality",
-		Source:      "catalog",
+		Source:      "worker_report",
 		Items: []types.EventStubCacheRequiredContentItem{{
 			Kind:       string(cache.RequiredContentKindClipV1),
 			Hash:       "hash-a",
@@ -241,7 +268,7 @@ func TestListRequiredContentForStubReadsCatalogFromEvents(t *testing.T) {
 	})
 	eventRepo := newRequiredContentEventRepo()
 	eventRepo.history = &types.EventHistoryResponse{Events: []types.ContainerEventRecord{first, second}}
-	service, cleanup := newRequiredContentServiceForTest(t, eventRepo)
+	service, _, cleanup := newRequiredContentServiceForTest(t, eventRepo)
 	defer cleanup()
 
 	resp, err := service.ListRequiredContentForStub(cacheRepositoryAuthContext(types.TokenTypeWorker), &pb.ListRequiredContentForStubRequest{
@@ -258,7 +285,7 @@ func TestListRequiredContentForStubReadsCatalogFromEvents(t *testing.T) {
 	}
 	item := resp.Items[0]
 	if item.Locality != "new-locality" || item.SizeBytes != 456 || item.RoutingKey != "route-a" {
-		t.Fatalf("unexpected item from event catalog: %+v", item)
+		t.Fatalf("unexpected required content item from events: %+v", item)
 	}
 	if len(eventRepo.queries) != 1 || eventRepo.queries[0].EventTypes[0] != types.EventStubCacheRequiredContent {
 		t.Fatalf("unexpected event query: %+v", eventRepo.queries)
@@ -267,7 +294,7 @@ func TestListRequiredContentForStubReadsCatalogFromEvents(t *testing.T) {
 
 func TestSetRequiredContentStatusPushesPlatformCacheEventOnly(t *testing.T) {
 	eventRepo := newRequiredContentEventRepo()
-	service, cleanup := newRequiredContentServiceForTest(t, eventRepo)
+	service, _, cleanup := newRequiredContentServiceForTest(t, eventRepo)
 	defer cleanup()
 
 	resp, err := service.SetRequiredContentReconciliationStatus(cacheRepositoryAuthContext(types.TokenTypeWorker), &pb.SetRequiredContentReconciliationStatusRequest{
@@ -298,7 +325,11 @@ func cacheRepositoryAuthContext(tokenType string) context.Context {
 	})
 }
 
-func newRequiredContentServiceForTest(t *testing.T, eventRepo *requiredContentEventRepo) (*WorkerRepositoryService, func()) {
+func newRequiredContentServiceForTest(t *testing.T, eventRepo *requiredContentEventRepo) (*WorkerRepositoryService, *miniredis.Miniredis, func()) {
+	return newRequiredContentServiceWithRepoForTest(t, eventRepo)
+}
+
+func newRequiredContentServiceWithRepoForTest(t *testing.T, eventRepo repository.EventRepository) (*WorkerRepositoryService, *miniredis.Miniredis, func()) {
 	t.Helper()
 
 	server, err := miniredis.Run()
@@ -317,7 +348,7 @@ func newRequiredContentServiceForTest(t *testing.T, eventRepo *requiredContentEv
 	return &WorkerRepositoryService{
 			requiredContent: cacheRepo,
 			eventRepo:       eventRepo,
-		}, func() {
+		}, server, func() {
 			_ = rdb.Close()
 			server.Close()
 		}

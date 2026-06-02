@@ -87,29 +87,29 @@ type ClientLocalPageFileView struct {
 }
 
 type Client struct {
-	ctx                   context.Context
-	locality              string
-	clientConfig          ClientConfig
-	globalConfig          GlobalConfig
-	grpcClients           map[string]proto.CacheClient
-	grpcConns             map[string]*grpc.ClientConn
-	localServers          map[string]*Server
-	localDiskStore        *Store
-	localNodeID           string
-	localCachePathID      string
-	rawReadPools          map[string]*rawReadConnPool
-	hostMap               *HostMap
-	mu                    sync.RWMutex
-	discoveryClient       *DiscoveryClient
-	metadataStore         CacheMetadataStore
-	requiredContentRepo   RequiredContentRepository
-	requiredContentConfig RequiredContentConfig
-	localHostCache        map[localHostCacheKey]*localClientCache
-	cachefsServer         *fuse.Server
-	hasher                RendezvousHasher
-	hostDirectory         HostDirectory
-	minRetryLengthBytes   int64
-	maxGetContentAttempts int64
+	ctx                     context.Context
+	locality                string
+	clientConfig            ClientConfig
+	globalConfig            GlobalConfig
+	grpcClients             map[string]proto.CacheClient
+	grpcConns               map[string]*grpc.ClientConn
+	localServers            map[string]*Server
+	localDiskStore          *Store
+	localNodeID             string
+	localCachePathID        string
+	rawReadPools            map[string]*rawReadConnPool
+	hostMap                 *HostMap
+	mu                      sync.RWMutex
+	discoveryClient         *DiscoveryClient
+	metadataStore           CacheMetadataStore
+	requiredContentReporter RequiredContentReporter
+	requiredContentConfig   RequiredContentConfig
+	localHostCache          map[localHostCacheKey]*localClientCache
+	cachefsServer           *fuse.Server
+	hasher                  RendezvousHasher
+	hostDirectory           HostDirectory
+	minRetryLengthBytes     int64
+	maxGetContentAttempts   int64
 }
 
 type localHostCacheKey struct {
@@ -182,8 +182,8 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 	}
 
 	bc.hostMap = NewHostMap(cfg.Global, bc.addHost)
-	if repo, ok := metadataStore.(RequiredContentRepository); ok {
-		bc.requiredContentRepo = repo
+	if reporter, ok := metadataStore.(RequiredContentReporter); ok {
+		bc.requiredContentReporter = reporter
 	}
 	bc.discoveryClient = NewDiscoveryClient(cfg.Global, bc.hostMap, hostDirectory, locality)
 	bc.initLocalDiskStore(cfg, locality)
@@ -241,7 +241,7 @@ func (c *Client) ReportRequiredContent(ctx context.Context, item RequiredContent
 }
 
 func (c *Client) ReportRequiredContentBatch(ctx context.Context, items []RequiredContentItem) error {
-	if c == nil || !c.requiredContentConfig.Enabled || c.requiredContentRepo == nil {
+	if c == nil || !c.requiredContentConfig.Enabled || c.requiredContentReporter == nil {
 		return nil
 	}
 	if len(items) == 0 {
@@ -267,15 +267,7 @@ func (c *Client) ReportRequiredContentBatch(ctx context.Context, items []Require
 	if len(normalized) == 0 {
 		return nil
 	}
-	if batchRepo, ok := c.requiredContentRepo.(RequiredContentBatchRepository); ok {
-		return batchRepo.UpsertRequiredContentBatch(ctx, normalized, c.requiredContentConfig.StubTTL)
-	}
-	for _, item := range normalized {
-		if err := c.requiredContentRepo.UpsertRequiredContent(ctx, item, c.requiredContentConfig.StubTTL); err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.requiredContentReporter.ReportRequiredContentBatch(ctx, normalized, c.requiredContentConfig.StubTTL)
 }
 
 func (c *Client) Cleanup() error {

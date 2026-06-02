@@ -158,17 +158,20 @@ type RequiredContentReconciliationLock interface {
 	Refresh(ctx context.Context, ttl time.Duration) error
 }
 
-type RequiredContentRepository interface {
+type RequiredContentIndexRepository interface {
 	MarkStubLocalityAccessed(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error
-	UpsertRequiredContent(ctx context.Context, item RequiredContentItem, ttl time.Duration) error
 	ListRecentStubLocalities(ctx context.Context, locality string, since time.Time, limit int) ([]RequiredContentStubLocality, error)
-	ListRequiredContentForStub(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]RequiredContentItem, error)
 	SetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string, status RequiredContentReconciliationStatus, errorMsg string, ttl time.Duration) error
 	AcquireRequiredContentReconciliationLock(ctx context.Context, locality, logicalHostID, hash string, ttl time.Duration) (RequiredContentReconciliationLock, bool, error)
 }
 
-type RequiredContentBatchRepository interface {
-	UpsertRequiredContentBatch(ctx context.Context, items []RequiredContentItem, ttl time.Duration) error
+type RequiredContentRepository interface {
+	RequiredContentIndexRepository
+	ListRequiredContentForStub(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]RequiredContentItem, error)
+}
+
+type RequiredContentReporter interface {
+	ReportRequiredContentBatch(ctx context.Context, items []RequiredContentItem, ttl time.Duration) error
 }
 
 func NormalizeRequiredContentConfig(config RequiredContentConfig) RequiredContentConfig {

@@ -49,50 +49,23 @@ func TestCacheRedisRepositoryUsesReadableCoordinatorHostIndexKeys(t *testing.T) 
 	require.Empty(t, logicalHost.PrivateAddr)
 }
 
-func TestCacheRedisRequiredContentDedupeTTLStatusAndLocks(t *testing.T) {
+func TestCacheRedisRequiredContentIndexStatusAndLocks(t *testing.T) {
 	ctx := context.Background()
 	server, repo := newCacheRedisRepositoryForTest(t)
 	ttl := 2 * time.Second
 
 	require.NoError(t, repo.MarkStubLocalityAccessed(ctx, "default", "workspace-1", "stub-1", ttl))
-	base := cache.RequiredContentItem{
-		Locality:     "default",
-		WorkspaceID:  "workspace-1",
-		StubID:       "stub-1",
-		Kind:         cache.RequiredContentKindVolume,
-		Hash:         "hash-a",
-		ExpectedHash: "hash-a",
-		SizeBytes:    64 * 1024 * 1024,
-		Source: cache.RequiredContentSource{
-			Type:       cache.RequiredContentSourceS3,
-			Descriptor: "volume object",
-		},
-	}
-	first := base
-	first.RoutingKey = "route-a"
-	second := base
-	second.RoutingKey = "route-b"
-
-	require.NoError(t, repo.UpsertRequiredContent(ctx, first, ttl))
-	require.NoError(t, repo.UpsertRequiredContent(ctx, first, ttl))
-	require.NoError(t, repo.UpsertRequiredContent(ctx, second, ttl))
 
 	stubs, err := repo.ListRecentStubLocalities(ctx, "default", time.Now().Add(-time.Minute), 10)
 	require.NoError(t, err)
 	require.Len(t, stubs, 1)
 	require.Equal(t, "stub-1", stubs[0].StubID)
 
-	items, err := repo.ListRequiredContentForStub(ctx, "default", "workspace-1", "stub-1", 10)
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	require.Equal(t, int64(2), requiredContentItemByRoutingKey(t, items, "route-a").AccessCount)
-	require.Equal(t, int64(1), requiredContentItemByRoutingKey(t, items, "route-b").AccessCount)
-
 	require.NoError(t, repo.SetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-a", "route-a", cache.RequiredContentStatusPresent, "", ttl))
-	items, err = repo.ListRequiredContentForStub(ctx, "default", "workspace-1", "stub-1", 10)
+	status, _, _, found, err := repo.GetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-a", "route-a")
 	require.NoError(t, err)
-	require.Equal(t, cache.RequiredContentStatusPresent, requiredContentItemByRoutingKey(t, items, "route-a").Status)
-	require.NoError(t, repo.SetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-missing", "route-missing", cache.RequiredContentStatusPresent, "", ttl))
+	require.True(t, found)
+	require.Equal(t, cache.RequiredContentStatusPresent, status)
 
 	lock, ok, err := repo.AcquireRequiredContentReconciliationLock(ctx, "default", "host-a", "hash-a", ttl)
 	require.NoError(t, err)
@@ -106,47 +79,12 @@ func TestCacheRedisRequiredContentDedupeTTLStatusAndLocks(t *testing.T) {
 	require.True(t, ok)
 
 	server.FastForward(ttl + time.Second)
-	items, err = repo.ListRequiredContentForStub(ctx, "default", "workspace-1", "stub-1", 10)
+	_, _, _, found, err = repo.GetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-a", "route-a")
 	require.NoError(t, err)
-	require.Empty(t, items)
+	require.False(t, found)
 	stubs, err = repo.ListRecentStubLocalities(ctx, "default", time.Now().Add(-time.Minute), 10)
 	require.NoError(t, err)
 	require.Empty(t, stubs)
-}
-
-func TestCacheRedisRequiredContentCatalogClaimsChangedFingerprints(t *testing.T) {
-	ctx := context.Background()
-	_, repo := newCacheRedisRepositoryForTest(t)
-	ttl := 2 * time.Second
-
-	claimed, err := repo.ClaimRequiredContentCatalogItems(ctx, "workspace-1", "stub-1", map[string]string{
-		"hash-a\x00route-a": "fingerprint-a",
-	}, ttl)
-	require.NoError(t, err)
-	require.True(t, claimed["hash-a\x00route-a"])
-
-	claimed, err = repo.ClaimRequiredContentCatalogItems(ctx, "workspace-1", "stub-1", map[string]string{
-		"hash-a\x00route-a": "fingerprint-a",
-	}, ttl)
-	require.NoError(t, err)
-	require.Empty(t, claimed)
-
-	claimed, err = repo.ClaimRequiredContentCatalogItems(ctx, "workspace-1", "stub-1", map[string]string{
-		"hash-a\x00route-a": "fingerprint-b",
-	}, ttl)
-	require.NoError(t, err)
-	require.True(t, claimed["hash-a\x00route-a"])
-}
-
-func requiredContentItemByRoutingKey(t *testing.T, items []cache.RequiredContentItem, routingKey string) cache.RequiredContentItem {
-	t.Helper()
-	for _, item := range items {
-		if item.RoutingKey == routingKey {
-			return item
-		}
-	}
-	t.Fatalf("required content item with routing key %q not found in %#v", routingKey, items)
-	return cache.RequiredContentItem{}
 }
 
 func newCacheRedisRepositoryForTest(t *testing.T) (*miniredis.Miniredis, *CacheRedisRepository) {

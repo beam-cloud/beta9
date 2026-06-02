@@ -223,36 +223,6 @@ func (r *CacheRedisRepository) MarkStubLocalityAccessed(ctx context.Context, loc
 	return err
 }
 
-func (r *CacheRedisRepository) UpsertRequiredContent(ctx context.Context, item cache.RequiredContentItem, ttl time.Duration) error {
-	item = item.Normalized()
-	if item.Locality == "" || item.WorkspaceID == "" || item.StubID == "" || item.Hash == "" {
-		return fmt.Errorf("locality, workspace id, stub id, and hash are required")
-	}
-	ttl = requiredContentTTL(ttl)
-	now := time.Now().UTC()
-	itemKey := requiredContentItemKey(item.Locality, item.WorkspaceID, item.StubID, item.Hash, item.RoutingKey)
-
-	existing, found, err := r.getRequiredContentItem(ctx, itemKey)
-	if err != nil {
-		return err
-	}
-	item = mergeRequiredContentItem(item, existing, found, now)
-
-	payload, err := json.Marshal(item)
-	if err != nil {
-		return err
-	}
-
-	stubItemsKey := requiredContentStubItemsKey(item.Locality, item.WorkspaceID, item.StubID)
-	pipe := r.rdb.Pipeline()
-	pipe.Set(ctx, itemKey, payload, ttl)
-	pipe.SAdd(ctx, stubItemsKey, itemKey)
-	pipe.Expire(ctx, stubItemsKey, ttl)
-	pipeRequiredContentStubAccess(ctx, pipe, item.Locality, item.WorkspaceID, item.StubID, now, ttl)
-	_, err = pipe.Exec(ctx)
-	return err
-}
-
 func pipeRequiredContentStubAccess(ctx context.Context, pipe redis.Pipeliner, locality, workspaceID, stubID string, seen time.Time, ttl time.Duration) {
 	recentKey := requiredContentRecentStubsKey(locality)
 	pipe.ZAdd(ctx, recentKey, redis.Z{
@@ -260,93 +230,6 @@ func pipeRequiredContentStubAccess(ctx context.Context, pipe redis.Pipeliner, lo
 		Member: requiredContentStubMember(workspaceID, stubID),
 	})
 	pipe.Expire(ctx, recentKey, ttl)
-}
-
-func mergeRequiredContentItem(item, existing cache.RequiredContentItem, found bool, now time.Time) cache.RequiredContentItem {
-	if !found {
-		item.AccessCount = 1
-		if item.FirstSeen.IsZero() {
-			item.FirstSeen = now
-		}
-		item.LastSeen = now
-		if item.LastStatusAt.IsZero() {
-			item.LastStatusAt = now
-		}
-		return item
-	}
-
-	if !existing.FirstSeen.IsZero() {
-		item.FirstSeen = existing.FirstSeen
-	}
-	item.AccessCount = existing.AccessCount + 1
-	if item.SizeBytes <= 0 {
-		item.SizeBytes = existing.SizeBytes
-	}
-	if item.Source.Type == cache.RequiredContentSourceUnknown && existing.Source.Type != "" {
-		item.Source = existing.Source
-	}
-	if existing.Status != "" && item.Status == cache.RequiredContentStatusPending {
-		item.Status = existing.Status
-		item.LastStatusAt = existing.LastStatusAt
-		item.LastError = existing.LastError
-	}
-	if item.FirstSeen.IsZero() {
-		item.FirstSeen = now
-	}
-	item.LastSeen = now
-	if item.LastStatusAt.IsZero() {
-		item.LastStatusAt = now
-	}
-	return item
-}
-
-func (r *CacheRedisRepository) UpsertRequiredContentBatch(ctx context.Context, items []cache.RequiredContentItem, ttl time.Duration) error {
-	for _, item := range items {
-		if err := r.UpsertRequiredContent(ctx, item, ttl); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *CacheRedisRepository) ClaimRequiredContentCatalogItems(ctx context.Context, workspaceID, stubID string, fingerprints map[string]string, ttl time.Duration) (map[string]bool, error) {
-	if workspaceID == "" || stubID == "" {
-		return nil, fmt.Errorf("workspace id and stub id are required")
-	}
-	if len(fingerprints) == 0 {
-		return map[string]bool{}, nil
-	}
-	ttl = requiredContentTTL(ttl)
-	const claimScript = `
-local got = redis.call("GET", KEYS[1])
-if got == ARGV[1] then
-  return 0
-end
-redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
-return 1`
-	pipe := r.rdb.Pipeline()
-	claims := make(map[string]*redis.Cmd, len(fingerprints))
-	for itemID, fingerprint := range fingerprints {
-		if itemID == "" || fingerprint == "" {
-			continue
-		}
-		key := requiredContentCatalogItemKey(workspaceID, stubID, itemID)
-		claims[itemID] = pipe.Eval(ctx, claimScript, []string{key}, fingerprint, ttl.Milliseconds())
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, err
-	}
-	claimed := make(map[string]bool, len(claims))
-	for itemID, claim := range claims {
-		result, err := claim.Int()
-		if err != nil {
-			return nil, err
-		}
-		if result == 1 {
-			claimed[itemID] = true
-		}
-	}
-	return claimed, nil
 }
 
 func (r *CacheRedisRepository) ListRecentStubLocalities(ctx context.Context, locality string, since time.Time, limit int) ([]cache.RequiredContentStubLocality, error) {
@@ -402,36 +285,6 @@ func (r *CacheRedisRepository) ListRecentStubLocalities(ctx context.Context, loc
 	return stubs, nil
 }
 
-func (r *CacheRedisRepository) ListRequiredContentForStub(ctx context.Context, locality, workspaceID, stubID string, limit int) ([]cache.RequiredContentItem, error) {
-	if locality == "" || workspaceID == "" || stubID == "" {
-		return nil, fmt.Errorf("locality, workspace id, and stub id are required")
-	}
-	if limit <= 0 {
-		limit = cache.DefaultRequiredContentBatchSize
-	}
-	itemKeys, err := r.rdb.SMembers(ctx, requiredContentStubItemsKey(locality, workspaceID, stubID)).Result()
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(itemKeys)
-	if len(itemKeys) > limit {
-		itemKeys = itemKeys[:limit]
-	}
-
-	items := make([]cache.RequiredContentItem, 0, len(itemKeys))
-	for _, itemKey := range itemKeys {
-		item, found, err := r.getRequiredContentItem(ctx, itemKey)
-		if err != nil {
-			return nil, err
-		}
-		if found {
-			item = r.applyRequiredContentStatus(ctx, item)
-			items = append(items, item.Normalized())
-		}
-	}
-	return items, nil
-}
-
 func (r *CacheRedisRepository) SetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string, status cache.RequiredContentReconciliationStatus, errorMsg string, ttl time.Duration) error {
 	if routingKey == "" {
 		routingKey = hash
@@ -440,36 +293,30 @@ func (r *CacheRedisRepository) SetRequiredContentReconciliationStatus(ctx contex
 		return fmt.Errorf("locality, workspace id, stub id, hash, and status are required")
 	}
 	ttl = requiredContentTTL(ttl)
-	key := requiredContentItemKey(locality, workspaceID, stubID, hash, routingKey)
-	item, found, err := r.getRequiredContentItem(ctx, key)
-	if err != nil {
-		return err
-	}
 	statusRecord := requiredContentStatusRecord{
 		Status:       status,
 		LastStatusAt: time.Now().UTC(),
 		LastError:    errorMsg,
 	}
-	if !found {
-		return r.setRequiredContentStatus(ctx, locality, workspaceID, stubID, hash, routingKey, statusRecord, ttl)
-	}
-	item.Status = status
-	item.LastStatusAt = statusRecord.LastStatusAt
-	item.LastError = errorMsg
-	payload, err := json.Marshal(item)
-	if err != nil {
-		return err
-	}
-	pipe := r.rdb.Pipeline()
-	pipe.Set(ctx, key, payload, ttl)
-	statusKey := requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey)
 	statusPayload, err := json.Marshal(statusRecord)
 	if err != nil {
 		return err
 	}
-	pipe.Set(ctx, statusKey, statusPayload, ttl)
-	_, err = pipe.Exec(ctx)
-	return err
+	return r.rdb.Set(ctx, requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey), statusPayload, ttl).Err()
+}
+
+func (r *CacheRedisRepository) GetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (cache.RequiredContentReconciliationStatus, time.Time, string, bool, error) {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	if locality == "" || workspaceID == "" || stubID == "" || hash == "" {
+		return "", time.Time{}, "", false, fmt.Errorf("locality, workspace id, stub id, and hash are required")
+	}
+	status, found, err := r.getRequiredContentStatus(ctx, locality, workspaceID, stubID, hash, routingKey)
+	if err != nil || !found {
+		return "", time.Time{}, "", found, err
+	}
+	return status.Status, status.LastStatusAt, status.LastError, true, nil
 }
 
 func (r *CacheRedisRepository) AcquireRequiredContentReconciliationLock(ctx context.Context, locality, logicalHostID, hash string, ttl time.Duration) (cache.RequiredContentReconciliationLock, bool, error) {
@@ -484,40 +331,6 @@ func (r *CacheRedisRepository) AcquireRequiredContentReconciliationLock(ctx cont
 		return nil, acquired, err
 	}
 	return &requiredContentRedisLock{rdb: r.rdb, key: key, token: token}, true, nil
-}
-
-func (r *CacheRedisRepository) getRequiredContentItem(ctx context.Context, key string) (cache.RequiredContentItem, bool, error) {
-	payload, err := r.rdb.Get(ctx, key).Bytes()
-	if err == redis.Nil {
-		return cache.RequiredContentItem{}, false, nil
-	}
-	if err != nil {
-		return cache.RequiredContentItem{}, false, err
-	}
-	item := cache.RequiredContentItem{}
-	if err := json.Unmarshal(payload, &item); err != nil {
-		return cache.RequiredContentItem{}, false, err
-	}
-	return item, true, nil
-}
-
-func (r *CacheRedisRepository) applyRequiredContentStatus(ctx context.Context, item cache.RequiredContentItem) cache.RequiredContentItem {
-	status, found, err := r.getRequiredContentStatus(ctx, item.Locality, item.WorkspaceID, item.StubID, item.Hash, item.RoutingKey)
-	if err != nil || !found {
-		return item
-	}
-	item.Status = status.Status
-	item.LastStatusAt = status.LastStatusAt
-	item.LastError = status.LastError
-	return item
-}
-
-func (r *CacheRedisRepository) setRequiredContentStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string, status requiredContentStatusRecord, ttl time.Duration) error {
-	payload, err := json.Marshal(status)
-	if err != nil {
-		return err
-	}
-	return r.rdb.Set(ctx, requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey), payload, ttl).Err()
 }
 
 func (r *CacheRedisRepository) getRequiredContentStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (requiredContentStatusRecord, bool, error) {
@@ -585,38 +398,6 @@ func requiredContentRecentStubsKey(locality string) string {
 		"%s:locality:%s:stubs",
 		cacheRequiredContentKeyPrefix,
 		requiredContentKeyPart(locality),
-	)
-}
-
-func requiredContentStubItemsKey(locality, workspaceID, stubID string) string {
-	return fmt.Sprintf(
-		"%s:locality:%s:workspace:%s:stub:%s:items",
-		cacheRequiredContentKeyPrefix,
-		requiredContentKeyPart(locality),
-		requiredContentKeyPart(workspaceID),
-		requiredContentKeyPart(stubID),
-	)
-}
-
-func requiredContentItemKey(locality, workspaceID, stubID, hash, routingKey string) string {
-	return fmt.Sprintf(
-		"%s:locality:%s:workspace:%s:stub:%s:item:%s",
-		cacheRequiredContentKeyPrefix,
-		requiredContentKeyPart(locality),
-		requiredContentKeyPart(workspaceID),
-		requiredContentKeyPart(stubID),
-		requiredContentItemID(hash, routingKey),
-	)
-}
-
-func requiredContentCatalogItemKey(workspaceID, stubID, itemID string) string {
-	sum := sha256.Sum256([]byte(itemID))
-	return fmt.Sprintf(
-		"%s:catalog:workspace:%s:stub:%s:item:%s",
-		cacheRequiredContentKeyPrefix,
-		requiredContentKeyPart(workspaceID),
-		requiredContentKeyPart(stubID),
-		hex.EncodeToString(sum[:]),
 	)
 }
 

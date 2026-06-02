@@ -153,19 +153,37 @@ func (r *requiredContentReconciler) reconcileOnce() {
 
 func (r *requiredContentReconciler) canScheduleItem(ctx context.Context, item RequiredContentItem, budget *requiredContentCycleBudget) (schedule bool, exhausted bool) {
 	if item.SizeBytes > 0 {
-		if !budget.takeAvailable(item.SizeBytes) {
+		if !budget.take(item.SizeBytes) {
 			return false, true
 		}
-		return budget.take(item.SizeBytes), false
+		return true, false
 	}
 	if r.localContentComplete(item) {
 		return true, false
 	}
 	if budget.limited() {
+		if r.canMaterializeUnknownSize(item) {
+			if !budget.takeUnknown() {
+				return false, true
+			}
+			return true, false
+		}
 		r.setStatus(ctx, item, RequiredContentStatusSkipped, "required content size unknown")
 		return false, false
 	}
 	return true, false
+}
+
+func (r *requiredContentReconciler) canMaterializeUnknownSize(item RequiredContentItem) bool {
+	if r == nil || !r.config.OriginFallbackEnabled || r.originResolver == nil {
+		return false
+	}
+	switch item.Source.Type {
+	case RequiredContentSourceOCIRegistry, RequiredContentSourceS3:
+		return true
+	default:
+		return false
+	}
 }
 
 type requiredContentCycleBudget struct {
@@ -190,6 +208,17 @@ func (b *requiredContentCycleBudget) take(size int64) bool {
 
 func (b *requiredContentCycleBudget) takeAvailable(size int64) bool {
 	return b == nil || b.max <= 0 || size <= 0 || b.used+size <= b.max
+}
+
+func (b *requiredContentCycleBudget) takeUnknown() bool {
+	if b == nil || b.max <= 0 {
+		return true
+	}
+	if b.used >= b.max {
+		return false
+	}
+	b.used = b.max
+	return true
 }
 
 func (r *requiredContentReconciler) currentHasher(ctx context.Context) (RendezvousHasher, error) {
@@ -290,22 +319,7 @@ func (r *requiredContentReconciler) reconcileItem(ctx context.Context, item Requ
 }
 
 func (r *requiredContentReconciler) markPresent(ctx context.Context, item RequiredContentItem) {
-	r.recordLocalContentSize(ctx, item)
 	r.setStatus(ctx, item, RequiredContentStatusPresent, "")
-}
-
-func (r *requiredContentReconciler) recordLocalContentSize(ctx context.Context, item RequiredContentItem) {
-	if item.SizeBytes > 0 || r.repository == nil || r.server == nil || r.server.cas == nil {
-		return
-	}
-	size, ok := r.server.cas.ContentSize(item.Hash)
-	if !ok || size <= 0 {
-		return
-	}
-	item.SizeBytes = size
-	if err := r.repository.UpsertRequiredContent(ctx, item, r.config.StubTTL); err != nil {
-		Logger.Debugf("required content size update failed: hash=%s size=%d err=%v", item.Hash, size, err)
-	}
 }
 
 func refreshRequiredContentLock(ctx context.Context, lock RequiredContentReconciliationLock, ttl time.Duration, done <-chan struct{}) {
