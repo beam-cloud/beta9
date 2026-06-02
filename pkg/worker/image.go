@@ -1596,7 +1596,11 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
 	os.MkdirAll(copyDir, 0755)
 
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
+	ociLayoutTag := baseImage.Tag
+	if ociLayoutTag == "" {
+		ociLayoutTag = "latest"
+	}
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociLayoutTag)
 
 	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
@@ -1632,7 +1636,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
+	err = c.unpack(ctx, baseImage.Repo, ociLayoutTag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}

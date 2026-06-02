@@ -1217,6 +1217,83 @@ func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T)
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestStoreContentFromLocalFileContentOnlyDoesNotPublishCacheFSMetadata(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteMetadataStore := NewMockCacheMetadataStore()
+	remoteServer, err := NewServerWithOptions(ctx, remoteCfg, "test", WithServerMetadataStore(remoteMetadataStore), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		globalConfig:          cfg.Global,
+		metadataStore:         NewMockCacheMetadataStore(),
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	content := []byte("clip-content-addressed-local-file")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	sourcePath := filepath.Join(t.TempDir(), "layer.bin")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+
+	got, trace, err := client.StoreContentFromLocalFileWithTrace(LocalContentSource{
+		Path:        sourcePath,
+		CachePath:   "/images/cache/" + expectedHash,
+		ContentOnly: true,
+	}, StoreContentOptions{
+		RoutingKey: expectedHash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.Equal(t, "stored_missing", trace.Result)
+	requireTraceAttempt(t, trace, "precheck_content_hash_remote", contentStatusMissing, contentStatusMissing)
+	requireTraceAttempt(t, trace, "store_selected_host", "stored", contentStatusComplete)
+	for _, metadata := range remoteMetadataStore.fsNodes {
+		require.NotEqual(t, "/images/cache/"+expectedHash, metadata.Path)
+	}
+
+	remote := make([]byte, len(content))
+	n, err := remoteServer.cas.ReadAt(expectedHash, 0, remote)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, remote)
+}
+
 func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

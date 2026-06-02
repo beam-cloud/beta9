@@ -60,8 +60,9 @@ type StoreContentOptions struct {
 }
 
 type LocalContentSource struct {
-	Path      string
-	CachePath string
+	Path        string
+	CachePath   string
+	ContentOnly bool
 }
 
 type S3ContentSource struct {
@@ -2066,11 +2067,16 @@ func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts Store
 
 func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, opts StoreContentOptions) (hash string, trace OperationTrace, err error) {
 	started := time.Now()
-	if source.CachePath == "" {
+	if source.ContentOnly {
+		source.CachePath = ""
+	} else if source.CachePath == "" {
 		source.CachePath = source.Path
 	}
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = source.CachePath
+		if opts.RoutingKey == "" {
+			opts.RoutingKey = source.Path
+		}
 	}
 	trace.Operation = "store_local_file"
 	trace.Hash = opts.RoutingKey
@@ -2085,19 +2091,24 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 	trace.Bytes = info.Size()
 	trace.ExpectedSize = info.Size()
 	trace.SizeBucket = TraceSizeBucket(info.Size())
-	metadata := cacheFSMetadataFromFileInfo(source.CachePath, info)
+	var metadata *proto.CacheFSMetadata
+	if source.CachePath != "" {
+		metadata = cacheFSMetadataFromFileInfo(source.CachePath, info)
+	}
 
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
 	repairStatus := contentStatusMissing
-	if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "precheck_metadata"); ok {
-		trace.Hash = metadataHash
-		trace.Result = "already_present"
-		trace.DurationUs = time.Since(started).Microseconds()
-		return metadataHash, trace, nil
-	} else if status != "" && status != contentStatusComplete {
-		repairStatus = status
+	if source.CachePath != "" {
+		if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "precheck_metadata"); ok {
+			trace.Hash = metadataHash
+			trace.Result = "already_present"
+			trace.DurationUs = time.Since(started).Microseconds()
+			return metadataHash, trace, nil
+		} else if status != "" && status != contentStatusComplete {
+			repairStatus = status
+		}
 	}
 	if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "precheck_content_hash"); ok {
 		trace.Result = "already_present"
@@ -2116,12 +2127,14 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 	defer file.Close()
 
 	store := func() (string, error) {
-		if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "lock_precheck_metadata"); ok {
-			trace.Hash = metadataHash
-			trace.Result = "already_present_after_lock"
-			return metadataHash, nil
-		} else if status != "" && status != contentStatusComplete {
-			repairStatus = status
+		if source.CachePath != "" {
+			if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "lock_precheck_metadata"); ok {
+				trace.Hash = metadataHash
+				trace.Result = "already_present_after_lock"
+				return metadataHash, nil
+			} else if status != "" && status != contentStatusComplete {
+				repairStatus = status
+			}
 		}
 		if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "lock_precheck_content_hash"); ok {
 			trace.Result = "already_present_after_lock"

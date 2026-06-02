@@ -466,8 +466,8 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 	}()
 
 	actualHash, cacheTrace, err = c.client.StoreContentFromLocalFileWithTrace(cache.LocalContentSource{
-		Path:      path,
-		CachePath: path,
+		Path:        path,
+		ContentOnly: true,
 	}, cache.StoreContentOptions{
 		RoutingKey: opts.RoutingKey,
 		Lock:       true,
