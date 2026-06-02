@@ -37,6 +37,12 @@ type cacheCoordinatorHostRecord struct {
 	CapacityUsagePct float64 `json:"capacity_usage_pct"`
 }
 
+type requiredContentStatusRecord struct {
+	Status       cache.RequiredContentReconciliationStatus `json:"status"`
+	LastStatusAt time.Time                                 `json:"last_status_at"`
+	LastError    string                                    `json:"last_error,omitempty"`
+}
+
 func NewCacheRedisRepository(rdb *common.RedisClient) *CacheRedisRepository {
 	return &CacheRedisRepository{rdb: rdb}
 }
@@ -299,6 +305,46 @@ func (r *CacheRedisRepository) UpsertRequiredContentBatch(ctx context.Context, i
 	return nil
 }
 
+func (r *CacheRedisRepository) ClaimRequiredContentCatalogItems(ctx context.Context, workspaceID, stubID string, fingerprints map[string]string, ttl time.Duration) (map[string]bool, error) {
+	if workspaceID == "" || stubID == "" {
+		return nil, fmt.Errorf("workspace id and stub id are required")
+	}
+	if len(fingerprints) == 0 {
+		return map[string]bool{}, nil
+	}
+	ttl = requiredContentTTL(ttl)
+	const claimScript = `
+local got = redis.call("GET", KEYS[1])
+if got == ARGV[1] then
+  return 0
+end
+redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
+return 1`
+	pipe := r.rdb.Pipeline()
+	claims := make(map[string]*redis.Cmd, len(fingerprints))
+	for itemID, fingerprint := range fingerprints {
+		if itemID == "" || fingerprint == "" {
+			continue
+		}
+		key := requiredContentCatalogItemKey(workspaceID, stubID, itemID)
+		claims[itemID] = pipe.Eval(ctx, claimScript, []string{key}, fingerprint, ttl.Milliseconds())
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	claimed := make(map[string]bool, len(claims))
+	for itemID, claim := range claims {
+		result, err := claim.Int()
+		if err != nil {
+			return nil, err
+		}
+		if result == 1 {
+			claimed[itemID] = true
+		}
+	}
+	return claimed, nil
+}
+
 func (r *CacheRedisRepository) ListRecentStubLocalities(ctx context.Context, locality string, since time.Time, limit int) ([]cache.RequiredContentStubLocality, error) {
 	if locality == "" {
 		return nil, fmt.Errorf("locality is required")
@@ -375,6 +421,7 @@ func (r *CacheRedisRepository) ListRequiredContentForStub(ctx context.Context, l
 			return nil, err
 		}
 		if found {
+			item = r.applyRequiredContentStatus(ctx, item)
 			items = append(items, item.Normalized())
 		}
 	}
@@ -391,17 +438,34 @@ func (r *CacheRedisRepository) SetRequiredContentReconciliationStatus(ctx contex
 	ttl = requiredContentTTL(ttl)
 	key := requiredContentItemKey(locality, workspaceID, stubID, hash, routingKey)
 	item, found, err := r.getRequiredContentItem(ctx, key)
-	if err != nil || !found {
+	if err != nil {
 		return err
 	}
+	statusRecord := requiredContentStatusRecord{
+		Status:       status,
+		LastStatusAt: time.Now().UTC(),
+		LastError:    errorMsg,
+	}
+	if !found {
+		return r.setRequiredContentStatus(ctx, locality, workspaceID, stubID, hash, routingKey, statusRecord, ttl)
+	}
 	item.Status = status
-	item.LastStatusAt = time.Now().UTC()
+	item.LastStatusAt = statusRecord.LastStatusAt
 	item.LastError = errorMsg
 	payload, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
-	return r.rdb.Set(ctx, key, payload, ttl).Err()
+	pipe := r.rdb.Pipeline()
+	pipe.Set(ctx, key, payload, ttl)
+	statusKey := requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey)
+	statusPayload, err := json.Marshal(statusRecord)
+	if err != nil {
+		return err
+	}
+	pipe.Set(ctx, statusKey, statusPayload, ttl)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (r *CacheRedisRepository) AcquireRequiredContentReconciliationLock(ctx context.Context, locality, logicalHostID, hash string, ttl time.Duration) (cache.RequiredContentReconciliationLock, bool, error) {
@@ -431,6 +495,40 @@ func (r *CacheRedisRepository) getRequiredContentItem(ctx context.Context, key s
 		return cache.RequiredContentItem{}, false, err
 	}
 	return item, true, nil
+}
+
+func (r *CacheRedisRepository) applyRequiredContentStatus(ctx context.Context, item cache.RequiredContentItem) cache.RequiredContentItem {
+	status, found, err := r.getRequiredContentStatus(ctx, item.Locality, item.WorkspaceID, item.StubID, item.Hash, item.RoutingKey)
+	if err != nil || !found {
+		return item
+	}
+	item.Status = status.Status
+	item.LastStatusAt = status.LastStatusAt
+	item.LastError = status.LastError
+	return item
+}
+
+func (r *CacheRedisRepository) setRequiredContentStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string, status requiredContentStatusRecord, ttl time.Duration) error {
+	payload, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Set(ctx, requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey), payload, ttl).Err()
+}
+
+func (r *CacheRedisRepository) getRequiredContentStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (requiredContentStatusRecord, bool, error) {
+	payload, err := r.rdb.Get(ctx, requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey)).Bytes()
+	if err == redis.Nil {
+		return requiredContentStatusRecord{}, false, nil
+	}
+	if err != nil {
+		return requiredContentStatusRecord{}, false, err
+	}
+	status := requiredContentStatusRecord{}
+	if err := json.Unmarshal(payload, &status); err != nil {
+		return requiredContentStatusRecord{}, false, err
+	}
+	return status, true, nil
 }
 
 type requiredContentRedisLock struct {
@@ -499,6 +597,28 @@ func requiredContentStubItemsKey(locality, workspaceID, stubID string) string {
 func requiredContentItemKey(locality, workspaceID, stubID, hash, routingKey string) string {
 	return fmt.Sprintf(
 		"%s:locality:%s:workspace:%s:stub:%s:item:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(workspaceID),
+		requiredContentKeyPart(stubID),
+		requiredContentItemID(hash, routingKey),
+	)
+}
+
+func requiredContentCatalogItemKey(workspaceID, stubID, itemID string) string {
+	sum := sha256.Sum256([]byte(itemID))
+	return fmt.Sprintf(
+		"%s:catalog:workspace:%s:stub:%s:item:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(workspaceID),
+		requiredContentKeyPart(stubID),
+		hex.EncodeToString(sum[:]),
+	)
+}
+
+func requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey string) string {
+	return fmt.Sprintf(
+		"%s:status:locality:%s:workspace:%s:stub:%s:item:%s",
 		cacheRequiredContentKeyPrefix,
 		requiredContentKeyPart(locality),
 		requiredContentKeyPart(workspaceID),

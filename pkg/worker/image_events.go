@@ -536,6 +536,54 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		Source:      types.EventSourceClipFUSE.String(),
 		Attrs:       attrs,
 	})
+	c.eventRepo.PushPlatformCacheEvent(types.EventPlatformCacheSchema{
+		Timestamp:        phaseEnd.UTC(),
+		Action:           "clip_cache_read_aggregate",
+		Result:           clipCacheAggregateResult(aggregate),
+		Source:           "clip",
+		WorkerID:         c.workerId,
+		WorkspaceID:      request.WorkspaceId,
+		StubID:           request.StubId,
+		ContainerID:      request.ContainerId,
+		ImageID:          request.ImageId,
+		Count:            aggregate.cacheCount,
+		Bytes:            aggregate.cacheBytes,
+		Read:             aggregate.bytesRead,
+		DurationUs:       aggregate.cacheTotal.Microseconds(),
+		MissCount:        aggregate.cacheMissCount,
+		HitCount:         aggregate.cacheHitCount,
+		UnavailableCount: aggregate.cacheUnavailableCount,
+		ErrorCount:       aggregate.cacheErrorCount,
+		Error:            aggregate.firstError,
+		Attrs: map[string]string{
+			"flush_reason":              flushReason,
+			"top_cache_hosts_json":      attrs["top_cache_hosts_json"],
+			"top_cache_methods_json":    attrs["top_cache_methods_json"],
+			"top_cache_operations_json": attrs["top_cache_operations_json"],
+			"top_cache_results_json":    attrs["top_cache_results_json"],
+			"top_cache_sizes_json":      attrs["top_cache_sizes_json"],
+			"top_cache_sources_json":    attrs["top_cache_sources_json"],
+		},
+	})
+}
+
+func clipCacheAggregateResult(aggregate *clipReadAggregate) string {
+	if aggregate == nil || aggregate.cacheCount == 0 {
+		return "none"
+	}
+	if aggregate.cacheMissCount > 0 {
+		return "miss"
+	}
+	if aggregate.cacheUnavailableCount > 0 {
+		return "unavailable"
+	}
+	if aggregate.cacheErrorCount > 0 {
+		return "error"
+	}
+	if aggregate.cacheHitCount > 0 {
+		return "hit"
+	}
+	return "unknown"
 }
 
 func isCanonicalClipRead(operation string) bool {

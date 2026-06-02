@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -183,5 +184,34 @@ func TestEventHistoryQueryFromContextParsesFilters(t *testing.T) {
 	}
 	if got, want := len(query.EventTypes), 2; got != want {
 		t.Fatalf("unexpected event type count: got %d want %d", got, want)
+	}
+}
+
+func TestPlatformCacheEventQueryUsesPlatformCacheStream(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&container_id=container-1&start_time=2026-05-28T10:00:00Z&end_time=2026-05-28T10:05:00Z&limit=25", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := platformCacheEventQueryFromContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := query.Platform, "cache"; got != want {
+		t.Fatalf("unexpected platform stream: got %q want %q", got, want)
+	}
+	if got, want := query.EventTypes, []string{types.EventPlatformCache}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("unexpected event types: got %#v want %#v", got, want)
+	}
+	if got, want := query.WorkspaceID, "workspace-1"; got != want {
+		t.Fatalf("unexpected workspace id: got %q want %q", got, want)
+	}
+	if got, want := query.StubID, "stub-1"; got != want {
+		t.Fatalf("unexpected stub id: got %q want %q", got, want)
+	}
+	if got, want := query.ContainerID, "container-1"; got != want {
+		t.Fatalf("unexpected container id: got %q want %q", got, want)
+	}
+	if query.StartTime == nil || query.EndTime == nil {
+		t.Fatal("expected start and end times")
 	}
 }

@@ -178,6 +178,7 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 		eventRepo:     eventRepo,
 	}
 
+	g.GET("/platform/cache", auth.WithWorkspaceAuth(group.GetPlatformCacheEvents))
 	g.GET("/:workspaceId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
 	g.GET("/:workspaceId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
@@ -193,6 +194,29 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	g.GET("/:workspaceId/tasks/:taskId", auth.WithWorkspaceAuth(group.GetTaskEvents))
 
 	return group
+}
+
+func (g *EventGroup) GetPlatformCacheEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if !isClusterAdmin(authInfoFromContext(cc)) {
+		return HTTPForbidden("This action is not permitted")
+	}
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	query, err := platformCacheEventQueryFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := g.eventRepo.GetEventHistory(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event reads are not configured")
+		}
+		return HTTPInternalServerError("Failed to retrieve platform cache events")
+	}
+	return ctx.JSON(http.StatusOK, response)
 }
 
 func (g *EventGroup) GetContainerEvents(ctx echo.Context) error {
@@ -770,6 +794,42 @@ func eventHistoryQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (ty
 		TaskID:      ctx.QueryParam("task_id"),
 		ContainerID: ctx.QueryParam("container_id"),
 		EventTypes:  eventQueryTypesFromParam(ctx.QueryParam("event_types")),
+	}
+
+	if raw := ctx.QueryParam("start_time"); raw != "" {
+		start, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return types.EventQuery{}, HTTPBadRequest("Invalid start time")
+		}
+		start = start.UTC()
+		query.StartTime = &start
+	}
+	if raw := ctx.QueryParam("end_time"); raw != "" {
+		end, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			return types.EventQuery{}, HTTPBadRequest("Invalid end time")
+		}
+		end = end.UTC()
+		query.EndTime = &end
+	}
+	if query.StartTime != nil && query.EndTime != nil && !query.EndTime.After(*query.StartTime) {
+		return types.EventQuery{}, HTTPBadRequest("Invalid event time range")
+	}
+	return query, nil
+}
+
+func platformCacheEventQueryFromContext(ctx echo.Context) (types.EventQuery, error) {
+	limit, err := eventQueryLimit(ctx)
+	if err != nil {
+		return types.EventQuery{}, HTTPBadRequest("Invalid event limit")
+	}
+	query := types.EventQuery{
+		Limit:       limit,
+		Platform:    "cache",
+		WorkspaceID: ctx.QueryParam("workspace_id"),
+		StubID:      ctx.QueryParam("stub_id"),
+		ContainerID: ctx.QueryParam("container_id"),
+		EventTypes:  []string{types.EventPlatformCache},
 	}
 
 	if raw := ctx.QueryParam("start_time"); raw != "" {

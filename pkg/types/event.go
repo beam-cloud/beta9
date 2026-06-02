@@ -29,6 +29,7 @@ var (
 	EventContainerEvent           = "container.event"
 	EventContainerLog             = "container.log"
 	EventPlatformLog              = "platform.log"
+	EventPlatformCache            = "platform.cache"
 	EventWorkerLifecycle          = "worker.lifecycle"
 	EventStubDeploy               = "stub.deploy"
 	EventStubServe                = "stub.serve"
@@ -148,19 +149,43 @@ type EventStubStateSchema struct {
 var EventStubCacheRequiredContentSchemaVersion = "1.0"
 
 type EventStubCacheRequiredContentSchema struct {
-	WorkspaceID      string    `json:"workspace_id"`
-	StubID           string    `json:"stub_id"`
-	Locality         string    `json:"locality"`
-	LogicalHostID    string    `json:"logical_host_id,omitempty"`
-	Kind             string    `json:"kind,omitempty"`
-	Status           string    `json:"status,omitempty"`
-	ItemCount        int64     `json:"item_count"`
-	Bytes            int64     `json:"bytes"`
-	MissCount        int64     `json:"miss_count,omitempty"`
-	UnavailableCount int64     `json:"unavailable_count,omitempty"`
-	Source           string    `json:"source,omitempty"`
-	Error            string    `json:"error,omitempty"`
-	Timestamp        time.Time `json:"timestamp"`
+	WorkspaceID      string                              `json:"workspace_id"`
+	StubID           string                              `json:"stub_id"`
+	Locality         string                              `json:"locality"`
+	LogicalHostID    string                              `json:"logical_host_id,omitempty"`
+	Kind             string                              `json:"kind,omitempty"`
+	Status           string                              `json:"status,omitempty"`
+	ItemCount        int64                               `json:"item_count"`
+	Bytes            int64                               `json:"bytes"`
+	MissCount        int64                               `json:"miss_count,omitempty"`
+	UnavailableCount int64                               `json:"unavailable_count,omitempty"`
+	Source           string                              `json:"source,omitempty"`
+	Error            string                              `json:"error,omitempty"`
+	Items            []EventStubCacheRequiredContentItem `json:"items,omitempty"`
+	Timestamp        time.Time                           `json:"timestamp"`
+}
+
+type EventStubCacheRequiredContentItem struct {
+	Kind         string                              `json:"kind,omitempty"`
+	Hash         string                              `json:"hash"`
+	RoutingKey   string                              `json:"routing_key,omitempty"`
+	SizeBytes    int64                               `json:"size_bytes,omitempty"`
+	ExpectedHash string                              `json:"expected_hash,omitempty"`
+	Source       EventStubCacheRequiredContentSource `json:"source,omitempty"`
+}
+
+type EventStubCacheRequiredContentSource struct {
+	Type           string `json:"type,omitempty"`
+	Descriptor     string `json:"descriptor,omitempty"`
+	Registry       string `json:"registry,omitempty"`
+	Repository     string `json:"repository,omitempty"`
+	Reference      string `json:"reference,omitempty"`
+	LayerDigest    string `json:"layer_digest,omitempty"`
+	BucketName     string `json:"bucket_name,omitempty"`
+	Region         string `json:"region,omitempty"`
+	EndpointURL    string `json:"endpoint_url,omitempty"`
+	ObjectPath     string `json:"object_path,omitempty"`
+	ForcePathStyle bool   `json:"force_path_style,omitempty"`
 }
 
 var EventWorkerPoolStateSchemaVersion = "1.0"
@@ -631,6 +656,40 @@ type EventPlatformLogSchema struct {
 	Line       string    `json:"line"`
 }
 
+var EventPlatformCacheSchemaVersion = "1.0"
+
+type EventPlatformCacheSchema struct {
+	Timestamp        time.Time         `json:"timestamp"`
+	Action           string            `json:"action"`
+	Result           string            `json:"result,omitempty"`
+	Status           string            `json:"status,omitempty"`
+	Source           string            `json:"source,omitempty"`
+	WorkerID         string            `json:"worker_id,omitempty"`
+	WorkspaceID      string            `json:"workspace_id,omitempty"`
+	StubID           string            `json:"stub_id,omitempty"`
+	ContainerID      string            `json:"container_id,omitempty"`
+	ImageID          string            `json:"image_id,omitempty"`
+	Locality         string            `json:"locality,omitempty"`
+	LogicalHostID    string            `json:"logical_host_id,omitempty"`
+	NodeID           string            `json:"node_id,omitempty"`
+	CachePathID      string            `json:"cache_path_id,omitempty"`
+	PoolName         string            `json:"pool_name,omitempty"`
+	Kind             string            `json:"kind,omitempty"`
+	Hash             string            `json:"hash,omitempty"`
+	RoutingKey       string            `json:"routing_key,omitempty"`
+	SizeBucket       string            `json:"size_bucket,omitempty"`
+	Count            int64             `json:"count,omitempty"`
+	Bytes            int64             `json:"bytes,omitempty"`
+	Read             int64             `json:"read,omitempty"`
+	DurationUs       int64             `json:"duration_us,omitempty"`
+	MissCount        int64             `json:"miss_count,omitempty"`
+	HitCount         int64             `json:"hit_count,omitempty"`
+	UnavailableCount int64             `json:"unavailable_count,omitempty"`
+	ErrorCount       int64             `json:"error_count,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	Attrs            map[string]string `json:"attrs,omitempty"`
+}
+
 type EventQuery struct {
 	Limit       uint64     `json:"limit,omitempty"`
 	WorkspaceID string     `json:"workspace_id,omitempty"`
@@ -647,6 +706,7 @@ type EventQuery struct {
 	Until       *uint64    `json:"until,omitempty"`
 	WaitSeconds *int32     `json:"wait,omitempty"`
 	Clamp       *bool      `json:"clamp,omitempty"`
+	Platform    string     `json:"platform,omitempty"`
 }
 
 type LogQuery struct {

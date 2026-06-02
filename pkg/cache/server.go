@@ -954,22 +954,7 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	// Store references in cachefs only when the caller is publishing a path into the
 	// cachefs namespace. Plain S3 source writes are content-addressed only.
 	if cs.metadataStore != nil {
-		var err error
-		if req.Source.BucketName == "" {
-			if req.Source.CachePath == "" {
-				err = cs.StoreContentInCacheFS(ctx, localPath, hash, size)
-			} else {
-				fileInfo, statErr := os.Stat(localPath)
-				if statErr != nil {
-					err = statErr
-				} else {
-					err = cs.storeContentInCacheFS(ctx, cachePath, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
-				}
-			}
-		} else if req.Source.CachePath != "" {
-			err = cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
-		}
-		if err != nil {
+		if err := cs.storeSourceReferenceInCacheFS(ctx, req.Source, localPath, cachePath, hash, size); err != nil {
 			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
@@ -981,6 +966,29 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	go runtime.GC()
 
 	return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: hash}, nil
+}
+
+func (cs *Server) storeSourceReferenceInCacheFS(ctx context.Context, source *proto.CacheSource, localPath, cachePath, hash string, size uint64) error {
+	if source == nil {
+		return nil
+	}
+	if _, ok := ParseOCIRequiredContentOriginPath(source.Path); ok {
+		return nil
+	}
+	if source.BucketName != "" {
+		if source.CachePath == "" {
+			return nil
+		}
+		return cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
+	}
+	if source.CachePath == "" {
+		return cs.StoreContentInCacheFS(ctx, localPath, hash, size)
+	}
+	fileInfo, err := os.Stat(localPath)
+	if err != nil {
+		return err
+	}
+	return cs.storeContentInCacheFS(ctx, cachePath, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
 }
 
 func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S3Client, path string, expectedHash string) (string, uint64, error) {

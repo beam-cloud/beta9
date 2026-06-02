@@ -137,3 +137,26 @@ func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {
 	require.Len(t, children, 1)
 	require.Equal(t, node.ID, children[0].ID)
 }
+
+func TestStoreSourceReferenceInCacheFSIgnoresOCIOrigins(t *testing.T) {
+	ctx := context.Background()
+	registry := NewMockCacheMetadataStore()
+	server := &Server{metadataStore: registry}
+	sourcePath := OCIRequiredContentOriginPath(RequiredContentSource{
+		Type:        RequiredContentSourceOCIRegistry,
+		Registry:    "registry.localhost:5000",
+		Repository:  "beta9-runner",
+		Reference:   "sha256:manifest",
+		LayerDigest: "sha256:layer",
+	})
+	source := &proto.CacheSource{
+		Path:      sourcePath,
+		CachePath: "images/layers/runtime",
+	}
+
+	err := server.storeSourceReferenceInCacheFS(ctx, source, "/oci:/not-a-real-file", "/images/layers/runtime", "sha256-content", 456)
+	require.NoError(t, err)
+
+	_, err = registry.GetFsNode(ctx, GenerateFsID("/images/layers/runtime"))
+	require.Error(t, err)
+}

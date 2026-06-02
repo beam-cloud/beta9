@@ -395,21 +395,26 @@ func (r *S2EventRepository) resolveContainerStreams(ctx context.Context, contain
 }
 
 func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, query types.EventQuery) ([]s2.StreamName, error) {
-	addIfExists := func(streamName s2.StreamName) ([]s2.StreamName, error) {
-		if streamName == "" {
-			return nil, nil
+	addIfExists := func(streamNames ...s2.StreamName) ([]s2.StreamName, error) {
+		streams := make([]s2.StreamName, 0, len(streamNames))
+		for _, streamName := range streamNames {
+			if streamName == "" {
+				continue
+			}
+			exists, err := r.streamExists(ctx, streamName)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				streams = append(streams, streamName)
+			}
 		}
-		exists, err := r.streamExists(ctx, streamName)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, nil
-		}
-		return []s2.StreamName{streamName}, nil
+		return streams, nil
 	}
 
 	switch {
+	case query.Platform == "cache":
+		return addIfExists(r.platformCacheStreamName())
 	case query.ContainerID != "" && query.WorkspaceID != "":
 		return r.resolveContainerStreams(ctx, query.ContainerID, query)
 	case query.TaskID != "":
@@ -417,12 +422,39 @@ func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, quer
 	case query.AppID != "" && query.WorkspaceID != "":
 		return addIfExists(r.appStreamName(query.WorkspaceID, query.AppID))
 	case query.StubID != "" && query.WorkspaceID != "":
-		return addIfExists(r.stubStreamName(query.WorkspaceID, query.StubID))
+		return addIfExists(r.eventHistoryStubStreamCandidates(query)...)
 	case query.WorkspaceID != "":
 		return addIfExists(r.workspaceStreamName(query.WorkspaceID))
 	default:
 		return nil, nil
 	}
+}
+
+func (r *S2EventRepository) eventHistoryStubStreamCandidates(query types.EventQuery) []s2.StreamName {
+	if query.WorkspaceID == "" || query.StubID == "" {
+		return nil
+	}
+	if eventQueryOnlyAllowsRequiredContent(query) {
+		return []s2.StreamName{r.stubCacheStreamName(query.WorkspaceID, query.StubID)}
+	}
+
+	streams := []s2.StreamName{r.stubStreamName(query.WorkspaceID, query.StubID)}
+	if eventQueryAllowsType(query, types.EventStubCacheRequiredContent) {
+		streams = append(streams, r.stubCacheStreamName(query.WorkspaceID, query.StubID))
+	}
+	return streams
+}
+
+func eventQueryOnlyAllowsRequiredContent(query types.EventQuery) bool {
+	if len(query.EventTypes) == 0 {
+		return false
+	}
+	for _, eventType := range query.EventTypes {
+		if strings.TrimSpace(eventType) != types.EventStubCacheRequiredContent {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *S2EventRepository) streamExists(ctx context.Context, streamName s2.StreamName) (bool, error) {
@@ -770,6 +802,9 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 	if eventType == types.EventPlatformLog {
 		return r.platformLogStreamName(metadata)
 	}
+	if eventType == types.EventPlatformCache {
+		return r.platformCacheStreamName()
+	}
 	if eventType == types.EventStubCacheRequiredContent && metadata.WorkspaceID != "" && metadata.StubID != "" {
 		return r.stubCacheStreamName(metadata.WorkspaceID, metadata.StubID)
 	}
@@ -806,6 +841,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 			return nil
 		}
 		return []s2.StreamName{stream}
+	}
+	if eventType == types.EventPlatformCache {
+		return []s2.StreamName{r.platformCacheStreamName()}
 	}
 	if eventType == types.EventStubCacheRequiredContent {
 		streams := []s2.StreamName{}
@@ -1000,6 +1038,10 @@ func (r *S2EventRepository) platformLogStreamName(metadata eventMetadata) s2.Str
 	default:
 		return ""
 	}
+}
+
+func (r *S2EventRepository) platformCacheStreamName() s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/platform/cache", r.streamPrefix))
 }
 
 func (r *S2EventRepository) typeStreamName(eventType string) s2.StreamName {

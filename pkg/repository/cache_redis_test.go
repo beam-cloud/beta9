@@ -92,6 +92,7 @@ func TestCacheRedisRequiredContentDedupeTTLStatusAndLocks(t *testing.T) {
 	items, err = repo.ListRequiredContentForStub(ctx, "default", "workspace-1", "stub-1", 10)
 	require.NoError(t, err)
 	require.Equal(t, cache.RequiredContentStatusPresent, requiredContentItemByRoutingKey(t, items, "route-a").Status)
+	require.NoError(t, repo.SetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-missing", "route-missing", cache.RequiredContentStatusPresent, "", ttl))
 
 	lock, ok, err := repo.AcquireRequiredContentReconciliationLock(ctx, "default", "host-a", "hash-a", ttl)
 	require.NoError(t, err)
@@ -111,6 +112,30 @@ func TestCacheRedisRequiredContentDedupeTTLStatusAndLocks(t *testing.T) {
 	stubs, err = repo.ListRecentStubLocalities(ctx, "default", time.Now().Add(-time.Minute), 10)
 	require.NoError(t, err)
 	require.Empty(t, stubs)
+}
+
+func TestCacheRedisRequiredContentCatalogClaimsChangedFingerprints(t *testing.T) {
+	ctx := context.Background()
+	_, repo := newCacheRedisRepositoryForTest(t)
+	ttl := 2 * time.Second
+
+	claimed, err := repo.ClaimRequiredContentCatalogItems(ctx, "workspace-1", "stub-1", map[string]string{
+		"hash-a\x00route-a": "fingerprint-a",
+	}, ttl)
+	require.NoError(t, err)
+	require.True(t, claimed["hash-a\x00route-a"])
+
+	claimed, err = repo.ClaimRequiredContentCatalogItems(ctx, "workspace-1", "stub-1", map[string]string{
+		"hash-a\x00route-a": "fingerprint-a",
+	}, ttl)
+	require.NoError(t, err)
+	require.Empty(t, claimed)
+
+	claimed, err = repo.ClaimRequiredContentCatalogItems(ctx, "workspace-1", "stub-1", map[string]string{
+		"hash-a\x00route-a": "fingerprint-b",
+	}, ttl)
+	require.NoError(t, err)
+	require.True(t, claimed["hash-a\x00route-a"])
 }
 
 func requiredContentItemByRoutingKey(t *testing.T, items []cache.RequiredContentItem, routingKey string) cache.RequiredContentItem {
