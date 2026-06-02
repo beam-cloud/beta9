@@ -178,7 +178,7 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 		eventRepo:     eventRepo,
 	}
 
-	g.GET("/platform/cache", auth.WithWorkspaceAuth(group.GetPlatformCacheEvents))
+	g.GET("/admin/cache", auth.WithClusterAdminAuth(group.GetAdminCacheEvents))
 	g.GET("/:workspaceId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
 	g.GET("/:workspaceId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
@@ -196,16 +196,12 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	return group
 }
 
-func (g *EventGroup) GetPlatformCacheEvents(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	if !isClusterAdmin(authInfoFromContext(cc)) {
-		return HTTPForbidden("This action is not permitted")
-	}
+func (g *EventGroup) GetAdminCacheEvents(ctx echo.Context) error {
 	if g.eventRepo == nil {
 		return HTTPInternalServerError("Event repository is unavailable")
 	}
 
-	query, err := platformCacheEventQueryFromContext(ctx)
+	query, err := adminCacheEventQueryFromContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -818,7 +814,7 @@ func eventHistoryQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (ty
 	return query, nil
 }
 
-func platformCacheEventQueryFromContext(ctx echo.Context) (types.EventQuery, error) {
+func adminCacheEventQueryFromContext(ctx echo.Context) (types.EventQuery, error) {
 	limit, err := eventQueryLimit(ctx)
 	if err != nil {
 		return types.EventQuery{}, HTTPBadRequest("Invalid event limit")

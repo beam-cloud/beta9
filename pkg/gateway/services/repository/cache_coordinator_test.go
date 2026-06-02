@@ -193,6 +193,15 @@ func TestReportRequiredContentWritesEventAndRedisStubIndex(t *testing.T) {
 		t.Fatalf("unexpected required content item hash: got %q want %q", got, want)
 	}
 
+	eventRepo.history = &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
+		requiredContentHistoryRecord(t, event),
+	}}
+	resp, err = service.ReportRequiredContent(ctx, req)
+	if err != nil || !resp.Ok {
+		t.Fatalf("duplicate ReportRequiredContent failed: resp=%+v err=%v", resp, err)
+	}
+	eventRepo.requireNoEvent(t)
+
 	req.Items[0].SizeBytes = 123
 	resp, err = service.ReportRequiredContent(ctx, req)
 	if err != nil || !resp.Ok {

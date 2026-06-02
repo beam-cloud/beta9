@@ -403,7 +403,7 @@ func requiredContentRecentStubsKey(locality string) string {
 
 func requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey string) string {
 	return fmt.Sprintf(
-		"%s:status:locality:%s:workspace:%s:stub:%s:item:%s",
+		"%s:status:locality:%s:workspace:%s:stub:%s:content:%s",
 		cacheRequiredContentKeyPrefix,
 		requiredContentKeyPart(locality),
 		requiredContentKeyPart(workspaceID),
