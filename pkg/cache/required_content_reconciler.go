@@ -129,9 +129,13 @@ func (r *requiredContentReconciler) reconcileOnce() {
 			if item.Hash == "" || !r.ownsItem(hasher, item) {
 				continue
 			}
-			if !budget.take(item.SizeBytes) {
+			schedule, exhausted := r.canScheduleItem(ctx, item, &budget)
+			if exhausted {
 				stop = true
 				break
+			}
+			if !schedule {
+				continue
 			}
 			select {
 			case jobs <- item:
@@ -147,20 +151,45 @@ func (r *requiredContentReconciler) reconcileOnce() {
 	wg.Wait()
 }
 
+func (r *requiredContentReconciler) canScheduleItem(ctx context.Context, item RequiredContentItem, budget *requiredContentCycleBudget) (schedule bool, exhausted bool) {
+	if item.SizeBytes > 0 {
+		if !budget.takeAvailable(item.SizeBytes) {
+			return false, true
+		}
+		return budget.take(item.SizeBytes), false
+	}
+	if r.localContentComplete(item) {
+		return true, false
+	}
+	if budget.limited() {
+		r.setStatus(ctx, item, RequiredContentStatusSkipped, "required content size unknown")
+		return false, false
+	}
+	return true, false
+}
+
 type requiredContentCycleBudget struct {
 	max  int64
 	used int64
+}
+
+func (b *requiredContentCycleBudget) limited() bool {
+	return b != nil && b.max > 0
 }
 
 func (b *requiredContentCycleBudget) take(size int64) bool {
 	if size <= 0 || b.max <= 0 {
 		return true
 	}
-	if b.used+size > b.max {
+	if !b.takeAvailable(size) {
 		return false
 	}
 	b.used += size
 	return true
+}
+
+func (b *requiredContentCycleBudget) takeAvailable(size int64) bool {
+	return b == nil || b.max <= 0 || size <= 0 || b.used+size <= b.max
 }
 
 func (r *requiredContentReconciler) currentHasher(ctx context.Context) (RendezvousHasher, error) {
@@ -236,11 +265,13 @@ func (r *requiredContentReconciler) reconcileItem(ctx context.Context, item Requ
 		r.markPresent(ctx, item)
 		return
 	}
-	if err := r.materializeFromReplica(ctx, item); err == nil {
+	if err := r.materializeFromReplica(ctx, item); err != nil {
+		if !errors.Is(err, ErrContentNotFound) && !errors.Is(err, ErrSelectedHostUnavailable) && !errors.Is(err, ErrHostNotFound) {
+			Logger.Debugf("required content replica materialization failed: hash=%s routing_key=%s err=%v", item.Hash, item.RoutingKey, err)
+		}
+	} else {
 		r.markPresent(ctx, item)
 		return
-	} else if !errors.Is(err, ErrContentNotFound) && !errors.Is(err, ErrSelectedHostUnavailable) && !errors.Is(err, ErrHostNotFound) {
-		Logger.Debugf("required content replica materialization failed: hash=%s routing_key=%s err=%v", item.Hash, item.RoutingKey, err)
 	}
 
 	if !r.config.OriginFallbackEnabled || r.originResolver == nil {
@@ -300,6 +331,9 @@ func refreshRequiredContentLock(ctx context.Context, lock RequiredContentReconci
 }
 
 func (r *requiredContentReconciler) localContentComplete(item RequiredContentItem) bool {
+	if r == nil || r.server == nil || r.server.cas == nil {
+		return false
+	}
 	status := r.server.cas.ContentStatus(item.Hash, item.SizeBytes)
 	return status == contentStatusComplete
 }

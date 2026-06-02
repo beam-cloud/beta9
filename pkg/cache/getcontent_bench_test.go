@@ -242,69 +242,11 @@ func BenchmarkClientSharedLocalDiskPageViews(b *testing.B) {
 }
 
 func BenchmarkClientRawReadInto(b *testing.B) {
-	InitLogger(false, false)
-	ctx, cancel := context.WithCancel(context.Background())
-	b.Cleanup(cancel)
-
-	cfg := Config{
-		Server: ServerConfig{
-			DiskCacheDir:                 b.TempDir(),
-			DiskCacheMaxUsagePct:         90,
-			MaxCachePct:                  0,
-			PageSizeBytes:                1024 * 1024,
-			SmallRangeCopyThresholdBytes: 128 * 1024,
-			ObjectTtlS:                   300,
-			ReadTransport: ServerReadTransportConfig{
-				Enabled:  true,
-				Sendfile: false,
-			},
-		},
-		Global: GlobalConfig{
-			GRPCMessageSizeBytes: 1024 * 1024,
-			GRPCDialTimeoutS:     1,
-		},
-	}
-	server, err := NewServerWithOptions(ctx, cfg, "local", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("raw-bench-host"))
-	if err != nil {
-		b.Fatalf("new server: %v", err)
-	}
-	b.Cleanup(func() { _ = server.Close() })
-	addr, err := server.Serve("127.0.0.1:0", "")
-	if err != nil {
-		b.Fatalf("serve: %v", err)
-	}
-
-	content := make([]byte, 64*1024*1024)
-	if _, err := rand.Read(content); err != nil {
-		b.Fatalf("random content: %v", err)
-	}
-	sum := sha256.Sum256(content)
-	hash := hex.EncodeToString(sum[:])
-	if err := server.cas.Add(context.Background(), hash, content); err != nil {
-		b.Fatalf("add content: %v", err)
-	}
-
-	host := &Host{HostId: "raw-bench-host", Addr: addr, PrivateAddr: addr}
-	client := &Client{
-		ctx: context.Background(),
-		clientConfig: ClientConfig{
-			NTopHosts: 1,
-			ReadTransport: ClientReadTransportConfig{
-				Enabled:                      true,
-				MaxActiveConnsPerHost:        64,
-				MaxIdleConnsPerHost:          16,
-				SmallRangeCopyThresholdBytes: 128 * 1024,
-			},
-		},
-		globalConfig:          cfg.Global,
-		grpcClients:           make(map[string]proto.CacheClient),
-		grpcConns:             make(map[string]*grpc.ClientConn),
-		localServers:          make(map[string]*Server),
-		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[localHostCacheKey]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: []*Host{host}},
-		maxGetContentAttempts: 1,
-	}
+	client, hash := newRawReadBenchmarkSetup(b, rawReadBenchmarkSetup{
+		pageSize:                  1024 * 1024,
+		smallRangeThreshold:       128 * 1024,
+		clientSmallRangeThreshold: 128 * 1024,
+	})
 	dst := make([]byte, 1024*1024)
 
 	b.ReportAllocs()
@@ -317,6 +259,14 @@ func BenchmarkClientRawReadInto(b *testing.B) {
 			b.Fatalf("raw read offset %d: n=%d err=%v", offset, n, err)
 		}
 	}
+}
+
+type rawReadBenchmarkSetup struct {
+	pageSize                  int64
+	smallRangeThreshold       int64
+	clientSmallRangeThreshold int64
+	sendfile                  bool
+	pageFDCacheSize           int
 }
 
 func BenchmarkClientRawReadIntoMatrix(b *testing.B) {
@@ -355,23 +305,35 @@ func BenchmarkClientRawReadIntoMatrix(b *testing.B) {
 }
 
 func newRawReadBenchmarkClient(b *testing.B, sendfile bool, smallRangeThreshold int64) (*Client, string) {
+	return newRawReadBenchmarkSetup(b, rawReadBenchmarkSetup{
+		pageSize:            4 * 1024 * 1024,
+		smallRangeThreshold: smallRangeThreshold,
+		sendfile:            sendfile,
+		pageFDCacheSize:     1024,
+	})
+}
+
+func newRawReadBenchmarkSetup(b *testing.B, setup rawReadBenchmarkSetup) (*Client, string) {
 	b.Helper()
 	InitLogger(false, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	b.Cleanup(cancel)
 
+	if setup.pageSize <= 0 {
+		setup.pageSize = 4 * 1024 * 1024
+	}
 	cfg := Config{
 		Server: ServerConfig{
 			DiskCacheDir:                 b.TempDir(),
 			DiskCacheMaxUsagePct:         90,
 			MaxCachePct:                  0,
-			PageSizeBytes:                4 * 1024 * 1024,
-			SmallRangeCopyThresholdBytes: smallRangeThreshold,
+			PageSizeBytes:                setup.pageSize,
+			SmallRangeCopyThresholdBytes: setup.smallRangeThreshold,
 			ObjectTtlS:                   300,
 			ReadTransport: ServerReadTransportConfig{
 				Enabled:         true,
-				Sendfile:        sendfile,
-				PageFDCacheSize: 1024,
+				Sendfile:        setup.sendfile,
+				PageFDCacheSize: setup.pageFDCacheSize,
 			},
 		},
 		Global: GlobalConfig{
@@ -405,9 +367,10 @@ func newRawReadBenchmarkClient(b *testing.B, sendfile bool, smallRangeThreshold 
 		clientConfig: ClientConfig{
 			NTopHosts: 1,
 			ReadTransport: ClientReadTransportConfig{
-				Enabled:               true,
-				MaxActiveConnsPerHost: 64,
-				MaxIdleConnsPerHost:   16,
+				Enabled:                      true,
+				MaxActiveConnsPerHost:        64,
+				MaxIdleConnsPerHost:          16,
+				SmallRangeCopyThresholdBytes: setup.clientSmallRangeThreshold,
 			},
 		},
 		globalConfig:          cfg.Global,

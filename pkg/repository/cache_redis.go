@@ -217,11 +217,8 @@ func (r *CacheRedisRepository) MarkStubLocalityAccessed(ctx context.Context, loc
 	}
 	ttl = requiredContentTTL(ttl)
 	now := time.Now().UTC()
-	key := requiredContentRecentStubsKey(locality)
-	member := requiredContentStubMember(workspaceID, stubID)
 	pipe := r.rdb.Pipeline()
-	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.UnixMilli()), Member: member})
-	pipe.Expire(ctx, key, ttl)
+	pipeRequiredContentStubAccess(ctx, pipe, locality, workspaceID, stubID, now, ttl)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -247,15 +244,22 @@ func (r *CacheRedisRepository) UpsertRequiredContent(ctx context.Context, item c
 	}
 
 	stubItemsKey := requiredContentStubItemsKey(item.Locality, item.WorkspaceID, item.StubID)
-	recentKey := requiredContentRecentStubsKey(item.Locality)
 	pipe := r.rdb.Pipeline()
 	pipe.Set(ctx, itemKey, payload, ttl)
 	pipe.SAdd(ctx, stubItemsKey, itemKey)
 	pipe.Expire(ctx, stubItemsKey, ttl)
-	pipe.ZAdd(ctx, recentKey, redis.Z{Score: float64(now.UnixMilli()), Member: requiredContentStubMember(item.WorkspaceID, item.StubID)})
-	pipe.Expire(ctx, recentKey, ttl)
+	pipeRequiredContentStubAccess(ctx, pipe, item.Locality, item.WorkspaceID, item.StubID, now, ttl)
 	_, err = pipe.Exec(ctx)
 	return err
+}
+
+func pipeRequiredContentStubAccess(ctx context.Context, pipe redis.Pipeliner, locality, workspaceID, stubID string, seen time.Time, ttl time.Duration) {
+	recentKey := requiredContentRecentStubsKey(locality)
+	pipe.ZAdd(ctx, recentKey, redis.Z{
+		Score:  float64(seen.UTC().UnixMilli()),
+		Member: requiredContentStubMember(workspaceID, stubID),
+	})
+	pipe.Expire(ctx, recentKey, ttl)
 }
 
 func mergeRequiredContentItem(item, existing cache.RequiredContentItem, found bool, now time.Time) cache.RequiredContentItem {

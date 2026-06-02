@@ -58,16 +58,9 @@ func (c *rawPageFDCache) open(path string) (rawPageHandle, error) {
 	}
 
 	c.mu.Lock()
-	if elem := c.entries[path]; elem != nil {
-		entry := elem.Value.(*rawPageFDCacheEntry)
-		if sameFileInfo(entry.info, info) {
-			c.lru.MoveToFront(elem)
-			handle := rawPageHandle{file: entry.file, pooled: true, hit: true}
-			c.mu.Unlock()
-			return handle, nil
-		}
-		c.removeElementLocked(elem)
-		atomicAddRawFDCacheStale()
+	if handle, ok := c.cachedHandleLocked(path, info); ok {
+		c.mu.Unlock()
+		return handle, nil
 	}
 	c.mu.Unlock()
 
@@ -85,17 +78,10 @@ func (c *rawPageFDCache) open(path string) (rawPageHandle, error) {
 	_ = fadviseSequential(file.Fd())
 
 	c.mu.Lock()
-	if elem := c.entries[path]; elem != nil {
-		entry := elem.Value.(*rawPageFDCacheEntry)
-		if sameFileInfo(entry.info, info) {
-			c.lru.MoveToFront(elem)
-			handle := rawPageHandle{file: entry.file, pooled: true, hit: true}
-			c.mu.Unlock()
-			_ = file.Close()
-			return handle, nil
-		}
-		c.removeElementLocked(elem)
-		atomicAddRawFDCacheStale()
+	if handle, ok := c.cachedHandleLocked(path, info); ok {
+		c.mu.Unlock()
+		_ = file.Close()
+		return handle, nil
 	}
 
 	entry := &rawPageFDCacheEntry{path: path, file: file, info: info}
@@ -105,6 +91,21 @@ func (c *rawPageFDCache) open(path string) (rawPageHandle, error) {
 	}
 	c.mu.Unlock()
 	return rawPageHandle{file: file, pooled: true}, nil
+}
+
+func (c *rawPageFDCache) cachedHandleLocked(path string, info os.FileInfo) (rawPageHandle, bool) {
+	elem := c.entries[path]
+	if elem == nil {
+		return rawPageHandle{}, false
+	}
+	entry := elem.Value.(*rawPageFDCacheEntry)
+	if sameFileInfo(entry.info, info) {
+		c.lru.MoveToFront(elem)
+		return rawPageHandle{file: entry.file, pooled: true, hit: true}, true
+	}
+	c.removeElementLocked(elem)
+	atomicAddRawFDCacheStale()
+	return rawPageHandle{}, false
 }
 
 func (c *rawPageFDCache) close() {

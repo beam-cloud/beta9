@@ -20,8 +20,8 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromReplica(t *
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
-	replicaHost := &Host{HostId: "cache-host-default-node-b", Locality: "default", NodeID: "node-b", CachePathID: "cache-b"}
+	selectedHost := requiredContentTestHost("node-a", "cache-a")
+	replicaHost := requiredContentTestHost("node-b", "cache-b")
 	routingKey := routingKeyOwnedBy(t, selectedHost, replicaHost)
 
 	selectedStore := newTestStore(t, 8)
@@ -44,17 +44,7 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromReplica(t *
 	require.NoError(t, os.RemoveAll(selectedStore.pageDir(hash)))
 	require.Equal(t, contentStatusMissing, selectedStore.ContentStatus(hash, size))
 
-	repo := newRequiredContentMemoryRepository([]*Host{selectedHost, replicaHost}, RequiredContentItem{
-		Locality:     "default",
-		WorkspaceID:  "workspace-1",
-		StubID:       "stub-1",
-		Kind:         RequiredContentKindClipOCI,
-		Hash:         hash,
-		RoutingKey:   routingKey,
-		ExpectedHash: hash,
-		SizeBytes:    size,
-		Status:       RequiredContentStatusPending,
-	})
+	repo := newRequiredContentMemoryRepository([]*Host{selectedHost, replicaHost}, requiredContentTestItem(RequiredContentKindClipOCI, hash, routingKey, size))
 	peerClient := &Client{
 		ctx:          ctx,
 		clientConfig: ClientConfig{NTopHosts: 2},
@@ -69,21 +59,12 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromReplica(t *
 		hasher:                &keyedTestHasher{routes: map[string][]*Host{routingKey: {selectedHost, replicaHost}}},
 		maxGetContentAttempts: 1,
 	}
-	server := &Server{
-		ctx:           ctx,
-		hostId:        selectedHost.HostId,
-		locality:      "default",
-		cas:           selectedStore,
-		metadataStore: NewMockCacheMetadataStore(),
-		peerClient:    peerClient,
-	}
-	reconciler := &requiredContentReconciler{
-		server:         server,
-		config:         NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, ReconcileConcurrency: 2, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2}),
-		repository:     repo,
-		hostDirectory:  repo,
-		originResolver: repo,
-	}
+	reconciler := requiredContentTestReconciler(ctx, selectedHost, selectedStore, repo,
+		RequiredContentConfig{Enabled: true, ReconcileConcurrency: 2, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2},
+		func(server *Server, reconciler *requiredContentReconciler) {
+			server.peerClient = peerClient
+		},
+	)
 
 	reconciler.reconcileOnce()
 
@@ -100,7 +81,7 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromOrigin(t *t
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
+	selectedHost := requiredContentTestHost("node-a", "cache-a")
 	selectedStore := newTestStore(t, 8)
 	content := bytes.Repeat([]byte("required-content-origin-"), 4)
 	sum := sha256.Sum256(content)
@@ -108,17 +89,7 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromOrigin(t *t
 	sourcePath := t.TempDir() + "/required-content.bin"
 	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
 
-	item := RequiredContentItem{
-		Locality:     "default",
-		WorkspaceID:  "workspace-1",
-		StubID:       "stub-1",
-		Kind:         RequiredContentKindVolume,
-		Hash:         hash,
-		RoutingKey:   "volumes/workspace/file.bin",
-		ExpectedHash: hash,
-		SizeBytes:    int64(len(content)),
-		Status:       RequiredContentStatusPending,
-	}
+	item := requiredContentTestItem(RequiredContentKindVolume, hash, "volumes/workspace/file.bin", int64(len(content)))
 	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
 	repo.origin = RequiredContentOriginInstruction{
 		Path:         sourcePath,
@@ -127,19 +98,9 @@ func TestRequiredContentReconcilerMaterializesDeletedLocalContentFromOrigin(t *t
 	}
 	repo.originOK = true
 
-	reconciler := &requiredContentReconciler{
-		server: &Server{
-			ctx:           ctx,
-			hostId:        selectedHost.HostId,
-			locality:      "default",
-			cas:           selectedStore,
-			metadataStore: NewMockCacheMetadataStore(),
-		},
-		config:         NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 2, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2}),
-		repository:     repo,
-		hostDirectory:  repo,
-		originResolver: repo,
-	}
+	reconciler := requiredContentTestReconciler(ctx, selectedHost, selectedStore, repo,
+		RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 2, BatchSize: 16, MaxBytesPerCycle: int64(len(content)) * 2},
+	)
 
 	reconciler.reconcileOnce()
 
@@ -156,7 +117,7 @@ func TestRequiredContentReconcilerBackfillsUnknownSizeFromCompleteMarker(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
+	selectedHost := requiredContentTestHost("node-a", "cache-a")
 	selectedStore := newTestStore(t, 8)
 	content := []byte("complete content with missing required-content size")
 	sum := sha256.Sum256(content)
@@ -166,28 +127,11 @@ func TestRequiredContentReconcilerBackfillsUnknownSizeFromCompleteMarker(t *test
 	require.Equal(t, hash, storedHash)
 	require.Equal(t, int64(len(content)), size)
 
-	item := RequiredContentItem{
-		Locality:     "default",
-		WorkspaceID:  "workspace-1",
-		StubID:       "stub-1",
-		Kind:         RequiredContentKindClipOCI,
-		Hash:         hash,
-		RoutingKey:   hash,
-		ExpectedHash: hash,
-		Status:       RequiredContentStatusPending,
-	}
+	item := requiredContentTestItem(RequiredContentKindClipOCI, hash, hash, 0)
 	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
-	reconciler := &requiredContentReconciler{
-		server: &Server{
-			ctx:      ctx,
-			hostId:   selectedHost.HostId,
-			locality: "default",
-			cas:      selectedStore,
-		},
-		config:        NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, ReconcileConcurrency: 1, BatchSize: 16}),
-		repository:    repo,
-		hostDirectory: repo,
-	}
+	reconciler := requiredContentTestReconciler(ctx, selectedHost, selectedStore, repo,
+		RequiredContentConfig{Enabled: true, ReconcileConcurrency: 1, BatchSize: 16},
+	)
 
 	reconciler.reconcileOnce()
 
@@ -195,11 +139,11 @@ func TestRequiredContentReconcilerBackfillsUnknownSizeFromCompleteMarker(t *test
 	require.Equal(t, int64(len(content)), repo.item.SizeBytes)
 }
 
-func TestRequiredContentReconcilerMaterializesUnknownSizeContentFromOrigin(t *testing.T) {
+func TestRequiredContentReconcilerSkipsUnknownSizeContentWhenBudgetLimited(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	selectedHost := &Host{HostId: "cache-host-default-node-a", Locality: "default", NodeID: "node-a", CachePathID: "cache-a"}
+	selectedHost := requiredContentTestHost("node-a", "cache-a")
 	selectedStore := newTestStore(t, 8)
 	content := []byte("origin content with missing required-content size")
 	sum := sha256.Sum256(content)
@@ -207,16 +151,7 @@ func TestRequiredContentReconcilerMaterializesUnknownSizeContentFromOrigin(t *te
 	sourcePath := t.TempDir() + "/required-content.bin"
 	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
 
-	item := RequiredContentItem{
-		Locality:     "default",
-		WorkspaceID:  "workspace-1",
-		StubID:       "stub-1",
-		Kind:         RequiredContentKindClipOCI,
-		Hash:         hash,
-		RoutingKey:   hash,
-		ExpectedHash: hash,
-		Status:       RequiredContentStatusPending,
-	}
+	item := requiredContentTestItem(RequiredContentKindClipOCI, hash, hash, 0)
 	repo := newRequiredContentMemoryRepository([]*Host{selectedHost}, item)
 	repo.origin = RequiredContentOriginInstruction{
 		Path:         sourcePath,
@@ -224,24 +159,61 @@ func TestRequiredContentReconcilerMaterializesUnknownSizeContentFromOrigin(t *te
 		ExpectedHash: hash,
 	}
 	repo.originOK = true
+	reconciler := requiredContentTestReconciler(ctx, selectedHost, selectedStore, repo,
+		RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 1, BatchSize: 16},
+	)
+
+	reconciler.reconcileOnce()
+
+	require.Equal(t, contentStatusMissing, selectedStore.ContentStatus(hash, int64(len(content))))
+	require.Equal(t, RequiredContentStatusSkipped, repo.statusFor(hash, item.RoutingKey))
+	require.Zero(t, repo.item.SizeBytes)
+}
+
+func requiredContentTestHost(nodeID, cachePathID string) *Host {
+	return &Host{
+		HostId:      fmt.Sprintf("cache-host-default-%s", nodeID),
+		Locality:    "default",
+		NodeID:      nodeID,
+		CachePathID: cachePathID,
+	}
+}
+
+func requiredContentTestItem(kind RequiredContentKind, hash, routingKey string, size int64) RequiredContentItem {
+	return RequiredContentItem{
+		Locality:     "default",
+		WorkspaceID:  "workspace-1",
+		StubID:       "stub-1",
+		Kind:         kind,
+		Hash:         hash,
+		RoutingKey:   routingKey,
+		ExpectedHash: hash,
+		SizeBytes:    size,
+		Status:       RequiredContentStatusPending,
+	}
+}
+
+type requiredContentTestReconcilerOption func(*Server, *requiredContentReconciler)
+
+func requiredContentTestReconciler(ctx context.Context, host *Host, store *Store, repo *requiredContentMemoryRepository, config RequiredContentConfig, opts ...requiredContentTestReconcilerOption) *requiredContentReconciler {
+	server := &Server{
+		ctx:           ctx,
+		hostId:        host.HostId,
+		locality:      host.Locality,
+		cas:           store,
+		metadataStore: NewMockCacheMetadataStore(),
+	}
 	reconciler := &requiredContentReconciler{
-		server: &Server{
-			ctx:      ctx,
-			hostId:   selectedHost.HostId,
-			locality: "default",
-			cas:      selectedStore,
-		},
-		config:         NormalizeRequiredContentConfig(RequiredContentConfig{Enabled: true, OriginFallbackEnabled: true, ReconcileConcurrency: 1, BatchSize: 16}),
+		server:         server,
+		config:         NormalizeRequiredContentConfig(config),
 		repository:     repo,
 		hostDirectory:  repo,
 		originResolver: repo,
 	}
-
-	reconciler.reconcileOnce()
-
-	require.Equal(t, contentStatusComplete, selectedStore.ContentStatus(hash, int64(len(content))))
-	require.Equal(t, RequiredContentStatusPresent, repo.statusFor(hash, item.RoutingKey))
-	require.Equal(t, int64(len(content)), repo.item.SizeBytes)
+	for _, opt := range opts {
+		opt(server, reconciler)
+	}
+	return reconciler
 }
 
 func routingKeyOwnedBy(t *testing.T, selectedHost, replicaHost *Host) string {
