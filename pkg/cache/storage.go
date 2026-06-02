@@ -27,6 +27,14 @@ const (
 	cacheCompleteMarkerName     = "_complete"
 )
 
+const (
+	contentStatusComplete     = "complete"
+	contentStatusMissing      = "missing"
+	contentStatusPartial      = "partial"
+	contentStatusSizeMismatch = "size_mismatch"
+	contentStatusIncomplete   = "incomplete"
+)
+
 type Store struct {
 	ctx                     context.Context
 	currentHost             *Host
@@ -922,32 +930,57 @@ func (cas *Store) completeMarker(hash string) (size int64, pageSize int64, pageC
 }
 
 func (cas *Store) Exists(hash string, expectedSize ...int64) bool {
-	var exists bool = false
-	hasExpectedSize := len(expectedSize) > 0 && expectedSize[0] > 0
+	return cas.ContentStatus(hash, expectedSize...) == contentStatusComplete
+}
 
+func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {
+	hasExpectedSize := len(expectedSize) > 0 && expectedSize[0] > 0
 	if cas.memoryCacheEnabled {
-		_, exists = cas.cache.GetTTL(hash)
-		if exists && !hasExpectedSize {
-			return true
+		if _, exists := cas.cache.GetTTL(hash); exists && !hasExpectedSize {
+			return contentStatusComplete
 		}
 	}
 
 	if cas.serverConfig.PageSizeBytes <= 0 {
-		return false
+		return contentStatusIncomplete
 	}
 
 	pageSize := cas.serverConfig.PageSizeBytes
 	markerSize, markerPageSize, markerPageCount, ok := cas.completeMarker(hash)
-	if !ok || markerPageSize != pageSize {
-		return false
+	if !ok {
+		if cas.hasAnyPages(hash) {
+			return contentStatusPartial
+		}
+		return contentStatusMissing
+	}
+	if markerPageSize != pageSize {
+		return contentStatusSizeMismatch
 	}
 	if !hasExpectedSize {
-		return true
+		return contentStatusComplete
 	}
 
 	size := expectedSize[0]
 	pageCount := (size + pageSize - 1) / pageSize
-	return markerSize == size && markerPageCount == pageCount
+	if markerSize != size || markerPageCount != pageCount {
+		return contentStatusSizeMismatch
+	}
+	return contentStatusComplete
+}
+
+func (cas *Store) hasAnyPages(hash string) bool {
+	for _, dir := range []string{cas.pageDir(hash), cas.legacyPageDir(hash)} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.Name() != cacheCompleteMarkerName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (cas *Store) Get(hash string, offset, length int64, dst []byte) (int64, error) {

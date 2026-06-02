@@ -25,6 +25,7 @@ const (
 	s2EventBatchSize           = 256
 	s2EventRetentionSeconds    = int64(30 * 24 * 60 * 60)
 	s2EventWriteTimeout        = 5 * time.Second
+	s2EventEnqueueTimeout      = 250 * time.Millisecond
 	s2EventFlushInterval       = 100 * time.Millisecond
 )
 
@@ -80,6 +81,15 @@ func (r *S2EventRepository) PushEvent(event cloudevents.Event) error {
 	case r.queue <- event:
 		return nil
 	default:
+	}
+
+	timer := time.NewTimer(s2EventEnqueueTimeout)
+	defer timer.Stop()
+
+	select {
+	case r.queue <- event:
+		return nil
+	case <-timer.C:
 		return fmt.Errorf("s2 event queue is full")
 	}
 }

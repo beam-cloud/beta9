@@ -13,7 +13,7 @@ from .clients.gateway import (
     EndTaskRequest,
     StartTaskRequest,
 )
-from .logging import StdoutJsonInterceptor
+from .logging import StdoutJsonContext
 from .runner.common import config as cfg
 from .runner.common import end_task_and_send_callback
 from .type import TaskStatus
@@ -33,7 +33,7 @@ async def run_task(request, func, func_args):
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
 
     os.environ["TASK_ID"] = task_id
-    with StdoutJsonInterceptor(task_id=task_id):
+    with StdoutJsonContext(task_id=task_id):
         print(f"Received task <{task_id}>")
 
         for attempt in range(3):

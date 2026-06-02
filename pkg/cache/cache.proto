@@ -35,6 +35,7 @@ message CacheHasContentRequest {
 message CacheHasContentResponse {
   bool ok = 1;
   bool exists = 2;
+  string status = 3; // complete, missing, partial, size_mismatch, or incomplete
 }
 
 message CacheStoreContentRequest {

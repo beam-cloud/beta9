@@ -1,23 +1,52 @@
+import contextvars
 import functools
 import io
 import json
 import sys
-from typing import Any
+from typing import Any, Callable, Dict
+
+
+_stdout_json_context: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
+    "stdout_json_context", default={}
+)
+
+
+def get_stdout_json_context() -> Dict[str, Any]:
+    return _stdout_json_context.get()
+
+
+class StdoutJsonContext:
+    def __init__(self, **ctx: Any):
+        self.ctx = ctx
+        self.token = None
+
+    def __enter__(self):
+        self.token = _stdout_json_context.set(self.ctx)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.token is not None:
+            _stdout_json_context.reset(self.token)
+        return False
 
 
 class StdoutJsonInterceptor(io.TextIOBase):
     def __init__(self, stream=sys.__stdout__, **ctx: Any):
         self.ctx = ctx
         self.stream = stream
+        self.previous_stdout = None
+        self.previous_stderr = None
 
     def __enter__(self):
+        self.previous_stdout = sys.stdout
+        self.previous_stderr = sys.stderr
         sys.stdout = self
         sys.stderr = self
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
+        sys.stdout = self.previous_stdout or sys.__stdout__
+        sys.stderr = self.previous_stderr or sys.__stderr__
         return False
 
     def write(self, buf: str):
@@ -29,6 +58,51 @@ class StdoutJsonInterceptor(io.TextIOBase):
                 log_record = {
                     "message": f"{line}\n",
                     **self.ctx,
+                }
+
+                self.stream.write(json.dumps(log_record))
+        except BaseException:
+            self.stream.write(buf)
+
+    def flush(self):
+        return self.stream.flush()
+
+    def fileno(self) -> int:
+        return -1
+
+
+class ContextualStdoutJsonInterceptor(io.TextIOBase):
+    def __init__(
+        self,
+        stream=sys.__stdout__,
+        context_getter: Callable[[], Dict[str, Any]] = get_stdout_json_context,
+    ):
+        self.context_getter = context_getter
+        self.stream = stream
+        self.previous_stdout = None
+        self.previous_stderr = None
+
+    def __enter__(self):
+        self.previous_stdout = sys.stdout
+        self.previous_stderr = sys.stderr
+        sys.stdout = self
+        sys.stderr = self
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.stdout = self.previous_stdout or sys.__stdout__
+        sys.stderr = self.previous_stderr or sys.__stderr__
+        return False
+
+    def write(self, buf: str):
+        try:
+            for line in buf.splitlines():
+                if line == "":
+                    continue
+
+                log_record = {
+                    "message": f"{line}\n",
+                    **self.context_getter(),
                 }
 
                 self.stream.write(json.dumps(log_record))

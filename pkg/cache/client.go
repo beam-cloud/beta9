@@ -788,31 +788,49 @@ func (c *Client) CacheFSMetadata(ctx context.Context, path string) (*FSMetadata,
 }
 
 func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info os.FileInfo, routingKey string) (string, bool) {
+	return c.cachedLocalFileHashWithTrace(ctx, cachePath, info, routingKey, nil, "")
+}
+
+func (c *Client) cachedLocalFileHashWithTrace(ctx context.Context, cachePath string, info os.FileInfo, routingKey string, trace *OperationTrace, traceSource string) (string, bool) {
+	hash, _, ok := c.cachedLocalFileHashWithStoreTrace(ctx, cachePath, info, routingKey, trace, traceSource)
+	return hash, ok
+}
+
+func (c *Client) cachedLocalFileHashWithStoreTrace(ctx context.Context, cachePath string, info os.FileInfo, routingKey string, trace *OperationTrace, traceSource string) (string, string, bool) {
 	if c == nil || cachePath == "" || info == nil || info.IsDir() {
-		return "", false
+		return "", "", false
 	}
 
 	metadata, err := c.CacheFSMetadata(ctx, cachePath)
 	if err != nil || !cacheFSMetadataMatchesFileInfo(metadata, info) {
-		return "", false
+		return "", "", false
 	}
 
 	if routingKey == "" {
 		routingKey = cachePath
 	}
-	exists, err := c.IsCachedOnSelectedHost(metadata.Hash, routingKey, info.Size())
-	if err != nil || !exists {
-		return "", false
+	check := c.selectedHostContentCheckWithTrace(ctx, metadata.Hash, routingKey, info.Size(), trace, traceSource)
+	if check.err != nil || !check.exists {
+		return "", check.status, false
 	}
-	return metadata.Hash, true
+	return metadata.Hash, check.status, true
 }
 
 func (c *Client) cachedContentHash(ctx context.Context, hash string, expectedSize int64) bool {
+	return c.cachedContentHashWithTrace(ctx, hash, expectedSize, nil, "")
+}
+
+func (c *Client) cachedContentHashWithTrace(ctx context.Context, hash string, expectedSize int64, trace *OperationTrace, traceSource string) bool {
+	_, ok := c.cachedContentHashWithStoreTrace(ctx, hash, expectedSize, trace, traceSource)
+	return ok
+}
+
+func (c *Client) cachedContentHashWithStoreTrace(ctx context.Context, hash string, expectedSize int64, trace *OperationTrace, traceSource string) (string, bool) {
 	if c == nil || !isContentHash(hash) {
-		return false
+		return "", false
 	}
-	exists, err := c.IsCachedOnSelectedHost(hash, hash, expectedSize)
-	return err == nil && exists
+	check := c.selectedHostContentCheckWithTrace(ctx, hash, hash, expectedSize, trace, traceSource)
+	return check.status, check.err == nil && check.exists
 }
 
 func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool {
@@ -909,20 +927,48 @@ func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string, expected
 	if len(expectedSize) > 0 {
 		size = expectedSize[0]
 	}
+	check := c.selectedHostContentCheckWithTrace(c.ctx, hash, routingKey, size, nil, "")
+	return check.exists, check.err
+}
+
+type selectedHostContentCheck struct {
+	exists bool
+	status string
+	host   *Host
+	err    error
+}
+
+func (c *Client) selectedHostContentCheckWithTrace(ctx context.Context, hash string, routingKey string, expectedSize int64, trace *OperationTrace, traceSource string) selectedHostContentCheck {
+	started := time.Now()
+	if traceSource == "" {
+		traceSource = "selected_host_check"
+	}
 	if routingKey == "" {
 		routingKey = hash
 	}
 
-	localStore, _, err := c.selectedLocalDiskStore(c.ctx, ClientRequestTypeStorage, hash, routingKey)
-	if err != nil {
-		return false, err
+	host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
+	if err == ErrHostNotFound && c.hostDirectory != nil && c.hostMap != nil {
+		_ = c.refreshRoutableHosts(ctx)
+		if trace != nil {
+			trace.HostRefreshes++
+		}
+		host, err = c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
 	}
+	if err != nil {
+		trace.addStoreAttempt(0, host, traceSource, operationTraceStoreResult(err), 0, expectedSize, "", time.Since(started), err)
+		return selectedHostContentCheck{host: host, err: err}
+	}
+
+	localStore := c.localDiskStoreForHost(host)
 	if localStore != nil {
-		exists := localStore.Exists(hash, size)
+		status := localStore.ContentStatus(hash, expectedSize)
+		exists := status == contentStatusComplete
 		if !exists {
 			c.removeLocalHostCache(hash, routingKey)
 		}
-		return exists, nil
+		trace.addStoreAttempt(0, host, traceSource+"_local", contentCheckTraceResult(nil, exists, status), 0, expectedSize, status, time.Since(started), nil)
+		return selectedHostContentCheck{exists: exists, status: status, host: host}
 	}
 
 	client, host, err := c.getGRPCClient(&ClientRequest{
@@ -933,20 +979,54 @@ func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string, expected
 	})
 	if err != nil {
 		if err == ErrHostNotFound {
-			_ = c.refreshRoutableHosts(c.ctx)
+			_ = c.refreshRoutableHosts(ctx)
+			if trace != nil {
+				trace.HostRefreshes++
+			}
 		}
-		return false, err
+		trace.addStoreAttempt(0, host, traceSource, operationTraceStoreResult(err), 0, expectedSize, "", time.Since(started), err)
+		return selectedHostContentCheck{host: host, err: err}
 	}
 
-	resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash, ExpectedSize: size})
+	resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash, ExpectedSize: expectedSize})
 	if err != nil {
 		c.removeHost(host)
-		return false, err
+		trace.addStoreAttempt(0, host, traceSource, operationTraceStoreResult(err), 0, expectedSize, "", time.Since(started), err)
+		return selectedHostContentCheck{host: host, err: err}
 	}
+	exists := resp.GetExists()
+	status := contentStatusFromHasContent(resp)
 	if !resp.Exists {
-		c.removeLocalHostCache(hash)
+		c.removeLocalHostCache(hash, routingKey)
 	}
-	return resp.Exists, nil
+	trace.addStoreAttempt(0, host, traceSource+"_remote", contentCheckTraceResult(nil, exists, status), 0, expectedSize, status, time.Since(started), nil)
+	return selectedHostContentCheck{exists: exists, status: status, host: host}
+}
+
+func contentStatusFromHasContent(resp *proto.CacheHasContentResponse) string {
+	if resp == nil {
+		return contentStatusIncomplete
+	}
+	if resp.Status != "" {
+		return resp.Status
+	}
+	if resp.Exists {
+		return contentStatusComplete
+	}
+	return contentStatusIncomplete
+}
+
+func contentCheckTraceResult(err error, exists bool, status string) string {
+	if err != nil {
+		return operationTraceStoreResult(err)
+	}
+	if exists {
+		return contentStatusComplete
+	}
+	if status != "" {
+		return status
+	}
+	return contentStatusIncomplete
 }
 
 func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
@@ -1853,67 +1933,113 @@ func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts Store
 
 // StoreContentFromLocalFile streams a caller-local file to the selected cache host.
 func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts StoreContentOptions) (string, error) {
+	hash, _, err := c.StoreContentFromLocalFileWithTrace(source, opts)
+	return hash, err
+}
+
+func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, opts StoreContentOptions) (hash string, trace OperationTrace, err error) {
+	started := time.Now()
 	if source.CachePath == "" {
 		source.CachePath = source.Path
 	}
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = source.CachePath
 	}
+	trace.Operation = "store_local_file"
+	trace.Hash = opts.RoutingKey
+	trace.RoutingKey = opts.RoutingKey
 
 	info, err := os.Stat(source.Path)
 	if err != nil {
-		return "", err
+		trace.Result = "error"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return "", trace, err
 	}
+	trace.Bytes = info.Size()
+	trace.ExpectedSize = info.Size()
 	metadata := cacheFSMetadataFromFileInfo(source.CachePath, info)
 
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
-	if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
-		return hash, nil
+	repairStatus := contentStatusMissing
+	if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "precheck_metadata"); ok {
+		trace.Hash = metadataHash
+		trace.Result = "already_present"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return metadataHash, trace, nil
+	} else if status != "" && status != contentStatusComplete {
+		repairStatus = status
 	}
-	if c.cachedContentHash(ctx, opts.RoutingKey, info.Size()) {
-		return opts.RoutingKey, nil
+	if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "precheck_content_hash"); ok {
+		trace.Result = "already_present"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return opts.RoutingKey, trace, nil
+	} else if status != "" && status != contentStatusComplete {
+		repairStatus = status
 	}
 
 	file, err := os.Open(source.Path)
 	if err != nil {
-		return "", err
+		trace.Result = "error"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return "", trace, err
 	}
 	defer file.Close()
 
 	store := func() (string, error) {
-		if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
-			return hash, nil
+		if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "lock_precheck_metadata"); ok {
+			trace.Hash = metadataHash
+			trace.Result = "already_present_after_lock"
+			return metadataHash, nil
+		} else if status != "" && status != contentStatusComplete {
+			repairStatus = status
 		}
-		if c.cachedContentHash(ctx, opts.RoutingKey, info.Size()) {
+		if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "lock_precheck_content_hash"); ok {
+			trace.Result = "already_present_after_lock"
 			return opts.RoutingKey, nil
+		} else if status != "" && status != contentStatusComplete {
+			repairStatus = status
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return "", err
 		}
-		hash, err := c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
+		hash, err := c.storeContentFromReaderWithContextAndTrace(ctx, file, opts.RoutingKey, source.CachePath, metadata, &trace, info.Size())
 		if err != nil {
 			return hash, err
 		}
 		if isContentHash(opts.RoutingKey) && hash != opts.RoutingKey {
 			return hash, fmt.Errorf("stored content hash mismatch: expected %s, got %s", opts.RoutingKey, hash)
 		}
+		trace.Hash = hash
+		trace.Result = storeRepairResult(repairStatus)
 		return hash, nil
 	}
 
-	hash, err := c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
+	hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
+		waitStarted := time.Now()
 		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), storeContentLockWaitTimeout) {
-			return opts.RoutingKey, nil
+			check := c.selectedHostContentCheckWithTrace(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), &trace, "lock_wait_result")
+			trace.addStoreAttempt(0, check.host, "lock_wait", "present", 0, info.Size(), check.status, time.Since(waitStarted), nil)
+			trace.Result = "lock_wait_present"
+			trace.DurationUs = time.Since(started).Microseconds()
+			return opts.RoutingKey, trace, nil
 		}
+		trace.addStoreAttempt(0, nil, "lock_wait", "timeout", 0, info.Size(), "", time.Since(waitStarted), ErrUnableToAcquireLock)
 		hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
 	}
 	if err != nil {
-		return hash, err
+		trace.Result = operationTraceStoreResult(err)
+		trace.DurationUs = time.Since(started).Microseconds()
+		return hash, trace, err
 	}
+	if trace.Result == "" {
+		trace.Result = "stored"
+	}
+	trace.DurationUs = time.Since(started).Microseconds()
 
-	return hash, nil
+	return hash, trace, nil
 }
 
 func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, expectedSize int64, timeout time.Duration) bool {
@@ -2037,6 +2163,10 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 }
 
 func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
+	return c.storeContentFromReaderWithContextAndTrace(ctx, reader, routingKey, cachePath, fileMetadata, nil, 0)
+}
+
+func (c *Client) storeContentFromReaderWithContextAndTrace(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata, trace *OperationTrace, expectedSize int64) (string, error) {
 	seeker, retryable := reader.(io.Seeker)
 	var lastErr error
 
@@ -2049,16 +2179,22 @@ func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader i
 			break
 		}
 
+		hostStarted := time.Now()
 		_, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, routingKey, routingKey, 0)
 		if err != nil {
+			trace.addStoreAttempt(0, host, "store_host_select", operationTraceStoreResult(err), 0, expectedSize, "", time.Since(hostStarted), err)
 			lastErr = err
 			continue
 		}
 
+		storeStarted := time.Now()
 		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+		storeResult := operationTraceStoreResult(err)
 		if err == nil {
+			trace.addStoreAttempt(0, host, "store_selected_host", storeResult, expectedSize, expectedSize, contentStatusComplete, time.Since(storeStarted), nil)
 			return hash, nil
 		}
+		trace.addStoreAttempt(0, host, "store_selected_host", storeResult, 0, expectedSize, contentStatusIncomplete, time.Since(storeStarted), err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
@@ -2074,6 +2210,21 @@ func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader i
 		return "", lastErr
 	}
 	return "", ErrHostNotFound
+}
+
+func storeRepairResult(status string) string {
+	switch status {
+	case contentStatusMissing:
+		return "stored_missing"
+	case contentStatusPartial:
+		return "stored_partial"
+	case contentStatusSizeMismatch:
+		return "stored_size_mismatch"
+	case contentStatusIncomplete, "":
+		return "stored_incomplete"
+	default:
+		return "stored_" + status
+	}
 }
 
 func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {

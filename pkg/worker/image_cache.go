@@ -413,14 +413,20 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 	}
 
 	started := time.Now()
+	var cacheTrace cache.OperationTrace
 	c.storeRequests.Add(1)
 	defer func() {
 		elapsed := time.Since(started)
+		result := cacheTrace.Result
+		if result == "" {
+			result = "stored_or_present"
+		}
 		if err != nil {
+			result = "error"
 			c.storeErrors.Add(1)
 			log.Warn().
 				Err(err).
-				Str("cache_result", "error").
+				Str("cache_result", result).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -433,7 +439,7 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 		}
 		if err == nil && elapsed > imageContentCacheSlowStore {
 			log.Debug().
-				Str("cache_result", "stored_or_present").
+				Str("cache_result", result).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -444,10 +450,6 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 				Msg("clip image content cache local-path store result")
 		}
 		c.maybeLogSummary()
-		result := "stored_or_present"
-		if err != nil {
-			result = "error"
-		}
 		c.observeContentCacheTrace(imageContentCacheTrace{
 			Operation:  "store_local_path",
 			Result:     result,
@@ -459,16 +461,18 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 			StartedAt:  started,
 			Duration:   elapsed,
 			Error:      imageContentCacheErrorString(err),
+			Trace:      cacheTrace,
 		})
 	}()
 
-	return c.client.StoreContentFromLocalFile(cache.LocalContentSource{
+	actualHash, cacheTrace, err = c.client.StoreContentFromLocalFileWithTrace(cache.LocalContentSource{
 		Path:      path,
 		CachePath: path,
 	}, cache.StoreContentOptions{
 		RoutingKey: opts.RoutingKey,
 		Lock:       true,
 	})
+	return actualHash, err
 }
 
 func drainImageContentChunks(chunks <-chan []byte) {
