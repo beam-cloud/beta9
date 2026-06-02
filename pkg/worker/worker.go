@@ -660,23 +660,7 @@ func (s *Worker) listenForShutdown() {
 	<-terminate
 	log.Info().Msg("shutdown signal received")
 
-	s.disableSchedulingForShutdown()
 	s.cancel()
-}
-
-func (s *Worker) disableSchedulingForShutdown() {
-	if s.workerRepoClient == nil {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if _, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
-		WorkerId: s.workerId,
-	})); err != nil {
-		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
-	}
 }
 
 // Exit if there are no containers running and no containers have recently been spun up on this
@@ -687,8 +671,6 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 		return true
 	default:
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
-			s.disableSchedulingForShutdown()
-
 			err := s.storageManager.Cleanup()
 			if err != nil {
 				log.Error().Err(err).Msg("failed to cleanup workspace storage")

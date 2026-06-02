@@ -23,8 +23,6 @@ type WorkerRedisRepository struct {
 	config types.WorkerConfig
 }
 
-const minSchedulableWorkerTTL = 2 * types.WorkerKeepAliveInterval
-
 var setWorkerNetworkContainerIPScript = redis.NewScript(`
 local container_key = KEYS[1]
 local index_key = KEYS[2]
@@ -466,9 +464,6 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 			r.rdb.SRem(context.TODO(), indexKey, keys[i]).Err()
 			continue
 		}
-		if !workerStateTTLIsSchedulable(ttl) {
-			continue
-		}
 
 		res, err := cmd.Result()
 		if err != nil || len(res) == 0 {
@@ -510,18 +505,6 @@ func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, err
 	}
 
 	return worker, nil
-}
-
-func workerStateTTLIsSchedulable(ttl time.Duration) bool {
-	return ttl >= minSchedulableWorkerTTL
-}
-
-func (r *WorkerRedisRepository) workerStateTTL(ctx context.Context, workerId string) (time.Duration, error) {
-	ttl, err := r.rdb.PTTL(ctx, common.RedisKeys.SchedulerWorkerState(workerId)).Result()
-	if err != nil {
-		return 0, fmt.Errorf("failed to retrieve worker state ttl <%s>: %w", workerId, err)
-	}
-	return ttl, nil
 }
 
 func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
@@ -822,14 +805,6 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	if currentWorker.Status != types.WorkerStatusAvailable {
 		return fmt.Errorf("worker <%s> is not available: %s", worker.Id, currentWorker.Status)
 	}
-	ttl, err := r.workerStateTTL(ctx, worker.Id)
-	if err != nil {
-		return err
-	}
-	if !workerStateTTLIsSchedulable(ttl) {
-		return fmt.Errorf("worker <%s> is not live enough to schedule: ttl=%s", worker.Id, ttl)
-	}
-
 	updatedWorker, err := r.updateWorkerCapacityLocked(ctx, worker.Id, request, types.RemoveCapacity)
 	if err != nil {
 		return err

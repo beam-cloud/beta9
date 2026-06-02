@@ -11,7 +11,7 @@ import (
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 )
 
-const requiredContentReportBatchSize = 256
+const imageRequiredContentReportBatchSize = 256
 
 func (c *ImageClient) reportClipRequiredContentMetadata(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
 	if c == nil || c.cacheClient == nil || request == nil || meta == nil {
@@ -21,7 +21,7 @@ func (c *ImageClient) reportClipRequiredContentMetadata(ctx context.Context, req
 	if len(items) == 0 {
 		return
 	}
-	go c.reportRequiredContentItems(ctx, items)
+	go c.reportImageRequiredContentItems(ctx, items)
 }
 
 func (c *ImageClient) clipRequiredContentItems(request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) []cache.RequiredContentItem {
@@ -122,18 +122,18 @@ func (c *ImageClient) reportClipRequiredContentCacheEvent(request *types.Contain
 			Descriptor: fmt.Sprintf("image:%s kind:%s", request.ImageId, event.Kind),
 		},
 	}
-	go c.reportRequiredContentItems(context.Background(), []cache.RequiredContentItem{item})
+	go c.reportImageRequiredContentItems(context.Background(), []cache.RequiredContentItem{item})
 }
 
-func (c *ImageClient) reportRequiredContentItems(ctx context.Context, items []cache.RequiredContentItem) {
+func (c *ImageClient) reportImageRequiredContentItems(ctx context.Context, items []cache.RequiredContentItem) {
 	if c == nil || c.cacheClient == nil || len(items) == 0 {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for start := 0; start < len(items); start += requiredContentReportBatchSize {
-		end := start + requiredContentReportBatchSize
+	for start := 0; start < len(items); start += imageRequiredContentReportBatchSize {
+		end := start + imageRequiredContentReportBatchSize
 		if end > len(items) {
 			end = len(items)
 		}
