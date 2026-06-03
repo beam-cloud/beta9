@@ -337,6 +337,14 @@ cache:
       directMount: false
       options:
       - max_read=1048576
+  reconciliation:
+    enabled: false
+    intervalSeconds: 60
+    recentStubTTLSeconds: 604800 # keep required content warm for 7 days after a stub's last container
+    lockTTLSeconds: 300
+    maxStubsPerCycle: 256
+    statusTTLSeconds: 604800
+    originFallbackEnabled: false
 
 providers:
   ec2:

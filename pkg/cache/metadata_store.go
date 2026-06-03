@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"time"
 
 	redis "github.com/redis/go-redis/v9"
 )
@@ -18,6 +19,15 @@ type CacheMetadataStore interface {
 	RemoveFsNodeChild(ctx context.Context, pid, id string) error
 	GetFsNodeChildren(ctx context.Context, id string) ([]*FSMetadata, error)
 	AddFsNodeChild(ctx context.Context, pid, id string) error
+
+	// Required-content reconciliation state. On workers these are brokered to
+	// the gateway/coordinator over gRPC; the gateway implements them against
+	// its Redis.
+	AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error
+	ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error)
+	MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error)
+	AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error)
+	ReleaseReconcileLock(ctx context.Context, locality, logicalHost, hash string) error
 }
 
 type RedisCacheMetadataStore struct {
@@ -102,4 +112,24 @@ func (c *RedisCacheMetadataStore) RemoveFsNodeChild(ctx context.Context, pid, id
 
 func (c *RedisCacheMetadataStore) GetFsNodeChildren(ctx context.Context, id string) ([]*FSMetadata, error) {
 	return c.metadata.GetFsNodeChildren(ctx, id)
+}
+
+func (c *RedisCacheMetadataStore) AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error {
+	return c.metadata.AddRecentStub(ctx, locality, workspaceID, stubID, ttl)
+}
+
+func (c *RedisCacheMetadataStore) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error) {
+	return c.metadata.ListRecentStubs(ctx, locality, ttl, limit)
+}
+
+func (c *RedisCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
+	return c.metadata.MarkStubReported(ctx, locality, stubID, ttl)
+}
+
+func (c *RedisCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {
+	return c.metadata.AcquireReconcileLock(ctx, locality, logicalHost, hash, ttlSeconds)
+}
+
+func (c *RedisCacheMetadataStore) ReleaseReconcileLock(_ context.Context, locality, logicalHost, hash string) error {
+	return c.metadata.ReleaseReconcileLock(locality, logicalHost, hash)
 }

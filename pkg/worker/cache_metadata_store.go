@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -77,5 +78,69 @@ func (s *gatewayCacheMetadataStore) GetFsNodeChildren(ctx context.Context, id st
 
 func (s *gatewayCacheMetadataStore) AddFsNodeChild(ctx context.Context, pid, id string) error {
 	_, err := handleGRPCResponse(s.client.AddCacheFsNodeChild(ctx, &pb.AddCacheFsNodeChildRequest{Pid: pid, Id: id}))
+	return err
+}
+
+func (s *gatewayCacheMetadataStore) AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error {
+	_, err := handleGRPCResponse(s.client.AddRecentCacheStub(ctx, &pb.AddRecentCacheStubRequest{
+		Locality:    locality,
+		WorkspaceId: workspaceID,
+		StubId:      stubID,
+		TtlSeconds:  int64(ttl / time.Second),
+	}))
+	return err
+}
+
+func (s *gatewayCacheMetadataStore) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]cache.RecentStub, error) {
+	resp, err := handleGRPCResponse(s.client.ListRecentCacheStubs(ctx, &pb.ListRecentCacheStubsRequest{
+		Locality:   locality,
+		TtlSeconds: int64(ttl / time.Second),
+		Limit:      int32(limit),
+	}))
+	if err != nil {
+		return nil, err
+	}
+	stubs := make([]cache.RecentStub, 0, len(resp.Stubs))
+	for _, stub := range resp.Stubs {
+		stubs = append(stubs, cache.RecentStub{
+			WorkspaceID: stub.WorkspaceId,
+			StubID:      stub.StubId,
+			LastSeen:    time.Unix(stub.LastSeenUnix, 0),
+		})
+	}
+	return stubs, nil
+}
+
+func (s *gatewayCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
+	resp, err := handleGRPCResponse(s.client.MarkCacheStubReported(ctx, &pb.MarkCacheStubReportedRequest{
+		Locality:   locality,
+		StubId:     stubID,
+		TtlSeconds: int64(ttl / time.Second),
+	}))
+	if err != nil {
+		return false, err
+	}
+	return resp.Claimed, nil
+}
+
+func (s *gatewayCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {
+	resp, err := handleGRPCResponse(s.client.AcquireCacheReconcileLock(ctx, &pb.AcquireCacheReconcileLockRequest{
+		Locality:    locality,
+		LogicalHost: logicalHost,
+		Hash:        hash,
+		TtlSeconds:  int64(ttlSeconds),
+	}))
+	if err != nil {
+		return false, err
+	}
+	return resp.Acquired, nil
+}
+
+func (s *gatewayCacheMetadataStore) ReleaseReconcileLock(ctx context.Context, locality, logicalHost, hash string) error {
+	_, err := handleGRPCResponse(s.client.ReleaseCacheReconcileLock(ctx, &pb.ReleaseCacheReconcileLockRequest{
+		Locality:    locality,
+		LogicalHost: logicalHost,
+		Hash:        hash,
+	}))
 	return err
 }

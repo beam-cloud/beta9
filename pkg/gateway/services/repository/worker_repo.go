@@ -19,6 +19,8 @@ type WorkerRepositoryService struct {
 	cacheMetadata         cache.CacheMetadataStore
 	workerEvents          *workerEventBroker
 	workerRepo            repository.WorkerRepository
+	backendRepo           repository.BackendRepository
+	appConfig             types.AppConfig
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 
@@ -26,10 +28,12 @@ const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient, cacheCoordinatorToken string) *WorkerRepositoryService {
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, backendRepo repository.BackendRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
 		workerRepo:            workerRepo,
+		backendRepo:           backendRepo,
+		appConfig:             appConfig,
 		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
 	}
 	if rdb != nil {

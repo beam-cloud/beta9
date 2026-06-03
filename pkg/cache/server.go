@@ -185,6 +185,40 @@ func (cs *Server) UsagePct() float64 {
 	return cs.usagePct()
 }
 
+// HostID returns the logical host id this server registers under, or "".
+func (cs *Server) HostID() string {
+	host := cs.Host()
+	if host == nil {
+		return ""
+	}
+	return host.HostId
+}
+
+// HasCompleteContent reports whether the local store holds the full content for
+// hash. When expectedSize > 0 it is validated against the stored size.
+func (cs *Server) HasCompleteContent(hash string, expectedSize int64) bool {
+	if cs == nil || cs.cas == nil {
+		return false
+	}
+	if expectedSize > 0 {
+		return cs.cas.ContentStatus(hash, expectedSize) == contentStatusComplete
+	}
+	return cs.cas.ContentStatus(hash) == contentStatusComplete
+}
+
+// StoreReader stores the full contents of reader into the local store,
+// validating against expectedHash when it is a content hash. It is used by the
+// reconciliation loop to materialize content copied from a replica.
+func (cs *Server) StoreReader(ctx context.Context, reader io.Reader, expectedHash string) (string, uint64, error) {
+	if cs == nil || cs.cas == nil {
+		return "", 0, fmt.Errorf("cache server store is not available")
+	}
+	if err := cs.rejectIfDraining(); err != nil {
+		return "", 0, err
+	}
+	return cs.storeReaderWithExpectedHash(ctx, reader, expectedHash)
+}
+
 func newMetadataStore(cfg Config) (CacheMetadataStore, ServerConfig, error) {
 	metadataStore, err := NewRedisCacheMetadataStore(cfg.Global, cfg.Server)
 	return metadataStore, cfg.Server, err

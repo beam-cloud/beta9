@@ -34,12 +34,94 @@ const (
 	defaultGeeseFSMinMemoryLimitMB = 128
 )
 
+// VolumeContentReporter receives workspace object content above the configured
+// size threshold so the cache reconciliation loop can keep it warm. It is
+// implemented by the worker's required-content reporter.
+type VolumeContentReporter interface {
+	ReportVolumeContent(workspaceID, hash, sourcePath string, sizeBytes int64)
+}
+
+// VolumeContentReporterAware is implemented by storage backends that can forward
+// cached object content to a VolumeContentReporter.
+type VolumeContentReporterAware interface {
+	SetVolumeContentReporter(workspaceID string, reporter VolumeContentReporter)
+}
+
 type GeeseStorage struct {
-	config      types.GeeseConfig
-	mfs         core.MountedFS
-	fs          *core.Goofys
-	mu          sync.Mutex
-	cacheClient *cache.Client
+	config         types.GeeseConfig
+	mfs            core.MountedFS
+	fs             *core.Goofys
+	mu             sync.Mutex
+	cacheClient    *cache.Client
+	workspaceID    string
+	volumeReporter VolumeContentReporter
+}
+
+func (s *GeeseStorage) SetVolumeContentReporter(workspaceID string, reporter VolumeContentReporter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workspaceID = workspaceID
+	s.volumeReporter = reporter
+}
+
+func (s *GeeseStorage) reportVolumeContent(hash, sourcePath string, sizeBytes int64) {
+	s.mu.Lock()
+	reporter := s.volumeReporter
+	workspaceID := s.workspaceID
+	s.mu.Unlock()
+	if reporter == nil || workspaceID == "" || hash == "" {
+		return
+	}
+	reporter.ReportVolumeContent(workspaceID, hash, sourcePath, sizeBytes)
+}
+
+// handleGeeseContentEvent forwards cached object content surfaced by the geesefs
+// fork's event callback to the volume content reporter. It is defensive about
+// the event payload shape so it degrades to a no-op when the fork does not (yet)
+// surface content hashes/sizes.
+func (s *GeeseStorage) handleGeeseContentEvent(data map[string]interface{}) {
+	if s.volumeReporter == nil || len(data) == 0 {
+		return
+	}
+
+	hash := firstStringValue(data, "content_hash", "hash")
+	if hash == "" {
+		return
+	}
+	path := firstStringValue(data, "path", "key", "object")
+	size := firstInt64Value(data, "size_bytes", "size", "content_length")
+	s.reportVolumeContent(hash, path, size)
+}
+
+func firstStringValue(data map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := data[key]; ok {
+			if str, ok := value.(string); ok && str != "" {
+				return str
+			}
+		}
+	}
+	return ""
+}
+
+func firstInt64Value(data map[string]interface{}, keys ...string) int64 {
+	for _, key := range keys {
+		value, ok := data[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case int64:
+			return v
+		case int:
+			return int64(v)
+		case uint64:
+			return int64(v)
+		case float64:
+			return int64(v)
+		}
+	}
+	return 0
 }
 
 type geeseContentCache struct {
@@ -195,6 +277,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
 		log.Debug().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
+		s.handleGeeseContentEvent(data)
 	}
 
 	// Cache through mode config

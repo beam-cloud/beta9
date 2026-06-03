@@ -39,6 +39,9 @@ var (
 	EventWorkerPoolHealthy  = "workerpool.healthy"
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
+
+	EventStubCacheRequiredContent = "stub.cache.required_content"
+	EventPlatformCache            = "platform.cache"
 )
 
 var (
@@ -46,6 +49,71 @@ var (
 	EventWorkerLifecycleStopped = "stopped"
 	EventWorkerLifecycleDeleted = "deleted"
 )
+
+// CacheContentKind identifies the source of a required-content report.
+type CacheContentKind string
+
+const (
+	CacheContentKindClipV1 CacheContentKind = "clip_v1"
+	CacheContentKindClipV2 CacheContentKind = "clip_v2"
+	CacheContentKindVolume CacheContentKind = "volume"
+)
+
+// Platform cache audit statuses for EventPlatformCacheSchema.Status.
+const (
+	CacheAuditStatusMaterialized   = "materialized"
+	CacheAuditStatusMiss           = "miss"
+	CacheAuditStatusHostUnavailable = "host_unavailable"
+	CacheAuditStatusOriginFailure  = "origin_failure"
+	CacheAuditStatusReplicaFailure = "replica_failure"
+	CacheAuditStatusSkipped        = "skipped"
+)
+
+var EventStubCacheRequiredContentSchemaVersion = "1.0"
+var EventPlatformCacheSchemaVersion = "1.0"
+
+// CacheRequiredContentItem describes a single piece of content a stub needs
+// warm in a locality. Source is a non-secret descriptor (OCI layer identity or
+// workspace object path) used to resolve an origin fetch; it never carries
+// credentials.
+type CacheRequiredContentItem struct {
+	Hash         string           `json:"hash"`
+	RoutingKey   string           `json:"routing_key"`
+	SizeBytes    int64            `json:"size_bytes,omitempty"`
+	ExpectedHash string           `json:"expected_hash,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	Kind         CacheContentKind `json:"kind,omitempty"`
+}
+
+// EventStubCacheRequiredContentSchema is the coalesced required-content report
+// for a stub within a locality, persisted to the stub cache stream in S2.
+type EventStubCacheRequiredContentSchema struct {
+	WorkspaceID string                     `json:"workspace_id"`
+	StubID      string                     `json:"stub_id"`
+	Locality    string                     `json:"locality"`
+	Kind        CacheContentKind           `json:"kind"`
+	ItemCount   int                        `json:"item_count"`
+	TotalBytes  int64                      `json:"total_bytes"`
+	Items       []CacheRequiredContentItem `json:"items"`
+	Timestamp   time.Time                  `json:"timestamp"`
+}
+
+// EventPlatformCacheSchema is an operational/audit event for cache
+// materialization status, persisted to the platform cache stream in S2.
+type EventPlatformCacheSchema struct {
+	Locality    string           `json:"locality"`
+	LogicalHost string           `json:"logical_host,omitempty"`
+	WorkspaceID string           `json:"workspace_id,omitempty"`
+	StubID      string           `json:"stub_id,omitempty"`
+	Hash        string           `json:"hash,omitempty"`
+	RoutingKey  string           `json:"routing_key,omitempty"`
+	Kind        CacheContentKind `json:"kind,omitempty"`
+	Status      string           `json:"status"`
+	Source      string           `json:"source,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	SizeBytes   int64            `json:"size_bytes,omitempty"`
+	Timestamp   time.Time        `json:"timestamp"`
+}
 
 // Schema versions should be in ISO 8601 format
 

@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -52,7 +53,8 @@ func RunCacheServer() error {
 		return err
 	}
 
-	manager := NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, workerID, poolName, podAddr)
+	eventRepo := repo.NewEventClientRepo(config)
+	manager := NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, eventRepo, nil, workerID, poolName, podAddr)
 	client, err := manager.Start()
 	if err != nil {
 		cancel()

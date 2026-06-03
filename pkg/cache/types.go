@@ -18,14 +18,28 @@ const (
 )
 
 type Config struct {
-	Enabled     bool              `key:"enabled" json:"enabled"`
-	Disk        DiskConfig        `key:"disk" json:"disk"`
-	Memory      MemoryConfig      `key:"memory" json:"memory"`
-	Coordinator CoordinatorConfig `key:"coordinator" json:"coordinator"`
-	Server      ServerConfig      `key:"server" json:"server"`
-	Client      ClientConfig      `key:"client" json:"client"`
-	Global      GlobalConfig      `key:"global" json:"global"`
-	Metrics     MetricsConfig     `key:"metrics" json:"metrics"`
+	Enabled        bool                 `key:"enabled" json:"enabled"`
+	Disk           DiskConfig           `key:"disk" json:"disk"`
+	Memory         MemoryConfig         `key:"memory" json:"memory"`
+	Coordinator    CoordinatorConfig    `key:"coordinator" json:"coordinator"`
+	Server         ServerConfig         `key:"server" json:"server"`
+	Client         ClientConfig         `key:"client" json:"client"`
+	Global         GlobalConfig         `key:"global" json:"global"`
+	Metrics        MetricsConfig        `key:"metrics" json:"metrics"`
+	Reconciliation ReconciliationConfig `key:"reconciliation" json:"reconciliation"`
+}
+
+// ReconciliationConfig controls the async required-content reconciliation loop.
+// It is disabled by default; when off, workers do not report required content
+// and cache servers do not run the loop, preserving prior startup behavior.
+type ReconciliationConfig struct {
+	Enabled               bool `key:"enabled" json:"enabled"`
+	IntervalSeconds       int  `key:"intervalSeconds" json:"interval_seconds"`
+	RecentStubTTLSeconds  int  `key:"recentStubTTLSeconds" json:"recent_stub_ttl_seconds"`
+	LockTTLSeconds        int  `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
+	MaxStubsPerCycle      int  `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
+	StatusTTLSeconds      int  `key:"statusTTLSeconds" json:"status_ttl_seconds"`
+	OriginFallbackEnabled bool `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 }
 
 type DiskConfig struct {

@@ -642,7 +642,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil {
+	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil && options.InitialSpec.Process != nil {
 		if len(request.EntryPoint) == 0 {
 			log.Info().
 				Str("container_id", request.ContainerId).
@@ -656,6 +656,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Process.Cwd = options.InitialSpec.Process.Cwd
 		spec.Process.User.UID = options.InitialSpec.Process.User.UID
 		spec.Process.User.GID = options.InitialSpec.Process.User.GID
+	}
+
+	if len(spec.Process.Args) == 0 {
+		if args := fallbackEntrypoint(request); len(args) > 0 {
+			log.Warn().
+				Str("container_id", request.ContainerId).
+				Str("stub_id", request.StubId).
+				Str("stub_type", string(request.Stub.Type)).
+				Strs("entrypoint", args).
+				Msg("container request had empty entrypoint, using stub default")
+			spec.Process.Args = args
+		}
+	}
+
+	if len(spec.Process.Args) == 0 {
+		return nil, fmt.Errorf("container <%s> has empty process args for stub <%s> type <%s>", request.ContainerId, request.StubId, request.Stub.Type)
 	}
 
 	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
@@ -763,6 +779,65 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	return spec, nil
+}
+
+func fallbackEntrypoint(request *types.ContainerRequest) []string {
+	stubConfig := requestStubConfig(request)
+	if stubConfig != nil && len(stubConfig.EntryPoint) > 0 {
+		return stubConfig.EntryPoint
+	}
+
+	pythonVersion := types.Python3.String()
+	if stubConfig != nil && stubConfig.PythonVersion != "" {
+		pythonVersion = stubConfig.PythonVersion
+	}
+
+	switch request.Stub.Type.Kind() {
+	case types.StubTypeEndpoint, types.StubTypeASGI:
+		if !envHas(request.Env, "HANDLER=") {
+			return nil
+		}
+		return []string{pythonVersion, "-m", "beta9.runner.endpoint"}
+	case types.StubTypeFunction:
+		if !envHas(request.Env, "HANDLER=") {
+			return nil
+		}
+		return []string{pythonVersion, "-m", "beta9.runner.function"}
+	case types.StubTypeTaskQueue:
+		if !envHas(request.Env, "HANDLER=") {
+			return nil
+		}
+		return []string{pythonVersion, "-m", "beta9.runner.taskqueue"}
+	default:
+		return nil
+	}
+}
+
+func envHas(env []string, prefix string) bool {
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func requestStubConfig(request *types.ContainerRequest) *types.StubConfigV1 {
+	if strings.TrimSpace(request.Stub.Config) == "" {
+		return nil
+	}
+
+	stubConfig, err := request.Stub.UnmarshalConfig()
+	if err != nil {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("stub_id", request.StubId).
+			Err(err).
+			Msg("failed to parse stub config for entrypoint fallback")
+		return nil
+	}
+
+	return stubConfig
 }
 
 func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) map[string]string {
