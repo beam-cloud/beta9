@@ -33,6 +33,11 @@ cacheServer:
   hostPath: /var/lib/beta9/cache
   mountPath: /var/lib/beta9/cache
   hostNetwork: true
+  priorityClassName:
+  image:
+    repository: # Defaults to images.worker.repository
+    tag:        # Defaults to images.worker.tag or chart app version
+    pullPolicy: # Defaults to images.worker.pullPolicy or IfNotPresent
   nodeSelector: {}
   affinity: {}
   tolerations: []
@@ -40,8 +45,8 @@ cacheServer:
     privileged: true
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
+      cpu: 250m
+      memory: 512Mi
     limits:
       cpu: "2"
       memory: 2Gi

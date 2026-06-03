@@ -316,6 +316,7 @@ cache:
     prettyLogs: true
   server:
     pageSizeBytes: 4194304
+    smallRangeCopyThresholdBytes: 131072
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000

@@ -77,6 +77,59 @@ func TestSamePortRawReadTransportAndGRPC(t *testing.T) {
 	require.Equal(t, Version, state.GetVersion())
 }
 
+func TestRawReadUsesCopyForSmallPageBackedRange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:                 t.TempDir(),
+			DiskCacheMaxUsagePct:         90,
+			PageSizeBytes:                1024,
+			ObjectTtlS:                   300,
+			SmallRangeCopyThresholdBytes: 128 * 1024,
+			ReadTransport: ServerReadTransportConfig{
+				Enabled:  true,
+				Sendfile: true,
+			},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("raw-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	content := []byte("abcdefghijklmnopqrstuvwxyz")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	require.NoError(t, server.cas.Add(context.Background(), hash, content))
+
+	before := snapshotCachePathStats()
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Write([]byte(rawReadMagic))
+	require.NoError(t, err)
+	require.NoError(t, writeRawReadRequest(conn, hash, 3, 8))
+	status, length, err := readRawReadResponseHeader(conn)
+	require.NoError(t, err)
+	require.Equal(t, rawReadStatusOK, status)
+	require.Equal(t, int64(8), length)
+	body := make([]byte, length)
+	_, err = io.ReadFull(conn, body)
+	require.NoError(t, err)
+	require.Equal(t, []byte("defghijk"), body)
+	after := snapshotCachePathStats()
+	diff := diffCachePathStats(after, before)
+	require.Equal(t, int64(1), diff.serverRawCopyHits)
+	require.Equal(t, int64(0), diff.serverRawSendfileHits)
+}
+
 func TestClientLocalPageFileViewsDoesNotPromoteRemotePageRegion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

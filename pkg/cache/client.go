@@ -38,6 +38,7 @@ const (
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
 	defaultRawReadWindowPartBytes   = 4 * 1024 * 1024
+	monitorHostFailureThreshold     = 2
 
 	// NOTE: This value for readAheadKB is separate from the cachefs config since the FUSE library does
 	// weird stuff with the other read_ahead_kb value internally
@@ -492,7 +493,8 @@ func (c *Client) monitorHost(host *Host) {
 		interval = 30 * time.Second
 	}
 
-	if !c.checkHostEndpoint(host) {
+	failures := 0
+	if !c.recordHostMonitorResult(host, &failures) {
 		return
 	}
 
@@ -512,7 +514,7 @@ func (c *Client) monitorHost(host *Host) {
 	for {
 		select {
 		case <-ticker.C:
-			if !c.checkHostEndpoint(host) {
+			if !c.recordHostMonitorResult(host, &failures) {
 				return
 			}
 
@@ -522,43 +524,64 @@ func (c *Client) monitorHost(host *Host) {
 	}
 }
 
-func (c *Client) checkHostEndpoint(host *Host) bool {
-	if !c.isCurrentHostEndpoint(host) {
+func (c *Client) recordHostMonitorResult(host *Host, failures *int) bool {
+	err := c.hostEndpointHealth(host)
+	if err == nil {
+		*failures = 0
+		return true
+	}
+	if errors.Is(err, ErrHostNotFound) {
 		return false
 	}
 
-	err := func() error {
-		c.mu.RLock()
-		client, exists := c.grpcClients[host.HostId]
-		c.mu.RUnlock()
-		if !exists {
-			return ErrHostNotFound
-		}
+	*failures++
+	if *failures < monitorHostFailureThreshold {
+		Logger.Debugf("cache host health check failed @ %s (PrivateAddr=%s, failures=%d/%d): %v", host.HostId, host.PrivateAddr, *failures, monitorHostFailureThreshold, err)
+		return true
+	}
 
-		timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
-		if timeout <= 0 {
-			timeout = time.Second
-		}
-		ctx, cancel := context.WithTimeout(c.ctx, timeout)
-		defer cancel()
+	c.removeHost(host)
+	return false
+}
 
-		resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
-		if err != nil {
-			return ErrInvalidHostVersion
-		}
-
-		if resp.GetVersion() != Version {
-			return ErrInvalidHostVersion
-		}
-
-		return nil
-	}()
-
+func (c *Client) checkHostEndpoint(host *Host) bool {
+	err := c.hostEndpointHealth(host)
 	if err != nil {
 		c.removeHost(host)
 		return false
 	}
 	return true
+}
+
+func (c *Client) hostEndpointHealth(host *Host) error {
+	if !c.isCurrentHostEndpoint(host) {
+		return ErrHostNotFound
+	}
+
+	c.mu.RLock()
+	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	if !exists {
+		return ErrHostNotFound
+	}
+
+	timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	defer cancel()
+
+	resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
+	if err != nil {
+		return err
+	}
+
+	if resp.GetVersion() != Version {
+		return ErrInvalidHostVersion
+	}
+
+	return nil
 }
 
 func (c *Client) removeHost(host *Host) {
@@ -2520,7 +2543,15 @@ func isStoreHostUnavailable(err error) bool {
 }
 
 func (c *Client) HostsAvailable() bool {
-	return c.hostMap.Members().Cardinality() > 0
+	if c.hostMap == nil {
+		return false
+	}
+	for _, host := range c.hostMap.GetAll() {
+		if host.HasEndpoint() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) WaitForHosts(timeout time.Duration) error {

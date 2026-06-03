@@ -273,6 +273,10 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		atomic.AddInt64(&cachePathStats.serverRawBytes, responseLength)
 		usedSendfile := false
 		usedCopy := false
+		useSendfile := cs.serverConfig.ReadTransport.Sendfile
+		if threshold := cs.serverConfig.SmallRangeCopyThresholdBytes; threshold > 0 && req.length <= threshold {
+			useSendfile = false
+		}
 		for _, region := range regions {
 			openStarted := time.Now()
 			file, err := os.Open(region.path)
@@ -285,12 +289,14 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 			}
 			copyOffset := region.pageOffset
 			copyLength := int64(region.length)
-			_ = fadviseSequential(file.Fd())
-			_ = fadviseWillneed(file.Fd(), copyOffset, copyLength)
+			if useSendfile {
+				_ = fadviseSequential(file.Fd())
+				_ = fadviseWillneed(file.Fd(), copyOffset, copyLength)
+			}
 			openDuration := time.Since(openStarted)
 			openElapsed += openDuration
 			atomic.AddInt64(&cachePathStats.serverRawOpenNanos, openDuration.Nanoseconds())
-			if cs.serverConfig.ReadTransport.Sendfile {
+			if useSendfile {
 				sendStarted := time.Now()
 				sent, err := sendFileToConn(conn, file, region.pageOffset, int64(region.length))
 				sendDuration := time.Since(sendStarted)

@@ -39,6 +39,16 @@ func requireTraceAttempt(t *testing.T, trace OperationTrace, source string, resu
 	require.Failf(t, "missing trace attempt", "source=%s result=%s status=%s attempts=%+v", source, result, status, trace.Attempts)
 }
 
+func TestHostsAvailableRequiresActiveEndpoint(t *testing.T) {
+	client := &Client{hostMap: NewHostMap(GlobalConfig{}, nil)}
+
+	client.hostMap.Set((&Host{HostId: "logical-host"}).LogicalOnly())
+	require.False(t, client.HostsAvailable())
+
+	client.hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "127.0.0.1:2049"})
+	require.True(t, client.HostsAvailable())
+}
+
 func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	m.setStoreFromContentLockCalls++
 	return m.MockCacheMetadataStore.SetStoreFromContentLock(ctx, locality, sourcePath)
@@ -385,6 +395,39 @@ func TestCheckHostEndpointPrunesUnreachableEndpoint(t *testing.T) {
 
 	_, _, err = client.getGRPCClientForHostIndex(context.Background(), ClientRequestTypeRetrieval, "hash", "hash", 0)
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+}
+
+func TestHostMonitorRequiresConsecutiveFailuresBeforePruningEndpoint(t *testing.T) {
+	host := &Host{
+		HostId:         "cache-host-default-node-a-path",
+		RegistrationID: "worker-a",
+		NodeID:         "node-a",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.1:2049",
+	}
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(host)
+
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		hostMap:        hostMap,
+		grpcClients:    map[string]proto.CacheClient{host.HostId: &fakeStoreCacheClient{stateErr: errors.New("connection refused")}},
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{host}},
+	}
+
+	failures := 0
+	require.True(t, client.recordHostMonitorResult(host, &failures))
+	require.Equal(t, 1, failures)
+	require.True(t, hostMap.Get(host.HostId).HasEndpoint())
+
+	require.False(t, client.recordHostMonitorResult(host, &failures))
+	require.Equal(t, 2, failures)
+	require.False(t, hostMap.Get(host.HostId).HasEndpoint())
 }
 
 func TestReadContentIntoDoesNotMaskPrimaryUnavailableWithReplicaMiss(t *testing.T) {
