@@ -630,6 +630,40 @@ func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.
 	require.ErrorIs(t, err, ErrContentNotFound)
 }
 
+func TestReadContentIntoDoesNotRefreshHostsOnConfirmedMiss(t *testing.T) {
+	store := newTestStore(t, 4)
+	host := &Host{HostId: "selected-host", Locality: "test"}
+	refreshes := 0
+	client := &Client{
+		ctx:          context.Background(),
+		locality:     "test",
+		clientConfig: ClientConfig{NTopHosts: 1},
+		grpcClients:  make(map[string]proto.CacheClient),
+		grpcConns:    make(map[string]*grpc.ClientConn),
+		localServers: map[string]*Server{
+			host.HostId: {cas: store},
+		},
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hostMap:        NewHostMap(GlobalConfig{}, nil),
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			refreshes++
+			return []*Host{host}, nil
+		}),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+
+	dst := make([]byte, 4)
+	_, trace, err := client.ReadContentIntoWithTrace(context.Background(), "missing-hash", 0, dst, ClientOptions{RoutingKey: "missing-hash"})
+
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Zero(t, refreshes)
+	require.Zero(t, trace.HostRefreshes)
+	require.Len(t, trace.Attempts, 1)
+	require.Equal(t, CacheResultMiss, trace.Attempts[0].Result)
+}
+
 func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
