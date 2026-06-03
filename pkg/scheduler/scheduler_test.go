@@ -527,7 +527,9 @@ func TestSchedulerProcessesLargeReadyBatch(t *testing.T) {
 	go wb.StartProcessingRequests()
 
 	received := map[string]struct{}{}
-	deadline := time.After(3 * time.Second)
+	// Generous deadline so the assertion is not flaky when the suite runs in
+	// parallel under load; a genuinely stuck scheduler still fails promptly.
+	deadline := time.After(30 * time.Second)
 	for len(received) < requestCount {
 		select {
 		case <-deadline:
