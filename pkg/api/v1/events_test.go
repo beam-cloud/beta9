@@ -203,7 +203,7 @@ func TestEventHistoryQueryFromContextParsesFilters(t *testing.T) {
 	}
 }
 
-func TestCacheEventQueryUsesPlatformCacheStream(t *testing.T) {
+func TestCacheEventQueryUsesStubCacheStream(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&container_id=container-1&start_time=2026-05-28T10:00:00Z&end_time=2026-05-28T10:05:00Z&limit=25", nil)
 	ctx := e.NewContext(req, httptest.NewRecorder())
@@ -212,10 +212,10 @@ func TestCacheEventQueryUsesPlatformCacheStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := query.Platform, "cache"; got != want {
-		t.Fatalf("unexpected platform stream: got %q want %q", got, want)
+	if query.Platform != "" {
+		t.Fatalf("cache route should read the stub cache stream, got platform %q", query.Platform)
 	}
-	if got, want := query.EventTypes, []string{types.EventPlatformCache}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := query.EventTypes, []string{types.EventStubCacheRequiredContent}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("unexpected event types: got %#v want %#v", got, want)
 	}
 	if got, want := query.WorkspaceID, "workspace-1"; got != want {
@@ -229,6 +229,49 @@ func TestCacheEventQueryUsesPlatformCacheStream(t *testing.T) {
 	}
 	if query.StartTime == nil || query.EndTime == nil {
 		t.Fatal("expected start and end times")
+	}
+	if query.TailOffset != nil {
+		t.Fatalf("explicit start time should not also set tail offset: %#v", query.TailOffset)
+	}
+}
+
+func TestCacheEventQueryDefaultsToBoundedTailRead(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&limit=50000", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := cacheEventQueryFromContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := query.Limit, uint64(1000); got != want {
+		t.Fatalf("unexpected capped limit: got %d want %d", got, want)
+	}
+	if query.TailOffset == nil {
+		t.Fatal("expected default tail offset")
+	}
+	if got, want := *query.TailOffset, int64(1000); got != want {
+		t.Fatalf("unexpected tail offset: got %d want %d", got, want)
+	}
+}
+
+func TestCacheEventQueryRejectsMultipleStartSelectors(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&start_time=2026-05-28T10:00:00Z&tail_offset=100", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	if _, err := cacheEventQueryFromContext(ctx); err == nil {
+		t.Fatal("expected multiple start selectors to be rejected")
+	}
+}
+
+func TestCacheEventQueryRequiresStubTarget(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	if _, err := cacheEventQueryFromContext(ctx); err == nil {
+		t.Fatal("expected missing stub id to be rejected")
 	}
 }
 
@@ -259,7 +302,7 @@ func TestCacheEventsRequiresClusterAdminToken(t *testing.T) {
 		t.Fatal("event repo should not be called for non-admin token")
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/?limit=25&workspace_id=workspace-1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/?limit=25&workspace_id=workspace-1&stub_id=stub-1", nil)
 	rec := httptest.NewRecorder()
 	ctx = e.NewContext(req, rec)
 	adminCtx := &auth.HttpAuthContext{
@@ -278,10 +321,16 @@ func TestCacheEventsRequiresClusterAdminToken(t *testing.T) {
 	if got, want := rec.Code, http.StatusOK; got != want {
 		t.Fatalf("unexpected status: got %d want %d", got, want)
 	}
-	if got, want := repo.query.Platform, "cache"; got != want {
-		t.Fatalf("unexpected platform stream: got %q want %q", got, want)
+	if repo.query.Platform != "" {
+		t.Fatalf("unexpected platform stream: got %q", repo.query.Platform)
 	}
 	if got, want := repo.query.WorkspaceID, "workspace-1"; got != want {
 		t.Fatalf("unexpected workspace id: got %q want %q", got, want)
+	}
+	if got, want := repo.query.StubID, "stub-1"; got != want {
+		t.Fatalf("unexpected stub id: got %q want %q", got, want)
+	}
+	if got, want := repo.query.EventTypes[0], types.EventStubCacheRequiredContent; got != want {
+		t.Fatalf("unexpected event type: got %q want %q", got, want)
 	}
 }

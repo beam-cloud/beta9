@@ -158,25 +158,7 @@ func TestReportRequiredContentWritesEventAndRedisStubIndex(t *testing.T) {
 	service, redisServer, cleanup := newRequiredContentServiceForTest(t, eventRepo)
 	defer cleanup()
 	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
-	req := &pb.ReportRequiredContentRequest{
-		Locality:    "default",
-		WorkspaceId: "workspace-1",
-		StubId:      "stub-1",
-		TtlMs:       int64((2 * time.Second).Milliseconds()),
-		Items: []*pb.RequiredContentItem{{
-			Kind:         string(cache.RequiredContentKindClipOCI),
-			Hash:         "hash-a",
-			RoutingKey:   "hash-a",
-			ExpectedHash: "hash-a",
-			Source: &pb.RequiredContentSource{
-				Type:        string(cache.RequiredContentSourceOCIRegistry),
-				Registry:    "registry.localhost:5000",
-				Repository:  "stage/beta9-users",
-				Reference:   "sha256:manifest",
-				LayerDigest: "sha256:layer",
-			},
-		}},
-	}
+	req := requiredContentReportRequest(requiredContentOCIItem("hash-a"))
 
 	resp, err := service.ReportRequiredContent(ctx, req)
 	if err != nil || !resp.Ok {
@@ -202,32 +184,14 @@ func TestReportRequiredContentWritesEventAndRedisStubIndex(t *testing.T) {
 		t.Fatalf("ReportRequiredContent should not scan event history: %+v", eventRepo.queries)
 	}
 
-	runtimeSizeOnly := &pb.ReportRequiredContentRequest{
-		Locality:    "default",
-		WorkspaceId: "workspace-1",
-		StubId:      "stub-1",
-		TtlMs:       int64((2 * time.Second).Milliseconds()),
-		Items: []*pb.RequiredContentItem{{
-			Kind:         string(cache.RequiredContentKindClipOCI),
-			Hash:         "hash-a",
-			RoutingKey:   "hash-a",
-			SizeBytes:    456,
-			ExpectedHash: "hash-a",
-			Source: &pb.RequiredContentSource{
-				Type:        string(cache.RequiredContentSourceUnknown),
-				Descriptor_: "runtime access",
-			},
-		}},
-	}
+	runtimeSizeOnly := requiredContentReportRequest(requiredContentRuntimeItem("hash-a", 456))
 	resp, err = service.ReportRequiredContent(ctx, runtimeSizeOnly)
 	if err != nil || !resp.Ok {
 		t.Fatalf("runtime ReportRequiredContent failed: resp=%+v err=%v", resp, err)
 	}
 	eventRepo.requireNoEvent(t)
 
-	req.Items[0].Hash = "hash-b"
-	req.Items[0].RoutingKey = "hash-b"
-	req.Items[0].ExpectedHash = "hash-b"
+	req = requiredContentReportRequest(requiredContentOCIItem("hash-b"))
 	resp, err = service.ReportRequiredContent(ctx, req)
 	if err != nil || !resp.Ok {
 		t.Fatalf("changed ReportRequiredContent failed: resp=%+v err=%v", resp, err)
@@ -254,31 +218,11 @@ func TestReportRequiredContentSplitsEventsByKindAndPayloadSize(t *testing.T) {
 	items := make([]*pb.RequiredContentItem, 0, requiredContentEventMaxItems+2)
 	for i := 0; i < requiredContentEventMaxItems+1; i++ {
 		hash := "clip-hash-" + strings.Repeat("0", 4) + "-" + time.UnixMilli(int64(i)).Format("150405.000")
-		items = append(items, &pb.RequiredContentItem{
-			Kind:       string(cache.RequiredContentKindClipV1),
-			Hash:       hash,
-			RoutingKey: hash,
-			Source: &pb.RequiredContentSource{
-				Type: string(cache.RequiredContentSourceUnknown),
-			},
-		})
+		items = append(items, requiredContentItem(string(cache.RequiredContentKindClipV1), hash, hash, 0, string(cache.RequiredContentSourceUnknown)))
 	}
-	items = append(items, &pb.RequiredContentItem{
-		Kind:       string(cache.RequiredContentKindVolume),
-		Hash:       "volume-hash",
-		RoutingKey: "volumes/path/file.bin",
-		Source: &pb.RequiredContentSource{
-			Type: string(cache.RequiredContentSourceS3),
-		},
-	})
+	items = append(items, requiredContentItem(string(cache.RequiredContentKindVolume), "volume-hash", "volumes/path/file.bin", 0, string(cache.RequiredContentSourceS3)))
 
-	resp, err := service.ReportRequiredContent(cacheRepositoryAuthContext(types.TokenTypeWorker), &pb.ReportRequiredContentRequest{
-		Locality:    "default",
-		WorkspaceId: "workspace-1",
-		StubId:      "stub-1",
-		TtlMs:       int64((2 * time.Second).Milliseconds()),
-		Items:       items,
-	})
+	resp, err := service.ReportRequiredContent(cacheRepositoryAuthContext(types.TokenTypeWorker), requiredContentReportRequest(items...))
 	if err != nil || !resp.Ok {
 		t.Fatalf("ReportRequiredContent failed: resp=%+v err=%v", resp, err)
 	}
@@ -308,16 +252,7 @@ func TestReportRequiredContentRequiresPersistentEvents(t *testing.T) {
 	service, redisServer, cleanup := newRequiredContentServiceWithRepoForTest(t, repository.NewEventClientRepo(types.AppConfig{}))
 	defer cleanup()
 
-	resp, err := service.ReportRequiredContent(cacheRepositoryAuthContext(types.TokenTypeWorker), &pb.ReportRequiredContentRequest{
-		Locality:    "default",
-		WorkspaceId: "workspace-1",
-		StubId:      "stub-1",
-		TtlMs:       int64((2 * time.Second).Milliseconds()),
-		Items: []*pb.RequiredContentItem{{
-			Kind: string(cache.RequiredContentKindClipOCI),
-			Hash: "hash-a",
-		}},
-	})
+	resp, err := service.ReportRequiredContent(cacheRepositoryAuthContext(types.TokenTypeWorker), requiredContentReportRequest(requiredContentItem(string(cache.RequiredContentKindClipOCI), "hash-a", "", 0, "")))
 	if err != nil {
 		t.Fatalf("ReportRequiredContent returned grpc error: %v", err)
 	}
@@ -458,6 +393,48 @@ func TestSetRequiredContentStatusPushesPlatformCacheEventOnly(t *testing.T) {
 	if platformEvent.WorkspaceID != "workspace-1" || platformEvent.StubID != "stub-1" || platformEvent.Hash != "hash-a" {
 		t.Fatalf("platform cache event missing content identifiers: %+v", platformEvent)
 	}
+}
+
+func requiredContentReportRequest(items ...*pb.RequiredContentItem) *pb.ReportRequiredContentRequest {
+	return &pb.ReportRequiredContentRequest{
+		Locality:    "default",
+		WorkspaceId: "workspace-1",
+		StubId:      "stub-1",
+		TtlMs:       int64((2 * time.Second).Milliseconds()),
+		Items:       items,
+	}
+}
+
+func requiredContentOCIItem(hash string) *pb.RequiredContentItem {
+	item := requiredContentItem(string(cache.RequiredContentKindClipOCI), hash, hash, 0, string(cache.RequiredContentSourceOCIRegistry))
+	item.Source.Registry = "registry.localhost:5000"
+	item.Source.Repository = "stage/beta9-users"
+	item.Source.Reference = "sha256:manifest"
+	item.Source.LayerDigest = "sha256:layer"
+	return item
+}
+
+func requiredContentRuntimeItem(hash string, size int64) *pb.RequiredContentItem {
+	item := requiredContentItem(string(cache.RequiredContentKindClipOCI), hash, hash, size, string(cache.RequiredContentSourceUnknown))
+	item.Source.Descriptor_ = "runtime access"
+	return item
+}
+
+func requiredContentItem(kind, hash, routingKey string, size int64, sourceType string) *pb.RequiredContentItem {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	item := &pb.RequiredContentItem{
+		Kind:         kind,
+		Hash:         hash,
+		RoutingKey:   routingKey,
+		ExpectedHash: hash,
+		SizeBytes:    size,
+	}
+	if sourceType != "" {
+		item.Source = &pb.RequiredContentSource{Type: sourceType}
+	}
+	return item
 }
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {

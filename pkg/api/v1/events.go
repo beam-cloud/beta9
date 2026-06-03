@@ -17,6 +17,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+const (
+	defaultCacheEventLimit = uint64(200)
+	maxCacheEventLimit     = uint64(1000)
+)
+
 type EventGroup struct {
 	routerGroup   *echo.Group
 	backendRepo   repository.BackendRepository
@@ -210,7 +215,7 @@ func (g *EventGroup) GetCacheEvents(ctx echo.Context) error {
 		if errors.Is(err, repository.ErrEventReadUnsupported) {
 			return NewHTTPError(http.StatusServiceUnavailable, "Event reads are not configured")
 		}
-		return HTTPInternalServerError("Failed to retrieve platform cache events")
+		return HTTPInternalServerError("Failed to retrieve cache events")
 	}
 	return ctx.JSON(http.StatusOK, response)
 }
@@ -819,13 +824,24 @@ func cacheEventQueryFromContext(ctx echo.Context) (types.EventQuery, error) {
 	if err != nil {
 		return types.EventQuery{}, HTTPBadRequest("Invalid event limit")
 	}
+	if limit == 0 {
+		limit = defaultCacheEventLimit
+	}
+	if limit > maxCacheEventLimit {
+		limit = maxCacheEventLimit
+	}
+	workspaceID := ctx.QueryParam("workspace_id")
+	stubID := ctx.QueryParam("stub_id")
+	if workspaceID == "" || stubID == "" {
+		return types.EventQuery{}, HTTPBadRequest("workspace_id and stub_id are required")
+	}
+
 	query := types.EventQuery{
 		Limit:       limit,
-		Platform:    "cache",
-		WorkspaceID: ctx.QueryParam("workspace_id"),
-		StubID:      ctx.QueryParam("stub_id"),
+		WorkspaceID: workspaceID,
+		StubID:      stubID,
 		ContainerID: ctx.QueryParam("container_id"),
-		EventTypes:  []string{types.EventPlatformCache},
+		EventTypes:  []string{types.EventStubCacheRequiredContent},
 	}
 
 	if raw := ctx.QueryParam("start_time"); raw != "" {
@@ -836,6 +852,27 @@ func cacheEventQueryFromContext(ctx echo.Context) (types.EventQuery, error) {
 		start = start.UTC()
 		query.StartTime = &start
 	}
+	if raw := ctx.QueryParam("seq_num"); raw != "" {
+		seqNum, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return types.EventQuery{}, HTTPBadRequest("Invalid sequence number")
+		}
+		query.SeqNum = &seqNum
+	}
+	if raw := ctx.QueryParam("timestamp"); raw != "" {
+		timestamp, err := parseEventStreamTimestamp(raw)
+		if err != nil {
+			return types.EventQuery{}, HTTPBadRequest("Invalid timestamp")
+		}
+		query.Timestamp = &timestamp
+	}
+	if raw := ctx.QueryParam("tail_offset"); raw != "" {
+		tailOffset, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || tailOffset < 0 {
+			return types.EventQuery{}, HTTPBadRequest("Invalid tail offset")
+		}
+		query.TailOffset = &tailOffset
+	}
 	if raw := ctx.QueryParam("end_time"); raw != "" {
 		end, err := time.Parse(time.RFC3339Nano, raw)
 		if err != nil {
@@ -844,10 +881,35 @@ func cacheEventQueryFromContext(ctx echo.Context) (types.EventQuery, error) {
 		end = end.UTC()
 		query.EndTime = &end
 	}
+	startSelectors := eventQueryStartSelectorCount(query)
+	if startSelectors > 1 {
+		return types.EventQuery{}, HTTPBadRequest("Multiple event start selectors")
+	}
 	if query.StartTime != nil && query.EndTime != nil && !query.EndTime.After(*query.StartTime) {
 		return types.EventQuery{}, HTTPBadRequest("Invalid event time range")
 	}
+	if startSelectors == 0 {
+		tailOffset := int64(limit)
+		query.TailOffset = &tailOffset
+	}
 	return query, nil
+}
+
+func eventQueryStartSelectorCount(query types.EventQuery) int {
+	count := 0
+	if query.StartTime != nil {
+		count++
+	}
+	if query.SeqNum != nil {
+		count++
+	}
+	if query.Timestamp != nil {
+		count++
+	}
+	if query.TailOffset != nil {
+		count++
+	}
+	return count
 }
 
 func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (types.EventQuery, error) {

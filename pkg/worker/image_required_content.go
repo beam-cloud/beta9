@@ -31,6 +31,25 @@ type requiredContentBatchGroup struct {
 	items map[string]cache.RequiredContentItem
 }
 
+func (g *requiredContentBatchGroup) add(item cache.RequiredContentItem) {
+	itemKey := requiredContentBatchItemKey(item)
+	if existing, ok := g.items[itemKey]; ok {
+		item = cache.MergeRequiredContentItem(existing, item)
+	}
+	g.items[itemKey] = item
+}
+
+func (g *requiredContentBatchGroup) itemList() []cache.RequiredContentItem {
+	if g == nil || len(g.items) == 0 {
+		return nil
+	}
+	items := make([]cache.RequiredContentItem, 0, len(g.items))
+	for _, item := range g.items {
+		items = append(items, item)
+	}
+	return items
+}
+
 func newRequiredContentBatcher(client *cache.Client) *requiredContentBatcher {
 	if client == nil {
 		return nil
@@ -47,7 +66,6 @@ func (b *requiredContentBatcher) Enqueue(item cache.RequiredContentItem) {
 	if b == nil || b.client == nil || item.Hash == "" {
 		return
 	}
-	item = b.normalize(item)
 	select {
 	case b.ch <- item:
 	default:
@@ -64,21 +82,7 @@ func (b *requiredContentBatcher) ReportNow(ctx context.Context, items []cache.Re
 	}
 	groups := map[string]*requiredContentBatchGroup{}
 	for _, item := range items {
-		item = b.normalize(item)
-		if item.Hash == "" || item.Locality == "" || item.WorkspaceID == "" || item.StubID == "" {
-			continue
-		}
-		groupKey := requiredContentBatchGroupKey(item)
-		group := groups[groupKey]
-		if group == nil {
-			group = &requiredContentBatchGroup{items: map[string]cache.RequiredContentItem{}}
-			groups[groupKey] = group
-		}
-		itemKey := requiredContentBatchItemKey(item)
-		if existing, ok := group.items[itemKey]; ok {
-			item = cache.MergeRequiredContentItem(existing, item)
-		}
-		group.items[itemKey] = item
+		b.addToGroups(groups, item)
 	}
 	b.flushGroups(ctx, groups)
 }
@@ -91,17 +95,7 @@ func (b *requiredContentBatcher) run() {
 	for {
 		select {
 		case item := <-b.ch:
-			groupKey := requiredContentBatchGroupKey(item)
-			group := groups[groupKey]
-			if group == nil {
-				group = &requiredContentBatchGroup{items: map[string]cache.RequiredContentItem{}}
-				groups[groupKey] = group
-			}
-			itemKey := requiredContentBatchItemKey(item)
-			if existing, ok := group.items[itemKey]; ok {
-				item = cache.MergeRequiredContentItem(existing, item)
-			}
-			group.items[itemKey] = item
+			b.addToGroups(groups, item)
 		case <-ticker.C:
 			b.flushGroups(context.Background(), groups)
 			groups = map[string]*requiredContentBatchGroup{}
@@ -112,12 +106,9 @@ func (b *requiredContentBatcher) run() {
 func (b *requiredContentBatcher) flushGroups(ctx context.Context, groups map[string]*requiredContentBatchGroup) {
 	var wg sync.WaitGroup
 	for _, group := range groups {
-		if group == nil || len(group.items) == 0 {
+		items := group.itemList()
+		if len(items) == 0 {
 			continue
-		}
-		items := make([]cache.RequiredContentItem, 0, len(group.items))
-		for _, item := range group.items {
-			items = append(items, item)
 		}
 		wg.Add(1)
 		go func(items []cache.RequiredContentItem) {
@@ -128,6 +119,20 @@ func (b *requiredContentBatcher) flushGroups(ctx context.Context, groups map[str
 		}(items)
 	}
 	wg.Wait()
+}
+
+func (b *requiredContentBatcher) addToGroups(groups map[string]*requiredContentBatchGroup, item cache.RequiredContentItem) {
+	item = b.normalize(item)
+	if item.Hash == "" || item.Locality == "" || item.WorkspaceID == "" || item.StubID == "" {
+		return
+	}
+	groupKey := requiredContentBatchGroupKey(item)
+	group := groups[groupKey]
+	if group == nil {
+		group = &requiredContentBatchGroup{items: map[string]cache.RequiredContentItem{}}
+		groups[groupKey] = group
+	}
+	group.add(item)
 }
 
 func (b *requiredContentBatcher) normalize(item cache.RequiredContentItem) cache.RequiredContentItem {

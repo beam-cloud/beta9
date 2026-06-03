@@ -511,6 +511,11 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		ts := *query.Timestamp
 		startTimestamp = &ts
 	}
+	var tailOffset *int64
+	if query.TailOffset != nil {
+		offset := *query.TailOffset
+		tailOffset = &offset
+	}
 	var until *uint64
 	if query.EndTime != nil {
 		ts := uint64(query.EndTime.UTC().UnixMilli())
@@ -533,6 +538,8 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 			opts.SeqNum = nextSeqNum
 		} else if startTimestamp != nil {
 			opts.Timestamp = startTimestamp
+		} else if tailOffset != nil {
+			opts.TailOffset = tailOffset
 		} else {
 			seq := uint64(0)
 			opts.SeqNum = &seq
@@ -564,6 +571,7 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		seq := last.SeqNum + 1
 		nextSeqNum = &seq
 		startTimestamp = nil
+		tailOffset = nil
 		if len(batch.Records) < int(count) {
 			return nil
 		}
