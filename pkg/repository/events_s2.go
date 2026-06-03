@@ -20,6 +20,11 @@ import (
 const (
 	defaultS2EventStreamPrefix = "events"
 	defaultS2EventReadLimit    = 10000
+	// maxStubCacheReadRecords bounds how many records ReadStubCacheRequiredContent
+	// will page through. Required content is coalesced to a small number of events
+	// per stub, so this is far above realistic sizes; it exists only to guarantee
+	// the read terminates even if the stream is continuously appended.
+	maxStubCacheReadRecords = 200000
 	s2EventHistoryReadLimit    = uint64(1000)
 	s2EventQueueSize           = 16384
 	s2EventBatchSize           = 256
@@ -996,11 +1001,14 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		return nil, nil
 	}
 
-	// Read the full stream (paginating past the per-read limit) so the coalesced
-	// required-content set is never truncated for stubs with many events.
+	// Read the stream (paginating past the per-read limit) so the coalesced
+	// required-content set is not truncated. Required content is coalesced to a
+	// small number of events per stub, so this is short in practice; the read is
+	// bounded so a continuously-appended stream can never stall reconciliation.
 	merged := map[string]types.CacheRequiredContentItem{}
 	seqNum := uint64(0)
-	for {
+	recordsRead := 0
+	for recordsRead < maxStubCacheReadRecords {
 		count := uint64(defaultS2EventReadLimit)
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
 			SeqNum: &seqNum,
@@ -1015,6 +1023,7 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		if len(batch.Records) == 0 {
 			break
 		}
+		recordsRead += len(batch.Records)
 
 		for _, record := range batch.Records {
 			var envelope struct {
@@ -1046,6 +1055,9 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		if uint64(len(batch.Records)) < count {
 			break
 		}
+	}
+	if recordsRead >= maxStubCacheReadRecords {
+		log.Warn().Str("stream", string(streamName)).Int("records_read", recordsRead).Msg("stub cache required-content read hit record cap; result may be partial")
 	}
 
 	items := make([]types.CacheRequiredContentItem, 0, len(merged))
