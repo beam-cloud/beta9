@@ -728,6 +728,66 @@ func TestReadContentIntoDoesNotRetrySmallReadsBelowMinRetryLength(t *testing.T) 
 	}
 }
 
+func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{NTopHosts: 1},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("primary-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, server.Close()) }()
+
+	host := server.Host()
+	require.NotNil(t, host)
+	host.Addr = addr
+	host.PrivateAddr = addr
+
+	refreshCalls := 0
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	client := &Client{
+		ctx:          ctx,
+		locality:     "test",
+		clientConfig: cfg.Client,
+		globalConfig: cfg.Global,
+		hostMap:      hostMap,
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			refreshCalls++
+			return []*Host{host}, nil
+		}),
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(host))
+	defer client.Cleanup()
+
+	dst := make([]byte, 16)
+	_, trace, err := client.ReadContentIntoWithTrace(ctx, strings.Repeat("a", sha256.Size*2), 0, dst, ClientOptions{})
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Equal(t, 0, refreshCalls)
+	require.Equal(t, 0, trace.HostRefreshes)
+	require.Equal(t, "miss", trace.Result)
+}
+
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")

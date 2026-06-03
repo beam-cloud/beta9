@@ -1455,12 +1455,16 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 
 	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts, &trace); err == nil {
 		return n, trace, nil
-	} else if c.hostDirectory == nil || c.hostMap == nil {
+	} else if !shouldRefreshReadContentIntoHosts(err) || c.hostDirectory == nil || c.hostMap == nil {
 		return 0, trace, err
 	}
 
 	read, err = c.readContentIntoAfterHostRefresh(ctx, hash, offset, dst, opts, &trace)
 	return read, trace, err
+}
+
+func shouldRefreshReadContentIntoHosts(err error) bool {
+	return errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) || errors.Is(err, ErrClientNotFound)
 }
 
 func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions, trace *OperationTrace) (int64, error) {
