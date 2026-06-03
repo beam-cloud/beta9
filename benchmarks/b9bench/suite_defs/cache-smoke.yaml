@@ -12,7 +12,6 @@ defaults:
   sandbox_dd_reads: true
   sandbox_cpu: "2"
   sandbox_memory: "2048"
-  worker_workspace_root: /workspace/data
   cleanup_cache_before_run: true
   cleanup_cache_after_run: true
   reset_workers_after_prepare: true

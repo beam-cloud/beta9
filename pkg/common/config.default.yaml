@@ -325,14 +325,9 @@ cache:
     prettyLogs: true
   server:
     pageSizeBytes: 4194304
-    smallRangeCopyThresholdBytes: 131072
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000
-    readTransport:
-      enabled: true
-      sendfile: true
-      pageFDCacheSize: 1024
     metadata:
       mode: default
       redisInsecureSkipVerify: false
@@ -340,11 +335,6 @@ cache:
     nTopHosts: 3
     minRetryLengthBytes: 0 # 0 means retry all cache reads; increase to retry only larger reads.
     maxGetContentAttempts: 3
-    readTransport:
-      enabled: true
-      maxActiveConnsPerHost: 64
-      maxIdleConnsPerHost: 16
-      smallRangeCopyThresholdBytes: 131072
     cachefs:
       maxBackgroundTasks: 256
       maxReadAheadKB: 1024

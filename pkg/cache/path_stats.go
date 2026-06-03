@@ -60,13 +60,6 @@ type cachePathStatsCounters struct {
 	serverRawSendfileHits int64
 	serverRawCopyHits     int64
 	serverRawReadAtHits   int64
-	serverRawFDCacheHits  int64
-	serverRawFDCacheMiss  int64
-	serverRawFDCacheStale int64
-	serverRawSmallReads   int64
-	serverRawSmallBytes   int64
-	serverRawLargeReads   int64
-	serverRawLargeBytes   int64
 	serverRawMisses       int64
 	serverRawErrors       int64
 	serverRawBytes        int64
@@ -114,7 +107,7 @@ func startCachePathStatsLogger() {
 						continue
 					}
 					Logger.Debugf(
-						"cache read path summary: client(read_into=%d %.2fMiB local_hit=%d local_miss=%d raw_req=%d raw_hit=%d raw_miss=%d raw_err=%d raw_wait_avg=%s raw_header_avg=%s raw_body_avg=%s grpc_hit=%d grpc_miss=%d grpc_err=%d) client_local_page_file(req=%d hit=%d miss=%d %.2fMiB) cachefs(read=%d %.2fMiB fd_hit=%d data=%d miss_retry=%d store_retry_err=%d read_err=%d) server(grpc_req=%d grpc_hit=%d grpc_miss=%d %.2fMiB stream_req=%d stream_chunks=%d %.2fMiB stream_err=%d raw_conn=%d raw_req=%d raw_small=%d %.2fMiB raw_large=%d %.2fMiB raw_sendfile=%d raw_copy=%d raw_readat=%d raw_fd_hit=%d raw_fd_miss=%d raw_fd_stale=%d raw_miss=%d raw_err=%d %.2fMiB raw_region_avg=%s raw_open_avg=%s raw_send_avg=%s) store(readat=%d %.2fMiB mem_pages=%d %.2fMiB disk_pages=%d %.2fMiB miss=%d page_region=%d hit=%d miss=%d %.2fMiB page_lock_avg=%s page_path_avg=%s disk_lock_avg=%s disk_open_avg=%s disk_read_avg=%s)",
+						"cache read path summary: client(read_into=%d %.2fMiB local_hit=%d local_miss=%d raw_req=%d raw_hit=%d raw_miss=%d raw_err=%d raw_wait_avg=%s raw_header_avg=%s raw_body_avg=%s grpc_hit=%d grpc_miss=%d grpc_err=%d) client_local_page_file(req=%d hit=%d miss=%d %.2fMiB) cachefs(read=%d %.2fMiB fd_hit=%d data=%d miss_retry=%d store_retry_err=%d read_err=%d) server(grpc_req=%d grpc_hit=%d grpc_miss=%d %.2fMiB stream_req=%d stream_chunks=%d %.2fMiB stream_err=%d raw_conn=%d raw_req=%d raw_sendfile=%d raw_copy=%d raw_readat=%d raw_miss=%d raw_err=%d %.2fMiB raw_region_avg=%s raw_open_avg=%s raw_send_avg=%s) store(readat=%d %.2fMiB mem_pages=%d %.2fMiB disk_pages=%d %.2fMiB miss=%d page_region=%d hit=%d miss=%d %.2fMiB page_lock_avg=%s page_path_avg=%s disk_lock_avg=%s disk_open_avg=%s disk_read_avg=%s)",
 						d.clientReadIntoRequests,
 						bytesToMiB(d.clientReadIntoBytes),
 						d.clientLocalHits,
@@ -150,16 +143,9 @@ func startCachePathStatsLogger() {
 						d.serverStreamErrors,
 						d.serverRawConns,
 						d.serverRawRequests,
-						d.serverRawSmallReads,
-						bytesToMiB(d.serverRawSmallBytes),
-						d.serverRawLargeReads,
-						bytesToMiB(d.serverRawLargeBytes),
 						d.serverRawSendfileHits,
 						d.serverRawCopyHits,
 						d.serverRawReadAtHits,
-						d.serverRawFDCacheHits,
-						d.serverRawFDCacheMiss,
-						d.serverRawFDCacheStale,
 						d.serverRawMisses,
 						d.serverRawErrors,
 						bytesToMiB(d.serverRawBytes),
@@ -232,13 +218,6 @@ func snapshotCachePathStats() cachePathStatsSnapshot {
 		serverRawSendfileHits: atomic.LoadInt64(&cachePathStats.serverRawSendfileHits),
 		serverRawCopyHits:     atomic.LoadInt64(&cachePathStats.serverRawCopyHits),
 		serverRawReadAtHits:   atomic.LoadInt64(&cachePathStats.serverRawReadAtHits),
-		serverRawFDCacheHits:  atomic.LoadInt64(&cachePathStats.serverRawFDCacheHits),
-		serverRawFDCacheMiss:  atomic.LoadInt64(&cachePathStats.serverRawFDCacheMiss),
-		serverRawFDCacheStale: atomic.LoadInt64(&cachePathStats.serverRawFDCacheStale),
-		serverRawSmallReads:   atomic.LoadInt64(&cachePathStats.serverRawSmallReads),
-		serverRawSmallBytes:   atomic.LoadInt64(&cachePathStats.serverRawSmallBytes),
-		serverRawLargeReads:   atomic.LoadInt64(&cachePathStats.serverRawLargeReads),
-		serverRawLargeBytes:   atomic.LoadInt64(&cachePathStats.serverRawLargeBytes),
 		serverRawMisses:       atomic.LoadInt64(&cachePathStats.serverRawMisses),
 		serverRawErrors:       atomic.LoadInt64(&cachePathStats.serverRawErrors),
 		serverRawBytes:        atomic.LoadInt64(&cachePathStats.serverRawBytes),
@@ -308,13 +287,6 @@ func diffCachePathStats(cur, prev cachePathStatsSnapshot) cachePathStatsSnapshot
 		serverRawSendfileHits: cur.serverRawSendfileHits - prev.serverRawSendfileHits,
 		serverRawCopyHits:     cur.serverRawCopyHits - prev.serverRawCopyHits,
 		serverRawReadAtHits:   cur.serverRawReadAtHits - prev.serverRawReadAtHits,
-		serverRawFDCacheHits:  cur.serverRawFDCacheHits - prev.serverRawFDCacheHits,
-		serverRawFDCacheMiss:  cur.serverRawFDCacheMiss - prev.serverRawFDCacheMiss,
-		serverRawFDCacheStale: cur.serverRawFDCacheStale - prev.serverRawFDCacheStale,
-		serverRawSmallReads:   cur.serverRawSmallReads - prev.serverRawSmallReads,
-		serverRawSmallBytes:   cur.serverRawSmallBytes - prev.serverRawSmallBytes,
-		serverRawLargeReads:   cur.serverRawLargeReads - prev.serverRawLargeReads,
-		serverRawLargeBytes:   cur.serverRawLargeBytes - prev.serverRawLargeBytes,
 		serverRawMisses:       cur.serverRawMisses - prev.serverRawMisses,
 		serverRawErrors:       cur.serverRawErrors - prev.serverRawErrors,
 		serverRawBytes:        cur.serverRawBytes - prev.serverRawBytes,
@@ -369,8 +341,4 @@ func avgDurationNanos(totalNanos int64, count int64) time.Duration {
 		return 0
 	}
 	return time.Duration(totalNanos / count)
-}
-
-func atomicAddRawFDCacheStale() {
-	atomic.AddInt64(&cachePathStats.serverRawFDCacheStale, 1)
 }

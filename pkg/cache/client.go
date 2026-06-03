@@ -678,19 +678,6 @@ func (c *Client) removeLocalHostCache(hash string, routingKey ...string) {
 	}
 }
 
-func (c *Client) setLocalHostCache(hash string, routingKey string, host *Host) {
-	if c == nil || hash == "" || host == nil || host.HostId == "" {
-		return
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.localHostCache[newLocalHostCacheKey(hash, routingKey)] = &localClientCache{
-		host:      host,
-		timestamp: time.Now(),
-	}
-}
-
 func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 	if c.hostDirectory == nil || c.hostMap == nil {
 		return ErrHostNotFound
@@ -1404,39 +1391,12 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 			return nil, trace, err
 		}
 	}
-	checked := make(map[string]struct{}, c.readReplicaHostCount())
-	for hostIndex := 0; hostIndex < c.readReplicaHostCount(); hostIndex++ {
-		if hostIndex > 0 {
-			host, err = c.getHostForRequest(&ClientRequest{
-				rt:        ClientRequestTypeRetrieval,
-				hash:      hash,
-				key:       opts.RoutingKey,
-				hostIndex: hostIndex,
-			})
-			if err != nil {
-				trace.addAttempt(hostIndex, host, "host_select", operationTraceReadResult(err, 0, length), 0, time.Since(started), err)
-				continue
-			}
-		}
-		if host == nil || host.HostId == "" {
-			continue
-		}
-		if _, ok := checked[host.HostId]; ok {
-			continue
-		}
-		checked[host.HostId] = struct{}{}
-
-		if views, source, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-			if hostIndex > 0 {
-				c.setLocalHostCache(hash, opts.RoutingKey, host)
-			}
-			trace.addAttempt(hostIndex, host, source, CacheResultHit, int64(len(views)), time.Since(started), nil)
-			return views, trace, nil
-		}
-
-		trace.addAttempt(hostIndex, host, "client_local_page_file", CacheResultMiss, 0, time.Since(started), ErrContentNotFound)
+	if views, source, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
+		trace.addAttempt(0, host, source, CacheResultHit, int64(len(views)), time.Since(started), nil)
+		return views, trace, nil
 	}
 
+	trace.addAttempt(0, host, "client_local_page_file", CacheResultMiss, 0, time.Since(started), ErrContentNotFound)
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	return nil, trace, ErrContentNotFound
 }
@@ -1595,7 +1555,7 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 		}
 		checked[host.HostId] = struct{}{}
 
-		n, err := c.readContentIntoFromHost(ctx, host, hostIndex, hash, opts.RoutingKey, offset, dst, trace)
+		n, err := c.readContentIntoFromHost(ctx, host, hostIndex, hash, offset, dst, trace)
 		if err == nil && n == length {
 			return n, nil
 		}
@@ -1658,7 +1618,7 @@ func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash strin
 	}
 }
 
-func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, routingKey string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
+func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
 	if host == nil {
 		trace.addAttempt(hostIndex, host, "host_select", CacheResultUnavailable, 0, 0, ErrHostNotFound)
 		return 0, ErrHostNotFound
@@ -1673,9 +1633,6 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		n, err := localServer.cas.ReadAt(hash, offset, dst)
 		trace.addAttempt(hostIndex, host, "local_server", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
-			if hostIndex > 0 {
-				c.setLocalHostCache(hash, routingKey, host)
-			}
 			cacheReadLocalTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
 			return n, nil
@@ -1695,9 +1652,6 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		n, err := localStore.ReadAt(hash, offset, dst)
 		trace.addAttempt(hostIndex, host, "local_disk", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
-			if hostIndex > 0 {
-				c.setLocalHostCache(hash, routingKey, host)
-			}
 			cacheReadLocalTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
 			return n, nil
@@ -1721,11 +1675,8 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 	if c.clientConfig.ReadTransport.Enabled {
 		attemptStarted := time.Now()
 		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
-		trace.addAttempt(hostIndex, host, c.rawReadTraceSource(length), operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
+		trace.addAttempt(hostIndex, host, "raw", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
-			if hostIndex > 0 {
-				c.setLocalHostCache(hash, routingKey, host)
-			}
 			return n, nil
 		}
 		if err == ErrContentNotFound {
@@ -1770,26 +1721,12 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 
 	copy(dst, getContentResponse.Content)
 	trace.addAttempt(hostIndex, host, "grpc", CacheResultHit, length, time.Since(start), nil)
-	if hostIndex > 0 {
-		c.setLocalHostCache(hash, routingKey, host)
-	}
 	atomic.AddInt64(&cachePathStats.clientGRPCHits, 1)
 	if c.globalConfig.GRPCPayloadCodecV2 {
 		cacheReadGRPCCodecV2Total.Inc()
 	}
 	Logger.Debugf("Elapsed time to get content: %v", time.Since(start))
 	return length, nil
-}
-
-func (c *Client) rawReadTraceSource(length int64) string {
-	if c == nil {
-		return "raw"
-	}
-	threshold := c.clientConfig.ReadTransport.SmallRangeCopyThresholdBytes
-	if threshold > 0 && length <= threshold {
-		return "raw_copy"
-	}
-	return "raw_sendfile"
 }
 
 func (c *Client) remainingHostsForRequest(checked map[string]struct{}) []*Host {

@@ -46,23 +46,22 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	proto.UnimplementedCacheServer
-	hostId         string
-	locality       string
-	privateIpAddr  string
-	publicIpAddr   string
-	cas            *Store
-	serverConfig   ServerConfig
-	globalConfig   GlobalConfig
-	config         Config
-	metadataStore  CacheMetadataStore
-	peerClient     *Client
-	reconciler     *requiredContentReconciler
-	grpcServer     *grpc.Server
-	listener       net.Listener
-	rawPageFDCache *rawPageFDCache
-	s3ClientCache  sync.Map
-	draining       atomic.Bool
-	closeOnce      sync.Once
+	hostId        string
+	locality      string
+	privateIpAddr string
+	publicIpAddr  string
+	cas           *Store
+	serverConfig  ServerConfig
+	globalConfig  GlobalConfig
+	config        Config
+	metadataStore CacheMetadataStore
+	peerClient    *Client
+	reconciler    *requiredContentReconciler
+	grpcServer    *grpc.Server
+	listener      net.Listener
+	s3ClientCache sync.Map
+	draining      atomic.Bool
+	closeOnce     sync.Once
 }
 
 func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error) {
@@ -146,20 +145,19 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 	}
 
 	cs := &Server{
-		ctx:            serverCtx,
-		cancel:         cancel,
-		hostId:         hostId,
-		locality:       locality,
-		cas:            cas,
-		serverConfig:   effectiveServerConfig,
-		globalConfig:   cfg.Global,
-		config:         cfg,
-		metadataStore:  metadataStore,
-		peerClient:     opts.PeerClient,
-		rawPageFDCache: newRawPageFDCache(effectiveServerConfig.ReadTransport.PageFDCacheSize),
-		privateIpAddr:  privateIpAddr,
-		publicIpAddr:   publicIpAddr,
-		s3ClientCache:  sync.Map{},
+		ctx:           serverCtx,
+		cancel:        cancel,
+		hostId:        hostId,
+		locality:      locality,
+		cas:           cas,
+		serverConfig:  effectiveServerConfig,
+		globalConfig:  cfg.Global,
+		config:        cfg,
+		metadataStore: metadataStore,
+		peerClient:    opts.PeerClient,
+		privateIpAddr: privateIpAddr,
+		publicIpAddr:  publicIpAddr,
+		s3ClientCache: sync.Map{},
 	}
 	cs.reconciler = newRequiredContentReconciler(cs, cfg.RequiredContent)
 
@@ -382,9 +380,6 @@ func (cs *Server) Close() error {
 		}
 		if cs.listener != nil {
 			_ = cs.listener.Close()
-		}
-		if cs.rawPageFDCache != nil {
-			cs.rawPageFDCache.close()
 		}
 		if cs.cas != nil {
 			cs.cas.Cleanup()
