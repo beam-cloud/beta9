@@ -643,7 +643,7 @@ func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
-		maxGetContentAttempts: 1,
+		maxGetContentAttempts: 2,
 	}
 	require.NoError(t, client.addHost(primaryHost))
 	require.NoError(t, client.addHost(replicaHost))
@@ -654,6 +654,78 @@ func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
+}
+
+func TestReadContentIntoDoesNotRetrySmallReadsBelowMinRetryLength(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{NTopHosts: 2},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+
+	primaryServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("primary-host"))
+	require.NoError(t, err)
+	primaryAddr, err := primaryServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, primaryServer.Close()) }()
+
+	replicaCfg := cfg
+	replicaCfg.Server.DiskCacheDir = t.TempDir()
+	replicaServer, err := NewServerWithOptions(ctx, replicaCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("replica-host"))
+	require.NoError(t, err)
+	replicaAddr, err := replicaServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, replicaServer.Close()) }()
+
+	content := []byte("content-on-ranked-replica")
+	hash, _, err := replicaServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	primaryHost := primaryServer.Host()
+	require.NotNil(t, primaryHost)
+	primaryHost.Addr = primaryAddr
+	primaryHost.PrivateAddr = primaryAddr
+	replicaHost := replicaServer.Host()
+	require.NotNil(t, replicaHost)
+	replicaHost.Addr = replicaAddr
+	replicaHost.PrivateAddr = replicaAddr
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{primaryHost, replicaHost}},
+		minRetryLengthBytes:   int64(len(content) + 1),
+		maxGetContentAttempts: 2,
+	}
+	require.NoError(t, client.addHost(primaryHost))
+	require.NoError(t, client.addHost(replicaHost))
+	defer client.Cleanup()
+
+	dst := make([]byte, len(content))
+	_, trace, err := client.ReadContentIntoWithTrace(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.NotEmpty(t, trace.Attempts)
+	for _, attempt := range trace.Attempts {
+		require.Equal(t, 0, attempt.HostIndex)
+	}
 }
 
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {

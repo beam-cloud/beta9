@@ -755,6 +755,15 @@ func (c *Client) readReplicaHostCount() int {
 	return c.clientConfig.NTopHosts
 }
 
+func (c *Client) readContentIntoHostCount(length int64) int {
+	attempts := c.getContentAttempts(length)
+	hostCount := c.readReplicaHostCount()
+	if attempts < hostCount {
+		return attempts
+	}
+	return hostCount
+}
+
 func (c *Client) dataCallOptions() []grpc.CallOption {
 	if !c.globalConfig.GRPCPayloadCodecV2 {
 		return nil
@@ -1460,9 +1469,10 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 	primaryUnavailable := false
 	selectedUnavailable := false
 	contentMissing := false
-	checked := make(map[string]struct{}, c.readReplicaHostCount())
+	hostCount := c.readContentIntoHostCount(length)
+	checked := make(map[string]struct{}, hostCount)
 
-	for hostIndex := 0; hostIndex < c.readReplicaHostCount(); hostIndex++ {
+	for hostIndex := 0; hostIndex < hostCount; hostIndex++ {
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
