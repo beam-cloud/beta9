@@ -986,6 +986,14 @@ func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Conte
 		return false, fmt.Errorf("image archive too large for local restore: %d bytes", metadata.Size)
 	}
 
+	exists, err := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
 		if isEmbeddedImageCacheMiss(err) {
 			return false, nil
