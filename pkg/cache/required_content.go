@@ -19,10 +19,9 @@ const (
 type RequiredContentKind string
 
 const (
-	RequiredContentKindClipOCI      RequiredContentKind = "clip_oci_layer"
-	RequiredContentKindClipV1       RequiredContentKind = "clip_v1_content"
-	RequiredContentKindVolume       RequiredContentKind = "volume_content"
-	RequiredContentKindImageArchive RequiredContentKind = "image_archive"
+	RequiredContentKindClipOCI RequiredContentKind = "clip_oci_layer"
+	RequiredContentKindClipV1  RequiredContentKind = "clip_v1_content"
+	RequiredContentKindVolume  RequiredContentKind = "volume_content"
 )
 
 type RequiredContentReconciliationStatus string
