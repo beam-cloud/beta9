@@ -99,24 +99,22 @@ func (c *GlobalConfig) GetLocality() string {
 }
 
 type ServerConfig struct {
-	DiskCacheDir                 string                    `key:"diskCacheDir" json:"disk_cache_dir"`
-	DiskCacheMaxUsagePct         float64                   `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
-	ObjectTtlS                   int                       `key:"objectTtlS" json:"object_ttl_s"`
-	MaxCachePct                  int64                     `key:"maxCachePct" json:"max_cache_pct"`
-	PageSizeBytes                int64                     `key:"pageSizeBytes" json:"page_size_bytes"`
-	PageFileBuckets              int                       `key:"pageFileBuckets" json:"page_file_buckets"`
-	SmallRangeCopyThresholdBytes int64                     `key:"smallRangeCopyThresholdBytes" json:"small_range_copy_threshold_bytes"`
-	ReadTransport                ServerReadTransportConfig `key:"readTransport" json:"read_transport"`
-	Metadata                     MetadataConfig            `key:"metadata" json:"metadata"`
-	Sources                      []SourceConfig            `key:"sources" json:"sources"`
-	S3DownloadConcurrency        int64                     `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
-	S3DownloadChunkSize          int64                     `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
+	DiskCacheDir          string                    `key:"diskCacheDir" json:"disk_cache_dir"`
+	DiskCacheMaxUsagePct  float64                   `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
+	ObjectTtlS            int                       `key:"objectTtlS" json:"object_ttl_s"`
+	MaxCachePct           int64                     `key:"maxCachePct" json:"max_cache_pct"`
+	PageSizeBytes         int64                     `key:"pageSizeBytes" json:"page_size_bytes"`
+	PageFileBuckets       int                       `key:"pageFileBuckets" json:"page_file_buckets"`
+	ReadTransport         ServerReadTransportConfig `key:"readTransport" json:"read_transport"`
+	Metadata              MetadataConfig            `key:"metadata" json:"metadata"`
+	Sources               []SourceConfig            `key:"sources" json:"sources"`
+	S3DownloadConcurrency int64                     `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
+	S3DownloadChunkSize   int64                     `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
 }
 
 type ServerReadTransportConfig struct {
-	Enabled         bool `key:"enabled" json:"enabled"`
-	Sendfile        bool `key:"sendfile" json:"sendfile"`
-	PageFDCacheSize int  `key:"pageFDCacheSize" json:"page_fd_cache_size"`
+	Enabled  bool `key:"enabled" json:"enabled"`
+	Sendfile bool `key:"sendfile" json:"sendfile"`
 }
 
 type ClientConfig struct {
@@ -132,10 +130,9 @@ type ClientConfig struct {
 }
 
 type ClientReadTransportConfig struct {
-	Enabled                      bool  `key:"enabled" json:"enabled"`
-	MaxActiveConnsPerHost        int   `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
-	MaxIdleConnsPerHost          int   `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
-	SmallRangeCopyThresholdBytes int64 `key:"smallRangeCopyThresholdBytes" json:"small_range_copy_threshold_bytes"`
+	Enabled               bool `key:"enabled" json:"enabled"`
+	MaxActiveConnsPerHost int  `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
+	MaxIdleConnsPerHost   int  `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
 }
 
 type ReadPrefetchConfig struct {

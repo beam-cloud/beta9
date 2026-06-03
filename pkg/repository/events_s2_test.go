@@ -103,7 +103,6 @@ func TestS2RequiredContentEventsUseStubCacheStream(t *testing.T) {
 
 	want := []s2.StreamName{
 		"events/workspaces/workspace-123/stubs/stub-456/cache",
-		"events/workspaces/workspace-123",
 	}
 	if len(streams) != len(want) {
 		t.Fatalf("unexpected required content stream count: got %d want %d: %#v", len(streams), len(want), streams)

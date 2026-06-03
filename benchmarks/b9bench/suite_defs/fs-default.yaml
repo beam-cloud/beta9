@@ -15,7 +15,6 @@ defaults:
   min_hot_file_read_mbps: 0
   min_remote_cache_socket_mbps: 0
   min_throughput_size_mb: 1024
-  worker_workspace_root: /workspace/data
 scenarios:
   - name: volume-fuse-sequential-1024
     access: volume_mount

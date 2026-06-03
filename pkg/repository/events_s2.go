@@ -854,14 +854,10 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 		return []s2.StreamName{r.platformCacheStreamName()}
 	}
 	if eventType == types.EventStubCacheRequiredContent {
-		streams := []s2.StreamName{}
 		if metadata.WorkspaceID != "" && metadata.StubID != "" {
-			streams = append(streams, r.stubCacheStreamName(metadata.WorkspaceID, metadata.StubID))
+			return []s2.StreamName{r.stubCacheStreamName(metadata.WorkspaceID, metadata.StubID)}
 		}
-		if metadata.WorkspaceID != "" {
-			streams = append(streams, r.workspaceStreamName(metadata.WorkspaceID))
-		}
-		return streams
+		return nil
 	}
 
 	streams := []s2.StreamName{}

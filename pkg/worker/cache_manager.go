@@ -35,8 +35,6 @@ const (
 	cacheDefaultGetAttempts             = 3
 	cacheDefaultPageFileBuckets         = 1024
 	cacheDefaultPageFDCacheSize         = 64
-	cacheDefaultServerPageFDCacheSize   = 1024
-	cacheDefaultSmallRangeCopyThreshold = 128 * 1024
 	cacheDefaultRawMaxActiveConns       = 64
 	cacheDefaultRawMaxIdleConns         = 16
 	cacheDefaultPrefetchAheadBytes      = 64 * 1024 * 1024
@@ -643,12 +641,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	cacheConfig.Server.ReadTransport.Enabled = true
 	cacheConfig.Server.ReadTransport.Sendfile = true
-	if cacheConfig.Server.ReadTransport.PageFDCacheSize == 0 {
-		cacheConfig.Server.ReadTransport.PageFDCacheSize = cacheDefaultServerPageFDCacheSize
-	}
-	if cacheConfig.Server.SmallRangeCopyThresholdBytes == 0 {
-		cacheConfig.Server.SmallRangeCopyThresholdBytes = cacheDefaultSmallRangeCopyThreshold
-	}
 	if cacheConfig.Server.S3DownloadConcurrency == 0 {
 		cacheConfig.Server.S3DownloadConcurrency = cacheDefaultS3Concurrency
 	}
@@ -681,9 +673,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost == 0 {
 		cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost = cacheDefaultRawMaxIdleConns
-	}
-	if cacheConfig.Client.ReadTransport.SmallRangeCopyThresholdBytes == 0 {
-		cacheConfig.Client.ReadTransport.SmallRangeCopyThresholdBytes = cacheConfig.Server.SmallRangeCopyThresholdBytes
 	}
 	cacheConfig.Client.Prefetch.Enabled = true
 	if cacheConfig.Client.Prefetch.AheadBytes == 0 {

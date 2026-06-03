@@ -440,11 +440,9 @@ func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, e
 func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Worker, error) {
 	pipe := r.rdb.Pipeline()
 	cmds := make([]*redis.MapStringStringCmd, len(keys))
-	ttlCmds := make([]*redis.DurationCmd, len(keys))
 
 	// Fetch all workers at once using a pipeline
 	for i, key := range keys {
-		ttlCmds[i] = pipe.PTTL(context.TODO(), key)
 		cmds[i] = pipe.HGetAll(context.TODO(), key)
 	}
 
@@ -455,16 +453,6 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 
 	var workers []*types.Worker
 	for i, cmd := range cmds {
-		ttl, err := ttlCmds[i].Result()
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve worker state ttl <%v>: %v", keys[i], err)
-		}
-		if ttl == -2*time.Millisecond {
-			indexKey := common.RedisKeys.SchedulerWorkerIndex()
-			r.rdb.SRem(context.TODO(), indexKey, keys[i]).Err()
-			continue
-		}
-
 		res, err := cmd.Result()
 		if err != nil || len(res) == 0 {
 			// If there is an error or the result is empty, remove the key from the index
@@ -805,6 +793,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	if currentWorker.Status != types.WorkerStatusAvailable {
 		return fmt.Errorf("worker <%s> is not available: %s", worker.Id, currentWorker.Status)
 	}
+
 	updatedWorker, err := r.updateWorkerCapacityLocked(ctx, worker.Id, request, types.RemoveCapacity)
 	if err != nil {
 		return err
