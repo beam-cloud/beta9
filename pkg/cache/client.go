@@ -1536,6 +1536,8 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 
 	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts, &trace); err == nil {
 		return n, trace, nil
+	} else if errors.Is(err, ErrContentNotFound) {
+		return 0, trace, err
 	} else if c.hostDirectory == nil || c.hostMap == nil {
 		return 0, trace, err
 	}
