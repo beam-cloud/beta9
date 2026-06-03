@@ -849,6 +849,13 @@ func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool
 // a recovery path for placement drift or host churn. Do not use it to decide
 // whether a cache-through write can be skipped.
 func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error) {
+	return c.IsCachedReachableContext(c.ctx, hash, routingKey)
+}
+
+func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, routingKey string) (bool, error) {
+	if ctx == nil {
+		ctx = c.ctx
+	}
 	if routingKey == "" {
 		routingKey = hash
 	}
@@ -870,7 +877,7 @@ func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error)
 			return false, nil
 		}
 
-		resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
 			c.removeHost(host)
 			return false, err
@@ -895,7 +902,7 @@ func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error)
 		}
 
 		checked[host.HostId] = struct{}{}
-		resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
 			c.removeHost(host)
 			continue
