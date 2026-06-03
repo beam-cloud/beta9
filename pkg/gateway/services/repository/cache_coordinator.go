@@ -507,7 +507,7 @@ func requiredContentEventItemBatches(items []cache.RequiredContentItem) [][]type
 		}
 		kind := string(item.Kind)
 		if kind == "" {
-			kind = string(cache.RequiredContentKindImageArchive)
+			continue
 		}
 		byKind[kind] = append(byKind[kind], item)
 	}

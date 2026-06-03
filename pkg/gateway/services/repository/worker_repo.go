@@ -15,6 +15,7 @@ import (
 
 type WorkerRepositoryService struct {
 	ctx                     context.Context
+	appConfig               types.AppConfig
 	cacheCoordinator        *cache.Coordinator
 	cacheCoordinatorToken   string
 	cacheMetadata           cache.CacheMetadataStore
@@ -32,9 +33,10 @@ const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient, cacheCoordinatorToken string, eventRepo repository.EventRepository, backendRepo repository.BackendRepository) *WorkerRepositoryService {
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient, cacheCoordinatorToken string, eventRepo repository.EventRepository, backendRepo repository.BackendRepository, appConfig types.AppConfig) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
+		appConfig:             appConfig,
 		workerRepo:            workerRepo,
 		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
 		eventRepo:             eventRepo,

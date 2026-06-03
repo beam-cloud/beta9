@@ -810,10 +810,12 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		return &sourceRegistry, nil
 	}
 
-	if ok, err := c.pullImageArchiveFromEmbeddedCache(ctx, archivePath, request); ok {
-		return &sourceRegistry, nil
-	} else if err != nil {
-		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive cache unavailable, falling back to registry")
+	if c.shouldUseEmbeddedImageArchiveCache() {
+		if ok, err := c.pullImageArchiveFromEmbeddedCache(ctx, archivePath, request); ok {
+			return &sourceRegistry, nil
+		} else if err != nil {
+			log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive cache unavailable, falling back to registry")
+		}
 	}
 
 	// Download to temp file, then atomically rename
@@ -851,8 +853,23 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	}
 
 	metadataStart := time.Now()
-	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
-		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, nil)
+	metadata, ok, err := c.lookupImageArchiveContentCacheMetadata(ctx, imageId)
+	if ok {
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, map[string]string{
+			"hash":       metadata.Hash,
+			"size_bytes": fmt.Sprintf("%d", metadata.Size),
+		})
+		restoreStart := time.Now()
+		trace, err := c.restoreImageArchiveFromContentCacheMetadata(ctx, archivePath, request, metadata)
+		attrs := imageArchiveRestoreAttrs(metadata.Hash, c.imageArchiveCachePath(imageId), int64(metadata.Size), trace)
+		if err != nil {
+			c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, attrs)
+			if isEmbeddedImageCacheMiss(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), true, attrs)
 		return true, nil
 	} else if err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), false, nil)
@@ -865,10 +882,7 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	routingKey := cachePath
 	key := fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
 
-	var (
-		hash string
-		err  error
-	)
+	var hash string
 	storeStart := time.Now()
 	if c.config.ImageService.RegistryStore == registry.S3ImageRegistryStore {
 		sourceRegistry := c.registry.Registry()
@@ -904,7 +918,7 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheStore, storeStart, time.Since(storeStart), false, nil)
 		if errors.Is(err, cache.ErrUnableToAcquireLock) {
 			waitStart := time.Now()
-			if ok, waitErr := c.waitForImageArchiveContentCache(ctx, archivePath, imageId); ok {
+			if ok, waitErr := c.waitForImageArchiveContentCache(ctx, archivePath, request); ok {
 				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), true, map[string]string{
 					"reason": "store_lock_contended",
 				})
@@ -933,16 +947,22 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, nil)
 		return false, err
 	}
-	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size, routingKey); err != nil {
-		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
+	trace, err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size, routingKey)
+	restoreAttrs := imageArchiveRestoreAttrs(hash, routingKey, size, trace)
+	if err != nil {
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, restoreAttrs)
 		return false, err
 	}
-	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
+	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), true, restoreAttrs)
 
 	return true, nil
 }
 
-func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archivePath, imageId string) (bool, error) {
+func (c *ImageClient) shouldUseEmbeddedImageArchiveCache() bool {
+	return c.config.ImageService.ClipVersion != uint32(types.ClipVersion2)
+}
+
+func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, embeddedImageCacheLockWaitTimeout)
 	defer cancel()
 
@@ -951,9 +971,12 @@ func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archi
 
 	var lastErr error
 	for {
-		ok, err := c.copyImageArchiveFromContentCacheMetadata(waitCtx, archivePath, imageId)
+		metadata, ok, err := c.lookupImageArchiveContentCacheMetadata(waitCtx, request.ImageId)
 		if ok {
-			return true, nil
+			_, err = c.restoreImageArchiveFromContentCacheMetadata(waitCtx, archivePath, request, metadata)
+			if err == nil {
+				return true, nil
+			}
 		}
 		if err != nil {
 			lastErr = err
@@ -973,29 +996,66 @@ func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archi
 	}
 }
 
-func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Context, archivePath, imageId string) (bool, error) {
+func (c *ImageClient) lookupImageArchiveContentCacheMetadata(ctx context.Context, imageId string) (*cache.FSMetadata, bool, error) {
 	cachePath := c.imageArchiveCachePath(imageId)
 	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
 	if err != nil {
 		if isEmbeddedImageCacheMiss(err) {
-			return false, nil
+			return nil, false, nil
 		}
-		return false, err
+		return nil, false, err
 	}
 	if metadata == nil || metadata.Hash == "" {
-		return false, fmt.Errorf("cachefs metadata missing hash for image archive path %s", cachePath)
+		return nil, false, fmt.Errorf("cachefs metadata missing hash for image archive path %s", cachePath)
 	}
 	if metadata.Size > uint64(^uint(0)>>1) {
-		return false, fmt.Errorf("image archive too large for local restore: %d bytes", metadata.Size)
+		return nil, false, fmt.Errorf("image archive too large for local restore: %d bytes", metadata.Size)
+	}
+	return metadata, true, nil
+}
+
+func (c *ImageClient) restoreImageArchiveFromContentCacheMetadata(ctx context.Context, archivePath string, request *types.ContainerRequest, metadata *cache.FSMetadata) (cache.OperationTrace, error) {
+	if request == nil || metadata == nil {
+		return cache.OperationTrace{}, nil
+	}
+	cachePath := c.imageArchiveCachePath(request.ImageId)
+	trace, err := c.writeImageArchiveFromContentCache(ctx, archivePath, request.ImageId, metadata.Hash, int64(metadata.Size), cachePath)
+	if err != nil {
+		return trace, err
+	}
+	return trace, nil
+}
+
+func imageArchiveRestoreAttrs(hash, routingKey string, size int64, trace cache.OperationTrace) map[string]string {
+	attrs := map[string]string{
+		"hash":        hash,
+		"routing_key": routingKey,
+		"size_bytes":  fmt.Sprintf("%d", size),
+	}
+	if trace.Result != "" {
+		attrs["cache_result"] = trace.Result.String()
+	}
+	if trace.DurationUs > 0 {
+		attrs["cache_elapsed_us"] = fmt.Sprintf("%d", trace.DurationUs)
+	}
+	if len(trace.Attempts) == 0 {
+		return attrs
 	}
 
-	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
-		if isEmbeddedImageCacheMiss(err) {
-			return false, nil
-		}
-		return false, err
+	attempt := trace.Attempts[len(trace.Attempts)-1]
+	attrs["cache_method"] = attempt.Source
+	attrs["cache_attempt_result"] = attempt.Result.String()
+	attrs["cache_host_id"] = attempt.HostID
+	attrs["cache_node_id"] = attempt.NodeID
+	attrs["cache_path_id"] = attempt.CachePathID
+	attrs["cache_host_index"] = fmt.Sprintf("%d", attempt.HostIndex)
+	if attempt.ElapsedUs > 0 {
+		attrs["cache_attempt_elapsed_us"] = fmt.Sprintf("%d", attempt.ElapsedUs)
 	}
-	return true, nil
+	if attempt.Error != "" {
+		attrs["cache_error"] = attempt.Error
+	}
+	return attrs
 }
 
 func isEmbeddedImageCacheMiss(err error) bool {
@@ -1007,7 +1067,8 @@ func (c *ImageClient) imageArchiveCachePath(imageId string) string {
 	return fmt.Sprintf("/images/%s.%s", imageId, c.registry.ImageFileExtension)
 }
 
-func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, archivePath, imageId, hash string, size int64, routingKey string) error {
+func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, archivePath, imageId, hash string, size int64, routingKey string) (cache.OperationTrace, error) {
+	var lastTrace cache.OperationTrace
 	tmpPath := archivePath + ".tmp"
 	defer os.Remove(tmpPath)
 	if routingKey == "" {
@@ -1016,7 +1077,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 
 	f, err := os.Create(tmpPath)
 	if err != nil {
-		return err
+		return lastTrace, err
 	}
 
 	hasher := sha256.New()
@@ -1026,53 +1087,55 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	for offset < size {
 		if err := ctx.Err(); err != nil {
 			_ = f.Close()
-			return err
+			return lastTrace, err
 		}
 
 		length := min(bufSize, size-offset)
-		n, err := c.cacheClient.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
+		var trace cache.OperationTrace
+		n, trace, err := c.cacheClient.ReadContentIntoWithTrace(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
+		lastTrace = trace
 		if err != nil {
 			_ = f.Close()
-			return err
+			return lastTrace, err
 		}
 		if n != length {
 			_ = f.Close()
-			return fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, n)
+			return lastTrace, fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, n)
 		}
 
 		content := buf[:n]
 		if _, err := f.Write(content); err != nil {
 			_ = f.Close()
-			return err
+			return lastTrace, err
 		}
 		if _, err := hasher.Write(content); err != nil {
 			_ = f.Close()
-			return err
+			return lastTrace, err
 		}
 		offset += length
 	}
 
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		return err
+		return lastTrace, err
 	}
 	if err := f.Close(); err != nil {
-		return err
+		return lastTrace, err
 	}
 
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if actualHash != hash {
-		return fmt.Errorf("image archive cache hash mismatch: expected %s, got %s", hash, actualHash)
+		return lastTrace, fmt.Errorf("image archive cache hash mismatch: expected %s, got %s", hash, actualHash)
 	}
 	if err := c.validateRestoredImageArchive(tmpPath, imageId, size); err != nil {
-		return err
+		return lastTrace, err
 	}
 	if err := os.Rename(tmpPath, archivePath); err != nil {
-		return err
+		return lastTrace, err
 	}
 
 	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from content cache")
-	return nil
+	return lastTrace, nil
 }
 
 func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, size int64) error {
