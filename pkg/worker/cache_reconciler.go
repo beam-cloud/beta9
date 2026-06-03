@@ -355,6 +355,8 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
+	m.pruneReconcileFailures()
+
 	maxStubs := m.config.Cache.Reconciliation.MaxStubsPerCycle
 	if maxStubs <= 0 {
 		maxStubs = cacheDefaultReconcileMaxStubsCycle
@@ -442,30 +444,50 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	ctx, cancel := context.WithTimeout(m.ctx, reconcileItemTimeout)
 	defer cancel()
 
-	m.reconcileLogFields(log.Info(), localHostID, stub, item).
+	m.reconcileLogFields(log.Debug(), localHostID, stub, item).
 		Str("source", item.Source).
 		Int64("size_bytes", item.SizeBytes).
 		Msg("reconciling missing cache content")
 
 	startedAt := time.Now()
 	status := m.materialize(ctx, server, stub, item, routingKey)
+	elapsed := time.Since(startedAt)
 
-	result := log.Info()
-	if status != types.CacheAuditStatusMaterialized {
-		result = log.Warn()
-	}
-	m.reconcileLogFields(result, localHostID, stub, item).
-		Str("status", status).
-		Dur("duration", time.Since(startedAt)).
-		Msg("cache content reconciled")
-
-	if status == types.CacheAuditStatusMaterialized {
+	switch {
+	case status == types.CacheAuditStatusMaterialized:
 		m.clearReconcileFailure(item.Hash, routingKey)
-	} else {
+		m.reconcileLogFields(log.Info(), localHostID, stub, item).
+			Str("status", status).Dur("duration", elapsed).
+			Msg("cache content reconciled")
+	case reconcileStatusIsFailure(status):
+		// Genuine fetch failure (e.g. an unresolvable origin source) - back off
+		// so it is not retried and re-logged every cycle.
 		m.recordReconcileFailure(item.Hash, routingKey)
+		m.reconcileLogFields(log.Warn(), localHostID, stub, item).
+			Str("status", status).Dur("duration", elapsed).
+			Msg("cache content reconciliation failed")
+	default:
+		// A miss (no replica and no usable origin) is expected/transient and is
+		// resolved by the normal read path, so it is not backed off.
+		m.reconcileLogFields(log.Debug(), localHostID, stub, item).
+			Str("status", status).Dur("duration", elapsed).
+			Msg("cache content not reconciled")
 	}
 
 	m.auditCacheEvent(localHostID, stub, item, routingKey, status)
+}
+
+// reconcileStatusIsFailure reports whether a materialization outcome is a genuine
+// failure that should be backed off, as opposed to an expected miss.
+func reconcileStatusIsFailure(status string) bool {
+	switch status {
+	case types.CacheAuditStatusOriginFailure,
+		types.CacheAuditStatusReplicaFailure,
+		types.CacheAuditStatusHostUnavailable:
+		return true
+	default:
+		return false
+	}
 }
 
 // reconcileBackingOff reports whether an item failed to materialize recently and
@@ -499,6 +521,19 @@ func (m *WorkerCacheManager) clearReconcileFailure(hash, routingKey string) {
 	m.reconcileFailuresMu.Lock()
 	delete(m.reconcileFailures, key)
 	m.reconcileFailuresMu.Unlock()
+}
+
+// pruneReconcileFailures drops expired backoff entries so the map stays bounded
+// to items that are currently failing, even if they are never retried (e.g. the
+// stub ages out or ownership moves).
+func (m *WorkerCacheManager) pruneReconcileFailures() {
+	m.reconcileFailuresMu.Lock()
+	defer m.reconcileFailuresMu.Unlock()
+	for key, failedAt := range m.reconcileFailures {
+		if time.Since(failedAt) >= reconcileFailureBackoff {
+			delete(m.reconcileFailures, key)
+		}
+	}
 }
 
 // reconcileLogFields adds the fields common to per-item reconciliation logs.
