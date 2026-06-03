@@ -770,6 +770,15 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 	if eventType == types.EventPlatformLog {
 		return r.platformLogStreamName(metadata)
 	}
+	if eventType == types.EventStubCacheRequiredContent {
+		if metadata.WorkspaceID != "" && metadata.StubID != "" {
+			return r.stubCacheStreamName(metadata.WorkspaceID, metadata.StubID)
+		}
+		return ""
+	}
+	if eventType == types.EventPlatformCache {
+		return r.platformCacheStreamName()
+	}
 
 	switch {
 	case isTaskEvent(eventType) && metadata.TaskID != "":
@@ -803,6 +812,18 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 			return nil
 		}
 		return []s2.StreamName{stream}
+	}
+	// Required-content reports are persisted only to the dedicated stub cache
+	// stream; they must not fan out to the stub/workspace event streams.
+	if eventType == types.EventStubCacheRequiredContent {
+		stream := r.streamNameForEvent(eventType, metadata)
+		if stream == "" {
+			return nil
+		}
+		return []s2.StreamName{stream}
+	}
+	if eventType == types.EventPlatformCache {
+		return []s2.StreamName{r.platformCacheStreamName()}
 	}
 
 	streams := []s2.StreamName{}
@@ -944,6 +965,94 @@ func (r *S2EventRepository) stubStreamName(workspaceID, stubID string) s2.Stream
 
 func (r *S2EventRepository) appStreamName(workspaceID, appID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/apps/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(appID)))
+}
+
+func (r *S2EventRepository) stubCacheStreamName(workspaceID, stubID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/stubs/%s/cache", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
+}
+
+func (r *S2EventRepository) platformCacheStreamName() s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/platform/cache", r.streamPrefix))
+}
+
+// ReadStubCacheRequiredContent reads the coalesced required-content set for a
+// stub from the dedicated S2 cache stream. Items are merged by
+// (hash, routing_key) keeping the most recent report for each.
+func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
+	if workspaceID == "" || stubID == "" {
+		return nil, fmt.Errorf("workspace id and stub id are required to read stub cache required content")
+	}
+
+	if err := r.ensureBasin(ctx); err != nil {
+		return nil, err
+	}
+
+	streamName := r.stubCacheStreamName(workspaceID, stubID)
+	exists, err := r.streamExists(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	// Read the full stream (paginating past the per-read limit) so the coalesced
+	// required-content set is never truncated for stubs with many events.
+	merged := map[string]types.CacheRequiredContentItem{}
+	seqNum := uint64(0)
+	for {
+		count := uint64(defaultS2EventReadLimit)
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
+			SeqNum: &seqNum,
+			Count:  &count,
+		})
+		if err != nil {
+			if isS2RangeNotSatisfiable(err) {
+				break
+			}
+			return nil, fmt.Errorf("read stub cache required content from s2 stream %q: %w", streamName, err)
+		}
+		if len(batch.Records) == 0 {
+			break
+		}
+
+		for _, record := range batch.Records {
+			var envelope struct {
+				Type string          `json:"type"`
+				Data json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(record.Body, &envelope); err != nil {
+				continue
+			}
+			if envelope.Type != types.EventStubCacheRequiredContent {
+				continue
+			}
+			var schema types.EventStubCacheRequiredContentSchema
+			if err := json.Unmarshal(envelope.Data, &schema); err != nil {
+				continue
+			}
+			for _, item := range schema.Items {
+				if item.Hash == "" {
+					continue
+				}
+				if item.Kind == "" {
+					item.Kind = schema.Kind
+				}
+				merged[item.Hash+"\x00"+item.RoutingKey] = item
+			}
+		}
+
+		seqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
+		if uint64(len(batch.Records)) < count {
+			break
+		}
+	}
+
+	items := make([]types.CacheRequiredContentItem, 0, len(merged))
+	for _, item := range merged {
+		items = append(items, item)
+	}
+	return items, nil
 }
 
 func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containerID string) s2.StreamName {

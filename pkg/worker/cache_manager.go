@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -49,6 +51,12 @@ const (
 	cacheDefaultRegistrationHeartbeat   = 10 * time.Second
 	cacheDefaultHostWatchInterval       = 5 * time.Second
 	cacheServerDaemonSetMarkerName      = ".beta9-cache-server-daemonset"
+
+	cacheDefaultReconcileIntervalS      = 60
+	cacheDefaultReconcileRecentStubTTLS = 7 * 24 * 60 * 60 // 7 days after a stub's last container
+	cacheDefaultReconcileLockTTLS       = 300
+	cacheDefaultReconcileMaxStubsCycle  = 256
+	cacheDefaultVolumeReportMinKB       = 1024
 )
 
 type WorkerCacheManager struct {
@@ -57,6 +65,8 @@ type WorkerCacheManager struct {
 	config                types.AppConfig
 	poolConfig            types.WorkerPoolConfig
 	workerRepo            pb.WorkerRepositoryServiceClient
+	eventRepo             repo.EventRepository
+	containerInstances    *common.SafeMap[*ContainerInstance]
 	workerID              string
 	instanceID            string
 	poolName              string
@@ -65,6 +75,11 @@ type WorkerCacheManager struct {
 	locality              string
 	cacheIdentityPath     string
 	metadataStore         cache.CacheMetadataStore
+	reporter              *cacheContentReporter
+	originCredsMu         sync.Mutex
+	originCredsCache      map[string]*originCredentials
+	reconcileFailuresMu   sync.Mutex
+	reconcileFailures     map[string]time.Time
 	client                *cache.Client
 	server                *cache.Server
 	serverLock            *os.File
@@ -79,24 +94,37 @@ type WorkerCacheManager struct {
 	drainErr              error
 }
 
-func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, workerRepo pb.WorkerRepositoryServiceClient, workerID, poolName, podAddr string) *WorkerCacheManager {
+func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, workerRepo pb.WorkerRepositoryServiceClient, eventRepo repo.EventRepository, containerInstances *common.SafeMap[*ContainerInstance], workerID, poolName, podAddr string) *WorkerCacheManager {
 	cacheCtx, cancel := context.WithCancel(ctx)
 	locality := cacheLocality(config, poolConfig)
 	nodeID := cacheNodeID()
 
 	return &WorkerCacheManager{
-		ctx:        cacheCtx,
-		cancel:     cancel,
-		config:     config,
-		poolConfig: poolConfig,
-		workerRepo: workerRepo,
-		workerID:   workerID,
-		instanceID: cacheWorkerInstanceID(workerID),
-		poolName:   poolName,
-		podAddr:    podAddr,
-		nodeID:     nodeID,
-		locality:   locality,
+		ctx:                cacheCtx,
+		cancel:             cancel,
+		config:             config,
+		poolConfig:         poolConfig,
+		workerRepo:         workerRepo,
+		eventRepo:          eventRepo,
+		containerInstances: containerInstances,
+		workerID:           workerID,
+		instanceID:         cacheWorkerInstanceID(workerID),
+		poolName:           poolName,
+		podAddr:            podAddr,
+		nodeID:             nodeID,
+		locality:           locality,
+		originCredsCache:   make(map[string]*originCredentials),
+		reconcileFailures:  make(map[string]time.Time),
 	}
+}
+
+// ContentReporter returns the required-content reporter, or nil when
+// reconciliation is disabled or unavailable. Callers must tolerate nil.
+func (m *WorkerCacheManager) ContentReporter() *cacheContentReporter {
+	if m == nil {
+		return nil
+	}
+	return m.reporter
 }
 
 func (m *WorkerCacheManager) Start() (*cache.Client, error) {
@@ -143,7 +171,53 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 			Msg("cache has no available hosts yet")
 	}
 
+	m.startReconciliation(cacheConfig)
+
 	return client, nil
+}
+
+// startReconciliation wires up required-content reporting and the async
+// reconciliation loop when enabled. It is non-blocking and degrades to a no-op
+// when Redis metadata is not configured, preserving prior startup behavior.
+func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
+	recCfg := cacheConfig.Reconciliation
+	if !recCfg.Enabled {
+		return
+	}
+	if m.metadataStore == nil {
+		log.Warn().Msg("cache reconciliation disabled: cache metadata store is unavailable")
+		return
+	}
+	if m.eventRepo == nil {
+		log.Warn().Msg("cache reconciliation disabled: event repository is unavailable")
+		return
+	}
+
+	m.reporter = newCacheContentReporter(
+		m.ctx,
+		m.eventRepo,
+		m.metadataStore,
+		m.locality,
+		m.recentStubTTL(),
+		cacheVolumeReportMinBytes(),
+		m.activeStubsForWorkspace,
+	)
+
+	m.wg.Add(1)
+	go m.runReconciliation()
+
+	log.Info().
+		Str("locality", m.locality).
+		Dur("interval", m.reconcileInterval()).
+		Dur("recent_stub_ttl", m.recentStubTTL()).
+		Bool("origin_fallback", recCfg.OriginFallbackEnabled).
+		Msg("cache required-content reconciliation enabled")
+}
+
+// cacheVolumeReportMinBytes is the geesefs object size threshold (in bytes)
+// above which volume content is reported, matching the geesefs hash threshold.
+func cacheVolumeReportMinBytes() int64 {
+	return int64(cacheDefaultVolumeReportMinKB) * 1024
 }
 
 func (m *WorkerCacheManager) Close() error {
@@ -689,6 +763,10 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Client.Prefetch.MaxPartsPerRead == 0 {
 		cacheConfig.Client.Prefetch.MaxPartsPerRead = cacheDefaultPrefetchMaxParts
 	}
+
+	// Reconciliation defaults are applied at read time by the manager's
+	// reconcile* helpers (the single source of truth), so they are intentionally
+	// not normalized here.
 
 	return cacheConfig
 }

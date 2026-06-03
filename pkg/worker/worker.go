@@ -204,7 +204,7 @@ func NewWorker() (*Worker, error) {
 	var cacheManager *WorkerCacheManager
 	var cacheClient *cache.Client
 	if config.Cache.Enabled && config.Worker.CacheEnabled {
-		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, workerId, workerPoolName, podAddr)
+		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, eventRepo, containerInstances, workerId, workerPoolName, podAddr)
 		cacheClient, err = cacheManager.Start()
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
@@ -297,6 +297,9 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 	imageClient.eventRepo = eventRepo
+	if cacheManager != nil {
+		imageClient.contentReporter = cacheManager.ContentReporter()
+	}
 
 	var criuManager CRIUManager = nil
 	var checkpointStorage storage.Storage = nil
@@ -570,9 +573,17 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	run := func() error {
 		if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
 			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
-			if _, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage); err != nil {
+			mount, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+			if err != nil {
 				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
 				return err
+			}
+			if s.cacheManager != nil {
+				if reporter := s.cacheManager.ContentReporter(); reporter != nil {
+					if aware, ok := mount.(storage.VolumeContentReporterAware); ok {
+						aware.SetVolumeContentReporter(request.WorkspaceId, reporter)
+					}
+				}
 			}
 		}
 		if err := ctx.Err(); err != nil {

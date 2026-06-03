@@ -252,6 +252,10 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 }
 
 func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, imageId *string, checkpoint *types.Checkpoint) (string, error) {
+	if !podRunnableStub(stub.Type) {
+		return "", fmt.Errorf("stub type <%s> cannot be run through pods", stub.Type)
+	}
+
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return "", err
@@ -355,6 +359,15 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	)
 
 	return containerId, nil
+}
+
+func podRunnableStub(stubType types.StubType) bool {
+	switch stubType.Kind() {
+	case types.StubTypePod, types.StubTypeSandbox:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {

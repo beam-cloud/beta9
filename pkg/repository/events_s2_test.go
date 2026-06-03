@@ -47,6 +47,56 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2StubCacheRequiredContentUsesDedicatedStreamOnly(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+
+	if got, want := len(streams), 1; got != want {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", got, want, streams)
+	}
+	if got, want := string(streams[0]), "events/workspaces/workspace-123/stubs/stub-456/cache"; got != want {
+		t.Fatalf("unexpected stub cache stream name: got %q want %q", got, want)
+	}
+}
+
+func TestS2StubCacheRequiredContentRequiresWorkspaceAndStub(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	cases := []struct {
+		name     string
+		metadata eventMetadata
+	}{
+		{name: "missing stub", metadata: eventMetadata{WorkspaceID: "workspace-123"}},
+		{name: "missing workspace", metadata: eventMetadata{StubID: "stub-456"}},
+		{name: "missing both", metadata: eventMetadata{}},
+	}
+	for _, tc := range cases {
+		if streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, tc.metadata); len(streams) != 0 {
+			t.Fatalf("%s: expected no streams, got %#v", tc.name, streams)
+		}
+	}
+}
+
+func TestS2PlatformCacheUsesPlatformStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventPlatformCache, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+
+	if got, want := len(streams), 1; got != want {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", got, want, streams)
+	}
+	if got, want := string(streams[0]), "events/platform/cache"; got != want {
+		t.Fatalf("unexpected platform cache stream name: got %q want %q", got, want)
+	}
+}
+
 func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

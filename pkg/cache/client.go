@@ -2535,6 +2535,99 @@ func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheSto
 	return "", ErrHostNotFound
 }
 
+// PrimaryReadHost returns the host a read for routingKey would resolve to: the
+// highest-ranked reachable host within the read's HRW window, computed from the
+// same hasher and window the read path uses. Reconciliation materializes content
+// on this host so a subsequent read's HRW lookup hits it instead of missing on a
+// host that does not hold the content.
+//
+// It deliberately walks the full ranking (which retains unreachable logical-only
+// hosts so placement stays stable during churn) and returns the first reachable
+// host, mirroring how reads skip unavailable hosts and fall back in rank order.
+func (c *Client) PrimaryReadHost(routingKey string) (*Host, error) {
+	if routingKey == "" {
+		return nil, ErrHostNotFound
+	}
+
+	c.mu.RLock()
+	ranked := c.hasher.GetN(c.readReplicaHostCount(), routingKey)
+	c.mu.RUnlock()
+
+	for _, host := range ranked {
+		if host != nil && host.HasEndpoint() {
+			return host, nil
+		}
+	}
+	return nil, ErrHostNotFound
+}
+
+// MaterializeFromReplica streams the content for (hash, routingKey) from a
+// reachable peer that already holds it into the given local server's store. It
+// returns true when the content is complete locally afterward. size must be
+// known (> 0); callers should fall back to an origin fetch otherwise.
+func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, hash, routingKey string, size int64) (bool, error) {
+	if server == nil {
+		return false, errors.New("local cache server is required")
+	}
+	if routingKey == "" {
+		routingKey = hash
+	}
+	if server.HasCompleteContent(hash, size) {
+		return true, nil
+	}
+	if size <= 0 {
+		return false, nil
+	}
+
+	reachable, err := c.IsCachedReachable(hash, routingKey)
+	if err != nil {
+		return false, err
+	}
+	if !reachable {
+		return false, nil
+	}
+
+	contentChan, err := c.GetContentStream(hash, 0, size, struct{ RoutingKey string }{RoutingKey: routingKey})
+	if err != nil {
+		return false, err
+	}
+	reader := newChannelReader(contentChan)
+	defer reader.drain()
+
+	if _, _, err := server.StoreReader(ctx, reader, hash); err != nil {
+		return false, err
+	}
+	return server.HasCompleteContent(hash, size), nil
+}
+
+// channelReader adapts a chan []byte (from GetContentStream) to an io.Reader.
+type channelReader struct {
+	ch  chan []byte
+	buf []byte
+}
+
+func newChannelReader(ch chan []byte) *channelReader {
+	return &channelReader{ch: ch}
+}
+
+func (r *channelReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		chunk, ok := <-r.ch
+		if !ok {
+			return 0, io.EOF
+		}
+		r.buf = chunk
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func (r *channelReader) drain() {
+	for range r.ch {
+	}
+}
+
 func isStoreHostUnavailable(err error) bool {
 	return errors.Is(err, ErrHostNotFound) ||
 		errors.Is(err, ErrSelectedHostUnavailable) ||

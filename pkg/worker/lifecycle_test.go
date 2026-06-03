@@ -149,6 +149,101 @@ func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
 	}
 }
 
+func TestSpecFromRequestDefaultsMissingRunnerEntrypoint(t *testing.T) {
+	tests := []struct {
+		name       string
+		stubType   types.StubType
+		env        []string
+		wantArgs   []string
+		stubConfig string
+	}{
+		{
+			name:       "endpoint",
+			stubType:   types.StubType(types.StubTypeEndpoint),
+			env:        []string{"HANDLER=sse:handler"},
+			wantArgs:   []string{"python3.11", "-m", "beta9.runner.endpoint"},
+			stubConfig: `{"python_version":"python3.11"}`,
+		},
+		{
+			name:       "asgi",
+			stubType:   types.StubType(types.StubTypeASGI),
+			env:        []string{"HANDLER=sse:handler"},
+			wantArgs:   []string{"python3.10", "-m", "beta9.runner.endpoint"},
+			stubConfig: `{"python_version":"python3.10"}`,
+		},
+		{
+			name:       "function",
+			stubType:   types.StubType(types.StubTypeFunction),
+			env:        []string{"HANDLER=handler"},
+			wantArgs:   []string{"python3", "-m", "beta9.runner.function"},
+			stubConfig: `{}`,
+		},
+		{
+			name:       "taskqueue",
+			stubType:   types.StubType(types.StubTypeTaskQueue),
+			env:        []string{"HANDLER=handler"},
+			wantArgs:   []string{"python3.9", "-m", "beta9.runner.taskqueue"},
+			stubConfig: `{"python_version":"python3.9"}`,
+		},
+		{
+			name:       "explicit config entrypoint",
+			stubType:   types.StubType(types.StubTypeEndpoint),
+			wantArgs:   []string{"custom", "runner"},
+			stubConfig: `{"python_version":"python3.11","entry_point":["custom","runner"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+			spec, err := worker.specFromRequest(&types.ContainerRequest{
+				ContainerId: "container-1",
+				StubId:      "stub-1",
+				Env:         tt.env,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Type:   tt.stubType,
+					Config: tt.stubConfig,
+				}},
+			}, &ContainerOptions{BindPorts: []int{8001}})
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantArgs, spec.Process.Args)
+		})
+	}
+}
+
+func TestSpecFromRequestRejectsUnsupportedEmptyEntrypoint(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		StubId:      "stub-1",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeSandbox),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+
+	require.Nil(t, spec)
+	require.ErrorContains(t, err, "empty process args")
+}
+
+func TestSpecFromRequestRejectsRunnerStubWithoutRunnerEnv(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		StubId:      "stub-1",
+		Env:         []string{"STUB_TYPE=asgi/deployment"},
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type:   types.StubType(types.StubTypeASGI),
+			Config: `{"python_version":"python3"}`,
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+
+	require.Nil(t, spec)
+	require.ErrorContains(t, err, "empty process args")
+}
+
 func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.T) {
 	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
@@ -460,6 +555,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 	sourceImage := "docker.io/library/ubuntu:20.04"
 	request := &types.ContainerRequest{
 		ContainerId: "test-container-123",
+		EntryPoint:  []string{"python3", "-m", "beta9.runner.function"},
 		ImageId:     "test-image-456",
 		Stub: types.StubWithRelated{
 			Stub: types.Stub{

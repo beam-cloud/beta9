@@ -39,6 +39,12 @@ const (
 	WorkerRepositoryService_SetCacheStoreFromContentLock_FullMethodName     = "/WorkerRepositoryService/SetCacheStoreFromContentLock"
 	WorkerRepositoryService_RemoveCacheStoreFromContentLock_FullMethodName  = "/WorkerRepositoryService/RemoveCacheStoreFromContentLock"
 	WorkerRepositoryService_RefreshCacheStoreFromContentLock_FullMethodName = "/WorkerRepositoryService/RefreshCacheStoreFromContentLock"
+	WorkerRepositoryService_AddRecentCacheStub_FullMethodName               = "/WorkerRepositoryService/AddRecentCacheStub"
+	WorkerRepositoryService_ListRecentCacheStubs_FullMethodName             = "/WorkerRepositoryService/ListRecentCacheStubs"
+	WorkerRepositoryService_MarkCacheStubReported_FullMethodName            = "/WorkerRepositoryService/MarkCacheStubReported"
+	WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName        = "/WorkerRepositoryService/AcquireCacheReconcileLock"
+	WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName        = "/WorkerRepositoryService/ReleaseCacheReconcileLock"
+	WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName        = "/WorkerRepositoryService/GetCacheOriginCredentials"
 	WorkerRepositoryService_SetCacheFsNode_FullMethodName                   = "/WorkerRepositoryService/SetCacheFsNode"
 	WorkerRepositoryService_GetCacheFsNode_FullMethodName                   = "/WorkerRepositoryService/GetCacheFsNode"
 	WorkerRepositoryService_AddCacheFsNodeChild_FullMethodName              = "/WorkerRepositoryService/AddCacheFsNodeChild"
@@ -79,6 +85,12 @@ type WorkerRepositoryServiceClient interface {
 	SetCacheStoreFromContentLock(ctx context.Context, in *SetCacheStoreFromContentLockRequest, opts ...grpc.CallOption) (*SetCacheStoreFromContentLockResponse, error)
 	RemoveCacheStoreFromContentLock(ctx context.Context, in *RemoveCacheStoreFromContentLockRequest, opts ...grpc.CallOption) (*RemoveCacheStoreFromContentLockResponse, error)
 	RefreshCacheStoreFromContentLock(ctx context.Context, in *RefreshCacheStoreFromContentLockRequest, opts ...grpc.CallOption) (*RefreshCacheStoreFromContentLockResponse, error)
+	AddRecentCacheStub(ctx context.Context, in *AddRecentCacheStubRequest, opts ...grpc.CallOption) (*AddRecentCacheStubResponse, error)
+	ListRecentCacheStubs(ctx context.Context, in *ListRecentCacheStubsRequest, opts ...grpc.CallOption) (*ListRecentCacheStubsResponse, error)
+	MarkCacheStubReported(ctx context.Context, in *MarkCacheStubReportedRequest, opts ...grpc.CallOption) (*MarkCacheStubReportedResponse, error)
+	AcquireCacheReconcileLock(ctx context.Context, in *AcquireCacheReconcileLockRequest, opts ...grpc.CallOption) (*AcquireCacheReconcileLockResponse, error)
+	ReleaseCacheReconcileLock(ctx context.Context, in *ReleaseCacheReconcileLockRequest, opts ...grpc.CallOption) (*ReleaseCacheReconcileLockResponse, error)
+	GetCacheOriginCredentials(ctx context.Context, in *GetCacheOriginCredentialsRequest, opts ...grpc.CallOption) (*GetCacheOriginCredentialsResponse, error)
 	SetCacheFsNode(ctx context.Context, in *SetCacheFsNodeRequest, opts ...grpc.CallOption) (*SetCacheFsNodeResponse, error)
 	GetCacheFsNode(ctx context.Context, in *GetCacheFsNodeRequest, opts ...grpc.CallOption) (*GetCacheFsNodeResponse, error)
 	AddCacheFsNodeChild(ctx context.Context, in *AddCacheFsNodeChildRequest, opts ...grpc.CallOption) (*AddCacheFsNodeChildResponse, error)
@@ -329,6 +341,60 @@ func (c *workerRepositoryServiceClient) RefreshCacheStoreFromContentLock(ctx con
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) AddRecentCacheStub(ctx context.Context, in *AddRecentCacheStubRequest, opts ...grpc.CallOption) (*AddRecentCacheStubResponse, error) {
+	out := new(AddRecentCacheStubResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_AddRecentCacheStub_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) ListRecentCacheStubs(ctx context.Context, in *ListRecentCacheStubsRequest, opts ...grpc.CallOption) (*ListRecentCacheStubsResponse, error) {
+	out := new(ListRecentCacheStubsResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ListRecentCacheStubs_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) MarkCacheStubReported(ctx context.Context, in *MarkCacheStubReportedRequest, opts ...grpc.CallOption) (*MarkCacheStubReportedResponse, error) {
+	out := new(MarkCacheStubReportedResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_MarkCacheStubReported_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) AcquireCacheReconcileLock(ctx context.Context, in *AcquireCacheReconcileLockRequest, opts ...grpc.CallOption) (*AcquireCacheReconcileLockResponse, error) {
+	out := new(AcquireCacheReconcileLockResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) ReleaseCacheReconcileLock(ctx context.Context, in *ReleaseCacheReconcileLockRequest, opts ...grpc.CallOption) (*ReleaseCacheReconcileLockResponse, error) {
+	out := new(ReleaseCacheReconcileLockResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) GetCacheOriginCredentials(ctx context.Context, in *GetCacheOriginCredentialsRequest, opts ...grpc.CallOption) (*GetCacheOriginCredentialsResponse, error) {
+	out := new(GetCacheOriginCredentialsResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerRepositoryServiceClient) SetCacheFsNode(ctx context.Context, in *SetCacheFsNodeRequest, opts ...grpc.CallOption) (*SetCacheFsNodeResponse, error) {
 	out := new(SetCacheFsNodeResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetCacheFsNode_FullMethodName, in, out, opts...)
@@ -479,6 +545,12 @@ type WorkerRepositoryServiceServer interface {
 	SetCacheStoreFromContentLock(context.Context, *SetCacheStoreFromContentLockRequest) (*SetCacheStoreFromContentLockResponse, error)
 	RemoveCacheStoreFromContentLock(context.Context, *RemoveCacheStoreFromContentLockRequest) (*RemoveCacheStoreFromContentLockResponse, error)
 	RefreshCacheStoreFromContentLock(context.Context, *RefreshCacheStoreFromContentLockRequest) (*RefreshCacheStoreFromContentLockResponse, error)
+	AddRecentCacheStub(context.Context, *AddRecentCacheStubRequest) (*AddRecentCacheStubResponse, error)
+	ListRecentCacheStubs(context.Context, *ListRecentCacheStubsRequest) (*ListRecentCacheStubsResponse, error)
+	MarkCacheStubReported(context.Context, *MarkCacheStubReportedRequest) (*MarkCacheStubReportedResponse, error)
+	AcquireCacheReconcileLock(context.Context, *AcquireCacheReconcileLockRequest) (*AcquireCacheReconcileLockResponse, error)
+	ReleaseCacheReconcileLock(context.Context, *ReleaseCacheReconcileLockRequest) (*ReleaseCacheReconcileLockResponse, error)
+	GetCacheOriginCredentials(context.Context, *GetCacheOriginCredentialsRequest) (*GetCacheOriginCredentialsResponse, error)
 	SetCacheFsNode(context.Context, *SetCacheFsNodeRequest) (*SetCacheFsNodeResponse, error)
 	GetCacheFsNode(context.Context, *GetCacheFsNodeRequest) (*GetCacheFsNodeResponse, error)
 	AddCacheFsNodeChild(context.Context, *AddCacheFsNodeChildRequest) (*AddCacheFsNodeChildResponse, error)
@@ -559,6 +631,24 @@ func (UnimplementedWorkerRepositoryServiceServer) RemoveCacheStoreFromContentLoc
 }
 func (UnimplementedWorkerRepositoryServiceServer) RefreshCacheStoreFromContentLock(context.Context, *RefreshCacheStoreFromContentLockRequest) (*RefreshCacheStoreFromContentLockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RefreshCacheStoreFromContentLock not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) AddRecentCacheStub(context.Context, *AddRecentCacheStubRequest) (*AddRecentCacheStubResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddRecentCacheStub not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) ListRecentCacheStubs(context.Context, *ListRecentCacheStubsRequest) (*ListRecentCacheStubsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListRecentCacheStubs not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) MarkCacheStubReported(context.Context, *MarkCacheStubReportedRequest) (*MarkCacheStubReportedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarkCacheStubReported not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) AcquireCacheReconcileLock(context.Context, *AcquireCacheReconcileLockRequest) (*AcquireCacheReconcileLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AcquireCacheReconcileLock not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) ReleaseCacheReconcileLock(context.Context, *ReleaseCacheReconcileLockRequest) (*ReleaseCacheReconcileLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseCacheReconcileLock not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) GetCacheOriginCredentials(context.Context, *GetCacheOriginCredentialsRequest) (*GetCacheOriginCredentialsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCacheOriginCredentials not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetCacheFsNode(context.Context, *SetCacheFsNodeRequest) (*SetCacheFsNodeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetCacheFsNode not implemented")
@@ -982,6 +1072,114 @@ func _WorkerRepositoryService_RefreshCacheStoreFromContentLock_Handler(srv inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_AddRecentCacheStub_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddRecentCacheStubRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).AddRecentCacheStub(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_AddRecentCacheStub_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).AddRecentCacheStub(ctx, req.(*AddRecentCacheStubRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_ListRecentCacheStubs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRecentCacheStubsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).ListRecentCacheStubs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_ListRecentCacheStubs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).ListRecentCacheStubs(ctx, req.(*ListRecentCacheStubsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_MarkCacheStubReported_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkCacheStubReportedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).MarkCacheStubReported(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_MarkCacheStubReported_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).MarkCacheStubReported(ctx, req.(*MarkCacheStubReportedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_AcquireCacheReconcileLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireCacheReconcileLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).AcquireCacheReconcileLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).AcquireCacheReconcileLock(ctx, req.(*AcquireCacheReconcileLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_ReleaseCacheReconcileLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseCacheReconcileLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).ReleaseCacheReconcileLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).ReleaseCacheReconcileLock(ctx, req.(*ReleaseCacheReconcileLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_GetCacheOriginCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCacheOriginCredentialsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetCacheOriginCredentials(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetCacheOriginCredentials(ctx, req.(*GetCacheOriginCredentialsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerRepositoryService_SetCacheFsNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetCacheFsNodeRequest)
 	if err := dec(in); err != nil {
@@ -1312,6 +1510,30 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RefreshCacheStoreFromContentLock",
 			Handler:    _WorkerRepositoryService_RefreshCacheStoreFromContentLock_Handler,
+		},
+		{
+			MethodName: "AddRecentCacheStub",
+			Handler:    _WorkerRepositoryService_AddRecentCacheStub_Handler,
+		},
+		{
+			MethodName: "ListRecentCacheStubs",
+			Handler:    _WorkerRepositoryService_ListRecentCacheStubs_Handler,
+		},
+		{
+			MethodName: "MarkCacheStubReported",
+			Handler:    _WorkerRepositoryService_MarkCacheStubReported_Handler,
+		},
+		{
+			MethodName: "AcquireCacheReconcileLock",
+			Handler:    _WorkerRepositoryService_AcquireCacheReconcileLock_Handler,
+		},
+		{
+			MethodName: "ReleaseCacheReconcileLock",
+			Handler:    _WorkerRepositoryService_ReleaseCacheReconcileLock_Handler,
+		},
+		{
+			MethodName: "GetCacheOriginCredentials",
+			Handler:    _WorkerRepositoryService_GetCacheOriginCredentials_Handler,
 		},
 		{
 			MethodName: "SetCacheFsNode",

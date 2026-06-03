@@ -138,7 +138,7 @@ func TestEmbeddedWorkerSkipsCacheServerWhenDaemonSetMarkerFresh(t *testing.T) {
 	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-node", "pod-a"))
 
 	config := testCacheManagerConfig(cacheDir)
-	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, nil, "worker-a", "default", "127.0.0.1")
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, nil, nil, nil, "worker-a", "default", "127.0.0.1")
 	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")
 	started, err := manager.nodeCacheServer(cacheConfig, "cache-host").Start()
 
@@ -160,7 +160,7 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	config := testCacheManagerConfig(cacheDir)
-	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, "worker-a", "default", "127.0.0.1")
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-a", "default", "127.0.0.1")
 	client, err := manager.Start()
 	require.NoError(t, err)
 	require.NotNil(t, client)
@@ -197,7 +197,7 @@ func TestCacheServerDaemonSetMarkerLoopStopsOnClose(t *testing.T) {
 
 	cacheDir := t.TempDir()
 	config := testCacheManagerConfig(cacheDir)
-	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, nil, "cache-server-single-node", "default", "127.0.0.1")
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, nil, nil, nil, "cache-server-single-node", "default", "127.0.0.1")
 	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")
 	manager.nodeCacheServer(cacheConfig, "cache-host").StartDaemonSetPresence()
 
@@ -231,9 +231,9 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 	cacheDir := t.TempDir()
 	config := testCacheManagerConfig(cacheDir)
 	managers := []*WorkerCacheManager{
-		NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, "worker-a", "default", "127.0.0.1"),
-		NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, "worker-b", "default", "127.0.0.1"),
-		NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, "worker-c", "default", "127.0.0.1"),
+		NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-a", "default", "127.0.0.1"),
+		NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-b", "default", "127.0.0.1"),
+		NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-c", "default", "127.0.0.1"),
 	}
 
 	for _, manager := range managers {

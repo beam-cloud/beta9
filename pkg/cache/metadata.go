@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bsm/redislock"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -218,6 +219,120 @@ func (m *Metadata) RemoveFsNodeChild(ctx context.Context, pid, id string) error 
 	return m.rdb.SRem(ctx, MetadataKeys.MetadataFsNodeChildren(pid), id).Err()
 }
 
+// RecentStub identifies a stub recently used in a locality, tracked so cache
+// servers can discover required-content streams to reconcile.
+type RecentStub struct {
+	WorkspaceID string
+	StubID      string
+	LastSeen    time.Time
+}
+
+// AddRecentStub records a (workspace, stub) as recently used in a locality and
+// prunes entries older than ttl. The index is a ZSET scored by last-seen time.
+func (m *Metadata) AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error {
+	if workspaceID == "" || stubID == "" {
+		return nil
+	}
+	key := MetadataKeys.MetadataReconcileRecent(locality)
+	now := time.Now()
+	member := recentStubMember(workspaceID, stubID)
+
+	pipe := m.rdb.TxPipeline()
+	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.UnixNano()), Member: member})
+	if ttl > 0 {
+		cutoff := now.Add(-ttl).UnixNano()
+		pipe.ZRemRangeByScore(ctx, key, "-inf", fmt.Sprintf("%d", cutoff))
+		pipe.Expire(ctx, key, ttl)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// ListRecentStubs returns recently used stubs in a locality, newest first,
+// excluding entries older than ttl.
+func (m *Metadata) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error) {
+	key := MetadataKeys.MetadataReconcileRecent(locality)
+	min := "-inf"
+	if ttl > 0 {
+		min = fmt.Sprintf("%d", time.Now().Add(-ttl).UnixNano())
+	}
+
+	rangeBy := &redis.ZRangeBy{Min: min, Max: "+inf"}
+	if limit > 0 {
+		rangeBy.Count = int64(limit)
+	}
+	results, err := m.rdb.ZRevRangeByScoreWithScores(ctx, key, rangeBy).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	stubs := make([]RecentStub, 0, len(results))
+	for _, z := range results {
+		member, ok := z.Member.(string)
+		if !ok {
+			continue
+		}
+		workspaceID, stubID, ok := parseRecentStubMember(member)
+		if !ok {
+			continue
+		}
+		stubs = append(stubs, RecentStub{
+			WorkspaceID: workspaceID,
+			StubID:      stubID,
+			LastSeen:    time.Unix(0, int64(z.Score)),
+		})
+	}
+	return stubs, nil
+}
+
+// MarkStubReported atomically claims the one-time required-content generation
+// for a stub. It returns true only for the first caller (cluster-wide), so the
+// expensive enumeration + S2 write happens once per stub rather than on every
+// container start. The marker is set once with the given TTL and is not
+// refreshed by later callers; once it expires the content may be regenerated,
+// which is idempotent.
+func (m *Metadata) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	return m.rdb.SetNX(ctx, MetadataKeys.MetadataReconcileReported(locality, stubID), "1", ttl).Result()
+}
+
+// AcquireReconcileLock takes a short lifecycle lock so only one materialization
+// runs for a (locality, logical host, hash) at a time. It returns whether the
+// lock was acquired; contention is not an error.
+func (m *Metadata) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlS int) (bool, error) {
+	err := m.lock.Acquire(ctx, MetadataKeys.MetadataReconcileLock(locality, logicalHost, hash), RedisLockOptions{TtlS: ttlS, Retries: 0})
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, redislock.ErrNotObtained) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (m *Metadata) RefreshReconcileLock(locality, logicalHost, hash string, ttlS int) error {
+	return m.lock.Refresh(MetadataKeys.MetadataReconcileLock(locality, logicalHost, hash), RedisLockOptions{TtlS: ttlS, Retries: 0})
+}
+
+func (m *Metadata) ReleaseReconcileLock(locality, logicalHost, hash string) error {
+	return m.lock.Release(MetadataKeys.MetadataReconcileLock(locality, logicalHost, hash))
+}
+
+func recentStubMember(workspaceID, stubID string) string {
+	return workspaceID + "|" + stubID
+}
+
+func parseRecentStubMember(member string) (string, string, bool) {
+	for i := 0; i < len(member); i++ {
+		if member[i] == '|' {
+			return member[:i], member[i+1:], true
+		}
+	}
+	return "", "", false
+}
+
 func (m *Metadata) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	return m.lock.Acquire(ctx, MetadataKeys.MetadataStoreFromContentLock(locality, sourcePath), RedisLockOptions{TtlS: storeFromContentLockTtlS, Retries: 0})
 }
@@ -240,6 +355,9 @@ var (
 	metadataFsNodeChildren       string = "cache:fs:node:%s:children"
 	metadataHostKeepAlive        string = "cache:host:keepalive:%s:%s"
 	metadataStoreFromContentLock string = "cache:store_from_content_lock:%s:%s"
+	metadataReconcileRecent      string = "cache:reconcile:recent:%s"
+	metadataReconcileLock        string = "cache:reconcile:lock:%s:%s:%s"
+	metadataReconcileReported    string = "cache:reconcile:reported:%s:%s"
 )
 
 // Metadata keys
@@ -274,6 +392,18 @@ func (k *metadataKeys) MetadataClientLock(hostId, hash string) string {
 func (k *metadataKeys) MetadataStoreFromContentLock(locality, sourcePath string) string {
 	encodedPath := base64.RawURLEncoding.EncodeToString([]byte(sourcePath))
 	return fmt.Sprintf(metadataStoreFromContentLock, locality, encodedPath)
+}
+
+func (k *metadataKeys) MetadataReconcileRecent(locality string) string {
+	return fmt.Sprintf(metadataReconcileRecent, locality)
+}
+
+func (k *metadataKeys) MetadataReconcileLock(locality, logicalHost, hash string) string {
+	return fmt.Sprintf(metadataReconcileLock, locality, logicalHost, hash)
+}
+
+func (k *metadataKeys) MetadataReconcileReported(locality, stubID string) string {
+	return fmt.Sprintf(metadataReconcileReported, locality, stubID)
 }
 
 var MetadataKeys = &metadataKeys{}
