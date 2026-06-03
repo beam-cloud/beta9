@@ -660,19 +660,7 @@ func (s *Worker) listenForShutdown() {
 	<-terminate
 	log.Info().Msg("shutdown signal received")
 
-	s.disableSchedulingForShutdown()
 	s.cancel()
-}
-
-func (s *Worker) disableSchedulingForShutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if _, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
-		WorkerId: s.workerId,
-	})); err != nil {
-		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
-	}
 }
 
 // Exit if there are no containers running and no containers have recently been spun up on this

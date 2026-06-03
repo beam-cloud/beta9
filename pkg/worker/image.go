@@ -140,6 +140,7 @@ type ImageClient struct {
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
+	requiredContent    *requiredContentBatcher
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
@@ -189,6 +190,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
 	}
+	c.requiredContent = newRequiredContentBatcher(c.cacheClient)
 	go c.runClipReadEventReporter()
 
 	if config.DebugMode {
@@ -385,6 +387,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
 	}
+	c.reportClipRequiredContentMetadata(ctx, request, meta)
 
 	return archive, nil
 }
@@ -1595,7 +1598,11 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
 	os.MkdirAll(copyDir, 0755)
 
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
+	ociLayoutTag := baseImage.Tag
+	if ociLayoutTag == "" {
+		ociLayoutTag = "latest"
+	}
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociLayoutTag)
 
 	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
@@ -1631,7 +1638,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
+	err = c.unpack(ctx, baseImage.Repo, ociLayoutTag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}

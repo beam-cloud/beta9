@@ -2,9 +2,14 @@ package repository
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -13,6 +18,8 @@ import (
 )
 
 const cacheCoordinatorKeyPrefix = "cache:coordinator"
+const cacheRequiredContentKeyPrefix = "cache:required_content"
+const requiredContentStubMemberSeparator = "\x1f"
 
 type CacheRedisRepository struct {
 	rdb *common.RedisClient
@@ -30,7 +37,30 @@ type cacheCoordinatorHostRecord struct {
 	CapacityUsagePct float64 `json:"capacity_usage_pct"`
 }
 
-func NewCacheRedisRepository(rdb *common.RedisClient) cache.CoordinatorRepository {
+type requiredContentStatusRecord struct {
+	Status       cache.RequiredContentReconciliationStatus `json:"status"`
+	LastStatusAt time.Time                                 `json:"last_status_at"`
+	LastError    string                                    `json:"last_error,omitempty"`
+}
+
+type requiredContentReportRecord struct {
+	Item        cache.RequiredContentItem `json:"item"`
+	Fingerprint string                    `json:"fingerprint"`
+	FirstSeen   time.Time                 `json:"first_seen"`
+	LastSeen    time.Time                 `json:"last_seen"`
+	AccessCount int64                     `json:"access_count"`
+}
+
+type requiredContentReportFingerprint struct {
+	Kind         cache.RequiredContentKind   `json:"kind"`
+	Hash         string                      `json:"hash"`
+	RoutingKey   string                      `json:"routing_key"`
+	SizeBytes    int64                       `json:"size_bytes"`
+	ExpectedHash string                      `json:"expected_hash"`
+	Source       cache.RequiredContentSource `json:"source"`
+}
+
+func NewCacheRedisRepository(rdb *common.RedisClient) *CacheRedisRepository {
 	return &CacheRedisRepository{rdb: rdb}
 }
 
@@ -196,4 +226,392 @@ func cacheCoordinatorLogicalHostTTL(registrationTTL time.Duration) time.Duration
 		return 2 * time.Minute
 	}
 	return ttl
+}
+
+func (r *CacheRedisRepository) MarkStubLocalityAccessed(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error {
+	if locality == "" || workspaceID == "" || stubID == "" {
+		return fmt.Errorf("locality, workspace id, and stub id are required")
+	}
+	ttl = requiredContentTTL(ttl)
+	now := time.Now().UTC()
+	pipe := r.rdb.Pipeline()
+	pipeRequiredContentStubAccess(ctx, pipe, locality, workspaceID, stubID, now, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (r *CacheRedisRepository) MarkRequiredContentReported(ctx context.Context, locality, workspaceID, stubID string, items []cache.RequiredContentItem, ttl time.Duration) ([]cache.RequiredContentItem, error) {
+	if locality == "" || workspaceID == "" || stubID == "" {
+		return nil, fmt.Errorf("locality, workspace id, and stub id are required")
+	}
+	ttl = requiredContentTTL(ttl)
+	now := time.Now().UTC()
+	items = normalizeRequiredContentReportItems(locality, workspaceID, stubID, items)
+
+	keys := make([]string, 0, len(items))
+	for _, item := range items {
+		keys = append(keys, requiredContentReportKey(locality, workspaceID, stubID, item.Hash, item.RoutingKey))
+	}
+	values := []any{}
+	if len(keys) > 0 {
+		var err error
+		values, err = r.rdb.MGet(ctx, keys...).Result()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	changed := make([]cache.RequiredContentItem, 0, len(items))
+	pipe := r.rdb.Pipeline()
+	pipeRequiredContentStubAccess(ctx, pipe, locality, workspaceID, stubID, now, ttl)
+	for i, item := range items {
+		record := requiredContentReportRecord{}
+		if i < len(values) && values[i] != nil {
+			payload, ok := values[i].(string)
+			if !ok {
+				return nil, fmt.Errorf("unexpected required content report record type %T", values[i])
+			}
+			if err := json.Unmarshal([]byte(payload), &record); err != nil {
+				return nil, err
+			}
+			item = cache.MergeRequiredContentItem(record.Item, item)
+		}
+
+		item.FirstSeen = record.FirstSeen
+		if item.FirstSeen.IsZero() {
+			item.FirstSeen = now
+		}
+		item.LastSeen = now
+		item.AccessCount = record.AccessCount + 1
+
+		fingerprint, err := requiredContentReportItemFingerprint(item)
+		if err != nil {
+			return nil, err
+		}
+		if fingerprint != record.Fingerprint {
+			changed = append(changed, item)
+		}
+
+		payload, err := json.Marshal(requiredContentReportRecord{
+			Item:        item,
+			Fingerprint: fingerprint,
+			FirstSeen:   item.FirstSeen,
+			LastSeen:    now,
+			AccessCount: item.AccessCount,
+		})
+		if err != nil {
+			return nil, err
+		}
+		pipe.Set(ctx, keys[i], payload, ttl)
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	return changed, nil
+}
+
+func normalizeRequiredContentReportItems(locality, workspaceID, stubID string, items []cache.RequiredContentItem) []cache.RequiredContentItem {
+	byID := map[string]cache.RequiredContentItem{}
+	for _, item := range items {
+		if item.Locality == "" {
+			item.Locality = locality
+		}
+		if item.WorkspaceID == "" {
+			item.WorkspaceID = workspaceID
+		}
+		if item.StubID == "" {
+			item.StubID = stubID
+		}
+		item = item.Normalized()
+		if item.Hash == "" {
+			continue
+		}
+		id := requiredContentItemID(item.Hash, item.RoutingKey)
+		if existing, ok := byID[id]; ok {
+			item = cache.MergeRequiredContentItem(existing, item)
+		}
+		byID[id] = item
+	}
+
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	normalized := make([]cache.RequiredContentItem, 0, len(ids))
+	for _, id := range ids {
+		normalized = append(normalized, byID[id])
+	}
+	return normalized
+}
+
+func requiredContentReportItemFingerprint(item cache.RequiredContentItem) (string, error) {
+	item = item.Normalized()
+	source := item.Source
+	if source.Type == cache.RequiredContentSourceUnknown {
+		source.Descriptor = ""
+	}
+	sizeBytes := item.SizeBytes
+	if item.Kind == cache.RequiredContentKindClipOCI && source.Type == cache.RequiredContentSourceOCIRegistry {
+		sizeBytes = 0
+	}
+	payload, err := json.Marshal(requiredContentReportFingerprint{
+		Kind:         item.Kind,
+		Hash:         item.Hash,
+		RoutingKey:   item.RoutingKey,
+		SizeBytes:    sizeBytes,
+		ExpectedHash: item.ExpectedHash,
+		Source:       source,
+	})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func pipeRequiredContentStubAccess(ctx context.Context, pipe redis.Pipeliner, locality, workspaceID, stubID string, seen time.Time, ttl time.Duration) {
+	recentKey := requiredContentRecentStubsKey(locality)
+	pipe.ZAdd(ctx, recentKey, redis.Z{
+		Score:  float64(seen.UTC().UnixMilli()),
+		Member: requiredContentStubMember(workspaceID, stubID),
+	})
+	pipe.Expire(ctx, recentKey, ttl)
+}
+
+func (r *CacheRedisRepository) ListRecentStubLocalities(ctx context.Context, locality string, since time.Time, limit int) ([]cache.RequiredContentStubLocality, error) {
+	if locality == "" {
+		return nil, fmt.Errorf("locality is required")
+	}
+	if limit <= 0 {
+		limit = cache.DefaultRequiredContentBatchSize
+	}
+	key := requiredContentRecentStubsKey(locality)
+	minScore := "-inf"
+	if !since.IsZero() {
+		minScore = fmt.Sprintf("%d", since.UTC().UnixMilli())
+		if err := r.rdb.ZRemRangeByScore(ctx, key, "-inf", fmt.Sprintf("%d", since.UTC().UnixMilli()-1)).Err(); err != nil {
+			return nil, err
+		}
+	}
+	values, err := r.rdb.ZRevRangeByScoreWithScores(ctx, key, &redis.ZRangeBy{
+		Min:    minScore,
+		Max:    "+inf",
+		Offset: 0,
+		Count:  int64(limit),
+	}).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	stubs := make([]cache.RequiredContentStubLocality, 0, len(values))
+	for _, value := range values {
+		member, ok := value.Member.(string)
+		if !ok {
+			continue
+		}
+		workspaceID, stubID, ok := parseRequiredContentStubMember(member)
+		if !ok {
+			continue
+		}
+		score := int64(value.Score)
+		if score <= 0 || value.Score > float64(math.MaxInt64) {
+			score = 0
+		}
+		lastSeen := time.Time{}
+		if score > 0 {
+			lastSeen = time.UnixMilli(score).UTC()
+		}
+		stubs = append(stubs, cache.RequiredContentStubLocality{
+			Locality:    locality,
+			WorkspaceID: workspaceID,
+			StubID:      stubID,
+			LastSeen:    lastSeen,
+		})
+	}
+	return stubs, nil
+}
+
+func (r *CacheRedisRepository) SetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string, status cache.RequiredContentReconciliationStatus, errorMsg string, ttl time.Duration) error {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	if locality == "" || workspaceID == "" || stubID == "" || hash == "" || status == "" {
+		return fmt.Errorf("locality, workspace id, stub id, hash, and status are required")
+	}
+	ttl = requiredContentTTL(ttl)
+	statusRecord := requiredContentStatusRecord{
+		Status:       status,
+		LastStatusAt: time.Now().UTC(),
+		LastError:    errorMsg,
+	}
+	statusPayload, err := json.Marshal(statusRecord)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Set(ctx, requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey), statusPayload, ttl).Err()
+}
+
+func (r *CacheRedisRepository) GetRequiredContentReconciliationStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (cache.RequiredContentReconciliationStatus, time.Time, string, bool, error) {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	if locality == "" || workspaceID == "" || stubID == "" || hash == "" {
+		return "", time.Time{}, "", false, fmt.Errorf("locality, workspace id, stub id, and hash are required")
+	}
+	status, found, err := r.getRequiredContentStatus(ctx, locality, workspaceID, stubID, hash, routingKey)
+	if err != nil || !found {
+		return "", time.Time{}, "", found, err
+	}
+	return status.Status, status.LastStatusAt, status.LastError, true, nil
+}
+
+func (r *CacheRedisRepository) AcquireRequiredContentReconciliationLock(ctx context.Context, locality, logicalHostID, hash string, ttl time.Duration) (cache.RequiredContentReconciliationLock, bool, error) {
+	if locality == "" || logicalHostID == "" || hash == "" {
+		return nil, false, fmt.Errorf("locality, logical host id, and hash are required")
+	}
+	ttl = requiredContentLockTTL(ttl)
+	token := requiredContentLockToken()
+	key := requiredContentLockKey(locality, logicalHostID, hash)
+	acquired, err := r.rdb.SetNX(ctx, key, token, ttl).Result()
+	if err != nil || !acquired {
+		return nil, acquired, err
+	}
+	return &requiredContentRedisLock{rdb: r.rdb, key: key, token: token}, true, nil
+}
+
+func (r *CacheRedisRepository) getRequiredContentStatus(ctx context.Context, locality, workspaceID, stubID, hash, routingKey string) (requiredContentStatusRecord, bool, error) {
+	payload, err := r.rdb.Get(ctx, requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey)).Bytes()
+	if err == redis.Nil {
+		return requiredContentStatusRecord{}, false, nil
+	}
+	if err != nil {
+		return requiredContentStatusRecord{}, false, err
+	}
+	status := requiredContentStatusRecord{}
+	if err := json.Unmarshal(payload, &status); err != nil {
+		return requiredContentStatusRecord{}, false, err
+	}
+	return status, true, nil
+}
+
+type requiredContentRedisLock struct {
+	rdb   *common.RedisClient
+	key   string
+	token string
+}
+
+func (l *requiredContentRedisLock) Release(ctx context.Context) error {
+	if l == nil || l.rdb == nil || l.key == "" || l.token == "" {
+		return nil
+	}
+	const releaseScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0`
+	return l.rdb.Eval(ctx, releaseScript, []string{l.key}, l.token).Err()
+}
+
+func (l *requiredContentRedisLock) Refresh(ctx context.Context, ttl time.Duration) error {
+	if l == nil || l.rdb == nil || l.key == "" || l.token == "" {
+		return nil
+	}
+	ttl = requiredContentLockTTL(ttl)
+	const refreshScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0`
+	return l.rdb.Eval(ctx, refreshScript, []string{l.key}, l.token, ttl.Milliseconds()).Err()
+}
+
+func requiredContentTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		return cache.DefaultRequiredContentStubTTL
+	}
+	return ttl
+}
+
+func requiredContentLockTTL(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		return time.Minute
+	}
+	return ttl
+}
+
+func requiredContentRecentStubsKey(locality string) string {
+	return fmt.Sprintf(
+		"%s:locality:%s:stubs",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+	)
+}
+
+func requiredContentStatusKey(locality, workspaceID, stubID, hash, routingKey string) string {
+	return fmt.Sprintf(
+		"%s:status:locality:%s:workspace:%s:stub:%s:content:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(workspaceID),
+		requiredContentKeyPart(stubID),
+		requiredContentItemID(hash, routingKey),
+	)
+}
+
+func requiredContentReportKey(locality, workspaceID, stubID, hash, routingKey string) string {
+	return fmt.Sprintf(
+		"%s:report:locality:%s:workspace:%s:stub:%s:content:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(workspaceID),
+		requiredContentKeyPart(stubID),
+		requiredContentItemID(hash, routingKey),
+	)
+}
+
+func requiredContentLockKey(locality, logicalHostID, hash string) string {
+	return fmt.Sprintf(
+		"%s:lock:%s:%s:%s",
+		cacheRequiredContentKeyPrefix,
+		requiredContentKeyPart(locality),
+		requiredContentKeyPart(logicalHostID),
+		requiredContentKeyPart(hash),
+	)
+}
+
+func requiredContentStubMember(workspaceID, stubID string) string {
+	return workspaceID + requiredContentStubMemberSeparator + stubID
+}
+
+func parseRequiredContentStubMember(member string) (string, string, bool) {
+	parts := strings.SplitN(member, requiredContentStubMemberSeparator, 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func requiredContentItemID(hash, routingKey string) string {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	sum := sha256.Sum256([]byte(routingKey))
+	return requiredContentKeyPart(hash) + ":" + hex.EncodeToString(sum[:8])
+}
+
+func requiredContentKeyPart(value string) string {
+	if value == "" {
+		return "_"
+	}
+	return strings.ReplaceAll(value, ":", "_")
+}
+
+func requiredContentLockToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

@@ -18,5 +18,25 @@ monitoring:
     events:
       endpoint: http://fluent-bit.monitoring:9880
 cache:
+  requiredContent:
+    enabled: false
+    stubTTL: 168h
+    volumeMinBytes: 33554432
+    reconcileInterval: 30s
+    reconcileConcurrency: 2
+    batchSize: 256
+    maxBytesPerCycle: 34359738368
+    originFallbackEnabled: true
   server:
     pageSizeBytes: 4194304
+    smallRangeCopyThresholdBytes: 131072
+    readTransport:
+      enabled: true
+      sendfile: true
+      pageFDCacheSize: 1024
+  client:
+    readTransport:
+      enabled: true
+      maxActiveConnsPerHost: 64
+      maxIdleConnsPerHost: 16
+      smallRangeCopyThresholdBytes: 131072

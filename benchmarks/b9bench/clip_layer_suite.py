@@ -68,13 +68,13 @@ def configure_sdk(args: argparse.Namespace) -> None:
 
 def deterministic_layer_command(size_mib: int, probe_id: str) -> str:
     size = size_mib * 1024 * 1024
-    return f"""mkdir -p /opt/b9bench && python3 - <<'PY'
+    return f"""mkdir -p /opt/b9bench && python3 - <<PY
 import hashlib
 
 size = {size}
-probe_id = {probe_id!r}
-path = {LAYER_PATH!r}
-sha_path = {SHA_PATH!r}
+probe_id = {json.dumps(probe_id)}
+path = {json.dumps(LAYER_PATH)}
+sha_path = {json.dumps(SHA_PATH)}
 
 def block(counter):
     seed = f"b9bench-clip-layer:{{probe_id}}:{{counter}}".encode()
@@ -335,6 +335,15 @@ def embedded_cache_page_proof(kube: Kube, hashes: list[str]) -> dict[str, Any]:
             }
         )
     proof["ok"] = ok
+    return proof
+
+
+def wait_embedded_cache_page_proof(kube: Kube, hashes: list[str], timeout_seconds: float = 20) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    proof = embedded_cache_page_proof(kube, hashes)
+    while hashes and not proof.get("ok") and time.monotonic() < deadline:
+        time.sleep(1)
+        proof = embedded_cache_page_proof(kube, hashes)
     return proof
 
 
@@ -713,7 +722,7 @@ def extract_archive_hashes(kube: Kube, image_id: str, artifact_dir: Path) -> lis
                 continue
 
             parse = subprocess.run(
-                [go, "run", "./benchmarks/b9bench/cache_tools/clip_hashes.go", str(archive)],
+                [go, "run", "./benchmarks/b9bench/cache_tools/clip_hashes.go", str(archive), LAYER_PATH],
                 cwd=REPO_ROOT,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -769,8 +778,10 @@ def main() -> int:
         first_since = utc_now()
         first = run_iteration(kube, image, image_id, "cold", args, artifact_dir, first_since)
         report["iterations"].append(first)
+        if not report["decompressedHashes"]:
+            report["decompressedHashes"] = extract_archive_hashes(kube, image_id, artifact_dir)
         first_hashes = first.get("logSummary", {}).get("decompressedHashes") or report["decompressedHashes"]
-        first["embeddedCachePageProof"] = embedded_cache_page_proof(kube, first_hashes)
+        first["embeddedCachePageProof"] = wait_embedded_cache_page_proof(kube, first_hashes)
         first["hrwRoutingProof"] = hrw_routing_proof(
             kube,
             first_hashes,
@@ -797,7 +808,7 @@ def main() -> int:
         second = run_iteration(kube, image, image_id, second_name, args, artifact_dir, second_since)
         report["iterations"].append(second)
         second_hashes = second.get("logSummary", {}).get("decompressedHashes") or second_hashes
-        second["embeddedCachePageProof"] = embedded_cache_page_proof(kube, second_hashes)
+        second["embeddedCachePageProof"] = wait_embedded_cache_page_proof(kube, second_hashes)
         second["hrwRoutingProof"] = hrw_routing_proof(
             kube,
             second_hashes,
@@ -879,7 +890,7 @@ def validate_report(report: dict[str, Any], failures: list[str]) -> None:
     cold_logs = cold.get("logSummary") or {}
     after_logs = after.get("logSummary") or {}
     if not report.get("decompressedHashes"):
-        failures.append("could not extract OCI decompressed layer hashes from clip archive")
+        failures.append("could not extract CLIP cache content hashes from clip archive")
     if report.get("preSecondClipDiskCachePresence", {}).get("present"):
         failures.append("CLIP local decompressed disk cache was still present before second iteration")
     if after.get("clipDiskCachePresence", {}).get("present"):

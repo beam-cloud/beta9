@@ -16,6 +16,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache/cachegrpc"
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/djherbis/atime"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/uuid"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -34,6 +37,7 @@ type ServerOpts struct {
 	HostID        string
 	MetadataStore CacheMetadataStore
 	AdvertiseAddr string
+	PeerClient    *Client
 }
 
 type ServerOption func(*ServerOpts)
@@ -42,19 +46,23 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	proto.UnimplementedCacheServer
-	hostId        string
-	locality      string
-	privateIpAddr string
-	publicIpAddr  string
-	cas           *Store
-	serverConfig  ServerConfig
-	globalConfig  GlobalConfig
-	metadataStore CacheMetadataStore
-	grpcServer    *grpc.Server
-	listener      net.Listener
-	s3ClientCache sync.Map
-	draining      atomic.Bool
-	closeOnce     sync.Once
+	hostId         string
+	locality       string
+	privateIpAddr  string
+	publicIpAddr   string
+	cas            *Store
+	serverConfig   ServerConfig
+	globalConfig   GlobalConfig
+	config         Config
+	metadataStore  CacheMetadataStore
+	peerClient     *Client
+	reconciler     *requiredContentReconciler
+	grpcServer     *grpc.Server
+	listener       net.Listener
+	rawPageFDCache *rawPageFDCache
+	s3ClientCache  sync.Map
+	draining       atomic.Bool
+	closeOnce      sync.Once
 }
 
 func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error) {
@@ -64,6 +72,7 @@ func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error
 func NewServerWithOptions(ctx context.Context, cfg Config, locality string, options ...ServerOption) (*Server, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
 	startCachePathStatsLogger()
+	cfg.RequiredContent = NormalizeRequiredContentConfig(cfg.RequiredContent)
 
 	opts := &ServerOpts{}
 	for _, opt := range options {
@@ -137,18 +146,22 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 	}
 
 	cs := &Server{
-		ctx:           serverCtx,
-		cancel:        cancel,
-		hostId:        hostId,
-		locality:      locality,
-		cas:           cas,
-		serverConfig:  effectiveServerConfig,
-		globalConfig:  cfg.Global,
-		metadataStore: metadataStore,
-		privateIpAddr: privateIpAddr,
-		publicIpAddr:  publicIpAddr,
-		s3ClientCache: sync.Map{},
+		ctx:            serverCtx,
+		cancel:         cancel,
+		hostId:         hostId,
+		locality:       locality,
+		cas:            cas,
+		serverConfig:   effectiveServerConfig,
+		globalConfig:   cfg.Global,
+		config:         cfg,
+		metadataStore:  metadataStore,
+		peerClient:     opts.PeerClient,
+		rawPageFDCache: newRawPageFDCache(effectiveServerConfig.ReadTransport.PageFDCacheSize),
+		privateIpAddr:  privateIpAddr,
+		publicIpAddr:   publicIpAddr,
+		s3ClientCache:  sync.Map{},
 	}
+	cs.reconciler = newRequiredContentReconciler(cs, cfg.RequiredContent)
 
 	return cs, nil
 }
@@ -168,6 +181,12 @@ func WithServerMetadataStore(metadataStore CacheMetadataStore) ServerOption {
 func WithServerAdvertiseAddr(addr string) ServerOption {
 	return func(opts *ServerOpts) {
 		opts.AdvertiseAddr = addr
+	}
+}
+
+func WithServerPeerClient(client *Client) ServerOption {
+	return func(opts *ServerOpts) {
+		opts.PeerClient = client
 	}
 }
 
@@ -287,6 +306,9 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 			}
 		}
 	}()
+	if cs.reconciler != nil {
+		cs.reconciler.Start()
+	}
 
 	return advertiseAddr, nil
 }
@@ -360,6 +382,9 @@ func (cs *Server) Close() error {
 		}
 		if cs.listener != nil {
 			_ = cs.listener.Close()
+		}
+		if cs.rawPageFDCache != nil {
+			cs.rawPageFDCache.close()
 		}
 		if cs.cas != nil {
 			cs.cas.Cleanup()
@@ -825,6 +850,27 @@ func (cs *Server) s3ClientForSource(source *proto.CacheSource) (*S3Client, error
 	return s3Client, nil
 }
 
+func (cs *Server) openOCIOriginSource(ctx context.Context, sourcePath string) (io.ReadCloser, error) {
+	source, ok := ParseOCIRequiredContentOriginPath(sourcePath)
+	if !ok {
+		return nil, fmt.Errorf("invalid OCI origin path: %s", sourcePath)
+	}
+
+	ref, err := name.NewDigest(fmt.Sprintf("%s/%s@%s", source.Registry, source.Repository, source.LayerDigest))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse OCI layer digest: %w", err)
+	}
+	layer, err := remote.Layer(ref, remote.WithContext(ctx), remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch OCI layer %s: %w", source.LayerDigest, err)
+	}
+	reader, err := layer.Uncompressed()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open uncompressed OCI layer %s: %w", source.LayerDigest, err)
+	}
+	return reader, nil
+}
+
 func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
 	if err := cs.rejectIfDraining(); err != nil {
 		return nil, err
@@ -842,7 +888,7 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	if req.Source.CachePath != "" {
 		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
-	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
+	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s bucket=%s expected_hash=%s]", req.Source.Path, cachePath, req.Source.BucketName, req.Source.ExpectedHash)
 	if req.Source.CachePath == "" && isContentHash(req.Source.ExpectedHash) && cs.cas.Exists(req.Source.ExpectedHash) {
 		Logger.Debugf("StoreFromContent[EXISTS] - [%s]", req.Source.ExpectedHash)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: req.Source.ExpectedHash}, nil
@@ -853,7 +899,15 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		size uint64
 		err  error
 	)
-	if req.Source.BucketName == "" {
+	if _, ok := ParseOCIRequiredContentOriginPath(req.Source.Path); ok {
+		var reader io.ReadCloser
+		reader, err = cs.openOCIOriginSource(ctx, req.Source.Path)
+		if err != nil {
+			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
+		}
+		defer reader.Close()
+		hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
+	} else if req.Source.BucketName == "" {
 		var reader io.ReadCloser
 		reader, err = cs.openLocalSource(localPath)
 		if err != nil {
@@ -862,7 +916,8 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		defer reader.Close()
 		hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
 	} else {
-		s3Client, err := cs.s3ClientForSource(req.Source)
+		var s3Client *S3Client
+		s3Client, err = cs.s3ClientForSource(req.Source)
 		if err != nil {
 			Logger.Errorf("StoreFromContent[ERR] - error caching source: %v", err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
@@ -886,26 +941,20 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		Logger.Warnf("StoreFromContent[ERR] - error storing data in cache: %v", err)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	Logger.Debugf("StoreFromContent[STORE] - [source=%s cache_path=%s hash=%s size=%d expected_hash=%s]", req.Source.Path, cachePath, hash, size, req.Source.ExpectedHash)
+	if hash == "" {
+		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: "stored content hash is empty"}, nil
+	}
+	if isContentHash(req.Source.ExpectedHash) && hash != req.Source.ExpectedHash {
+		err := fmt.Errorf("stored content hash mismatch: expected %s, got %s", req.Source.ExpectedHash, hash)
+		Logger.Warnf("StoreFromContent[ERR] - %v", err)
+		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 
 	// Store references in cachefs only when the caller is publishing a path into the
 	// cachefs namespace. Plain S3 source writes are content-addressed only.
 	if cs.metadataStore != nil {
-		var err error
-		if req.Source.BucketName == "" {
-			if req.Source.CachePath == "" {
-				err = cs.StoreContentInCacheFS(ctx, localPath, hash, size)
-			} else {
-				fileInfo, statErr := os.Stat(localPath)
-				if statErr != nil {
-					err = statErr
-				} else {
-					err = cs.storeContentInCacheFS(ctx, cachePath, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
-				}
-			}
-		} else if req.Source.CachePath != "" {
-			err = cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
-		}
-		if err != nil {
+		if err := cs.storeSourceReferenceInCacheFS(ctx, req.Source, localPath, cachePath, hash, size); err != nil {
 			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
@@ -917,6 +966,29 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	go runtime.GC()
 
 	return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: hash}, nil
+}
+
+func (cs *Server) storeSourceReferenceInCacheFS(ctx context.Context, source *proto.CacheSource, localPath, cachePath, hash string, size uint64) error {
+	if source == nil {
+		return nil
+	}
+	if _, ok := ParseOCIRequiredContentOriginPath(source.Path); ok {
+		return nil
+	}
+	if source.BucketName != "" {
+		if source.CachePath == "" {
+			return nil
+		}
+		return cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
+	}
+	if source.CachePath == "" {
+		return cs.StoreContentInCacheFS(ctx, localPath, hash, size)
+	}
+	fileInfo, err := os.Stat(localPath)
+	if err != nil {
+		return err
+	}
+	return cs.storeContentInCacheFS(ctx, cachePath, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
 }
 
 func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S3Client, path string, expectedHash string) (string, uint64, error) {

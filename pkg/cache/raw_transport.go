@@ -27,6 +27,16 @@ const (
 	cacheMuxInitialReadTimeout      = 5 * time.Second
 )
 
+type rawReadMethod string
+
+const (
+	rawReadMethodNone         rawReadMethod = "none"
+	rawReadMethodCopy         rawReadMethod = "copy"
+	rawReadMethodSendfile     rawReadMethod = "sendfile"
+	rawReadMethodSendfileCopy rawReadMethod = "sendfile+copy"
+	rawReadMethodReadAt       rawReadMethod = "readat"
+)
+
 type cacheMuxListener struct {
 	base       net.Listener
 	rawHandler func(net.Conn)
@@ -222,7 +232,7 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		Logger.Debugf("cache raw server request received: seq=%d hash=%s offset=%d length=%d", reqCount, req.hash, req.offset, req.length)
 	}
 	status := "unknown"
-	method := "none"
+	method := rawReadMethodNone
 	var responseBytes int64
 	var regionElapsed time.Duration
 	var openElapsed time.Duration
@@ -258,6 +268,13 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		_ = writeRawReadResponseHeader(conn, rawReadStatusError, 0)
 		return
 	}
+	if cs.rawReadUsesSmallRangeCopy(req.length) {
+		atomic.AddInt64(&cachePathStats.serverRawSmallReads, 1)
+		atomic.AddInt64(&cachePathStats.serverRawSmallBytes, req.length)
+	} else {
+		atomic.AddInt64(&cachePathStats.serverRawLargeReads, 1)
+		atomic.AddInt64(&cachePathStats.serverRawLargeBytes, req.length)
+	}
 
 	regionStarted := time.Now()
 	regions, responseLength, ok, err := cs.rawReadPageRegions(req)
@@ -273,9 +290,10 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		atomic.AddInt64(&cachePathStats.serverRawBytes, responseLength)
 		usedSendfile := false
 		usedCopy := false
+		cacheableFD := cs.rawReadCanCacheFD(req.hash)
 		for _, region := range regions {
 			openStarted := time.Now()
-			file, err := os.Open(region.path)
+			page, err := cs.openRawReadPage(region.path, cacheableFD)
 			if err != nil {
 				status = "open_error"
 				Logger.Warnf("raw cache read open failed: hash=%s offset=%d length=%d path=%s err=%v", req.hash, req.offset, req.length, region.path, err)
@@ -285,20 +303,21 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 			}
 			copyOffset := region.pageOffset
 			copyLength := int64(region.length)
-			_ = fadviseSequential(file.Fd())
-			_ = fadviseWillneed(file.Fd(), copyOffset, copyLength)
+			if cs.rawReadShouldFadviseWillneed(req.length, copyLength) {
+				_ = fadviseWillneed(page.file.Fd(), copyOffset, copyLength)
+			}
 			openDuration := time.Since(openStarted)
 			openElapsed += openDuration
 			atomic.AddInt64(&cachePathStats.serverRawOpenNanos, openDuration.Nanoseconds())
-			if cs.serverConfig.ReadTransport.Sendfile {
+			if cs.rawReadUsesSendfile(req.length) {
 				sendStarted := time.Now()
-				sent, err := sendFileToConn(conn, file, region.pageOffset, int64(region.length))
+				sent, err := sendFileToConn(conn, page.file, region.pageOffset, int64(region.length))
 				sendDuration := time.Since(sendStarted)
 				sendElapsed += sendDuration
 				atomic.AddInt64(&cachePathStats.serverRawSendNanos, sendDuration.Nanoseconds())
 				if sent > 0 {
 					usedSendfile = true
-					method = "sendfile"
+					method = rawReadMethodSendfile
 					copyOffset += sent
 					copyLength -= sent
 				}
@@ -306,33 +325,26 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 					Logger.Debugf("raw cache read sendfile partial: hash=%s offset=%d length=%d path=%s page_offset=%d region_length=%d sent=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, region.pageOffset, region.length, sent, copyLength, err)
 				}
 				if copyLength == 0 {
-					_ = file.Close()
+					_ = page.Close()
 					continue
 				}
 			}
-			if _, err := file.Seek(copyOffset, io.SeekStart); err != nil {
-				status = "seek_error"
-				Logger.Warnf("raw cache read seek failed: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
-				_ = file.Close()
-				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
-				_ = conn.Close()
-				return
-			}
 			copyStarted := time.Now()
-			if _, err := io.CopyN(conn, file, copyLength); err != nil {
+			reader := io.NewSectionReader(page.file, copyOffset, copyLength)
+			if _, err := io.CopyN(conn, reader, copyLength); err != nil {
 				copyDuration := time.Since(copyStarted)
 				sendElapsed += copyDuration
 				atomic.AddInt64(&cachePathStats.serverRawSendNanos, copyDuration.Nanoseconds())
 				if isRawReadClientAbort(err) {
 					status = "client_abort"
 					Logger.Debugf("raw cache read client aborted: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
-					_ = file.Close()
+					_ = page.Close()
 					_ = conn.Close()
 					return
 				}
 				status = "copy_error"
 				Logger.Warnf("raw cache read copy failed: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
-				_ = file.Close()
+				_ = page.Close()
 				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
 				_ = conn.Close()
 				return
@@ -340,12 +352,12 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 			copyDuration := time.Since(copyStarted)
 			sendElapsed += copyDuration
 			atomic.AddInt64(&cachePathStats.serverRawSendNanos, copyDuration.Nanoseconds())
-			_ = file.Close()
+			_ = page.Close()
 			usedCopy = true
-			if method == "none" {
-				method = "copy"
-			} else if method != "copy" {
-				method = "sendfile+copy"
+			if method == rawReadMethodNone {
+				method = rawReadMethodCopy
+			} else if method != rawReadMethodCopy {
+				method = rawReadMethodSendfileCopy
 			}
 		}
 		if usedSendfile {
@@ -362,7 +374,7 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 	buf := make([]byte, req.length)
 	n64, err := cs.cas.ReadAt(req.hash, req.offset, buf)
 	if err != nil || n64 != req.length {
-		status = "miss"
+		status = CacheResultMiss.String()
 		atomic.AddInt64(&cachePathStats.serverRawMisses, 1)
 		_ = writeRawReadResponseHeader(conn, rawReadStatusMiss, 0)
 		return
@@ -385,8 +397,53 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 	responseBytes = n64
 	atomic.AddInt64(&cachePathStats.serverRawBytes, n64)
 	atomic.AddInt64(&cachePathStats.serverRawReadAtHits, 1)
-	method = "readat"
+	method = rawReadMethodReadAt
 	status = "ok"
+}
+
+func (cs *Server) rawReadUsesSmallRangeCopy(length int64) bool {
+	return cs != nil && cs.serverConfig.SmallRangeCopyThresholdBytes > 0 && length <= cs.serverConfig.SmallRangeCopyThresholdBytes
+}
+
+func (cs *Server) rawReadUsesSendfile(length int64) bool {
+	return cs != nil && cs.serverConfig.ReadTransport.Sendfile && !cs.rawReadUsesSmallRangeCopy(length)
+}
+
+func (cs *Server) rawReadShouldFadviseWillneed(requestLength int64, regionLength int64) bool {
+	if cs == nil || regionLength <= 0 {
+		return false
+	}
+	pageSize := cs.serverConfig.PageSizeBytes
+	if pageSize > 0 && regionLength >= pageSize {
+		return true
+	}
+	threshold := cs.serverConfig.SmallRangeCopyThresholdBytes
+	return threshold <= 0 || requestLength > threshold
+}
+
+func (cs *Server) rawReadCanCacheFD(hash string) bool {
+	return cs != nil && cs.rawPageFDCache != nil && cs.cas != nil && cs.cas.ContentStatus(hash) == contentStatusComplete
+}
+
+func (cs *Server) openRawReadPage(path string, cacheable bool) (rawPageHandle, error) {
+	if cacheable && cs != nil && cs.rawPageFDCache != nil {
+		page, err := cs.rawPageFDCache.open(path)
+		if err == nil {
+			if page.hit {
+				atomic.AddInt64(&cachePathStats.serverRawFDCacheHits, 1)
+			} else {
+				atomic.AddInt64(&cachePathStats.serverRawFDCacheMiss, 1)
+			}
+		}
+		return page, err
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return rawPageHandle{}, err
+	}
+	_ = fadviseSequential(file.Fd())
+	return rawPageHandle{file: file}, nil
 }
 
 func isRawReadClientAbort(err error) bool {

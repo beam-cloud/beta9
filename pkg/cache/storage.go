@@ -318,7 +318,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			}
 
 			tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkCount))
-			if err := writeCacheChunkAtomic(tempChunkPath, chunk); err != nil {
+			if err := writeCacheChunkAtomicReplace(tempChunkPath, chunk); err != nil {
 				return "", size, fmt.Errorf("failed to write temp cache chunk: %w", err)
 			}
 
@@ -336,30 +336,18 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	}
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
-	dirPath := cas.pageDir(hash)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		return "", size, fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	chunkKeys := make([]string, 0, chunkCount)
-	for chunkIdx := int64(0); chunkIdx < chunkCount; chunkIdx++ {
-		chunkKey := cas.pageKey(hash, chunkIdx)
-		chunkKeys = append(chunkKeys, chunkKey)
-
-		tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkIdx))
-		filePath := filepath.Join(dirPath, chunkKey)
-		pageLock := cas.pageLock(hash, chunkIdx)
-		pageLock.Lock()
-		if err := linkCacheChunkAtomic(tempChunkPath, filePath); err != nil {
-			pageLock.Unlock()
-			return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
-		}
-		pageLock.Unlock()
+	if err := cas.publishStagedPages(hash, chunkCount, size, func(pageIdx int64) string {
+		return filepath.Join(tempDir, fmt.Sprintf("chunk-%d", pageIdx))
+	}); err != nil {
+		return "", size, err
 	}
 
 	if cas.memoryCacheEnabled {
-		for _, chunkKey := range chunkKeys {
-			filePath := filepath.Join(dirPath, chunkKey)
+		chunkKeys := make([]string, 0, chunkCount)
+		for chunkIdx := int64(0); chunkIdx < chunkCount; chunkIdx++ {
+			chunkKey := cas.pageKey(hash, chunkIdx)
+			chunkKeys = append(chunkKeys, chunkKey)
+			filePath := cas.pagePath(hash, chunkIdx)
 			chunk, err := os.ReadFile(filePath)
 			if err != nil {
 				return "", size, fmt.Errorf("failed to read cache chunk for memory cache: %w", err)
@@ -376,9 +364,6 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 		if !added {
 			return "", size, errors.New("unable to cache: set dropped")
 		}
-	}
-	if err := cas.writeCompleteMarker(hash, size, chunkCount); err != nil {
-		return "", size, err
 	}
 
 	Logger.Debugf("Added object: %s, size: %d bytes", hash, size)
@@ -435,7 +420,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 			}
 
 			filePath := filepath.Join(tmpDir, cas.pageKey(expectedHash, chunkCount))
-			if err := writeCacheChunkAtomic(filePath, chunk); err != nil {
+			if err := writeCacheChunkAtomicReplace(filePath, chunk); err != nil {
 				cleanupInstalled()
 				return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
 			}
@@ -570,7 +555,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 				}
 
 				tmpPath := filepath.Join(tmpDir, cas.pageKey(expectedHash, pageIdx))
-				if err := writeCacheChunkAtomic(tmpPath, data); err != nil {
+				if err := writeCacheChunkAtomicReplace(tmpPath, data); err != nil {
 					results <- pageResult{pageIdx: pageIdx, err: err}
 					cancel()
 					continue
@@ -667,14 +652,19 @@ func (cas *Store) newExpectedHashTempDir(hash string) (string, error) {
 }
 
 func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {
+	return cas.publishStagedPages(hash, pageCount, size, func(pageIdx int64) string {
+		return filepath.Join(tmpDir, cas.pageKey(hash, pageIdx))
+	})
+}
+
+func (cas *Store) publishStagedPages(hash string, pageCount int64, size int64, stagedPath func(int64) string) error {
 	finalDir := cas.pageDir(hash)
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
 	for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
-		pageKey := cas.pageKey(hash, pageIdx)
-		tmpPath := filepath.Join(tmpDir, pageKey)
+		tmpPath := stagedPath(pageIdx)
 		if _, err := os.Stat(tmpPath); err != nil {
 			return fmt.Errorf("missing verified cache chunk %s: %w", tmpPath, err)
 		}
@@ -682,10 +672,6 @@ func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount
 		pagePath := cas.pagePath(hash, pageIdx)
 		pageLock := cas.pageLock(hash, pageIdx)
 		pageLock.Lock()
-		if err := os.Remove(pagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			pageLock.Unlock()
-			return err
-		}
 		if err := os.Rename(tmpPath, pagePath); err != nil {
 			pageLock.Unlock()
 			return err
@@ -818,26 +804,11 @@ func writeCacheChunkAtomic(filePath string, chunk []byte) error {
 		return err
 	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*.tmp")
+	tmpPath, cleanup, err := writeCacheChunkTemp(filePath, chunk)
 	if err != nil {
 		return err
 	}
-	tmpPath := tmpFile.Name()
-	defer func() {
-		_ = os.Remove(tmpPath)
-	}()
-
-	if _, err := tmpFile.Write(chunk); err != nil {
-		_ = tmpFile.Close()
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		_ = tmpFile.Close()
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		return err
-	}
+	defer cleanup()
 
 	if err := os.Link(tmpPath, filePath); err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -849,30 +820,42 @@ func writeCacheChunkAtomic(filePath string, chunk []byte) error {
 	return nil
 }
 
-func linkCacheChunkAtomic(tmpPath, filePath string) error {
-	if info, err := os.Stat(filePath); err == nil {
-		tmpInfo, tmpErr := os.Stat(tmpPath)
-		if tmpErr != nil {
-			return tmpErr
-		}
-		if info.Size() == tmpInfo.Size() {
-			return nil
-		}
-		if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+func writeCacheChunkAtomicReplace(filePath string, chunk []byte) error {
+	tmpPath, cleanup, err := writeCacheChunkTemp(filePath, chunk)
+	if err != nil {
 		return err
 	}
+	defer cleanup()
 
-	if err := os.Link(tmpPath, filePath); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return nil
-		}
-		return err
+	return os.Rename(tmpPath, filePath)
+}
+
+func writeCacheChunkTemp(filePath string, chunk []byte) (string, func(), error) {
+	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), "."+filepath.Base(filePath)+".*.tmp")
+	if err != nil {
+		return "", nil, err
+	}
+	tmpPath := tmpFile.Name()
+	cleanup := func() {
+		_ = os.Remove(tmpPath)
 	}
 
-	return nil
+	if _, err := tmpFile.Write(chunk); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return "", nil, err
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+
+	return tmpPath, cleanup, nil
 }
 
 func (cas *Store) writeCompleteMarker(hash string, size int64, pageCount int64) error {
@@ -931,6 +914,11 @@ func (cas *Store) completeMarker(hash string) (size int64, pageSize int64, pageC
 
 func (cas *Store) Exists(hash string, expectedSize ...int64) bool {
 	return cas.ContentStatus(hash, expectedSize...) == contentStatusComplete
+}
+
+func (cas *Store) ContentSize(hash string) (int64, bool) {
+	size, _, _, ok := cas.completeMarker(hash)
+	return size, ok
 }
 
 func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {

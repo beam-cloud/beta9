@@ -386,3 +386,33 @@ func TestPushPlatformLogSkipsCallbackSinks(t *testing.T) {
 		t.Fatalf("expected platform log event to skip callbacks, got %d callback events", got)
 	}
 }
+
+func TestPushPlatformCacheSkipsCallbackSinks(t *testing.T) {
+	storageSink := &captureEventSink{}
+	callbackSink := &captureEventSink{}
+	repo := &EventClientRepo{
+		storageSinks:  []eventSink{storageSink},
+		callbackSinks: []eventSink{callbackSink},
+	}
+
+	repo.PushPlatformCacheEvent(types.EventPlatformCacheSchema{
+		Action:      "clip_cache_read_aggregate",
+		Result:      "miss",
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+	})
+
+	if got, want := len(storageSink.events), 1; got != want {
+		t.Fatalf("unexpected storage event count: got %d want %d", got, want)
+	}
+	if got := len(callbackSink.events); got != 0 {
+		t.Fatalf("expected platform cache event to skip callbacks, got %d callback events", got)
+	}
+	var event types.EventPlatformCacheSchema
+	if err := json.Unmarshal(storageSink.events[0].Data(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := event.Action, "clip_cache_read_aggregate"; got != want {
+		t.Fatalf("unexpected platform cache action: got %q want %q", got, want)
+	}
+}

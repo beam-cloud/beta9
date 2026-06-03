@@ -51,6 +51,10 @@ type EventClientRepo struct {
 
 var ErrEventReadUnsupported = errors.New("event read unsupported")
 
+func (r *EventClientRepo) PersistentEventStoreConfigured() bool {
+	return r != nil && r.reader != nil && len(r.storageSinks) > 0
+}
+
 type eventMetadata struct {
 	ContainerID string
 	WorkspaceID string
@@ -125,6 +129,10 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
+	case types.EventPlatformCacheSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
 	case types.EventContainerEventSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
@@ -132,6 +140,10 @@ func eventTimeForData(data interface{}) time.Time {
 	case types.EventContainerLifecycleSchema:
 		if !d.StartTime.IsZero() {
 			return d.StartTime
+		}
+	case types.EventStubCacheRequiredContentSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
 		}
 	}
 
@@ -154,7 +166,7 @@ func (r *EventClientRepo) pushEvent(eventName string, schemaVersion string, data
 			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to push event")
 		}
 	}
-	if event.Type() == types.EventContainerLog || event.Type() == types.EventPlatformLog {
+	if event.Type() == types.EventContainerLog || event.Type() == types.EventPlatformLog || event.Type() == types.EventPlatformCache {
 		return
 	}
 	for _, sink := range r.callbackSinks {
@@ -296,6 +308,17 @@ func (r *EventClientRepo) PushPlatformLogEvent(entry types.EventPlatformLogSchem
 	}
 
 	r.pushEvent(types.EventPlatformLog, types.EventPlatformLogSchemaVersion, entry)
+}
+
+func (r *EventClientRepo) PushPlatformCacheEvent(event types.EventPlatformCacheSchema) {
+	if event.Action == "" {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+
+	r.pushEvent(types.EventPlatformCache, types.EventPlatformCacheSchemaVersion, event)
 }
 
 func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions) {
@@ -811,6 +834,14 @@ func (r *EventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stu
 	)
 }
 
+func (r *EventClientRepo) PushStubCacheRequiredContentEvent(event types.EventStubCacheRequiredContentSchema) {
+	r.pushEvent(
+		types.EventStubCacheRequiredContent,
+		types.EventStubCacheRequiredContentSchemaVersion,
+		event,
+	)
+}
+
 func (r *EventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 	r.pushEvent(
 		types.EventTaskUpdated,
@@ -1006,12 +1037,16 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventPlatformLogSchema:
 		return eventMetadata{WorkerID: d.WorkerID, ServiceName: d.Service, InstanceID: d.InstanceID}
+	case types.EventPlatformCacheSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
 	case types.EventTaskSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventStubSchema:
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
 	case types.EventStubStateSchema:
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
+	case types.EventStubCacheRequiredContentSchema:
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
 	case types.EventWorkerLifecycleSchema:
 		return eventMetadata{WorkerID: d.WorkerID, PoolName: d.PoolName}
 	case types.EventWorkerPoolStateSchema:

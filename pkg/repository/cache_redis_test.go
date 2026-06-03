@@ -15,18 +15,7 @@ import (
 func TestCacheRedisRepositoryUsesReadableCoordinatorHostIndexKeys(t *testing.T) {
 	ctx := context.Background()
 
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-
-	rdb, err := common.NewRedisClient(types.RedisConfig{
-		Addrs: []string{server.Addr()},
-		Mode:  types.RedisModeSingle,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	repo := NewCacheRedisRepository(rdb)
+	server, repo := newCacheRedisRepositoryForTest(t)
 	host := cache.CoordinatorHost{
 		LogicalHostID:    "cache-host-default-node-a-path-0",
 		RegistrationID:   "worker-a",
@@ -58,4 +47,59 @@ func TestCacheRedisRepositoryUsesReadableCoordinatorHostIndexKeys(t *testing.T) 
 	require.Equal(t, host.LogicalHostID, logicalHost.LogicalHostID)
 	require.Empty(t, logicalHost.RegistrationID)
 	require.Empty(t, logicalHost.PrivateAddr)
+}
+
+func TestCacheRedisRequiredContentIndexStatusAndLocks(t *testing.T) {
+	ctx := context.Background()
+	server, repo := newCacheRedisRepositoryForTest(t)
+	ttl := 2 * time.Second
+
+	require.NoError(t, repo.MarkStubLocalityAccessed(ctx, "default", "workspace-1", "stub-1", ttl))
+
+	stubs, err := repo.ListRecentStubLocalities(ctx, "default", time.Now().Add(-time.Minute), 10)
+	require.NoError(t, err)
+	require.Len(t, stubs, 1)
+	require.Equal(t, "stub-1", stubs[0].StubID)
+
+	require.NoError(t, repo.SetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-a", "route-a", cache.RequiredContentStatusPresent, "", ttl))
+	status, _, _, found, err := repo.GetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-a", "route-a")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, cache.RequiredContentStatusPresent, status)
+
+	lock, ok, err := repo.AcquireRequiredContentReconciliationLock(ctx, "default", "host-a", "hash-a", ttl)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, ok, err = repo.AcquireRequiredContentReconciliationLock(ctx, "default", "host-a", "hash-a", ttl)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.NoError(t, lock.Release(ctx))
+	_, ok, err = repo.AcquireRequiredContentReconciliationLock(ctx, "default", "host-a", "hash-a", ttl)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	server.FastForward(ttl + time.Second)
+	_, _, _, found, err = repo.GetRequiredContentReconciliationStatus(ctx, "default", "workspace-1", "stub-1", "hash-a", "route-a")
+	require.NoError(t, err)
+	require.False(t, found)
+	stubs, err = repo.ListRecentStubLocalities(ctx, "default", time.Now().Add(-time.Minute), 10)
+	require.NoError(t, err)
+	require.Empty(t, stubs)
+}
+
+func newCacheRedisRepositoryForTest(t *testing.T) (*miniredis.Miniredis, *CacheRedisRepository) {
+	t.Helper()
+
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{
+		Addrs: []string{server.Addr()},
+		Mode:  types.RedisModeSingle,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	return server, NewCacheRedisRepository(rdb)
 }

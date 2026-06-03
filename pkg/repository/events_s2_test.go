@@ -93,6 +93,67 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2RequiredContentEventsUseStubCacheStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456/cache",
+		"events/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected required content stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected required content stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2EventHistoryStubStreamsIncludeRequiredContentCacheStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	query := types.EventQuery{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	}
+	streams := repo.eventHistoryStubStreamCandidates(query)
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123/stubs/stub-456/cache",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stub history stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stub history stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2EventHistoryRequiredContentFilterUsesOnlyCacheStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.eventHistoryStubStreamCandidates(types.EventQuery{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		EventTypes:  []string{types.EventStubCacheRequiredContent},
+	})
+	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/cache"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected required content history stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	if streams[0] != want[0] {
+		t.Fatalf("unexpected required content history stream: got %q want %q", streams[0], want[0])
+	}
+}
+
 func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -286,6 +347,24 @@ func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
 	})
 	if got, want := serviceStream[0], s2.StreamName("events/logs/platform/services/gateway/pod_1"); got != want {
 		t.Fatalf("unexpected platform service log stream: got %q want %q", got, want)
+	}
+}
+
+func TestS2PlatformCacheUsesPlatformCacheStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventPlatformCache, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+	})
+
+	want := []s2.StreamName{"events/platform/cache"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected platform cache stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	if streams[0] != want[0] {
+		t.Fatalf("unexpected platform cache stream: got %q want %q", streams[0], want[0])
 	}
 }
 

@@ -29,6 +29,7 @@ type WorkspaceStorageManager struct {
 	mountLocks         map[string]*sync.Mutex
 	mountLocksMu       sync.Mutex
 	cacheClient        *cache.Client
+	requiredContent    *requiredContentBatcher
 }
 
 func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *cache.Client) (*WorkspaceStorageManager, error) {
@@ -40,6 +41,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		containerInstances: containerInstances,
 		mountLocks:         make(map[string]*sync.Mutex),
 		cacheClient:        cacheClient,
+		requiredContent:    newRequiredContentBatcher(cacheClient),
 	}
 
 	if sm.poolConfig.StorageMode == "" {
@@ -91,7 +93,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	case storage.StorageModeGeese:
 		os.MkdirAll(mountPath, 0755)
 
-		mount, err = storage.NewStorage(types.StorageConfig{
+		mount, err = storage.NewStorageWithOptions(types.StorageConfig{
 			Mode:           storage.StorageModeGeese,
 			FilesystemName: workspaceName,
 			FilesystemPath: mountPath,
@@ -126,7 +128,10 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 				CacheDirectIO:          sm.config.WorkspaceStorage.Geese.CacheDirectIO,
 				CacheThroughEnabled:    sm.config.WorkspaceStorage.Geese.CacheThroughEnabled,
 			},
-		}, sm.cacheClient)
+		}, sm.cacheClient, storage.StorageOptions{
+			RequiredContentReporter:       sm.requiredContentReporterForWorkspace(workspaceName),
+			RequiredContentVolumeMinBytes: sm.requiredContentVolumeMinBytes(),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -166,6 +171,48 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	sm.mounts.Set(workspaceName, mount)
 
 	return mount, nil
+}
+
+func (sm *WorkspaceStorageManager) requiredContentVolumeMinBytes() int64 {
+	if sm == nil || sm.cacheClient == nil {
+		return 0
+	}
+	return sm.cacheClient.RequiredContentVolumeMinBytes()
+}
+
+func (sm *WorkspaceStorageManager) requiredContentReporterForWorkspace(workspaceName string) storage.RequiredContentReporter {
+	if sm == nil || sm.requiredContent == nil {
+		return nil
+	}
+	return func(ctx context.Context, item cache.RequiredContentItem) {
+		if item.Hash == "" {
+			return
+		}
+
+		sm.containerInstances.Range(func(_ string, instance *ContainerInstance) bool {
+			if instance == nil || instance.Request == nil {
+				return true
+			}
+			request := instance.Request
+			if request.Workspace.Name != workspaceName {
+				return true
+			}
+
+			reportItem := item
+			reportItem.Locality = sm.cacheClient.Locality()
+			reportItem.WorkspaceID = request.WorkspaceId
+			reportItem.StubID = request.StubId
+			if reportItem.RoutingKey == "" {
+				reportItem.RoutingKey = reportItem.Hash
+			}
+			if reportItem.ExpectedHash == "" {
+				reportItem.ExpectedHash = reportItem.Hash
+			}
+			sm.requiredContent.Enqueue(reportItem)
+
+			return true
+		})
+	}
 }
 
 func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {

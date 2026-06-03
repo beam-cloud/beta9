@@ -1,12 +1,29 @@
 package apiv1
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
+
+type cacheEventRepo struct {
+	repository.EventRepository
+
+	called bool
+	query  types.EventQuery
+}
+
+func (r *cacheEventRepo) GetEventHistory(ctx context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	r.called = true
+	r.query = query
+	return &types.EventHistoryResponse{Streams: []string{"events/platform/cache"}}, nil
+}
 
 func TestSummarizeContainerEventsBatchReturnsCoverageAndBottleneck(t *testing.T) {
 	items := []ContainerEventSummary{
@@ -183,5 +200,137 @@ func TestEventHistoryQueryFromContextParsesFilters(t *testing.T) {
 	}
 	if got, want := len(query.EventTypes), 2; got != want {
 		t.Fatalf("unexpected event type count: got %d want %d", got, want)
+	}
+}
+
+func TestCacheEventQueryUsesStubCacheStream(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&container_id=container-1&start_time=2026-05-28T10:00:00Z&end_time=2026-05-28T10:05:00Z&limit=25", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := cacheEventQueryFromContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Platform != "" {
+		t.Fatalf("cache route should read the stub cache stream, got platform %q", query.Platform)
+	}
+	if got, want := query.EventTypes, []string{types.EventStubCacheRequiredContent}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("unexpected event types: got %#v want %#v", got, want)
+	}
+	if got, want := query.WorkspaceID, "workspace-1"; got != want {
+		t.Fatalf("unexpected workspace id: got %q want %q", got, want)
+	}
+	if got, want := query.StubID, "stub-1"; got != want {
+		t.Fatalf("unexpected stub id: got %q want %q", got, want)
+	}
+	if got, want := query.ContainerID, "container-1"; got != want {
+		t.Fatalf("unexpected container id: got %q want %q", got, want)
+	}
+	if query.StartTime == nil || query.EndTime == nil {
+		t.Fatal("expected start and end times")
+	}
+	if query.TailOffset != nil {
+		t.Fatalf("explicit start time should not also set tail offset: %#v", query.TailOffset)
+	}
+}
+
+func TestCacheEventQueryDefaultsToBoundedTailRead(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&limit=50000", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := cacheEventQueryFromContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := query.Limit, uint64(1000); got != want {
+		t.Fatalf("unexpected capped limit: got %d want %d", got, want)
+	}
+	if query.TailOffset == nil {
+		t.Fatal("expected default tail offset")
+	}
+	if got, want := *query.TailOffset, int64(1000); got != want {
+		t.Fatalf("unexpected tail offset: got %d want %d", got, want)
+	}
+}
+
+func TestCacheEventQueryRejectsMultipleStartSelectors(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1&stub_id=stub-1&start_time=2026-05-28T10:00:00Z&tail_offset=100", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	if _, err := cacheEventQueryFromContext(ctx); err == nil {
+		t.Fatal("expected multiple start selectors to be rejected")
+	}
+}
+
+func TestCacheEventQueryRequiresStubTarget(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?workspace_id=workspace-1", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	if _, err := cacheEventQueryFromContext(ctx); err == nil {
+		t.Fatal("expected missing stub id to be rejected")
+	}
+}
+
+func TestCacheEventsRequiresClusterAdminToken(t *testing.T) {
+	e := echo.New()
+	repo := &cacheEventRepo{}
+	group := &EventGroup{eventRepo: repo}
+	handler := auth.WithClusterAdminAuth(group.GetCacheEvents)
+
+	req := httptest.NewRequest(http.MethodGet, "/?limit=25", nil)
+	ctx := e.NewContext(req, httptest.NewRecorder())
+	workspaceCtx := &auth.HttpAuthContext{
+		Context: ctx,
+		AuthInfo: &auth.AuthInfo{
+			Token: &types.Token{TokenType: types.TokenTypeWorkspace},
+		},
+	}
+
+	err := handler(workspaceCtx)
+	if err == nil {
+		t.Fatal("expected workspace token to be rejected")
+	}
+	httpErr, ok := err.(*echo.HTTPError)
+	if !ok || httpErr.Code != http.StatusUnauthorized {
+		t.Fatalf("unexpected workspace token error: %#v", err)
+	}
+	if repo.called {
+		t.Fatal("event repo should not be called for non-admin token")
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/?limit=25&workspace_id=workspace-1&stub_id=stub-1", nil)
+	rec := httptest.NewRecorder()
+	ctx = e.NewContext(req, rec)
+	adminCtx := &auth.HttpAuthContext{
+		Context: ctx,
+		AuthInfo: &auth.AuthInfo{
+			Token: &types.Token{TokenType: types.TokenTypeClusterAdmin},
+		},
+	}
+
+	if err := handler(adminCtx); err != nil {
+		t.Fatal(err)
+	}
+	if !repo.called {
+		t.Fatal("expected event repo to be called for admin token")
+	}
+	if got, want := rec.Code, http.StatusOK; got != want {
+		t.Fatalf("unexpected status: got %d want %d", got, want)
+	}
+	if repo.query.Platform != "" {
+		t.Fatalf("unexpected platform stream: got %q", repo.query.Platform)
+	}
+	if got, want := repo.query.WorkspaceID, "workspace-1"; got != want {
+		t.Fatalf("unexpected workspace id: got %q want %q", got, want)
+	}
+	if got, want := repo.query.StubID, "stub-1"; got != want {
+		t.Fatalf("unexpected stub id: got %q want %q", got, want)
+	}
+	if got, want := repo.query.EventTypes[0], types.EventStubCacheRequiredContent; got != want {
+		t.Fatalf("unexpected event type: got %q want %q", got, want)
 	}
 }
