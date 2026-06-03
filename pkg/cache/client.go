@@ -1084,17 +1084,17 @@ func contentStatusFromHasContent(resp *proto.CacheHasContentResponse) string {
 	return contentStatusIncomplete
 }
 
-func contentCheckTraceResult(err error, exists bool, status string) string {
+func contentCheckTraceResult(err error, exists bool, status string) CacheResult {
 	if err != nil {
 		return operationTraceStoreResult(err)
 	}
 	if exists {
-		return contentStatusComplete
+		return CacheResultComplete
 	}
 	if status != "" {
-		return status
+		return CacheResult(status)
 	}
-	return contentStatusIncomplete
+	return CacheResultIncomplete
 }
 
 func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
@@ -1193,7 +1193,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		return 0, err
 	}
 	if respStatus == rawReadStatusMiss {
-		status = "miss"
+		status = CacheResultMiss.String()
 		cacheReadRawFallbackTotal.Inc()
 		atomic.AddInt64(&cachePathStats.clientRawMisses, 1)
 		reusable = true
@@ -1430,11 +1430,11 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 			if hostIndex > 0 {
 				c.setLocalHostCache(hash, opts.RoutingKey, host)
 			}
-			trace.addAttempt(hostIndex, host, source, "hit", int64(len(views)), time.Since(started), nil)
+			trace.addAttempt(hostIndex, host, source, CacheResultHit, int64(len(views)), time.Since(started), nil)
 			return views, trace, nil
 		}
 
-		trace.addAttempt(hostIndex, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
+		trace.addAttempt(hostIndex, host, "client_local_page_file", CacheResultMiss, 0, time.Since(started), ErrContentNotFound)
 	}
 
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
@@ -1658,7 +1658,7 @@ func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash strin
 
 func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, routingKey string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
 	if host == nil {
-		trace.addAttempt(hostIndex, host, "host_select", "unavailable", 0, 0, ErrHostNotFound)
+		trace.addAttempt(hostIndex, host, "host_select", CacheResultUnavailable, 0, 0, ErrHostNotFound)
 		return 0, ErrHostNotFound
 	}
 
@@ -1711,7 +1711,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 	}
 
 	if !host.HasEndpoint() {
-		trace.addAttempt(hostIndex, host, "endpoint", "unavailable", 0, 0, ErrSelectedHostUnavailable)
+		trace.addAttempt(hostIndex, host, "endpoint", CacheResultUnavailable, 0, 0, ErrSelectedHostUnavailable)
 		c.removeLocalHostCache(hash)
 		return 0, ErrSelectedHostUnavailable
 	}
@@ -1739,7 +1739,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 	client, exists := c.grpcClients[host.HostId]
 	c.mu.RUnlock()
 	if !exists {
-		trace.addAttempt(hostIndex, host, "grpc_client", "unavailable", 0, 0, ErrSelectedHostUnavailable)
+		trace.addAttempt(hostIndex, host, "grpc_client", CacheResultUnavailable, 0, 0, ErrSelectedHostUnavailable)
 		c.removeLocalHostCache(hash)
 		return 0, ErrSelectedHostUnavailable
 	}
@@ -1747,7 +1747,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 	start := time.Now()
 	getContentResponse, err := client.GetContent(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
 	if err != nil {
-		trace.addAttempt(hostIndex, host, "grpc", "unavailable", 0, time.Since(start), err)
+		trace.addAttempt(hostIndex, host, "grpc", CacheResultUnavailable, 0, time.Since(start), err)
 		atomic.AddInt64(&cachePathStats.clientGRPCErrors, 1)
 		if c.globalConfig.GRPCPayloadCodecV2 {
 			cacheReadGRPCCodecV2FallbackTotal.Inc()
@@ -1760,14 +1760,14 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		responseLength = int64(len(getContentResponse.Content))
 	}
 	if getContentResponse == nil || !getContentResponse.Ok || responseLength != length {
-		trace.addAttempt(hostIndex, host, "grpc", "miss", responseLength, time.Since(start), ErrContentNotFound)
+		trace.addAttempt(hostIndex, host, "grpc", CacheResultMiss, responseLength, time.Since(start), ErrContentNotFound)
 		atomic.AddInt64(&cachePathStats.clientGRPCMisses, 1)
 		c.removeLocalHostCache(hash)
 		return 0, ErrContentNotFound
 	}
 
 	copy(dst, getContentResponse.Content)
-	trace.addAttempt(hostIndex, host, "grpc", "hit", length, time.Since(start), nil)
+	trace.addAttempt(hostIndex, host, "grpc", CacheResultHit, length, time.Since(start), nil)
 	if hostIndex > 0 {
 		c.setLocalHostCache(hash, routingKey, host)
 	}
@@ -2076,7 +2076,7 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 
 	info, err := os.Stat(source.Path)
 	if err != nil {
-		trace.Result = "error"
+		trace.Result = CacheResultError
 		trace.DurationUs = time.Since(started).Microseconds()
 		return "", trace, err
 	}
@@ -2095,7 +2095,7 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 	if source.CachePath != "" {
 		if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "precheck_metadata"); ok {
 			trace.Hash = metadataHash
-			trace.Result = "already_present"
+			trace.Result = CacheResultAlreadyPresent
 			trace.DurationUs = time.Since(started).Microseconds()
 			return metadataHash, trace, nil
 		} else if status != "" && status != contentStatusComplete {
@@ -2103,7 +2103,7 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 		}
 	}
 	if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "precheck_content_hash"); ok {
-		trace.Result = "already_present"
+		trace.Result = CacheResultAlreadyPresent
 		trace.DurationUs = time.Since(started).Microseconds()
 		return opts.RoutingKey, trace, nil
 	} else if status != "" && status != contentStatusComplete {
@@ -2112,7 +2112,7 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 
 	file, err := os.Open(source.Path)
 	if err != nil {
-		trace.Result = "error"
+		trace.Result = CacheResultError
 		trace.DurationUs = time.Since(started).Microseconds()
 		return "", trace, err
 	}
@@ -2122,14 +2122,14 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 		if source.CachePath != "" {
 			if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "lock_precheck_metadata"); ok {
 				trace.Hash = metadataHash
-				trace.Result = "already_present_after_lock"
+				trace.Result = CacheResultAlreadyPresentAfterLock
 				return metadataHash, nil
 			} else if status != "" && status != contentStatusComplete {
 				repairStatus = status
 			}
 		}
 		if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "lock_precheck_content_hash"); ok {
-			trace.Result = "already_present_after_lock"
+			trace.Result = CacheResultAlreadyPresentAfterLock
 			return opts.RoutingKey, nil
 		} else if status != "" && status != contentStatusComplete {
 			repairStatus = status
@@ -2154,12 +2154,12 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 		waitStarted := time.Now()
 		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), storeContentLockWaitTimeout) {
 			check := c.selectedHostContentCheckWithTrace(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), &trace, "lock_wait_result")
-			trace.addStoreAttempt(0, check.host, "lock_wait", "present", 0, info.Size(), check.status, time.Since(waitStarted), nil)
-			trace.Result = "lock_wait_present"
+			trace.addStoreAttempt(0, check.host, "lock_wait", CacheResultPresent, 0, info.Size(), check.status, time.Since(waitStarted), nil)
+			trace.Result = CacheResultLockWaitPresent
 			trace.DurationUs = time.Since(started).Microseconds()
 			return opts.RoutingKey, trace, nil
 		}
-		trace.addStoreAttempt(0, nil, "lock_wait", "timeout", 0, info.Size(), "", time.Since(waitStarted), ErrUnableToAcquireLock)
+		trace.addStoreAttempt(0, nil, "lock_wait", CacheResultTimeout, 0, info.Size(), "", time.Since(waitStarted), ErrUnableToAcquireLock)
 		hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
 	}
 	if err != nil {
@@ -2168,7 +2168,7 @@ func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, o
 		return hash, trace, err
 	}
 	if trace.Result == "" {
-		trace.Result = "stored"
+		trace.Result = CacheResultStored
 	}
 	trace.DurationUs = time.Since(started).Microseconds()
 
@@ -2345,18 +2345,18 @@ func (c *Client) storeContentFromReaderWithContextAndTrace(ctx context.Context, 
 	return "", ErrHostNotFound
 }
 
-func storeRepairResult(status string) string {
+func storeRepairResult(status string) CacheResult {
 	switch status {
 	case contentStatusMissing:
-		return "stored_missing"
+		return CacheResultStoredMissing
 	case contentStatusPartial:
-		return "stored_partial"
+		return CacheResultStoredPartial
 	case contentStatusSizeMismatch:
-		return "stored_size_mismatch"
+		return CacheResultStoredSizeMismatch
 	case contentStatusIncomplete, "":
-		return "stored_incomplete"
+		return CacheResultStoredIncomplete
 	default:
-		return "stored_" + status
+		return CacheResult("stored_" + status)
 	}
 }
 

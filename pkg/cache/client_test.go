@@ -29,7 +29,7 @@ type countingCacheMetadataStore struct {
 	setStoreFromContentLockCalls int
 }
 
-func requireTraceAttempt(t *testing.T, trace OperationTrace, source string, result string, status string) {
+func requireTraceAttempt(t *testing.T, trace OperationTrace, source string, result CacheResult, status string) {
 	t.Helper()
 	for _, attempt := range trace.Attempts {
 		if attempt.Source == source && attempt.Result == result && attempt.ContentStatus == status {
@@ -538,9 +538,9 @@ func TestClientLocalPageFileViewsFallsBackToRankedSameNodeHost(t *testing.T) {
 	require.Equal(t, 4, views[0].Length)
 	require.Len(t, trace.Attempts, 2)
 	require.Equal(t, primaryHost.HostId, trace.Attempts[0].HostID)
-	require.Equal(t, "miss", trace.Attempts[0].Result)
+	require.Equal(t, CacheResultMiss, trace.Attempts[0].Result)
 	require.Equal(t, replicaHost.HostId, trace.Attempts[1].HostID)
-	require.Equal(t, "hit", trace.Attempts[1].Result)
+	require.Equal(t, CacheResultHit, trace.Attempts[1].Result)
 
 	cached := client.localHostCache[newLocalHostCacheKey(hash, hash)]
 	require.NotNil(t, cached)
@@ -1137,8 +1137,8 @@ func TestStoreContentFromLocalFileWithHashSkipsSelectedHostWhenAlreadyCachedWith
 	})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
-	require.Equal(t, "already_present", trace.Result)
-	requireTraceAttempt(t, trace, "precheck_content_hash_remote", contentStatusComplete, contentStatusComplete)
+	require.Equal(t, CacheResultAlreadyPresent, trace.Result)
+	requireTraceAttempt(t, trace, "precheck_content_hash_remote", CacheResultComplete, contentStatusComplete)
 	require.Zero(t, metadataStore.setStoreFromContentLockCalls)
 }
 
@@ -1205,9 +1205,9 @@ func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
-	require.Equal(t, "stored_missing", trace.Result)
-	requireTraceAttempt(t, trace, "precheck_content_hash_remote", contentStatusMissing, contentStatusMissing)
-	requireTraceAttempt(t, trace, "store_selected_host", "stored", contentStatusComplete)
+	require.Equal(t, CacheResultStoredMissing, trace.Result)
+	requireTraceAttempt(t, trace, "precheck_content_hash_remote", CacheResultMissing, contentStatusMissing)
+	requireTraceAttempt(t, trace, "store_selected_host", CacheResultStored, contentStatusComplete)
 	require.Empty(t, metadataStore.locks)
 
 	require.Eventually(t, func() bool {
@@ -1280,9 +1280,9 @@ func TestStoreContentFromLocalFileContentOnlyDoesNotPublishCacheFSMetadata(t *te
 	})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
-	require.Equal(t, "stored_missing", trace.Result)
-	requireTraceAttempt(t, trace, "precheck_content_hash_remote", contentStatusMissing, contentStatusMissing)
-	requireTraceAttempt(t, trace, "store_selected_host", "stored", contentStatusComplete)
+	require.Equal(t, CacheResultStoredMissing, trace.Result)
+	requireTraceAttempt(t, trace, "precheck_content_hash_remote", CacheResultMissing, contentStatusMissing)
+	requireTraceAttempt(t, trace, "store_selected_host", CacheResultStored, contentStatusComplete)
 	for _, metadata := range remoteMetadataStore.fsNodes {
 		require.NotEqual(t, "/images/cache/"+expectedHash, metadata.Path)
 	}
@@ -1388,9 +1388,9 @@ func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *t
 	})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
-	require.Equal(t, "stored_missing", trace.Result)
-	requireTraceAttempt(t, trace, "precheck_metadata_remote", contentStatusMissing, contentStatusMissing)
-	requireTraceAttempt(t, trace, "store_selected_host", "stored", contentStatusComplete)
+	require.Equal(t, CacheResultStoredMissing, trace.Result)
+	requireTraceAttempt(t, trace, "precheck_metadata_remote", CacheResultMissing, contentStatusMissing)
+	requireTraceAttempt(t, trace, "store_selected_host", CacheResultStored, contentStatusComplete)
 
 	require.Eventually(t, func() bool {
 		selected := make([]byte, len(content))
@@ -1478,9 +1478,9 @@ func TestStoreContentFromLocalFileRepairsPartialSelectedHost(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, got)
-	require.Equal(t, "stored_partial", trace.Result)
-	requireTraceAttempt(t, trace, "precheck_metadata_remote", contentStatusPartial, contentStatusPartial)
-	requireTraceAttempt(t, trace, "store_selected_host", "stored", contentStatusComplete)
+	require.Equal(t, CacheResultStoredPartial, trace.Result)
+	requireTraceAttempt(t, trace, "precheck_metadata_remote", CacheResultPartial, contentStatusPartial)
+	requireTraceAttempt(t, trace, "store_selected_host", CacheResultStored, contentStatusComplete)
 	require.True(t, selectedServer.cas.Exists(expectedHash, info.Size()))
 
 	selected := make([]byte, len(content))

@@ -261,25 +261,16 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 	a.cacheBytes += event.Bytes
 	a.cacheTotal += event.Duration
 	switch {
-	case event.Result == "hit" ||
-		event.Result == "stored_or_present" ||
-		event.Result == "already_present" ||
-		event.Result == "already_present_after_lock" ||
-		event.Result == "lock_wait_present":
+	case event.Result.IsHitLike():
 		a.cacheHitCount++
-	case event.Result == "miss" ||
-		event.Result == "missing" ||
-		event.Result == "partial" ||
-		event.Result == "size_mismatch" ||
-		event.Result == "stored" ||
-		strings.HasPrefix(event.Result, "stored_"):
+	case event.Result.IsMissLike():
 		a.cacheMissCount++
-	case event.Result == "unavailable" || event.Result == "lock_unavailable":
+	case event.Result.IsUnavailableLike():
 		a.cacheUnavailableCount++
-	case event.Result == "error":
+	case event.Result.IsErrorLike():
 		a.cacheErrorCount++
 	}
-	if event.Error != "" && event.Result != "error" {
+	if event.Error != "" && !event.Result.IsErrorLike() {
 		a.cacheErrorCount++
 		if a.firstError == "" && event.Error != "" {
 			a.firstError = event.Error
@@ -290,13 +281,14 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 	}
 
 	sizeBucket := imageContentCacheTraceSizeBucket(event)
-	a.addCacheRollup(a.byCacheOperation, clipReadRollupKey(event.Operation, event.Result), event.Operation, event.Result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
-	a.addCacheRollup(a.byCacheResult, clipReadRollupKey(event.Result, event.Operation), event.Operation, event.Result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
-	a.addCacheRollup(a.byCacheSize, clipReadRollupKey(sizeBucket, event.Operation, event.Result), event.Operation, event.Result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+	result := event.Result.String()
+	a.addCacheRollup(a.byCacheOperation, clipReadRollupKey(event.Operation, result), event.Operation, result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+	a.addCacheRollup(a.byCacheResult, clipReadRollupKey(result, event.Operation), event.Operation, result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+	a.addCacheRollup(a.byCacheSize, clipReadRollupKey(sizeBucket, event.Operation, result), event.Operation, result, "", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
 
 	if len(event.Trace.Attempts) == 0 {
-		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, "content_cache", event.Result), event.Operation, event.Result, "content_cache", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
-		a.addCacheRollup(a.byCacheMethod, clipReadRollupKey("content_cache", event.Operation, event.Result), event.Operation, event.Result, "content_cache", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+		a.addCacheRollup(a.byCacheSource, clipReadRollupKey(event.Operation, "content_cache", result), event.Operation, result, "content_cache", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
+		a.addCacheRollup(a.byCacheMethod, clipReadRollupKey("content_cache", event.Operation, result), event.Operation, result, "content_cache", "content_cache", sizeBucket, nil, durationUs, event.Bytes, event.Read, event.Error)
 		return
 	}
 
@@ -309,10 +301,11 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 		if source == "" {
 			source = "unknown"
 		}
-		result := attempt.Result
-		if result == "" {
-			result = event.Result
+		resultType := attempt.Result
+		if resultType == "" {
+			resultType = event.Result
 		}
+		result := resultType.String()
 		method := imageContentCacheAttemptMethod(source)
 		attemptSizeBucket := sizeBucket
 		if attempt.SizeBucket != "" && attempt.SizeBucket != "unknown" {
@@ -424,7 +417,8 @@ func (a *clipReadAggregate) addCacheRollup(target map[string]*clipCacheRollup, k
 	}
 
 	rollup.Count++
-	if err != "" || result == "miss" || result == "unavailable" || result == "error" {
+	resultType := cache.CacheResultFromString(result)
+	if err != "" || resultType == cache.CacheResultMiss || resultType == cache.CacheResultUnavailable || resultType == cache.CacheResultError {
 		rollup.ErrorCount++
 	}
 	rollup.TotalUs += durationUs
@@ -569,21 +563,21 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 
 func clipCacheAggregateResult(aggregate *clipReadAggregate) string {
 	if aggregate == nil || aggregate.cacheCount == 0 {
-		return "none"
+		return cache.CacheResultNone.String()
 	}
 	if aggregate.cacheMissCount > 0 {
-		return "miss"
+		return cache.CacheResultMiss.String()
 	}
 	if aggregate.cacheUnavailableCount > 0 {
-		return "unavailable"
+		return cache.CacheResultUnavailable.String()
 	}
 	if aggregate.cacheErrorCount > 0 {
-		return "error"
+		return cache.CacheResultError.String()
 	}
 	if aggregate.cacheHitCount > 0 {
-		return "hit"
+		return cache.CacheResultHit.String()
 	}
-	return "unknown"
+	return cache.CacheResultUnknown.String()
 }
 
 func isCanonicalClipRead(operation string) bool {

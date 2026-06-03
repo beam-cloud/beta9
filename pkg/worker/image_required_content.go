@@ -239,7 +239,7 @@ func (c *ImageClient) reportClipRequiredContentCacheEvent(request *types.Contain
 	if c == nil || c.requiredContent == nil || request == nil {
 		return
 	}
-	if !strings.HasPrefix(event.Operation, "store_") || event.Result == "error" || event.Hash == "" {
+	if !strings.HasPrefix(event.Operation, "store_") || event.Result.IsErrorLike() || event.Hash == "" {
 		return
 	}
 	kind := cache.RequiredContentKindClipV1

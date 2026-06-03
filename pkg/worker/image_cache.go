@@ -52,7 +52,7 @@ type imageContentCacheObserver func(imageContentCacheTrace)
 
 type imageContentCacheTrace struct {
 	Operation  string
-	Result     string
+	Result     cache.CacheResult
 	ImageID    string
 	Kind       string
 	Hash       string
@@ -117,20 +117,20 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 		elapsed := time.Since(started)
 		result := imageContentCacheReadResult(err, read, length)
 		switch result {
-		case "hit":
+		case cache.CacheResultHit:
 			c.readHits.Add(1)
-		case "miss":
+		case cache.CacheResultMiss:
 			c.readMisses.Add(1)
-		case "unavailable":
+		case cache.CacheResultUnavailable:
 			c.readUnavailable.Add(1)
-		case "short_read":
+		case cache.CacheResultShortRead:
 			c.readShortReads.Add(1)
 		}
 		if err != nil || read != length {
 			c.readErrors.Add(1)
 			log.Warn().
 				Err(err).
-				Str("cache_result", result).
+				Str("cache_result", result.String()).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -142,7 +142,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 				Msg("clip image content cache read result")
 		} else if elapsed > imageContentCacheSlowRead {
 			log.Debug().
-				Str("cache_result", result).
+				Str("cache_result", result.String()).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -255,18 +255,18 @@ func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 		elapsed := time.Since(started)
 		result := imageContentCachePageViewResult(err, len(views))
 		switch result {
-		case "hit":
+		case cache.CacheResultHit:
 			c.pageViewHits.Add(1)
 			c.pageViewBytes.Add(length)
-		case "miss":
+		case cache.CacheResultMiss:
 			c.pageViewMisses.Add(1)
-		case "unavailable", "error":
+		case cache.CacheResultUnavailable, cache.CacheResultError:
 			c.pageViewErrors.Add(1)
 		}
 		if err != nil {
 			log.Warn().
 				Err(err).
-				Str("cache_result", result).
+				Str("cache_result", result.String()).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -278,7 +278,7 @@ func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 				Msg("clip image content cache client-local page-file views result")
 		} else if len(views) == 0 || elapsed > imageContentCacheSlowRead {
 			log.Debug().
-				Str("cache_result", result).
+				Str("cache_result", result.String()).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -358,13 +358,13 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	actualHash, err := c.client.StoreContent(countingChunks, hash, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
 	close(done)
 	elapsed := time.Since(started)
-	result := "stored_or_present"
+	result := cache.CacheResultStoredOrPresent
 	if err != nil {
-		result = "error"
+		result = cache.CacheResultError
 		c.storeErrors.Add(1)
 		log.Warn().
 			Err(err).
-			Str("cache_result", "error").
+			Str("cache_result", result.String()).
 			Str("image_id", c.imageID).
 			Str("kind", c.kind).
 			Str("hash", shortHash(hash)).
@@ -377,7 +377,7 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	}
 	if err == nil && elapsed > imageContentCacheSlowStore {
 		log.Debug().
-			Str("cache_result", "stored_or_present").
+			Str("cache_result", result.String()).
 			Str("image_id", c.imageID).
 			Str("kind", c.kind).
 			Str("hash", shortHash(hash)).
@@ -419,14 +419,14 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 		elapsed := time.Since(started)
 		result := cacheTrace.Result
 		if result == "" {
-			result = "stored_or_present"
+			result = cache.CacheResultStoredOrPresent
 		}
 		if err != nil {
-			result = "error"
+			result = cache.CacheResultError
 			c.storeErrors.Add(1)
 			log.Warn().
 				Err(err).
-				Str("cache_result", result).
+				Str("cache_result", result.String()).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -439,7 +439,7 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 		}
 		if err == nil && elapsed > imageContentCacheSlowStore {
 			log.Debug().
-				Str("cache_result", result).
+				Str("cache_result", result.String()).
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
@@ -537,33 +537,33 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
-func imageContentCacheReadResult(err error, read int64, length int64) string {
+func imageContentCacheReadResult(err error, read int64, length int64) cache.CacheResult {
 	switch {
 	case err == nil && read == length:
-		return "hit"
+		return cache.CacheResultHit
 	case errors.Is(err, clipStorage.ErrContentCacheMiss):
-		return "miss"
+		return cache.CacheResultMiss
 	case errors.Is(err, clipStorage.ErrContentCacheUnavailable):
-		return "unavailable"
+		return cache.CacheResultUnavailable
 	case err == nil && read != length:
-		return "short_read"
+		return cache.CacheResultShortRead
 	default:
-		return "error"
+		return cache.CacheResultError
 	}
 }
 
-func imageContentCachePageViewResult(err error, viewCount int) string {
+func imageContentCachePageViewResult(err error, viewCount int) cache.CacheResult {
 	switch {
 	case err == nil && viewCount > 0:
-		return "hit"
+		return cache.CacheResultHit
 	case err == nil:
-		return "miss"
+		return cache.CacheResultMiss
 	case errors.Is(err, clipStorage.ErrContentCacheMiss):
-		return "miss"
+		return cache.CacheResultMiss
 	case errors.Is(err, clipStorage.ErrContentCacheUnavailable):
-		return "unavailable"
+		return cache.CacheResultUnavailable
 	default:
-		return "error"
+		return cache.CacheResultError
 	}
 }
 

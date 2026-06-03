@@ -374,7 +374,7 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 	buf := make([]byte, req.length)
 	n64, err := cs.cas.ReadAt(req.hash, req.offset, buf)
 	if err != nil || n64 != req.length {
-		status = "miss"
+		status = CacheResultMiss.String()
 		atomic.AddInt64(&cachePathStats.serverRawMisses, 1)
 		_ = writeRawReadResponseHeader(conn, rawReadStatusMiss, 0)
 		return
