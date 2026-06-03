@@ -34,6 +34,7 @@ const (
 	cacheDefaultMinRetryBytes           = 0
 	cacheDefaultGetAttempts             = 3
 	cacheDefaultPageFileBuckets         = 1024
+	cacheDefaultSmallRangeCopyBytes     = 128 * 1024
 	cacheDefaultPageFDCacheSize         = 64
 	cacheDefaultRawMaxActiveConns       = 64
 	cacheDefaultRawMaxIdleConns         = 16
@@ -636,6 +637,9 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Server.PageFileBuckets == 0 {
 		cacheConfig.Server.PageFileBuckets = cacheDefaultPageFileBuckets
+	}
+	if cacheConfig.Server.SmallRangeCopyThresholdBytes == 0 {
+		cacheConfig.Server.SmallRangeCopyThresholdBytes = cacheDefaultSmallRangeCopyBytes
 	}
 	cacheConfig.Server.ReadTransport.Enabled = true
 	cacheConfig.Server.ReadTransport.Sendfile = true

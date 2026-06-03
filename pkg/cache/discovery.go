@@ -124,6 +124,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 				return
 			}
 
+			d.hostMap.Set(host)
 			mu.Lock()
 			selectedHosts = append(selectedHosts, host)
 			mu.Unlock()

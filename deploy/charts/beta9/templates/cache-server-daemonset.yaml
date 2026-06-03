@@ -20,6 +20,9 @@ spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 60
+      {{- with .Values.cacheServer.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       {{- if .Values.cacheServer.hostNetwork }}
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
@@ -42,8 +45,8 @@ spec:
       {{- end }}
       containers:
       - name: worker
-        image: {{ .Values.images.worker.repository }}:{{ .Values.images.worker.tag | default .Chart.AppVersion }}
-        imagePullPolicy: {{ .Values.images.worker.pullPolicy | default "IfNotPresent" }}
+        image: {{ .Values.cacheServer.image.repository | default .Values.images.worker.repository }}:{{ .Values.cacheServer.image.tag | default .Values.images.worker.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.cacheServer.image.pullPolicy | default .Values.images.worker.pullPolicy | default "IfNotPresent" }}
         command:
         - /usr/bin/tini
         - -g
