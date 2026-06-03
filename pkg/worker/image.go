@@ -408,12 +408,24 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 		return
 	}
 
-	// Required content is immutable per stub, so enumerate and publish it only
-	// the first time the stub loads, not on every container start.
-	if !c.contentReporter.shouldGenerateRequiredContent(request.StubId) {
+	items, kind := requiredContentItems(meta)
+	if len(items) == 0 {
+		// Nothing to report; do not claim the one-time generation so a later
+		// load that does yield items can still publish them.
 		return
 	}
 
+	// Required content is immutable per stub, so publish it only the first time
+	// the stub loads, not on every container start.
+	if !c.contentReporter.shouldGenerateRequiredContent(request.StubId) {
+		return
+	}
+	c.contentReporter.reportItems(request.WorkspaceId, request.StubId, kind, items)
+}
+
+// requiredContentItems enumerates the content a stub's image requires from its
+// CLIP metadata, returning the items and their content kind.
+func requiredContentItems(meta *clipCommon.ClipArchiveMetadata) ([]types.CacheRequiredContentItem, types.CacheContentKind) {
 	// CLIP v2 (OCI): decompressed layer hashes are available directly from
 	// image metadata, keyed by layer digest. The non-secret source descriptor
 	// is the full OCI layer reference so the HRW owner can fetch and decompress
@@ -432,13 +444,12 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 				Kind:         types.CacheContentKindClipV2,
 			})
 		}
-		c.contentReporter.reportItems(request.WorkspaceId, request.StubId, types.CacheContentKindClipV2, items)
-		return
+		return items, types.CacheContentKindClipV2
 	}
 
 	// CLIP v1: deduplicated content hashes from the archive index.
 	if meta.Index == nil {
-		return
+		return nil, types.CacheContentKindClipV1
 	}
 	seen := map[string]struct{}{}
 	items := make([]types.CacheRequiredContentItem, 0)
@@ -464,7 +475,7 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 		})
 		return true
 	})
-	c.contentReporter.reportItems(request.WorkspaceId, request.StubId, types.CacheContentKindClipV1, items)
+	return items, types.CacheContentKindClipV1
 }
 
 // ociLayerReference builds a fully-qualified, non-secret OCI layer digest

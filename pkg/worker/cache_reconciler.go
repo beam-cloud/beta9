@@ -1,5 +1,20 @@
 package worker
 
+// This file implements the cache required-content reconciliation that runs on
+// workers. Responsibilities are split to keep the worker boundary clear:
+//
+//   - cacheContentReporter: records, on the worker, which content a stub needs
+//     (coalesced to S2) and refreshes the per-stub recency window. It never
+//     decides placement or moves bytes.
+//   - WorkerCacheManager reconcile loop: on the node that currently hosts the
+//     cache server, materializes content the local host owns (HRW) and is
+//     missing, copying from a replica or fetching from origin.
+//
+// The worker is trustless: all coordinator state (recent stubs, locks) is
+// brokered through the gateway, and all origin credentials are fetched from the
+// gateway on demand and held in memory only. Nothing secret is written to disk,
+// Redis, or S2.
+
 import (
 	"compress/gzip"
 	"context"
@@ -15,10 +30,19 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-const originCredentialsTTL = 5 * time.Minute
+const (
+	reporterFlushInterval    = 5 * time.Second
+	reporterMaxItemsPerEvent = 512
+	reconcileItemTimeout     = 5 * time.Minute
+	originCredentialsTTL     = 5 * time.Minute
+	// reconcileFailureBackoff throttles retries (and logs) for items that fail
+	// to materialize, e.g. an unresolvable origin source.
+	reconcileFailureBackoff = 15 * time.Minute
+)
 
 // originCredentials holds short-lived, gateway-brokered credentials used to
 // fetch content from origin during reconciliation. It is held in memory only
@@ -29,11 +53,35 @@ type originCredentials struct {
 	fetchedAt           time.Time
 }
 
-const (
-	reporterFlushInterval    = 5 * time.Second
-	reporterMaxItemsPerEvent = 512
-	reconcileItemTimeout     = 5 * time.Minute
-)
+// reconcileInterval is how often a cache host scans for content to reconcile.
+func (m *WorkerCacheManager) reconcileInterval() time.Duration {
+	seconds := m.config.Cache.Reconciliation.IntervalSeconds
+	if seconds <= 0 {
+		seconds = cacheDefaultReconcileIntervalS
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// recentStubTTL is the recency window ("X amount of time"): a stub whose most
+// recent container started longer ago than this is dropped from the recent
+// index and is no longer reconciled. It is refreshed on every container start.
+func (m *WorkerCacheManager) recentStubTTL() time.Duration {
+	seconds := m.config.Cache.Reconciliation.RecentStubTTLSeconds
+	if seconds <= 0 {
+		seconds = cacheDefaultReconcileRecentStubTTLS
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// reconcileLockTTLSeconds bounds how long a single materialization may hold the
+// per-item lifecycle lock.
+func (m *WorkerCacheManager) reconcileLockTTLSeconds() int {
+	seconds := m.config.Cache.Reconciliation.LockTTLSeconds
+	if seconds <= 0 {
+		seconds = cacheDefaultReconcileLockTTLS
+	}
+	return seconds
+}
 
 // cacheContentReporter coalesces required-content reports per (stub, kind) and
 // flushes them to S2 as bounded events, while keeping a fast-moving recent-stub
@@ -275,12 +323,7 @@ func (m *WorkerCacheManager) activeStubsForWorkspace(workspaceID string) []strin
 func (m *WorkerCacheManager) runReconciliation() {
 	defer m.wg.Done()
 
-	interval := time.Duration(m.config.Cache.Reconciliation.IntervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = cacheDefaultReconcileIntervalS * time.Second
-	}
-
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(m.reconcileInterval())
 	defer ticker.Stop()
 
 	for {
@@ -312,9 +355,14 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
-	recCfg := m.config.Cache.Reconciliation
-	recentTTL := time.Duration(recCfg.RecentStubTTLSeconds) * time.Second
-	stubs, err := m.metadataStore.ListRecentStubs(m.ctx, m.locality, recentTTL, recCfg.MaxStubsPerCycle)
+	maxStubs := m.config.Cache.Reconciliation.MaxStubsPerCycle
+	if maxStubs <= 0 {
+		maxStubs = cacheDefaultReconcileMaxStubsCycle
+	}
+
+	// Only stubs accessed within the recency window are reconciled; older stubs
+	// have aged out of the recent index and their content is left to expire.
+	stubs, err := m.metadataStore.ListRecentStubs(m.ctx, m.locality, m.recentStubTTL(), maxStubs)
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Msg("cache reconciliation failed to list recent stubs")
 		return
@@ -349,13 +397,23 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 			routingKey = item.Hash
 		}
 
-		owner, err := m.client.SelectedActiveHost(routingKey)
-		if err != nil || owner == nil || owner.HostId != localHostID {
-			// Not the active HRW owner for this item; another live host will claim it.
+		// Materialize only on the host a read would actually resolve to (the
+		// primary host in the read's HRW window). This keeps reconciled content
+		// on the same host the read path looks up first, preventing misses for
+		// recent stubs; other hosts leave the item to the primary.
+		primary, err := m.client.PrimaryReadHost(routingKey)
+		if err != nil || primary == nil || primary.HostId != localHostID {
 			continue
 		}
 
 		if server.HasCompleteContent(item.Hash, item.SizeBytes) {
+			continue
+		}
+
+		// Back off items that recently failed to materialize (e.g. an
+		// unresolvable origin source) so they are not retried and re-logged
+		// every cycle.
+		if m.reconcileBackingOff(item.Hash, routingKey) {
 			continue
 		}
 
@@ -364,13 +422,7 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 }
 
 func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) {
-	recCfg := m.config.Cache.Reconciliation
-	lockTTLS := recCfg.LockTTLSeconds
-	if lockTTLS <= 0 {
-		lockTTLS = cacheDefaultReconcileLockTTLS
-	}
-
-	acquired, err := m.metadataStore.AcquireReconcileLock(m.ctx, m.locality, localHostID, item.Hash, lockTTLS)
+	acquired, err := m.metadataStore.AcquireReconcileLock(m.ctx, m.locality, localHostID, item.Hash, m.reconcileLockTTLSeconds())
 	if err != nil || !acquired {
 		// Another materialization is already in flight for this item (or the
 		// coordinator is unavailable); try again next cycle.
@@ -390,13 +442,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	ctx, cancel := context.WithTimeout(m.ctx, reconcileItemTimeout)
 	defer cancel()
 
-	log.Info().
-		Str("locality", m.locality).
-		Str("logical_host", localHostID).
-		Str("workspace_id", stub.WorkspaceID).
-		Str("stub_id", stub.StubID).
-		Str("hash", item.Hash).
-		Str("kind", string(item.Kind)).
+	m.reconcileLogFields(log.Info(), localHostID, stub, item).
 		Str("source", item.Source).
 		Int64("size_bytes", item.SizeBytes).
 		Msg("reconciling missing cache content")
@@ -404,22 +450,66 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	startedAt := time.Now()
 	status := m.materialize(ctx, server, stub, item, routingKey)
 
-	event := log.Info()
+	result := log.Info()
 	if status != types.CacheAuditStatusMaterialized {
-		event = log.Warn()
+		result = log.Warn()
 	}
-	event.
+	m.reconcileLogFields(result, localHostID, stub, item).
+		Str("status", status).
+		Dur("duration", time.Since(startedAt)).
+		Msg("cache content reconciled")
+
+	if status == types.CacheAuditStatusMaterialized {
+		m.clearReconcileFailure(item.Hash, routingKey)
+	} else {
+		m.recordReconcileFailure(item.Hash, routingKey)
+	}
+
+	m.auditCacheEvent(localHostID, stub, item, routingKey, status)
+}
+
+// reconcileBackingOff reports whether an item failed to materialize recently and
+// should be skipped until the backoff window elapses. Expired entries are pruned
+// so the map only tracks currently-failing items.
+func (m *WorkerCacheManager) reconcileBackingOff(hash, routingKey string) bool {
+	key := hash + "\x00" + routingKey
+	m.reconcileFailuresMu.Lock()
+	defer m.reconcileFailuresMu.Unlock()
+
+	failedAt, ok := m.reconcileFailures[key]
+	if !ok {
+		return false
+	}
+	if time.Since(failedAt) < reconcileFailureBackoff {
+		return true
+	}
+	delete(m.reconcileFailures, key)
+	return false
+}
+
+func (m *WorkerCacheManager) recordReconcileFailure(hash, routingKey string) {
+	key := hash + "\x00" + routingKey
+	m.reconcileFailuresMu.Lock()
+	m.reconcileFailures[key] = time.Now()
+	m.reconcileFailuresMu.Unlock()
+}
+
+func (m *WorkerCacheManager) clearReconcileFailure(hash, routingKey string) {
+	key := hash + "\x00" + routingKey
+	m.reconcileFailuresMu.Lock()
+	delete(m.reconcileFailures, key)
+	m.reconcileFailuresMu.Unlock()
+}
+
+// reconcileLogFields adds the fields common to per-item reconciliation logs.
+func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem) *zerolog.Event {
+	return event.
 		Str("locality", m.locality).
 		Str("logical_host", localHostID).
 		Str("workspace_id", stub.WorkspaceID).
 		Str("stub_id", stub.StubID).
 		Str("hash", item.Hash).
-		Str("kind", string(item.Kind)).
-		Str("status", status).
-		Dur("duration", time.Since(startedAt)).
-		Msg("cache content reconciled")
-
-	m.auditCacheEvent(localHostID, stub, item, routingKey, status)
+		Str("kind", string(item.Kind))
 }
 
 // materialize copies content for an owned item onto the local cache server. It
@@ -537,7 +627,10 @@ func (m *WorkerCacheManager) originCredentials(ctx context.Context, workspaceID,
 		return nil
 	}
 
-	key := workspaceID + "|" + stubID
+	// The registry is part of the key: registry credentials are registry-scoped,
+	// so callers requesting different registries (or none, for volume fetches)
+	// must not reuse each other's cached auth.
+	key := workspaceID + "\x00" + stubID + "\x00" + registry
 	m.originCredsMu.Lock()
 	if cached, ok := m.originCredsCache[key]; ok && time.Since(cached.fetchedAt) < originCredentialsTTL {
 		m.originCredsMu.Unlock()

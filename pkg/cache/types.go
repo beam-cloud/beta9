@@ -38,7 +38,6 @@ type ReconciliationConfig struct {
 	RecentStubTTLSeconds  int  `key:"recentStubTTLSeconds" json:"recent_stub_ttl_seconds"`
 	LockTTLSeconds        int  `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
 	MaxStubsPerCycle      int  `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
-	StatusTTLSeconds      int  `key:"statusTTLSeconds" json:"status_ttl_seconds"`
 	OriginFallbackEnabled bool `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 }
 

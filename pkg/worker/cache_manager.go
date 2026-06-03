@@ -55,7 +55,6 @@ const (
 	cacheDefaultReconcileIntervalS      = 60
 	cacheDefaultReconcileRecentStubTTLS = 7 * 24 * 60 * 60 // 7 days after a stub's last container
 	cacheDefaultReconcileLockTTLS       = 300
-	cacheDefaultReconcileStatusTTLS     = 7 * 24 * 60 * 60
 	cacheDefaultReconcileMaxStubsCycle  = 256
 	cacheDefaultVolumeReportMinKB       = 1024
 )
@@ -79,6 +78,8 @@ type WorkerCacheManager struct {
 	reporter              *cacheContentReporter
 	originCredsMu         sync.Mutex
 	originCredsCache      map[string]*originCredentials
+	reconcileFailuresMu   sync.Mutex
+	reconcileFailures     map[string]time.Time
 	client                *cache.Client
 	server                *cache.Server
 	serverLock            *os.File
@@ -113,6 +114,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		nodeID:             nodeID,
 		locality:           locality,
 		originCredsCache:   make(map[string]*originCredentials),
+		reconcileFailures:  make(map[string]time.Time),
 	}
 }
 
@@ -186,15 +188,18 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 		log.Warn().Msg("cache reconciliation disabled: cache metadata store is unavailable")
 		return
 	}
+	if m.eventRepo == nil {
+		log.Warn().Msg("cache reconciliation disabled: event repository is unavailable")
+		return
+	}
 
-	recentTTL := time.Duration(recCfg.RecentStubTTLSeconds) * time.Second
 	m.reporter = newCacheContentReporter(
 		m.ctx,
 		m.eventRepo,
 		m.metadataStore,
 		m.locality,
-		recentTTL,
-		int64(cacheVolumeReportMinBytes()),
+		m.recentStubTTL(),
+		cacheVolumeReportMinBytes(),
 		m.activeStubsForWorkspace,
 	)
 
@@ -203,7 +208,8 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 
 	log.Info().
 		Str("locality", m.locality).
-		Int("interval_seconds", recCfg.IntervalSeconds).
+		Dur("interval", m.reconcileInterval()).
+		Dur("recent_stub_ttl", m.recentStubTTL()).
 		Bool("origin_fallback", recCfg.OriginFallbackEnabled).
 		Msg("cache required-content reconciliation enabled")
 }
@@ -758,21 +764,9 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 		cacheConfig.Client.Prefetch.MaxPartsPerRead = cacheDefaultPrefetchMaxParts
 	}
 
-	if cacheConfig.Reconciliation.IntervalSeconds == 0 {
-		cacheConfig.Reconciliation.IntervalSeconds = cacheDefaultReconcileIntervalS
-	}
-	if cacheConfig.Reconciliation.RecentStubTTLSeconds == 0 {
-		cacheConfig.Reconciliation.RecentStubTTLSeconds = cacheDefaultReconcileRecentStubTTLS
-	}
-	if cacheConfig.Reconciliation.LockTTLSeconds == 0 {
-		cacheConfig.Reconciliation.LockTTLSeconds = cacheDefaultReconcileLockTTLS
-	}
-	if cacheConfig.Reconciliation.StatusTTLSeconds == 0 {
-		cacheConfig.Reconciliation.StatusTTLSeconds = cacheDefaultReconcileStatusTTLS
-	}
-	if cacheConfig.Reconciliation.MaxStubsPerCycle == 0 {
-		cacheConfig.Reconciliation.MaxStubsPerCycle = cacheDefaultReconcileMaxStubsCycle
-	}
+	// Reconciliation defaults are applied at read time by the manager's
+	// reconcile* helpers (the single source of truth), so they are intentionally
+	// not normalized here.
 
 	return cacheConfig
 }

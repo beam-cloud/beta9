@@ -66,8 +66,18 @@ func TestS2StubCacheRequiredContentUsesDedicatedStreamOnly(t *testing.T) {
 func TestS2StubCacheRequiredContentRequiresWorkspaceAndStub(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	if streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, eventMetadata{WorkspaceID: "workspace-123"}); len(streams) != 0 {
-		t.Fatalf("expected no streams without stub id, got %#v", streams)
+	cases := []struct {
+		name     string
+		metadata eventMetadata
+	}{
+		{name: "missing stub", metadata: eventMetadata{WorkspaceID: "workspace-123"}},
+		{name: "missing workspace", metadata: eventMetadata{StubID: "stub-456"}},
+		{name: "missing both", metadata: eventMetadata{}},
+	}
+	for _, tc := range cases {
+		if streams := repo.streamNamesForEvent(types.EventStubCacheRequiredContent, tc.metadata); len(streams) != 0 {
+			t.Fatalf("%s: expected no streams, got %#v", tc.name, streams)
+		}
 	}
 }
 

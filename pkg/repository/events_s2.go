@@ -996,43 +996,55 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		return nil, nil
 	}
 
-	seqNum := uint64(0)
-	count := uint64(defaultS2EventReadLimit)
-	batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-		SeqNum: &seqNum,
-		Count:  &count,
-	})
-	if err != nil {
-		if isS2RangeNotSatisfiable(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read stub cache required content from s2 stream %q: %w", streamName, err)
-	}
-
+	// Read the full stream (paginating past the per-read limit) so the coalesced
+	// required-content set is never truncated for stubs with many events.
 	merged := map[string]types.CacheRequiredContentItem{}
-	for _, record := range batch.Records {
-		var envelope struct {
-			Type string          `json:"type"`
-			Data json.RawMessage `json:"data"`
+	seqNum := uint64(0)
+	for {
+		count := uint64(defaultS2EventReadLimit)
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
+			SeqNum: &seqNum,
+			Count:  &count,
+		})
+		if err != nil {
+			if isS2RangeNotSatisfiable(err) {
+				break
+			}
+			return nil, fmt.Errorf("read stub cache required content from s2 stream %q: %w", streamName, err)
 		}
-		if err := json.Unmarshal(record.Body, &envelope); err != nil {
-			continue
+		if len(batch.Records) == 0 {
+			break
 		}
-		if envelope.Type != types.EventStubCacheRequiredContent {
-			continue
-		}
-		var schema types.EventStubCacheRequiredContentSchema
-		if err := json.Unmarshal(envelope.Data, &schema); err != nil {
-			continue
-		}
-		for _, item := range schema.Items {
-			if item.Hash == "" {
+
+		for _, record := range batch.Records {
+			var envelope struct {
+				Type string          `json:"type"`
+				Data json.RawMessage `json:"data"`
+			}
+			if err := json.Unmarshal(record.Body, &envelope); err != nil {
 				continue
 			}
-			if item.Kind == "" {
-				item.Kind = schema.Kind
+			if envelope.Type != types.EventStubCacheRequiredContent {
+				continue
 			}
-			merged[item.Hash+"\x00"+item.RoutingKey] = item
+			var schema types.EventStubCacheRequiredContentSchema
+			if err := json.Unmarshal(envelope.Data, &schema); err != nil {
+				continue
+			}
+			for _, item := range schema.Items {
+				if item.Hash == "" {
+					continue
+				}
+				if item.Kind == "" {
+					item.Kind = schema.Kind
+				}
+				merged[item.Hash+"\x00"+item.RoutingKey] = item
+			}
+		}
+
+		seqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
+		if uint64(len(batch.Records)) < count {
+			break
 		}
 	}
 

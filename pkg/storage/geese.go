@@ -80,10 +80,12 @@ func (s *GeeseStorage) reportVolumeContent(hash, sourcePath string, sizeBytes in
 // the event payload shape so it degrades to a no-op when the fork does not (yet)
 // surface content hashes/sizes.
 func (s *GeeseStorage) handleGeeseContentEvent(data map[string]interface{}) {
-	if s.volumeReporter == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return
 	}
 
+	// reportVolumeContent reads the reporter under the lock; avoid an
+	// unsynchronized read of s.volumeReporter here.
 	hash := firstStringValue(data, "content_hash", "hash")
 	if hash == "" {
 		return

@@ -2535,39 +2535,30 @@ func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheSto
 	return "", ErrHostNotFound
 }
 
-// SelectedActiveHost returns the rendezvous (HRW) owner for routingKey computed
-// only over currently-reachable hosts in the locality. Read placement
-// intentionally keeps unreachable hosts in the hasher as logical-only so reads
-// stay deterministic during churn; reconciliation must instead resolve to a
-// live host so some node always claims ownership after a membership change.
-func (c *Client) SelectedActiveHost(routingKey string) (*Host, error) {
+// PrimaryReadHost returns the host a read for routingKey would resolve to: the
+// highest-ranked reachable host within the read's HRW window, computed from the
+// same hasher and window the read path uses. Reconciliation materializes content
+// on this host so a subsequent read's HRW lookup hits it instead of missing on a
+// host that does not hold the content.
+//
+// It deliberately walks the full ranking (which retains unreachable logical-only
+// hosts so placement stays stable during churn) and returns the first reachable
+// host, mirroring how reads skip unavailable hosts and fall back in rank order.
+func (c *Client) PrimaryReadHost(routingKey string) (*Host, error) {
 	if routingKey == "" {
 		return nil, ErrHostNotFound
 	}
 
-	hosts, err := c.GetNearbyHosts()
-	if err != nil {
-		return nil, err
-	}
+	c.mu.RLock()
+	ranked := c.hasher.GetN(c.readReplicaHostCount(), routingKey)
+	c.mu.RUnlock()
 
-	hasher := rendezvous.New[*Host]()
-	active := 0
-	for _, host := range hosts {
-		if host == nil || host.HostId == "" || !host.HasEndpoint() {
-			continue
+	for _, host := range ranked {
+		if host != nil && host.HasEndpoint() {
+			return host, nil
 		}
-		hasher.Add(host)
-		active++
 	}
-	if active == 0 {
-		return nil, ErrHostNotFound
-	}
-
-	selected, _ := hasher.Get(routingKey)
-	if selected == nil {
-		return nil, ErrHostNotFound
-	}
-	return selected, nil
+	return nil, ErrHostNotFound
 }
 
 // MaterializeFromReplica streams the content for (hash, routingKey) from a

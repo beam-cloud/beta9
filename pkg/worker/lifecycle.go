@@ -944,7 +944,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	env = append(request.Env, env...)
 
 	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
-	if options.InitialSpec != nil {
+	if options.InitialSpec != nil && options.InitialSpec.Process != nil {
 		env = append(options.InitialSpec.Process.Env, env...)
 	}
 

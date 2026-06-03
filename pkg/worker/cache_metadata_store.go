@@ -16,6 +16,19 @@ func newGatewayCacheMetadataStore(client pb.WorkerRepositoryServiceClient) cache
 	return &gatewayCacheMetadataStore{client: client}
 }
 
+// clampInt32 safely narrows an int to int32, saturating instead of overflowing.
+func clampInt32(v int) int32 {
+	const maxInt32 = 1<<31 - 1
+	switch {
+	case v < 0:
+		return 0
+	case v > maxInt32:
+		return maxInt32
+	default:
+		return int32(v)
+	}
+}
+
 func (s *gatewayCacheMetadataStore) SetClientLock(ctx context.Context, hash string, host string) error {
 	_, err := handleGRPCResponse(s.client.SetCacheClientLock(ctx, &pb.SetCacheClientLockRequest{Hash: hash, HostId: host}))
 	return err
@@ -95,7 +108,7 @@ func (s *gatewayCacheMetadataStore) ListRecentStubs(ctx context.Context, localit
 	resp, err := handleGRPCResponse(s.client.ListRecentCacheStubs(ctx, &pb.ListRecentCacheStubsRequest{
 		Locality:   locality,
 		TtlSeconds: int64(ttl / time.Second),
-		Limit:      int32(limit),
+		Limit:      clampInt32(limit),
 	}))
 	if err != nil {
 		return nil, err

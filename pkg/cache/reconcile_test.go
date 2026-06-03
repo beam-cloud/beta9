@@ -12,60 +12,79 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSelectedActiveHostExcludesLogicalOnly(t *testing.T) {
-	active1 := &Host{HostId: "host-a", Addr: "10.0.0.1:2049"}
-	active2 := &Host{HostId: "host-b", PrivateAddr: "10.0.0.2:2049"}
-	logicalOnly := &Host{HostId: "host-c"} // no endpoint
-
+func newTestReadClient(nTopHosts int, hosts ...*Host) *Client {
 	c := &Client{
-		ctx:      context.Background(),
-		locality: "default",
-		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
-			return []*Host{active1, active2, logicalOnly}, nil
-		}),
+		ctx:          context.Background(),
+		clientConfig: ClientConfig{NTopHosts: nTopHosts},
+		hasher:       rendezvous.New[*Host](),
 	}
-
-	for i := 0; i < 50; i++ {
-		host, err := c.SelectedActiveHost(fmt.Sprintf("key-%d", i))
-		require.NoError(t, err)
-		require.True(t, host.HasEndpoint())
-		require.NotEqual(t, "host-c", host.HostId)
+	for _, host := range hosts {
+		c.hasher.Add(host)
 	}
+	return c
 }
 
-func TestSelectedActiveHostMatchesRendezvousOverActiveSet(t *testing.T) {
+func TestPrimaryReadHostMatchesReadRankZero(t *testing.T) {
 	active1 := &Host{HostId: "host-a", Addr: "10.0.0.1:2049"}
 	active2 := &Host{HostId: "host-b", Addr: "10.0.0.2:2049"}
 
-	c := &Client{
-		ctx: context.Background(),
-		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
-			return []*Host{active1, active2}, nil
-		}),
-	}
+	c := newTestReadClient(3, active1, active2)
 
-	hasher := rendezvous.New[*Host]()
-	hasher.Add(active1)
-	hasher.Add(active2)
-
-	for i := 0; i < 25; i++ {
-		key := fmt.Sprintf("k-%d", i)
-		want, _ := hasher.Get(key)
-		got, err := c.SelectedActiveHost(key)
+	// With all hosts reachable, the primary read host is exactly the read path's
+	// rank-0 host, so reconciliation materializes where reads look first.
+	for i := 0; i < 50; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		want := c.hasher.GetN(c.readReplicaHostCount(), key)[0]
+		got, err := c.PrimaryReadHost(key)
 		require.NoError(t, err)
 		require.Equal(t, want.HostId, got.HostId)
 	}
 }
 
-func TestSelectedActiveHostErrorsWithoutActiveHosts(t *testing.T) {
-	c := &Client{
-		ctx: context.Background(),
-		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
-			return []*Host{{HostId: "host-c"}}, nil // no endpoint
-		}),
-	}
+func TestPrimaryReadHostSkipsUnreachableInWindow(t *testing.T) {
+	active := &Host{HostId: "host-a", Addr: "10.0.0.1:2049"}
+	logicalOnly := &Host{HostId: "host-b"} // no endpoint
 
-	_, err := c.SelectedActiveHost("key")
+	c := newTestReadClient(3, active, logicalOnly)
+
+	// The primary read host is always reachable, mirroring how reads skip
+	// unavailable hosts and fall back in rank order within the window.
+	for i := 0; i < 50; i++ {
+		got, err := c.PrimaryReadHost(fmt.Sprintf("key-%d", i))
+		require.NoError(t, err)
+		require.True(t, got.HasEndpoint())
+		require.Equal(t, "host-a", got.HostId)
+	}
+}
+
+func TestPrimaryReadHostRespectsReadWindow(t *testing.T) {
+	active := &Host{HostId: "host-a", Addr: "10.0.0.1:2049"}
+	logicalOnly := &Host{HostId: "host-b"} // no endpoint
+
+	// With a window of 1, only the single highest-ranked host is considered, so
+	// for keys where the unreachable host ranks first there is no in-window
+	// target. Reconciliation must not place content outside the read window.
+	c := newTestReadClient(1, active, logicalOnly)
+
+	sawError := false
+	for i := 0; i < 50; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		host, err := c.PrimaryReadHost(key)
+		if err != nil {
+			sawError = true
+			continue
+		}
+		// When a host is returned it is the in-window rank-0 host and reachable.
+		require.True(t, host.HasEndpoint())
+		require.Equal(t, c.hasher.GetN(1, key)[0].HostId, host.HostId)
+	}
+	require.True(t, sawError, "expected at least one key whose in-window rank-0 host is unreachable")
+}
+
+func TestPrimaryReadHostErrorsWithoutReachableHosts(t *testing.T) {
+	c := newTestReadClient(3, &Host{HostId: "host-c"}) // no endpoint
+
+	_, err := c.PrimaryReadHost("key")
 	require.Error(t, err)
 }
 
@@ -107,20 +126,6 @@ func TestRecentStubsExcludesExpiredByTTL(t *testing.T) {
 	stubs, err := m.ListRecentStubs(ctx, "default", time.Nanosecond, 10)
 	require.NoError(t, err)
 	require.Empty(t, stubs)
-}
-
-func TestReconcileStatusRoundTrip(t *testing.T) {
-	ctx := context.Background()
-	m := newTestMetadata(t)
-
-	status, err := m.GetReconcileStatus(ctx, "default", "stub", "hash", "rk")
-	require.NoError(t, err)
-	require.Empty(t, status)
-
-	require.NoError(t, m.SetReconcileStatus(ctx, "default", "stub", "hash", "rk", "materialized", time.Hour))
-	status, err = m.GetReconcileStatus(ctx, "default", "stub", "hash", "rk")
-	require.NoError(t, err)
-	require.Equal(t, "materialized", status)
 }
 
 func TestMarkStubReportedClaimsOnce(t *testing.T) {

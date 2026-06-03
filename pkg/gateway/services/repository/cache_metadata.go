@@ -76,12 +76,22 @@ func (s *WorkerRepositoryService) RefreshCacheStoreFromContentLock(ctx context.C
 	return &pb.RefreshCacheStoreFromContentLockResponse{Ok: true}, nil
 }
 
-func (s *WorkerRepositoryService) AddRecentCacheStub(ctx context.Context, req *pb.AddRecentCacheStubRequest) (*pb.AddRecentCacheStubResponse, error) {
+// authorizeCacheMetadata authorizes a cache coordinator request and ensures the
+// metadata store is configured, returning a single error for handlers to map to
+// their response type.
+func (s *WorkerRepositoryService) authorizeCacheMetadata(ctx context.Context) error {
 	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
-		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return err
 	}
 	if s.cacheMetadata == nil {
-		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
+		return cache.ErrCoordinatorUnavailable
+	}
+	return nil
+}
+
+func (s *WorkerRepositoryService) AddRecentCacheStub(ctx context.Context, req *pb.AddRecentCacheStubRequest) (*pb.AddRecentCacheStubResponse, error) {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
+		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	if err := s.cacheMetadata.AddRecentStub(ctx, req.Locality, req.WorkspaceId, req.StubId, time.Duration(req.TtlSeconds)*time.Second); err != nil {
 		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -90,11 +100,8 @@ func (s *WorkerRepositoryService) AddRecentCacheStub(ctx context.Context, req *p
 }
 
 func (s *WorkerRepositoryService) ListRecentCacheStubs(ctx context.Context, req *pb.ListRecentCacheStubsRequest) (*pb.ListRecentCacheStubsResponse, error) {
-	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.ListRecentCacheStubsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if s.cacheMetadata == nil {
-		return &pb.ListRecentCacheStubsResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
 	stubs, err := s.cacheMetadata.ListRecentStubs(ctx, req.Locality, time.Duration(req.TtlSeconds)*time.Second, int(req.Limit))
 	if err != nil {
@@ -112,11 +119,8 @@ func (s *WorkerRepositoryService) ListRecentCacheStubs(ctx context.Context, req 
 }
 
 func (s *WorkerRepositoryService) MarkCacheStubReported(ctx context.Context, req *pb.MarkCacheStubReportedRequest) (*pb.MarkCacheStubReportedResponse, error) {
-	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.MarkCacheStubReportedResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if s.cacheMetadata == nil {
-		return &pb.MarkCacheStubReportedResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
 	claimed, err := s.cacheMetadata.MarkStubReported(ctx, req.Locality, req.StubId, time.Duration(req.TtlSeconds)*time.Second)
 	if err != nil {
@@ -126,11 +130,8 @@ func (s *WorkerRepositoryService) MarkCacheStubReported(ctx context.Context, req
 }
 
 func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context, req *pb.AcquireCacheReconcileLockRequest) (*pb.AcquireCacheReconcileLockResponse, error) {
-	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if s.cacheMetadata == nil {
-		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
 	acquired, err := s.cacheMetadata.AcquireReconcileLock(ctx, req.Locality, req.LogicalHost, req.Hash, int(req.TtlSeconds))
 	if err != nil {
@@ -140,11 +141,8 @@ func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context,
 }
 
 func (s *WorkerRepositoryService) ReleaseCacheReconcileLock(ctx context.Context, req *pb.ReleaseCacheReconcileLockRequest) (*pb.ReleaseCacheReconcileLockResponse, error) {
-	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.ReleaseCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if s.cacheMetadata == nil {
-		return &pb.ReleaseCacheReconcileLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
 	if err := s.cacheMetadata.ReleaseReconcileLock(ctx, req.Locality, req.LogicalHost, req.Hash); err != nil {
 		return &pb.ReleaseCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -161,29 +159,39 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	resp := &pb.GetCacheOriginCredentialsResponse{Ok: true}
+	return &pb.GetCacheOriginCredentialsResponse{
+		Ok:               true,
+		WorkspaceStorage: s.workspaceStorageCredentials(ctx, req.WorkspaceId),
+		// Short-lived registry credentials for OCI layer pulls from the build registry.
+		RegistryCredentials: s.buildRegistryCredentials(ctx, req.Registry),
+	}, nil
+}
 
-	// Workspace storage credentials (used for geesefs/volume content fetches).
-	if s.backendRepo != nil && req.WorkspaceId != "" {
-		if ws, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId); err == nil {
-			if full, err := s.backendRepo.GetWorkspace(ctx, ws.Id); err == nil && full.StorageAvailable() {
-				st := full.Storage
-				resp.WorkspaceStorage = &pb.CacheWorkspaceStorageCredentials{
-					EndpointUrl:    derefString(st.EndpointUrl),
-					Region:         derefString(st.Region),
-					BucketName:     derefString(st.BucketName),
-					AccessKey:      derefString(st.AccessKey),
-					SecretKey:      derefString(st.SecretKey),
-					ForcePathStyle: true,
-				}
-			}
-		}
+// workspaceStorageCredentials resolves a workspace's (decrypted) object storage
+// credentials, or nil when unavailable. Used for geesefs/volume content fetches.
+func (s *WorkerRepositoryService) workspaceStorageCredentials(ctx context.Context, workspaceID string) *pb.CacheWorkspaceStorageCredentials {
+	if s.backendRepo == nil || workspaceID == "" {
+		return nil
 	}
 
-	// Short-lived registry credentials for OCI layer pulls from the build registry.
-	resp.RegistryCredentials = s.buildRegistryCredentials(ctx, req.Registry)
+	ws, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
+	if err != nil {
+		return nil
+	}
+	full, err := s.backendRepo.GetWorkspace(ctx, ws.Id)
+	if err != nil || !full.StorageAvailable() {
+		return nil
+	}
 
-	return resp, nil
+	st := full.Storage
+	return &pb.CacheWorkspaceStorageCredentials{
+		EndpointUrl:    derefString(st.EndpointUrl),
+		Region:         derefString(st.Region),
+		BucketName:     derefString(st.BucketName),
+		AccessKey:      derefString(st.AccessKey),
+		SecretKey:      derefString(st.SecretKey),
+		ForcePathStyle: true,
+	}
 }
 
 func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, registry string) string {
@@ -192,8 +200,10 @@ func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, 
 	if buildRegistry == "" || registry == "" {
 		return ""
 	}
-	// Only vend build-registry credentials for the configured build registry host.
-	if !strings.Contains(registry, buildRegistry) && !strings.Contains(buildRegistry, registry) {
+	// Only vend build-registry credentials when the requested registry host is
+	// exactly the configured build registry. Substring matching would leak
+	// credentials to look-alike hosts (e.g. "<build-registry>.evil.com").
+	if !registryHostsEqual(registry, buildRegistry) {
 		return ""
 	}
 
@@ -217,6 +227,22 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// registryHostsEqual reports whether two registry references resolve to the same
+// host[:port], ignoring scheme and any path component.
+func registryHostsEqual(a, b string) bool {
+	return normalizeRegistryHost(a) == normalizeRegistryHost(b)
+}
+
+func normalizeRegistryHost(registry string) string {
+	registry = strings.TrimPrefix(registry, "https://")
+	registry = strings.TrimPrefix(registry, "http://")
+	registry = strings.Trim(registry, "/")
+	if i := strings.IndexByte(registry, '/'); i >= 0 {
+		registry = registry[:i]
+	}
+	return registry
 }
 
 func (s *WorkerRepositoryService) SetCacheFsNode(ctx context.Context, req *pb.SetCacheFsNodeRequest) (*pb.SetCacheFsNodeResponse, error) {

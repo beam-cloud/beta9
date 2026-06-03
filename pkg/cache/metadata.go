@@ -288,26 +288,14 @@ func (m *Metadata) ListRecentStubs(ctx context.Context, locality string, ttl tim
 // MarkStubReported atomically claims the one-time required-content generation
 // for a stub. It returns true only for the first caller (cluster-wide), so the
 // expensive enumeration + S2 write happens once per stub rather than on every
-// container start. The marker is refreshed with the recent-stub TTL.
+// container start. The marker is set once with the given TTL and is not
+// refreshed by later callers; once it expires the content may be regenerated,
+// which is idempotent.
 func (m *Metadata) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
 	return m.rdb.SetNX(ctx, MetadataKeys.MetadataReconcileReported(locality, stubID), "1", ttl).Result()
-}
-
-// SetReconcileStatus records advisory reconciliation status for an item. This
-// is observability/rate-limiting only; local content status is authoritative.
-func (m *Metadata) SetReconcileStatus(ctx context.Context, locality, stubID, hash, routingKey, status string, ttl time.Duration) error {
-	return m.rdb.Set(ctx, MetadataKeys.MetadataReconcileStatus(locality, stubID, hash, routingKey), status, ttl).Err()
-}
-
-func (m *Metadata) GetReconcileStatus(ctx context.Context, locality, stubID, hash, routingKey string) (string, error) {
-	value, err := m.rdb.Get(ctx, MetadataKeys.MetadataReconcileStatus(locality, stubID, hash, routingKey)).Result()
-	if err == redis.Nil {
-		return "", nil
-	}
-	return value, err
 }
 
 // AcquireReconcileLock takes a short lifecycle lock so only one materialization
@@ -368,7 +356,6 @@ var (
 	metadataHostKeepAlive        string = "cache:host:keepalive:%s:%s"
 	metadataStoreFromContentLock string = "cache:store_from_content_lock:%s:%s"
 	metadataReconcileRecent      string = "cache:reconcile:recent:%s"
-	metadataReconcileStatus      string = "cache:reconcile:status:%s:%s:%s:%s"
 	metadataReconcileLock        string = "cache:reconcile:lock:%s:%s:%s"
 	metadataReconcileReported    string = "cache:reconcile:reported:%s:%s"
 )
@@ -409,11 +396,6 @@ func (k *metadataKeys) MetadataStoreFromContentLock(locality, sourcePath string)
 
 func (k *metadataKeys) MetadataReconcileRecent(locality string) string {
 	return fmt.Sprintf(metadataReconcileRecent, locality)
-}
-
-func (k *metadataKeys) MetadataReconcileStatus(locality, stubID, hash, routingKey string) string {
-	encodedRoutingKey := base64.RawURLEncoding.EncodeToString([]byte(routingKey))
-	return fmt.Sprintf(metadataReconcileStatus, locality, stubID, hash, encodedRoutingKey)
 }
 
 func (k *metadataKeys) MetadataReconcileLock(locality, logicalHost, hash string) string {
