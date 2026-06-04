@@ -164,10 +164,18 @@ func (r *cacheContentReporter) shouldGenerateRequiredContent(stubID string) bool
 		return true
 	}
 
-	// Cluster-wide one-time claim; on error, fall back to generating.
+	// The Redis marker is advisory. Required-content events are the durable
+	// source of truth, and S2 writes are asynchronous; a marker can outlive a
+	// failed or interrupted write. Re-emit once per worker process when the
+	// marker already exists so reconciliation never gets stuck with an empty
+	// stub cache stream.
 	claimed, err := r.metadata.MarkStubReported(r.ctx, r.locality, stubID, r.recentStubTTL)
 	if err != nil {
 		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to claim one-time required-content generation")
+		return true
+	}
+	if !claimed {
+		log.Debug().Str("stub_id", stubID).Msg("required-content report already claimed; emitting once locally")
 		return true
 	}
 	return claimed
