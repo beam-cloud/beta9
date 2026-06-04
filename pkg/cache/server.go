@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 )
 
@@ -280,6 +281,17 @@ func (cs *Server) grpcServerOptions() []grpc.ServerOption {
 		grpc.ReadBufferSize(readBufferSize),
 		grpc.MaxConcurrentStreams(uint32(maxConcurrentStreams)),
 		grpc.NumStreamWorkers(uint32(numStreamWorkers)),
+		// Permit client keepalive pings (incl. without active streams) so cache
+		// clients can detect a connection broken by a server rollout. MinTime must
+		// be <= the client's keepalive Time to avoid "too_many_pings" GOAWAYs.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             cacheKeepaliveMinTime,
+			PermitWithoutStream: true,
+		}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    cacheKeepaliveTime,
+			Timeout: cacheKeepaliveTimeout,
+		}),
 	}
 	if cs.globalConfig.GRPCPayloadCodecV2 {
 		opts = append(opts, grpc.ForceServerCodecV2(cachegrpc.New(cs.globalConfig.GRPCPayloadCodecMinBytes)))
