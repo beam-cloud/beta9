@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -332,7 +333,7 @@ func (m *WorkerCacheManager) createEmbeddedServer(cacheConfig cache.Config, host
 		return nil, "", err
 	}
 
-	advertisedAddr, err := server.Serve(m.bindAddr(cacheConfig), m.podAddr)
+	advertisedAddr, err := server.Serve(m.bindAddr(cacheConfig), m.cacheAdvertiseHost())
 	if err != nil {
 		_ = server.Close()
 		return nil, "", err
@@ -645,6 +646,22 @@ func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
 	}
 
 	return fmt.Sprintf(":%d", port)
+}
+
+// cacheAdvertiseHost returns the address other cache clients should use to reach
+// this node's cache server. It must be an IP (the node's private IP), never a
+// hostname: cache clients resolve via cluster DNS, not tailscale MagicDNS, so a
+// tailscale POD_HOSTNAME would be unresolvable and the host would look down.
+// It prefers an explicit pod IP and otherwise returns "" so the cache server
+// falls back to its own discovered private IP.
+func (m *WorkerCacheManager) cacheAdvertiseHost() string {
+	if net.ParseIP(m.podAddr) != nil {
+		return m.podAddr
+	}
+	if ip, err := getIPFromEnv("POD_IP"); err == nil {
+		return ip
+	}
+	return ""
 }
 
 // fixedCacheServerPortConfigured reports whether a cache server port was
