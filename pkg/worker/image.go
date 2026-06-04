@@ -269,7 +269,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// keeps this stub's content warm for the configured TTL after its last
 	// container. This is cheap and independent of one-time content generation.
 	if c.contentReporter != nil && request != nil {
-		c.contentReporter.touchRecentStub(request.WorkspaceId, request.StubId)
+		c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -393,6 +393,8 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	}
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
+	} else {
+		c.restoreV1ArchiveDataCache(ctx, request)
 	}
 
 	c.reportRequiredContent(request, meta)
@@ -409,7 +411,18 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 	}
 
 	items, kind := requiredContentItems(meta)
-	if len(items) == 0 {
+	archiveItem, hasArchiveItem := c.clipV1ArchiveRequiredContentItem(request, meta)
+
+	reports := make([]requiredContentReport, 0, 2)
+	if hasArchiveItem {
+		reports = append(reports, requiredContentReport{
+			kind:  types.CacheContentKindClipV1Archive,
+			items: []types.CacheRequiredContentItem{archiveItem},
+		})
+	} else if len(items) > 0 {
+		reports = append(reports, requiredContentReport{kind: kind, items: items})
+	}
+	if len(reports) == 0 {
 		// Nothing to report; do not claim the one-time generation so a later
 		// load that does yield items can still publish them.
 		return
@@ -417,18 +430,42 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 
 	// Required content is immutable per stub, so publish it only the first time
 	// the stub loads, not on every container start.
-	if !c.contentReporter.shouldGenerateRequiredContent(request.StubId) {
+	stubID := cacheRequestStubID(request)
+	if !c.contentReporter.shouldGenerateRequiredContent(stubID) {
 		return
 	}
-	c.contentReporter.reportItems(request.WorkspaceId, request.StubId, kind, items)
-	c.contentReporter.flush()
+
+	workspaceID := cacheRequestWorkspaceID(request)
+	c.contentReporter.reportBatches(workspaceID, stubID, reports)
+
 	log.Debug().
-		Str("workspace_id", request.WorkspaceId).
-		Str("stub_id", request.StubId).
+		Str("workspace_id", workspaceID).
+		Str("stub_id", stubID).
 		Str("image_id", request.ImageId).
 		Str("kind", string(kind)).
 		Int("item_count", len(items)).
+		Bool("archive_item", hasArchiveItem).
 		Msg("reported image required content")
+}
+
+func cacheRequestWorkspaceID(request *types.ContainerRequest) string {
+	if request == nil {
+		return ""
+	}
+	if request.WorkspaceId != "" {
+		return request.WorkspaceId
+	}
+	return request.Workspace.ExternalId
+}
+
+func cacheRequestStubID(request *types.ContainerRequest) string {
+	if request == nil {
+		return ""
+	}
+	if request.StubId != "" {
+		return request.StubId
+	}
+	return request.Stub.ExternalId
 }
 
 // requiredContentItems enumerates the content a stub's image requires from its
@@ -507,6 +544,31 @@ func (c *ImageClient) localArchivePath(imageId string) string {
 	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 }
 
+func (c *ImageClient) clipV1ArchiveCachePath(imageId string) string {
+	return fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+}
+
+func (c *ImageClient) clipV1ArchiveDataCachePath(imageId string) string {
+	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, reg.LocalImageFileExtension)
+}
+
+func (c *ImageClient) clipV1ArchiveRequiredContentItem(request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, bool) {
+	if request == nil || request.ImageId == "" || meta == nil || meta.Index == nil {
+		return types.CacheRequiredContentItem{}, false
+	}
+	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
+		return types.CacheRequiredContentItem{}, false
+	}
+
+	cachePath := c.clipV1ArchiveCachePath(request.ImageId)
+	return types.CacheRequiredContentItem{
+		Hash:       "clip-v1-archive:" + request.ImageId,
+		RoutingKey: cachePath,
+		Source:     fmt.Sprintf("%s.%s", request.ImageId, reg.LocalImageFileExtension),
+		Kind:       types.CacheContentKindClipV1Archive,
+	}, true
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -573,11 +635,37 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 		return c.imageCachePath
 	}
 
+	if c.config.ImageService.RegistryStore == registry.S3ImageRegistryStore {
+		return c.clipV1ArchiveDataCachePath(request.ImageId)
+	}
+
 	if c.config.ImageService.LocalCacheEnabled || strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
 		return fmt.Sprintf("%s/%s.cache", c.imageCachePath, request.ImageId)
 	}
 
 	return ""
+}
+
+func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest) {
+	if c.cacheClient == nil || request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
+		return
+	}
+
+	cachePath := c.clipV1ArchiveCachePath(request.ImageId)
+	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
+	if err != nil || metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
+		return
+	}
+
+	exists, err := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
+	if err != nil || !exists {
+		return
+	}
+
+	targetPath := c.clipV1ArchiveDataCachePath(request.ImageId)
+	if err := c.writeImageArchiveFromContentCache(ctx, targetPath, request.ImageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
+		log.Debug().Err(err).Str("image_id", request.ImageId).Str("cache_path", cachePath).Msg("failed to restore v1 archive data cache")
+	}
 }
 
 func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error) {

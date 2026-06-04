@@ -90,7 +90,7 @@ func (s *GeeseStorage) handleGeeseContentEvent(data map[string]interface{}) {
 	if hash == "" {
 		return
 	}
-	path := firstStringValue(data, "path", "key", "object")
+	path := firstStringValue(data, "path", "key", "object", "inode")
 	size := firstInt64Value(data, "size_bytes", "size", "content_length")
 	s.reportVolumeContent(hash, path, size)
 }

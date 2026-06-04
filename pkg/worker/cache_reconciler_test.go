@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,9 +10,12 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	clip "github.com/beam-cloud/clip/pkg/clip"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,12 +25,17 @@ type fakeEventRepo struct {
 	repo.EventRepository
 	mu     sync.Mutex
 	pushed []types.EventStubCacheRequiredContentSchema
+	err    error
 }
 
-func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) {
+func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
 	f.pushed = append(f.pushed, schema)
+	return nil
 }
 
 func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
@@ -42,10 +51,16 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
 	claimed bool
+	marked  int
 }
 
 func (m *claimedMetadataStore) MarkStubReported(context.Context, string, string, time.Duration) (bool, error) {
+	m.marked++
 	return m.claimed, nil
+}
+
+func (m *claimedMetadataStore) AddRecentStub(context.Context, string, string, string, time.Duration) error {
+	return nil
 }
 
 func TestReporterGeneratesOncePerStub(t *testing.T) {
@@ -103,6 +118,37 @@ func TestReporterSeparatesByKind(t *testing.T) {
 	require.Len(t, fake.pushed, 2)
 }
 
+func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
+	fake := &fakeEventRepo{}
+	metadata := &claimedMetadataStore{claimed: true}
+	r := newTestReporter(fake)
+	r.metadata = metadata
+
+	r.reportItems("ws", "stub", types.CacheContentKindClipV1Archive, []types.CacheRequiredContentItem{{Hash: "archive", RoutingKey: "/images/archive.clip"}})
+	require.Zero(t, metadata.marked)
+
+	r.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, 1, metadata.marked)
+}
+
+func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
+	fake := &fakeEventRepo{err: errors.New("s2 unavailable")}
+	metadata := &claimedMetadataStore{claimed: true}
+	r := newTestReporter(fake)
+	r.metadata = metadata
+
+	r.reportItems("ws", "stub", types.CacheContentKindClipV1Archive, []types.CacheRequiredContentItem{{Hash: "archive", RoutingKey: "/images/archive.clip"}})
+	r.flush()
+	require.Empty(t, fake.pushed)
+	require.Zero(t, metadata.marked)
+
+	fake.err = nil
+	r.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, 1, metadata.marked)
+}
+
 func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
 	fake := &fakeEventRepo{}
 	r := newTestReporter(fake)
@@ -118,6 +164,23 @@ func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
 	require.Equal(t, types.CacheContentKindVolume, event.Kind)
 	require.Len(t, event.Items, 1)
 	require.Equal(t, "big", event.Items[0].Hash)
+	require.Equal(t, "/p/big", event.Items[0].Source)
+	require.Equal(t, int64(4096), event.Items[0].SizeBytes)
+}
+
+func TestReporterVolumeDefaultThresholdKeepsOnlyLargeObjects(t *testing.T) {
+	fake := &fakeEventRepo{}
+	r := newTestReporter(fake)
+	r.volumeMinBytes = cacheDefaultVolumeReportMinBytes
+	r.activeStubs = func(string) []string { return []string{"stub"} }
+
+	r.ReportVolumeContent("ws", "small", "/p/32mb", 32<<20)
+	r.ReportVolumeContent("ws", "large", "/p/128mb", 128<<20)
+
+	r.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Len(t, fake.pushed[0].Items, 1)
+	require.Equal(t, "large", fake.pushed[0].Items[0].Hash)
 }
 
 func TestReporterVolumeNoActiveStubsIsNoop(t *testing.T) {
@@ -130,13 +193,23 @@ func TestReporterVolumeNoActiveStubsIsNoop(t *testing.T) {
 	require.Empty(t, fake.pushed)
 }
 
-func TestRequiredContentItemsClipV1FromArchive(t *testing.T) {
+func TestCacheVolumeReportMinBytesDefaultAndOverride(t *testing.T) {
+	manager := &WorkerCacheManager{}
+	require.Equal(t, int64(128<<20), manager.cacheVolumeReportMinBytes())
+
+	manager.config.Cache.Reconciliation.VolumeMinBytes = 64 << 20
+	require.Equal(t, int64(64<<20), manager.cacheVolumeReportMinBytes())
+}
+
+func testClipV1Metadata(t *testing.T) *clipCommon.ClipArchiveMetadata {
+	t.Helper()
+
 	src := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(src, "usr", "bin"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "usr", "bin", "tool"), []byte("tool-data"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "config.json"), []byte(`{"ok":true}`), 0644))
 
-	archivePath := filepath.Join(t.TempDir(), "legacy.rclip")
+	archivePath := filepath.Join(t.TempDir(), "legacy.clip")
 	archiver := clip.NewClipArchiver()
 	require.NoError(t, archiver.Create(clip.ClipArchiverOptions{
 		SourcePath:  src,
@@ -145,7 +218,11 @@ func TestRequiredContentItemsClipV1FromArchive(t *testing.T) {
 	}))
 	meta, err := archiver.ExtractMetadata(archivePath)
 	require.NoError(t, err)
+	return meta
+}
 
+func TestRequiredContentItemsClipV1FromArchive(t *testing.T) {
+	meta := testClipV1Metadata(t)
 	items, kind := requiredContentItems(meta)
 	require.Equal(t, types.CacheContentKindClipV1, kind)
 	require.Len(t, items, 2)
@@ -156,6 +233,135 @@ func TestRequiredContentItemsClipV1FromArchive(t *testing.T) {
 		require.Equal(t, types.CacheContentKindClipV1, item.Kind)
 		require.NotEmpty(t, item.Source)
 	}
+}
+
+func TestRequiredContentItemsClipV2FromOCILayers(t *testing.T) {
+	meta := testClipV2Metadata()
+
+	items, kind := requiredContentItems(meta)
+	require.Equal(t, types.CacheContentKindClipV2, kind)
+	require.Len(t, items, 2)
+
+	byHash := map[string]types.CacheRequiredContentItem{}
+	for _, item := range items {
+		byHash[item.Hash] = item
+		require.Equal(t, item.Hash, item.RoutingKey)
+		require.Equal(t, item.Hash, item.ExpectedHash)
+		require.Equal(t, types.CacheContentKindClipV2, item.Kind)
+		require.NotEmpty(t, item.Source)
+	}
+	require.Equal(t, "registry.example.com/team/image@sha256:layer-a", byHash["hash-a"].Source)
+	require.Equal(t, "registry.example.com/team/image@sha256:layer-b", byHash["hash-b"].Source)
+}
+
+func testClipV2Metadata() *clipCommon.ClipArchiveMetadata {
+	return &clipCommon.ClipArchiveMetadata{
+		StorageInfo: clipCommon.OCIStorageInfo{
+			RegistryURL: "https://registry.example.com",
+			Repository:  "team/image",
+			DecompressedHashByLayer: map[string]string{
+				"sha256:layer-a": "hash-a",
+				"sha256:layer-b": "hash-b",
+			},
+		},
+	}
+}
+
+func TestReportRequiredContentClipV1IncludesArchiveItem(t *testing.T) {
+	fake := &fakeEventRepo{}
+	client := &ImageClient{contentReporter: newTestReporter(fake)}
+	request := &types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+		ImageId:     "image",
+	}
+
+	client.reportRequiredContent(request, testClipV1Metadata(t))
+	client.contentReporter.flush()
+
+	require.Len(t, fake.pushed, 1)
+	event := fake.pushed[0]
+	require.Equal(t, types.CacheContentKindClipV1Archive, event.Kind)
+	require.Equal(t, "workspace", event.WorkspaceID)
+	require.Equal(t, "stub", event.StubID)
+	require.Len(t, event.Items, 1)
+
+	archiveItem := event.Items[0]
+	require.Equal(t, types.CacheContentKindClipV1Archive, archiveItem.Kind)
+	require.Equal(t, "clip-v1-archive:image", archiveItem.Hash)
+	require.Equal(t, "/images/image.clip", archiveItem.RoutingKey)
+	require.Equal(t, "image.clip", archiveItem.Source)
+}
+
+func TestReportRequiredContentClipV1DoesNotEmitIndexEntries(t *testing.T) {
+	fake := &fakeEventRepo{}
+	client := &ImageClient{contentReporter: newTestReporter(fake)}
+	request := &types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+		ImageId:     "image",
+	}
+
+	client.reportRequiredContent(request, testClipV1Metadata(t))
+	client.contentReporter.flush()
+
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, types.CacheContentKindClipV1Archive, fake.pushed[0].Kind)
+	require.Len(t, fake.pushed[0].Items, 1)
+}
+
+func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
+	fake := &fakeEventRepo{}
+	client := &ImageClient{contentReporter: newTestReporter(fake)}
+	request := &types.ContainerRequest{
+		ImageId: "image",
+		Workspace: types.Workspace{
+			ExternalId: "workspace-nested",
+		},
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{ExternalId: "stub-nested"},
+		},
+	}
+
+	client.reportRequiredContent(request, testClipV2Metadata())
+	client.contentReporter.flush()
+
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, "workspace-nested", fake.pushed[0].WorkspaceID)
+	require.Equal(t, "stub-nested", fake.pushed[0].StubID)
+	require.Equal(t, types.CacheContentKindClipV2, fake.pushed[0].Kind)
+	require.Len(t, fake.pushed[0].Items, 2)
+}
+
+func TestActiveStubsForWorkspaceUsesNestedRequestIDs(t *testing.T) {
+	manager := &WorkerCacheManager{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	manager.containerInstances.Set("container", &ContainerInstance{
+		Request: &types.ContainerRequest{
+			Workspace: types.Workspace{ExternalId: "workspace-nested"},
+			Stub: types.StubWithRelated{
+				Stub: types.Stub{ExternalId: "stub-nested"},
+			},
+		},
+	})
+
+	require.Equal(t, []string{"stub-nested"}, manager.activeStubsForWorkspace("workspace-nested"))
+	require.Empty(t, manager.activeStubsForWorkspace("other-workspace"))
+}
+
+func TestContentCachePathUsesFullClipArchiveForS3V1(t *testing.T) {
+	client := &ImageClient{
+		imageCachePath: "/images/cache",
+		config: types.AppConfig{
+			ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore},
+		},
+	}
+	request := &types.ContainerRequest{ImageId: "image", ContainerId: "endpoint-container"}
+
+	require.Equal(t, "/images/cache/image.clip", client.contentCachePath(request, lazyImageArchive{}))
+
+	client.config.ImageService.RegistryStore = registry.LocalImageRegistryStore
+	client.config.ImageService.LocalCacheEnabled = true
+	require.Equal(t, "/images/cache/image.cache", client.contentCachePath(request, lazyImageArchive{}))
 }
 
 func TestValidateRestoredImageArchiveAcceptsClipV1WhenDefaultIsV2(t *testing.T) {

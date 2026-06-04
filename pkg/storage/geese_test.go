@@ -2,6 +2,20 @@ package storage
 
 import "testing"
 
+type testVolumeReporter struct {
+	workspaceID string
+	hash        string
+	sourcePath  string
+	sizeBytes   int64
+}
+
+func (r *testVolumeReporter) ReportVolumeContent(workspaceID, hash, sourcePath string, sizeBytes int64) {
+	r.workspaceID = workspaceID
+	r.hash = hash
+	r.sourcePath = sourcePath
+	r.sizeBytes = sizeBytes
+}
+
 func TestEffectiveGeeseMemoryLimitMB(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -25,5 +39,30 @@ func TestEffectiveGeeseMemoryLimitMB(t *testing.T) {
 				t.Fatalf("effectiveGeeseMemoryLimitMB(%d, %q) = %d, want %d", tt.configured, tt.worker, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHandleGeeseContentEventReportsStoredContent(t *testing.T) {
+	reporter := &testVolumeReporter{}
+	storage := &GeeseStorage{}
+	storage.SetVolumeContentReporter("workspace-id", reporter)
+
+	storage.handleGeeseContentEvent(map[string]interface{}{
+		"content_hash": "hash",
+		"inode":        "/volumes/workspace/files/data.bin",
+		"size_bytes":   uint64(32 << 20),
+	})
+
+	if reporter.workspaceID != "workspace-id" {
+		t.Fatalf("workspaceID = %q", reporter.workspaceID)
+	}
+	if reporter.hash != "hash" {
+		t.Fatalf("hash = %q", reporter.hash)
+	}
+	if reporter.sourcePath != "/volumes/workspace/files/data.bin" {
+		t.Fatalf("sourcePath = %q", reporter.sourcePath)
+	}
+	if reporter.sizeBytes != 32<<20 {
+		t.Fatalf("sizeBytes = %d", reporter.sizeBytes)
 	}
 }

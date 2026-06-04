@@ -33,12 +33,13 @@ type Config struct {
 // It is disabled by default; when off, workers do not report required content
 // and cache servers do not run the loop, preserving prior startup behavior.
 type ReconciliationConfig struct {
-	Enabled               bool `key:"enabled" json:"enabled"`
-	IntervalSeconds       int  `key:"intervalSeconds" json:"interval_seconds"`
-	RecentStubTTLSeconds  int  `key:"recentStubTTLSeconds" json:"recent_stub_ttl_seconds"`
-	LockTTLSeconds        int  `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
-	MaxStubsPerCycle      int  `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
-	OriginFallbackEnabled bool `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
+	Enabled               bool  `key:"enabled" json:"enabled"`
+	IntervalSeconds       int   `key:"intervalSeconds" json:"interval_seconds"`
+	RecentStubTTLSeconds  int   `key:"recentStubTTLSeconds" json:"recent_stub_ttl_seconds"`
+	LockTTLSeconds        int   `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
+	MaxStubsPerCycle      int   `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
+	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
+	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 }
 
 type DiskConfig struct {

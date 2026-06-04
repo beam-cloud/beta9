@@ -54,19 +54,20 @@ var (
 type CacheContentKind string
 
 const (
-	CacheContentKindClipV1 CacheContentKind = "clip_v1"
-	CacheContentKindClipV2 CacheContentKind = "clip_v2"
-	CacheContentKindVolume CacheContentKind = "volume"
+	CacheContentKindClipV1        CacheContentKind = "clip_v1"
+	CacheContentKindClipV1Archive CacheContentKind = "clip_v1_archive"
+	CacheContentKindClipV2        CacheContentKind = "clip_v2"
+	CacheContentKindVolume        CacheContentKind = "volume"
 )
 
 // Platform cache audit statuses for EventPlatformCacheSchema.Status.
 const (
-	CacheAuditStatusMaterialized   = "materialized"
-	CacheAuditStatusMiss           = "miss"
+	CacheAuditStatusMaterialized    = "materialized"
+	CacheAuditStatusMiss            = "miss"
 	CacheAuditStatusHostUnavailable = "host_unavailable"
-	CacheAuditStatusOriginFailure  = "origin_failure"
-	CacheAuditStatusReplicaFailure = "replica_failure"
-	CacheAuditStatusSkipped        = "skipped"
+	CacheAuditStatusOriginFailure   = "origin_failure"
+	CacheAuditStatusReplicaFailure  = "replica_failure"
+	CacheAuditStatusSkipped         = "skipped"
 )
 
 var EventStubCacheRequiredContentSchemaVersion = "1.0"

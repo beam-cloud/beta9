@@ -25,13 +25,13 @@ const (
 	// per stub, so this is far above realistic sizes; it exists only to guarantee
 	// the read terminates even if the stream is continuously appended.
 	maxStubCacheReadRecords = 200000
-	s2EventHistoryReadLimit    = uint64(1000)
-	s2EventQueueSize           = 16384
-	s2EventBatchSize           = 256
-	s2EventRetentionSeconds    = int64(30 * 24 * 60 * 60)
-	s2EventWriteTimeout        = 5 * time.Second
-	s2EventEnqueueTimeout      = 250 * time.Millisecond
-	s2EventFlushInterval       = 100 * time.Millisecond
+	s2EventHistoryReadLimit = uint64(1000)
+	s2EventQueueSize        = 16384
+	s2EventBatchSize        = 256
+	s2EventRetentionSeconds = int64(30 * 24 * 60 * 60)
+	s2EventWriteTimeout     = 5 * time.Second
+	s2EventEnqueueTimeout   = 250 * time.Millisecond
+	s2EventFlushInterval    = 100 * time.Millisecond
 )
 
 type S2EventRepository struct {
@@ -97,6 +97,10 @@ func (r *S2EventRepository) PushEvent(event cloudevents.Event) error {
 	case <-timer.C:
 		return fmt.Errorf("s2 event queue is full")
 	}
+}
+
+func (r *S2EventRepository) PushEventSync(event cloudevents.Event) error {
+	return r.appendEvent(event)
 }
 
 func (r *S2EventRepository) runWriter() {
