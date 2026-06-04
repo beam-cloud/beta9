@@ -87,6 +87,7 @@ func (d *DiscoveryClient) discoveryJitter() time.Duration {
 func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hosts, err := d.hostDirectory.GetAvailableHosts(ctx, d.locality)
 	if err != nil {
+		Logger.Warnf("cache host discovery failed to list hosts for locality %s: %v", d.locality, err)
 		return nil, err
 	}
 
@@ -94,6 +95,10 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hostGroups := cacheHostCandidateGroups(hosts)
 	var wg sync.WaitGroup
 	mu := sync.Mutex{}
+	totalCandidates := 0
+	endpointCandidates := 0
+	verifiedEndpoints := 0
+	var lastVerifyErr error
 	maxConcurrency := d.cfg.MaxDiscoveryConcurrency
 	if maxConcurrency <= 0 {
 		maxConcurrency = 8
@@ -101,6 +106,15 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	sem := make(chan struct{}, maxConcurrency)
 
 	for _, group := range hostGroups {
+		for _, candidate := range group.candidates {
+			if candidate == nil {
+				continue
+			}
+			totalCandidates++
+			if candidate.HasEndpoint() {
+				endpointCandidates++
+			}
+		}
 		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
 			continue
 		}
@@ -115,7 +129,15 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 				return
 			}
 
-			host, ok := group.firstReachable(ctx, d.GetHostState)
+			host, ok := group.firstReachable(ctx, func(ctx context.Context, candidate *Host) (*Host, error) {
+				host, err := d.GetHostState(ctx, candidate)
+				if err != nil {
+					mu.Lock()
+					lastVerifyErr = err
+					mu.Unlock()
+				}
+				return host, err
+			})
 			if !ok {
 				if logicalHost := group.logicalHost(); logicalHost != nil {
 					mu.Lock()
@@ -127,6 +149,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 
 			d.hostMap.Set(host)
 			mu.Lock()
+			verifiedEndpoints++
 			selectedHosts = append(selectedHosts, host)
 			mu.Unlock()
 
@@ -135,6 +158,11 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	}
 
 	wg.Wait()
+	if endpointCandidates > 0 && verifiedEndpoints == 0 {
+		Logger.Warnf("cache host discovery found %d endpoint candidates across %d hosts for locality %s, but none verified reachable (last_error=%v)", endpointCandidates, len(hostGroups), d.locality, lastVerifyErr)
+	} else if totalCandidates > 0 && endpointCandidates == 0 {
+		Logger.Warnf("cache host discovery found %d logical hosts for locality %s, but none had an active endpoint", totalCandidates, d.locality)
+	}
 	return selectedHosts, nil
 }
 
