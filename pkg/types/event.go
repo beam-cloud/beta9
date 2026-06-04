@@ -61,12 +61,12 @@ const (
 
 // Platform cache audit statuses for EventPlatformCacheSchema.Status.
 const (
-	CacheAuditStatusMaterialized   = "materialized"
-	CacheAuditStatusMiss           = "miss"
+	CacheAuditStatusMaterialized    = "materialized"
+	CacheAuditStatusMiss            = "miss"
 	CacheAuditStatusHostUnavailable = "host_unavailable"
-	CacheAuditStatusOriginFailure  = "origin_failure"
-	CacheAuditStatusReplicaFailure = "replica_failure"
-	CacheAuditStatusSkipped        = "skipped"
+	CacheAuditStatusOriginFailure   = "origin_failure"
+	CacheAuditStatusReplicaFailure  = "replica_failure"
+	CacheAuditStatusSkipped         = "skipped"
 )
 
 var EventStubCacheRequiredContentSchemaVersion = "1.0"

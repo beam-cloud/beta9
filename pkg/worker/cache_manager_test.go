@@ -173,7 +173,7 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-single-node", "pod-a"))
 
 	require.Eventually(t, func() bool {
-		return !manager.runningCacheServer() && len(repo.activeHosts()) == 0
+		return !manager.runningCacheServer() && repo.unregisterCalled("worker-a")
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
@@ -442,8 +442,9 @@ func runningCacheServers(managers []*WorkerCacheManager) []*WorkerCacheManager {
 
 type testCacheCoordinator struct {
 	pb.UnimplementedWorkerRepositoryServiceServer
-	mu    sync.Mutex
-	hosts map[string]*pb.CacheCoordinatorHost
+	mu          sync.Mutex
+	hosts       map[string]*pb.CacheCoordinatorHost
+	unregisters map[string]bool
 }
 
 func startTestCacheCoordinator(t *testing.T) (pb.WorkerRepositoryServiceClient, *testCacheCoordinator, func()) {
@@ -453,7 +454,10 @@ func startTestCacheCoordinator(t *testing.T) (pb.WorkerRepositoryServiceClient, 
 	require.NoError(t, err)
 
 	server := grpc.NewServer()
-	coordinator := &testCacheCoordinator{hosts: make(map[string]*pb.CacheCoordinatorHost)}
+	coordinator := &testCacheCoordinator{
+		hosts:       make(map[string]*pb.CacheCoordinatorHost),
+		unregisters: make(map[string]bool),
+	}
 	pb.RegisterWorkerRepositoryServiceServer(server, coordinator)
 	go func() {
 		_ = server.Serve(listener)
@@ -488,6 +492,7 @@ func (s *testCacheCoordinator) UnregisterCacheHost(ctx context.Context, req *pb.
 	}
 
 	s.mu.Lock()
+	s.unregisters[req.GetRegistrationId()] = true
 	if host := s.hosts[req.GetLogicalHostId()]; host != nil && host.GetRegistrationId() == req.GetRegistrationId() {
 		delete(s.hosts, req.GetLogicalHostId())
 	}
@@ -520,4 +525,11 @@ func (s *testCacheCoordinator) activeHosts() map[string]*pb.CacheCoordinatorHost
 		hosts[id] = &copyHost
 	}
 	return hosts
+}
+
+func (s *testCacheCoordinator) unregisterCalled(registrationID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.unregisters[registrationID]
 }

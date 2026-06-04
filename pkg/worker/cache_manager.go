@@ -56,7 +56,7 @@ const (
 	cacheDefaultReconcileRecentStubTTLS = 7 * 24 * 60 * 60 // 7 days after a stub's last container
 	cacheDefaultReconcileLockTTLS       = 300
 	cacheDefaultReconcileMaxStubsCycle  = 256
-	cacheDefaultVolumeReportMinKB       = 1024
+	cacheDefaultVolumeReportMinBytes    = 128 * 1024 * 1024
 )
 
 type WorkerCacheManager struct {
@@ -199,7 +199,7 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 		m.metadataStore,
 		m.locality,
 		m.recentStubTTL(),
-		cacheVolumeReportMinBytes(),
+		m.cacheVolumeReportMinBytes(),
 		m.activeStubsForWorkspace,
 	)
 
@@ -214,10 +214,13 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 		Msg("cache required-content reconciliation enabled")
 }
 
-// cacheVolumeReportMinBytes is the geesefs object size threshold (in bytes)
-// above which volume content is reported, matching the geesefs hash threshold.
-func cacheVolumeReportMinBytes() int64 {
-	return int64(cacheDefaultVolumeReportMinKB) * 1024
+// cacheVolumeReportMinBytes is the geesefs object size threshold above which
+// volume content is reported as required content for reconciliation.
+func (m *WorkerCacheManager) cacheVolumeReportMinBytes() int64 {
+	if m != nil && m.config.Cache.Reconciliation.VolumeMinBytes > 0 {
+		return m.config.Cache.Reconciliation.VolumeMinBytes
+	}
+	return cacheDefaultVolumeReportMinBytes
 }
 
 func (m *WorkerCacheManager) Close() error {

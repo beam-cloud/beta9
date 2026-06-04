@@ -278,7 +278,7 @@ type EventRepository interface {
 	PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState)
 	PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState)
 	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string)
-	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema)
+	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
 	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)
 	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
 }

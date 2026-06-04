@@ -107,6 +107,16 @@ type reporterKey struct {
 	kind        types.CacheContentKind
 }
 
+type reporterStubKey struct {
+	workspaceID string
+	stubID      string
+}
+
+type requiredContentReport struct {
+	kind  types.CacheContentKind
+	items []types.CacheRequiredContentItem
+}
+
 func newCacheContentReporter(
 	ctx context.Context,
 	eventRepo repo.EventRepository,
@@ -143,10 +153,9 @@ func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 	}
 }
 
-// shouldGenerateRequiredContent reports whether this is the first load of a stub
-// (cluster-wide) and therefore the one time its required content should be
-// enumerated and written to S2. Subsequent container starts only refresh the
-// recent-stub window via touchRecentStub.
+// shouldGenerateRequiredContent reports whether this worker process has already
+// enumerated a stub's required content. The durable S2 stream is the source of
+// truth, so Redis is marked only after a successful event write.
 func (r *cacheContentReporter) shouldGenerateRequiredContent(stubID string) bool {
 	if r == nil || stubID == "" {
 		return false
@@ -160,25 +169,7 @@ func (r *cacheContentReporter) shouldGenerateRequiredContent(stubID string) bool
 	r.reported[stubID] = struct{}{}
 	r.mu.Unlock()
 
-	if r.metadata == nil {
-		return true
-	}
-
-	// The Redis marker is advisory. Required-content events are the durable
-	// source of truth, and S2 writes are asynchronous; a marker can outlive a
-	// failed or interrupted write. Re-emit once per worker process when the
-	// marker already exists so reconciliation never gets stuck with an empty
-	// stub cache stream.
-	claimed, err := r.metadata.MarkStubReported(r.ctx, r.locality, stubID, r.recentStubTTL)
-	if err != nil {
-		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to claim one-time required-content generation")
-		return true
-	}
-	if !claimed {
-		log.Debug().Str("stub_id", stubID).Msg("required-content report already claimed; emitting once locally")
-		return true
-	}
-	return claimed
+	return true
 }
 
 func (r *cacheContentReporter) run() {
@@ -198,7 +189,14 @@ func (r *cacheContentReporter) run() {
 // reportItems merges a coalesced set of items for a stub and records the stub in
 // the recent index so the reconciliation loop can discover it.
 func (r *cacheContentReporter) reportItems(workspaceID, stubID string, kind types.CacheContentKind, items []types.CacheRequiredContentItem) {
-	if r == nil || workspaceID == "" || stubID == "" || len(items) == 0 {
+	r.reportBatches(workspaceID, stubID, []requiredContentReport{{kind: kind, items: items}})
+}
+
+// reportBatches records all required-content kinds for a stub under one lock.
+// This prevents the periodic flush from publishing one image kind, marking the
+// stub as reported, and missing another kind from the same image load.
+func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports []requiredContentReport) {
+	if r == nil || workspaceID == "" || stubID == "" || len(reports) == 0 {
 		return
 	}
 
@@ -208,28 +206,27 @@ func (r *cacheContentReporter) reportItems(workspaceID, stubID string, kind type
 		}
 	}
 
-	key := reporterKey{workspaceID: workspaceID, stubID: stubID, kind: kind}
-
 	r.mu.Lock()
-	bucket := r.pending[key]
-	if bucket == nil {
-		bucket = make(map[string]types.CacheRequiredContentItem)
-		r.pending[key] = bucket
-	}
-	for _, item := range items {
-		if item.Hash == "" {
+	defer r.mu.Unlock()
+	for _, report := range reports {
+		if len(report.items) == 0 {
 			continue
 		}
-		if item.RoutingKey == "" {
-			item.RoutingKey = item.Hash
+		key := reporterKey{workspaceID: workspaceID, stubID: stubID, kind: report.kind}
+		bucket := r.pending[key]
+		if bucket == nil {
+			bucket = make(map[string]types.CacheRequiredContentItem)
+			r.pending[key] = bucket
 		}
-		bucket[item.Hash+"\x00"+item.RoutingKey] = item
-	}
-	total := len(bucket)
-	r.mu.Unlock()
-
-	if total >= reporterMaxItemsPerEvent {
-		r.flush()
+		for _, item := range report.items {
+			if item.Hash == "" {
+				continue
+			}
+			if item.RoutingKey == "" {
+				item.RoutingKey = item.Hash
+			}
+			bucket[item.Hash+"\x00"+item.RoutingKey] = item
+		}
 	}
 }
 
@@ -247,23 +244,77 @@ func (r *cacheContentReporter) flush() {
 		return
 	}
 
+	failed := make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	stubOK := make(map[reporterStubKey]bool)
 	for key, bucket := range pending {
 		if len(bucket) == 0 {
 			continue
 		}
+		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
+		if _, ok := stubOK[stubKey]; !ok {
+			stubOK[stubKey] = true
+		}
+
 		items := make([]types.CacheRequiredContentItem, 0, len(bucket))
 		for _, item := range bucket {
 			items = append(items, item)
 		}
+		ok := true
 		for start := 0; start < len(items); start += reporterMaxItemsPerEvent {
 			end := min(start+reporterMaxItemsPerEvent, len(items))
-			r.eventRepo.PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema{
+			if err := r.eventRepo.PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema{
 				WorkspaceID: key.workspaceID,
 				StubID:      key.stubID,
 				Locality:    r.locality,
 				Kind:        key.kind,
 				Items:       items[start:end],
-			})
+			}); err != nil {
+				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Str("kind", string(key.kind)).Msg("failed to publish required-content event")
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			stubOK[stubKey] = false
+			failed[key] = bucket
+			continue
+		}
+	}
+
+	for stubKey, ok := range stubOK {
+		if ok {
+			r.markStubReported(stubKey.stubID)
+		}
+	}
+
+	if len(failed) > 0 {
+		r.requeue(failed)
+	}
+}
+
+func (r *cacheContentReporter) markStubReported(stubID string) {
+	if r == nil || r.metadata == nil || stubID == "" {
+		return
+	}
+	if _, err := r.metadata.MarkStubReported(r.ctx, r.locality, stubID, r.recentStubTTL); err != nil {
+		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to mark required-content report complete")
+	}
+}
+
+func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.CacheRequiredContentItem) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, bucket := range items {
+		if len(bucket) == 0 {
+			continue
+		}
+		current := r.pending[key]
+		if current == nil {
+			current = make(map[string]types.CacheRequiredContentItem, len(bucket))
+			r.pending[key] = current
+		}
+		for itemKey, item := range bucket {
+			current[itemKey] = item
 		}
 	}
 }
@@ -312,14 +363,15 @@ func (m *WorkerCacheManager) activeStubsForWorkspace(workspaceID string) []strin
 		if instance == nil || instance.Request == nil {
 			return true
 		}
-		if instance.Request.WorkspaceId != workspaceID || instance.StubId == "" {
+		stubID := cacheRequestStubID(instance.Request)
+		if cacheRequestWorkspaceID(instance.Request) != workspaceID || stubID == "" {
 			return true
 		}
-		if _, ok := seen[instance.StubId]; ok {
+		if _, ok := seen[stubID]; ok {
 			return true
 		}
-		seen[instance.StubId] = struct{}{}
-		stubs = append(stubs, instance.StubId)
+		seen[stubID] = struct{}{}
+		stubs = append(stubs, stubID)
 		return true
 	})
 	return stubs
@@ -416,7 +468,7 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 			continue
 		}
 
-		if server.HasCompleteContent(item.Hash, item.SizeBytes) {
+		if m.requiredContentComplete(server, item, routingKey) {
 			continue
 		}
 
@@ -445,7 +497,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	}()
 
 	// Re-check after acquiring the lock; another process may have just completed it.
-	if server.HasCompleteContent(item.Hash, item.SizeBytes) {
+	if m.requiredContentComplete(server, item, routingKey) {
 		return
 	}
 
@@ -577,11 +629,55 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 		return m.materializeOCILayer(ctx, server, stub, item)
 	case types.CacheContentKindVolume:
 		return m.materializeVolumeObject(ctx, server, stub, item)
+	case types.CacheContentKindClipV1:
+		// The v1 archive is one content-addressed object; re-fetch the whole
+		// archive from the image registry (the same source the image-load path
+		// pulls it from) and store it under its hash + cachefs path.
+		return m.materializeArchiveObject(ctx, server, item, routingKey)
 	default:
-		// CLIP v1 content is content-addressed archive data with no standalone
-		// origin source; it is materialized from a replica when available.
 		return types.CacheAuditStatusMiss
 	}
+}
+
+// materializeArchiveObject re-fetches the whole CLIP v1 archive from the image
+// registry and stores it as a single content object, mirroring the embedded
+// image-archive cache that the image-load path populates. It pulls from the same
+// source the load path uses: the S3 image registry for the S3 store, or the
+// mounted image volume for the local store. No credentials are persisted.
+func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey string) string {
+	source := &pb.CacheSource{
+		CachePath:    routingKey,
+		ExpectedHash: item.Hash,
+	}
+
+	if m.config.ImageService.RegistryStore == reg.S3ImageRegistryStore {
+		s3 := m.config.ImageService.Registries.S3
+		if s3.BucketName == "" || item.Source == "" {
+			return types.CacheAuditStatusMiss
+		}
+		source.Path = item.Source
+		source.BucketName = s3.BucketName
+		source.Region = s3.Region
+		source.EndpointUrl = s3.Endpoint
+		source.AccessKey = s3.AccessKey
+		source.SecretKey = s3.SecretKey
+		source.ForcePathStyle = s3.ForcePathStyle
+	} else {
+		// Local registry store: the durable archive lives on the mounted image
+		// volume at the cachefs path; read it directly (no bucket/credentials).
+		source.Path = routingKey
+	}
+
+	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{Source: source})
+	if err == nil && resp != nil && resp.Ok {
+		return types.CacheAuditStatusMaterialized
+	}
+	log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive fetch failed")
+	return types.CacheAuditStatusOriginFailure
+}
+
+func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
+	return server.HasCompleteContent(item.Hash, item.SizeBytes)
 }
 
 // materializeVolumeObject fetches a workspace object from object storage using
@@ -739,6 +835,7 @@ func (m *WorkerCacheManager) auditCacheEvent(localHostID string, stub cache.Rece
 		StubID:      stub.StubID,
 		Hash:        item.Hash,
 		RoutingKey:  routingKey,
+		Kind:        item.Kind,
 		Status:      status,
 		Source:      item.Source,
 		SizeBytes:   item.SizeBytes,

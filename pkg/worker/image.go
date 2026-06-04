@@ -141,6 +141,10 @@ type ImageClient struct {
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
 	contentReporter    *cacheContentReporter
+	// archiveContentMetadata resolves the cached image archive object (hash/size)
+	// for a cachefs path. It is a field so tests can inject a fake; in production
+	// it delegates to the cache client.
+	archiveContentMetadata func(ctx context.Context, cachePath string) (*cache.FSMetadata, error)
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
@@ -189,6 +193,9 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
+	}
+	if c.cacheClient != nil {
+		c.archiveContentMetadata = c.cacheClient.CacheFSMetadata
 	}
 	go c.runClipReadEventReporter()
 
@@ -269,7 +276,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// keeps this stub's content warm for the configured TTL after its last
 	// container. This is cheap and independent of one-time content generation.
 	if c.contentReporter != nil && request != nil {
-		c.contentReporter.touchRecentStub(request.WorkspaceId, request.StubId)
+		c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -393,9 +400,11 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	}
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
+	} else {
+		c.restoreV1ArchiveDataCache(ctx, request)
 	}
 
-	c.reportRequiredContent(request, meta)
+	c.reportRequiredContent(ctx, request, meta)
 
 	return archive, nil
 }
@@ -403,87 +412,132 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 // reportRequiredContent enumerates the content a stub's image requires and feeds
 // it to the cache reconciliation reporter. It runs at image-load time (off the
 // read hot path) and is a no-op when reconciliation is disabled.
-func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
+func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
 	if c.contentReporter == nil || request == nil || meta == nil {
 		return
 	}
 
-	items, kind := requiredContentItems(meta)
-	if len(items) == 0 {
+	report, ok := c.imageRequiredContent(ctx, request, meta)
+	if !ok {
 		// Nothing to report; do not claim the one-time generation so a later
-		// load that does yield items can still publish them.
+		// load that does yield content can still publish it.
 		return
 	}
 
 	// Required content is immutable per stub, so publish it only the first time
 	// the stub loads, not on every container start.
-	if !c.contentReporter.shouldGenerateRequiredContent(request.StubId) {
+	stubID := cacheRequestStubID(request)
+	if !c.contentReporter.shouldGenerateRequiredContent(stubID) {
 		return
 	}
-	c.contentReporter.reportItems(request.WorkspaceId, request.StubId, kind, items)
-	c.contentReporter.flush()
+
+	workspaceID := cacheRequestWorkspaceID(request)
+	c.contentReporter.reportBatches(workspaceID, stubID, []requiredContentReport{report})
+
 	log.Debug().
-		Str("workspace_id", request.WorkspaceId).
-		Str("stub_id", request.StubId).
+		Str("workspace_id", workspaceID).
+		Str("stub_id", stubID).
 		Str("image_id", request.ImageId).
-		Str("kind", string(kind)).
-		Int("item_count", len(items)).
+		Str("kind", string(report.kind)).
+		Int("item_count", len(report.items)).
 		Msg("reported image required content")
 }
 
-// requiredContentItems enumerates the content a stub's image requires from its
-// CLIP metadata, returning the items and their content kind.
-func requiredContentItems(meta *clipCommon.ClipArchiveMetadata) ([]types.CacheRequiredContentItem, types.CacheContentKind) {
-	// CLIP v2 (OCI): decompressed layer hashes are available directly from
-	// image metadata, keyed by layer digest. The non-secret source descriptor
-	// is the full OCI layer reference so the HRW owner can fetch and decompress
-	// the layer from the source registry exactly as the read path does.
+func cacheRequestWorkspaceID(request *types.ContainerRequest) string {
+	if request == nil {
+		return ""
+	}
+	if request.WorkspaceId != "" {
+		return request.WorkspaceId
+	}
+	return request.Workspace.ExternalId
+}
+
+func cacheRequestStubID(request *types.ContainerRequest) string {
+	if request == nil {
+		return ""
+	}
+	if request.StubId != "" {
+		return request.StubId
+	}
+	return request.Stub.ExternalId
+}
+
+// imageRequiredContent returns the required-content batch for a stub's image:
+// per-layer decompressed hashes for CLIP v2, or the whole archive as a single
+// content object for CLIP v1 (reconciling the archive as one file avoids
+// re-materializing the thousands of per-file entries in the v1 index).
+func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
 	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
-		items := make([]types.CacheRequiredContentItem, 0, len(ociInfo.DecompressedHashByLayer))
-		for layerDigest, hash := range ociInfo.DecompressedHashByLayer {
-			if hash == "" {
-				continue
-			}
-			items = append(items, types.CacheRequiredContentItem{
-				Hash:         hash,
-				RoutingKey:   hash,
-				ExpectedHash: hash,
-				Source:       ociLayerReference(ociInfo, layerDigest),
-				Kind:         types.CacheContentKindClipV2,
-			})
+		items := ociRequiredContentItems(ociInfo)
+		if len(items) == 0 {
+			return requiredContentReport{}, false
 		}
-		return items, types.CacheContentKindClipV2
+		return requiredContentReport{kind: types.CacheContentKindClipV2, items: items}, true
 	}
 
-	// CLIP v1: deduplicated content hashes from the archive index.
-	if meta.Index == nil {
-		return nil, types.CacheContentKindClipV1
+	item, ok := c.clipV1ArchiveRequiredContent(ctx, request)
+	if !ok {
+		return requiredContentReport{}, false
 	}
-	seen := map[string]struct{}{}
-	items := make([]types.CacheRequiredContentItem, 0)
-	meta.Index.Ascend(nil, func(a interface{}) bool {
-		node, ok := a.(*clipCommon.ClipNode)
-		if !ok || node == nil || node.ContentHash == "" {
-			return true
+	return requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}, true
+}
+
+// ociRequiredContentItems enumerates CLIP v2 decompressed layer hashes. The
+// non-secret source descriptor is the full OCI layer reference so the HRW owner
+// can fetch and decompress the layer from the source registry like the read path.
+func ociRequiredContentItems(ociInfo *clipCommon.OCIStorageInfo) []types.CacheRequiredContentItem {
+	items := make([]types.CacheRequiredContentItem, 0, len(ociInfo.DecompressedHashByLayer))
+	for layerDigest, hash := range ociInfo.DecompressedHashByLayer {
+		if hash == "" {
+			continue
 		}
-		if node.NodeType != clipCommon.FileNode {
-			return true
-		}
-		if _, exists := seen[node.ContentHash]; exists {
-			return true
-		}
-		seen[node.ContentHash] = struct{}{}
 		items = append(items, types.CacheRequiredContentItem{
-			Hash:         node.ContentHash,
-			RoutingKey:   node.ContentHash,
-			ExpectedHash: node.ContentHash,
-			SizeBytes:    int64(node.Attr.Size),
-			Source:       node.Path,
-			Kind:         types.CacheContentKindClipV1,
+			Hash:         hash,
+			RoutingKey:   hash,
+			ExpectedHash: hash,
+			Source:       ociLayerReference(ociInfo, layerDigest),
+			Kind:         types.CacheContentKindClipV2,
 		})
-		return true
-	})
-	return items, types.CacheContentKindClipV1
+	}
+	return items
+}
+
+// clipV1ArchiveRequiredContent describes the cached CLIP v1 archive as a single
+// content object, routed the same way the read/restore path routes it (by the
+// archive cachefs path). The archive is already populated in the content cache
+// by the embedded-cache pull that runs before this, so its hash/size are
+// available without an extra fetch.
+func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request *types.ContainerRequest) (types.CacheRequiredContentItem, bool) {
+	if c.archiveContentMetadata == nil || request == nil {
+		return types.CacheRequiredContentItem{}, false
+	}
+
+	cachePath := c.imageArchiveCachePath(request.ImageId)
+	metadata, err := c.archiveContentMetadata(ctx, cachePath)
+	if err != nil || metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
+		return types.CacheRequiredContentItem{}, false
+	}
+
+	return types.CacheRequiredContentItem{
+		Hash:         metadata.Hash,
+		RoutingKey:   cachePath,
+		ExpectedHash: metadata.Hash,
+		SizeBytes:    int64(metadata.Size),
+		// Origin source descriptor: the archive's key in the image registry,
+		// so a cache host that owns the archive but lost it can re-fetch it from
+		// the same place the image-load path pulls it. Non-secret (object key
+		// only); credentials are resolved at fetch time.
+		Source: c.imageArchiveSourceKey(request.ImageId),
+		Kind:   types.CacheContentKindClipV1,
+	}, true
+}
+
+// imageArchiveSourceKey returns the image registry object key for a stub's
+// archive (e.g. "{imageId}.rclip"), matching the key used by the embedded-cache
+// pull that originally stored it.
+func (c *ImageClient) imageArchiveSourceKey(imageId string) string {
+	return fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
 }
 
 // ociLayerReference builds a fully-qualified, non-secret OCI layer digest
@@ -505,6 +559,14 @@ func ociLayerReference(ociInfo *clipCommon.OCIStorageInfo, layerDigest string) s
 
 func (c *ImageClient) localArchivePath(imageId string) string {
 	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+}
+
+func (c *ImageClient) clipV1ArchiveCachePath(imageId string) string {
+	return fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+}
+
+func (c *ImageClient) clipV1ArchiveDataCachePath(imageId string) string {
+	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, reg.LocalImageFileExtension)
 }
 
 func fileExists(path string) bool {
@@ -573,11 +635,37 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 		return c.imageCachePath
 	}
 
+	if c.config.ImageService.RegistryStore == registry.S3ImageRegistryStore {
+		return c.clipV1ArchiveDataCachePath(request.ImageId)
+	}
+
 	if c.config.ImageService.LocalCacheEnabled || strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
 		return fmt.Sprintf("%s/%s.cache", c.imageCachePath, request.ImageId)
 	}
 
 	return ""
+}
+
+func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest) {
+	if c.cacheClient == nil || request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
+		return
+	}
+
+	cachePath := c.clipV1ArchiveCachePath(request.ImageId)
+	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
+	if err != nil || metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
+		return
+	}
+
+	exists, err := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
+	if err != nil || !exists {
+		return
+	}
+
+	targetPath := c.clipV1ArchiveDataCachePath(request.ImageId)
+	if err := c.writeImageArchiveFromContentCache(ctx, targetPath, request.ImageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
+		log.Debug().Err(err).Str("image_id", request.ImageId).Str("cache_path", cachePath).Msg("failed to restore v1 archive data cache")
+	}
 }
 
 func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error) {
@@ -1713,7 +1801,20 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
 	os.MkdirAll(copyDir, 0755)
 
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
+	// Local OCI-layout reference name. Digest-pinned source images
+	// (registry/repo@sha256:...) have no tag, which would yield an empty,
+	// invalid reference for both the skopeo destination and the umoci unpack
+	// ("refusing to resolve invalid reference"). Derive a unique, tag-safe ref
+	// from the digest rather than a shared "latest": the OCI layout is shared
+	// per-repo, so distinct digests of the same repo must not collide on one ref
+	// (which would unpack the wrong image when builds overlap). The image is
+	// still pulled by its full (digest) reference; this name only labels it
+	// locally.
+	ociRef := baseImage.Tag
+	if ociRef == "" {
+		ociRef = localOCILayoutRef(baseImage.Digest)
+	}
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociRef)
 
 	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
@@ -1749,7 +1850,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
+	err = c.unpack(ctx, baseImage.Repo, ociRef, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
@@ -1763,6 +1864,24 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 
 	return nil
+}
+
+// localOCILayoutRef converts an image digest (e.g. "sha256:abc...") into a
+// tag-safe, content-unique reference for the local OCI layout. Because the
+// layout is shared per repository, using the digest keeps distinct images
+// distinct (and identical content idempotent), avoiding a shared "latest" ref
+// that could unpack the wrong image when same-repo builds overlap. Falls back to
+// "latest" only when no digest is available.
+func localOCILayoutRef(digest string) string {
+	if digest == "" {
+		return "latest"
+	}
+	// OCI tags must match [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}.
+	ref := strings.NewReplacer(":", "-", "/", "-", "+", "-", "@", "-").Replace(digest)
+	if len(ref) > 128 {
+		ref = ref[:128]
+	}
+	return ref
 }
 
 func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath *PathInfo) error {
@@ -1822,7 +1941,9 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 				},
 			},
 			ProgressChan: progressChan,
-			ContentCache: newImageContentCache(c.cacheClient, imageId, "legacy-file-build"),
+			// v1 content is cached and reconciled as a single archive object on
+			// first load (the embedded image-archive cache), so we intentionally
+			// do not warm every individual file into the distributed cache here.
 		}, &clipCommon.S3StorageInfo{
 			Bucket:         c.config.ImageService.Registries.S3.BucketName,
 			Region:         c.config.ImageService.Registries.S3.Region,
@@ -1831,10 +1952,11 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 			ForcePathStyle: c.config.ImageService.Registries.S3.ForcePathStyle,
 		})
 	case registry.LocalImageRegistryStore:
+		// No per-file ContentCache: v1 is cached/reconciled as a single archive
+		// object on first load, not file-by-file during the build.
 		err = clip.CreateArchive(clip.CreateOptions{
-			InputPath:    bundlePath.Path,
-			OutputPath:   archivePath,
-			ContentCache: newImageContentCache(c.cacheClient, imageId, "legacy-file-build"),
+			InputPath:  bundlePath.Path,
+			OutputPath: archivePath,
 		})
 	}
 

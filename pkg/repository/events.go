@@ -940,7 +940,11 @@ func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspace
 	)
 }
 
-func (r *EventClientRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) {
+type syncEventSink interface {
+	PushEventSync(event cloudevents.Event) error
+}
+
+func (r *EventClientRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error {
 	if schema.Timestamp.IsZero() {
 		schema.Timestamp = time.Now().UTC()
 	}
@@ -952,7 +956,32 @@ func (r *EventClientRepo) PushStubCacheRequiredContent(schema types.EventStubCac
 		}
 		schema.TotalBytes = total
 	}
-	r.pushEvent(types.EventStubCacheRequiredContent, types.EventStubCacheRequiredContentSchemaVersion, schema)
+	if len(r.storageSinks) == 0 && len(r.callbackSinks) == 0 {
+		return nil
+	}
+
+	event, err := r.createEventObject(types.EventStubCacheRequiredContent, types.EventStubCacheRequiredContentSchemaVersion, schema)
+	if err != nil {
+		return err
+	}
+
+	for _, sink := range r.storageSinks {
+		if syncSink, ok := sink.(syncEventSink); ok {
+			if err := syncSink.PushEventSync(event); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := sink.PushEvent(event); err != nil {
+			return err
+		}
+	}
+	for _, sink := range r.callbackSinks {
+		if err := sink.PushEvent(event); err != nil {
+			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to push required-content event callback")
+		}
+	}
+	return nil
 }
 
 func (r *EventClientRepo) PushPlatformCacheEvent(schema types.EventPlatformCacheSchema) {
