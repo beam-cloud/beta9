@@ -524,8 +524,20 @@ func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request 
 		RoutingKey:   cachePath,
 		ExpectedHash: metadata.Hash,
 		SizeBytes:    int64(metadata.Size),
-		Kind:         types.CacheContentKindClipV1,
+		// Origin source descriptor: the archive's key in the image registry,
+		// so a cache host that owns the archive but lost it can re-fetch it from
+		// the same place the image-load path pulls it. Non-secret (object key
+		// only); credentials are resolved at fetch time.
+		Source: c.imageArchiveSourceKey(request.ImageId),
+		Kind:   types.CacheContentKindClipV1,
 	}, true
+}
+
+// imageArchiveSourceKey returns the image registry object key for a stub's
+// archive (e.g. "{imageId}.rclip"), matching the key used by the embedded-cache
+// pull that originally stored it.
+func (c *ImageClient) imageArchiveSourceKey(imageId string) string {
+	return fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
 }
 
 // ociLayerReference builds a fully-qualified, non-secret OCI layer digest

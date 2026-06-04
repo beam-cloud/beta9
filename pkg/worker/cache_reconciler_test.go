@@ -241,6 +241,9 @@ func TestClipV1ArchiveRequiredContentIsSingleArchiveObject(t *testing.T) {
 	require.Equal(t, "archive-hash", item.ExpectedHash)
 	require.Equal(t, "/images/image.clip", item.RoutingKey)
 	require.Equal(t, int64(4096), item.SizeBytes)
+	// Origin source is the registry object key so a host that lost the archive
+	// can re-fetch it from the same place the image-load path pulls it.
+	require.Equal(t, "image.clip", item.Source)
 	require.Equal(t, types.CacheContentKindClipV1, item.Kind)
 }
 
@@ -312,6 +315,7 @@ func TestReportRequiredContentClipV1EmitsSingleArchiveObject(t *testing.T) {
 	require.Equal(t, "archive-hash", item.ExpectedHash)
 	require.Equal(t, "/images/image.clip", item.RoutingKey)
 	require.Equal(t, int64(4096), item.SizeBytes)
+	require.Equal(t, "image.clip", item.Source)
 }
 
 func TestReportRequiredContentClipV1SkipsWhenArchiveUncached(t *testing.T) {

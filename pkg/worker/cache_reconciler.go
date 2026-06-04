@@ -629,11 +629,48 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 		return m.materializeOCILayer(ctx, server, stub, item)
 	case types.CacheContentKindVolume:
 		return m.materializeVolumeObject(ctx, server, stub, item)
+	case types.CacheContentKindClipV1:
+		// The v1 archive is one content-addressed object; re-fetch the whole
+		// archive from the image registry (the same source the image-load path
+		// pulls it from) and store it under its hash + cachefs path.
+		return m.materializeArchiveObject(ctx, server, item, routingKey)
 	default:
-		// CLIP v1 content is content-addressed archive data with no standalone
-		// origin source; it is materialized from a replica when available.
 		return types.CacheAuditStatusMiss
 	}
+}
+
+// materializeArchiveObject re-fetches the whole CLIP v1 archive from the image
+// registry and stores it as a single content object, mirroring the embedded
+// image-archive cache that the image-load path populates. It uses the worker's
+// configured image registry (the same source/credentials the load path uses);
+// no credentials are persisted to Redis or S2.
+func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey string) string {
+	s3 := m.config.ImageService.Registries.S3
+	if m.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || s3.BucketName == "" || item.Source == "" {
+		// Non-S3 stores keep the archive on local disk only, so there is no
+		// cross-host origin to re-fetch from; rely on replica copy / next load.
+		return types.CacheAuditStatusMiss
+	}
+
+	req := &pb.CacheStoreContentFromSourceRequest{
+		Source: &pb.CacheSource{
+			Path:           item.Source,
+			CachePath:      routingKey,
+			ExpectedHash:   item.Hash,
+			BucketName:     s3.BucketName,
+			Region:         s3.Region,
+			EndpointUrl:    s3.Endpoint,
+			AccessKey:      s3.AccessKey,
+			SecretKey:      s3.SecretKey,
+			ForcePathStyle: s3.ForcePathStyle,
+		},
+	}
+	resp, err := server.StoreContentFromSource(ctx, req)
+	if err == nil && resp != nil && resp.Ok {
+		return types.CacheAuditStatusMaterialized
+	}
+	log.Debug().Err(err).Str("hash", item.Hash).Str("source", item.Source).Msg("cache reconciliation image archive fetch failed")
+	return types.CacheAuditStatusOriginFailure
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
