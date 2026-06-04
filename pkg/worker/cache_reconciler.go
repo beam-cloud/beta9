@@ -18,7 +18,6 @@ package worker
 import (
 	"compress/gzip"
 	"context"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -612,10 +611,6 @@ func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostI
 // prefers a reachable replica and otherwise fetches from the item's origin in
 // the same way the read path does. It never persists credentials in Redis or S2.
 func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
-	if item.Kind == types.CacheContentKindClipV1Archive {
-		return m.materializeClipV1Archive(ctx, server, item, routingKey)
-	}
-
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation replica copy failed")
 	} else if ok {
@@ -642,56 +637,7 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
-	if item.Kind != types.CacheContentKindClipV1Archive {
-		return server.HasCompleteContent(item.Hash, item.SizeBytes)
-	}
-
-	metadata, err := m.client.CacheFSMetadata(m.ctx, routingKey)
-	if err != nil || metadata == nil || metadata.Hash == "" {
-		return false
-	}
-	return server.HasCompleteContent(metadata.Hash, int64(metadata.Size))
-}
-
-func (m *WorkerCacheManager) materializeClipV1Archive(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey string) string {
-	if metadata, err := m.client.CacheFSMetadata(ctx, routingKey); err == nil && metadata != nil && metadata.Hash != "" {
-		if server.HasCompleteContent(metadata.Hash, int64(metadata.Size)) {
-			return types.CacheAuditStatusMaterialized
-		}
-		if ok, err := m.client.MaterializeFromReplica(ctx, server, metadata.Hash, routingKey, int64(metadata.Size)); err != nil {
-			log.Debug().Err(err).Str("hash", metadata.Hash).Str("routing_key", routingKey).Msg("cache reconciliation v1 archive replica copy failed")
-		} else if ok {
-			return types.CacheAuditStatusMaterialized
-		}
-	}
-
-	if !m.config.Cache.Reconciliation.OriginFallbackEnabled || item.Source == "" {
-		return types.CacheAuditStatusMiss
-	}
-
-	req := &pb.CacheStoreContentFromSourceRequest{Source: &pb.CacheSource{
-		Path:      item.Source,
-		CachePath: routingKey,
-	}}
-	switch m.config.ImageService.RegistryStore {
-	case reg.S3ImageRegistryStore:
-		sourceRegistry := m.config.ImageService.Registries.S3
-		req.Source.BucketName = sourceRegistry.BucketName
-		req.Source.Region = sourceRegistry.Region
-		req.Source.EndpointUrl = sourceRegistry.Endpoint
-		req.Source.AccessKey = sourceRegistry.AccessKey
-		req.Source.SecretKey = sourceRegistry.SecretKey
-		req.Source.ForcePathStyle = sourceRegistry.ForcePathStyle
-	default:
-		req.Source.Path = filepath.Join("/images", item.Source)
-	}
-
-	resp, err := server.StoreContentFromSource(ctx, req)
-	if err == nil && resp != nil && resp.Ok {
-		return types.CacheAuditStatusMaterialized
-	}
-	log.Debug().Err(err).Str("source", item.Source).Str("routing_key", routingKey).Msg("cache reconciliation v1 archive fetch failed")
-	return types.CacheAuditStatusOriginFailure
+	return server.HasCompleteContent(item.Hash, item.SizeBytes)
 }
 
 // materializeVolumeObject fetches a workspace object from object storage using

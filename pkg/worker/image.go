@@ -141,6 +141,10 @@ type ImageClient struct {
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
 	contentReporter    *cacheContentReporter
+	// archiveContentMetadata resolves the cached image archive object (hash/size)
+	// for a cachefs path. It is a field so tests can inject a fake; in production
+	// it delegates to the cache client.
+	archiveContentMetadata func(ctx context.Context, cachePath string) (*cache.FSMetadata, error)
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
@@ -189,6 +193,9 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
+	}
+	if c.cacheClient != nil {
+		c.archiveContentMetadata = c.cacheClient.CacheFSMetadata
 	}
 	go c.runClipReadEventReporter()
 
@@ -397,7 +404,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 		c.restoreV1ArchiveDataCache(ctx, request)
 	}
 
-	c.reportRequiredContent(request, meta)
+	c.reportRequiredContent(ctx, request, meta)
 
 	return archive, nil
 }
@@ -405,26 +412,15 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 // reportRequiredContent enumerates the content a stub's image requires and feeds
 // it to the cache reconciliation reporter. It runs at image-load time (off the
 // read hot path) and is a no-op when reconciliation is disabled.
-func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
+func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
 	if c.contentReporter == nil || request == nil || meta == nil {
 		return
 	}
 
-	items, kind := requiredContentItems(meta)
-	archiveItem, hasArchiveItem := c.clipV1ArchiveRequiredContentItem(request, meta)
-
-	reports := make([]requiredContentReport, 0, 2)
-	if hasArchiveItem {
-		reports = append(reports, requiredContentReport{
-			kind:  types.CacheContentKindClipV1Archive,
-			items: []types.CacheRequiredContentItem{archiveItem},
-		})
-	} else if len(items) > 0 {
-		reports = append(reports, requiredContentReport{kind: kind, items: items})
-	}
-	if len(reports) == 0 {
+	report, ok := c.imageRequiredContent(ctx, request, meta)
+	if !ok {
 		// Nothing to report; do not claim the one-time generation so a later
-		// load that does yield items can still publish them.
+		// load that does yield content can still publish it.
 		return
 	}
 
@@ -436,15 +432,14 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 	}
 
 	workspaceID := cacheRequestWorkspaceID(request)
-	c.contentReporter.reportBatches(workspaceID, stubID, reports)
+	c.contentReporter.reportBatches(workspaceID, stubID, []requiredContentReport{report})
 
 	log.Debug().
 		Str("workspace_id", workspaceID).
 		Str("stub_id", stubID).
 		Str("image_id", request.ImageId).
-		Str("kind", string(kind)).
-		Int("item_count", len(items)).
-		Bool("archive_item", hasArchiveItem).
+		Str("kind", string(report.kind)).
+		Int("item_count", len(report.items)).
 		Msg("reported image required content")
 }
 
@@ -468,59 +463,69 @@ func cacheRequestStubID(request *types.ContainerRequest) string {
 	return request.Stub.ExternalId
 }
 
-// requiredContentItems enumerates the content a stub's image requires from its
-// CLIP metadata, returning the items and their content kind.
-func requiredContentItems(meta *clipCommon.ClipArchiveMetadata) ([]types.CacheRequiredContentItem, types.CacheContentKind) {
-	// CLIP v2 (OCI): decompressed layer hashes are available directly from
-	// image metadata, keyed by layer digest. The non-secret source descriptor
-	// is the full OCI layer reference so the HRW owner can fetch and decompress
-	// the layer from the source registry exactly as the read path does.
+// imageRequiredContent returns the required-content batch for a stub's image:
+// per-layer decompressed hashes for CLIP v2, or the whole archive as a single
+// content object for CLIP v1 (reconciling the archive as one file avoids
+// re-materializing the thousands of per-file entries in the v1 index).
+func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
 	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
-		items := make([]types.CacheRequiredContentItem, 0, len(ociInfo.DecompressedHashByLayer))
-		for layerDigest, hash := range ociInfo.DecompressedHashByLayer {
-			if hash == "" {
-				continue
-			}
-			items = append(items, types.CacheRequiredContentItem{
-				Hash:         hash,
-				RoutingKey:   hash,
-				ExpectedHash: hash,
-				Source:       ociLayerReference(ociInfo, layerDigest),
-				Kind:         types.CacheContentKindClipV2,
-			})
+		items := ociRequiredContentItems(ociInfo)
+		if len(items) == 0 {
+			return requiredContentReport{}, false
 		}
-		return items, types.CacheContentKindClipV2
+		return requiredContentReport{kind: types.CacheContentKindClipV2, items: items}, true
 	}
 
-	// CLIP v1: deduplicated content hashes from the archive index.
-	if meta.Index == nil {
-		return nil, types.CacheContentKindClipV1
+	item, ok := c.clipV1ArchiveRequiredContent(ctx, request)
+	if !ok {
+		return requiredContentReport{}, false
 	}
-	seen := map[string]struct{}{}
-	items := make([]types.CacheRequiredContentItem, 0)
-	meta.Index.Ascend(nil, func(a interface{}) bool {
-		node, ok := a.(*clipCommon.ClipNode)
-		if !ok || node == nil || node.ContentHash == "" {
-			return true
+	return requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}}, true
+}
+
+// ociRequiredContentItems enumerates CLIP v2 decompressed layer hashes. The
+// non-secret source descriptor is the full OCI layer reference so the HRW owner
+// can fetch and decompress the layer from the source registry like the read path.
+func ociRequiredContentItems(ociInfo *clipCommon.OCIStorageInfo) []types.CacheRequiredContentItem {
+	items := make([]types.CacheRequiredContentItem, 0, len(ociInfo.DecompressedHashByLayer))
+	for layerDigest, hash := range ociInfo.DecompressedHashByLayer {
+		if hash == "" {
+			continue
 		}
-		if node.NodeType != clipCommon.FileNode {
-			return true
-		}
-		if _, exists := seen[node.ContentHash]; exists {
-			return true
-		}
-		seen[node.ContentHash] = struct{}{}
 		items = append(items, types.CacheRequiredContentItem{
-			Hash:         node.ContentHash,
-			RoutingKey:   node.ContentHash,
-			ExpectedHash: node.ContentHash,
-			SizeBytes:    int64(node.Attr.Size),
-			Source:       node.Path,
-			Kind:         types.CacheContentKindClipV1,
+			Hash:         hash,
+			RoutingKey:   hash,
+			ExpectedHash: hash,
+			Source:       ociLayerReference(ociInfo, layerDigest),
+			Kind:         types.CacheContentKindClipV2,
 		})
-		return true
-	})
-	return items, types.CacheContentKindClipV1
+	}
+	return items
+}
+
+// clipV1ArchiveRequiredContent describes the cached CLIP v1 archive as a single
+// content object, routed the same way the read/restore path routes it (by the
+// archive cachefs path). The archive is already populated in the content cache
+// by the embedded-cache pull that runs before this, so its hash/size are
+// available without an extra fetch.
+func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request *types.ContainerRequest) (types.CacheRequiredContentItem, bool) {
+	if c.archiveContentMetadata == nil || request == nil {
+		return types.CacheRequiredContentItem{}, false
+	}
+
+	cachePath := c.imageArchiveCachePath(request.ImageId)
+	metadata, err := c.archiveContentMetadata(ctx, cachePath)
+	if err != nil || metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
+		return types.CacheRequiredContentItem{}, false
+	}
+
+	return types.CacheRequiredContentItem{
+		Hash:         metadata.Hash,
+		RoutingKey:   cachePath,
+		ExpectedHash: metadata.Hash,
+		SizeBytes:    int64(metadata.Size),
+		Kind:         types.CacheContentKindClipV1,
+	}, true
 }
 
 // ociLayerReference builds a fully-qualified, non-secret OCI layer digest
@@ -550,23 +555,6 @@ func (c *ImageClient) clipV1ArchiveCachePath(imageId string) string {
 
 func (c *ImageClient) clipV1ArchiveDataCachePath(imageId string) string {
 	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, reg.LocalImageFileExtension)
-}
-
-func (c *ImageClient) clipV1ArchiveRequiredContentItem(request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (types.CacheRequiredContentItem, bool) {
-	if request == nil || request.ImageId == "" || meta == nil || meta.Index == nil {
-		return types.CacheRequiredContentItem{}, false
-	}
-	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
-		return types.CacheRequiredContentItem{}, false
-	}
-
-	cachePath := c.clipV1ArchiveCachePath(request.ImageId)
-	return types.CacheRequiredContentItem{
-		Hash:       "clip-v1-archive:" + request.ImageId,
-		RoutingKey: cachePath,
-		Source:     fmt.Sprintf("%s.%s", request.ImageId, reg.LocalImageFileExtension),
-		Kind:       types.CacheContentKindClipV1Archive,
-	}, true
 }
 
 func fileExists(path string) bool {

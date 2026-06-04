@@ -124,7 +124,7 @@ func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 	r := newTestReporter(fake)
 	r.metadata = metadata
 
-	r.reportItems("ws", "stub", types.CacheContentKindClipV1Archive, []types.CacheRequiredContentItem{{Hash: "archive", RoutingKey: "/images/archive.clip"}})
+	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	require.Zero(t, metadata.marked)
 
 	r.flush()
@@ -138,7 +138,7 @@ func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
 	r := newTestReporter(fake)
 	r.metadata = metadata
 
-	r.reportItems("ws", "stub", types.CacheContentKindClipV1Archive, []types.CacheRequiredContentItem{{Hash: "archive", RoutingKey: "/images/archive.clip"}})
+	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	r.flush()
 	require.Empty(t, fake.pushed)
 	require.Zero(t, metadata.marked)
@@ -221,25 +221,43 @@ func testClipV1Metadata(t *testing.T) *clipCommon.ClipArchiveMetadata {
 	return meta
 }
 
-func TestRequiredContentItemsClipV1FromArchive(t *testing.T) {
-	meta := testClipV1Metadata(t)
-	items, kind := requiredContentItems(meta)
-	require.Equal(t, types.CacheContentKindClipV1, kind)
-	require.Len(t, items, 2)
-	for _, item := range items {
-		require.NotEmpty(t, item.Hash)
-		require.Equal(t, item.Hash, item.RoutingKey)
-		require.Equal(t, item.Hash, item.ExpectedHash)
-		require.Equal(t, types.CacheContentKindClipV1, item.Kind)
-		require.NotEmpty(t, item.Source)
+func newTestV1ImageClient(reporter *cacheContentReporter, metadata *cache.FSMetadata) *ImageClient {
+	return &ImageClient{
+		contentReporter: reporter,
+		registry:        &registry.ImageRegistry{ImageFileExtension: registry.LocalImageFileExtension},
+		archiveContentMetadata: func(_ context.Context, _ string) (*cache.FSMetadata, error) {
+			return metadata, nil
+		},
 	}
 }
 
-func TestRequiredContentItemsClipV2FromOCILayers(t *testing.T) {
-	meta := testClipV2Metadata()
+func TestClipV1ArchiveRequiredContentIsSingleArchiveObject(t *testing.T) {
+	client := newTestV1ImageClient(nil, &cache.FSMetadata{Hash: "archive-hash", Size: 4096})
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub", ImageId: "image"}
 
-	items, kind := requiredContentItems(meta)
-	require.Equal(t, types.CacheContentKindClipV2, kind)
+	item, ok := client.clipV1ArchiveRequiredContent(context.Background(), request)
+	require.True(t, ok)
+	require.Equal(t, "archive-hash", item.Hash)
+	require.Equal(t, "archive-hash", item.ExpectedHash)
+	require.Equal(t, "/images/image.clip", item.RoutingKey)
+	require.Equal(t, int64(4096), item.SizeBytes)
+	require.Equal(t, types.CacheContentKindClipV1, item.Kind)
+}
+
+func TestClipV1ArchiveRequiredContentSkipsWhenUncached(t *testing.T) {
+	client := newTestV1ImageClient(nil, nil)
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub", ImageId: "image"}
+
+	_, ok := client.clipV1ArchiveRequiredContent(context.Background(), request)
+	require.False(t, ok)
+}
+
+func TestOCIRequiredContentItemsFromLayers(t *testing.T) {
+	meta := testClipV2Metadata()
+	ociInfo, ok := ociStorageInfo(meta)
+	require.True(t, ok)
+
+	items := ociRequiredContentItems(ociInfo)
 	require.Len(t, items, 2)
 
 	byHash := map[string]types.CacheRequiredContentItem{}
@@ -267,47 +285,48 @@ func testClipV2Metadata() *clipCommon.ClipArchiveMetadata {
 	}
 }
 
-func TestReportRequiredContentClipV1IncludesArchiveItem(t *testing.T) {
+func TestReportRequiredContentClipV1EmitsSingleArchiveObject(t *testing.T) {
 	fake := &fakeEventRepo{}
-	client := &ImageClient{contentReporter: newTestReporter(fake)}
+	client := newTestV1ImageClient(newTestReporter(fake), &cache.FSMetadata{Hash: "archive-hash", Size: 4096})
 	request := &types.ContainerRequest{
 		WorkspaceId: "workspace",
 		StubId:      "stub",
 		ImageId:     "image",
 	}
 
-	client.reportRequiredContent(request, testClipV1Metadata(t))
+	client.reportRequiredContent(context.Background(), request, testClipV1Metadata(t))
 	client.contentReporter.flush()
 
 	require.Len(t, fake.pushed, 1)
 	event := fake.pushed[0]
-	require.Equal(t, types.CacheContentKindClipV1Archive, event.Kind)
+	require.Equal(t, types.CacheContentKindClipV1, event.Kind)
 	require.Equal(t, "workspace", event.WorkspaceID)
 	require.Equal(t, "stub", event.StubID)
-	require.Len(t, event.Items, 1)
 
-	archiveItem := event.Items[0]
-	require.Equal(t, types.CacheContentKindClipV1Archive, archiveItem.Kind)
-	require.Equal(t, "clip-v1-archive:image", archiveItem.Hash)
-	require.Equal(t, "/images/image.clip", archiveItem.RoutingKey)
-	require.Equal(t, "image.clip", archiveItem.Source)
+	// The whole v1 archive is reconciled as a single content object routed by
+	// its cachefs path, not as thousands of per-file index entries.
+	require.Len(t, event.Items, 1)
+	item := event.Items[0]
+	require.Equal(t, types.CacheContentKindClipV1, item.Kind)
+	require.Equal(t, "archive-hash", item.Hash)
+	require.Equal(t, "archive-hash", item.ExpectedHash)
+	require.Equal(t, "/images/image.clip", item.RoutingKey)
+	require.Equal(t, int64(4096), item.SizeBytes)
 }
 
-func TestReportRequiredContentClipV1DoesNotEmitIndexEntries(t *testing.T) {
+func TestReportRequiredContentClipV1SkipsWhenArchiveUncached(t *testing.T) {
 	fake := &fakeEventRepo{}
-	client := &ImageClient{contentReporter: newTestReporter(fake)}
+	client := newTestV1ImageClient(newTestReporter(fake), nil)
 	request := &types.ContainerRequest{
 		WorkspaceId: "workspace",
 		StubId:      "stub",
 		ImageId:     "image",
 	}
 
-	client.reportRequiredContent(request, testClipV1Metadata(t))
+	client.reportRequiredContent(context.Background(), request, testClipV1Metadata(t))
 	client.contentReporter.flush()
 
-	require.Len(t, fake.pushed, 1)
-	require.Equal(t, types.CacheContentKindClipV1Archive, fake.pushed[0].Kind)
-	require.Len(t, fake.pushed[0].Items, 1)
+	require.Empty(t, fake.pushed)
 }
 
 func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
@@ -323,7 +342,7 @@ func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
 		},
 	}
 
-	client.reportRequiredContent(request, testClipV2Metadata())
+	client.reportRequiredContent(context.Background(), request, testClipV2Metadata())
 	client.contentReporter.flush()
 
 	require.Len(t, fake.pushed, 1)
