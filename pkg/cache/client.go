@@ -24,8 +24,19 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+)
+
+// gRPC keepalive for cache peer connections so a connection broken by a cache
+// server rollout is detected and replaced rather than left to hang. The client
+// Time must be >= the cache server's keepalive EnforcementPolicy MinTime to
+// avoid "too_many_pings" GOAWAYs.
+const (
+	cacheKeepaliveTime    = 20 * time.Second
+	cacheKeepaliveTimeout = 10 * time.Second
+	cacheKeepaliveMinTime = 10 * time.Second
 )
 
 const (
@@ -449,6 +460,11 @@ func (c *Client) addHost(host *Host) error {
 		grpc.WithInitialConnWindowSize(int32(initialConnWindowSize)),
 		grpc.WithWriteBufferSize(writeBufferSize),
 		grpc.WithReadBufferSize(readBufferSize),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                cacheKeepaliveTime,
+			Timeout:             cacheKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	}
 
 	if c.clientConfig.Token != "" {

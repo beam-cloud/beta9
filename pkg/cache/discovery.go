@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 type DiscoveryClient struct {
@@ -242,6 +243,11 @@ func (d *DiscoveryClient) GetHostState(ctx context.Context, host *Host) (*Host, 
 			grpc.MaxCallRecvMsgSize(d.cfg.GRPCMessageSizeBytes),
 			grpc.MaxCallSendMsgSize(d.cfg.GRPCMessageSizeBytes),
 		),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                cacheKeepaliveTime,
+			Timeout:             cacheKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	}
 
 	timeout := time.Duration(d.cfg.GRPCDialTimeoutS) * time.Second
