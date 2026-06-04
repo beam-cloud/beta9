@@ -1804,11 +1804,15 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	// Local OCI-layout reference name. Digest-pinned source images
 	// (registry/repo@sha256:...) have no tag, which would yield an empty,
 	// invalid reference for both the skopeo destination and the umoci unpack
-	// ("refusing to resolve invalid reference"). The source is still pulled by
-	// its full (digest) reference; this name only labels it in the local layout.
+	// ("refusing to resolve invalid reference"). Derive a unique, tag-safe ref
+	// from the digest rather than a shared "latest": the OCI layout is shared
+	// per-repo, so distinct digests of the same repo must not collide on one ref
+	// (which would unpack the wrong image when builds overlap). The image is
+	// still pulled by its full (digest) reference; this name only labels it
+	// locally.
 	ociRef := baseImage.Tag
 	if ociRef == "" {
-		ociRef = "latest"
+		ociRef = localOCILayoutRef(baseImage.Digest)
 	}
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociRef)
 
@@ -1860,6 +1864,24 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 
 	return nil
+}
+
+// localOCILayoutRef converts an image digest (e.g. "sha256:abc...") into a
+// tag-safe, content-unique reference for the local OCI layout. Because the
+// layout is shared per repository, using the digest keeps distinct images
+// distinct (and identical content idempotent), avoiding a shared "latest" ref
+// that could unpack the wrong image when same-repo builds overlap. Falls back to
+// "latest" only when no digest is available.
+func localOCILayoutRef(digest string) string {
+	if digest == "" {
+		return "latest"
+	}
+	// OCI tags must match [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}.
+	ref := strings.NewReplacer(":", "-", "/", "-", "+", "-", "@", "-").Replace(digest)
+	if len(ref) > 128 {
+		ref = ref[:128]
+	}
+	return ref
 }
 
 func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath *PathInfo) error {
