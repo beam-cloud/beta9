@@ -350,6 +350,12 @@ func (cs *Server) advertiseAddr(listenerAddr net.Addr, advertiseHost string) str
 	if cs.privateIpAddr != "" {
 		return net.JoinHostPort(cs.privateIpAddr, port)
 	}
+	// No private IP available (e.g. a node whose only routable address is on the
+	// public/default interface). Advertise the public IP rather than an empty
+	// host, which would make the host undiallable.
+	if cs.publicIpAddr != "" {
+		return net.JoinHostPort(cs.publicIpAddr, port)
+	}
 	if advertiseAddr != "" {
 		return advertiseAddr
 	}

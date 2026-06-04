@@ -15,6 +15,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestAdvertiseAddrFallsBackToPublicIP(t *testing.T) {
+	// Unspecified bind (e.g. ":2050"), no explicit advertise host.
+	listener := &net.TCPAddr{IP: net.IPv4zero, Port: 2050}
+
+	// No private IP: must advertise the public IP, not an empty host.
+	csPublic := &Server{cas: &Store{currentHost: &Host{}}, publicIpAddr: "15.204.241.150"}
+	require.Equal(t, "15.204.241.150:2050", csPublic.advertiseAddr(listener, ""))
+
+	// Private IP present: preferred over the public IP.
+	csPrivate := &Server{cas: &Store{currentHost: &Host{}}, privateIpAddr: "10.0.0.5", publicIpAddr: "15.204.241.150"}
+	require.Equal(t, "10.0.0.5:2050", csPrivate.advertiseAddr(listener, ""))
+
+	// Explicit advertise host wins over both.
+	require.Equal(t, "1.2.3.4:2050", csPrivate.advertiseAddr(listener, "1.2.3.4"))
+}
+
 func TestNormalizeAdvertiseHostForJoinHostPort(t *testing.T) {
 	host := normalizeAdvertiseHost("[2600:1f18:37a4:c02::c0dd]")
 	require.Equal(t, "2600:1f18:37a4:c02::c0dd", host)
