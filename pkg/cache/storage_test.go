@@ -47,6 +47,16 @@ func newTestStore(t *testing.T, pageSize int64) *Store {
 	return store
 }
 
+func TestGetFilesystemDiskMetricsMb(t *testing.T) {
+	usedMb, totalMb, usagePct, err := getFilesystemDiskMetricsMb(t.TempDir())
+
+	require.NoError(t, err)
+	require.Greater(t, totalMb, int64(0))
+	require.GreaterOrEqual(t, usedMb, int64(0))
+	require.GreaterOrEqual(t, usagePct, 0.0)
+	require.LessOrEqual(t, usagePct, 1.0)
+}
+
 func TestStoreAddReaderStreamsToDiskCAS(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("streamed content spanning several cache pages")

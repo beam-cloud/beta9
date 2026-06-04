@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,7 @@ type Store struct {
 	prefetcher              *Prefetcher
 	pageLocks               [pageLockStripeCount]sync.RWMutex
 	closing                 atomic.Bool
+	diskUsagePctBits        atomic.Uint64
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -1346,33 +1348,18 @@ func (cas *Store) Cleanup() {
 }
 
 func (cas *Store) GetDiskCacheMetrics() (int64, int64, float64, error) {
-	var (
-		diskUsageMb      int64
-		totalDiskSpaceMb int64
-		usagePercentage  float64
-		err              error
-	)
+	return getFilesystemDiskMetricsMb(cas.diskCacheDir)
+}
 
-	// Get current disk usage
-	diskUsageMb, err = getDiskUsageMb(cas.diskCacheDir)
-	if err != nil {
-		return 0, 0, 0, err
+func (cas *Store) CachedDiskUsagePct() float64 {
+	if cas == nil {
+		return 0
 	}
+	return math.Float64frombits(cas.diskUsagePctBits.Load())
+}
 
-	// Get total disk capacity
-	totalDiskSpaceMb, err = getTotalDiskSpaceMb(cas.diskCacheDir)
-	if err != nil {
-		return 0, 0, 0, err
-	}
-
-	// Calculate usage ratio.
-	if totalDiskSpaceMb > 0 {
-		usagePercentage = float64(diskUsageMb) / float64(totalDiskSpaceMb)
-	} else {
-		usagePercentage = 0
-	}
-
-	return diskUsageMb, totalDiskSpaceMb, usagePercentage, nil
+func (cas *Store) setCachedDiskUsagePct(usagePercentage float64) {
+	cas.diskUsagePctBits.Store(math.Float64bits(usagePercentage))
 }
 
 func min(a, b int64) int64 {
@@ -1381,30 +1368,22 @@ func min(a, b int64) int64 {
 	}
 	return b
 }
-func getDiskUsageMb(path string) (int64, error) {
-	var totalUsage int64 = 0
-	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			totalUsage += info.Size()
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return totalUsage / (1024 * 1024), nil
-}
-
-func getTotalDiskSpaceMb(path string) (int64, error) {
+func getFilesystemDiskMetricsMb(path string) (int64, int64, float64, error) {
 	var stat syscall.Statfs_t
 	err := syscall.Statfs(path, &stat)
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, err
 	}
-	return int64(stat.Blocks) * int64(stat.Bsize) / (1024 * 1024), nil
+	totalBytes := uint64(stat.Blocks) * uint64(stat.Bsize)
+	availableBytes := uint64(stat.Bavail) * uint64(stat.Bsize)
+	usedBytes := totalBytes - availableBytes
+	totalDiskSpaceMb := int64(totalBytes / (1024 * 1024))
+	diskUsageMb := int64(usedBytes / (1024 * 1024))
+	usagePercentage := 0.0
+	if totalBytes > 0 {
+		usagePercentage = float64(usedBytes) / float64(totalBytes)
+	}
+	return diskUsageMb, totalDiskSpaceMb, usagePercentage, nil
 }
 
 func getMemoryMb() (int64, int64) {
@@ -1439,6 +1418,7 @@ func (cas *Store) monitorDiskCacheUsage() {
 			cas.metrics.MemCacheUsagePct.Update(float64(usedMemoryMb) / float64(totalMemoryMb) * 100)
 			cas.metrics.DiskCacheUsageMB.Update(float64(currentUsage))
 			cas.metrics.DiskCacheUsagePct.Update(float64(usagePercentage))
+			cas.setCachedDiskUsagePct(usagePercentage)
 
 			Logger.Debugf("Memory Cache Usage: %dMB / %dMB (%.2f%%)", availableMemoryMb, totalMemoryMb, float64(availableMemoryMb)/float64(totalMemoryMb)*100)
 			Logger.Debugf("Disk Cache Usage: %dMB / %dMB (%.2f%%)", currentUsage, totalDiskSpace, usagePercentage*100)

@@ -24,8 +24,8 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -417,10 +417,7 @@ func (c *Client) addHost(host *Host) error {
 		return nil
 	}
 
-	addr := host.Addr
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
+	addr := cacheHostDialAddr(host, c.localNodeID)
 
 	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if isTLSEnabled(addr) {
@@ -1120,10 +1117,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		return 0, ErrUnableToReachHost
 	}
 	hostID = host.HostId
-	addr = host.Addr
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
+	addr = cacheHostDialAddr(host, c.localNodeID)
 	if addr == "" {
 		status = "missing_addr"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
