@@ -43,6 +43,11 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	defaultContainerStartupTimeout time.Duration = 5 * time.Minute
+	// maxContainerStartupTimeout bounds the configurable startup timeout so a
+	// large/sentinel maxSchedulingLatencyMs cannot overflow time.Duration (int64
+	// nanoseconds) and wrap negative, which would fire the startup timer
+	// immediately and fail every container.
+	maxContainerStartupTimeout time.Duration = 1 * time.Hour
 )
 
 type Worker struct {
@@ -598,8 +603,15 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 		err = run()
 	} else {
 		timeout := defaultContainerStartupTimeout
-		if s.config.Worker.Failover.MaxSchedulingLatencyMs > 0 {
-			timeout = time.Duration(s.config.Worker.Failover.MaxSchedulingLatencyMs) * time.Millisecond
+		if ms := s.config.Worker.Failover.MaxSchedulingLatencyMs; ms > 0 {
+			// Clamp before converting to a nanosecond duration: ms is an int64 of
+			// milliseconds, so large/sentinel values (e.g. a misconfigured
+			// maxSchedulingLatencyMs) would overflow and wrap negative, making the
+			// timer fire immediately and fail every container startup.
+			if ms > maxContainerStartupTimeout.Milliseconds() {
+				ms = maxContainerStartupTimeout.Milliseconds()
+			}
+			timeout = time.Duration(ms) * time.Millisecond
 		}
 
 		errCh := make(chan error, 1)
