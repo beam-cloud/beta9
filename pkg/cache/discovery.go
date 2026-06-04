@@ -95,8 +95,9 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hostGroups := cacheHostCandidateGroups(hosts)
 	var wg sync.WaitGroup
 	mu := sync.Mutex{}
-	totalCandidates := 0
-	endpointCandidates := 0
+	unresolvedHosts := 0
+	unresolvedCandidates := 0
+	unresolvedEndpointCandidates := 0
 	verifiedEndpoints := 0
 	var lastVerifyErr error
 	maxConcurrency := d.cfg.MaxDiscoveryConcurrency
@@ -106,17 +107,19 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	sem := make(chan struct{}, maxConcurrency)
 
 	for _, group := range hostGroups {
+		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
+			continue
+		}
+
+		unresolvedHosts++
 		for _, candidate := range group.candidates {
 			if candidate == nil {
 				continue
 			}
-			totalCandidates++
+			unresolvedCandidates++
 			if candidate.HasEndpoint() {
-				endpointCandidates++
+				unresolvedEndpointCandidates++
 			}
-		}
-		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
-			continue
 		}
 
 		wg.Add(1)
@@ -158,10 +161,10 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	}
 
 	wg.Wait()
-	if endpointCandidates > 0 && verifiedEndpoints == 0 {
-		Logger.Warnf("cache host discovery found %d endpoint candidates across %d hosts for locality %s, but none verified reachable (last_error=%v)", endpointCandidates, len(hostGroups), d.locality, lastVerifyErr)
-	} else if totalCandidates > 0 && endpointCandidates == 0 {
-		Logger.Warnf("cache host discovery found %d logical hosts for locality %s, but none had an active endpoint", totalCandidates, d.locality)
+	if unresolvedEndpointCandidates > 0 && verifiedEndpoints == 0 {
+		Logger.Warnf("cache host discovery found %d endpoint candidates across %d unresolved hosts for locality %s, but none verified reachable (last_error=%v)", unresolvedEndpointCandidates, unresolvedHosts, d.locality, lastVerifyErr)
+	} else if unresolvedCandidates > 0 && unresolvedEndpointCandidates == 0 {
+		Logger.Warnf("cache host discovery found %d unresolved logical hosts for locality %s, but none had an active endpoint", unresolvedHosts, d.locality)
 	}
 	return selectedHosts, nil
 }
