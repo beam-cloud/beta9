@@ -533,3 +533,80 @@ func (s *testCacheCoordinator) unregisterCalled(registrationID string) bool {
 
 	return s.unregisters[registrationID]
 }
+
+func TestBindAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		// env
+		hostNetwork    string // CACHE_HOST_NETWORK
+		cacheServer    string // CACHE_SERVER_ONLY
+		envPort        string // CACHE_SERVER_PORT
+		configPort     uint   // raw config (m.config.Cache.Global.ServerPort)
+		normalizedPort uint   // resolved port passed to bindAddr
+		expected       string
+	}{
+		{
+			name:           "daemonset host-network binds fixed port",
+			hostNetwork:    "true",
+			cacheServer:    "true",
+			normalizedPort: 2050,
+			expected:       ":2050",
+		},
+		{
+			name:           "embedded host-network without explicit port is ephemeral",
+			hostNetwork:    "true",
+			cacheServer:    "false",
+			normalizedPort: 2050,
+			expected:       ":0",
+		},
+		{
+			name:           "embedded host-network honors explicit config port",
+			hostNetwork:    "true",
+			cacheServer:    "false",
+			configPort:     9000,
+			normalizedPort: 9000,
+			expected:       ":9000",
+		},
+		{
+			name:           "embedded host-network honors CACHE_SERVER_PORT env",
+			hostNetwork:    "true",
+			cacheServer:    "false",
+			envPort:        "9001",
+			normalizedPort: 9001,
+			expected:       ":9001",
+		},
+		{
+			name:           "non-host-network binds fixed port",
+			hostNetwork:    "false",
+			cacheServer:    "false",
+			normalizedPort: 2050,
+			expected:       ":2050",
+		},
+		{
+			name:           "zero port falls back to default",
+			hostNetwork:    "true",
+			cacheServer:    "true",
+			normalizedPort: 0,
+			expected:       ":2050",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CACHE_HOST_NETWORK", tc.hostNetwork)
+			t.Setenv("CACHE_SERVER_ONLY", tc.cacheServer)
+			t.Setenv("CACHE_SERVER_PORT", tc.envPort)
+
+			m := &WorkerCacheManager{
+				config: types.AppConfig{
+					Cache: cache.Config{
+						Global: cache.GlobalConfig{ServerPort: tc.configPort},
+					},
+				},
+			}
+			cacheConfig := cache.Config{Global: cache.GlobalConfig{ServerPort: tc.normalizedPort}}
+
+			require.Equal(t, tc.expected, m.bindAddr(cacheConfig))
+		})
+	}
+}
