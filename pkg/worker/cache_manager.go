@@ -23,7 +23,7 @@ import (
 const (
 	cacheDefaultLocality                = "default"
 	cacheDefaultDiskPath                = "/var/lib/beta9/cache"
-	cacheDefaultServerPort              = 2049
+	cacheDefaultServerPort              = 2050
 	cacheDefaultDiscoveryS              = 5
 	cacheDefaultDiscoveryJitterS        = 3
 	cacheDefaultMaxDiscoveryConcurrency = 8
@@ -636,11 +636,23 @@ func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
 		port = cacheDefaultServerPort
 	}
 
-	if cacheHostNetwork(m.config) {
+	// Host-network embedded workers default to an ephemeral port to avoid
+	// collisions when many share a node (the advertised address carries the real
+	// port). The one-per-node cache-server daemonset always binds the fixed port,
+	// as does any worker with an explicitly configured fixed port.
+	if cacheHostNetwork(m.config) && !cacheServerOnlyMode() && !m.fixedCacheServerPortConfigured() {
 		return ":0"
 	}
 
 	return fmt.Sprintf(":%d", port)
+}
+
+// fixedCacheServerPortConfigured reports whether a cache server port was
+// explicitly set (via the config or the CACHE_SERVER_PORT env), as opposed to
+// falling back to the default. When set, it is honored even for embedded
+// host-network workers.
+func (m *WorkerCacheManager) fixedCacheServerPortConfigured() bool {
+	return m.config.Cache.Global.ServerPort > 0 || cacheServerPortFromEnv() > 0
 }
 
 func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolConfig, nodeID, locality string) cache.Config {
@@ -651,6 +663,12 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Global.ServerPort == 0 {
 		cacheConfig.Global.ServerPort = cacheDefaultServerPort
+	}
+	// CACHE_SERVER_PORT lets the deployment (e.g. the cache-server daemonset) pin
+	// the listen port without editing the shared config secret. It takes
+	// precedence over the configured/default port.
+	if port := cacheServerPortFromEnv(); port > 0 {
+		cacheConfig.Global.ServerPort = port
 	}
 	if cacheConfig.Global.DiscoveryIntervalS == 0 {
 		cacheConfig.Global.DiscoveryIntervalS = cacheDefaultDiscoveryS
@@ -838,6 +856,21 @@ func cacheHostNetwork(config types.AppConfig) bool {
 func cacheServerOnlyMode() bool {
 	enabled, err := strconv.ParseBool(os.Getenv("CACHE_SERVER_ONLY"))
 	return err == nil && enabled
+}
+
+// cacheServerPortFromEnv returns the cache server listen port set via
+// CACHE_SERVER_PORT, or 0 when unset/invalid. It lets the deployment pin the
+// port without editing the shared config secret.
+func cacheServerPortFromEnv() uint {
+	value := os.Getenv("CACHE_SERVER_PORT")
+	if value == "" {
+		return 0
+	}
+	port, err := strconv.ParseUint(value, 10, 16)
+	if err != nil {
+		return 0
+	}
+	return uint(port)
 }
 
 func cacheWorkerInstanceID(workerID string) string {
