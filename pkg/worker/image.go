@@ -1801,7 +1801,16 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
 	os.MkdirAll(copyDir, 0755)
 
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
+	// Local OCI-layout reference name. Digest-pinned source images
+	// (registry/repo@sha256:...) have no tag, which would yield an empty,
+	// invalid reference for both the skopeo destination and the umoci unpack
+	// ("refusing to resolve invalid reference"). The source is still pulled by
+	// its full (digest) reference; this name only labels it in the local layout.
+	ociRef := baseImage.Tag
+	if ociRef == "" {
+		ociRef = "latest"
+	}
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociRef)
 
 	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
@@ -1837,7 +1846,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
+	err = c.unpack(ctx, baseImage.Repo, ociRef, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
@@ -1910,7 +1919,9 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 				},
 			},
 			ProgressChan: progressChan,
-			ContentCache: newImageContentCache(c.cacheClient, imageId, "legacy-file-build"),
+			// v1 content is cached and reconciled as a single archive object on
+			// first load (the embedded image-archive cache), so we intentionally
+			// do not warm every individual file into the distributed cache here.
 		}, &clipCommon.S3StorageInfo{
 			Bucket:         c.config.ImageService.Registries.S3.BucketName,
 			Region:         c.config.ImageService.Registries.S3.Region,
@@ -1919,10 +1930,11 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 			ForcePathStyle: c.config.ImageService.Registries.S3.ForcePathStyle,
 		})
 	case registry.LocalImageRegistryStore:
+		// No per-file ContentCache: v1 is cached/reconciled as a single archive
+		// object on first load, not file-by-file during the build.
 		err = clip.CreateArchive(clip.CreateOptions{
-			InputPath:    bundlePath.Path,
-			OutputPath:   archivePath,
-			ContentCache: newImageContentCache(c.cacheClient, imageId, "legacy-file-build"),
+			InputPath:  bundlePath.Path,
+			OutputPath: archivePath,
 		})
 	}
 
