@@ -25,7 +25,10 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 		return nil, cache.ErrHostNotFound
 	}
 
-	resp, err := handleGRPCResponse(d.client.ListCacheHosts(ctx, &pb.ListCacheHostsRequest{
+	rpcCtx, cancel := context.WithTimeout(ctx, cacheCoordinatorRPCTimeout)
+	defer cancel()
+
+	resp, err := handleGRPCResponse(d.client.ListCacheHosts(rpcCtx, &pb.ListCacheHostsRequest{
 		Locality: locality,
 	}))
 	if err != nil {
