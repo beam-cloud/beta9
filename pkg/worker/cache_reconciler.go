@@ -641,35 +641,38 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 
 // materializeArchiveObject re-fetches the whole CLIP v1 archive from the image
 // registry and stores it as a single content object, mirroring the embedded
-// image-archive cache that the image-load path populates. It uses the worker's
-// configured image registry (the same source/credentials the load path uses);
-// no credentials are persisted to Redis or S2.
+// image-archive cache that the image-load path populates. It pulls from the same
+// source the load path uses: the S3 image registry for the S3 store, or the
+// mounted image volume for the local store. No credentials are persisted.
 func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey string) string {
-	s3 := m.config.ImageService.Registries.S3
-	if m.config.ImageService.RegistryStore != reg.S3ImageRegistryStore || s3.BucketName == "" || item.Source == "" {
-		// Non-S3 stores keep the archive on local disk only, so there is no
-		// cross-host origin to re-fetch from; rely on replica copy / next load.
-		return types.CacheAuditStatusMiss
+	source := &pb.CacheSource{
+		CachePath:    routingKey,
+		ExpectedHash: item.Hash,
 	}
 
-	req := &pb.CacheStoreContentFromSourceRequest{
-		Source: &pb.CacheSource{
-			Path:           item.Source,
-			CachePath:      routingKey,
-			ExpectedHash:   item.Hash,
-			BucketName:     s3.BucketName,
-			Region:         s3.Region,
-			EndpointUrl:    s3.Endpoint,
-			AccessKey:      s3.AccessKey,
-			SecretKey:      s3.SecretKey,
-			ForcePathStyle: s3.ForcePathStyle,
-		},
+	if m.config.ImageService.RegistryStore == reg.S3ImageRegistryStore {
+		s3 := m.config.ImageService.Registries.S3
+		if s3.BucketName == "" || item.Source == "" {
+			return types.CacheAuditStatusMiss
+		}
+		source.Path = item.Source
+		source.BucketName = s3.BucketName
+		source.Region = s3.Region
+		source.EndpointUrl = s3.Endpoint
+		source.AccessKey = s3.AccessKey
+		source.SecretKey = s3.SecretKey
+		source.ForcePathStyle = s3.ForcePathStyle
+	} else {
+		// Local registry store: the durable archive lives on the mounted image
+		// volume at the cachefs path; read it directly (no bucket/credentials).
+		source.Path = routingKey
 	}
-	resp, err := server.StoreContentFromSource(ctx, req)
+
+	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{Source: source})
 	if err == nil && resp != nil && resp.Ok {
 		return types.CacheAuditStatusMaterialized
 	}
-	log.Debug().Err(err).Str("hash", item.Hash).Str("source", item.Source).Msg("cache reconciliation image archive fetch failed")
+	log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive fetch failed")
 	return types.CacheAuditStatusOriginFailure
 }
 
