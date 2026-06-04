@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ type DiscoveryClient struct {
 	hostMap       *HostMap
 	hostDirectory HostDirectory
 	locality      string
+	localNodeID   string
 }
 
 func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, hostDirectory HostDirectory, locality string) *DiscoveryClient {
@@ -27,6 +29,7 @@ func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, hostDirectory HostDi
 		hostMap:       hostMap,
 		hostDirectory: hostDirectory,
 		locality:      locality,
+		localNodeID:   os.Getenv("CACHE_NODE_ID"),
 	}
 }
 
@@ -256,11 +259,7 @@ func sameCacheHostEndpoint(a *Host, b *Host) bool {
 
 // GetHostState attempts to connect to the gRPC service and verifies its availability
 func (d *DiscoveryClient) GetHostState(ctx context.Context, host *Host) (*Host, error) {
-	addr := host.Addr
-
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
+	addr := cacheHostDialAddr(host, d.localNodeID)
 
 	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if isTLSEnabled(addr) {

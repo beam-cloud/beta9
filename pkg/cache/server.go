@@ -808,12 +808,7 @@ func (r *storeContentStreamReader) Read(p []byte) (int, error) {
 
 func (cs *Server) usagePct() float64 {
 	if cs.cas.maxCacheSizeMb <= 0 {
-		_, _, diskUsagePct, err := cs.cas.GetDiskCacheMetrics()
-		if err == nil {
-			return diskUsagePct
-		}
-
-		return 0
+		return cs.cas.CachedDiskUsagePct()
 	}
 
 	var memStats runtime.MemStats
