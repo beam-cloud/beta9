@@ -43,6 +43,13 @@ type Scheduler struct {
 	eventBus              *common.EventBus
 
 	provisioning *provisioningTracker
+	credentials  *schedulerCredentialCache
+}
+
+type schedulerCredentialAttachResult struct {
+	hasCredentials bool
+	cacheHit       bool
+	source         string
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -117,11 +124,20 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		workspaceRepo:         workspaceRepo,
 
 		provisioning: newProvisioningTracker(),
+		credentials:  newSchedulerCredentialCache(),
 	}, nil
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	log.Info().Interface("request", request).Msg("received run request")
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("stub_id", request.StubId).
+		Str("stub_type", string(request.Stub.Type.Kind())).
+		Str("workspace_id", request.WorkspaceId).
+		Int64("cpu", request.Cpu).
+		Int64("memory", request.Memory).
+		Uint32("gpu_count", request.GpuCount).
+		Msg("received run request")
 
 	request.Timestamp = time.Now()
 
@@ -306,7 +322,14 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
+		workerListStart := time.Now()
 		workers, err := s.workerRepo.GetAllWorkers()
+		workerListEnd := time.Now()
+		for _, request := range requests {
+			s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerList, workerListStart, workerListEnd, err == nil, map[string]string{
+				"batch_size": fmt.Sprintf("%d", len(requests)),
+			})
+		}
 		if err != nil {
 			for _, request := range requests {
 				newSchedulingAttempt(s, request, nil).retry("worker_list_failed")
@@ -332,32 +355,27 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	request.Gpu = worker.Gpu
 
-	// Attach OCI credentials for runtime lazy layer loading
-	if err := s.attachImageCredentials(request); err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", request.ContainerId).
-			Str("image_id", request.ImageId).
-			Msg("failed to attach OCI credentials, will use default provider")
-	}
-
-	// Attach build registry credentials for push + runtime layer loading
-	if err := s.attachBuildRegistryCredentials(request); err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", request.ContainerId).
-			Msg("failed to attach build registry credentials to request")
-	}
+	s.attachImageCredentials(request)
+	s.attachBuildRegistryCredentials(request)
 
 	workerRequest := cloneContainerRequest(request)
 	workerRequest.Timestamp = time.Now()
-	if err := s.workerRepo.ScheduleContainerRequest(worker, workerRequest); err != nil {
+	if err := s.pushWorkerRequest(worker, request, workerRequest); err != nil {
 		return err
 	}
 
 	scheduledEvent := cloneContainerRequest(workerRequest)
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
 	return nil
+}
+
+func (s *Scheduler) pushWorkerRequest(worker *types.Worker, originalRequest, workerRequest *types.ContainerRequest) error {
+	start := time.Now()
+	err := s.workerRepo.ScheduleContainerRequest(worker, workerRequest)
+	s.recordContainerLifecycle(originalRequest, types.ContainerLifecycleSchedulerWorkerQueuePush, start, time.Now(), err == nil, map[string]string{
+		"worker_id": worker.Id,
+	})
+	return err
 }
 
 func cloneContainerRequest(request *types.ContainerRequest) *types.ContainerRequest {
@@ -410,120 +428,194 @@ func taskIDFromRequestEnv(env []string) string {
 	return ""
 }
 
-// attachImageCredentials fetches and attaches OCI credentials to a container request
-func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) error {
-	if request.ImageId == "" {
-		return nil
+func (r schedulerCredentialAttachResult) attrs() map[string]string {
+	return map[string]string{
+		"has_credentials": fmt.Sprintf("%t", r.hasCredentials),
+		"cache_hit":       fmt.Sprintf("%t", r.cacheHit),
+		"source":          r.source,
 	}
+}
 
-	// Skip credential attachment for build containers - they already have credentials
-	// in BuildOptions.SourceImageCreds for pulling the base image during the build
-	if strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
-		return nil
-	}
+func (s *Scheduler) recordCredentialLifecycle(request *types.ContainerRequest, id types.ContainerLifecycleID, start time.Time, result schedulerCredentialAttachResult, err error) {
+	s.recordContainerLifecycle(request, id, start, time.Now(), err == nil, result.attrs())
+}
 
-	secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
-	if err != nil {
-		log.Debug().
-			Err(err).
-			Str("container_id", request.ContainerId).
-			Str("image_id", request.ImageId).
-			Msg("error getting image credential secret")
-		return err
-	}
-
-	if secretName == "" {
-		return nil
-	}
-
-	secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
+func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) {
+	start := time.Now()
+	result, err := s.loadImageCredentials(request)
+	s.recordCredentialLifecycle(request, types.ContainerLifecycleSchedulerImageCredentials, start, result, err)
 	if err != nil {
 		log.Warn().
 			Err(err).
 			Str("container_id", request.ContainerId).
 			Str("image_id", request.ImageId).
-			Str("secret_name", secretName).
-			Msg("failed to get secret by name")
-		return err
+			Msg("failed to attach OCI credentials, will use default provider")
 	}
-
-	request.ImageCredentials = secret.Value
-
-	log.Info().
-		Str("container_id", request.ContainerId).
-		Str("image_id", request.ImageId).
-		Str("secret_name", secretName).
-		Int("credentials_length", len(secret.Value)).
-		Msg("attached OCI credentials")
-
-	return nil
 }
 
-// attachBuildRegistryCredentials generates and attaches build registry credentials to a container request
-// These credentials are used for both build-time (push) and runtime (CLIP layer mounting)
-func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerRequest) error {
+// loadImageCredentials fetches and attaches OCI credentials to a container request.
+func (s *Scheduler) loadImageCredentials(request *types.ContainerRequest) (schedulerCredentialAttachResult, error) {
+	if request.ImageId == "" {
+		return schedulerCredentialAttachResult{}, nil
+	}
+
+	// Skip credential attachment for build containers - they already have credentials
+	// in BuildOptions.SourceImageCreds for pulling the base image during the build
+	if strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
+		return schedulerCredentialAttachResult{}, nil
+	}
+
+	cacheKey := imageCredentialCacheKey(request.WorkspaceId, request.ImageId)
+	credential, cacheHit, err := s.credentials.getOrLoad(cacheKey, schedulerImageCredentialTTL, func() (cachedSchedulerCredential, error) {
+		secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
+		if err != nil {
+			log.Debug().
+				Err(err).
+				Str("container_id", request.ContainerId).
+				Str("image_id", request.ImageId).
+				Msg("error getting image credential secret")
+			return cachedSchedulerCredential{}, err
+		}
+
+		if secretName == "" {
+			return cachedSchedulerCredential{exists: false}, nil
+		}
+
+		secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container_id", request.ContainerId).
+				Str("image_id", request.ImageId).
+				Str("secret_name", secretName).
+				Msg("failed to get secret by name")
+			return cachedSchedulerCredential{}, err
+		}
+
+		return cachedSchedulerCredential{
+			value:  secret.Value,
+			source: secretName,
+			exists: true,
+		}, nil
+	})
+	if err != nil {
+		return schedulerCredentialAttachResult{cacheHit: cacheHit}, err
+	}
+	if !credential.exists {
+		return schedulerCredentialAttachResult{cacheHit: cacheHit}, nil
+	}
+
+	request.ImageCredentials = credential.value
+
+	log.Debug().
+		Str("container_id", request.ContainerId).
+		Str("image_id", request.ImageId).
+		Str("secret_name", credential.source).
+		Bool("cache_hit", cacheHit).
+		Int("credentials_length", len(credential.value)).
+		Msg("attached OCI credentials")
+
+	return schedulerCredentialAttachResult{
+		hasCredentials: true,
+		cacheHit:       cacheHit,
+		source:         credential.source,
+	}, nil
+}
+
+func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerRequest) {
+	start := time.Now()
+	result, err := s.loadBuildRegistryCredentials(request)
+	s.recordCredentialLifecycle(request, types.ContainerLifecycleSchedulerBuildCredentials, start, result, err)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Msg("failed to attach build registry credentials to request")
+	}
+}
+
+// loadBuildRegistryCredentials generates and attaches build registry credentials to a container request.
+// These credentials are used for both build-time push and runtime CLIP layer mounting.
+func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest) (schedulerCredentialAttachResult, error) {
 	buildRegistry := s.config.ImageService.BuildRegistry
 	if buildRegistry == "" || isLocalBuildRegistry(buildRegistry) {
 		log.Debug().
 			Str("container_id", request.ContainerId).
 			Str("build_registry", buildRegistry).
 			Msg("no remote build registry configured, skipping credential generation")
-		return nil
+		return schedulerCredentialAttachResult{}, nil
 	}
 
 	// Check if we have credentials configured for the build registry.
 	buildRegistryCredentials := s.config.ImageService.BuildRegistryCredentials
 	dummyImageRef := fmt.Sprintf("%s/%s:dummy", buildRegistry, s.config.ImageService.BuildRepositoryName)
 
-	var token string
-	authSource := "ambient"
-	if buildRegistryCredentials.Type != "" && len(buildRegistryCredentials.Credentials) > 0 {
-		var err error
-		token, err = reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("container_id", request.ContainerId).
-				Str("build_registry", buildRegistry).
-				Str("cred_type", buildRegistryCredentials.Type).
-				Msg("failed to generate build registry token from configured credentials")
+	cacheKey := buildRegistryCredentialCacheKey(buildRegistry, s.config.ImageService.BuildRepositoryName, buildRegistryCredentials)
+	credential, cacheHit, err := s.credentials.getOrLoad(cacheKey, schedulerBuildRegistryCredentialTTL, func() (cachedSchedulerCredential, error) {
+		var token string
+		authSource := "ambient"
+		if buildRegistryCredentials.Type != "" && len(buildRegistryCredentials.Credentials) > 0 {
+			var err error
+			token, err = reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
+			if err != nil {
+				log.Warn().
+					Err(err).
+					Str("container_id", request.ContainerId).
+					Str("build_registry", buildRegistry).
+					Str("cred_type", buildRegistryCredentials.Type).
+					Msg("failed to generate build registry token from configured credentials")
+			}
+			if token != "" {
+				authSource = buildRegistryCredentials.Type
+			}
 		}
-		if token != "" {
-			authSource = buildRegistryCredentials.Type
+
+		if token == "" && reg.IsECRRegistry(buildRegistry) {
+			var err error
+			token, err = reg.GetAmbientECRTokenForImage(context.TODO(), dummyImageRef)
+			if err != nil {
+				log.Warn().
+					Err(err).
+					Str("container_id", request.ContainerId).
+					Str("build_registry", buildRegistry).
+					Msg("failed to generate build registry token from ambient credentials")
+				return cachedSchedulerCredential{}, err
+			}
 		}
+
+		return cachedSchedulerCredential{
+			value:  token,
+			source: authSource,
+			exists: token != "",
+		}, nil
+	})
+	if err != nil {
+		return schedulerCredentialAttachResult{cacheHit: cacheHit}, err
 	}
 
-	if token == "" && reg.IsECRRegistry(buildRegistry) {
-		var err error
-		token, err = reg.GetAmbientECRTokenForImage(context.TODO(), dummyImageRef)
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("container_id", request.ContainerId).
-				Str("build_registry", buildRegistry).
-				Msg("failed to generate build registry token from ambient credentials")
-			return nil
-		}
-	}
-
-	if token == "" {
+	if !credential.exists {
 		log.Debug().
 			Str("container_id", request.ContainerId).
 			Str("build_registry", buildRegistry).
 			Str("cred_type", buildRegistryCredentials.Type).
 			Msg("no token generated (public registry?), will use ambient auth")
-		return nil
+		return schedulerCredentialAttachResult{cacheHit: cacheHit, source: credential.source}, nil
 	}
 
-	request.BuildRegistryCredentials = token
+	request.BuildRegistryCredentials = credential.value
 
-	log.Info().
+	log.Debug().
 		Str("container_id", request.ContainerId).
 		Str("build_registry", buildRegistry).
-		Str("auth_source", authSource).
+		Str("auth_source", credential.source).
+		Bool("cache_hit", cacheHit).
 		Msg("attached build registry credentials to request")
 
-	return nil
+	return schedulerCredentialAttachResult{
+		hasCredentials: true,
+		cacheHit:       cacheHit,
+		source:         credential.source,
+	}, nil
 }
 
 func isLocalBuildRegistry(buildRegistry string) bool {

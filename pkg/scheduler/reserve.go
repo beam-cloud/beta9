@@ -91,7 +91,15 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 func (a *schedulingAttempt) provisionWorker() {
 	controllers, err := a.scheduler.getControllers(a.request)
 	if err != nil {
-		log.Error().Interface("request", a.request).Err(err).Msg("no controller found for request")
+		log.Error().
+			Str("container_id", a.request.ContainerId).
+			Str("stub_id", a.request.StubId).
+			Str("workspace_id", a.request.WorkspaceId).
+			Int64("cpu", a.request.Cpu).
+			Int64("memory", a.request.Memory).
+			Uint32("gpu_count", a.request.GpuCount).
+			Err(err).
+			Msg("no controller found for request")
 		a.fail("no_controller")
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/rs/zerolog/log"
@@ -370,49 +371,21 @@ func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.Stre
 
 func (r *S2EventRepository) resolveContainerStreams(ctx context.Context, containerID string, query types.EventQuery) ([]s2.StreamName, error) {
 	if query.WorkspaceID != "" && query.StubID != "" {
-		streamName := r.containerStreamName(query.WorkspaceID, query.StubID, containerID)
-		exists, err := r.streamExists(ctx, streamName)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, nil
-		}
-		return []s2.StreamName{streamName}, nil
+		return []s2.StreamName{r.containerStreamName(query.WorkspaceID, query.StubID, containerID)}, nil
 	}
 
 	if query.WorkspaceID == "" {
 		return nil, nil
 	}
-
-	prefix := r.workspaceStubPrefix(query.WorkspaceID)
-	suffix := "/containers/" + eventStreamPart(containerID)
-	streams := make([]s2.StreamName, 0, 1)
-	iter := r.basin.Streams.Iter(ctx, &s2.ListStreamsArgs{Prefix: prefix})
-	for iter.Next() {
-		stream := iter.Value()
-		name := string(stream.Name)
-		if strings.HasSuffix(name, suffix) {
-			streams = append(streams, stream.Name)
-		}
+	if stubID, ok := common.ExtractStubIdFromStubScopedContainerId(containerID); ok {
+		return []s2.StreamName{r.containerStreamName(query.WorkspaceID, stubID, containerID)}, nil
 	}
-	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("list s2 container event streams for workspace %q: %w", query.WorkspaceID, err)
-	}
-
-	return streams, nil
+	return []s2.StreamName{r.containerAliasStreamName(query.WorkspaceID, containerID)}, nil
 }
 
 func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, query types.EventQuery) ([]s2.StreamName, error) {
-	addIfExists := func(streamName s2.StreamName) ([]s2.StreamName, error) {
+	addKnown := func(streamName s2.StreamName) ([]s2.StreamName, error) {
 		if streamName == "" {
-			return nil, nil
-		}
-		exists, err := r.streamExists(ctx, streamName)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
 			return nil, nil
 		}
 		return []s2.StreamName{streamName}, nil
@@ -422,33 +395,16 @@ func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, quer
 	case query.ContainerID != "" && query.WorkspaceID != "":
 		return r.resolveContainerStreams(ctx, query.ContainerID, query)
 	case query.TaskID != "":
-		return addIfExists(r.taskStreamName(query.TaskID))
+		return addKnown(r.taskStreamName(query.TaskID))
 	case query.AppID != "" && query.WorkspaceID != "":
-		return addIfExists(r.appStreamName(query.WorkspaceID, query.AppID))
+		return addKnown(r.appStreamName(query.WorkspaceID, query.AppID))
 	case query.StubID != "" && query.WorkspaceID != "":
-		return addIfExists(r.stubStreamName(query.WorkspaceID, query.StubID))
+		return addKnown(r.stubStreamName(query.WorkspaceID, query.StubID))
 	case query.WorkspaceID != "":
-		return addIfExists(r.workspaceStreamName(query.WorkspaceID))
+		return addKnown(r.workspaceStreamName(query.WorkspaceID))
 	default:
 		return nil, nil
 	}
-}
-
-func (r *S2EventRepository) streamExists(ctx context.Context, streamName s2.StreamName) (bool, error) {
-	limit := 1
-	resp, err := r.basin.Streams.List(ctx, &s2.ListStreamsArgs{
-		Prefix: string(streamName),
-		Limit:  &limit,
-	})
-	if err != nil {
-		return false, fmt.Errorf("list s2 event stream %q: %w", streamName, err)
-	}
-	for _, stream := range resp.Streams {
-		if stream.Name == streamName {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName s2.StreamName, limit uint64, query types.EventQuery, response *types.ContainerEventsResponse) error {
@@ -458,6 +414,9 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 		Count:  &limit,
 	})
 	if err != nil {
+		if isS2ReadEmpty(err) {
+			return nil
+		}
 		return fmt.Errorf("read container events from s2 stream %q: %w", streamName, err)
 	}
 
@@ -517,7 +476,7 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 
 		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
 		if err != nil {
-			if isS2RangeNotSatisfiable(err) {
+			if isS2ReadEmpty(err) {
 				return nil
 			}
 			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
@@ -849,6 +808,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	}
 
 	add(r.streamNameForEvent(eventType, metadata))
+	if metadata.ContainerID != "" && metadata.WorkspaceID != "" {
+		add(r.containerAliasStreamName(metadata.WorkspaceID, metadata.ContainerID))
+	}
 	if isTaskEvent(eventType) && metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "" {
 		add(r.containerStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID))
 	}
@@ -921,6 +883,9 @@ func (r *S2EventRepository) logStreamNamesForEvent(metadata eventMetadata) []s2.
 	if metadata.ContainerID != "" && metadata.StubID != "" {
 		add(r.containerLogStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID))
 	}
+	if metadata.ContainerID != "" {
+		add(r.containerLogAliasStreamName(metadata.WorkspaceID, metadata.ContainerID))
+	}
 	if metadata.StubID != "" {
 		add(r.stubLogStreamName(metadata.WorkspaceID, metadata.StubID))
 	}
@@ -944,12 +909,13 @@ func (r *S2EventRepository) containerStreamName(workspaceID, stubID, containerID
 	))
 }
 
-func (r *S2EventRepository) workspaceStubPrefix(workspaceID string) string {
-	return fmt.Sprintf("%s/workspaces/%s/stubs/", r.streamPrefix, eventStreamPart(workspaceID))
-}
-
-func (r *S2EventRepository) workspaceLogStubPrefix(workspaceID string) string {
-	return fmt.Sprintf("%s/logs/workspaces/%s/stubs/", r.streamPrefix, eventStreamPart(workspaceID))
+func (r *S2EventRepository) containerAliasStreamName(workspaceID, containerID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf(
+		"%s/workspaces/%s/containers/%s",
+		r.streamPrefix,
+		eventStreamPart(workspaceID),
+		eventStreamPart(containerID),
+	))
 }
 
 func (r *S2EventRepository) taskStreamName(taskID string) s2.StreamName {
@@ -997,13 +963,6 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 	}
 
 	streamName := r.stubCacheStreamName(workspaceID, stubID)
-	exists, err := r.streamExists(ctx, streamName)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
 
 	// Read the stream (paginating past the per-read limit) so the coalesced
 	// required-content set is not truncated. Required content is coalesced to a
@@ -1019,7 +978,7 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 			Count:  &count,
 		})
 		if err != nil {
-			if isS2RangeNotSatisfiable(err) {
+			if isS2ReadEmpty(err) {
 				break
 			}
 			return nil, fmt.Errorf("read stub cache required content from s2 stream %q: %w", streamName, err)
@@ -1077,6 +1036,15 @@ func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containe
 		r.streamPrefix,
 		eventStreamPart(workspaceID),
 		eventStreamPart(stubID),
+		eventStreamPart(containerID),
+	))
+}
+
+func (r *S2EventRepository) containerLogAliasStreamName(workspaceID, containerID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf(
+		"%s/logs/workspaces/%s/containers/%s",
+		r.streamPrefix,
+		eventStreamPart(workspaceID),
 		eventStreamPart(containerID),
 	))
 }

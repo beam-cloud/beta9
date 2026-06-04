@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -33,17 +34,86 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 		ContainerID: "container-789",
 	})
 
-	if got, want := len(streams), 3; got != want {
+	if got, want := len(streams), 4; got != want {
 		t.Fatalf("unexpected stream count: got %d want %d: %#v", got, want, streams)
 	}
 	if got, want := string(streams[0]), "events/workspaces/workspace-123/stubs/stub-456/containers/container-789"; got != want {
 		t.Fatalf("unexpected container stream name: got %q want %q", got, want)
 	}
-	if got, want := string(streams[1]), "events/workspaces/workspace-123/stubs/stub-456"; got != want {
+	if got, want := string(streams[1]), "events/workspaces/workspace-123/containers/container-789"; got != want {
+		t.Fatalf("unexpected container alias stream name: got %q want %q", got, want)
+	}
+	if got, want := string(streams[2]), "events/workspaces/workspace-123/stubs/stub-456"; got != want {
 		t.Fatalf("unexpected stub stream name: got %q want %q", got, want)
 	}
-	if got, want := string(streams[2]), "events/workspaces/workspace-123"; got != want {
+	if got, want := string(streams[3]), "events/workspaces/workspace-123"; got != want {
 		t.Fatalf("unexpected workspace stream name: got %q want %q", got, want)
+	}
+}
+
+func TestResolveContainerStreamsUsesExactStreamWithoutExistenceList(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveContainerStreams(context.Background(), "container-789", types.EventQuery{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/containers/container-789"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestResolveContainerStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	containerID := "endpoint-" + stubID + "-1717f4fc"
+
+	streams, err := repo.resolveContainerStreams(context.Background(), containerID, types.EventQuery{
+		WorkspaceID: "workspace-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/endpoint-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestResolveContainerStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveContainerStreams(context.Background(), "container-789", types.EventQuery{
+		WorkspaceID: "workspace-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/workspaces/workspace-123/containers/container-789"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
 	}
 }
 
@@ -108,6 +178,7 @@ func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 
 	want := []s2.StreamName{
 		"events/workspaces/workspace-123/stubs/stub-456/containers/container-789",
+		"events/workspaces/workspace-123/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456",
 		"events/workspaces/workspace-123",
 	}
@@ -156,6 +227,7 @@ func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 
 	want := []s2.StreamName{
 		"events/logs/workspaces/workspace-123/stubs/stub-456/containers/container-789",
+		"events/logs/workspaces/workspace-123/containers/container-789",
 		"events/logs/workspaces/workspace-123/stubs/stub-456",
 		"events/logs/workspaces/workspace-123/tasks/task-123",
 		"events/logs/workspaces/workspace-123/apps/app-123",
@@ -167,6 +239,74 @@ func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 	for i := range want {
 		if streams[i] != want[i] {
 			t.Fatalf("unexpected log stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestResolveLogStreamsUsesKnownStreamsWithoutExistenceList(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+		WorkspaceID: "workspace-123",
+		TaskID:      "task-123",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123/tasks/task-123"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestResolveLogStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	containerID := "sandbox-" + stubID + "-1717f4fc"
+
+	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+		WorkspaceID: "workspace-123",
+		ContainerID: containerID,
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/sandbox-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestResolveLogStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+		WorkspaceID: "workspace-123",
+		ContainerID: "container-789",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123/containers/container-789"}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
 		}
 	}
 }
@@ -261,6 +401,7 @@ func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
 
 	want := []s2.StreamName{
 		"events/tasks/task-123",
+		"events/workspaces/workspace-123/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456",
 		"events/workspaces/workspace-123",

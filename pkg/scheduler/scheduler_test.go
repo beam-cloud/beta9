@@ -75,6 +75,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workspaceRepo:         workspaceRepo,
 
 		provisioning: newProvisioningTracker(),
+		credentials:  newSchedulerCredentialCache(),
 	}, nil
 }
 
