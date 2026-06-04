@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -55,7 +57,7 @@ func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspace
 	}
 
 	s3Client := newS3Client(cfg, endpointUrl)
-	presignClient := s3.NewPresignClient(newS3Client(cfg, firstNonEmpty(presignEndpointUrl, endpointUrl)))
+	presignClient := s3.NewPresignClient(newS3Client(cfg, presignEndpointForStorage(endpointUrl, presignEndpointUrl)))
 
 	return &WorkspaceStorageClient{
 		WorkspaceName:    workspaceName,
@@ -84,7 +86,10 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 	s3Client := newS3Client(s3Cfg, cfg.Storage.WorkspaceStorage.DefaultEndpointUrl)
 	presignClient := s3.NewPresignClient(newS3Client(
 		s3Cfg,
-		firstNonEmpty(cfg.Storage.WorkspaceStorage.DefaultPresignedEndpointUrl, cfg.Storage.WorkspaceStorage.DefaultEndpointUrl),
+		presignEndpointForStorage(
+			cfg.Storage.WorkspaceStorage.DefaultEndpointUrl,
+			cfg.Storage.WorkspaceStorage.DefaultPresignedEndpointUrl,
+		),
 	))
 
 	return &StorageClient{
@@ -109,6 +114,75 @@ func firstNonEmpty(values ...string) string {
 			return value
 		}
 	}
+	return ""
+}
+
+func presignEndpointForStorage(storageEndpointUrl, presignEndpointUrl string) string {
+	return firstNonEmpty(presignEndpointOverride(storageEndpointUrl, presignEndpointUrl), storageEndpointUrl)
+}
+
+func presignEndpointOverride(storageEndpointUrl, presignEndpointUrl string) string {
+	presignEndpointUrl = strings.TrimSpace(presignEndpointUrl)
+	if presignEndpointUrl == "" {
+		return ""
+	}
+
+	// The default config is LocalStack-friendly, but production configs often
+	// overlay only the storage endpoint. Do not let that inherited loopback
+	// presign endpoint leak into remote buckets.
+	if isLoopbackEndpoint(presignEndpointUrl) && !isLocalS3DevEndpoint(storageEndpointUrl) {
+		return ""
+	}
+
+	return presignEndpointUrl
+}
+
+func isLocalS3DevEndpoint(endpoint string) bool {
+	host := endpointHostname(endpoint)
+	if host == "" {
+		return false
+	}
+
+	return isLoopbackHost(host) || isLocalstackHost(host)
+}
+
+func isLocalstackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "localstack" || strings.HasPrefix(host, "localstack.")
+}
+
+func isLoopbackEndpoint(endpoint string) bool {
+	return isLoopbackHost(endpointHostname(endpoint))
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func endpointHostname(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+
+	parsedURL, err := url.Parse(endpoint)
+	if err == nil && parsedURL.Hostname() != "" {
+		return strings.ToLower(parsedURL.Hostname())
+	}
+
+	if !strings.Contains(endpoint, "://") {
+		parsedURL, err = url.Parse("//" + endpoint)
+		if err == nil && parsedURL.Hostname() != "" {
+			return strings.ToLower(parsedURL.Hostname())
+		}
+	}
+
 	return ""
 }
 

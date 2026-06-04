@@ -14,11 +14,18 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 const (
 	defaultGRPCMaxRetries = 3
 	defaultGRPCRetryDelay = time.Second
+	// gRPC client keepalive: actively ping the gateway so a connection broken by
+	// a gateway rollout or load-balancer idle timeout is detected and replaced,
+	// instead of leaving RPCs to hang until their deadline. Time must be >= the
+	// gateway's keepalive EnforcementPolicy MinTime to avoid "too_many_pings".
+	grpcClientKeepaliveTime    = 20 * time.Second
+	grpcClientKeepaliveTimeout = 10 * time.Second
 )
 
 // NewWorkerRepositoryClient creates a new worker repository client
@@ -63,6 +70,11 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                grpcClientKeepaliveTime,
+			Timeout:             grpcClientKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	}
 
 	if token != "" {

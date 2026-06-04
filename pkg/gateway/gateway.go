@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/labstack/echo-contrib/pprof"
@@ -52,6 +53,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -251,6 +253,20 @@ func (g *Gateway) initGrpc() error {
 		grpc.StreamInterceptor(authInterceptor.Stream()),
 		grpc.MaxRecvMsgSize(g.Config.GatewayService.GRPC.MaxRecvMsgSize * 1024 * 1024),
 		grpc.MaxSendMsgSize(g.Config.GatewayService.GRPC.MaxSendMsgSize * 1024 * 1024),
+		// Permit client keepalive pings (including without active streams) so
+		// long-lived clients like workers can detect a connection broken by a
+		// gateway rollout. MinTime must be <= the client's keepalive Time to
+		// avoid sending "too_many_pings" GOAWAYs.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		// Server-side keepalive so the gateway also detects and reaps dead client
+		// connections rather than holding them open.
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    20 * time.Second,
+			Timeout: 10 * time.Second,
+		}),
 	}
 
 	g.grpcServer = grpc.NewServer(
