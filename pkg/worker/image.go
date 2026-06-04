@@ -421,6 +421,14 @@ func (c *ImageClient) reportRequiredContent(request *types.ContainerRequest, met
 		return
 	}
 	c.contentReporter.reportItems(request.WorkspaceId, request.StubId, kind, items)
+	c.contentReporter.flush()
+	log.Debug().
+		Str("workspace_id", request.WorkspaceId).
+		Str("stub_id", request.StubId).
+		Str("image_id", request.ImageId).
+		Str("kind", string(kind)).
+		Int("item_count", len(items)).
+		Msg("reported image required content")
 }
 
 // requiredContentItems enumerates the content a stub's image requires from its
@@ -1187,24 +1195,20 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 }
 
 func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, size int64) error {
-	if c.config.ImageService.ClipVersion != uint32(types.ClipVersion2) {
+	archiver := clip.NewClipArchiver()
+	meta, err := archiver.ExtractMetadata(archivePath)
+	if err != nil {
+		return fmt.Errorf("restored image archive metadata invalid: image_id=%s: %w", imageId, err)
+	}
+
+	ociInfo, ok := ociStorageInfo(meta)
+	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {
 		return nil
 	}
 
 	const maxExpectedV2ArchiveSize = int64(128 * 1024 * 1024)
 	if size > maxExpectedV2ArchiveSize {
 		return fmt.Errorf("restored v2 image archive is unexpectedly large: image_id=%s size=%d", imageId, size)
-	}
-
-	archiver := clip.NewClipArchiver()
-	meta, err := archiver.ExtractMetadata(archivePath)
-	if err != nil {
-		return fmt.Errorf("restored v2 image archive metadata invalid: image_id=%s: %w", imageId, err)
-	}
-
-	ociInfo, ok := ociStorageInfo(meta)
-	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {
-		return fmt.Errorf("restored v2 image archive is not an OCI metadata archive: image_id=%s", imageId)
 	}
 	if ociInfo.ImageMetadata == nil {
 		return fmt.Errorf("restored v2 image archive is missing embedded image metadata: image_id=%s", imageId)

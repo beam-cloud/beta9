@@ -2,11 +2,16 @@ package worker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	clip "github.com/beam-cloud/clip/pkg/clip"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +39,15 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 	}
 }
 
+type claimedMetadataStore struct {
+	cache.CacheMetadataStore
+	claimed bool
+}
+
+func (m *claimedMetadataStore) MarkStubReported(context.Context, string, string, time.Duration) (bool, error) {
+	return m.claimed, nil
+}
+
 func TestReporterGeneratesOncePerStub(t *testing.T) {
 	r := newTestReporter(&fakeEventRepo{})
 
@@ -41,6 +55,14 @@ func TestReporterGeneratesOncePerStub(t *testing.T) {
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
+}
+
+func TestReporterRedisMarkerIsAdvisory(t *testing.T) {
+	r := newTestReporter(&fakeEventRepo{})
+	r.metadata = &claimedMetadataStore{claimed: false}
+
+	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
+	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 }
 
 func TestReporterCoalescesItemsPerStubKind(t *testing.T) {
@@ -87,8 +109,8 @@ func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
 	r.volumeMinBytes = 1024
 	r.activeStubs = func(string) []string { return []string{"stub"} }
 
-	r.ReportVolumeContent("ws", "small", "/p/small", 512)  // below threshold -> dropped
-	r.ReportVolumeContent("ws", "big", "/p/big", 4096)     // above threshold -> kept
+	r.ReportVolumeContent("ws", "small", "/p/small", 512) // below threshold -> dropped
+	r.ReportVolumeContent("ws", "big", "/p/big", 4096)    // above threshold -> kept
 
 	r.flush()
 	require.Len(t, fake.pushed, 1)
@@ -106,4 +128,54 @@ func TestReporterVolumeNoActiveStubsIsNoop(t *testing.T) {
 	r.ReportVolumeContent("ws", "big", "/p/big", 4096)
 	r.flush()
 	require.Empty(t, fake.pushed)
+}
+
+func TestRequiredContentItemsClipV1FromArchive(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "usr", "bin"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "usr", "bin", "tool"), []byte("tool-data"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "config.json"), []byte(`{"ok":true}`), 0644))
+
+	archivePath := filepath.Join(t.TempDir(), "legacy.rclip")
+	archiver := clip.NewClipArchiver()
+	require.NoError(t, archiver.Create(clip.ClipArchiverOptions{
+		SourcePath:  src,
+		OutputFile:  archivePath,
+		ArchivePath: archivePath,
+	}))
+	meta, err := archiver.ExtractMetadata(archivePath)
+	require.NoError(t, err)
+
+	items, kind := requiredContentItems(meta)
+	require.Equal(t, types.CacheContentKindClipV1, kind)
+	require.Len(t, items, 2)
+	for _, item := range items {
+		require.NotEmpty(t, item.Hash)
+		require.Equal(t, item.Hash, item.RoutingKey)
+		require.Equal(t, item.Hash, item.ExpectedHash)
+		require.Equal(t, types.CacheContentKindClipV1, item.Kind)
+		require.NotEmpty(t, item.Source)
+	}
+}
+
+func TestValidateRestoredImageArchiveAcceptsClipV1WhenDefaultIsV2(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello"), 0644))
+
+	archivePath := filepath.Join(t.TempDir(), "legacy.rclip")
+	archiver := clip.NewClipArchiver()
+	require.NoError(t, archiver.Create(clip.ClipArchiverOptions{
+		SourcePath:  src,
+		OutputFile:  archivePath,
+		ArchivePath: archivePath,
+	}))
+	info, err := os.Stat(archivePath)
+	require.NoError(t, err)
+
+	client := &ImageClient{
+		config: types.AppConfig{
+			ImageService: types.ImageServiceConfig{ClipVersion: uint32(types.ClipVersion2)},
+		},
+	}
+	require.NoError(t, client.validateRestoredImageArchive(archivePath, "legacy-image", info.Size()))
 }
