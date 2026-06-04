@@ -534,6 +534,40 @@ func (s *testCacheCoordinator) unregisterCalled(registrationID string) bool {
 	return s.unregisters[registrationID]
 }
 
+func TestCacheAdvertiseHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		podAddr  string
+		podIP    string
+		expected string
+	}{
+		{
+			name:     "pod addr is an ip",
+			podAddr:  "10.0.0.5",
+			expected: "10.0.0.5",
+		},
+		{
+			name:     "tailscale hostname falls back to pod ip",
+			podAddr:  "machine-6a392694.tailc480d.ts.net",
+			podIP:    "10.0.0.6",
+			expected: "10.0.0.6",
+		},
+		{
+			name:     "hostname without pod ip yields empty (server discovers private ip)",
+			podAddr:  "machine-6a392694.tailc480d.ts.net",
+			expected: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("POD_IP", tc.podIP)
+			m := &WorkerCacheManager{podAddr: tc.podAddr}
+			require.Equal(t, tc.expected, m.cacheAdvertiseHost())
+		})
+	}
+}
+
 func TestBindAddr(t *testing.T) {
 	tests := []struct {
 		name string
