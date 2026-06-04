@@ -411,9 +411,15 @@ const (
 	ContainerLifecycleStartup                     ContainerLifecycleID = "container.startup"
 	ContainerLifecycleSchedulerQueuePush          ContainerLifecycleID = "scheduler.queue_push"
 	ContainerLifecycleSchedulerBacklogWait        ContainerLifecycleID = "scheduler.backlog_wait"
+	ContainerLifecycleSchedulerWorkerList         ContainerLifecycleID = "scheduler.worker_list"
+	ContainerLifecycleSchedulerBatchPlan          ContainerLifecycleID = "scheduler.batch_plan"
 	ContainerLifecycleSchedulerWorkerSelection    ContainerLifecycleID = "scheduler.worker_selection"
+	ContainerLifecycleSchedulerReserveCapacity    ContainerLifecycleID = "scheduler.reserve_capacity"
 	ContainerLifecycleSchedulerReservation        ContainerLifecycleID = "scheduler.reservation"
 	ContainerLifecycleSchedulerProvisionWorker    ContainerLifecycleID = "scheduler.provision_worker"
+	ContainerLifecycleSchedulerImageCredentials   ContainerLifecycleID = "scheduler.attach_image_credentials"
+	ContainerLifecycleSchedulerBuildCredentials   ContainerLifecycleID = "scheduler.attach_build_registry_credentials"
+	ContainerLifecycleSchedulerWorkerQueuePush    ContainerLifecycleID = "scheduler.worker_queue_push"
 	ContainerLifecycleWorkerQueueReceive          ContainerLifecycleID = "worker.queue_receive"
 	ContainerLifecycleImageLoad                   ContainerLifecycleID = "image.load"
 	ContainerLifecycleImageEmbeddedCacheMetadata  ContainerLifecycleID = "image.embedded_cache_metadata_copy"
@@ -485,9 +491,15 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleStartup:                     {ID: ContainerLifecycleStartup, Domain: EventDomainRuntime, Label: "Container startup", Required: true},
 	ContainerLifecycleSchedulerQueuePush:          {ID: ContainerLifecycleSchedulerQueuePush, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Queue request"},
 	ContainerLifecycleSchedulerBacklogWait:        {ID: ContainerLifecycleSchedulerBacklogWait, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Scheduler backlog wait"},
+	ContainerLifecycleSchedulerWorkerList:         {ID: ContainerLifecycleSchedulerWorkerList, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Load workers"},
+	ContainerLifecycleSchedulerBatchPlan:          {ID: ContainerLifecycleSchedulerBatchPlan, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Plan batch"},
 	ContainerLifecycleSchedulerWorkerSelection:    {ID: ContainerLifecycleSchedulerWorkerSelection, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker selection"},
+	ContainerLifecycleSchedulerReserveCapacity:    {ID: ContainerLifecycleSchedulerReserveCapacity, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Reserve capacity"},
 	ContainerLifecycleSchedulerReservation:        {ID: ContainerLifecycleSchedulerReservation, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Capacity reservation"},
 	ContainerLifecycleSchedulerProvisionWorker:    {ID: ContainerLifecycleSchedulerProvisionWorker, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker provisioning"},
+	ContainerLifecycleSchedulerImageCredentials:   {ID: ContainerLifecycleSchedulerImageCredentials, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Attach image credentials"},
+	ContainerLifecycleSchedulerBuildCredentials:   {ID: ContainerLifecycleSchedulerBuildCredentials, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Attach build registry credentials"},
+	ContainerLifecycleSchedulerWorkerQueuePush:    {ID: ContainerLifecycleSchedulerWorkerQueuePush, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Push to worker queue"},
 	ContainerLifecycleWorkerQueueReceive:          {ID: ContainerLifecycleWorkerQueueReceive, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker queue receive"},
 	ContainerLifecycleImageLoad:                   {ID: ContainerLifecycleImageLoad, Domain: EventDomainImage, ParentID: ContainerLifecycleStartup, Label: "Image load", Required: true},
 	ContainerLifecycleImageEmbeddedCacheMetadata:  {ID: ContainerLifecycleImageEmbeddedCacheMetadata, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache metadata copy"},
@@ -877,12 +889,24 @@ func EventSummaryKeyForLifecycle(id ContainerLifecycleID) string {
 		return "scheduler_queue_push_ms"
 	case ContainerLifecycleSchedulerBacklogWait:
 		return "scheduler_backlog_ms"
+	case ContainerLifecycleSchedulerWorkerList:
+		return "scheduler_worker_list_ms"
+	case ContainerLifecycleSchedulerBatchPlan:
+		return "scheduler_batch_plan_ms"
 	case ContainerLifecycleSchedulerWorkerSelection:
 		return "scheduler_worker_selection_ms"
+	case ContainerLifecycleSchedulerReserveCapacity:
+		return "scheduler_reserve_capacity_ms"
 	case ContainerLifecycleSchedulerReservation:
 		return "scheduler_reservation_ms"
 	case ContainerLifecycleSchedulerProvisionWorker:
 		return "scheduler_provision_worker_ms"
+	case ContainerLifecycleSchedulerImageCredentials:
+		return "scheduler_attach_image_credentials_ms"
+	case ContainerLifecycleSchedulerBuildCredentials:
+		return "scheduler_attach_build_registry_credentials_ms"
+	case ContainerLifecycleSchedulerWorkerQueuePush:
+		return "scheduler_worker_queue_push_ms"
 	case ContainerLifecycleWorkerQueueReceive:
 		return "worker_queue_ms"
 	case ContainerLifecycleImageLoad:
