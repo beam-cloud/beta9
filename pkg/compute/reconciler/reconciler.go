@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/compute/solver"
@@ -60,9 +61,9 @@ func (r *Reconciler) Apply(ctx context.Context, demand compute.Demand, plan comp
 	for _, action := range plan.Actions {
 		switch action.Type {
 		case compute.ActionCreate:
-			vendor, ok := r.Vendors[action.Offer.Provider]
-			if !ok {
-				return fmt.Errorf("vendor %q is not configured", action.Offer.Provider)
+			vendor, err := r.vendor(action.Offer.Provider)
+			if err != nil {
+				return err
 			}
 			for i := uint32(0); i < action.Count; i++ {
 				reservation, err := vendor.CreateReservation(ctx, compute.ReservationRequest{
@@ -80,16 +81,16 @@ func (r *Reconciler) Apply(ctx context.Context, demand compute.Demand, plan comp
 				}
 				if r.Store != nil {
 					if err := r.Store.SaveReservation(ctx, reservation); err != nil {
-						return err
+						return r.cleanupUnsavedReservation(ctx, vendor, reservation, err)
 					}
 				}
 			}
 		case compute.ActionDelete:
-			vendor, ok := r.Vendors[action.Reservation.Provider]
-			if !ok {
-				return fmt.Errorf("vendor %q is not configured", action.Reservation.Provider)
+			vendor, err := r.vendor(action.Reservation.Provider)
+			if err != nil {
+				return err
 			}
-			if err := vendor.DeleteReservation(ctx, action.Reservation.InstanceID); err != nil {
+			if err := vendor.DeleteReservation(ctx, reservationInstanceID(action.Reservation)); err != nil {
 				return err
 			}
 			if r.Store != nil {
@@ -102,6 +103,31 @@ func (r *Reconciler) Apply(ctx context.Context, demand compute.Demand, plan comp
 	return nil
 }
 
+func (r *Reconciler) vendor(name string) (compute.Vendor, error) {
+	vendor, ok := r.Vendors[name]
+	if !ok {
+		return nil, fmt.Errorf("vendor %q is not configured", name)
+	}
+	return vendor, nil
+}
+
+func (r *Reconciler) cleanupUnsavedReservation(ctx context.Context, vendor compute.Vendor, reservation *compute.Reservation, saveErr error) error {
+	if reservation == nil {
+		return saveErr
+	}
+	if deleteErr := vendor.DeleteReservation(ctx, reservationInstanceID(*reservation)); deleteErr != nil {
+		return fmt.Errorf("save reservation: %w; cleanup reservation %q failed: %v", saveErr, reservationInstanceID(*reservation), deleteErr)
+	}
+	return saveErr
+}
+
+func reservationInstanceID(reservation compute.Reservation) string {
+	if reservation.InstanceID != "" {
+		return reservation.InstanceID
+	}
+	return reservation.ID
+}
+
 func (r *Reconciler) collectOffers(ctx context.Context, demand compute.Demand) ([]compute.Offer, error) {
 	request := compute.OfferRequest{
 		GPUs:           demand.GPUs,
@@ -112,19 +138,7 @@ func (r *Reconciler) collectOffers(ctx context.Context, demand compute.Demand) (
 	}
 
 	offers := []compute.Offer{}
-	for _, vendor := range r.Vendors {
-		if len(demand.Providers) > 0 {
-			found := false
-			for _, provider := range demand.Providers {
-				if provider == vendor.Name() {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
+	for _, vendor := range r.orderedVendors(demand.Providers) {
 		vendorOffers, err := vendor.ListOffers(ctx, request)
 		if err != nil {
 			return nil, err
@@ -132,4 +146,33 @@ func (r *Reconciler) collectOffers(ctx context.Context, demand compute.Demand) (
 		offers = append(offers, vendorOffers...)
 	}
 	return offers, nil
+}
+
+func (r *Reconciler) orderedVendors(providers []string) []compute.Vendor {
+	if len(providers) > 0 {
+		out := make([]compute.Vendor, 0, len(providers))
+		seen := map[string]struct{}{}
+		for _, provider := range providers {
+			if _, ok := seen[provider]; ok {
+				continue
+			}
+			seen[provider] = struct{}{}
+			if vendor, ok := r.Vendors[provider]; ok {
+				out = append(out, vendor)
+			}
+		}
+		return out
+	}
+
+	names := make([]string, 0, len(r.Vendors))
+	for name := range r.Vendors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]compute.Vendor, 0, len(names))
+	for _, name := range names {
+		out = append(out, r.Vendors[name])
+	}
+	return out
 }

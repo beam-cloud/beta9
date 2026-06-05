@@ -113,6 +113,7 @@ func (gws *GatewayService) LaunchPoolCapacity(ctx context.Context, in *pb.Launch
 
 	vendors := gws.computeVendors()
 	newReservations := append([]compute.Reservation{}, reservations...)
+	createdReservations := []compute.Reservation{}
 	for _, action := range plan.Actions {
 		if action.Type != compute.ActionCreate {
 			continue
@@ -134,6 +135,10 @@ func (gws *GatewayService) LaunchPoolCapacity(ctx context.Context, in *pb.Launch
 			if err != nil {
 				return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 			}
+			if reservation == nil {
+				return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "vendor returned empty reservation"}, nil
+			}
+			createdReservations = append(createdReservations, *reservation)
 			newReservations = append(newReservations, *reservation)
 		}
 	}
@@ -162,16 +167,50 @@ func (gws *GatewayService) LaunchPoolCapacity(ctx context.Context, in *pb.Launch
 		state.CreatedByTokenID = existing.CreatedByTokenID
 	}
 	if err := gws.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		err = gws.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if gws.scheduler != nil {
 		if err := gws.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
+			err = gws.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
 			return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 	}
 	gws.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
 	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
+}
+
+func (gws *GatewayService) compensatePoolLaunchFailure(ctx context.Context, workspaceID, poolName string, previous *compute.PoolState, vendors map[string]compute.Vendor, reservations []compute.Reservation, cause error) error {
+	failures := []string{}
+	for _, reservation := range reservations {
+		vendor := vendors[reservation.Provider]
+		if vendor == nil {
+			failures = append(failures, fmt.Sprintf("vendor %q is not configured", reservation.Provider))
+			continue
+		}
+		instanceID := computeReservationInstanceID(reservation)
+		if err := vendor.DeleteReservation(ctx, instanceID); err != nil {
+			failures = append(failures, fmt.Sprintf("delete reservation %q: %v", instanceID, err))
+		}
+	}
+
+	if previous != nil {
+		if err := gws.savePrivatePoolState(ctx, workspaceID, previous); err != nil {
+			failures = append(failures, fmt.Sprintf("restore previous pool state: %v", err))
+		}
+	} else if err := gws.deletePrivatePoolState(ctx, workspaceID, poolName); err != nil {
+		failures = append(failures, fmt.Sprintf("delete partial pool state: %v", err))
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("%w; cleanup failed: %s", cause, strings.Join(failures, "; "))
+	}
+	return cause
+}
+
+func computeReservationInstanceID(reservation compute.Reservation) string {
+	return firstNonEmpty(reservation.InstanceID, reservation.ID)
 }
 
 func (gws *GatewayService) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsRequest) (*pb.ListPrivatePoolsResponse, error) {
@@ -283,11 +322,7 @@ func (gws *GatewayService) DeletePool(ctx context.Context, in *pb.DeletePoolRequ
 		if vendor == nil {
 			continue
 		}
-		instanceID := reservation.InstanceID
-		if instanceID == "" {
-			instanceID = reservation.ID
-		}
-		_ = vendor.DeleteReservation(ctx, instanceID)
+		_ = vendor.DeleteReservation(ctx, computeReservationInstanceID(reservation))
 	}
 
 	if err := gws.deletePrivatePoolState(ctx, workspaceID, in.Name); err != nil {
@@ -651,14 +686,14 @@ func (gws *GatewayService) agentSlotsForMachine(ctx context.Context, agentState 
 		return nil, nil
 	}
 
-	slot, err := gws.ensureAgentWorkerSlot(ctx, agentState, worker, slots)
+	slot, workerToken, err := gws.ensureAgentWorkerSlot(ctx, agentState, worker, slots)
 	if err != nil {
 		return nil, err
 	}
 	if err := gws.pruneAgentWorkerSlots(ctx, agentState, worker.Id, slots); err != nil {
 		return nil, err
 	}
-	return []*pb.AgentWorkerSlot{agentWorkerSlotToProto(slot)}, nil
+	return []*pb.AgentWorkerSlot{agentWorkerSlotToProto(slot, workerToken)}, nil
 }
 
 func (gws *GatewayService) agentMachineWorker(agentState *compute.AgentTokenState) (*types.Worker, error) {
@@ -676,7 +711,7 @@ func (gws *GatewayService) agentMachineWorker(agentState *compute.AgentTokenStat
 	return worker, nil
 }
 
-func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState *compute.AgentTokenState, worker *types.Worker, slots []*compute.AgentWorkerSlotState) (*compute.AgentWorkerSlotState, error) {
+func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState *compute.AgentTokenState, worker *types.Worker, slots []*compute.AgentWorkerSlotState) (*compute.AgentWorkerSlotState, string, error) {
 	var existing *compute.AgentWorkerSlotState
 	for _, slot := range slots {
 		if slot != nil && slot.WorkerID == worker.Id {
@@ -684,28 +719,22 @@ func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState
 			break
 		}
 	}
-	token := ""
-	if existing != nil {
-		token = existing.WorkerToken
+
+	workspace, err := gws.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
+	if err != nil {
+		return nil, "", err
 	}
-	if token == "" {
-		workspace, err := gws.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
-		if err != nil {
-			return nil, err
-		}
-		createdToken, err := gws.backendRepo.CreateToken(ctx, workspace.Id, types.TokenTypeWorker, true)
-		if err != nil {
-			return nil, err
-		}
-		token = createdToken.Key
+	token, tokenID, tokenHash, err := gws.agentWorkerToken(ctx, workspace.Id, existing)
+	if err != nil {
+		return nil, "", err
 	}
 
-	slot := agentWorkerSlotState(gws.appConfig, agentState, worker, token)
+	slot := agentWorkerSlotState(gws.appConfig, agentState, worker, tokenID, tokenHash)
 	if existing != nil {
 		slot.CreatedAt = existing.CreatedAt
 	}
 	if err := gws.computeRepo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if existing == nil {
 		gws.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
@@ -725,7 +754,25 @@ func (gws *GatewayService) ensureAgentWorkerSlot(ctx context.Context, agentState
 			},
 		})
 	}
-	return slot, nil
+	return slot, token, nil
+}
+
+func (gws *GatewayService) agentWorkerToken(ctx context.Context, workspaceID uint, existing *compute.AgentWorkerSlotState) (string, string, string, error) {
+	if existing != nil && existing.WorkerTokenID != "" {
+		token, err := gws.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
+		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorker {
+			tokenHash := hashComputeToken(token.Key)
+			if existing.WorkerTokenHash == "" || existing.WorkerTokenHash == tokenHash {
+				return token.Key, token.ExternalId, tokenHash, nil
+			}
+		}
+	}
+
+	createdToken, err := gws.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorker, true)
+	if err != nil {
+		return "", "", "", err
+	}
+	return createdToken.Key, createdToken.ExternalId, hashComputeToken(createdToken.Key), nil
 }
 
 func (gws *GatewayService) pruneAgentWorkerSlots(ctx context.Context, agentState *compute.AgentTokenState, keepWorkerID string, slots []*compute.AgentWorkerSlotState) error {
@@ -749,10 +796,11 @@ func (gws *GatewayService) pruneAgentWorkerSlots(ctx context.Context, agentState
 	return nil
 }
 
-func agentWorkerSlotState(config types.AppConfig, agentState *compute.AgentTokenState, worker *types.Worker, token string) *compute.AgentWorkerSlotState {
+func agentWorkerSlotState(config types.AppConfig, agentState *compute.AgentTokenState, worker *types.Worker, tokenID, tokenHash string) *compute.AgentWorkerSlotState {
 	return &compute.AgentWorkerSlotState{
 		WorkerID:                  worker.Id,
-		WorkerToken:               token,
+		WorkerTokenID:             tokenID,
+		WorkerTokenHash:           tokenHash,
 		WorkspaceID:               agentState.WorkspaceID,
 		PoolName:                  agentState.PoolName,
 		MachineID:                 agentState.MachineID,
@@ -780,10 +828,10 @@ func agentWorkerImage(config types.AppConfig) string {
 	return image
 }
 
-func agentWorkerSlotToProto(slot *compute.AgentWorkerSlotState) *pb.AgentWorkerSlot {
+func agentWorkerSlotToProto(slot *compute.AgentWorkerSlotState, workerToken string) *pb.AgentWorkerSlot {
 	return &pb.AgentWorkerSlot{
 		WorkerId:                  slot.WorkerID,
-		WorkerToken:               slot.WorkerToken,
+		WorkerToken:               workerToken,
 		PoolName:                  slot.PoolName,
 		MachineId:                 slot.MachineID,
 		Cpu:                       slot.CPU,

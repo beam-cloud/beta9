@@ -127,20 +127,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	poolConfig := poolConfigFromProto(in.Pool)
 	if poolConfig != nil {
 		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
-		if poolConfig.ReservationRequired {
-			res, err := gws.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
-				Pool: poolConfigToProto(poolConfig),
-			})
-			if err != nil {
-				return nil, err
-			}
-			if !res.Ok {
-				return &pb.GetOrCreateStubResponse{
-					Ok:     false,
-					ErrMsg: res.ErrMsg,
-				}, nil
-			}
-		}
 	}
 
 	stubConfig := types.StubConfigV1{
@@ -280,6 +266,21 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Ok:     false,
 			ErrMsg: "Failed to get or create stub",
 		}, nil
+	}
+
+	if poolConfig != nil && poolConfig.ReservationRequired {
+		res, err := gws.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
+			Pool: poolConfigToProto(poolConfig),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !res.Ok {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: res.ErrMsg,
+			}, nil
+		}
 	}
 
 	return &pb.GetOrCreateStubResponse{

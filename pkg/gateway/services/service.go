@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -58,6 +59,9 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 	}
 	computeRepo := opts.ComputeRepo
 	if computeRepo == nil {
+		if opts.RedisClient == nil {
+			return nil, fmt.Errorf("compute repository requires redis client")
+		}
 		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
 	}
 

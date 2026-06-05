@@ -61,66 +61,79 @@ func (c Client) Do(ctx context.Context, method, path string, body any, out any) 
 }
 
 func String(m map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := m[key]; ok {
-			switch t := v.(type) {
-			case string:
-				return t
-			case fmt.Stringer:
-				return t.String()
-			case float64:
-				return strconv.FormatFloat(t, 'f', -1, 64)
-			}
-		}
-	}
-	return ""
+	return lookup(m, keys, stringValue)
 }
 
 func Int64(m map[string]any, keys ...string) int64 {
-	for _, key := range keys {
-		if v, ok := m[key]; ok {
-			switch t := v.(type) {
-			case float64:
-				return int64(t)
-			case int64:
-				return t
-			case int:
-				return int64(t)
-			case string:
-				i, _ := strconv.ParseInt(t, 10, 64)
-				return i
-			}
-		}
-	}
-	return 0
+	return lookup(m, keys, int64Value)
 }
 
 func Float64(m map[string]any, keys ...string) float64 {
-	for _, key := range keys {
-		if v, ok := m[key]; ok {
-			switch t := v.(type) {
-			case float64:
-				return t
-			case int64:
-				return float64(t)
-			case int:
-				return float64(t)
-			case string:
-				f, _ := strconv.ParseFloat(t, 64)
-				return f
-			}
-		}
-	}
-	return 0
+	return lookup(m, keys, float64Value)
 }
 
 func Array(data map[string]any, keys ...string) []any {
+	return lookup(data, keys, arrayValue)
+}
+
+func lookup[T any](data map[string]any, keys []string, convert func(any) (T, bool)) T {
+	var zero T
 	for _, key := range keys {
 		if v, ok := data[key]; ok {
-			if arr, ok := v.([]any); ok {
-				return arr
+			if out, ok := convert(v); ok {
+				return out
 			}
 		}
 	}
-	return nil
+	return zero
+}
+
+func stringValue(value any) (string, bool) {
+	switch t := value.(type) {
+	case string:
+		return t, true
+	case fmt.Stringer:
+		return t.String(), true
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64), true
+	default:
+		return "", false
+	}
+}
+
+func int64Value(value any) (int64, bool) {
+	switch t := value.(type) {
+	case float64:
+		return int64(t), true
+	case int64:
+		return t, true
+	case int:
+		return int64(t), true
+	case string:
+		i, err := strconv.ParseInt(t, 10, 64)
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func float64Value(value any) (float64, bool) {
+	switch t := value.(type) {
+	case float64:
+		return t, true
+	case int64:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case string:
+		f, err := strconv.ParseFloat(t, 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func arrayValue(value any) ([]any, bool) {
+	arr, ok := value.([]any)
+	return arr, ok
 }

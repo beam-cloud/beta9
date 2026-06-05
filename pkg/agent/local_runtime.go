@@ -115,10 +115,9 @@ func (f *tcpForwarder) run(ctx context.Context) {
 			if ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "use of closed network connection") {
 				return
 			}
-			if f.stderr != nil {
-				fmt.Fprintf(f.stderr, "local registry forwarder accept failed: %v\n", err)
-			}
-			return
+			f.logf("local registry forwarder accept failed: %v\n", err)
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 		go f.handleConn(conn)
 	}
@@ -129,9 +128,7 @@ func (f *tcpForwarder) handleConn(conn net.Conn) {
 
 	upstream, err := net.DialTimeout("tcp", f.target, 30*time.Second)
 	if err != nil {
-		if f.stderr != nil {
-			fmt.Fprintf(f.stderr, "local registry forwarder dial failed: %v\n", err)
-		}
+		f.logf("local registry forwarder dial failed: %v\n", err)
 		return
 	}
 	defer upstream.Close()
@@ -139,19 +136,24 @@ func (f *tcpForwarder) handleConn(conn net.Conn) {
 	copyBoth(conn, upstream)
 }
 
+func (f *tcpForwarder) logf(format string, args ...any) {
+	if f.stderr != nil {
+		fmt.Fprintf(f.stderr, format, args...)
+	}
+}
+
 func agentStateDir() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv(types.AgentStateDirEnv)); dir != "" {
-		return dir, os.MkdirAll(dir, 0755)
+	dir := strings.TrimSpace(os.Getenv(types.AgentStateDirEnv))
+	if dir == "" && runtime.GOOS == "linux" && writableDirOrCreatable(types.DefaultAgentStateDir) {
+		dir = types.DefaultAgentStateDir
 	}
-	if runtime.GOOS == "linux" && writableDirOrCreatable(types.DefaultAgentStateDir) {
-		dir := types.DefaultAgentStateDir
-		return dir, os.MkdirAll(dir, 0755)
+	if dir == "" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(base, types.BeamStateDirName, types.AgentStateDirName)
 	}
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(base, types.BeamStateDirName, types.AgentStateDirName)
 	return dir, os.MkdirAll(dir, 0755)
 }
 

@@ -61,7 +61,8 @@ type AgentTokenState struct {
 
 type AgentWorkerSlotState struct {
 	WorkerID                  string    `json:"worker_id"`
-	WorkerToken               string    `json:"worker_token"`
+	WorkerTokenID             string    `json:"worker_token_id"`
+	WorkerTokenHash           string    `json:"worker_token_hash"`
 	WorkspaceID               string    `json:"workspace_id"`
 	PoolName                  string    `json:"pool_name"`
 	MachineID                 string    `json:"machine_id"`

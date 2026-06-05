@@ -124,8 +124,12 @@ func TestRawReadUsesCopyForSmallPageBackedRange(t *testing.T) {
 	_, err = io.ReadFull(conn, body)
 	require.NoError(t, err)
 	require.Equal(t, []byte("defghijk"), body)
-	after := snapshotCachePathStats()
-	diff := diffCachePathStats(after, before)
+	var diff cachePathStatsSnapshot
+	require.Eventually(t, func() bool {
+		after := snapshotCachePathStats()
+		diff = diffCachePathStats(after, before)
+		return diff.serverRawSendfileHits+diff.serverRawCopyHits+diff.serverRawReadAtHits > 0
+	}, time.Second, 10*time.Millisecond)
 	// The guarantee for a small (sub-threshold) range is that it is never served
 	// via sendfile. It is served from the local page file through the copy path,
 	// or the readAt fallback if the page region isn't resolvable on this read;

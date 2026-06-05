@@ -152,6 +152,9 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 	if route.LocalTarget == "" {
 		route.LocalTarget = defaultLocalTarget
 	}
+	if route.LocalTarget == "" {
+		return "", fmt.Errorf("backend route local target is required for port %d", route.Port)
+	}
 	if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
 		return "", err
 	}
