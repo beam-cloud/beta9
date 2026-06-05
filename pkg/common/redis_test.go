@@ -71,11 +71,15 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 	// NOTE: I wanted to test this using a TTL, but unfortunately miniredis doesn't support true TTL like redis
 	// TTL'd keys technically still exist. Instead we're relying on manually releasing the lock (which deletes the key)
 	go func() {
-		err := secondLock.Acquire(context.Background(), key, RedisLockOptions{TtlS: 10, Retries: 5})
+		err := secondLock.Acquire(context.Background(), key, RedisLockOptions{
+			TtlS:          10,
+			Retries:       20,
+			RetryInterval: 50 * time.Millisecond,
+		})
 		resultCh <- err
 	}()
 
-	time.Sleep(time.Millisecond * 500)
+	time.Sleep(time.Millisecond * 100)
 
 	// Release lock so the secondLock can acquire it
 	err = firstLock.Release(key)
@@ -371,7 +375,6 @@ func TestRedisClientScan(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Generate 1000 items, add to map var, add to redis
 	keys := map[string]string{}
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprint(i)
@@ -380,17 +383,14 @@ func TestRedisClientScan(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// Make sure 1000 items were added to redis
 	items, err := rdb.Scan(ctx, "*")
 	assert.NoError(t, err)
 	assert.Len(t, items, 1000)
 
-	// Scan/search for 100 items e.g. 800 - 899
 	items, err = rdb.Scan(ctx, "8??")
 	assert.NoError(t, err)
 	assert.Len(t, items, 100)
 
-	// Get values for all items, compare their values to map
 	for _, item := range items {
 		expect := keys[item]
 		actual, err := rdb.Get(ctx, item).Result()

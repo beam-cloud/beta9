@@ -47,6 +47,9 @@ func (r *CacheRedisRepository) SetCacheRegistration(ctx context.Context, host ca
 	if err := r.rdb.SAdd(ctx, cacheCoordinatorIndexKey(host.PoolName, host.Locality), host.LogicalHostID).Err(); err != nil {
 		return err
 	}
+	if err := r.rdb.SAdd(ctx, cacheCoordinatorLocalityIndexKey(host.Locality), host.LogicalHostID).Err(); err != nil {
+		return err
+	}
 	if err := r.rdb.Set(ctx, cacheCoordinatorLogicalHostKey(host.LogicalHostID), logicalPayload, cacheCoordinatorLogicalHostTTL(ttl)).Err(); err != nil {
 		return err
 	}
@@ -73,37 +76,25 @@ func (r *CacheRedisRepository) SetActiveCacheRegistration(ctx context.Context, l
 
 func (r *CacheRedisRepository) ListCacheLogicalHosts(ctx context.Context, poolName, locality string) ([]string, error) {
 	if poolName == "" {
-		return r.listCacheLogicalHostsForLocality(ctx, locality)
+		return r.listCacheLogicalHostsFromIndex(ctx, cacheCoordinatorLocalityIndexKey(locality))
 	}
-	return r.rdb.SMembers(ctx, cacheCoordinatorIndexKey(poolName, locality)).Result()
+	return r.listCacheLogicalHostsFromIndex(ctx, cacheCoordinatorIndexKey(poolName, locality))
 }
 
-func (r *CacheRedisRepository) listCacheLogicalHostsForLocality(ctx context.Context, locality string) ([]string, error) {
-	pattern := cacheCoordinatorIndexKey("*", locality)
-	keys, err := r.rdb.Scan(ctx, pattern)
+func (r *CacheRedisRepository) listCacheLogicalHostsFromIndex(ctx context.Context, key string) ([]string, error) {
+	ids, err := r.rdb.SMembers(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	seen := map[string]struct{}{}
-	for _, key := range keys {
-		ids, err := r.rdb.SMembers(ctx, key).Result()
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range ids {
-			if id != "" {
-				seen[id] = struct{}{}
-			}
+	filtered := ids[:0]
+	for _, id := range ids {
+		if id != "" {
+			filtered = append(filtered, id)
 		}
 	}
-
-	ids := make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids, nil
+	sort.Strings(filtered)
+	return filtered, nil
 }
 
 func (r *CacheRedisRepository) ListCacheRegistrations(ctx context.Context, logicalHostID string) ([]string, error) {
@@ -164,7 +155,12 @@ func (r *CacheRedisRepository) CountCacheRegistrations(ctx context.Context, logi
 }
 
 func (r *CacheRedisRepository) RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error {
-	if err := r.rdb.SRem(ctx, cacheCoordinatorIndexKey(poolName, locality), logicalHostID).Err(); err != nil {
+	if poolName != "" {
+		if err := r.rdb.SRem(ctx, cacheCoordinatorIndexKey(poolName, locality), logicalHostID).Err(); err != nil {
+			return err
+		}
+	}
+	if err := r.rdb.SRem(ctx, cacheCoordinatorLocalityIndexKey(locality), logicalHostID).Err(); err != nil {
 		return err
 	}
 	return r.rdb.Del(ctx, cacheCoordinatorActiveRegistrationKey(logicalHostID), cacheCoordinatorRegistrationSetKey(logicalHostID), cacheCoordinatorLogicalHostKey(logicalHostID)).Err()
@@ -172,6 +168,10 @@ func (r *CacheRedisRepository) RemoveCacheLogicalHost(ctx context.Context, poolN
 
 func cacheCoordinatorIndexKey(poolName, locality string) string {
 	return fmt.Sprintf("%s:host_index:%s:%s", cacheCoordinatorKeyPrefix, poolName, locality)
+}
+
+func cacheCoordinatorLocalityIndexKey(locality string) string {
+	return fmt.Sprintf("%s:host_index_by_locality:%s", cacheCoordinatorKeyPrefix, locality)
 }
 
 func cacheCoordinatorRegistrationSetKey(logicalHostID string) string {

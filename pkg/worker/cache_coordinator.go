@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -23,7 +25,10 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 		return nil, cache.ErrHostNotFound
 	}
 
-	resp, err := handleGRPCResponse(d.client.ListCacheHosts(ctx, &pb.ListCacheHostsRequest{
+	rpcCtx, cancel := context.WithTimeout(ctx, cacheCoordinatorRPCTimeout)
+	defer cancel()
+
+	resp, err := handleGRPCResponse(d.client.ListCacheHosts(rpcCtx, &pb.ListCacheHostsRequest{
 		Locality: locality,
 	}))
 	if err != nil {
@@ -65,8 +70,18 @@ type gatewayCacheRegistration struct {
 }
 
 func newGatewayCacheRegistration(manager *WorkerCacheManager, server *cache.Server, cacheConfig cache.Config, advertisedAddr string) *gatewayCacheRegistration {
-	cachePathID := cachePathID(cacheConfig.Server.DiskCacheDir)
-	logicalHostID := cacheLogicalHostID(manager.locality, manager.nodeID, cacheConfig.Server.DiskCacheDir)
+	cacheIdentityPath := ""
+	if manager != nil {
+		cacheIdentityPath = manager.cacheIdentityPath
+	}
+	if cacheIdentityPath == "" && manager != nil {
+		cacheIdentityPath = cachePlacementIdentityPath(manager.config, cacheConfig)
+	}
+	if cacheIdentityPath == "" {
+		cacheIdentityPath = cacheCanonicalPhysicalIdentityPath(cacheConfig)
+	}
+	cachePathID := cachePathID(cacheIdentityPath)
+	logicalHostID := cacheLogicalHostID(manager.locality, manager.nodeID, cacheIdentityPath)
 
 	return &gatewayCacheRegistration{
 		manager:        manager,
@@ -118,10 +133,12 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 		TtlSeconds: int32(cacheRegistrationTTL(r.cacheConfig) / time.Second),
 	}))
 	if err == nil {
-		logger := log.Debug()
+		logger := log.Trace()
+		message := "refreshed cache host registration"
 		if !r.loggedSuccess {
 			logger = log.Info()
 			r.loggedSuccess = true
+			message = "registered cache host"
 		}
 		logger.
 			Str("logical_host_id", host.LogicalHostId).
@@ -131,7 +148,9 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 			Str("node_id", host.NodeId).
 			Str("cache_path_id", host.CachePathId).
 			Str("addr", host.PrivateAddr).
-			Msg("Registered cache host")
+			Int32("ttl_seconds", int32(cacheRegistrationTTL(r.cacheConfig)/time.Second)).
+			Float32("capacity_usage_pct", host.CapacityUsagePct).
+			Msg(message)
 	}
 	return err
 }
@@ -183,15 +202,15 @@ func (r *gatewayCacheRegistration) host() *pb.CacheCoordinatorHost {
 }
 
 // cacheLogicalHostID is the stable routing identity for one cache placement
-// target. It is intentionally based on locality, node, and cache path, not the
+// target. It is intentionally based on locality, node, and cache identity path, not the
 // worker pool or process ID; restarted or colocated cache servers register
 // under this same logical host when they serve the same disk cache target.
-func cacheLogicalHostID(locality, nodeID, diskCacheDir string) string {
+func cacheLogicalHostID(locality, nodeID, cacheIdentityPath string) string {
 	return fmt.Sprintf(
 		"cache-host-%s-%s-%s",
 		safeCacheName(locality),
 		safeCacheName(nodeID),
-		cachePathID(diskCacheDir),
+		cachePathID(cacheIdentityPath),
 	)
 }
 
@@ -208,6 +227,28 @@ func cacheRegistrationID(workerID, instanceID string) string {
 func cachePathID(path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return fmt.Sprintf("%x", sum[:6])
+}
+
+func cacheCanonicalPhysicalIdentityPath(config cache.Config) string {
+	if config.Server.DiskCacheDir == "" {
+		return ""
+	}
+	diskCacheDir := filepath.Clean(config.Server.DiskCacheDir)
+	if config.Disk.MountPath == "" || config.Disk.HostPath == "" {
+		return diskCacheDir
+	}
+	mountPath := filepath.Clean(config.Disk.MountPath)
+	hostPath := filepath.Clean(config.Disk.HostPath)
+
+	rel, err := filepath.Rel(mountPath, diskCacheDir)
+	if err != nil || relEscapesBase(rel) {
+		return diskCacheDir
+	}
+	return filepath.Clean(filepath.Join(hostPath, rel))
+}
+
+func relEscapesBase(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
 }
 
 func cacheRegistrationTTL(config cache.Config) time.Duration {

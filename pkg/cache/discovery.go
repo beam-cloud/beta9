@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 type DiscoveryClient struct {
@@ -18,6 +20,7 @@ type DiscoveryClient struct {
 	hostMap       *HostMap
 	hostDirectory HostDirectory
 	locality      string
+	localNodeID   string
 }
 
 func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, hostDirectory HostDirectory, locality string) *DiscoveryClient {
@@ -26,6 +29,7 @@ func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, hostDirectory HostDi
 		hostMap:       hostMap,
 		hostDirectory: hostDirectory,
 		locality:      locality,
+		localNodeID:   os.Getenv("CACHE_NODE_ID"),
 	}
 }
 
@@ -86,6 +90,7 @@ func (d *DiscoveryClient) discoveryJitter() time.Duration {
 func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hosts, err := d.hostDirectory.GetAvailableHosts(ctx, d.locality)
 	if err != nil {
+		Logger.Warnf("cache host discovery failed to list hosts for locality %s: %v", d.locality, err)
 		return nil, err
 	}
 
@@ -93,6 +98,11 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hostGroups := cacheHostCandidateGroups(hosts)
 	var wg sync.WaitGroup
 	mu := sync.Mutex{}
+	unresolvedHosts := 0
+	unresolvedCandidates := 0
+	unresolvedEndpointCandidates := 0
+	verifiedEndpoints := 0
+	var lastVerifyErr error
 	maxConcurrency := d.cfg.MaxDiscoveryConcurrency
 	if maxConcurrency <= 0 {
 		maxConcurrency = 8
@@ -102,6 +112,17 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	for _, group := range hostGroups {
 		if group.hasEndpoint(d.hostMap.Get(group.hostID)) {
 			continue
+		}
+
+		unresolvedHosts++
+		for _, candidate := range group.candidates {
+			if candidate == nil {
+				continue
+			}
+			unresolvedCandidates++
+			if candidate.HasEndpoint() {
+				unresolvedEndpointCandidates++
+			}
 		}
 
 		wg.Add(1)
@@ -114,7 +135,15 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 				return
 			}
 
-			host, ok := group.firstReachable(ctx, d.GetHostState)
+			host, ok := group.firstReachable(ctx, func(ctx context.Context, candidate *Host) (*Host, error) {
+				host, err := d.GetHostState(ctx, candidate)
+				if err != nil {
+					mu.Lock()
+					lastVerifyErr = err
+					mu.Unlock()
+				}
+				return host, err
+			})
 			if !ok {
 				if logicalHost := group.logicalHost(); logicalHost != nil {
 					mu.Lock()
@@ -124,7 +153,9 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 				return
 			}
 
+			d.hostMap.Set(host)
 			mu.Lock()
+			verifiedEndpoints++
 			selectedHosts = append(selectedHosts, host)
 			mu.Unlock()
 
@@ -133,6 +164,11 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	}
 
 	wg.Wait()
+	if unresolvedEndpointCandidates > 0 && verifiedEndpoints == 0 {
+		Logger.Warnf("cache host discovery found %d endpoint candidates across %d unresolved hosts for locality %s, but none verified reachable (last_error=%v)", unresolvedEndpointCandidates, unresolvedHosts, d.locality, lastVerifyErr)
+	} else if unresolvedCandidates > 0 && unresolvedEndpointCandidates == 0 {
+		Logger.Warnf("cache host discovery found %d unresolved logical hosts for locality %s, but none had an active endpoint", unresolvedHosts, d.locality)
+	}
 	return selectedHosts, nil
 }
 
@@ -223,11 +259,7 @@ func sameCacheHostEndpoint(a *Host, b *Host) bool {
 
 // GetHostState attempts to connect to the gRPC service and verifies its availability
 func (d *DiscoveryClient) GetHostState(ctx context.Context, host *Host) (*Host, error) {
-	addr := host.Addr
-
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
+	addr := cacheHostDialAddr(host, d.localNodeID)
 
 	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if isTLSEnabled(addr) {
@@ -241,6 +273,11 @@ func (d *DiscoveryClient) GetHostState(ctx context.Context, host *Host) (*Host, 
 			grpc.MaxCallRecvMsgSize(d.cfg.GRPCMessageSizeBytes),
 			grpc.MaxCallSendMsgSize(d.cfg.GRPCMessageSizeBytes),
 		),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                cacheKeepaliveTime,
+			Timeout:             cacheKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	}
 
 	timeout := time.Duration(d.cfg.GRPCDialTimeoutS) * time.Second

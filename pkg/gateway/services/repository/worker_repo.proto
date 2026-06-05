@@ -40,6 +40,20 @@ service WorkerRepositoryService {
       returns (RemoveCacheStoreFromContentLockResponse) {}
   rpc RefreshCacheStoreFromContentLock(RefreshCacheStoreFromContentLockRequest)
       returns (RefreshCacheStoreFromContentLockResponse) {}
+  rpc AddRecentCacheStub(AddRecentCacheStubRequest)
+      returns (AddRecentCacheStubResponse) {}
+  rpc ListRecentCacheStubs(ListRecentCacheStubsRequest)
+      returns (ListRecentCacheStubsResponse) {}
+  rpc MarkCacheStubReported(MarkCacheStubReportedRequest)
+      returns (MarkCacheStubReportedResponse) {}
+  rpc AcquireCacheReconcileLock(AcquireCacheReconcileLockRequest)
+      returns (AcquireCacheReconcileLockResponse) {}
+  rpc ReleaseCacheReconcileLock(ReleaseCacheReconcileLockRequest)
+      returns (ReleaseCacheReconcileLockResponse) {}
+  rpc GetCacheOriginCredentials(GetCacheOriginCredentialsRequest)
+      returns (GetCacheOriginCredentialsResponse) {}
+  rpc PruneStaleCacheCheckpoints(PruneStaleCacheCheckpointsRequest)
+      returns (PruneStaleCacheCheckpointsResponse) {}
   rpc SetCacheFsNode(SetCacheFsNodeRequest) returns (SetCacheFsNodeResponse) {}
   rpc GetCacheFsNode(GetCacheFsNodeRequest) returns (GetCacheFsNodeResponse) {}
   rpc AddCacheFsNodeChild(AddCacheFsNodeChildRequest)
@@ -260,6 +274,107 @@ message SetCacheStoreFromContentLockRequest {
 message SetCacheStoreFromContentLockResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message RecentCacheStub {
+  string workspace_id = 1;
+  string stub_id = 2;
+  int64 last_seen_unix = 3;
+}
+
+message AddRecentCacheStubRequest {
+  string locality = 1;
+  string workspace_id = 2;
+  string stub_id = 3;
+  int64 ttl_seconds = 4;
+}
+
+message AddRecentCacheStubResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message ListRecentCacheStubsRequest {
+  string locality = 1;
+  int64 ttl_seconds = 2;
+  int32 limit = 3;
+}
+
+message ListRecentCacheStubsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated RecentCacheStub stubs = 3;
+}
+
+message MarkCacheStubReportedRequest {
+  string locality = 1;
+  string stub_id = 2;
+  int64 ttl_seconds = 3;
+}
+
+message MarkCacheStubReportedResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bool claimed = 3;
+}
+
+message AcquireCacheReconcileLockRequest {
+  string locality = 1;
+  string logical_host = 2;
+  string hash = 3;
+  int64 ttl_seconds = 4;
+}
+
+message AcquireCacheReconcileLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bool acquired = 3;
+}
+
+message ReleaseCacheReconcileLockRequest {
+  string locality = 1;
+  string logical_host = 2;
+  string hash = 3;
+}
+
+message ReleaseCacheReconcileLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message CacheWorkspaceStorageCredentials {
+  string endpoint_url = 1;
+  string region = 2;
+  string bucket_name = 3;
+  string access_key = 4;
+  string secret_key = 5;
+  bool force_path_style = 6;
+}
+
+message GetCacheOriginCredentialsRequest {
+  string workspace_id = 1;
+  string stub_id = 2;
+  string registry = 3;
+}
+
+message GetCacheOriginCredentialsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  // Opaque registry credentials blob (same format as runtime image credentials).
+  // Short-lived and used in-memory by the worker only; never persisted.
+  string registry_credentials = 3;
+  CacheWorkspaceStorageCredentials workspace_storage = 4;
+}
+
+message PruneStaleCacheCheckpointsRequest {
+  string locality = 1;
+  repeated string active_stub_ids = 2;
+}
+
+message PruneStaleCacheCheckpointsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  int32 pruned = 3;
 }
 
 message RemoveCacheStoreFromContentLockRequest {

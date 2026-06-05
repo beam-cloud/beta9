@@ -29,11 +29,13 @@ message CacheGetContentResponse {
 
 message CacheHasContentRequest {
   string hash = 1; // Hash of the content to check
+  int64 expected_size = 2; // Optional content size; when set, cache marker must match it
 }
 
 message CacheHasContentResponse {
   bool ok = 1;
   bool exists = 2;
+  string status = 3; // complete, missing, partial, size_mismatch, or incomplete
 }
 
 message CacheStoreContentRequest {

@@ -2,13 +2,59 @@ package repository_services
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/metadata"
 )
 
+const cacheCoordinatorTokenEnv = "CACHE_COORDINATOR_TOKEN"
+
+var errCacheCoordinatorUnauthorized = errors.New("unauthorized cache coordinator request")
+
+func configuredCacheCoordinatorToken(configured string) string {
+	if token := os.Getenv(cacheCoordinatorTokenEnv); token != "" {
+		return token
+	}
+	return configured
+}
+
+func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Context) error {
+	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil {
+		if authInfo.Token.TokenType == types.TokenTypeWorker {
+			return nil
+		}
+		return errCacheCoordinatorUnauthorized
+	}
+
+	if s == nil || s.cacheCoordinatorToken == "" {
+		return errCacheCoordinatorUnauthorized
+	}
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || len(md["authorization"]) == 0 {
+		return errCacheCoordinatorUnauthorized
+	}
+
+	token := strings.TrimPrefix(md["authorization"][0], "Bearer ")
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.cacheCoordinatorToken)) != 1 {
+		return errCacheCoordinatorUnauthorized
+	}
+
+	return nil
+}
+
 func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb.RegisterCacheHostRequest) (*pb.RegisterCacheHostResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheCoordinator == nil {
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -24,6 +70,9 @@ func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb
 }
 
 func (s *WorkerRepositoryService) UnregisterCacheHost(ctx context.Context, req *pb.UnregisterCacheHostRequest) (*pb.UnregisterCacheHostResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.UnregisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheCoordinator == nil {
 		return &pb.UnregisterCacheHostResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
@@ -38,6 +87,9 @@ func (s *WorkerRepositoryService) UnregisterCacheHost(ctx context.Context, req *
 }
 
 func (s *WorkerRepositoryService) ListCacheHosts(ctx context.Context, req *pb.ListCacheHostsRequest) (*pb.ListCacheHostsResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 	if s.cacheCoordinator == nil {
 		return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}

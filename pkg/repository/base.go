@@ -206,6 +206,8 @@ type BackendRepository interface {
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
 	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
 	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
+	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error)
+	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
 }
 
 type TaskRepository interface {
@@ -299,6 +301,9 @@ type EventRepository interface {
 	PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState)
 	PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState)
 	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string)
+	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
+	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)
+	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
 }
 
 type UsageMetricsRepository interface {

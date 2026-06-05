@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // MockCacheMetadataStore is a simple in-memory metadataStore for testing
@@ -187,5 +188,45 @@ func (m *MockCacheMetadataStore) AddFsNodeChild(ctx context.Context, pid, id str
 	}
 
 	m.fsChildren[pid] = append(m.fsChildren[pid], id)
+	return nil
+}
+
+func (m *MockCacheMetadataStore) AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error {
+	return nil
+}
+
+func (m *MockCacheMetadataStore) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error) {
+	return nil, nil
+}
+
+func (m *MockCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := "reported:" + locality + ":" + stubID
+	if m.locks[key] {
+		return false, nil
+	}
+	m.locks[key] = true
+	return true, nil
+}
+
+func (m *MockCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := "reconcile-lock:" + locality + ":" + logicalHost + ":" + hash
+	if m.locks[key] {
+		return false, nil
+	}
+	m.locks[key] = true
+	return true, nil
+}
+
+func (m *MockCacheMetadataStore) ReleaseReconcileLock(ctx context.Context, locality, logicalHost, hash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.locks, "reconcile-lock:"+locality+":"+logicalHost+":"+hash)
 	return nil
 }

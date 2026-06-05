@@ -51,11 +51,14 @@ func (hm *HostMap) Set(host *Host) {
 		return
 	}
 
-	if exists {
+	if !host.HasEndpoint() {
+		Logger.Debugf("Tracked logical cache host @ %s without active endpoint", host.HostId)
+	} else if exists {
 		Logger.Debugf("Updated host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	} else {
 		Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	}
+
 	if err := hm.onHostAdded(host); err != nil {
 		Logger.Warnf("failed to initialize cache host %s: %v", host.HostId, err)
 		hm.mu.Lock()
@@ -88,6 +91,24 @@ func (hm *HostMap) Remove(host *Host) bool {
 	Logger.Infof("Removed host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
 	delete(hm.hosts, host.HostId)
 	return true
+}
+
+func (hm *HostMap) RemoveLogicalHost(hostID string) (*Host, bool) {
+	if hostID == "" {
+		return nil, false
+	}
+
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+
+	existing, exists := hm.hosts[hostID]
+	if !exists {
+		return nil, false
+	}
+
+	Logger.Infof("Removed logical cache host @ %s", hostID)
+	delete(hm.hosts, hostID)
+	return existing, true
 }
 
 func (hm *HostMap) DeactivateEndpoint(host *Host) (*Host, bool) {

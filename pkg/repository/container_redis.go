@@ -46,6 +46,7 @@ local request_gpu = tonumber(ARGV[3])
 local request_cpu = tonumber(ARGV[4])
 
 if redis.call("EXISTS", KEYS[2]) == 1 then
+	redis.call("SADD", KEYS[3], ARGV[6])
 	return "ok"
 end
 
@@ -70,11 +71,13 @@ redis.call("HSET", KEYS[2],
 	"gpu_count", request_gpu,
 	"cpu", request_cpu,
 	"created_at", ARGV[7])
+redis.call("SADD", KEYS[3], ARGV[6])
 return "ok"
 `)
 
 var releaseConcurrencyReservationScript = redis.NewScript(`
 if redis.call("EXISTS", KEYS[2]) == 0 then
+	redis.call("SREM", KEYS[3], ARGV[2])
 	return 0
 end
 
@@ -104,6 +107,7 @@ end
 
 redis.call("HSET", KEYS[1], "updated_at", ARGV[1])
 redis.call("DEL", KEYS[2])
+redis.call("SREM", KEYS[3], ARGV[2])
 return 1
 `)
 
@@ -794,6 +798,7 @@ func (c *ContainerRedisRepository) rebuildWorkspaceConcurrencyCounter(ctx contex
 	nowTime := time.Now()
 	now := nowTime.Unix()
 	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(workspaceId)
+	reservationIndexKey := common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(workspaceId)
 	// Make repairs visible to lock-free reserve/release scripts before taking
 	// the snapshot so they cannot race the final aggregate write.
 	if err := c.rdb.HSet(ctx, usageKey,
@@ -828,38 +833,51 @@ func (c *ContainerRedisRepository) rebuildWorkspaceConcurrencyCounter(ctx contex
 			"cpu", container.Cpu,
 			"created_at", now,
 		)
+		pipe.SAdd(ctx, reservationIndexKey, container.ContainerId)
 	}
 
-	reservationKeys, err := c.rdb.Scan(ctx, common.RedisKeys.WorkspaceConcurrencyLimitReservation(workspaceId, "*"))
+	reservationIds, err := c.rdb.SMembers(ctx, reservationIndexKey).Result()
 	if err != nil {
 		return err
 	}
 
-	for _, reservationKey := range reservationKeys {
+	for _, reservationId := range reservationIds {
+		if reservationId == "" {
+			pipe.SRem(ctx, reservationIndexKey, reservationId)
+			continue
+		}
+		reservationKey := common.RedisKeys.WorkspaceConcurrencyLimitReservation(workspaceId, reservationId)
 		res, err := c.rdb.HGetAll(ctx, reservationKey).Result()
 		if err != nil {
 			return err
 		}
 		if len(res) == 0 {
+			pipe.SRem(ctx, reservationIndexKey, reservationId)
 			continue
 		}
 
 		var reservation concurrencyReservation
 		if err := common.ToStruct(res, &reservation); err != nil {
 			pipe.Del(ctx, reservationKey)
+			pipe.SRem(ctx, reservationIndexKey, reservationId)
 			continue
+		}
+		if reservation.ContainerId == "" {
+			reservation.ContainerId = reservationId
 		}
 
 		state, stateExists := statesByContainerId[reservation.ContainerId]
 		if stateExists {
 			if state.Status == types.ContainerStatusStopping {
 				pipe.Del(ctx, reservationKey)
+				pipe.SRem(ctx, reservationIndexKey, reservation.ContainerId)
 			}
 			continue
 		}
 
 		if reservation.CreatedAt <= 0 || nowTime.Sub(time.Unix(reservation.CreatedAt, 0)) > concurrencyReservationInFlightTTL {
 			pipe.Del(ctx, reservationKey)
+			pipe.SRem(ctx, reservationIndexKey, reservation.ContainerId)
 			continue
 		}
 
@@ -928,6 +946,7 @@ func (c *ContainerRedisRepository) tryReserveContainerConcurrency(quota *types.C
 	result, err := reserveConcurrencyReservationScript.Run(ctx, c.rdb, []string{
 		common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
 		common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(request.WorkspaceId),
 	},
 		int64(quota.GPULimit),
 		int64(quota.CPUMillicoreLimit),
@@ -964,7 +983,8 @@ func (c *ContainerRedisRepository) releaseContainerConcurrencyReservation(ctx co
 		result, err := releaseConcurrencyReservationScript.Run(ctx, c.rdb, []string{
 			common.RedisKeys.WorkspaceConcurrencyLimitUsage(workspaceId),
 			common.RedisKeys.WorkspaceConcurrencyLimitReservation(workspaceId, containerId),
-		}, time.Now().Unix()).Result()
+			common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(workspaceId),
+		}, time.Now().Unix(), containerId).Result()
 		if err != nil {
 			return err
 		}

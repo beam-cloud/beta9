@@ -43,6 +43,11 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	defaultContainerStartupTimeout time.Duration = 5 * time.Minute
+	// maxContainerStartupTimeout bounds the configurable startup timeout so a
+	// large/sentinel maxSchedulingLatencyMs cannot overflow time.Duration (int64
+	// nanoseconds) and wrap negative, which would fire the startup timer
+	// immediately and fail every container.
+	maxContainerStartupTimeout time.Duration = 1 * time.Hour
 )
 
 type Worker struct {
@@ -86,7 +91,6 @@ type Worker struct {
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
-	checkpointStorage       storage.Storage
 	persistent              bool
 	routeTransport          string
 	ctx                     context.Context
@@ -215,7 +219,7 @@ func NewWorker() (*Worker, error) {
 	var cacheManager *WorkerCacheManager
 	var cacheClient *cache.Client
 	if config.Cache.Enabled && config.Worker.CacheEnabled {
-		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, workerId, workerPoolName, podAddr)
+		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, eventRepo, containerInstances, workerId, workerPoolName, podAddr)
 		cacheClient, err = cacheManager.Start()
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
@@ -308,13 +312,19 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 	imageClient.eventRepo = eventRepo
+	if cacheManager != nil {
+		imageClient.contentReporter = cacheManager.ContentReporter()
+	}
 
 	var criuManager CRIUManager = nil
-	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
-		criuManager, err = InitializeCRIUManager(ctx, config.Worker.CRIU)
-		if err != nil {
-			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
+		if cacheManager == nil {
+			log.Warn().Str("worker_id", workerId).Msg("C/R unavailable, cache is required for checkpoints")
+		} else {
+			criuManager, err = InitializeCRIUManager(ctx, config.Worker.CRIU, cacheManager.CheckpointRoot())
+			if err != nil {
+				log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
+			}
 		}
 	}
 
@@ -372,7 +382,6 @@ func NewWorker() (*Worker, error) {
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
-		checkpointStorage:   checkpointStorage,
 		persistent:          persistent,
 		routeTransport:      routeTransport,
 	}
@@ -587,9 +596,17 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	run := func() error {
 		if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
 			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
-			if _, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage); err != nil {
+			mount, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+			if err != nil {
 				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
 				return err
+			}
+			if s.cacheManager != nil {
+				if reporter := s.cacheManager.ContentReporter(); reporter != nil {
+					if aware, ok := mount.(storage.VolumeContentReporterAware); ok {
+						aware.SetVolumeContentReporter(request.WorkspaceId, reporter)
+					}
+				}
 			}
 		}
 		if err := ctx.Err(); err != nil {
@@ -604,8 +621,15 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 		err = run()
 	} else {
 		timeout := defaultContainerStartupTimeout
-		if s.config.Worker.Failover.MaxSchedulingLatencyMs > 0 {
-			timeout = time.Duration(s.config.Worker.Failover.MaxSchedulingLatencyMs) * time.Millisecond
+		if ms := s.config.Worker.Failover.MaxSchedulingLatencyMs; ms > 0 {
+			// Clamp before converting to a nanosecond duration: ms is an int64 of
+			// milliseconds, so large/sentinel values (e.g. a misconfigured
+			// maxSchedulingLatencyMs) would overflow and wrap negative, making the
+			// timer fire immediately and fail every container startup.
+			if ms > maxContainerStartupTimeout.Milliseconds() {
+				ms = maxContainerStartupTimeout.Milliseconds()
+			}
+			timeout = time.Duration(ms) * time.Millisecond
 		}
 
 		errCh := make(chan error, 1)
@@ -965,14 +989,14 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
+	s.waitForActiveContainersBeforeShutdown()
+	s.stopActiveContainersForShutdown()
+
 	if s.cacheManager != nil {
 		if err := s.cacheManager.Drain(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to drain cache registration: %v", err))
 		}
 	}
-
-	s.waitForActiveContainersBeforeShutdown()
-	s.stopActiveContainersForShutdown()
 
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {
@@ -1000,13 +1024,6 @@ func (s *Worker) shutdown() error {
 	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount data storage: %v", err))
-	}
-
-	if s.checkpointStorage != nil {
-		err = s.checkpointStorage.Unmount(s.config.Worker.CRIU.Storage.MountPath)
-		if err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to unmount checkpoint storage: %v", err))
-		}
 	}
 
 	err = s.imageClient.Cleanup()

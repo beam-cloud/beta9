@@ -409,6 +409,11 @@ type Checkpoint struct {
 	CreatedAt         Time     `db:"created_at" json:"created_at" serializer:"created_at"`
 	LastRestoredAt    Time     `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
 	DeletedAt         NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at"`
+	CacheHash         string   `db:"cache_hash" json:"cache_hash" serializer:"cache_hash"`
+	CacheSizeBytes    int64    `db:"cache_size_bytes" json:"cache_size_bytes" serializer:"cache_size_bytes"`
+	OriginKey         string   `db:"origin_key" json:"origin_key" serializer:"origin_key"`
+	Locality          string   `db:"locality" json:"locality" serializer:"locality"`
+	Accelerator       string   `db:"accelerator" json:"accelerator" serializer:"accelerator"`
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
@@ -428,6 +433,11 @@ func (c *Checkpoint) ToProto() *pb.Checkpoint {
 		ExposedPorts:      exposedPorts,
 		CreatedAt:         timestamppb.New(c.CreatedAt.Time),
 		LastRestoredAt:    timestamppb.New(c.LastRestoredAt.Time),
+		CacheHash:         c.CacheHash,
+		CacheSizeBytes:    c.CacheSizeBytes,
+		OriginKey:         c.OriginKey,
+		Locality:          c.Locality,
+		Accelerator:       c.Accelerator,
 	}
 }
 
@@ -448,6 +458,11 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 		ExposedPorts:      exposedPorts,
 		CreatedAt:         Time{Time: in.CreatedAt.AsTime()},
 		LastRestoredAt:    Time{Time: in.LastRestoredAt.AsTime()},
+		CacheHash:         in.CacheHash,
+		CacheSizeBytes:    in.CacheSizeBytes,
+		OriginKey:         in.OriginKey,
+		Locality:          in.Locality,
+		Accelerator:       in.Accelerator,
 	}
 }
 

@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,7 +25,18 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+)
+
+// gRPC keepalive for cache peer connections so a connection broken by a cache
+// server rollout is detected and replaced rather than left to hang. The client
+// Time must be >= the cache server's keepalive EnforcementPolicy MinTime to
+// avoid "too_many_pings" GOAWAYs.
+const (
+	cacheKeepaliveTime    = 20 * time.Second
+	cacheKeepaliveTimeout = 10 * time.Second
+	cacheKeepaliveMinTime = 10 * time.Second
 )
 
 const (
@@ -36,6 +49,7 @@ const (
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
 	defaultRawReadWindowPartBytes   = 4 * 1024 * 1024
+	monitorHostFailureThreshold     = 2
 
 	// NOTE: This value for readAheadKB is separate from the cachefs config since the FUSE library does
 	// weird stuff with the other read_ahead_kb value internally
@@ -91,12 +105,15 @@ type Client struct {
 	grpcClients           map[string]proto.CacheClient
 	grpcConns             map[string]*grpc.ClientConn
 	localServers          map[string]*Server
+	localDiskStore        *Store
+	localNodeID           string
+	localCachePathID      string
 	rawReadPools          map[string]*rawReadConnPool
 	hostMap               *HostMap
 	mu                    sync.RWMutex
 	discoveryClient       *DiscoveryClient
 	metadataStore         CacheMetadataStore
-	localHostCache        map[string]*localClientCache
+	localHostCache        map[localHostCacheKey]*localClientCache
 	cachefsServer         *fuse.Server
 	hasher                RendezvousHasher
 	hostDirectory         HostDirectory
@@ -104,9 +121,21 @@ type Client struct {
 	maxGetContentAttempts int64
 }
 
+type localHostCacheKey struct {
+	hash       string
+	routingKey string
+}
+
 type localClientCache struct {
 	host      *Host
 	timestamp time.Time
+}
+
+func newLocalHostCacheKey(hash, routingKey string) localHostCacheKey {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	return localHostCacheKey{hash: hash, routingKey: routingKey}
 }
 
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
@@ -148,8 +177,10 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
+		localNodeID:           os.Getenv("CACHE_NODE_ID"),
+		localCachePathID:      cachePathIDForConfig(cfg),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		mu:                    sync.RWMutex{},
 		metadataStore:         metadataStore,
 		hasher:                rendezvous.New[*Host](),
@@ -160,6 +191,7 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 
 	bc.hostMap = NewHostMap(cfg.Global, bc.addHost)
 	bc.discoveryClient = NewDiscoveryClient(cfg.Global, bc.hostMap, hostDirectory, locality)
+	bc.initLocalDiskStore(cfg, locality)
 
 	// Start searching for nearby cache hosts
 	go bc.discoveryClient.Start(bc.ctx)
@@ -211,6 +243,10 @@ func (c *Client) Cleanup() error {
 		pool.close()
 		delete(c.rawReadPools, hostID)
 	}
+	if c.localDiskStore != nil {
+		c.localDiskStore.Cleanup()
+		c.localDiskStore = nil
+	}
 	return nil
 }
 
@@ -239,9 +275,9 @@ func (c *Client) DetachLocalServer(hostID string) {
 		detachedHost = server.Host()
 	}
 	delete(c.localServers, hostID)
-	for hash, entry := range c.localHostCache {
+	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == hostID {
-			delete(c.localHostCache, hash)
+			delete(c.localHostCache, key)
 		}
 	}
 	c.mu.Unlock()
@@ -264,6 +300,87 @@ func (c *Client) localServersSnapshot() []*Server {
 	return servers
 }
 
+func (c *Client) initLocalDiskStore(cfg Config, locality string) {
+	if cfg.Server.DiskCacheDir == "" || cfg.Server.PageSizeBytes <= 0 {
+		return
+	}
+
+	// A worker and the cache-server DaemonSet can share the same node hostPath
+	// while only the DaemonSet owns the active endpoint. Keep a local Store view
+	// so selected same-node content can still use local reads and page views.
+	localHost := &Host{
+		HostId:      "client-local-disk",
+		Locality:    locality,
+		NodeID:      c.localNodeID,
+		CachePathID: c.localCachePathID,
+	}
+	store, err := NewStore(c.ctx, localHost, locality, c.metadataStore, cfg)
+	if err != nil {
+		Logger.Warnf("failed to initialize local cache disk view: %v", err)
+		return
+	}
+	c.localDiskStore = store
+}
+
+func cachePathIDForConfig(config Config) string {
+	identity := canonicalPhysicalCacheIdentityPath(config)
+	if identity == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return fmt.Sprintf("%x", sum[:6])
+}
+
+func canonicalPhysicalCacheIdentityPath(config Config) string {
+	if config.Server.DiskCacheDir == "" {
+		return ""
+	}
+	diskCacheDir := filepath.Clean(config.Server.DiskCacheDir)
+	if config.Disk.MountPath == "" || config.Disk.HostPath == "" {
+		return diskCacheDir
+	}
+
+	mountPath := filepath.Clean(config.Disk.MountPath)
+	hostPath := filepath.Clean(config.Disk.HostPath)
+	rel, err := filepath.Rel(mountPath, diskCacheDir)
+	if err != nil || relEscapesBase(rel) {
+		return diskCacheDir
+	}
+	return filepath.Clean(filepath.Join(hostPath, rel))
+}
+
+func relEscapesBase(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
+}
+
+func (c *Client) localDiskStoreForHost(host *Host) *Store {
+	if c == nil || host == nil || c.localDiskStore == nil {
+		return nil
+	}
+	if c.localNodeID != "" && host.NodeID != "" && host.NodeID != c.localNodeID {
+		return nil
+	}
+	if c.localCachePathID == "" || host.CachePathID == "" || host.CachePathID != c.localCachePathID {
+		return nil
+	}
+	return c.localDiskStore
+}
+
+func (c *Client) selectedLocalDiskStore(ctx context.Context, rt ClientRequestType, hash string, routingKey string) (*Store, *Host, error) {
+	if routingKey == "" {
+		routingKey = hash
+	}
+	host, err := c.getSelectedHostForRequest(rt, hash, routingKey)
+	if err == ErrHostNotFound && c.hostDirectory != nil && c.hostMap != nil {
+		_ = c.refreshRoutableHosts(ctx)
+		host, err = c.getSelectedHostForRequest(rt, hash, routingKey)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.localDiskStoreForHost(host), host, nil
+}
+
 func (c *Client) GetNearbyHosts() ([]*Host, error) {
 	hosts, err := c.hostDirectory.GetAvailableHosts(c.ctx, c.locality)
 	if err != nil {
@@ -278,7 +395,6 @@ func (c *Client) addHost(host *Host) error {
 		return ErrHostNotFound
 	}
 	if !host.HasEndpoint() {
-		logicalHost := host.LogicalOnly()
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
@@ -292,19 +408,16 @@ func (c *Client) addHost(host *Host) error {
 			delete(c.rawReadPools, host.HostId)
 		}
 		c.hasher.Remove(host)
-		c.hasher.Add(logicalHost)
-		for hash, entry := range c.localHostCache {
+		c.hasher.Add(host.LogicalOnly())
+		for key, entry := range c.localHostCache {
 			if entry.host != nil && entry.host.HostId == host.HostId {
-				delete(c.localHostCache, hash)
+				delete(c.localHostCache, key)
 			}
 		}
 		return nil
 	}
 
-	addr := host.Addr
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
+	addr := cacheHostDialAddr(host, c.localNodeID)
 
 	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
 	if isTLSEnabled(addr) {
@@ -344,6 +457,11 @@ func (c *Client) addHost(host *Host) error {
 		grpc.WithInitialConnWindowSize(int32(initialConnWindowSize)),
 		grpc.WithWriteBufferSize(writeBufferSize),
 		grpc.WithReadBufferSize(readBufferSize),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                cacheKeepaliveTime,
+			Timeout:             cacheKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
 	}
 
 	if c.clientConfig.Token != "" {
@@ -372,9 +490,9 @@ func (c *Client) addHost(host *Host) error {
 	c.grpcClients[host.HostId] = proto.NewCacheClient(conn)
 	c.grpcConns[host.HostId] = conn
 	c.hasher.Add(host)
-	for hash, entry := range c.localHostCache {
+	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == host.HostId {
-			delete(c.localHostCache, hash)
+			delete(c.localHostCache, key)
 		}
 	}
 
@@ -386,6 +504,11 @@ func (c *Client) monitorHost(host *Host) {
 	interval := time.Duration(c.globalConfig.HostMonitorIntervalS) * time.Second
 	if interval <= 0 {
 		interval = 30 * time.Second
+	}
+
+	failures := 0
+	if !c.recordHostMonitorResult(host, &failures) {
+		return
 	}
 
 	if jitter := time.Duration(time.Now().UnixNano() % int64(interval)); jitter > 0 {
@@ -404,40 +527,7 @@ func (c *Client) monitorHost(host *Host) {
 	for {
 		select {
 		case <-ticker.C:
-			if !c.isCurrentHostEndpoint(host) {
-				return
-			}
-
-			err := func() error {
-				c.mu.RLock()
-				client, exists := c.grpcClients[host.HostId]
-				c.mu.RUnlock()
-				if !exists {
-					return ErrHostNotFound
-				}
-
-				timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
-				if timeout <= 0 {
-					timeout = time.Second
-				}
-				ctx, cancel := context.WithTimeout(c.ctx, timeout)
-				defer cancel()
-
-				resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
-				if err != nil {
-					return ErrInvalidHostVersion
-				}
-
-				if resp.GetVersion() != Version {
-					return ErrInvalidHostVersion
-				}
-
-				return nil
-			}()
-
-			// We were unable to reach the host for some reason, remove it as a possible client
-			if err != nil {
-				c.removeHost(host)
+			if !c.recordHostMonitorResult(host, &failures) {
 				return
 			}
 
@@ -447,18 +537,81 @@ func (c *Client) monitorHost(host *Host) {
 	}
 }
 
+func (c *Client) recordHostMonitorResult(host *Host, failures *int) bool {
+	err := c.hostEndpointHealth(host)
+	if err == nil {
+		*failures = 0
+		return true
+	}
+	if errors.Is(err, ErrHostNotFound) {
+		return false
+	}
+
+	*failures++
+	if *failures < monitorHostFailureThreshold {
+		Logger.Debugf("cache host health check failed @ %s (PrivateAddr=%s, failures=%d/%d): %v", host.HostId, host.PrivateAddr, *failures, monitorHostFailureThreshold, err)
+		return true
+	}
+
+	c.removeHost(host)
+	return false
+}
+
+func (c *Client) checkHostEndpoint(host *Host) bool {
+	err := c.hostEndpointHealth(host)
+	if err != nil {
+		c.removeHost(host)
+		return false
+	}
+	return true
+}
+
+func (c *Client) hostEndpointHealth(host *Host) error {
+	if !c.isCurrentHostEndpoint(host) {
+		return ErrHostNotFound
+	}
+
+	c.mu.RLock()
+	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	if !exists {
+		return ErrHostNotFound
+	}
+
+	timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	defer cancel()
+
+	resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
+	if err != nil {
+		return err
+	}
+
+	if resp.GetVersion() != Version {
+		return ErrInvalidHostVersion
+	}
+
+	return nil
+}
+
 func (c *Client) removeHost(host *Host) {
 	if host == nil {
 		return
 	}
 
-	logicalHost := host.LogicalOnly()
+	var logicalHost *Host
 	if c.hostMap != nil {
 		var ok bool
 		logicalHost, ok = c.hostMap.DeactivateEndpoint(host)
 		if !ok {
 			return
 		}
+	}
+	if logicalHost == nil {
+		logicalHost = host.LogicalOnly()
 	}
 
 	c.mu.Lock()
@@ -475,9 +628,9 @@ func (c *Client) removeHost(host *Host) {
 		pool.close()
 		delete(c.rawReadPools, host.HostId)
 	}
-	for hash, entry := range c.localHostCache {
+	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == host.HostId {
-			delete(c.localHostCache, hash)
+			delete(c.localHostCache, key)
 		}
 	}
 }
@@ -492,10 +645,18 @@ func (c *Client) isCurrentHostEndpoint(host *Host) bool {
 	return sameCacheHostEndpoint(c.hostMap.Get(host.HostId), host)
 }
 
-func (c *Client) removeLocalHostCache(hash string) {
+func (c *Client) removeLocalHostCache(hash string, routingKey ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.localHostCache, hash)
+	if len(routingKey) > 0 {
+		delete(c.localHostCache, newLocalHostCacheKey(hash, routingKey[0]))
+		return
+	}
+	for key := range c.localHostCache {
+		if key.hash == hash {
+			delete(c.localHostCache, key)
+		}
+	}
 }
 
 func (c *Client) refreshRoutableHosts(ctx context.Context) error {
@@ -522,10 +683,12 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 	}
 
 	routable := false
+	seenHosts := map[string]struct{}{}
 	for _, group := range cacheHostCandidateGroups(hosts) {
 		if group.hostID == "" {
 			continue
 		}
+		seenHosts[group.hostID] = struct{}{}
 
 		if c.keepExistingCacheHost(group) {
 			routable = true
@@ -539,14 +702,50 @@ func (c *Client) refreshRoutableHosts(ctx context.Context) error {
 		}
 		if logicalHost := group.logicalHost(); logicalHost != nil {
 			c.hostMap.Set(logicalHost)
-			routable = true
 		}
 	}
+	c.removeUndiscoveredLogicalHosts(seenHosts)
 
-	if !routable && len(c.hostMap.GetAll()) == 0 {
+	if !routable {
 		return ErrHostNotFound
 	}
 	return nil
+}
+
+func (c *Client) removeUndiscoveredLogicalHosts(seenHosts map[string]struct{}) {
+	if c.hostMap == nil {
+		return
+	}
+	for _, known := range c.hostMap.GetAll() {
+		if known == nil || known.HostId == "" {
+			continue
+		}
+		if _, ok := seenHosts[known.HostId]; ok {
+			continue
+		}
+		removed, ok := c.hostMap.RemoveLogicalHost(known.HostId)
+		if !ok {
+			continue
+		}
+
+		c.mu.Lock()
+		c.hasher.Remove(removed)
+		if conn, ok := c.grpcConns[removed.HostId]; ok {
+			_ = conn.Close()
+			delete(c.grpcConns, removed.HostId)
+		}
+		delete(c.grpcClients, removed.HostId)
+		if pool, ok := c.rawReadPools[removed.HostId]; ok {
+			pool.close()
+			delete(c.rawReadPools, removed.HostId)
+		}
+		for key, entry := range c.localHostCache {
+			if entry.host != nil && entry.host.HostId == removed.HostId {
+				delete(c.localHostCache, key)
+			}
+		}
+		c.mu.Unlock()
+	}
 }
 
 func (c *Client) keepExistingCacheHost(group cacheHostCandidateGroup) bool {
@@ -585,6 +784,22 @@ func (c *Client) getContentAttempts(length int64) int {
 	return attempts
 }
 
+func (c *Client) readReplicaHostCount() int {
+	if c.clientConfig.NTopHosts < 1 {
+		return 1
+	}
+	return c.clientConfig.NTopHosts
+}
+
+func (c *Client) readContentIntoHostCount(length int64) int {
+	attempts := c.getContentAttempts(length)
+	hostCount := c.readReplicaHostCount()
+	if attempts < hostCount {
+		return attempts
+	}
+	return hostCount
+}
+
 func (c *Client) dataCallOptions() []grpc.CallOption {
 	if !c.globalConfig.GRPCPayloadCodecV2 {
 		return nil
@@ -618,23 +833,49 @@ func (c *Client) CacheFSMetadata(ctx context.Context, path string) (*FSMetadata,
 }
 
 func (c *Client) cachedLocalFileHash(ctx context.Context, cachePath string, info os.FileInfo, routingKey string) (string, bool) {
+	return c.cachedLocalFileHashWithTrace(ctx, cachePath, info, routingKey, nil, "")
+}
+
+func (c *Client) cachedLocalFileHashWithTrace(ctx context.Context, cachePath string, info os.FileInfo, routingKey string, trace *OperationTrace, traceSource string) (string, bool) {
+	hash, _, ok := c.cachedLocalFileHashWithStoreTrace(ctx, cachePath, info, routingKey, trace, traceSource)
+	return hash, ok
+}
+
+func (c *Client) cachedLocalFileHashWithStoreTrace(ctx context.Context, cachePath string, info os.FileInfo, routingKey string, trace *OperationTrace, traceSource string) (string, string, bool) {
 	if c == nil || cachePath == "" || info == nil || info.IsDir() {
-		return "", false
+		return "", "", false
 	}
 
 	metadata, err := c.CacheFSMetadata(ctx, cachePath)
 	if err != nil || !cacheFSMetadataMatchesFileInfo(metadata, info) {
-		return "", false
+		return "", "", false
 	}
 
 	if routingKey == "" {
 		routingKey = cachePath
 	}
-	exists, err := c.IsCachedOnSelectedHost(metadata.Hash, routingKey)
-	if err != nil || !exists {
+	check := c.selectedHostContentCheckWithTrace(ctx, metadata.Hash, routingKey, info.Size(), trace, traceSource)
+	if check.err != nil || !check.exists {
+		return "", check.status, false
+	}
+	return metadata.Hash, check.status, true
+}
+
+func (c *Client) cachedContentHash(ctx context.Context, hash string, expectedSize int64) bool {
+	return c.cachedContentHashWithTrace(ctx, hash, expectedSize, nil, "")
+}
+
+func (c *Client) cachedContentHashWithTrace(ctx context.Context, hash string, expectedSize int64, trace *OperationTrace, traceSource string) bool {
+	_, ok := c.cachedContentHashWithStoreTrace(ctx, hash, expectedSize, trace, traceSource)
+	return ok
+}
+
+func (c *Client) cachedContentHashWithStoreTrace(ctx context.Context, hash string, expectedSize int64, trace *OperationTrace, traceSource string) (string, bool) {
+	if c == nil || !isContentHash(hash) {
 		return "", false
 	}
-	return metadata.Hash, true
+	check := c.selectedHostContentCheckWithTrace(ctx, hash, hash, expectedSize, trace, traceSource)
+	return check.status, check.err == nil && check.exists
 }
 
 func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool {
@@ -653,6 +894,13 @@ func cacheFSMetadataMatchesFileInfo(metadata *FSMetadata, info os.FileInfo) bool
 // a recovery path for placement drift or host churn. Do not use it to decide
 // whether a cache-through write can be skipped.
 func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error) {
+	return c.IsCachedReachableContext(c.ctx, hash, routingKey)
+}
+
+func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, routingKey string) (bool, error) {
+	if ctx == nil {
+		ctx = c.ctx
+	}
 	if routingKey == "" {
 		routingKey = hash
 	}
@@ -674,7 +922,7 @@ func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error)
 			return false, nil
 		}
 
-		resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
 			c.removeHost(host)
 			return false, err
@@ -699,7 +947,7 @@ func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error)
 		}
 
 		checked[host.HostId] = struct{}{}
-		resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
 			c.removeHost(host)
 			continue
@@ -726,9 +974,53 @@ func (c *Client) IsCachedReachable(hash string, routingKey string) (bool, error)
 // This is intentionally stricter than IsCachedReachable: cache-through writers use
 // it to avoid treating a fallback replica as proof that the primary placement is
 // already populated.
-func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, error) {
+func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string, expectedSize ...int64) (bool, error) {
+	size := int64(0)
+	if len(expectedSize) > 0 {
+		size = expectedSize[0]
+	}
+	check := c.selectedHostContentCheckWithTrace(c.ctx, hash, routingKey, size, nil, "")
+	return check.exists, check.err
+}
+
+type selectedHostContentCheck struct {
+	exists bool
+	status string
+	host   *Host
+	err    error
+}
+
+func (c *Client) selectedHostContentCheckWithTrace(ctx context.Context, hash string, routingKey string, expectedSize int64, trace *OperationTrace, traceSource string) selectedHostContentCheck {
+	started := time.Now()
+	if traceSource == "" {
+		traceSource = "selected_host_check"
+	}
 	if routingKey == "" {
 		routingKey = hash
+	}
+
+	host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
+	if err == ErrHostNotFound && c.hostDirectory != nil && c.hostMap != nil {
+		_ = c.refreshRoutableHosts(ctx)
+		if trace != nil {
+			trace.HostRefreshes++
+		}
+		host, err = c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
+	}
+	if err != nil {
+		trace.addStoreAttempt(0, host, traceSource, operationTraceStoreResult(err), 0, expectedSize, "", time.Since(started), err)
+		return selectedHostContentCheck{host: host, err: err}
+	}
+
+	localStore := c.localDiskStoreForHost(host)
+	if localStore != nil {
+		status := localStore.ContentStatus(hash, expectedSize)
+		exists := status == contentStatusComplete
+		if !exists {
+			c.removeLocalHostCache(hash, routingKey)
+		}
+		trace.addStoreAttempt(0, host, traceSource+"_local", contentCheckTraceResult(nil, exists, status), 0, expectedSize, status, time.Since(started), nil)
+		return selectedHostContentCheck{exists: exists, status: status, host: host}
 	}
 
 	client, host, err := c.getGRPCClient(&ClientRequest{
@@ -739,47 +1031,95 @@ func (c *Client) IsCachedOnSelectedHost(hash string, routingKey string) (bool, e
 	})
 	if err != nil {
 		if err == ErrHostNotFound {
-			_ = c.refreshRoutableHosts(c.ctx)
+			_ = c.refreshRoutableHosts(ctx)
+			if trace != nil {
+				trace.HostRefreshes++
+			}
 		}
-		return false, err
+		trace.addStoreAttempt(0, host, traceSource, operationTraceStoreResult(err), 0, expectedSize, "", time.Since(started), err)
+		return selectedHostContentCheck{host: host, err: err}
 	}
 
-	resp, err := client.HasContent(c.ctx, &proto.CacheHasContentRequest{Hash: hash})
+	resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash, ExpectedSize: expectedSize})
 	if err != nil {
 		c.removeHost(host)
-		return false, err
+		trace.addStoreAttempt(0, host, traceSource, operationTraceStoreResult(err), 0, expectedSize, "", time.Since(started), err)
+		return selectedHostContentCheck{host: host, err: err}
 	}
+	exists := resp.GetExists()
+	status := contentStatusFromHasContent(resp)
 	if !resp.Exists {
-		c.removeLocalHostCache(hash)
+		c.removeLocalHostCache(hash, routingKey)
 	}
-	return resp.Exists, nil
+	trace.addStoreAttempt(0, host, traceSource+"_remote", contentCheckTraceResult(nil, exists, status), 0, expectedSize, status, time.Since(started), nil)
+	return selectedHostContentCheck{exists: exists, status: status, host: host}
+}
+
+func contentStatusFromHasContent(resp *proto.CacheHasContentResponse) string {
+	if resp == nil {
+		return contentStatusIncomplete
+	}
+	if resp.Status != "" {
+		return resp.Status
+	}
+	if resp.Exists {
+		return contentStatusComplete
+	}
+	return contentStatusIncomplete
+}
+
+func contentCheckTraceResult(err error, exists bool, status string) string {
+	if err != nil {
+		return operationTraceStoreResult(err)
+	}
+	if exists {
+		return contentStatusComplete
+	}
+	if status != "" {
+		return status
+	}
+	return contentStatusIncomplete
 }
 
 func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
 	started := time.Now()
+	reqCount := atomic.AddInt64(&cachePathStats.clientRawRequests, 1)
+	status := "unknown"
+	hostID := ""
+	addr := ""
+	var waitElapsed time.Duration
+	var headerElapsed time.Duration
+	var bodyElapsed time.Duration
 	defer func() {
-		if elapsed := time.Since(started); elapsed > time.Second || err != nil {
-			hostID := ""
-			addr := ""
-			if host != nil {
-				hostID = host.HostId
-				addr = host.PrivateAddr
-				if addr == "" {
-					addr = host.Addr
-				}
-			}
-			Logger.Debugf("cache remote page-region raw read result: host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hostID, addr, hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
+		elapsed := time.Since(started)
+		if shouldTraceCachePath(reqCount, elapsed, err != nil || status != "ok") {
+			Logger.Debugf(
+				"cache raw client read trace: seq=%d status=%s host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s wait=%s header=%s body=%s",
+				reqCount,
+				status,
+				hostID,
+				addr,
+				hash,
+				offset,
+				len(dst),
+				read,
+				err,
+				elapsed.Truncate(time.Millisecond),
+				waitElapsed.Truncate(time.Microsecond),
+				headerElapsed.Truncate(time.Microsecond),
+				bodyElapsed.Truncate(time.Microsecond),
+			)
 		}
 	}()
 	if host == nil || !c.clientConfig.ReadTransport.Enabled {
+		status = "disabled_or_missing_host"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
-	addr := host.Addr
-	if host.PrivateAddr != "" {
-		addr = host.PrivateAddr
-	}
+	hostID = host.HostId
+	addr = cacheHostDialAddr(host, c.localNodeID)
 	if addr == "" {
+		status = "missing_addr"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
@@ -792,8 +1132,12 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	}
 	c.mu.Unlock()
 
+	waitStarted := time.Now()
 	conn, err := pool.get(ctx.Done())
+	waitElapsed = time.Since(waitStarted)
+	atomic.AddInt64(&cachePathStats.clientRawWaitNanos, waitElapsed.Nanoseconds())
 	if err != nil {
+		status = "conn_wait_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
@@ -813,32 +1157,48 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	}
 
 	length := int64(len(dst))
+	headerStarted := time.Now()
 	if err := writeRawReadRequest(conn, hash, offset, length); err != nil {
+		headerElapsed = time.Since(headerStarted)
+		atomic.AddInt64(&cachePathStats.clientRawHeaderNanos, headerElapsed.Nanoseconds())
+		status = "write_request_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
-	status, responseLength, err := readRawReadResponseHeader(conn)
+	respStatus, responseLength, err := readRawReadResponseHeader(conn)
+	headerElapsed = time.Since(headerStarted)
+	atomic.AddInt64(&cachePathStats.clientRawHeaderNanos, headerElapsed.Nanoseconds())
 	if err != nil {
+		status = "read_header_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
-	if status == rawReadStatusMiss {
+	if respStatus == rawReadStatusMiss {
+		status = "miss"
 		cacheReadRawFallbackTotal.Inc()
 		atomic.AddInt64(&cachePathStats.clientRawMisses, 1)
 		reusable = true
 		return 0, ErrContentNotFound
 	}
-	if status != rawReadStatusOK || responseLength != length {
+	if respStatus != rawReadStatusOK || responseLength != length {
+		status = "bad_response"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
+	bodyStarted := time.Now()
 	if _, err := io.ReadFull(conn, dst); err != nil {
+		bodyElapsed = time.Since(bodyStarted)
+		atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
+		status = "body_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, err
 	}
+	bodyElapsed = time.Since(bodyStarted)
+	atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
 	cacheReadRawTransportTotal.Inc()
 	atomic.AddInt64(&cachePathStats.clientRawHits, 1)
 	reusable = true
+	status = "ok"
 	return length, nil
 }
 
@@ -962,23 +1322,43 @@ func (c *Client) ClientLocalPageFileView(hash string, offset int64, length int64
 	c.mu.RLock()
 	localServer := c.localServers[host.HostId]
 	c.mu.RUnlock()
-	if localServer == nil || localServer.cas == nil {
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
-		return "", 0, 0, false, nil
+	if localServer != nil && localServer.cas != nil {
+		path, pageOffset, n, ok, err = localServer.cas.PageRegion(hash, offset, length)
+		if err == nil && ok {
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
+			return path, pageOffset, n, ok, err
+		}
 	}
-	path, pageOffset, n, ok, err = localServer.cas.PageRegion(hash, offset, length)
-	if err == nil && ok {
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
-	} else {
-		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
+	if localStore := c.localDiskStoreForHost(host); localStore != nil {
+		path, pageOffset, n, ok, err = localStore.PageRegion(hash, offset, length)
+		if err == nil && ok {
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
+			return path, pageOffset, n, ok, err
+		}
 	}
-	return path, pageOffset, n, ok, err
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
+	return "", 0, 0, false, err
 }
 
 func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int64, opts ClientOptions) (views []ClientLocalPageFileView, err error) {
+	views, _, err = c.ClientLocalPageFileViewsWithTrace(hash, offset, length, opts)
+	return views, err
+}
+
+func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, length int64, opts ClientOptions) (views []ClientLocalPageFileView, trace OperationTrace, err error) {
 	started := time.Now()
 	defer func() {
+		elapsed := time.Since(started)
+		trace.Operation = "client_local_page_file_views"
+		trace.Result = operationTracePageViewResult(err, len(views))
+		trace.Hash = hash
+		trace.RoutingKey = opts.RoutingKey
+		trace.Offset = offset
+		trace.Length = length
+		trace.Views = len(views)
+		trace.DurationUs = elapsed.Microseconds()
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || err != nil {
 			Logger.Debugf("cache client-local page-file views result: hash=%s offset=%d length=%d views=%d err=%v elapsed=%s", hash, offset, length, len(views), err, elapsed.Truncate(time.Millisecond))
 		}
@@ -988,50 +1368,35 @@ func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int6
 		opts.RoutingKey = hash
 	}
 	if offset < 0 || length <= 0 {
-		return nil, nil
+		return nil, trace, nil
 	}
-	checked := make(map[string]struct{})
-	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
-		host, err := c.getHostForRequest(&ClientRequest{
-			rt:        ClientRequestTypeRetrieval,
-			hash:      hash,
-			key:       opts.RoutingKey,
-			hostIndex: attempt,
-		})
+
+	host, err := c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+	if err != nil {
+		if err == ErrHostNotFound {
+			_ = c.refreshRoutableHosts(c.ctx)
+			trace.HostRefreshes++
+			host, err = c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+		}
 		if err != nil {
-			if err == ErrHostNotFound {
-				_ = c.refreshRoutableHosts(c.ctx)
-				host, err = c.getHostForRequest(&ClientRequest{
-					rt:        ClientRequestTypeRetrieval,
-					hash:      hash,
-					key:       opts.RoutingKey,
-					hostIndex: attempt,
-				})
-			}
-			if err != nil {
-				continue
-			}
-		}
-
-		checked[host.HostId] = struct{}{}
-		if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-			return views, nil
+			trace.addAttempt(0, host, "host_select", operationTraceReadResult(err, 0, length), 0, time.Since(started), err)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
+			return nil, trace, err
 		}
 	}
-
-	for _, host := range c.remainingHostsForRequest(checked) {
-		if views, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-			return views, nil
-		}
+	if views, source, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
+		trace.addAttempt(0, host, source, "hit", int64(len(views)), time.Since(started), nil)
+		return views, trace, nil
 	}
 
+	trace.addAttempt(0, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
-	return nil, ErrContentNotFound
+	return nil, trace, ErrContentNotFound
 }
 
-func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
+func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, string, bool) {
 	if host == nil {
-		return nil, false
+		return nil, "", false
 	}
 
 	c.mu.RLock()
@@ -1042,11 +1407,20 @@ func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offse
 			cacheReadClientLocalPageFileTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
 			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
-			return views, true
+			return views, "local_server_page_file", true
 		}
 	}
 
-	return nil, false
+	if localStore := c.localDiskStoreForHost(host); localStore != nil {
+		if views, ok := clientLocalPageFileViewsFromStore(localStore, hash, offset, length); ok {
+			cacheReadClientLocalPageFileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+			return views, "local_disk_page_file", true
+		}
+	}
+
+	return nil, "", false
 }
 
 func clientLocalPageFileViewsFromStore(store *Store, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
@@ -1073,6 +1447,11 @@ func clientLocalPageFileViewsFromStore(store *Store, hash string, offset int64, 
 }
 
 func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (read int64, err error) {
+	read, _, err = c.ReadContentIntoWithTrace(ctx, hash, offset, dst, opts)
+	return read, err
+}
+
+func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (read int64, trace OperationTrace, err error) {
 	if ctx == nil {
 		ctx = c.ctx
 	}
@@ -1082,7 +1461,7 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 		defer cancel()
 	}
 	if len(dst) == 0 {
-		return 0, nil
+		return 0, trace, nil
 	}
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = hash
@@ -1091,6 +1470,15 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 	length := int64(len(dst))
 	started := time.Now()
 	defer func() {
+		elapsed := time.Since(started)
+		trace.Operation = "read_into"
+		trace.Result = operationTraceReadResult(err, read, length)
+		trace.Hash = hash
+		trace.RoutingKey = opts.RoutingKey
+		trace.Offset = offset
+		trace.Length = length
+		trace.Read = read
+		trace.DurationUs = elapsed.Microseconds()
 		if elapsed := time.Since(started); elapsed > time.Second || err != nil {
 			Logger.Debugf("cache read-into result: hash=%s routing_key=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, opts.RoutingKey, offset, length, read, err, elapsed.Truncate(time.Millisecond))
 		}
@@ -1098,103 +1486,116 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
 	atomic.AddInt64(&cachePathStats.clientReadIntoBytes, length)
 
-	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); err == nil {
-		return n, nil
-	} else if c.hostDirectory == nil || c.hostMap == nil {
-		return 0, err
+	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts, &trace); err == nil {
+		return n, trace, nil
+	} else if !shouldRefreshReadContentIntoHosts(err) || c.hostDirectory == nil || c.hostMap == nil {
+		return 0, trace, err
 	}
 
-	return c.readContentIntoAfterHostRefresh(ctx, hash, offset, dst, opts)
+	read, err = c.readContentIntoAfterHostRefresh(ctx, hash, offset, dst, opts, &trace)
+	return read, trace, err
 }
 
-func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
+func shouldRefreshReadContentIntoHosts(err error) bool {
+	return errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) || errors.Is(err, ErrClientNotFound)
+}
+
+func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions, trace *OperationTrace) (int64, error) {
 	length := int64(len(dst))
-	checked := make(map[string]struct{})
-	var primaryErr error
-	var sawMiss bool
-	var sawUnavailable bool
 	var lastErr error
-	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
+	primaryUnavailable := false
+	selectedUnavailable := false
+	contentMissing := false
+	hostCount := c.readContentIntoHostCount(length)
+	checked := make(map[string]struct{}, hostCount)
+
+	for hostIndex := 0; hostIndex < hostCount; hostIndex++ {
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
 			key:       opts.RoutingKey,
-			hostIndex: attempt,
+			hostIndex: hostIndex,
 		})
 		if err != nil {
 			if err == ErrHostNotFound {
 				_ = c.refreshRoutableHosts(c.ctx)
+				trace.HostRefreshes++
 				host, err = c.getHostForRequest(&ClientRequest{
 					rt:        ClientRequestTypeRetrieval,
 					hash:      hash,
 					key:       opts.RoutingKey,
-					hostIndex: attempt,
+					hostIndex: hostIndex,
 				})
 			}
 			if err != nil {
-				if attempt == 0 {
-					primaryErr = err
+				trace.addAttempt(hostIndex, host, "host_select", operationTraceReadResult(err, 0, length), 0, 0, err)
+				if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
+					if hostIndex == 0 {
+						primaryUnavailable = true
+					}
+					selectedUnavailable = true
+					lastErr = ErrSelectedHostUnavailable
+					continue
 				}
 				lastErr = err
 				continue
 			}
 		}
-
+		if host == nil || host.HostId == "" {
+			lastErr = ErrHostNotFound
+			continue
+		}
+		if _, ok := checked[host.HostId]; ok {
+			continue
+		}
 		checked[host.HostId] = struct{}{}
-		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
-		if err == nil && n == length {
-			return n, nil
-		}
-		if attempt == 0 {
-			primaryErr = err
-		}
-		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-			sawUnavailable = true
-		} else if errors.Is(err, ErrContentNotFound) {
-			sawMiss = true
-		}
-		if err != nil {
-			lastErr = err
-		}
-	}
 
-	for _, host := range c.remainingHostsForRequest(checked) {
-		n, err := c.readContentIntoFromHost(ctx, host, hash, offset, dst)
+		n, err := c.readContentIntoFromHost(ctx, host, hostIndex, hash, offset, dst, trace)
 		if err == nil && n == length {
 			return n, nil
 		}
 		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-			sawUnavailable = true
-		} else if errors.Is(err, ErrContentNotFound) {
-			sawMiss = true
+			if hostIndex == 0 {
+				primaryUnavailable = true
+			}
+			selectedUnavailable = true
+			lastErr = ErrSelectedHostUnavailable
+			continue
+		}
+		if errors.Is(err, ErrContentNotFound) {
+			contentMissing = true
+			lastErr = ErrContentNotFound
+			continue
+		}
+		if err == ErrHostNotFound {
+			if hostIndex == 0 {
+				primaryUnavailable = true
+			}
+			selectedUnavailable = true
+			lastErr = ErrSelectedHostUnavailable
+			continue
 		}
 		if err != nil {
 			lastErr = err
+			continue
 		}
+		contentMissing = true
+		lastErr = ErrContentNotFound
 	}
 
-	if primaryErr != nil {
-		if errors.Is(primaryErr, ErrSelectedHostUnavailable) || errors.Is(primaryErr, ErrUnableToReachHost) || errors.Is(primaryErr, ErrHostNotFound) {
-			return 0, ErrSelectedHostUnavailable
-		}
-		if errors.Is(primaryErr, ErrContentNotFound) {
-			return 0, ErrContentNotFound
-		}
-		return 0, primaryErr
-	}
-	if sawUnavailable {
+	if primaryUnavailable || (selectedUnavailable && !contentMissing) {
 		return 0, ErrSelectedHostUnavailable
 	}
-	if sawMiss {
+	if contentMissing {
 		return 0, ErrContentNotFound
 	}
 	if lastErr != nil {
 		return 0, lastErr
 	}
-	return 0, ErrContentNotFound
+	return 0, ErrHostNotFound
 }
 
-func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
+func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions, trace *OperationTrace) (int64, error) {
 	if c.hostDirectory == nil || c.hostMap == nil {
 		return 0, ErrHostNotFound
 	}
@@ -1203,7 +1604,8 @@ func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash strin
 	if err := c.refreshRoutableHosts(ctx); err != nil && ctx.Err() != nil {
 		return 0, err
 	}
-	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts); err == nil {
+	trace.HostRefreshes++
+	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts, trace); err == nil {
 		Logger.Debugf("cache read-into recovered after host refresh: hash=%s routing_key=%s offset=%d length=%d", hash, opts.RoutingKey, offset, len(dst))
 		return n, nil
 	} else {
@@ -1211,8 +1613,9 @@ func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash strin
 	}
 }
 
-func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
+func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
 	if host == nil {
+		trace.addAttempt(hostIndex, host, "host_select", "unavailable", 0, 0, ErrHostNotFound)
 		return 0, ErrHostNotFound
 	}
 
@@ -1221,7 +1624,28 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	localServer := c.localServers[host.HostId]
 	c.mu.RUnlock()
 	if localServer != nil && localServer.cas != nil {
+		attemptStarted := time.Now()
 		n, err := localServer.cas.ReadAt(hash, offset, dst)
+		trace.addAttempt(hostIndex, host, "local_server", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
+		if err == nil && n == length {
+			cacheReadLocalTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
+			return n, nil
+		}
+		if err == ErrContentNotFound {
+			atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+			c.removeLocalHostCache(hash)
+			return 0, err
+		}
+		if err != nil {
+			atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+		}
+	}
+
+	if localStore := c.localDiskStoreForHost(host); localStore != nil {
+		attemptStarted := time.Now()
+		n, err := localStore.ReadAt(hash, offset, dst)
+		trace.addAttempt(hostIndex, host, "local_disk", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
 			cacheReadLocalTotal.Inc()
 			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
@@ -1238,12 +1662,15 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	}
 
 	if !host.HasEndpoint() {
+		trace.addAttempt(hostIndex, host, "endpoint", "unavailable", 0, 0, ErrSelectedHostUnavailable)
 		c.removeLocalHostCache(hash)
 		return 0, ErrSelectedHostUnavailable
 	}
 
 	if c.clientConfig.ReadTransport.Enabled {
+		attemptStarted := time.Now()
 		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
+		trace.addAttempt(hostIndex, host, "raw", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
 		if err == nil && n == length {
 			return n, nil
 		}
@@ -1260,6 +1687,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	client, exists := c.grpcClients[host.HostId]
 	c.mu.RUnlock()
 	if !exists {
+		trace.addAttempt(hostIndex, host, "grpc_client", "unavailable", 0, 0, ErrSelectedHostUnavailable)
 		c.removeLocalHostCache(hash)
 		return 0, ErrSelectedHostUnavailable
 	}
@@ -1267,6 +1695,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 	start := time.Now()
 	getContentResponse, err := client.GetContent(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
 	if err != nil {
+		trace.addAttempt(hostIndex, host, "grpc", "unavailable", 0, time.Since(start), err)
 		atomic.AddInt64(&cachePathStats.clientGRPCErrors, 1)
 		if c.globalConfig.GRPCPayloadCodecV2 {
 			cacheReadGRPCCodecV2FallbackTotal.Inc()
@@ -1274,13 +1703,19 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hash s
 		c.removeHost(host)
 		return 0, ErrSelectedHostUnavailable
 	}
-	if !getContentResponse.Ok || int64(len(getContentResponse.Content)) != length {
+	responseLength := int64(0)
+	if getContentResponse != nil {
+		responseLength = int64(len(getContentResponse.Content))
+	}
+	if getContentResponse == nil || !getContentResponse.Ok || responseLength != length {
+		trace.addAttempt(hostIndex, host, "grpc", "miss", responseLength, time.Since(start), ErrContentNotFound)
 		atomic.AddInt64(&cachePathStats.clientGRPCMisses, 1)
 		c.removeLocalHostCache(hash)
 		return 0, ErrContentNotFound
 	}
 
 	copy(dst, getContentResponse.Content)
+	trace.addAttempt(hostIndex, host, "grpc", "hit", length, time.Since(start), nil)
 	atomic.AddInt64(&cachePathStats.clientGRPCHits, 1)
 	if c.globalConfig.GRPCPayloadCodecV2 {
 		cacheReadGRPCCodecV2Total.Inc()
@@ -1397,19 +1832,19 @@ func (c *Client) manageLocalClientCache(ttl time.Duration, interval time.Duratio
 			select {
 			case <-ticker.C:
 				now := time.Now()
-				stale := make([]string, 0)
+				stale := make([]localHostCacheKey, 0)
 
 				c.mu.RLock()
-				for hash, entry := range c.localHostCache {
+				for key, entry := range c.localHostCache {
 					if now.Sub(entry.timestamp) > ttl {
-						stale = append(stale, hash)
+						stale = append(stale, key)
 					}
 				}
 				c.mu.RUnlock()
 
 				c.mu.Lock()
-				for _, hash := range stale {
-					delete(c.localHostCache, hash)
+				for _, key := range stale {
+					delete(c.localHostCache, key)
 				}
 				c.mu.Unlock()
 
@@ -1427,7 +1862,7 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	}
 	if !host.HasEndpoint() {
 		c.mu.Lock()
-		delete(c.localHostCache, request.hash)
+		delete(c.localHostCache, newLocalHostCacheKey(request.hash, request.key))
 		c.mu.Unlock()
 		return nil, host, ErrSelectedHostUnavailable
 	}
@@ -1437,13 +1872,48 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	c.mu.RUnlock()
 	if !exists {
 		c.mu.Lock()
-		delete(c.localHostCache, request.hash)
+		delete(c.localHostCache, newLocalHostCacheKey(request.hash, request.key))
 		c.mu.Unlock()
 
 		return nil, host, ErrSelectedHostUnavailable
 	}
 
 	return client, host, nil
+}
+
+func (c *Client) getSelectedHostForRequest(rt ClientRequestType, hash string, routingKey string) (*Host, error) {
+	return c.getHostForRequest(&ClientRequest{
+		rt:        rt,
+		hash:      hash,
+		key:       routingKey,
+		hostIndex: 0,
+	})
+}
+
+func (c *Client) getSelectedGRPCClient(ctx context.Context, rt ClientRequestType, hash string, routingKey string) (proto.CacheClient, *Host, error) {
+	return c.getGRPCClientForHostIndex(ctx, rt, hash, routingKey, 0)
+}
+
+func (c *Client) getGRPCClientForHostIndex(ctx context.Context, rt ClientRequestType, hash string, routingKey string, hostIndex int) (proto.CacheClient, *Host, error) {
+	client, host, err := c.getGRPCClient(&ClientRequest{
+		rt:        rt,
+		hash:      hash,
+		key:       routingKey,
+		hostIndex: hostIndex,
+	})
+	if err == nil {
+		return client, host, nil
+	}
+	if isStoreHostUnavailable(err) && c.hostDirectory != nil && c.hostMap != nil {
+		_ = c.refreshRoutableHosts(ctx)
+		client, host, err = c.getGRPCClient(&ClientRequest{
+			rt:        rt,
+			hash:      hash,
+			key:       routingKey,
+			hostIndex: hostIndex,
+		})
+	}
+	return client, host, err
 }
 
 func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
@@ -1460,7 +1930,8 @@ func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 
 	case ClientRequestTypeRetrieval:
 		c.mu.RLock()
-		cachedHost, hostFound := c.localHostCache[request.hash]
+		cacheKey := newLocalHostCacheKey(request.hash, request.key)
+		cachedHost, hostFound := c.localHostCache[cacheKey]
 		c.mu.RUnlock()
 
 		if hostFound && request.hostIndex == 0 {
@@ -1474,9 +1945,11 @@ func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 				host = nil
 			} else {
 				host = hosts[request.hostIndex]
-				c.localHostCache[request.hash] = &localClientCache{
-					host:      host,
-					timestamp: time.Now(),
+				if request.hostIndex == 0 {
+					c.localHostCache[cacheKey] = &localClientCache{
+						host:      host,
+						timestamp: time.Now(),
+					}
 				}
 			}
 
@@ -1499,6 +1972,38 @@ func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	return c.storeContentFromChunks(chunks, hash, "", opts.RoutingKey)
 }
 
+func (c *Client) SelectedStoreHostAvailable(hash string, routingKey string) bool {
+	if c == nil {
+		return false
+	}
+	if routingKey == "" {
+		routingKey = hash
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
+		if err == nil && host != nil {
+			if c.localDiskStoreForHost(host) != nil {
+				return true
+			}
+			if host.HasEndpoint() {
+				c.mu.RLock()
+				_, exists := c.grpcClients[host.HostId]
+				c.mu.RUnlock()
+				if exists {
+					return true
+				}
+			}
+		}
+
+		if attempt > 0 || c.hostDirectory == nil || c.hostMap == nil {
+			return false
+		}
+		_ = c.refreshRoutableHosts(c.ctx)
+	}
+	return false
+}
+
 func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts StoreContentOptions) (string, error) {
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = cachePath
@@ -1514,64 +2019,116 @@ func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts Store
 
 // StoreContentFromLocalFile streams a caller-local file to the selected cache host.
 func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts StoreContentOptions) (string, error) {
+	hash, _, err := c.StoreContentFromLocalFileWithTrace(source, opts)
+	return hash, err
+}
+
+func (c *Client) StoreContentFromLocalFileWithTrace(source LocalContentSource, opts StoreContentOptions) (hash string, trace OperationTrace, err error) {
+	started := time.Now()
 	if source.CachePath == "" {
 		source.CachePath = source.Path
 	}
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = source.CachePath
 	}
+	trace.Operation = "store_local_file"
+	trace.Hash = opts.RoutingKey
+	trace.RoutingKey = opts.RoutingKey
 
 	info, err := os.Stat(source.Path)
 	if err != nil {
-		return "", err
+		trace.Result = "error"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return "", trace, err
 	}
+	trace.Bytes = info.Size()
+	trace.ExpectedSize = info.Size()
 	metadata := cacheFSMetadataFromFileInfo(source.CachePath, info)
 
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
-	if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
-		return hash, nil
+	repairStatus := contentStatusMissing
+	if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "precheck_metadata"); ok {
+		trace.Hash = metadataHash
+		trace.Result = "already_present"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return metadataHash, trace, nil
+	} else if status != "" && status != contentStatusComplete {
+		repairStatus = status
+	}
+	if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "precheck_content_hash"); ok {
+		trace.Result = "already_present"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return opts.RoutingKey, trace, nil
+	} else if status != "" && status != contentStatusComplete {
+		repairStatus = status
 	}
 
 	file, err := os.Open(source.Path)
 	if err != nil {
-		return "", err
+		trace.Result = "error"
+		trace.DurationUs = time.Since(started).Microseconds()
+		return "", trace, err
 	}
 	defer file.Close()
 
 	store := func() (string, error) {
-		if hash, ok := c.cachedLocalFileHash(ctx, source.CachePath, info, opts.RoutingKey); ok {
-			return hash, nil
+		if metadataHash, status, ok := c.cachedLocalFileHashWithStoreTrace(ctx, source.CachePath, info, opts.RoutingKey, &trace, "lock_precheck_metadata"); ok {
+			trace.Hash = metadataHash
+			trace.Result = "already_present_after_lock"
+			return metadataHash, nil
+		} else if status != "" && status != contentStatusComplete {
+			repairStatus = status
+		}
+		if status, ok := c.cachedContentHashWithStoreTrace(ctx, opts.RoutingKey, info.Size(), &trace, "lock_precheck_content_hash"); ok {
+			trace.Result = "already_present_after_lock"
+			return opts.RoutingKey, nil
+		} else if status != "" && status != contentStatusComplete {
+			repairStatus = status
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return "", err
 		}
-		hash, err := c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
+		hash, err := c.storeContentFromReaderWithContextAndTrace(ctx, file, opts.RoutingKey, source.CachePath, metadata, &trace, info.Size())
 		if err != nil {
 			return hash, err
 		}
 		if isContentHash(opts.RoutingKey) && hash != opts.RoutingKey {
 			return hash, fmt.Errorf("stored content hash mismatch: expected %s, got %s", opts.RoutingKey, hash)
 		}
+		trace.Hash = hash
+		trace.Result = storeRepairResult(repairStatus)
 		return hash, nil
 	}
 
-	hash, err := c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
+	hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
-			return opts.RoutingKey, nil
+		waitStarted := time.Now()
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), storeContentLockWaitTimeout) {
+			check := c.selectedHostContentCheckWithTrace(ctx, opts.RoutingKey, opts.RoutingKey, info.Size(), &trace, "lock_wait_result")
+			trace.addStoreAttempt(0, check.host, "lock_wait", "present", 0, info.Size(), check.status, time.Since(waitStarted), nil)
+			trace.Result = "lock_wait_present"
+			trace.DurationUs = time.Since(started).Microseconds()
+			return opts.RoutingKey, trace, nil
 		}
+		trace.addStoreAttempt(0, nil, "lock_wait", "timeout", 0, info.Size(), "", time.Since(waitStarted), ErrUnableToAcquireLock)
 		hash, err = c.withStoreFromContentLock(ctx, storeContentLockKey(source.CachePath, opts.RoutingKey), opts.Lock, store)
 	}
 	if err != nil {
-		return hash, err
+		trace.Result = operationTraceStoreResult(err)
+		trace.DurationUs = time.Since(started).Microseconds()
+		return hash, trace, err
 	}
+	if trace.Result == "" {
+		trace.Result = "stored"
+	}
+	trace.DurationUs = time.Since(started).Microseconds()
 
-	return hash, nil
+	return hash, trace, nil
 }
 
-func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, timeout time.Duration) bool {
+func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingKey string, expectedSize int64, timeout time.Duration) bool {
 	if hash == "" || timeout <= 0 {
 		return false
 	}
@@ -1581,7 +2138,7 @@ func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingK
 	defer ticker.Stop()
 
 	for {
-		exists, err := c.IsCachedOnSelectedHost(hash, routingKey)
+		exists, err := c.IsCachedOnSelectedHost(hash, routingKey, expectedSize)
 		if err == nil && exists {
 			return true
 		}
@@ -1648,23 +2205,7 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 		routingKey = hash
 	}
 
-	var client proto.CacheClient
-	var err error
-	for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
-		client, _, err = c.getGRPCClient(&ClientRequest{
-			rt:        ClientRequestTypeStorage,
-			hash:      hash,
-			key:       routingKey,
-			hostIndex: hostIndex,
-		})
-		if err == nil {
-			break
-		}
-		if isStoreHostUnavailable(err) {
-			_ = c.refreshRoutableHosts(ctx)
-			continue
-		}
-	}
+	client, _, err := c.getSelectedGRPCClient(ctx, ClientRequestTypeStorage, hash, routingKey)
 	if err != nil {
 		return "", err
 	}
@@ -1708,55 +2249,68 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 }
 
 func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
+	return c.storeContentFromReaderWithContextAndTrace(ctx, reader, routingKey, cachePath, fileMetadata, nil, 0)
+}
+
+func (c *Client) storeContentFromReaderWithContextAndTrace(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata, trace *OperationTrace, expectedSize int64) (string, error) {
 	seeker, retryable := reader.(io.Seeker)
 	var lastErr error
+
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
-			if retryable {
-				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-					return "", err
-				}
-			} else if attempt > 0 || hostIndex > 0 {
-				break
+		if retryable {
+			if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+				return "", err
 			}
-
-			_, host, err := c.getGRPCClient(&ClientRequest{
-				rt:        ClientRequestTypeStorage,
-				hash:      routingKey,
-				key:       routingKey,
-				hostIndex: hostIndex,
-			})
-			if err != nil {
-				lastErr = err
-				if isStoreHostUnavailable(err) {
-					_ = c.refreshRoutableHosts(ctx)
-				}
-				continue
-			}
-
-			hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
-			if err == nil {
-				return hash, nil
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return "", ctxErr
-			}
-			lastErr = err
-			c.removeHost(host)
-			_ = c.refreshRoutableHosts(ctx)
-			if !retryable {
-				break
-			}
-		}
-		if !retryable {
+		} else if attempt > 0 {
 			break
 		}
+
+		hostStarted := time.Now()
+		_, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, routingKey, routingKey, 0)
+		if err != nil {
+			trace.addStoreAttempt(0, host, "store_host_select", operationTraceStoreResult(err), 0, expectedSize, "", time.Since(hostStarted), err)
+			lastErr = err
+			continue
+		}
+
+		storeStarted := time.Now()
+		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+		storeResult := operationTraceStoreResult(err)
+		if err == nil {
+			trace.addStoreAttempt(0, host, "store_selected_host", storeResult, expectedSize, expectedSize, contentStatusComplete, time.Since(storeStarted), nil)
+			return hash, nil
+		}
+		trace.addStoreAttempt(0, host, "store_selected_host", storeResult, 0, expectedSize, contentStatusIncomplete, time.Since(storeStarted), err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		lastErr = err
+		if c.hostDirectory == nil || c.hostMap == nil || !retryable {
+			break
+		}
+		c.removeHost(host)
+		_ = c.refreshRoutableHosts(ctx)
 	}
 
 	if lastErr != nil {
 		return "", lastErr
 	}
 	return "", ErrHostNotFound
+}
+
+func storeRepairResult(status string) string {
+	switch status {
+	case contentStatusMissing:
+		return "stored_missing"
+	case contentStatusPartial:
+		return "stored_partial"
+	case contentStatusSizeMismatch:
+		return "stored_size_mismatch"
+	case contentStatusIncomplete, "":
+		return "stored_incomplete"
+	default:
+		return "stored_" + status
+	}
 }
 
 func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
@@ -1900,7 +2454,7 @@ func (c *Client) StoreContentFromLocalSource(source LocalContentSource, opts Sto
 	}
 	hash, err := c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
 			return opts.RoutingKey, nil
 		}
 		hash, err = c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
@@ -1956,7 +2510,7 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 	}
 	hash, err := c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
 	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, storeContentLockWaitTimeout) {
+		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
 			return opts.RoutingKey, nil
 		}
 		hash, err = c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
@@ -1966,55 +2520,55 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
 	var lastErr error
+
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		for hostIndex := 0; hostIndex < c.storeHostAttempts(); hostIndex++ {
-			client, host, err := c.getGRPCClient(&ClientRequest{
-				rt:        ClientRequestTypeStorage,
-				hash:      hash,
-				key:       routingKey,
-				hostIndex: hostIndex,
-			})
+		client, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, hash, routingKey, 0)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if lock {
+			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
 			if err != nil {
 				lastErr = err
-				if isStoreHostUnavailable(err) {
-					_ = c.refreshRoutableHosts(ctx)
+				if c.hostDirectory == nil || c.hostMap == nil {
+					break
 				}
-				continue
-			}
-
-			if lock {
-				resp, err := client.StoreContentFromSourceWithLock(ctx, req)
-				if err != nil {
-					lastErr = err
-					c.removeHost(host)
-					_ = c.refreshRoutableHosts(ctx)
-					continue
-				}
-
-				if resp == nil {
-					return "", ErrUnableToPopulateContent
-				}
-				if resp.FailedToAcquireLock {
-					return "", ErrUnableToAcquireLock
-				}
-				if !resp.Ok {
-					return "", ErrUnableToPopulateContent
-				}
-				return resp.Hash, nil
-			}
-
-			resp, err := client.StoreContentFromSource(ctx, req)
-			if err != nil {
-				lastErr = err
 				c.removeHost(host)
 				_ = c.refreshRoutableHosts(ctx)
 				continue
 			}
-			if resp == nil || !resp.Ok {
-				return "", ErrUnableToPopulateContent
+
+			if resp == nil {
+				lastErr = ErrUnableToPopulateContent
+				break
+			}
+			if resp.FailedToAcquireLock {
+				return "", ErrUnableToAcquireLock
+			}
+			if !resp.Ok {
+				lastErr = ErrUnableToPopulateContent
+				break
 			}
 			return resp.Hash, nil
 		}
+
+		resp, err := client.StoreContentFromSource(ctx, req)
+		if err != nil {
+			lastErr = err
+			if c.hostDirectory == nil || c.hostMap == nil {
+				break
+			}
+			c.removeHost(host)
+			_ = c.refreshRoutableHosts(ctx)
+			continue
+		}
+		if resp == nil || !resp.Ok {
+			lastErr = ErrUnableToPopulateContent
+			break
+		}
+		return resp.Hash, nil
 	}
 
 	if lastErr != nil {
@@ -2023,11 +2577,97 @@ func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheSto
 	return "", ErrHostNotFound
 }
 
-func (c *Client) storeHostAttempts() int {
-	if c == nil || c.clientConfig.NTopHosts <= 0 {
-		return 1
+// PrimaryReadHost returns the host a read for routingKey would resolve to: the
+// highest-ranked reachable host within the read's HRW window, computed from the
+// same hasher and window the read path uses. Reconciliation materializes content
+// on this host so a subsequent read's HRW lookup hits it instead of missing on a
+// host that does not hold the content.
+//
+// It deliberately walks the full ranking (which retains unreachable logical-only
+// hosts so placement stays stable during churn) and returns the first reachable
+// host, mirroring how reads skip unavailable hosts and fall back in rank order.
+func (c *Client) PrimaryReadHost(routingKey string) (*Host, error) {
+	if routingKey == "" {
+		return nil, ErrHostNotFound
 	}
-	return c.clientConfig.NTopHosts
+
+	c.mu.RLock()
+	ranked := c.hasher.GetN(c.readReplicaHostCount(), routingKey)
+	c.mu.RUnlock()
+
+	for _, host := range ranked {
+		if host != nil && host.HasEndpoint() {
+			return host, nil
+		}
+	}
+	return nil, ErrHostNotFound
+}
+
+// MaterializeFromReplica streams the content for (hash, routingKey) from a
+// reachable peer that already holds it into the given local server's store. It
+// returns true when the content is complete locally afterward. size must be
+// known (> 0); callers should fall back to an origin fetch otherwise.
+func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, hash, routingKey string, size int64) (bool, error) {
+	if server == nil {
+		return false, errors.New("local cache server is required")
+	}
+	if routingKey == "" {
+		routingKey = hash
+	}
+	if server.HasCompleteContent(hash, size) {
+		return true, nil
+	}
+	if size <= 0 {
+		return false, nil
+	}
+
+	reachable, err := c.IsCachedReachable(hash, routingKey)
+	if err != nil {
+		return false, err
+	}
+	if !reachable {
+		return false, nil
+	}
+
+	contentChan, err := c.GetContentStream(hash, 0, size, struct{ RoutingKey string }{RoutingKey: routingKey})
+	if err != nil {
+		return false, err
+	}
+	reader := newChannelReader(contentChan)
+	defer reader.drain()
+
+	if _, _, err := server.StoreReader(ctx, reader, hash); err != nil {
+		return false, err
+	}
+	return server.HasCompleteContent(hash, size), nil
+}
+
+// channelReader adapts a chan []byte (from GetContentStream) to an io.Reader.
+type channelReader struct {
+	ch  chan []byte
+	buf []byte
+}
+
+func newChannelReader(ch chan []byte) *channelReader {
+	return &channelReader{ch: ch}
+}
+
+func (r *channelReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		chunk, ok := <-r.ch
+		if !ok {
+			return 0, io.EOF
+		}
+		r.buf = chunk
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
+
+func (r *channelReader) drain() {
+	for range r.ch {
+	}
 }
 
 func isStoreHostUnavailable(err error) bool {
@@ -2037,8 +2677,20 @@ func isStoreHostUnavailable(err error) bool {
 		errors.Is(err, ErrClientNotFound)
 }
 
+func IsStoreHostUnavailable(err error) bool {
+	return isStoreHostUnavailable(err)
+}
+
 func (c *Client) HostsAvailable() bool {
-	return c.hostMap.Members().Cardinality() > 0
+	if c.hostMap == nil {
+		return false
+	}
+	for _, host := range c.hostMap.GetAll() {
+		if host.HasEndpoint() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) WaitForHosts(timeout time.Duration) error {

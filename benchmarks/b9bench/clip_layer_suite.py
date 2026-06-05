@@ -299,18 +299,32 @@ def embedded_cache_page_proof(kube: Kube, hashes: list[str]) -> dict[str, Any]:
     for hash_value in hashes:
         prefix = hash_value[:2]
         script_parts.append(
-            f"h={hash_value}; count=$(find /var/lib/beta9/cache/default -path '*/pages/{prefix}/{hash_value}/{hash_value}-*' -type f 2>/dev/null | wc -l); echo \"$h $count\""
+            f"h={hash_value}; "
+            f"found=$(find /var/lib/beta9/cache/default -path '*/pages/{prefix}/{hash_value}' -type d 2>/dev/null | head -n1); "
+            "if [ -z \"$found\" ]; then echo \"$h 0 0 false false\"; "
+            "else count=0; bytes=0; "
+            "while [ -f \"$found/$h-$count\" ]; do size=$(stat -c %s \"$found/$h-$count\"); bytes=$((bytes + size)); count=$((count + 1)); done; "
+            "marker=false; [ -f \"$found/_complete\" ] && marker=true; "
+            "ready=false; [ \"$marker\" = true ] && [ \"$count\" -gt 0 ] && ready=true; "
+            "echo \"$h $count $bytes $marker $ready\"; fi"
         )
     script = "; ".join(script_parts)
     ok = False
-    for pod in kube.running_workers():
+    for pod in kube.cache_probe_pods():
         proc = kube.worker_shell(pod["name"], script, timeout=30)
         rows = []
         for line in proc.stdout.splitlines():
             parts = line.split()
-            if len(parts) == 2:
-                rows.append({"hash": parts[0], "pages": int(parts[1])})
-                ok = ok or int(parts[1]) > 0
+            if len(parts) == 5:
+                row = {
+                    "hash": parts[0],
+                    "pages": int(parts[1]),
+                    "bytes": int(parts[2]),
+                    "completeMarker": parts[3] == "true",
+                    "ready": parts[4] == "true",
+                }
+                rows.append(row)
+                ok = ok or bool(row["ready"])
         proof["workers"].append(
             {
                 "pod": pod["name"],
@@ -350,6 +364,35 @@ def cache_hosts_snapshot(kube: Kube, pool_name: str, locality: str) -> dict[str,
 
     hosts: list[dict[str, Any]] = []
     for logical_host_id in logical_host_ids:
+        logical_raw = redis_cli(
+            kube.config.namespace,
+            redis_pod,
+            "GET",
+            f"cache:coordinator:host:{logical_host_id}:logical",
+        )
+        logical: dict[str, Any] = {}
+        if logical_raw:
+            try:
+                logical = json.loads(logical_raw)
+            except json.JSONDecodeError:
+                logical = {}
+        logical_host = {
+            "hostId": logical.get("logical_host_id")
+            or logical.get("logicalHostId")
+            or logical_host_id,
+            "registrationId": "",
+            "poolName": logical.get("pool_name") or logical.get("poolName") or pool_name,
+            "nodeId": logical.get("node_id") or logical.get("nodeId") or "",
+            "nodeName": logical.get("node_id") or logical.get("nodeId") or "",
+            "cachePathId": logical.get("cache_path_id")
+            or logical.get("cachePathId")
+            or "",
+            "addr": "",
+            "privateAddr": "",
+            "endpointAvailable": False,
+            "source": "coordinator_logical",
+        }
+        added_registration = False
         for registration_id in registration_ids(kube.config.namespace, redis_pod, logical_host_id):
             raw = redis_cli(
                 kube.config.namespace,
@@ -383,10 +426,14 @@ def cache_hosts_snapshot(kube: Kube, pool_name: str, locality: str) -> dict[str,
                     "privateAddr": registration.get("private_addr")
                     or registration.get("privateAddr")
                     or "",
+                    "endpointAvailable": True,
                     "source": "coordinator",
                 }
             )
+            added_registration = True
             break
+        if not added_registration and logical_host["nodeName"]:
+            hosts.append(logical_host)
     if hosts:
         return {"available": True, "source": "coordinator", "indexKeys": index_keys, "hosts": hosts}
     return cache_hosts_from_worker_logs(kube)
@@ -413,7 +460,7 @@ def registration_ids(namespace: str, redis_pod: str, logical_host_id: str) -> li
 
 def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
     hosts_by_id: dict[str, dict[str, Any]] = {}
-    for pod in kube.running_workers():
+    for pod in kube.cache_probe_pods():
         proc = run(
             [
                 "kubectl",
@@ -435,7 +482,7 @@ def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
             continue
         latest: dict[str, Any] | None = None
         for line in proc.stdout.splitlines():
-            if "Registered cache host" not in line:
+            if "Registered cache host" not in line and "registered cache host" not in line:
                 continue
             start = line.find("{")
             end = line.rfind("}")
@@ -462,6 +509,7 @@ def cache_hosts_from_worker_logs(kube: Kube) -> dict[str, Any]:
             "addr": addr,
             "privateAddr": addr,
             "pod": pod.get("name", ""),
+            "endpointAvailable": True,
             "source": "worker_logs",
         }
     hosts = list(hosts_by_id.values())
@@ -486,8 +534,9 @@ def hrw_routing_proof(
     if not hashes:
         proof["error"] = "no hashes provided"
         return proof
-    if not hosts:
-        proof["error"] = "no active cache hosts found"
+    hrw_hosts = [host for host in hosts if host.get("hostId")]
+    if not hrw_hosts:
+        proof["error"] = "no cache hosts found"
         return proof
 
     go = shutil.which("go")
@@ -506,7 +555,7 @@ def hrw_routing_proof(
             "run",
             "./benchmarks/b9bench/cache_tools/hrw_routing.go",
             "--hosts-json",
-            json.dumps(hosts, sort_keys=True),
+            json.dumps(hrw_hosts, sort_keys=True),
             "--keys",
             ",".join(hashes),
             "--n",
@@ -524,27 +573,40 @@ def hrw_routing_proof(
         return proof
 
     routes = json.loads(proc.stdout)
-    pages_by_hash_node: dict[tuple[str, str], int] = {}
+    pages_by_hash_node: dict[tuple[str, str], dict[str, Any]] = {}
     for worker in page_proof.get("workers") or []:
         node = worker.get("nodeName") or ""
         for row in worker.get("rows") or []:
-            pages_by_hash_node[(row.get("hash") or "", node)] = int(row.get("pages") or 0)
+            pages_by_hash_node[(row.get("hash") or "", node)] = row
 
+    live_nodes = kube.node_names()
     checked = []
     ok = True
     for route in routes:
         key = route.get("key") or ""
         selected = (route.get("hosts") or [{}])[0]
         node = selected.get("nodeName") or selected.get("nodeId") or ""
-        pages = pages_by_hash_node.get((key, node), 0)
+        selected_page = pages_by_hash_node.get((key, node)) or {}
+        pages = int(selected_page.get("pages") or 0)
+        complete_marker = bool(selected_page.get("completeMarker"))
+        selected_ready = bool(selected_page.get("ready") and complete_marker)
+        endpoint_available = bool(
+            selected.get("endpointAvailable", bool(selected.get("privateAddr") or selected.get("addr")))
+        )
+        node_gone = bool(node and live_nodes and node not in live_nodes)
         item = {
             "hash": key,
             "selectedHostId": selected.get("hostId") or "",
             "selectedRegistrationId": selected.get("registrationId") or "",
             "selectedNode": node,
             "selectedPod": selected.get("pod") or "",
+            "selectedCachePathId": selected.get("cachePathId") or "",
+            "selectedEndpointAvailable": endpoint_available,
+            "selectedNodeGone": node_gone,
             "pagesOnSelectedNode": pages,
-            "ok": pages > 0,
+            "completeMarkerOnSelectedNode": complete_marker,
+            "bytesOnSelectedNode": int(selected_page.get("bytes") or 0),
+            "ok": (selected_ready and endpoint_available) or node_gone,
         }
         checked.append(item)
         ok = ok and item["ok"]

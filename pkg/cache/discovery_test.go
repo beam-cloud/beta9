@@ -3,7 +3,9 @@ package cache
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
+	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
 	rendezvous "github.com/beam-cloud/rendezvous"
@@ -168,6 +170,77 @@ func TestDiscoveryKeepsKnownRegisteredEndpoint(t *testing.T) {
 	require.Empty(t, hosts)
 }
 
+func TestDiscoveryPublishesReachableHostBeforeSlowCandidatesFinish(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes:    1024 * 1024,
+			GRPCDialTimeoutS:        1,
+			MaxDiscoveryConcurrency: 2,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("fast-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	slowListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, slowListener.Close()) })
+	go func() {
+		for {
+			conn, err := slowListener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				<-ctx.Done()
+				_ = conn.Close()
+			}()
+		}
+	}()
+
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	discovery := &DiscoveryClient{
+		cfg:     cfg.Global,
+		hostMap: hostMap,
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			return []*Host{
+				{HostId: "fast-host", PrivateAddr: addr},
+				{HostId: "slow-host", PrivateAddr: slowListener.Addr().String()},
+			}, nil
+		}),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = discovery.discoverHosts(ctx)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		host := hostMap.Get("fast-host")
+		return host != nil && host.HasEndpoint()
+	}, 500*time.Millisecond, 10*time.Millisecond)
+	select {
+	case <-done:
+		require.Fail(t, "discovery finished before slow candidate timed out")
+	default:
+	}
+
+	cancel()
+	<-done
+}
+
 func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -201,7 +274,7 @@ func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {
 		grpcClients:    make(map[string]proto.CacheClient),
 		grpcConns:      make(map[string]*grpc.ClientConn),
 		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[string]*localClientCache),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
 		hasher:         rendezvous.New[*Host](),
 		hostMap:        NewHostMap(cfg.Global, nil),
 		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
@@ -222,4 +295,45 @@ func TestRefreshRoutableHostsReactivatesLogicalOnlyHost(t *testing.T) {
 	require.True(t, refreshed.HasEndpoint())
 	require.Equal(t, addr, refreshed.PrivateAddr)
 	require.True(t, client.hasCacheClient("logical-host"))
+}
+
+func TestRefreshRoutableHostsRemovesUndiscoveredLogicalHost(t *testing.T) {
+	ctx := context.Background()
+	oldHost := (&Host{
+		HostId:      "cache-host-default-node-old-path",
+		Locality:    "default",
+		NodeID:      "node-old",
+		CachePathID: "path",
+	}).LogicalOnly()
+	stillHost := (&Host{
+		HostId:      "cache-host-default-node-live-path",
+		Locality:    "default",
+		NodeID:      "node-live",
+		CachePathID: "path",
+	}).LogicalOnly()
+	client := &Client{
+		ctx:            ctx,
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher:         &orderedTestHasher{},
+		hostMap:        NewHostMap(GlobalConfig{}, nil),
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			return []*Host{stillHost}, nil
+		}),
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap.onHostAdded = client.addHost
+	client.hostMap.Set(oldHost)
+	client.hostMap.Set(stillHost)
+
+	require.NotNil(t, client.hostMap.Get(oldHost.HostId))
+	require.NotNil(t, client.hostMap.Get(stillHost.HostId))
+
+	require.ErrorIs(t, client.refreshRoutableHosts(ctx), ErrHostNotFound)
+
+	require.Nil(t, client.hostMap.Get(oldHost.HostId))
+	require.NotNil(t, client.hostMap.Get(stillHost.HostId))
 }

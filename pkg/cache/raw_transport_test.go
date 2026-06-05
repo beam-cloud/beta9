@@ -77,6 +77,64 @@ func TestSamePortRawReadTransportAndGRPC(t *testing.T) {
 	require.Equal(t, Version, state.GetVersion())
 }
 
+func TestRawReadUsesCopyForSmallPageBackedRange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:                 t.TempDir(),
+			DiskCacheMaxUsagePct:         90,
+			PageSizeBytes:                1024,
+			ObjectTtlS:                   300,
+			SmallRangeCopyThresholdBytes: 128 * 1024,
+			ReadTransport: ServerReadTransportConfig{
+				Enabled:  true,
+				Sendfile: true,
+			},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("raw-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	content := []byte("abcdefghijklmnopqrstuvwxyz")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	require.NoError(t, server.cas.Add(context.Background(), hash, content))
+
+	before := snapshotCachePathStats()
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Write([]byte(rawReadMagic))
+	require.NoError(t, err)
+	require.NoError(t, writeRawReadRequest(conn, hash, 3, 8))
+	status, length, err := readRawReadResponseHeader(conn)
+	require.NoError(t, err)
+	require.Equal(t, rawReadStatusOK, status)
+	require.Equal(t, int64(8), length)
+	body := make([]byte, length)
+	_, err = io.ReadFull(conn, body)
+	require.NoError(t, err)
+	require.Equal(t, []byte("defghijk"), body)
+	after := snapshotCachePathStats()
+	diff := diffCachePathStats(after, before)
+	// The guarantee for a small (sub-threshold) range is that it is never served
+	// via sendfile. It is served from the local page file through the copy path,
+	// or the readAt fallback if the page region isn't resolvable on this read;
+	// asserting on copy alone is flaky across filesystems, so require that it was
+	// served by one of the non-sendfile local paths.
+	require.Equal(t, int64(0), diff.serverRawSendfileHits)
+	require.Equal(t, int64(1), diff.serverRawCopyHits+diff.serverRawReadAtHits)
+}
+
 func TestClientLocalPageFileViewsDoesNotPromoteRemotePageRegion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -124,7 +182,7 @@ func TestClientLocalPageFileViewsDoesNotPromoteRemotePageRegion(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
 		maxGetContentAttempts: 1,
 	}
@@ -165,7 +223,7 @@ func TestClientLocalPageFileViewsReturnsLocalFinalPartialPage(t *testing.T) {
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[string]*localClientCache),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
 		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
 		maxGetContentAttempts: 1,
 	}

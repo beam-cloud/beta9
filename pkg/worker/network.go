@@ -53,6 +53,10 @@ const (
 	workerIptablesModeEnv               string        = "WORKER_IPTABLES_MODE"
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
+	containerNetworkCleanupLockRetries                = 14
+	containerNetworkSlotProbePort                     = 1
+	containerNetworkSlotProbeTimeout    time.Duration = 50 * time.Millisecond
+	containerNetworkSlotAcquireAttempts               = 3
 )
 
 type ContainerNetworkManager struct {
@@ -657,6 +661,10 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 			if !shouldCleanup {
 				continue
 			}
+			m.clearNetworkSlotNeighbor(&containerNetworkSlot{
+				id: slotID,
+				ip: assignment.IpAddress,
+			})
 			m.deleteNetworkSlotResources(slotID)
 
 			if err := m.removeContainerIPFromRepository(assignment.ContainerId); err != nil {
@@ -774,6 +782,7 @@ func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetwor
 		return nil
 	}
 
+	m.clearNetworkSlotNeighbor(slot)
 	m.deleteNetworkSlotResources(slot.id)
 	if err := m.removeContainerIPFromRepositoryWithContext(context.Background(), m.containerNetworkSlotReservation(slot)); err != nil {
 		return fmt.Errorf("failed to release preallocated network slot %s: %w", slot.id, err)
@@ -783,15 +792,44 @@ func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetwor
 }
 
 func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
-	slot := m.acquireNetworkSlot()
+	var slot *containerNetworkSlot
+	for attempts := 0; attempts < containerNetworkSlotAcquireAttempts; attempts++ {
+		candidate := m.acquireNetworkSlot()
+		if candidate == nil {
+			break
+		}
+
+		if err := m.prepareNetworkSlotForAssignment(candidate); err != nil {
+			log.Warn().
+				Str("container_id", containerId).
+				Str("network_slot", candidate.id).
+				Str("ip_address", candidate.ip).
+				Err(err).
+				Msg("discarding unreachable preallocated network slot")
+			m.discardNetworkSlot("", candidate)
+			continue
+		}
+
+		slot = candidate
+		break
+	}
 	if slot == nil {
 		return false, nil
 	}
 
 	phaseStart := time.Now()
 	err := m.assignPreallocatedNetworkSlot(containerId, slot)
-	metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil), "mode": "preallocated"})
-	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkSetContainerIP, phaseStart, err == nil, map[string]string{"mode": "preallocated"})
+	metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), request, map[string]string{
+		"success":      fmt.Sprintf("%t", err == nil),
+		"mode":         "preallocated",
+		"network_slot": slot.id,
+		"ip_address":   slot.ip,
+	})
+	m.recordNetworkLifecycle(request, types.ContainerLifecycleNetworkSetContainerIP, phaseStart, err == nil, map[string]string{
+		"mode":         "preallocated",
+		"network_slot": slot.id,
+		"ip_address":   slot.ip,
+	})
 	if err != nil {
 		m.discardNetworkSlot(containerId, slot)
 		return true, err
@@ -819,6 +857,54 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 
 	go m.fillNetworkSlotPool()
 	return true, nil
+}
+
+func (m *ContainerNetworkManager) prepareNetworkSlotForAssignment(slot *containerNetworkSlot) error {
+	if slot == nil || slot.ip == "" {
+		return errors.New("network slot is missing an IP address")
+	}
+
+	m.clearNetworkSlotNeighbor(slot)
+	probe := probeTCP(m.ctx, slot.ip, containerNetworkSlotProbePort, containerNetworkSlotProbeTimeout)
+	if probe.RouteReady {
+		return nil
+	}
+
+	m.clearNetworkSlotNeighbor(slot)
+	time.Sleep(containerNetworkSlotProbeTimeout)
+	probe = probeTCP(m.ctx, slot.ip, containerNetworkSlotProbePort, containerNetworkSlotProbeTimeout)
+	if probe.RouteReady {
+		return nil
+	}
+	if probe.Err != nil {
+		return fmt.Errorf("network slot %s at %s is not route-ready: %w", slot.id, slot.ip, probe.Err)
+	}
+	return fmt.Errorf("network slot %s at %s is not route-ready", slot.id, slot.ip)
+}
+
+func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetworkSlot) {
+	if slot == nil || slot.ip == "" {
+		return
+	}
+
+	ip := net.ParseIP(slot.ip)
+	if ip == nil {
+		return
+	}
+
+	bridge, err := netlink.LinkByName(containerBridgeLinkName)
+	if err != nil {
+		log.Debug().Str("network_slot", slot.id).Str("ip_address", slot.ip).Err(err).Msg("failed to look up bridge for neighbor cleanup")
+		return
+	}
+
+	err = netlink.NeighDel(&netlink.Neigh{
+		LinkIndex: bridge.Attrs().Index,
+		IP:        ip,
+	})
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		log.Debug().Str("network_slot", slot.id).Str("ip_address", slot.ip).Err(err).Msg("failed to clear stale network slot neighbor")
+	}
 }
 
 func (m *ContainerNetworkManager) assignPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
@@ -890,6 +976,8 @@ func (m *ContainerNetworkManager) discardNetworkSlot(containerId string, slot *c
 	if slot == nil {
 		return
 	}
+
+	m.clearNetworkSlotNeighbor(slot)
 
 	m.slotMu.Lock()
 	if containerId != "" {
@@ -1541,8 +1629,8 @@ func (m *ContainerNetworkManager) reserveContainerIP(opts *containerNetworkConfi
 
 	phaseStart = time.Now()
 	err := m.reloadAllocatedIPsLocked()
-	metrics.RecordWorkerStartupPhase("network_ip_scan", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	m.recordNetworkLifecycle(opts.request, types.ContainerLifecycleNetworkIPScan, phaseStart, err == nil, map[string]string{
+	metrics.RecordWorkerStartupPhase("network_ip_load", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	m.recordNetworkLifecycle(opts.request, types.ContainerLifecycleNetworkIPLoad, phaseStart, err == nil, map[string]string{
 		"source": "redis",
 	})
 	if err != nil {
@@ -1998,7 +2086,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(cleanupCtx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
-		Retries:       10,
+		Retries:       containerNetworkCleanupLockRetries,
 	}))
 	if err != nil {
 		return err

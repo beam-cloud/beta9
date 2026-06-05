@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
@@ -127,15 +128,6 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 		return nil, err
 	}
 
-	exists, err := r.streamExists(ctx, streamName)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		response.Timeseries.AggregationBuckets = []types.MetricsAggregationBucket{}
-		return response, nil
-	}
-
 	buckets := map[int64]*metricsBucketAccumulator{}
 	seqNum := uint64(0)
 	startMs := uint64(start.UTC().UnixMilli())
@@ -153,7 +145,7 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 
 		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
 		if err != nil {
-			if isS2RangeNotSatisfiable(err) {
+			if isS2ReadEmpty(err) {
 				break
 			}
 			return nil, fmt.Errorf("read metrics from s2 stream %q: %w", streamName, err)
@@ -200,7 +192,7 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 }
 
 func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.LogQuery, createCanonical bool) ([]s2.StreamName, error) {
-	addIfExists := func(streamName s2.StreamName) ([]s2.StreamName, error) {
+	addKnown := func(streamName s2.StreamName) ([]s2.StreamName, error) {
 		if streamName == "" {
 			return nil, nil
 		}
@@ -210,55 +202,34 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 			}
 			return []s2.StreamName{streamName}, nil
 		}
-		exists, err := r.streamExists(ctx, streamName)
-		if err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, nil
-		}
 		return []s2.StreamName{streamName}, nil
 	}
 
 	switch {
 	case query.TaskID != "" && query.WorkspaceID != "":
-		return addIfExists(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
+		return addKnown(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
 	case query.ContainerID != "" && query.WorkspaceID != "" && query.StubID != "":
-		return addIfExists(r.containerLogStreamName(query.WorkspaceID, query.StubID, query.ContainerID))
+		return addKnown(r.containerLogStreamName(query.WorkspaceID, query.StubID, query.ContainerID))
 	case query.ContainerID != "" && query.WorkspaceID != "":
-		return r.findContainerLogStreams(ctx, query.WorkspaceID, query.ContainerID)
+		if stubID, ok := common.ExtractStubIdFromStubScopedContainerId(query.ContainerID); ok {
+			return addKnown(r.containerLogStreamName(query.WorkspaceID, stubID, query.ContainerID))
+		}
+		return addKnown(r.containerLogAliasStreamName(query.WorkspaceID, query.ContainerID))
 	case query.StubID != "" && query.WorkspaceID != "":
-		return addIfExists(r.stubLogStreamName(query.WorkspaceID, query.StubID))
+		return addKnown(r.stubLogStreamName(query.WorkspaceID, query.StubID))
 	case query.AppID != "" && query.WorkspaceID != "":
-		return addIfExists(r.appLogStreamName(query.WorkspaceID, query.AppID))
+		return addKnown(r.appLogStreamName(query.WorkspaceID, query.AppID))
 	case query.WorkspaceID != "":
-		return addIfExists(r.workspaceLogStreamName(query.WorkspaceID))
+		return addKnown(r.workspaceLogStreamName(query.WorkspaceID))
 	default:
 		return nil, nil
 	}
 }
 
-func (r *S2EventRepository) findContainerLogStreams(ctx context.Context, workspaceID string, containerID string) ([]s2.StreamName, error) {
-	prefix := r.workspaceLogStubPrefix(workspaceID)
-	suffix := "/containers/" + eventStreamPart(containerID)
-	streams := make([]s2.StreamName, 0, 1)
-	iter := r.basin.Streams.Iter(ctx, &s2.ListStreamsArgs{Prefix: prefix})
-	for iter.Next() {
-		stream := iter.Value()
-		if strings.HasSuffix(string(stream.Name), suffix) {
-			streams = append(streams, stream.Name)
-		}
-	}
-	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("list s2 container log streams for workspace %q: %w", workspaceID, err)
-	}
-	return streams, nil
-}
-
 func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2.StreamName, query types.LogQuery, limit uint64) (int, []types.LogRecord, error) {
 	tail, err := r.basin.Stream(streamName).CheckTail(ctx)
 	if err != nil {
-		if isS2RangeNotSatisfiable(err) {
+		if isS2ReadEmpty(err) {
 			return 0, nil, nil
 		}
 		return 0, nil, fmt.Errorf("check tail for s2 log stream %q: %w", streamName, err)
@@ -277,7 +248,7 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		Count:      &limit,
 	})
 	if err != nil {
-		if isS2RangeNotSatisfiable(err) {
+		if isS2ReadEmpty(err) {
 			return total, []types.LogRecord{}, nil
 		}
 		return 0, nil, fmt.Errorf("read logs from s2 stream %q: %w", streamName, err)
@@ -578,4 +549,14 @@ func isS2RangeNotSatisfiable(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "416") || (errors.As(err, &s2Err) && s2Err.Status == httpStatusRangeNotSatisfiable))
 }
 
+func isS2StreamNotFound(err error) bool {
+	var s2Err *s2.S2Error
+	return err != nil && errors.As(err, &s2Err) && s2Err.Status == httpStatusNotFound
+}
+
+func isS2ReadEmpty(err error) bool {
+	return isS2RangeNotSatisfiable(err) || isS2StreamNotFound(err)
+}
+
 const httpStatusRangeNotSatisfiable = 416
+const httpStatusNotFound = 404

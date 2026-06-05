@@ -7,6 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
+	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -36,14 +37,35 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 		backendRepo:   backendRepo,
 		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
-			"/gateway.GatewayService/Authorize":                         true,
-			"/gateway.GatewayService/JoinAgent":                         true,
-			"/gateway.GatewayService/ListAgentRoutes":                   true,
-			"/gateway.GatewayService/RequestAgentTransportCredential":   true,
-			"/gateway.GatewayService/StreamAgent":                       true,
-			"/gateway.GatewayService/UpdateAgentRouteStatus":            true,
-			"/grpc.health.v1.Health/Check":                              true,
-			"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo": config.DebugMode,
+			pb.GatewayService_Authorize_FullMethodName:                                 true,
+			pb.GatewayService_JoinAgent_FullMethodName:                                 true,
+			pb.GatewayService_ListAgentRoutes_FullMethodName:                           true,
+			pb.GatewayService_RequestAgentTransportCredential_FullMethodName:           true,
+			pb.GatewayService_StreamAgent_FullMethodName:                               true,
+			pb.GatewayService_UpdateAgentRouteStatus_FullMethodName:                    true,
+			"/grpc.health.v1.Health/Check":                                             true,
+			"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo":                config.DebugMode,
+			pb.WorkerRepositoryService_RegisterCacheHost_FullMethodName:                true,
+			pb.WorkerRepositoryService_UnregisterCacheHost_FullMethodName:              true,
+			pb.WorkerRepositoryService_ListCacheHosts_FullMethodName:                   true,
+			pb.WorkerRepositoryService_SetCacheClientLock_FullMethodName:               true,
+			pb.WorkerRepositoryService_RemoveCacheClientLock_FullMethodName:            true,
+			pb.WorkerRepositoryService_SetCacheStoreFromContentLock_FullMethodName:     true,
+			pb.WorkerRepositoryService_RemoveCacheStoreFromContentLock_FullMethodName:  true,
+			pb.WorkerRepositoryService_RefreshCacheStoreFromContentLock_FullMethodName: true,
+			pb.WorkerRepositoryService_SetCacheFsNode_FullMethodName:                   true,
+			pb.WorkerRepositoryService_GetCacheFsNode_FullMethodName:                   true,
+			pb.WorkerRepositoryService_AddCacheFsNodeChild_FullMethodName:              true,
+			pb.WorkerRepositoryService_RemoveCacheFsNode_FullMethodName:                true,
+			pb.WorkerRepositoryService_RemoveCacheFsNodeChild_FullMethodName:           true,
+			pb.WorkerRepositoryService_GetCacheFsNodeChildren_FullMethodName:           true,
+			pb.WorkerRepositoryService_AddRecentCacheStub_FullMethodName:               true,
+			pb.WorkerRepositoryService_ListRecentCacheStubs_FullMethodName:             true,
+			pb.WorkerRepositoryService_MarkCacheStubReported_FullMethodName:            true,
+			pb.WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName:        true,
+			pb.WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName:        true,
+			pb.WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName:        true,
+			pb.WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName:       true,
 		},
 	}
 }
@@ -156,6 +178,10 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 }
 
 func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *AuthInfo) context.Context {
+	return ContextWithAuthInfo(ctx, authInfo)
+}
+
+func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Context {
 	return context.WithValue(ctx, authContextKey, authInfo)
 }
 

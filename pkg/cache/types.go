@@ -15,17 +15,32 @@ const (
 const (
 	defaultHostStorageCapacityThresholdPct float64 = 0.95
 	defaultHostKeepAliveTimeoutS           int     = 60
+	DefaultReconcileRecentStubTTLS         int     = 7 * 24 * 60 * 60
 )
 
 type Config struct {
-	Enabled     bool              `key:"enabled" json:"enabled"`
-	Disk        DiskConfig        `key:"disk" json:"disk"`
-	Memory      MemoryConfig      `key:"memory" json:"memory"`
-	Coordinator CoordinatorConfig `key:"coordinator" json:"coordinator"`
-	Server      ServerConfig      `key:"server" json:"server"`
-	Client      ClientConfig      `key:"client" json:"client"`
-	Global      GlobalConfig      `key:"global" json:"global"`
-	Metrics     MetricsConfig     `key:"metrics" json:"metrics"`
+	Enabled        bool                 `key:"enabled" json:"enabled"`
+	Disk           DiskConfig           `key:"disk" json:"disk"`
+	Memory         MemoryConfig         `key:"memory" json:"memory"`
+	Coordinator    CoordinatorConfig    `key:"coordinator" json:"coordinator"`
+	Server         ServerConfig         `key:"server" json:"server"`
+	Client         ClientConfig         `key:"client" json:"client"`
+	Global         GlobalConfig         `key:"global" json:"global"`
+	Metrics        MetricsConfig        `key:"metrics" json:"metrics"`
+	Reconciliation ReconciliationConfig `key:"reconciliation" json:"reconciliation"`
+}
+
+// ReconciliationConfig controls the async required-content reconciliation loop.
+// It is disabled by default; when off, workers do not report required content
+// and cache servers do not run the loop, preserving prior startup behavior.
+type ReconciliationConfig struct {
+	Enabled               bool  `key:"enabled" json:"enabled"`
+	IntervalSeconds       int   `key:"intervalSeconds" json:"interval_seconds"`
+	RecentStubTTLSeconds  int   `key:"recentStubTTLSeconds" json:"recent_stub_ttl_seconds"`
+	LockTTLSeconds        int   `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
+	MaxStubsPerCycle      int   `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
+	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
+	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 }
 
 type DiskConfig struct {
@@ -48,9 +63,10 @@ type MetricsConfig struct {
 }
 
 type CoordinatorConfig struct {
-	RegistrationTTLSeconds   int `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
-	HeartbeatIntervalSeconds int `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
-	HostWatchIntervalSeconds int `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
+	Token                    string `key:"token" json:"token"`
+	RegistrationTTLSeconds   int    `key:"registrationTTLSeconds" json:"registration_ttl_seconds"`
+	HeartbeatIntervalSeconds int    `key:"heartbeatIntervalSeconds" json:"heartbeat_interval_seconds"`
+	HostWatchIntervalSeconds int    `key:"hostWatchIntervalSeconds" json:"host_watch_interval_seconds"`
 }
 
 type GlobalConfig struct {

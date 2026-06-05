@@ -336,7 +336,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
 	if err != nil {
-		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
+		outputLogger.Info(fmt.Sprintf("failed to setup container mounts: %v", err))
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -484,6 +484,48 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 	return bindings
 }
 
+func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.ContainerRequest, bindings []PortBinding) error {
+	containerId := request.ContainerId
+	if len(bindings) > 0 {
+		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindings[0].HostPort)
+		phaseStart := time.Now()
+		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+			ContainerId: containerId,
+			Address:     containerAddr,
+		}))
+		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, phaseStart, err == nil, nil)
+		if err != nil {
+			return err
+		}
+		log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
+	}
+
+	addressMap := make(map[int32]string, len(bindings))
+	for _, binding := range bindings {
+		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
+	}
+
+	phaseStart := time.Now()
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+		ContainerId: containerId,
+		AddressMap:  addressMap,
+	}))
+	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("container_id", containerId).
+		Str("stub_type", request.Stub.Type.Kind()).
+		Int("port_count", len(addressMap)).
+		Interface("address_map", addressMap).
+		Msg("set container address map")
+	return nil
+}
+
 func allocateBindPorts(count int) ([]int, error) {
 	bindPorts := make([]int, 0, count)
 	for i := 0; i < count; i++ {
@@ -604,7 +646,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil {
+	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil && options.InitialSpec.Process != nil {
 		if len(request.EntryPoint) == 0 {
 			log.Info().
 				Str("container_id", request.ContainerId).
@@ -618,6 +660,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Process.Cwd = options.InitialSpec.Process.Cwd
 		spec.Process.User.UID = options.InitialSpec.Process.User.UID
 		spec.Process.User.GID = options.InitialSpec.Process.User.GID
+	}
+
+	if len(spec.Process.Args) == 0 {
+		if args := fallbackEntrypoint(request); len(args) > 0 {
+			log.Warn().
+				Str("container_id", request.ContainerId).
+				Str("stub_id", request.StubId).
+				Str("stub_type", string(request.Stub.Type)).
+				Strs("entrypoint", args).
+				Msg("container request had empty entrypoint, using stub default")
+			spec.Process.Args = args
+		}
+	}
+
+	if len(spec.Process.Args) == 0 {
+		return nil, fmt.Errorf("container <%s> has empty process args for stub <%s> type <%s>", request.ContainerId, request.StubId, request.Stub.Type)
 	}
 
 	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
@@ -727,6 +785,65 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	return spec, nil
 }
 
+func fallbackEntrypoint(request *types.ContainerRequest) []string {
+	stubConfig := requestStubConfig(request)
+	if stubConfig != nil && len(stubConfig.EntryPoint) > 0 {
+		return stubConfig.EntryPoint
+	}
+
+	pythonVersion := types.Python3.String()
+	if stubConfig != nil && stubConfig.PythonVersion != "" {
+		pythonVersion = stubConfig.PythonVersion
+	}
+
+	switch request.Stub.Type.Kind() {
+	case types.StubTypeEndpoint, types.StubTypeASGI:
+		if !envHas(request.Env, "HANDLER=") {
+			return nil
+		}
+		return []string{pythonVersion, "-m", "beta9.runner.endpoint"}
+	case types.StubTypeFunction:
+		if !envHas(request.Env, "HANDLER=") {
+			return nil
+		}
+		return []string{pythonVersion, "-m", "beta9.runner.function"}
+	case types.StubTypeTaskQueue:
+		if !envHas(request.Env, "HANDLER=") {
+			return nil
+		}
+		return []string{pythonVersion, "-m", "beta9.runner.taskqueue"}
+	default:
+		return nil
+	}
+}
+
+func envHas(env []string, prefix string) bool {
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func requestStubConfig(request *types.ContainerRequest) *types.StubConfigV1 {
+	if strings.TrimSpace(request.Stub.Config) == "" {
+		return nil
+	}
+
+	stubConfig, err := request.Stub.UnmarshalConfig()
+	if err != nil {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("stub_id", request.StubId).
+			Err(err).
+			Msg("failed to parse stub config for entrypoint fallback")
+		return nil
+	}
+
+	return stubConfig
+}
+
 func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) map[string]string {
 	volumeCacheMap := make(map[string]string)
 
@@ -770,6 +887,18 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount type
 	}
 
 	return true
+}
+
+func ensureBindMountSourceDirs(mounts []types.Mount) error {
+	for _, mount := range mounts {
+		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
+			continue
+		}
+		if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
+			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
+		}
+	}
+	return nil
 }
 
 func bindMountMode(mount types.Mount) string {
@@ -971,6 +1100,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Prepare spec for the selected runtime
 	phaseStart = time.Now()
+	if err := ensureBindMountSourceDirs(request.Mounts); err != nil {
+		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
+			"runtime": s.runtime.Name(),
+			"reason":  "bind_mount_source",
+			"success": "false",
+		})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, false, map[string]string{
+			"reason":  "bind_mount_source",
+			"runtime": s.runtime.Name(),
+		})
+		log.Error().Err(err).Str("container_id", containerId).Msg("failed to create bind mount source directories")
+		return
+	}
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
 			"runtime": s.runtime.Name(),
@@ -1098,7 +1240,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1203,7 +1345,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1220,39 +1362,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 	}
 
-	// Handle restore from checkpoint if available
-	if supportsCheckpoint && request.Checkpoint != nil {
-		if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
-			checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
-
-			err := copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to copy checkpoint directory: %v", err)
-			}
-		}
-
-		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
-		if restored {
-			return exitCode, err
-		}
-
-		// If this is not a deployment stub, don't fall back to running the container
-		if !restored && !request.Stub.Type.IsDeployment() {
-			return exitCode, err
-		} else if !restored {
-			// Disable checkpoint flag if the restore fails
-			request.CheckpointEnabled = false
-		}
-	}
-
-	if request.CheckpointEnabled {
-		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
-		if err != nil {
-			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)
-		}
-
-	}
-
 	bundlePath := filepath.Dir(request.ConfigPath)
 	runtimeStartedChan := make(chan int, 1)
 	runtimeStartedDone := make(chan struct{})
@@ -1260,6 +1369,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	runtimeStart := time.Now()
 
 	handleRuntimeStarted := func(pid int) {
+		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
+			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
+			s.stopContainer(request.ContainerId, false)
+			return
+		}
 		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
 			instance.RuntimeStarted = true
 			instance.RuntimePid = pid
@@ -1290,12 +1404,54 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
 	}()
 
+	// Handle restore from checkpoint if available
+	if supportsCheckpoint && request.Checkpoint != nil {
+		if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
+			checkpointPath, err := s.ensureCheckpointMaterialized(ctx, request, request.Checkpoint)
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to materialize checkpoint: %v", err)
+			} else {
+				err = copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
+			}
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to copy checkpoint directory: %v", err)
+			}
+		}
+
+		runtimeStart = time.Now()
+		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
+		if restored {
+			close(runtimeStartedDone)
+			<-runtimeStartedHandled
+			return exitCode, err
+		}
+
+		// If this is not a deployment stub, don't fall back to running the container
+		if !restored && !request.Stub.Type.IsDeployment() {
+			close(runtimeStartedDone)
+			<-runtimeStartedHandled
+			return exitCode, err
+		} else if !restored {
+			// Disable checkpoint flag if the restore fails
+			request.CheckpointEnabled = false
+		}
+	}
+
+	if request.CheckpointEnabled {
+		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
+		if err != nil {
+			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)
+		}
+
+	}
+
 	select {
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	default:
 	}
 
+	runtimeStart = time.Now()
 	exitCode, err := instance.Runtime.Run(context.WithoutCancel(ctx), request.ContainerId, bundlePath, &runtime.RunOpts{
 		OutputWriter:  outputWriter,
 		Started:       runtimeStartedChan,

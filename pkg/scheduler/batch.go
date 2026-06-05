@@ -15,6 +15,7 @@ const requestSchedulingParallelism = 128
 type schedulingBatch struct {
 	scheduler *Scheduler
 	workers   []*types.Worker
+	batchSize int
 
 	schedules []plannedSchedule
 }
@@ -24,16 +25,17 @@ type plannedSchedule struct {
 	request *types.ContainerRequest
 }
 
-func newSchedulingBatch(scheduler *Scheduler, workers []*types.Worker) *schedulingBatch {
+func newSchedulingBatch(scheduler *Scheduler, workers []*types.Worker, batchSize int) *schedulingBatch {
 	return &schedulingBatch{
 		scheduler: scheduler,
 		workers:   workers,
+		batchSize: batchSize,
 		schedules: make([]plannedSchedule, 0),
 	}
 }
 
 func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, workers []*types.Worker) {
-	batch := newSchedulingBatch(s, workers)
+	batch := newSchedulingBatch(s, workers, len(requests))
 	batch.plan(requests)
 	batch.dispatch()
 }
@@ -45,6 +47,17 @@ func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
 }
 
 func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
+	planStart := time.Now()
+	planned := false
+	defer func() {
+		b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerBatchPlan, planStart, time.Now(), true, map[string]string{
+			"batch_size":           fmt.Sprintf("%d", b.batchSize),
+			"worker_count":         fmt.Sprintf("%d", len(b.workers)),
+			"planned":              fmt.Sprintf("%t", planned),
+			"planned_count_so_far": fmt.Sprintf("%d", len(b.schedules)),
+		})
+	}()
+
 	normalizeGPURequest(request)
 
 	selectionStart := time.Now()
@@ -58,7 +71,12 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 	}
 
 	workerForSchedule := cloneWorker(worker)
-	if !b.scheduler.reserveWorkerCapacity(worker, request) {
+	reserveStart := time.Now()
+	reserved := b.scheduler.reserveWorkerCapacity(worker, request)
+	b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerReserveCapacity, reserveStart, time.Now(), reserved, map[string]string{
+		"worker_id": worker.Id,
+	})
+	if !reserved {
 		newSchedulingAttempt(b.scheduler, request, b.workers).runWaitingOrProvisioning()
 		return
 	}
@@ -67,6 +85,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 		worker:  workerForSchedule,
 		request: request,
 	})
+	planned = true
 }
 
 func (b *schedulingBatch) dispatch() {

@@ -21,12 +21,14 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 )
 
 const (
-	writeBufferSizeBytes      int   = 1024 * 1024
-	getContentStreamChunkSize int64 = 4 * 1024 * 1024 // 4MB
+	writeBufferSizeBytes           int   = 1024 * 1024
+	getContentStreamChunkSize      int64 = 4 * 1024 * 1024 // 4MB
+	cacheServerGracefulStopTimeout       = 30 * time.Second
 )
 
 type ServerOpts struct {
@@ -184,6 +186,40 @@ func (cs *Server) UsagePct() float64 {
 	return cs.usagePct()
 }
 
+// HostID returns the logical host id this server registers under, or "".
+func (cs *Server) HostID() string {
+	host := cs.Host()
+	if host == nil {
+		return ""
+	}
+	return host.HostId
+}
+
+// HasCompleteContent reports whether the local store holds the full content for
+// hash. When expectedSize > 0 it is validated against the stored size.
+func (cs *Server) HasCompleteContent(hash string, expectedSize int64) bool {
+	if cs == nil || cs.cas == nil {
+		return false
+	}
+	if expectedSize > 0 {
+		return cs.cas.ContentStatus(hash, expectedSize) == contentStatusComplete
+	}
+	return cs.cas.ContentStatus(hash) == contentStatusComplete
+}
+
+// StoreReader stores the full contents of reader into the local store,
+// validating against expectedHash when it is a content hash. It is used by the
+// reconciliation loop to materialize content copied from a replica.
+func (cs *Server) StoreReader(ctx context.Context, reader io.Reader, expectedHash string) (string, uint64, error) {
+	if cs == nil || cs.cas == nil {
+		return "", 0, fmt.Errorf("cache server store is not available")
+	}
+	if err := cs.rejectIfDraining(); err != nil {
+		return "", 0, err
+	}
+	return cs.storeReaderWithExpectedHash(ctx, reader, expectedHash)
+}
+
 func newMetadataStore(cfg Config) (CacheMetadataStore, ServerConfig, error) {
 	metadataStore, err := NewRedisCacheMetadataStore(cfg.Global, cfg.Server)
 	return metadataStore, cfg.Server, err
@@ -245,6 +281,17 @@ func (cs *Server) grpcServerOptions() []grpc.ServerOption {
 		grpc.ReadBufferSize(readBufferSize),
 		grpc.MaxConcurrentStreams(uint32(maxConcurrentStreams)),
 		grpc.NumStreamWorkers(uint32(numStreamWorkers)),
+		// Permit client keepalive pings (incl. without active streams) so cache
+		// clients can detect a connection broken by a server rollout. MinTime must
+		// be <= the client's keepalive Time to avoid "too_many_pings" GOAWAYs.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             cacheKeepaliveMinTime,
+			PermitWithoutStream: true,
+		}),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    cacheKeepaliveTime,
+			Timeout: cacheKeepaliveTimeout,
+		}),
 	}
 	if cs.globalConfig.GRPCPayloadCodecV2 {
 		opts = append(opts, grpc.ForceServerCodecV2(cachegrpc.New(cs.globalConfig.GRPCPayloadCodecMinBytes)))
@@ -315,6 +362,12 @@ func (cs *Server) advertiseAddr(listenerAddr net.Addr, advertiseHost string) str
 	if cs.privateIpAddr != "" {
 		return net.JoinHostPort(cs.privateIpAddr, port)
 	}
+	// No private IP available (e.g. a node whose only routable address is on the
+	// public/default interface). Advertise the public IP rather than an empty
+	// host, which would make the host undiallable.
+	if cs.publicIpAddr != "" {
+		return net.JoinHostPort(cs.publicIpAddr, port)
+	}
 	if advertiseAddr != "" {
 		return advertiseAddr
 	}
@@ -350,7 +403,7 @@ func (cs *Server) Close() error {
 			}()
 			select {
 			case <-stopped:
-			case <-time.After(5 * time.Second):
+			case <-time.After(cacheServerGracefulStopTimeout):
 				cs.grpcServer.Stop()
 			}
 		}
@@ -422,8 +475,11 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 	if err := cs.rejectIfDraining(); err != nil {
 		return nil, err
 	}
-	exists := cs.cas.Exists(req.Hash)
-	return &proto.CacheHasContentResponse{Exists: exists, Ok: true}, nil
+	status := cs.cas.ContentStatus(req.Hash)
+	if req.ExpectedSize > 0 {
+		status = cs.cas.ContentStatus(req.Hash, req.ExpectedSize)
+	}
+	return &proto.CacheHasContentResponse{Exists: status == contentStatusComplete, Status: status, Ok: true}, nil
 }
 
 func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream proto.Cache_GetContentStreamServer) error {
@@ -752,12 +808,7 @@ func (r *storeContentStreamReader) Read(p []byte) (int, error) {
 
 func (cs *Server) usagePct() float64 {
 	if cs.cas.maxCacheSizeMb <= 0 {
-		_, _, diskUsagePct, err := cs.cas.GetDiskCacheMetrics()
-		if err == nil {
-			return diskUsagePct
-		}
-
-		return 0
+		return cs.cas.CachedDiskUsagePct()
 	}
 
 	var memStats runtime.MemStats

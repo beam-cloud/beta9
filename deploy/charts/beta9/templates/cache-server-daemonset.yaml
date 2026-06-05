@@ -1,0 +1,111 @@
+{{- if .Values.cacheServer.enabled -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-cache-server
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cache-server
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: cache-server
+  template:
+    metadata:
+      labels:
+        {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cache-server
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.cacheServer.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- if .Values.cacheServer.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with .Values.cacheServer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cacheServer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.cacheServer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.defaultPodOptions.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: worker
+        image: {{ .Values.cacheServer.image.repository | default .Values.images.worker.repository }}:{{ .Values.cacheServer.image.tag | default .Values.images.worker.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.cacheServer.image.pullPolicy | default .Values.images.worker.pullPolicy | default "IfNotPresent" }}
+        command:
+        - /usr/bin/tini
+        - -g
+        - --
+        - /usr/local/bin/worker
+        {{- with .Values.cacheServer.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        env:
+        - name: CONFIG_PATH
+          value: /etc/beta9/config.yaml
+        - name: CACHE_SERVER_ONLY
+          value: "true"
+        - name: WORKER_POOL_NAME
+          value: {{ .Values.cacheServer.poolName | quote }}
+        - name: CACHE_LOCALITY
+          value: {{ .Values.cacheServer.locality | quote }}
+        - name: CACHE_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: CACHE_HOST_NETWORK
+          value: {{ .Values.cacheServer.hostNetwork | quote }}
+        - name: CACHE_SERVER_PORT
+          value: {{ .Values.cacheServer.serverPort | quote }}
+        - name: WORKER_ID
+          value: cache-server-$(CACHE_NODE_ID)
+        ports:
+        - name: cache
+          containerPort: {{ .Values.cacheServer.serverPort }}
+          {{- if .Values.cacheServer.hostNetwork }}
+          hostPort: {{ .Values.cacheServer.serverPort }}
+          {{- end }}
+        volumeMounts:
+        - name: config
+          mountPath: /etc/beta9/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: cache
+          mountPath: {{ .Values.cacheServer.mountPath }}
+        {{- with .Values.cacheServer.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+      - name: config
+        secret:
+          secretName: {{ .Values.cacheServer.configSecretName }}
+      - name: cache
+        hostPath:
+          path: {{ .Values.cacheServer.hostPath }}
+          type: DirectoryOrCreate
+{{- end -}}

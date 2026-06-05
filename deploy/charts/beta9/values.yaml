@@ -20,6 +20,37 @@ images:
     repository: public.ecr.aws/n4e0e1y0/beta9-gateway
     tag:        # Defaults to chart's app version
     pullPolicy: # Defaults to IfNotPresent
+  worker:
+    repository: public.ecr.aws/n4e0e1y0/beta9-worker
+    tag:        # Defaults to chart's app version
+    pullPolicy: # Defaults to IfNotPresent
+
+cacheServer:
+  enabled: false
+  configSecretName: beta9-config-helm
+  poolName: default
+  locality: default
+  serverPort: 2050
+  hostPath: /var/lib/beta9/cache
+  mountPath: /var/lib/beta9/cache
+  hostNetwork: true
+  priorityClassName:
+  image:
+    repository: # Defaults to images.worker.repository
+    tag:        # Defaults to images.worker.tag or chart app version
+    pullPolicy: # Defaults to images.worker.pullPolicy or IfNotPresent
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  securityContext:
+    privileged: true
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
 
 controllers:
   gateway:

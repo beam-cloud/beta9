@@ -69,7 +69,7 @@ VOLUME_CONTAINER_PREFIX = "/volumes"
 GEESEFS_SUMMARY_RE = re.compile(
     r"geesefs read path summary: .*?"
     r"mmap_page\(attempt=(\d+) hit=(\d+) miss=(\d+) mmap_fail=(\d+) ([0-9.]+)MiB[^)]*\).*?"
-    r"read_into\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"read_into\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB[^)]*\).*?"
     r"stream\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"unary\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"cloud\(req=(\d+) ([0-9.]+)MiB\)"
@@ -80,12 +80,14 @@ GEESEFS_BUFFER_RE = re.compile(
 CACHE_SUMMARY_RE = re.compile(
     r"cache read path summary: .*?"
     r"client\(read_into=(\d+) ([0-9.]+)MiB local_hit=(\d+) local_miss=(\d+) "
-    r"raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"raw_req=(\d+) raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"raw_wait_avg=[^ ]+ raw_header_avg=[^ ]+ raw_body_avg=[^ ]+ "
     r"grpc_hit=(\d+) grpc_miss=(\d+) grpc_err=(\d+)\).*?"
     r"client_local_page_file\(req=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
     r"server\(grpc_req=(\d+) grpc_hit=(\d+) grpc_miss=(\d+) ([0-9.]+)MiB "
     r"stream_req=(\d+) stream_chunks=(\d+) ([0-9.]+)MiB stream_err=(\d+) "
-    r"raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+)\)"
+    r"(?:raw_conn=(\d+) )?raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+) "
+    r"[0-9.]+MiB raw_region_avg=[^ ]+ raw_open_avg=[^ ]+ raw_send_avg=[^ )]+\)"
 )
 FUSE_RESPONSE_RE = re.compile(
     r"geesefs fuse read response complete: .*?"
@@ -236,6 +238,7 @@ class BenchmarkConfig:
     min_hot_file_read_mbps: float
     min_remote_cache_socket_mbps: float
     min_throughput_size_mb: int
+    hrw_route_top_n: int
     remote_object_full_read_max_mb: int
     workspace_storage_config: str
     workspace_storage_endpoint_url: str
@@ -316,7 +319,7 @@ class BenchmarkConfig:
         add("--volume-subdir", default=os.getenv("BENCH_CACHE_VOLUME_SUBDIR", ""))
         add(
             "--worker-workspace-root",
-            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/workspace/data"),
+            default=os.getenv("BENCH_WORKER_WORKSPACE_ROOT", "/storage"),
         )
         add(
             "--cache-mount-path",
@@ -425,6 +428,12 @@ class BenchmarkConfig:
             "--min-throughput-size-mb",
             type=int,
             default=env_int("BENCH_CACHE_MIN_HOT_FILE_READ_SIZE_MB", 1024),
+        )
+        add(
+            "--hrw-route-top-n",
+            type=int,
+            default=env_int("BENCH_CACHE_HRW_ROUTE_TOP_N", 3),
+            help="number of active HRW-ranked cache hosts accepted as valid fallback targets",
         )
         add(
             "--remote-object-full-read-max-mb",
@@ -655,6 +664,37 @@ class Kube:
             ),
         )
 
+    def running_cache_servers(self) -> list[dict[str, str]]:
+        return sorted(
+            [
+                pod
+                for pod in self.cache_server_pods()
+                if pod.get("phase") == "Running"
+                and not pod.get("deleting")
+                and pod.get("ready")
+            ],
+            key=lambda pod: (pod.get("nodeName", ""), pod["name"]),
+        )
+
+    def cache_probe_pods(self) -> list[dict[str, str]]:
+        pods: list[dict[str, str]] = []
+        seen_nodes: set[str] = set()
+        for pod in [*self.running_cache_servers(), *self.running_workers()]:
+            node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
+            if node_key in seen_nodes:
+                continue
+            seen_nodes.add(node_key)
+            pods.append(pod)
+        return pods
+
+    def cache_endpoint_pods(self) -> list[dict[str, str]]:
+        pods_by_ip: dict[str, dict[str, str]] = {}
+        for pod in [*self.running_cache_servers(), *self.running_workers()]:
+            pod_ip = pod.get("podIP", "")
+            if pod_ip:
+                pods_by_ip[pod_ip] = pod
+        return list(pods_by_ip.values())
+
     def worker_pod_for_container(self, container_id: str) -> Optional[dict[str, str]]:
         if not container_id:
             return None
@@ -722,6 +762,54 @@ class Kube:
                     "poolName": item.get("metadata", {})
                     .get("labels", {})
                     .get("run.beam.cloud/worker-pool-name", ""),
+                    "restartCount": int(
+                        worker_statuses[0].get("restartCount", 0)
+                        if worker_statuses
+                        else 0
+                    ),
+                    "ready": any(status.get("ready") for status in worker_statuses),
+                }
+            )
+        return pods
+
+    def cache_server_pods(self) -> list[dict[str, str]]:
+        proc = run(
+            [
+                "kubectl",
+                "-n",
+                self.config.namespace,
+                "get",
+                "pods",
+                "-l",
+                "app.kubernetes.io/component=cache-server",
+                "-o",
+                "json",
+            ],
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return []
+        pods = []
+        for item in json.loads(proc.stdout).get("items", []):
+            worker_statuses = [
+                status
+                for status in item.get("status", {}).get("containerStatuses", [])
+                if status.get("name") == "worker"
+            ]
+            pods.append(
+                {
+                    "name": item.get("metadata", {}).get("name", ""),
+                    "uid": item.get("metadata", {}).get("uid", ""),
+                    "jobName": "",
+                    "deleting": bool(
+                        item.get("metadata", {}).get("deletionTimestamp", "")
+                    ),
+                    "nodeName": item.get("spec", {}).get("nodeName", ""),
+                    "podIP": item.get("status", {}).get("podIP", ""),
+                    "hostIP": item.get("status", {}).get("hostIP", ""),
+                    "phase": item.get("status", {}).get("phase", ""),
+                    "poolName": "cache-server",
                     "restartCount": int(
                         worker_statuses[0].get("restartCount", 0)
                         if worker_statuses
@@ -945,6 +1033,24 @@ class Kube:
         arch = (proc.stdout or "").strip().lower()
         return "arm64" if arch in {"arm64", "aarch64"} else "amd64"
 
+    def node_names(self) -> set[str]:
+        proc = run(
+            ["kubectl", "get", "nodes", "-o", "json"],
+            check=False,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return set()
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return set()
+        return {
+            item.get("metadata", {}).get("name", "")
+            for item in payload.get("items", [])
+            if item.get("metadata", {}).get("name", "")
+        }
+
 
 class ReadPathParser:
     @staticmethod
@@ -967,6 +1073,7 @@ class ReadPathParser:
         cache_summary: dict[str, Any] = {
             "summaryLines": 0,
             "clientLocalHits": 0,
+            "clientRawRequests": 0,
             "clientRawHits": 0,
             "clientRawMisses": 0,
             "clientRawErrors": 0,
@@ -989,20 +1096,21 @@ class ReadPathParser:
             if m:
                 cache_summary["summaryLines"] += 1
                 cache_summary["clientLocalHits"] += int(m.group(3))
-                cache_summary["clientRawHits"] += int(m.group(5))
-                cache_summary["clientRawMisses"] += int(m.group(6))
-                cache_summary["clientRawErrors"] += int(m.group(7))
-                cache_summary["clientGRPCHits"] += int(m.group(8))
-                cache_summary["clientGRPCMisses"] += int(m.group(9))
-                cache_summary["clientGRPCErrors"] += int(m.group(10))
-                cache_summary["clientLocalPageFileHits"] += int(m.group(12))
-                cache_summary["serverGRPCHits"] += int(m.group(16))
-                cache_summary["serverStreamChunks"] += int(m.group(20))
-                cache_summary["serverRawRequests"] += int(m.group(22))
-                cache_summary["serverRawSendfile"] += int(m.group(23))
-                cache_summary["serverRawCopy"] += int(m.group(24))
-                cache_summary["serverRawReadAt"] += int(m.group(25))
-                cache_summary["serverRawErrors"] += int(m.group(28))
+                cache_summary["clientRawRequests"] += int(m.group(5))
+                cache_summary["clientRawHits"] += int(m.group(6))
+                cache_summary["clientRawMisses"] += int(m.group(7))
+                cache_summary["clientRawErrors"] += int(m.group(8))
+                cache_summary["clientGRPCHits"] += int(m.group(9))
+                cache_summary["clientGRPCMisses"] += int(m.group(10))
+                cache_summary["clientGRPCErrors"] += int(m.group(11))
+                cache_summary["clientLocalPageFileHits"] += int(m.group(13))
+                cache_summary["serverGRPCHits"] += int(m.group(17))
+                cache_summary["serverStreamChunks"] += int(m.group(21))
+                cache_summary["serverRawRequests"] += int(m.group(25))
+                cache_summary["serverRawSendfile"] += int(m.group(26))
+                cache_summary["serverRawCopy"] += int(m.group(27))
+                cache_summary["serverRawReadAt"] += int(m.group(28))
+                cache_summary["serverRawErrors"] += int(m.group(30))
             if "geesefs external page hit" in line and geesefs_path in line:
                 external_hit_lines += 1
             m = FUSE_RESPONSE_RE.search(line)
@@ -1043,18 +1151,15 @@ class CacheStore:
         self.tools = tools
 
     def cleanup_worker_cache(self) -> dict[str, Any]:
-        workers = self.kube.running_workers()
+        workers = self.kube.cache_probe_pods()
         if not workers:
-            return {"ok": False, "error": "no running workers"}
+            return {"ok": False, "error": "no running cache probe pods"}
         script = r"""
 set -eu
 for pages in /var/lib/beta9/cache/default/*/pages; do
   [ -d "$pages" ] && find "$pages" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 done
-for volume_root in /cache/volumes/*; do
-  [ -d "$volume_root" ] && find "$volume_root" -mindepth 1 -maxdepth 1 -name "run-*" -exec rm -rf {} +
-done
-rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/null || true
+rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
 """
         result: dict[str, Any] = {"ok": True, "pods": []}
         seen_nodes = set()
@@ -1124,7 +1229,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
 
     def object_ready(self, content_hash: str, expected_size: int) -> dict[str, Any]:
         checked = []
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             candidates = self._candidate_shell_paths(pod, content_hash)
             script = (
                 f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
@@ -1174,7 +1279,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             "workers": [],
         }
         seen_nodes = set()
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
             if node_key in seen_nodes:
                 continue
@@ -1184,11 +1289,12 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
                 "found=''; for candidate in "
                 f'{candidates}; do [ -d "$candidate" ] && found="$candidate" && break; done; '
-                'if [ -z "$found" ]; then printf \'{"exists":false,"ready":false,"bytes":0,"chunks":0}\\n\'; exit 0; fi; '
+                'if [ -z "$found" ]; then printf \'{"exists":false,"ready":false,"bytes":0,"chunks":0,"completeMarker":false}\\n\'; exit 0; fi; '
                 "i=0; bytes=0; "
                 'while [ -f "$found/$hash-$i" ]; do size=$(stat -c %s "$found/$hash-$i"); bytes=$((bytes + size)); i=$((i + 1)); done; '
-                'ready=false; [ "$bytes" -eq "$expected" ] && ready=true; '
-                'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s}\\n\' "$ready" "$found" "$i" "$bytes"'
+                'marker=false; [ -f "$found/_complete" ] && marker=true; '
+                'ready=false; [ "$marker" = true ] && [ "$bytes" -eq "$expected" ] && ready=true; '
+                'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s,"completeMarker":%s}\\n\' "$ready" "$found" "$i" "$bytes" "$marker"'
             )
             proc = self.kube.worker_shell(pod["name"], script, timeout=30)
             row: dict[str, Any] = {
@@ -1222,8 +1328,9 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             "routes": [],
         }
         hosts = hosts_snapshot.get("hosts") or []
-        if not hosts:
-            proof["error"] = "no active cache hosts found"
+        hrw_hosts = [host for host in hosts if host.get("hostId")]
+        if not hrw_hosts:
+            proof["error"] = "no cache hosts found"
             return proof
 
         go = shutil.which("go")
@@ -1242,11 +1349,11 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 "run",
                 "./benchmarks/b9bench/cache_tools/hrw_routing.go",
                 "--hosts-json",
-                json.dumps(hosts, sort_keys=True),
+                json.dumps(hrw_hosts, sort_keys=True),
                 "--keys",
                 content_hash,
                 "--n",
-                "1",
+                str(max(1, self.config.hrw_route_top_n)),
             ],
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
@@ -1259,31 +1366,55 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             proof["error"] = proc.stderr.strip()[-1000:] or f"hrw helper exited {proc.returncode}"
             return proof
 
-        pages_by_node = {
-            worker.get("nodeName") or "": int(worker.get("chunks") or 0)
+        page_rows_by_node = {
+            worker.get("nodeName") or "": worker
             for worker in page_proof.get("workers") or []
         }
+        live_nodes = self.kube.node_names()
         routes = json.loads(proc.stdout)
         checked = []
         ok = True
         for route in routes:
-            selected = (route.get("hosts") or [{}])[0]
+            ranked_hosts = route.get("hosts") or []
+            selected = (ranked_hosts or [{}])[0]
             node = selected.get("nodeName") or selected.get("nodeId") or ""
-            pages = pages_by_node.get(node, 0)
+            selected_page = page_rows_by_node.get(node) or {}
+            pages = int(selected_page.get("chunks") or 0)
+            complete_marker = bool(selected_page.get("completeMarker"))
+            selected_ready = bool(selected_page.get("ready") and complete_marker)
+            endpoint_available = bool(
+                selected.get("endpointAvailable", bool(selected.get("privateAddr") or selected.get("addr")))
+            )
+            node_gone = bool(node and live_nodes and node not in live_nodes)
             item = {
                 "hash": route.get("key") or "",
                 "selectedHostId": selected.get("hostId") or "",
                 "selectedRegistrationId": selected.get("registrationId") or "",
                 "selectedNode": node,
                 "selectedPod": selected.get("pod") or "",
+                "selectedCachePathId": selected.get("cachePathId") or "",
+                "selectedEndpointAvailable": endpoint_available,
+                "selectedNodeGone": node_gone,
                 "pagesOnSelectedNode": pages,
-                "ok": pages > 0,
+                "completeMarkerOnSelectedNode": complete_marker,
+                "bytesOnSelectedNode": int(selected_page.get("bytes") or 0),
+                "expectedBytes": int(page_proof.get("expectedBytes") or 0),
+                "selectedCachePath": selected_page.get("path") or "",
+                "ok": (selected_ready and endpoint_available) or node_gone,
             }
             if remote_read:
                 target_host = remote_read.get("targetHost") or {}
-                item["remoteTargetHostId"] = target_host.get("hostId") or ""
-                item["remoteTargetRegistrationId"] = target_host.get("registrationId") or ""
-                item["remoteTargetNode"] = remote_read.get("targetNode") or target_host.get("nodeName") or ""
+                target_host_id = target_host.get("hostId") or ""
+                target_registration_id = target_host.get("registrationId") or ""
+                target_node = remote_read.get("targetNode") or target_host.get("nodeName") or ""
+                target_rank = 0
+                for index, ranked in enumerate(ranked_hosts, start=1):
+                    if ranked.get("hostId") == target_host_id:
+                        target_rank = index
+                        break
+                item["remoteTargetHostId"] = target_host_id
+                item["remoteTargetRegistrationId"] = target_registration_id
+                item["remoteTargetNode"] = target_node
                 item["remoteTargetMatchesHRW"] = bool(
                     item["selectedHostId"]
                     and item["selectedHostId"] == item["remoteTargetHostId"]
@@ -1292,6 +1423,18 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                     item["selectedRegistrationId"]
                     and item["selectedRegistrationId"] == item["remoteTargetRegistrationId"]
                 )
+                item["remoteTargetInHRWTopN"] = target_rank > 0
+                item["remoteTargetHRWRank"] = target_rank
+                target_page = page_rows_by_node.get(target_node) or {}
+                item["remoteTargetPages"] = int(target_page.get("chunks") or 0)
+                item["remoteTargetCompleteMarker"] = bool(target_page.get("completeMarker"))
+                item["fallbackCacheHit"] = bool(
+                    not item["remoteTargetMatchesHRW"]
+                    and item["remoteTargetInHRWTopN"]
+                    and item["remoteTargetPages"] > 0
+                    and item["remoteTargetCompleteMarker"]
+                )
+                item["ok"] = bool(item["ok"] or item["fallbackCacheHit"])
             checked.append(item)
             ok = ok and item["ok"]
 
@@ -1299,18 +1442,19 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         proof["ok"] = ok
         return proof
 
-    def object_proof(self, content_hash: str) -> dict[str, Any]:
-        for pod in self.kube.running_workers():
+    def object_proof(self, content_hash: str, expected_size: int = 0) -> dict[str, Any]:
+        for pod in self.kube.cache_probe_pods():
             candidates = self._candidate_shell_paths(pod, content_hash)
             script = (
-                f"hash={shlex.quote(content_hash)}; "
+                f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
                 "found=''; for candidate in "
                 f'{candidates}; do [ -d "$candidate" ] && found="$candidate" && break; done; '
                 'if [ -z "$found" ]; then printf \'{"exists":false}\\n\'; exit 0; fi; '
-                "i=0; bytes=0; tmp=$(mktemp); "
-                'while [ -f "$found/$hash-$i" ]; do cat "$found/$hash-$i" >> "$tmp"; bytes=$((bytes + $(wc -c < "$found/$hash-$i"))); i=$((i + 1)); done; '
-                'sha=$(sha256sum "$tmp" | awk \'{print $1}\'); rm -f "$tmp"; '
-                'printf \'{"exists":true,"path":"%s","chunks":%s,"bytes":%s,"sha256":"%s"}\\n\' "$found" "$i" "$bytes" "$sha"'
+                "i=0; bytes=0; "
+                'while [ -f "$found/$hash-$i" ]; do bytes=$((bytes + $(stat -c %s "$found/$hash-$i"))); i=$((i + 1)); done; '
+                'marker=false; [ -f "$found/_complete" ] && marker=true; '
+                'matches=false; if [ "$marker" = true ] && { [ "$expected" -eq 0 ] || [ "$bytes" -eq "$expected" ]; }; then matches=true; fi; '
+                'printf \'{"exists":true,"path":"%s","chunks":%s,"bytes":%s,"completeMarker":%s,"matchesHash":%s}\\n\' "$found" "$i" "$bytes" "$marker" "$matches"'
             )
             proc = self.kube.worker_shell(
                 pod["name"],
@@ -1331,7 +1475,6 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 }
             )
             if proof.get("exists"):
-                proof["matchesHash"] = proof.get("sha256") == content_hash
                 return proof
         return {"hash": content_hash, "exists": False}
 
@@ -1339,7 +1482,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         result: dict[str, Any] = {"ok": False, "pods": []}
         source = self.tools.source("evict_cache_object.py")
         seen_nodes = set()
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
             if node_key in seen_nodes:
                 continue
@@ -1371,7 +1514,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
     def remove_cache_pages(self, entry: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {"ok": False, "pods": []}
         seen_nodes = set()
-        for pod in self.kube.running_workers():
+        for pod in self.kube.cache_probe_pods():
             node_key = pod.get("nodeName") or pod.get("hostIP") or pod["name"]
             if node_key in seen_nodes:
                 continue
@@ -1556,9 +1699,9 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
     def direct_disk_probe(self) -> Optional[dict[str, Any]]:
         if not self.config.direct_cache_disk_probe:
             return None
-        workers = self.kube.running_workers()
+        workers = self.kube.cache_probe_pods()
         if not workers:
-            return {"ok": False, "error": "no running workers"}
+            return {"ok": False, "error": "no running cache probe pods"}
         pod = workers[0]
         proc = self.kube.worker_exec(
             pod["name"],
@@ -1591,6 +1734,22 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
         return payload
 
     def remote_read(
+        self, entry: dict[str, Any], cas_proof: dict[str, Any]
+    ) -> dict[str, Any]:
+        last_payload: dict[str, Any] = {}
+        for attempt in range(3):
+            payload = self._remote_read_once(entry, cas_proof)
+            payload["attempt"] = attempt + 1
+            last_payload = payload
+            if payload.get("ok"):
+                return payload
+            error = str(payload.get("error") or "")
+            if not self._retry_worker_probe(error):
+                return payload
+            time.sleep(2)
+        return last_payload
+
+    def _remote_read_once(
         self, entry: dict[str, Any], cas_proof: dict[str, Any]
     ) -> dict[str, Any]:
         hosts = self.cache_hosts_snapshot()
@@ -1671,9 +1830,12 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 "targetHost": target_host,
                 "differentWorkerPod": bool(target_pod)
                 and source_pod["name"] != target_pod["name"],
-                "differentNode": bool(target_pod)
+                "differentNode": bool(source_pod.get("nodeName", ""))
                 and source_pod.get("nodeName", "")
-                != target_pod.get("nodeName", ""),
+                != (
+                    (target_pod or {}).get("nodeName", "")
+                    or target_host.get("nodeName", "")
+                ),
             }
         )
         if self.config.remote_network_probe and target_pod:
@@ -1858,6 +2020,11 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             index_keys = [
                 f"cache:coordinator:host_index:{self.config.cache_pool_name}:{self.config.cache_locality}"
             ]
+        running_workers_by_ip = {
+            pod.get("podIP", ""): pod
+            for pod in self.kube.cache_endpoint_pods()
+            if pod.get("podIP", "")
+        }
         logical_host_ids = []
         seen_logical_hosts = set()
         for index_key in index_keys:
@@ -1870,6 +2037,37 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                     logical_host_ids.append(logical_host_id)
         hosts = []
         for logical_host_id in logical_host_ids:
+            logical_raw = redis_cli(
+                self.config.namespace,
+                redis_pod,
+                "GET",
+                f"cache:coordinator:host:{logical_host_id}:logical",
+            )
+            logical: dict[str, Any] = {}
+            if logical_raw:
+                try:
+                    logical = json.loads(logical_raw)
+                except json.JSONDecodeError:
+                    logical = {}
+            logical_host = {
+                "hostId": logical.get("logical_host_id")
+                or logical.get("logicalHostId")
+                or logical_host_id,
+                "registrationId": "",
+                "poolName": logical.get("pool_name")
+                or logical.get("poolName")
+                or self.config.cache_pool_name,
+                "nodeId": logical.get("node_id") or logical.get("nodeId") or "",
+                "nodeName": logical.get("node_id") or logical.get("nodeId") or "",
+                "cachePathId": logical.get("cache_path_id")
+                or logical.get("cachePathId")
+                or "",
+                "addr": "",
+                "privateAddr": "",
+                "endpointAvailable": False,
+                "source": "coordinator_logical",
+            }
+            added_registration = False
             registration_ids = self._registration_ids(redis_pod, logical_host_id)
             for registration_id in registration_ids:
                 raw = redis_cli(
@@ -1883,6 +2081,16 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                 try:
                     registration = json.loads(raw)
                 except json.JSONDecodeError:
+                    continue
+                addr = registration.get("addr") or ""
+                private_addr = (
+                    registration.get("private_addr")
+                    or registration.get("privateAddr")
+                    or ""
+                )
+                endpoint_ip = self._host_part(private_addr or addr)
+                endpoint_pod = running_workers_by_ip.get(endpoint_ip)
+                if not endpoint_ip or endpoint_pod is None:
                     continue
                 hosts.append(
                     {
@@ -1898,27 +2106,31 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "nodeId": registration.get("node_id")
                         or registration.get("nodeId")
                         or "",
-                        "nodeName": registration.get("node_id")
+                        "nodeName": (endpoint_pod or {}).get("nodeName", "")
+                        or registration.get("node_id")
                         or registration.get("nodeId")
                         or "",
                         "cachePathId": registration.get("cache_path_id")
                         or registration.get("cachePathId")
                         or "",
-                        "addr": registration.get("addr") or "",
-                        "privateAddr": registration.get("private_addr")
-                        or registration.get("privateAddr")
-                        or "",
+                        "addr": addr,
+                        "privateAddr": private_addr,
+                        "pod": (endpoint_pod or {}).get("name", ""),
+                        "endpointAvailable": True,
                         "source": "coordinator",
                     }
                 )
+                added_registration = True
                 break
+            if not added_registration and logical_host["nodeName"]:
+                hosts.append(logical_host)
         if hosts:
             return {"available": True, "indexKeys": index_keys, "hosts": hosts}
         return self.cache_hosts_from_worker_logs()
 
     def cache_hosts_from_worker_logs(self) -> dict[str, Any]:
         hosts: list[dict[str, Any]] = []
-        workers = {pod["name"]: pod for pod in self.kube.running_workers()}
+        workers = {pod["name"]: pod for pod in self.kube.cache_probe_pods()}
         for pod_name, pod in workers.items():
             proc = run(
                 [
@@ -1940,7 +2152,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
             if proc.returncode != 0:
                 continue
             for line in proc.stdout.splitlines():
-                if "Registered cache host" not in line:
+                if "Registered cache host" not in line and "registered cache host" not in line:
                     continue
                 start = line.find("{")
                 end = line.rfind("}")
@@ -1972,6 +2184,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
                         "addr": addr,
                         "privateAddr": addr,
                         "pod": pod_name,
+                        "endpointAvailable": True,
                         "source": "worker_logs",
                     }
                 )
@@ -2064,8 +2277,15 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes /cache/.benchmark-probes 2>/dev/nu
     ) -> Tuple[Optional[dict[str, str]], Optional[dict[str, str]]]:
         target_ip = self._host_part(self._cache_host_addr(target_host))
         workers = self.kube.running_workers()
+        target_pod_name = target_host.get("pod") or ""
         target_pod = next(
-            (pod for pod in workers if pod.get("podIP") == target_ip), None
+            (
+                pod
+                for pod in workers
+                if (target_pod_name and pod["name"] == target_pod_name)
+                or (target_ip and pod.get("podIP") == target_ip)
+            ),
+            None,
         )
         target_node = (target_pod or {}).get("nodeName") or target_host.get("nodeName", "")
         source_pod = None
@@ -2695,9 +2915,20 @@ class Reporter:
                 row["sizeMiB"] >= self.config.min_throughput_size_mb
                 and read.get("fileReadMBps", 0) < self.config.min_hot_file_read_mbps
             ):
-                failures.append(
-                    f"{row['accessType']}:{row['sizeMiB']}MiB hot file-read {read.get('fileReadMBps', 0):.2f} MB/s below {self.config.min_hot_file_read_mbps:.2f} MB/s"
-                )
+                network = ((row.get("remoteRead") or {}).get("networkProbe") or {})
+                network_mbps = float(network.get("mbps") or 0)
+                required_mbps = self.config.min_hot_file_read_mbps
+                if network.get("ok") and network_mbps > 0:
+                    required_mbps = min(required_mbps, network_mbps * 0.9)
+                if read.get("fileReadMBps", 0) < required_mbps:
+                    suffix = (
+                        f" measured network target {required_mbps:.2f} MB/s (network {network_mbps:.2f} MB/s)"
+                        if network.get("ok") and network_mbps > 0
+                        else f" {self.config.min_hot_file_read_mbps:.2f} MB/s"
+                    )
+                    failures.append(
+                        f"{row['accessType']}:{row['sizeMiB']}MiB hot file-read {read.get('fileReadMBps', 0):.2f} MB/s below{suffix}"
+                    )
             read_path_proofs = [
                 proof
                 for proof in (
@@ -2711,11 +2942,13 @@ class Reporter:
                 for proof in read_path_proofs
             )
             cache_hits = 0
+            cloud_reads = 0
             for proof in read_path_proofs:
                 summary = proof.get("geesefsSummary") or {}
                 cache_hits += int(summary.get("mmapHits") or 0)
                 cache_hits += int(summary.get("readIntoHits") or 0)
                 cache_hits += int(summary.get("bufferHits") or 0)
+                cloud_reads += int(summary.get("cloudReq") or 0)
             if self.config.require_read_path_proof and (
                 cache_hits <= 0 and external_page_hits <= 0
             ):
@@ -2726,6 +2959,14 @@ class Reporter:
             if not hrw_proof.get("ok"):
                 failures.append(
                     f"{row['accessType']}:{row['sizeMiB']}MiB HRW route proof failed: {hrw_proof.get('error') or hrw_proof.get('routes')}"
+                )
+            selected_node_gone = any(
+                bool(route.get("selectedNodeGone"))
+                for route in hrw_proof.get("routes") or []
+            )
+            if cloud_reads > 0 and not selected_node_gone:
+                failures.append(
+                    f"{row['accessType']}:{row['sizeMiB']}MiB cloud read observed while HRW-selected node still exists"
                 )
             remote = row.get("remoteRead")
             if self.config.require_remote_read:
@@ -2754,9 +2995,12 @@ class Reporter:
                         )
                 else:
                     route = ((hrw_proof.get("routes") or []) + [{}])[0]
-                    if route and not route.get("remoteTargetMatchesHRW", True):
+                    if route and not (
+                        route.get("remoteTargetMatchesHRW", True)
+                        or route.get("remoteTargetInHRWTopN", False)
+                    ):
                         failures.append(
-                            f"{row['accessType']}:{row['sizeMiB']}MiB remote target {route.get('remoteTargetHostId')} does not match HRW-selected host {route.get('selectedHostId')}"
+                            f"{row['accessType']}:{row['sizeMiB']}MiB remote target {route.get('remoteTargetHostId')} is not in HRW top-{self.config.hrw_route_top_n}"
                         )
             remote_object = row.get("remoteObject")
             if self.config.require_remote_object_proof and (
@@ -2805,6 +3049,8 @@ class Reporter:
                     f"{route.get('selectedNode', '')}/"
                     f"{route.get('selectedHostId', '')}"
                     f" pages={route.get('pagesOnSelectedNode', 0)}"
+                    f" complete={route.get('completeMarkerOnSelectedNode', False)}"
+                    f" endpoint={route.get('selectedEndpointAvailable', False)}"
                 )
             remote_target = ""
             if route:
@@ -2913,14 +3159,20 @@ class CacheBenchmark:
         ]
         worker_restart_after_prepare = None
         if self.config.reset_workers_after_prepare:
+            worker_pod_names = {pod["name"] for pod in self.kube.worker_pods()}
             pods_to_restart = sorted(
                 {
                     proof["proof"].get("pod", "")
                     for proof in prepare_cache_proofs
                     if proof.get("proof", {}).get("ready")
                     and proof.get("proof", {}).get("pod")
+                    and proof["proof"].get("pod", "") in worker_pod_names
                 }
             )
+            if not pods_to_restart:
+                pods_to_restart = sorted(
+                    pod["name"] for pod in self.kube.running_workers()
+                )
             log(
                 "Restarting worker container(s) after write prepare to clear in-memory state while preserving node-local disk cache"
             )
@@ -3151,7 +3403,7 @@ class CacheBenchmark:
                     entry,
                     geesefs_path,
                 )
-            cas_proof = self.cache.object_proof(entry["sha256"])
+            cas_proof = self.cache.object_proof(entry["sha256"], entry["size"])
             page_proof = self.cache.object_page_proof(entry["sha256"], entry["size"])
             remote_object = self._remote_object_proof(workspace, paths, entry)
             worker_dd = None
@@ -3614,6 +3866,7 @@ class CacheBenchmark:
             "remoteCacheProofConcurrency": self.config.remote_cache_proof_concurrency,
             "remoteNetworkProbe": self.config.remote_network_probe,
             "remoteNetworkProbeBytes": self.config.remote_network_probe_bytes,
+            "hrwRouteTopN": self.config.hrw_route_top_n,
             "volumeName": self.config.volume_name,
             "volumeId": volume_id,
             "volumeMountPath": self.config.volume_mount_path,

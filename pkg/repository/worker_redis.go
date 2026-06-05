@@ -926,36 +926,44 @@ func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string,
 
 func (r *WorkerRedisRepository) GetContainerIpAssignments(networkPrefix string) ([]types.ContainerIpAssignment, error) {
 	ctx := context.TODO()
-	keyPrefix := common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, "")
-	pattern := common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, "*")
 	assignments := []types.ContainerIpAssignment{}
 
-	keys, err := r.rdb.Scan(ctx, pattern)
+	ips, err := r.rdb.SMembers(ctx, common.RedisKeys.WorkerNetworkIpIndex(networkPrefix)).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	if len(keys) > 0 {
-		values, err := r.rdb.MGet(ctx, keys...).Result()
+	if len(ips) > 0 {
+		ownerKeys := make([]string, 0, len(ips))
+		for _, ip := range ips {
+			ownerKeys = append(ownerKeys, common.RedisKeys.WorkerNetworkIpOwner(networkPrefix, ip))
+		}
+
+		owners, err := r.rdb.MGet(ctx, ownerKeys...).Result()
 		if err != nil {
 			return nil, err
 		}
 
-		for i, value := range values {
-			ip, ok := value.(string)
-			if !ok || ip == "" {
-				continue
-			}
-
-			containerId := strings.TrimPrefix(keys[i], keyPrefix)
-			if containerId == "" || containerId == keys[i] {
+		pipe := r.rdb.TxPipeline()
+		cleanupStaleIndexes := false
+		for i, value := range owners {
+			containerId, ok := value.(string)
+			if !ok || containerId == "" {
+				pipe.SRem(ctx, common.RedisKeys.WorkerNetworkIpIndex(networkPrefix), ips[i])
+				pipe.HDel(ctx, common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix), ips[i])
+				cleanupStaleIndexes = true
 				continue
 			}
 
 			assignments = append(assignments, types.ContainerIpAssignment{
 				ContainerID: containerId,
-				IPAddress:   ip,
+				IPAddress:   ips[i],
 			})
+		}
+		if cleanupStaleIndexes {
+			if _, err := pipe.Exec(ctx); err != nil {
+				return nil, err
+			}
 		}
 	}
 

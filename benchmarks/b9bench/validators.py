@@ -29,9 +29,13 @@ class Validator:
             failures.append(
                 f"{measurement.suite}/{measurement.scenario}/{measurement.measurement}: missing embedded-cache hit proof"
             )
-        if tags.get("requires_remote_worker") and evidence.get("remote_worker") is not True:
+        if (
+            tags.get("requires_remote_worker")
+            and evidence.get("remote_worker") is not True
+            and evidence.get("remote_node") is not True
+        ):
             failures.append(
-                f"{measurement.suite}/{measurement.scenario}/{measurement.measurement}: missing different-worker remote proof"
+                f"{measurement.suite}/{measurement.scenario}/{measurement.measurement}: missing different-worker or different-node remote proof"
             )
         if tags.get("reject_cloud_read") and evidence.get("cloud_read"):
             failures.append(

@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
+import "google/protobuf/timestamp.proto";
 import "types.proto";
 
 service BackendRepositoryService {
@@ -47,6 +48,11 @@ message CreateCheckpointRequest {
   string remote_key = 5;
   string stub_id = 6;
   repeated uint32 exposed_ports = 7;
+  string cache_hash = 8;
+  int64 cache_size_bytes = 9;
+  string origin_key = 10;
+  string locality = 11;
+  string accelerator = 12;
 }
 
 message CreateCheckpointResponse {
@@ -58,6 +64,7 @@ message CreateCheckpointResponse {
 message UpdateCheckpointRequest {
   string checkpoint_id = 1;
   string status = 2;
+  google.protobuf.Timestamp last_restored_at = 3;
 }
 
 message UpdateCheckpointResponse {

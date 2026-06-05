@@ -45,6 +45,9 @@ var (
 	EventComputeMachine   = "compute.machine"
 	EventComputeTransport = "compute.transport"
 	EventComputeRoute     = "compute.route"
+
+	EventStubCacheRequiredContent = "stub.cache.required_content"
+	EventPlatformCache            = "platform.cache"
 )
 
 var (
@@ -52,6 +55,74 @@ var (
 	EventWorkerLifecycleStopped = "stopped"
 	EventWorkerLifecycleDeleted = "deleted"
 )
+
+// CacheContentKind identifies the source of a required-content report.
+type CacheContentKind string
+
+const (
+	CacheContentKindClipV1     CacheContentKind = "clip_v1"
+	CacheContentKindClipV2     CacheContentKind = "clip_v2"
+	CacheContentKindVolume     CacheContentKind = "volume"
+	CacheContentKindCheckpoint CacheContentKind = "checkpoint"
+)
+
+// Platform cache audit statuses for EventPlatformCacheSchema.Status.
+const (
+	CacheAuditStatusMaterialized    = "materialized"
+	CacheAuditStatusMiss            = "miss"
+	CacheAuditStatusHostUnavailable = "host_unavailable"
+	CacheAuditStatusOriginFailure   = "origin_failure"
+	CacheAuditStatusReplicaFailure  = "replica_failure"
+	CacheAuditStatusSkipped         = "skipped"
+)
+
+var EventStubCacheRequiredContentSchemaVersion = "1.0"
+var EventPlatformCacheSchemaVersion = "1.0"
+
+// CacheRequiredContentItem describes a single piece of content a stub needs
+// warm in a locality. Source is a non-secret descriptor (OCI layer identity or
+// workspace object path) used to resolve an origin fetch; it never carries
+// credentials.
+type CacheRequiredContentItem struct {
+	Hash         string           `json:"hash"`
+	RoutingKey   string           `json:"routing_key"`
+	SizeBytes    int64            `json:"size_bytes,omitempty"`
+	ExpectedHash string           `json:"expected_hash,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	Kind         CacheContentKind `json:"kind,omitempty"`
+	CheckpointID string           `json:"checkpoint_id,omitempty"`
+	Accelerator  string           `json:"accelerator,omitempty"`
+}
+
+// EventStubCacheRequiredContentSchema is the coalesced required-content report
+// for a stub within a locality, persisted to the stub cache stream in S2.
+type EventStubCacheRequiredContentSchema struct {
+	WorkspaceID string                     `json:"workspace_id"`
+	StubID      string                     `json:"stub_id"`
+	Locality    string                     `json:"locality"`
+	Kind        CacheContentKind           `json:"kind"`
+	ItemCount   int                        `json:"item_count"`
+	TotalBytes  int64                      `json:"total_bytes"`
+	Items       []CacheRequiredContentItem `json:"items"`
+	Timestamp   time.Time                  `json:"timestamp"`
+}
+
+// EventPlatformCacheSchema is an operational/audit event for cache
+// materialization status, persisted to the platform cache stream in S2.
+type EventPlatformCacheSchema struct {
+	Locality    string           `json:"locality"`
+	LogicalHost string           `json:"logical_host,omitempty"`
+	WorkspaceID string           `json:"workspace_id,omitempty"`
+	StubID      string           `json:"stub_id,omitempty"`
+	Hash        string           `json:"hash,omitempty"`
+	RoutingKey  string           `json:"routing_key,omitempty"`
+	Kind        CacheContentKind `json:"kind,omitempty"`
+	Status      string           `json:"status"`
+	Source      string           `json:"source,omitempty"`
+	Message     string           `json:"message,omitempty"`
+	SizeBytes   int64            `json:"size_bytes,omitempty"`
+	Timestamp   time.Time        `json:"timestamp"`
+}
 
 // Schema versions should be in ISO 8601 format
 
@@ -391,9 +462,15 @@ const (
 	ContainerLifecycleStartup                     ContainerLifecycleID = "container.startup"
 	ContainerLifecycleSchedulerQueuePush          ContainerLifecycleID = "scheduler.queue_push"
 	ContainerLifecycleSchedulerBacklogWait        ContainerLifecycleID = "scheduler.backlog_wait"
+	ContainerLifecycleSchedulerWorkerList         ContainerLifecycleID = "scheduler.worker_list"
+	ContainerLifecycleSchedulerBatchPlan          ContainerLifecycleID = "scheduler.batch_plan"
 	ContainerLifecycleSchedulerWorkerSelection    ContainerLifecycleID = "scheduler.worker_selection"
+	ContainerLifecycleSchedulerReserveCapacity    ContainerLifecycleID = "scheduler.reserve_capacity"
 	ContainerLifecycleSchedulerReservation        ContainerLifecycleID = "scheduler.reservation"
 	ContainerLifecycleSchedulerProvisionWorker    ContainerLifecycleID = "scheduler.provision_worker"
+	ContainerLifecycleSchedulerImageCredentials   ContainerLifecycleID = "scheduler.attach_image_credentials"
+	ContainerLifecycleSchedulerBuildCredentials   ContainerLifecycleID = "scheduler.attach_build_registry_credentials"
+	ContainerLifecycleSchedulerWorkerQueuePush    ContainerLifecycleID = "scheduler.worker_queue_push"
 	ContainerLifecycleWorkerQueueReceive          ContainerLifecycleID = "worker.queue_receive"
 	ContainerLifecycleImageLoad                   ContainerLifecycleID = "image.load"
 	ContainerLifecycleImageEmbeddedCacheMetadata  ContainerLifecycleID = "image.embedded_cache_metadata_copy"
@@ -414,7 +491,7 @@ const (
 	ContainerLifecycleNetworkCreateNamespace      ContainerLifecycleID = "network.create_namespace"
 	ContainerLifecycleNetworkConfigureNamespace   ContainerLifecycleID = "network.configure_namespace"
 	ContainerLifecycleNetworkIPLock               ContainerLifecycleID = "network.ip_lock"
-	ContainerLifecycleNetworkIPScan               ContainerLifecycleID = "network.ip_scan"
+	ContainerLifecycleNetworkIPLoad               ContainerLifecycleID = "network.ip_load"
 	ContainerLifecycleNetworkIPAssign             ContainerLifecycleID = "network.ip_assign"
 	ContainerLifecycleNetworkSetContainerIP       ContainerLifecycleID = "network.set_container_ip"
 	ContainerLifecycleNetworkRestrictions         ContainerLifecycleID = "network.restrictions"
@@ -465,9 +542,15 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleStartup:                     {ID: ContainerLifecycleStartup, Domain: EventDomainRuntime, Label: "Container startup", Required: true},
 	ContainerLifecycleSchedulerQueuePush:          {ID: ContainerLifecycleSchedulerQueuePush, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Queue request"},
 	ContainerLifecycleSchedulerBacklogWait:        {ID: ContainerLifecycleSchedulerBacklogWait, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Scheduler backlog wait"},
+	ContainerLifecycleSchedulerWorkerList:         {ID: ContainerLifecycleSchedulerWorkerList, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Load workers"},
+	ContainerLifecycleSchedulerBatchPlan:          {ID: ContainerLifecycleSchedulerBatchPlan, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Plan batch"},
 	ContainerLifecycleSchedulerWorkerSelection:    {ID: ContainerLifecycleSchedulerWorkerSelection, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker selection"},
+	ContainerLifecycleSchedulerReserveCapacity:    {ID: ContainerLifecycleSchedulerReserveCapacity, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Reserve capacity"},
 	ContainerLifecycleSchedulerReservation:        {ID: ContainerLifecycleSchedulerReservation, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Capacity reservation"},
 	ContainerLifecycleSchedulerProvisionWorker:    {ID: ContainerLifecycleSchedulerProvisionWorker, Domain: EventDomainScheduler, ParentID: ContainerLifecycleStartup, Label: "Worker provisioning"},
+	ContainerLifecycleSchedulerImageCredentials:   {ID: ContainerLifecycleSchedulerImageCredentials, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Attach image credentials"},
+	ContainerLifecycleSchedulerBuildCredentials:   {ID: ContainerLifecycleSchedulerBuildCredentials, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Attach build registry credentials"},
+	ContainerLifecycleSchedulerWorkerQueuePush:    {ID: ContainerLifecycleSchedulerWorkerQueuePush, Domain: EventDomainScheduler, ParentID: ContainerLifecycleSchedulerBacklogWait, Label: "Push to worker queue"},
 	ContainerLifecycleWorkerQueueReceive:          {ID: ContainerLifecycleWorkerQueueReceive, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker queue receive"},
 	ContainerLifecycleImageLoad:                   {ID: ContainerLifecycleImageLoad, Domain: EventDomainImage, ParentID: ContainerLifecycleStartup, Label: "Image load", Required: true},
 	ContainerLifecycleImageEmbeddedCacheMetadata:  {ID: ContainerLifecycleImageEmbeddedCacheMetadata, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache metadata copy"},
@@ -488,7 +571,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleNetworkCreateNamespace:      {ID: ContainerLifecycleNetworkCreateNamespace, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Create namespace"},
 	ContainerLifecycleNetworkConfigureNamespace:   {ID: ContainerLifecycleNetworkConfigureNamespace, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Configure namespace"},
 	ContainerLifecycleNetworkIPLock:               {ID: ContainerLifecycleNetworkIPLock, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Acquire IP lock"},
-	ContainerLifecycleNetworkIPScan:               {ID: ContainerLifecycleNetworkIPScan, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Scan allocated IPs"},
+	ContainerLifecycleNetworkIPLoad:               {ID: ContainerLifecycleNetworkIPLoad, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Load allocated IPs"},
 	ContainerLifecycleNetworkIPAssign:             {ID: ContainerLifecycleNetworkIPAssign, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Assign container IP"},
 	ContainerLifecycleNetworkSetContainerIP:       {ID: ContainerLifecycleNetworkSetContainerIP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Persist container IP"},
 	ContainerLifecycleNetworkRestrictions:         {ID: ContainerLifecycleNetworkRestrictions, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Network restrictions"},
@@ -857,12 +940,24 @@ func EventSummaryKeyForLifecycle(id ContainerLifecycleID) string {
 		return "scheduler_queue_push_ms"
 	case ContainerLifecycleSchedulerBacklogWait:
 		return "scheduler_backlog_ms"
+	case ContainerLifecycleSchedulerWorkerList:
+		return "scheduler_worker_list_ms"
+	case ContainerLifecycleSchedulerBatchPlan:
+		return "scheduler_batch_plan_ms"
 	case ContainerLifecycleSchedulerWorkerSelection:
 		return "scheduler_worker_selection_ms"
+	case ContainerLifecycleSchedulerReserveCapacity:
+		return "scheduler_reserve_capacity_ms"
 	case ContainerLifecycleSchedulerReservation:
 		return "scheduler_reservation_ms"
 	case ContainerLifecycleSchedulerProvisionWorker:
 		return "scheduler_provision_worker_ms"
+	case ContainerLifecycleSchedulerImageCredentials:
+		return "scheduler_attach_image_credentials_ms"
+	case ContainerLifecycleSchedulerBuildCredentials:
+		return "scheduler_attach_build_registry_credentials_ms"
+	case ContainerLifecycleSchedulerWorkerQueuePush:
+		return "scheduler_worker_queue_push_ms"
 	case ContainerLifecycleWorkerQueueReceive:
 		return "worker_queue_ms"
 	case ContainerLifecycleImageLoad:

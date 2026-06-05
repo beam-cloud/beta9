@@ -350,23 +350,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		}
 	}
 
-	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
-		path := defaultCheckpointPath
-		if wpc.workerPoolConfig.CheckpointPath != "" {
-			path = wpc.workerPoolConfig.CheckpointPath
-		}
-
-		volumes = append(volumes, corev1.Volume{
-			Name: checkpointVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: path,
-					Type: &hostPathType,
-				},
-			},
-		})
-	}
-
 	if workerCacheEnabled(wpc.config, wpc.workerPoolConfig) {
 		volumes = append(volumes, corev1.Volume{
 			Name: cacheVolumeName,
@@ -424,14 +407,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 
 	if len(wpc.workerPoolConfig.JobSpec.VolumeMounts) > 0 {
 		volumeMounts = append(volumeMounts, wpc.workerPoolConfig.JobSpec.VolumeMounts...)
-	}
-
-	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      checkpointVolumeName,
-			MountPath: defaultCheckpointPath,
-			ReadOnly:  false,
-		})
 	}
 
 	if workerCacheEnabled(wpc.config, wpc.workerPoolConfig) {

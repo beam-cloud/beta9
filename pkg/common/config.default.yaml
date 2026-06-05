@@ -190,7 +190,6 @@ worker:
       jobSpec:
         nodeSelector: {}
       criuEnabled: true
-      checkpointPath: /data/checkpoints
       poolSizing:
         defaultWorkerCpu: 2000m
         defaultWorkerGpuType: ""
@@ -277,9 +276,6 @@ worker:
     minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
     mode: nvidia
-    storage:
-      mode: local
-      mountPath: /data/checkpoints
 
 cache:
   enabled: true
@@ -292,6 +288,7 @@ cache:
     enabled: false
     maxCachePct: 0
   coordinator:
+    token:
     registrationTTLSeconds: 30
     heartbeatIntervalSeconds: 10
     hostWatchIntervalSeconds: 5
@@ -315,6 +312,7 @@ cache:
     prettyLogs: true
   server:
     pageSizeBytes: 4194304
+    smallRangeCopyThresholdBytes: 131072
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000
@@ -335,6 +333,14 @@ cache:
       directMount: false
       options:
       - max_read=1048576
+  reconciliation:
+    enabled: false
+    intervalSeconds: 60
+    recentStubTTLSeconds: 604800 # keep required content warm for 7 days after a stub's last container
+    lockTTLSeconds: 300
+    maxStubsPerCycle: 256
+    volumeMinBytes: 134217728 # 128MiB; only large geesefs volume objects are reconciled
+    originFallbackEnabled: false
 
 providers:
   ec2:

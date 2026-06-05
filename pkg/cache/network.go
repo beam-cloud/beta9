@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,6 +42,35 @@ func isTLSEnabled(addr string) bool {
 		return false
 	}
 	return port == "443"
+}
+
+func cacheHostDialAddr(host *Host, localNodeID string) string {
+	if host == nil {
+		return ""
+	}
+
+	addr := host.Addr
+	if host.PrivateAddr != "" {
+		addr = host.PrivateAddr
+	}
+	if addr == "" {
+		return ""
+	}
+
+	if !cacheHostNetworkEnabled() || localNodeID == "" || host.NodeID == "" || host.NodeID != localNodeID {
+		return addr
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return addr
+	}
+	return net.JoinHostPort("127.0.0.1", port)
+}
+
+func cacheHostNetworkEnabled() bool {
+	enabled, err := strconv.ParseBool(os.Getenv("CACHE_HOST_NETWORK"))
+	return err == nil && enabled
 }
 
 func GetPublicIpAddr() (string, error) {

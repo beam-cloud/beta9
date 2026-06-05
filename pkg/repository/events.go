@@ -24,6 +24,7 @@ type eventReader interface {
 	GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error)
 	GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
 	GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
+	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
 }
 
 type EventStream interface {
@@ -139,6 +140,14 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
+	case types.EventStubCacheRequiredContentSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
+	case types.EventPlatformCacheSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
 	}
 
 	return time.Now()
@@ -203,6 +212,13 @@ func (r *EventClientRepo) GetWorkspaceMetricsTimeseries(ctx context.Context, que
 		return nil, ErrEventReadUnsupported
 	}
 	return r.reader.GetWorkspaceMetricsTimeseries(ctx, query, start, end, interval)
+}
+
+func (r *EventClientRepo) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.ReadStubCacheRequiredContent(ctx, workspaceID, stubID)
 }
 
 func (r *EventClientRepo) StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error) {
@@ -940,6 +956,57 @@ func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspace
 	)
 }
 
+type syncEventSink interface {
+	PushEventSync(event cloudevents.Event) error
+}
+
+func (r *EventClientRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error {
+	if schema.Timestamp.IsZero() {
+		schema.Timestamp = time.Now().UTC()
+	}
+	schema.ItemCount = len(schema.Items)
+	if schema.TotalBytes == 0 {
+		var total int64
+		for _, item := range schema.Items {
+			total += item.SizeBytes
+		}
+		schema.TotalBytes = total
+	}
+	if len(r.storageSinks) == 0 && len(r.callbackSinks) == 0 {
+		return nil
+	}
+
+	event, err := r.createEventObject(types.EventStubCacheRequiredContent, types.EventStubCacheRequiredContentSchemaVersion, schema)
+	if err != nil {
+		return err
+	}
+
+	for _, sink := range r.storageSinks {
+		if syncSink, ok := sink.(syncEventSink); ok {
+			if err := syncSink.PushEventSync(event); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := sink.PushEvent(event); err != nil {
+			return err
+		}
+	}
+	for _, sink := range r.callbackSinks {
+		if err := sink.PushEvent(event); err != nil {
+			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to push required-content event callback")
+		}
+	}
+	return nil
+}
+
+func (r *EventClientRepo) PushPlatformCacheEvent(schema types.EventPlatformCacheSchema) {
+	if schema.Timestamp.IsZero() {
+		schema.Timestamp = time.Now().UTC()
+	}
+	r.pushEvent(types.EventPlatformCache, types.EventPlatformCacheSchemaVersion, schema)
+}
+
 func taskIDFromRequestEnv(request *types.ContainerRequest) string {
 	if request == nil {
 		return ""
@@ -1043,6 +1110,10 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 			RouteID:     d.RouteID,
 			PoolName:    d.PoolName,
 		}
+	case types.EventStubCacheRequiredContentSchema:
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
+	case types.EventPlatformCacheSchema:
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
 	default:
 		return eventMetadata{}
 	}

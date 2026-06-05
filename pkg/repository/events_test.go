@@ -356,6 +356,56 @@ func TestContainerLogCloudEventUsesLogTimestamp(t *testing.T) {
 	}
 }
 
+func TestPushContainerRequestLogLineIncludesRequestContext(t *testing.T) {
+	sink := &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		StubId:      "stub-1",
+		WorkspaceId: "workspace-1",
+		AppId:       "app-1",
+		Env:         []string{"TASK_ID=task-from-env"},
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)},
+		},
+	}
+
+	repo.PushContainerRequestLogLine("worker-1", request, "", types.EventLogStreamStdout, "hello")
+
+	if got, want := len(sink.events), 1; got != want {
+		t.Fatalf("unexpected event count: got %d want %d", got, want)
+	}
+
+	var event types.EventContainerLogSchema
+	if err := json.Unmarshal(sink.events[0].Data(), &event); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := event.ContainerID, "container-1"; got != want {
+		t.Fatalf("unexpected container id: got %q want %q", got, want)
+	}
+	if got, want := event.TaskID, "task-from-env"; got != want {
+		t.Fatalf("unexpected task id: got %q want %q", got, want)
+	}
+	if got, want := event.AppID, "app-1"; got != want {
+		t.Fatalf("unexpected app id: got %q want %q", got, want)
+	}
+	if got, want := event.WorkerID, "worker-1"; got != want {
+		t.Fatalf("unexpected worker id: got %q want %q", got, want)
+	}
+	if got, want := event.Stream, types.EventLogStreamStdout; got != want {
+		t.Fatalf("unexpected stream: got %q want %q", got, want)
+	}
+
+	metadata := eventMetadataFromCloudEvent(sink.events[0])
+	if got, want := metadata.ContainerID, "container-1"; got != want {
+		t.Fatalf("unexpected metadata container id: got %q want %q", got, want)
+	}
+	if got, want := metadata.TaskID, "task-from-env"; got != want {
+		t.Fatalf("unexpected metadata task id: got %q want %q", got, want)
+	}
+}
+
 func TestPushPlatformLogSkipsCallbackSinks(t *testing.T) {
 	storageSink := &captureEventSink{}
 	callbackSink := &captureEventSink{}

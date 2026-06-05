@@ -25,6 +25,7 @@ from ..channel import runner_context
 from ..clients.gateway import (
     GatewayServiceStub,
 )
+from ..logging import ContextualStdoutJsonInterceptor
 from ..middleware import (
     TaskLifecycleData,
     TaskLifecycleMiddleware,
@@ -147,6 +148,8 @@ class EndpointManager:
         self.logger = logger
         self.pid: int = os.getpid()
         self.exit_code: int = 0
+        self.stdout_interceptor = ContextualStdoutJsonInterceptor()
+        self.stdout_interceptor.__enter__()
 
         self.handler: FunctionHandler = FunctionHandler()
         self.on_start_value = asyncio.run(OnStartMethodHandler(worker).start())
