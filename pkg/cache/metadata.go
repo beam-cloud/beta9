@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/bsm/redislock"
@@ -235,15 +234,19 @@ func (m *Metadata) AddRecentStub(ctx context.Context, locality, workspaceID, stu
 		return nil
 	}
 	key := MetadataKeys.MetadataReconcileRecent(locality)
+	allKey := MetadataKeys.MetadataReconcileRecentAll()
 	now := time.Now()
 	member := RecentStubKey(workspaceID, stubID)
 
 	pipe := m.rdb.TxPipeline()
 	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.UnixNano()), Member: member})
+	pipe.ZAdd(ctx, allKey, redis.Z{Score: float64(now.UnixNano()), Member: member})
 	if ttl > 0 {
 		cutoff := now.Add(-ttl).UnixNano()
 		pipe.ZRemRangeByScore(ctx, key, "-inf", fmt.Sprintf("%d", cutoff))
+		pipe.ZRemRangeByScore(ctx, allKey, "-inf", fmt.Sprintf("%d", cutoff))
 		pipe.Expire(ctx, key, ttl)
+		pipe.Expire(ctx, allKey, ttl)
 	}
 	_, err := pipe.Exec(ctx)
 	return err
@@ -290,36 +293,10 @@ func (m *Metadata) listRecentStubsFromKey(ctx context.Context, key string, ttl t
 	return stubs, nil
 }
 
-// ListRecentStubsAnyLocality returns recently used stubs across all locality
-// indexes, newest first, deduplicated by workspace/stub pair.
+// ListRecentStubsAnyLocality returns recently used stubs across all localities
+// from the global recent-stub index, newest first.
 func (m *Metadata) ListRecentStubsAnyLocality(ctx context.Context, ttl time.Duration) ([]RecentStub, error) {
-	keys, err := m.rdb.Scan(ctx, MetadataKeys.MetadataReconcileRecent("*"))
-	if err != nil {
-		return nil, err
-	}
-
-	latest := map[string]RecentStub{}
-	for _, key := range keys {
-		stubs, err := m.listRecentStubsFromKey(ctx, key, ttl, 0)
-		if err != nil {
-			return nil, err
-		}
-		for _, stub := range stubs {
-			member := RecentStubKey(stub.WorkspaceID, stub.StubID)
-			if existing, ok := latest[member]; !ok || stub.LastSeen.After(existing.LastSeen) {
-				latest[member] = stub
-			}
-		}
-	}
-
-	stubs := make([]RecentStub, 0, len(latest))
-	for _, stub := range latest {
-		stubs = append(stubs, stub)
-	}
-	sort.Slice(stubs, func(i, j int) bool {
-		return stubs[i].LastSeen.After(stubs[j].LastSeen)
-	})
-	return stubs, nil
+	return m.listRecentStubsFromKey(ctx, MetadataKeys.MetadataReconcileRecentAll(), ttl, 0)
 }
 
 // MarkStubReported atomically claims the one-time required-content generation
@@ -393,6 +370,7 @@ var (
 	metadataHostKeepAlive        string = "cache:host:keepalive:%s:%s"
 	metadataStoreFromContentLock string = "cache:store_from_content_lock:%s:%s"
 	metadataReconcileRecent      string = "cache:reconcile:recent:%s"
+	metadataReconcileRecentAll   string = "cache:reconcile:recent"
 	metadataReconcileLock        string = "cache:reconcile:lock:%s:%s:%s"
 	metadataReconcileReported    string = "cache:reconcile:reported:%s:%s"
 )
@@ -433,6 +411,10 @@ func (k *metadataKeys) MetadataStoreFromContentLock(locality, sourcePath string)
 
 func (k *metadataKeys) MetadataReconcileRecent(locality string) string {
 	return fmt.Sprintf(metadataReconcileRecent, locality)
+}
+
+func (k *metadataKeys) MetadataReconcileRecentAll() string {
+	return metadataReconcileRecentAll
 }
 
 func (k *metadataKeys) MetadataReconcileLock(locality, logicalHost, hash string) string {

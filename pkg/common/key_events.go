@@ -37,37 +37,9 @@ func (kem *KeyEventManager) TrimKeyspacePrefix(key string) string {
 	return strings.TrimPrefix(key, keyspacePrefix)
 }
 
-func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, error) {
-	pattern := fmt.Sprintf("%s*", patternPrefix)
-
-	keys, err := kem.rdb.Scan(context.Background(), pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	trimmedKeys := make([]string, len(keys))
-	for i, key := range keys {
-		trimmedKeys[i] = strings.TrimPrefix(key, patternPrefix)
-	}
-
-	return trimmedKeys, nil
-}
-
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
 	pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
 	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
-
-	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
-	if err != nil {
-		return err
-	}
-
-	for _, key := range existingKeys {
-		keyEventChan <- KeyEvent{
-			Key:       key,
-			Operation: KeyOperationSet,
-		}
-	}
 
 	go func() {
 		defer close()

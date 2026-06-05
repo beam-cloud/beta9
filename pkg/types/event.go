@@ -443,7 +443,7 @@ const (
 	ContainerLifecycleNetworkCreateNamespace      ContainerLifecycleID = "network.create_namespace"
 	ContainerLifecycleNetworkConfigureNamespace   ContainerLifecycleID = "network.configure_namespace"
 	ContainerLifecycleNetworkIPLock               ContainerLifecycleID = "network.ip_lock"
-	ContainerLifecycleNetworkIPScan               ContainerLifecycleID = "network.ip_scan"
+	ContainerLifecycleNetworkIPLoad               ContainerLifecycleID = "network.ip_load"
 	ContainerLifecycleNetworkIPAssign             ContainerLifecycleID = "network.ip_assign"
 	ContainerLifecycleNetworkSetContainerIP       ContainerLifecycleID = "network.set_container_ip"
 	ContainerLifecycleNetworkRestrictions         ContainerLifecycleID = "network.restrictions"
@@ -523,7 +523,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleNetworkCreateNamespace:      {ID: ContainerLifecycleNetworkCreateNamespace, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Create namespace"},
 	ContainerLifecycleNetworkConfigureNamespace:   {ID: ContainerLifecycleNetworkConfigureNamespace, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Configure namespace"},
 	ContainerLifecycleNetworkIPLock:               {ID: ContainerLifecycleNetworkIPLock, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Acquire IP lock"},
-	ContainerLifecycleNetworkIPScan:               {ID: ContainerLifecycleNetworkIPScan, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Scan allocated IPs"},
+	ContainerLifecycleNetworkIPLoad:               {ID: ContainerLifecycleNetworkIPLoad, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Load allocated IPs"},
 	ContainerLifecycleNetworkIPAssign:             {ID: ContainerLifecycleNetworkIPAssign, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Assign container IP"},
 	ContainerLifecycleNetworkSetContainerIP:       {ID: ContainerLifecycleNetworkSetContainerIP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkConfigureNamespace, Label: "Persist container IP"},
 	ContainerLifecycleNetworkRestrictions:         {ID: ContainerLifecycleNetworkRestrictions, Domain: EventDomainNetwork, ParentID: ContainerLifecycleNetworkSetup, Label: "Network restrictions"},

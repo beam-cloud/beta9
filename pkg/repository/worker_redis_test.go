@@ -754,6 +754,8 @@ func TestGetContainerIpAssignments(t *testing.T) {
 	assert.Nil(t, err)
 	err = repo.SetContainerIp(networkPrefix, "container-a", "192.168.0.3")
 	assert.Nil(t, err)
+	err = rdb.SAdd(context.TODO(), common.RedisKeys.WorkerNetworkIpIndex(networkPrefix), "192.168.0.99").Err()
+	assert.Nil(t, err)
 
 	assignments, err := repo.GetContainerIpAssignments(networkPrefix)
 	assert.Nil(t, err)
@@ -761,6 +763,10 @@ func TestGetContainerIpAssignments(t *testing.T) {
 		{ContainerID: "container-a", IPAddress: "192.168.0.3"},
 		{ContainerID: "network-slot:slot-a", IPAddress: "192.168.0.2"},
 	}, assignments)
+
+	ips, err := repo.GetContainerIps(networkPrefix)
+	assert.Nil(t, err)
+	assert.NotContains(t, ips, "192.168.0.99")
 }
 
 func TestRemoveContainerIpCleansLegacyIndexWithoutOwnerKey(t *testing.T) {

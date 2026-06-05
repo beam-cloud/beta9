@@ -171,6 +171,18 @@ func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.
 	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be released after STOPPING status, got %v", err)
 	}
+
+	indexed, err := rdb.SIsMember(
+		context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(firstRequest.WorkspaceId),
+		firstRequest.ContainerId,
+	).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexed {
+		t.Fatal("expected STOPPING release to remove reservation index entry")
+	}
 }
 
 func TestUpdateContainerStatusDoesNotMoveStoppingBackToRunning(t *testing.T) {
@@ -245,6 +257,18 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be available after retry release, got %v", err)
 	}
+
+	indexed, err := rdb.SIsMember(
+		context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(firstRequest.WorkspaceId),
+		firstRequest.ContainerId,
+	).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexed {
+		t.Fatal("expected retry release to remove reservation index entry")
+	}
 }
 
 func TestUpdateContainerStatusStoppingReleasesDuringCounterRepair(t *testing.T) {
@@ -302,6 +326,18 @@ func TestDeleteContainerStateReleasesConcurrencyReservation(t *testing.T) {
 	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be released after delete, got %v", err)
 	}
+
+	indexed, err := rdb.SIsMember(
+		context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(firstRequest.WorkspaceId),
+		firstRequest.ContainerId,
+	).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexed {
+		t.Fatal("expected delete to remove reservation index entry")
+	}
 }
 
 func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *testing.T) {
@@ -321,7 +357,7 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 
 	// Simulate a state TTL expiry or missed cleanup after a worker failure. The
 	// hot path counter still says the workspace is full, but the active state
-	// scan used for repair no longer includes the first container.
+	// index used for repair no longer includes the first container.
 	if err := rdb.Del(context.Background(), common.RedisKeys.SchedulerContainerState(firstRequest.ContainerId)).Err(); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +383,18 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 	}
 	if usedCPU != secondRequest.Cpu {
 		t.Fatalf("expected repaired counter to track only active request CPU, got %d", usedCPU)
+	}
+
+	indexed, err := rdb.SIsMember(
+		context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(firstRequest.WorkspaceId),
+		firstRequest.ContainerId,
+	).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexed {
+		t.Fatal("expected stale reservation index entry to be removed during repair")
 	}
 }
 

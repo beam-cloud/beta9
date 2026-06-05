@@ -137,6 +137,13 @@ func TestRecentStubsAnyLocalityDedupesByNewestSeen(t *testing.T) {
 	require.NoError(t, m.AddRecentStub(ctx, "locality-b", "ws", "stub-a", time.Hour))
 	require.NoError(t, m.AddRecentStub(ctx, "locality-b", "ws", "stub-b", time.Hour))
 
+	indexMembers, err := m.rdb.ZRange(ctx, MetadataKeys.MetadataReconcileRecentAll(), 0, -1).Result()
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{
+		RecentStubKey("ws", "stub-a"),
+		RecentStubKey("ws", "stub-b"),
+	}, indexMembers)
+
 	stubs, err := m.ListRecentStubsAnyLocality(ctx, time.Hour)
 	require.NoError(t, err)
 
