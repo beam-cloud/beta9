@@ -392,6 +392,8 @@ func (m *WorkerCacheManager) runReconciliation() {
 		select {
 		case <-m.ctx.Done():
 			return
+		case <-m.reconcileNow:
+			m.reconcileOnce()
 		case <-ticker.C:
 			m.reconcileOnce()
 		}
@@ -493,7 +495,7 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		// Back off items that recently failed to materialize (e.g. an
 		// unresolvable origin source) so they are not retried and re-logged
 		// every cycle.
-		if m.reconcileBackingOff(item.Hash, routingKey) {
+		if m.reconcileBackingOff(item.Hash, routingKey, stub.LastSeen) {
 			continue
 		}
 
@@ -572,13 +574,17 @@ func reconcileStatusIsFailure(status string) bool {
 // reconcileBackingOff reports whether an item failed to materialize recently and
 // should be skipped until the backoff window elapses. Expired entries are pruned
 // so the map only tracks currently-failing items.
-func (m *WorkerCacheManager) reconcileBackingOff(hash, routingKey string) bool {
+func (m *WorkerCacheManager) reconcileBackingOff(hash, routingKey string, stubLastSeen time.Time) bool {
 	key := hash + "\x00" + routingKey
 	m.reconcileFailuresMu.Lock()
 	defer m.reconcileFailuresMu.Unlock()
 
 	failedAt, ok := m.reconcileFailures[key]
 	if !ok {
+		return false
+	}
+	if !stubLastSeen.IsZero() && stubLastSeen.After(failedAt) {
+		delete(m.reconcileFailures, key)
 		return false
 	}
 	if time.Since(failedAt) < reconcileFailureBackoff {

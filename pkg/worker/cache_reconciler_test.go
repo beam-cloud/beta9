@@ -29,6 +29,7 @@ type fakeEventRepo struct {
 	pushed      []types.EventStubCacheRequiredContentSchema
 	cacheEvents []types.EventPlatformCacheSchema
 	items       []types.CacheRequiredContentItem
+	readKeys    []string
 	err         error
 	readErr     error
 }
@@ -55,6 +56,7 @@ func (f *fakeEventRepo) ReadStubCacheRequiredContent(ctx context.Context, worksp
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
+	f.readKeys = append(f.readKeys, workspaceID+"|"+stubID)
 	return append([]types.CacheRequiredContentItem(nil), f.items...), nil
 }
 
@@ -78,6 +80,18 @@ type claimedMetadataStore struct {
 	cache.CacheMetadataStore
 	claimed bool
 	marked  int
+	recent  int
+}
+
+type localityRecentMetadataStore struct {
+	*cache.MockCacheMetadataStore
+	stubs  map[string][]cache.RecentStub
+	listed []string
+}
+
+func (m *localityRecentMetadataStore) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]cache.RecentStub, error) {
+	m.listed = append(m.listed, locality)
+	return append([]cache.RecentStub(nil), m.stubs[locality]...), nil
 }
 
 func (m *claimedMetadataStore) MarkStubReported(context.Context, string, string, time.Duration) (bool, error) {
@@ -86,6 +100,7 @@ func (m *claimedMetadataStore) MarkStubReported(context.Context, string, string,
 }
 
 func (m *claimedMetadataStore) AddRecentStub(context.Context, string, string, string, time.Duration) error {
+	m.recent++
 	return nil
 }
 
@@ -233,6 +248,106 @@ func TestCheckpointAcceleratorMatch(t *testing.T) {
 	require.True(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{Accelerator: "a10g"}))
 	require.True(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{}))
 	require.False(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{Accelerator: "T4"}))
+}
+
+func TestReconcileBackoffIsBypassedByNewStubSighting(t *testing.T) {
+	failedAt := time.Now().Add(-time.Minute)
+	manager := &WorkerCacheManager{
+		reconcileFailures: map[string]time.Time{
+			"hash\x00route": failedAt,
+		},
+	}
+
+	require.True(t, manager.reconcileBackingOff("hash", "route", failedAt.Add(-time.Second)))
+	require.False(t, manager.reconcileBackingOff("hash", "route", failedAt.Add(time.Second)))
+	require.Empty(t, manager.reconcileFailures)
+}
+
+func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	localServer, err := cache.NewServerWithOptions(ctx, cfg, "locality-b", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	localAddr, err := localServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
+
+	localHost := localServer.Host()
+	require.NotNil(t, localHost)
+	localHost.Addr = localAddr
+	localHost.PrivateAddr = localAddr
+
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	client, err := cache.NewClientWithHostDirectory(ctx, clientCfg, cache.NewMockCacheMetadataStore(), testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{localHost}, nil
+	}), "locality-b")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	metadata := &localityRecentMetadataStore{
+		MockCacheMetadataStore: cache.NewMockCacheMetadataStore(),
+		stubs: map[string][]cache.RecentStub{
+			"locality-a": {{WorkspaceID: "workspace-a", StubID: "stub-a", LastSeen: time.Now()}},
+			"locality-b": {{WorkspaceID: "workspace-b", StubID: "stub-b", LastSeen: time.Now()}},
+		},
+	}
+	fake := &fakeEventRepo{}
+	manager := &WorkerCacheManager{
+		ctx:               ctx,
+		locality:          "locality-b",
+		metadataStore:     metadata,
+		eventRepo:         fake,
+		client:            client,
+		server:            localServer,
+		checkpointRoot:    t.TempDir(),
+		reconcileFailures: make(map[string]time.Time),
+	}
+
+	manager.reconcileOnce()
+
+	require.Equal(t, []string{"locality-b"}, metadata.listed)
+	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
+}
+
+func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T) {
+	fake := &fakeEventRepo{}
+	metadata := &claimedMetadataStore{}
+	reporter := newTestReporter(fake)
+	reporter.metadata = metadata
+	worker := &Worker{
+		cacheManager: &WorkerCacheManager{
+			checkpointRoot: t.TempDir(),
+			reporter:       reporter,
+			reconcileNow:   make(chan struct{}, 1),
+		},
+	}
+	checkpoint := &types.Checkpoint{
+		CheckpointId:   "checkpoint-a",
+		CacheHash:      strings.Repeat("a", 64),
+		CacheSizeBytes: 1,
+		OriginKey:      "checkpoints/checkpoint-a.tar",
+		Accelerator:    "A10G",
+	}
+
+	_, err := worker.ensureCheckpointMaterialized(context.Background(), &types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}, checkpoint)
+	require.Error(t, err)
+	require.Len(t, worker.cacheManager.reconcileNow, 1)
+
+	reporter.flush()
+	require.Equal(t, 1, metadata.recent)
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, types.CacheContentKindCheckpoint, fake.pushed[0].Kind)
+	require.Equal(t, "workspace", fake.pushed[0].WorkspaceID)
+	require.Equal(t, "stub", fake.pushed[0].StubID)
+	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
+	require.Equal(t, checkpoint.CheckpointId, fake.pushed[0].Items[0].CheckpointID)
+	require.Equal(t, checkpoint.Accelerator, fake.pushed[0].Items[0].Accelerator)
 }
 
 func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {

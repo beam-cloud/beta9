@@ -186,7 +186,7 @@ type BackendRepository interface {
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
 	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
 	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
-	PruneStaleCheckpoints(ctx context.Context, locality string, activeStubExternalIds []string) ([]types.Checkpoint, error)
+	PruneStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error)
 }
 
 type TaskRepository interface {

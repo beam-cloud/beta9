@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bsm/redislock"
@@ -235,7 +236,7 @@ func (m *Metadata) AddRecentStub(ctx context.Context, locality, workspaceID, stu
 	}
 	key := MetadataKeys.MetadataReconcileRecent(locality)
 	now := time.Now()
-	member := recentStubMember(workspaceID, stubID)
+	member := RecentStubKey(workspaceID, stubID)
 
 	pipe := m.rdb.TxPipeline()
 	pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.UnixNano()), Member: member})
@@ -252,6 +253,10 @@ func (m *Metadata) AddRecentStub(ctx context.Context, locality, workspaceID, stu
 // excluding entries older than ttl.
 func (m *Metadata) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error) {
 	key := MetadataKeys.MetadataReconcileRecent(locality)
+	return m.listRecentStubsFromKey(ctx, key, ttl, limit)
+}
+
+func (m *Metadata) listRecentStubsFromKey(ctx context.Context, key string, ttl time.Duration, limit int) ([]RecentStub, error) {
 	min := "-inf"
 	if ttl > 0 {
 		min = fmt.Sprintf("%d", time.Now().Add(-ttl).UnixNano())
@@ -282,6 +287,38 @@ func (m *Metadata) ListRecentStubs(ctx context.Context, locality string, ttl tim
 			LastSeen:    time.Unix(0, int64(z.Score)),
 		})
 	}
+	return stubs, nil
+}
+
+// ListRecentStubsAnyLocality returns recently used stubs across all locality
+// indexes, newest first, deduplicated by workspace/stub pair.
+func (m *Metadata) ListRecentStubsAnyLocality(ctx context.Context, ttl time.Duration) ([]RecentStub, error) {
+	keys, err := m.rdb.Scan(ctx, MetadataKeys.MetadataReconcileRecent("*"))
+	if err != nil {
+		return nil, err
+	}
+
+	latest := map[string]RecentStub{}
+	for _, key := range keys {
+		stubs, err := m.listRecentStubsFromKey(ctx, key, ttl, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, stub := range stubs {
+			member := RecentStubKey(stub.WorkspaceID, stub.StubID)
+			if existing, ok := latest[member]; !ok || stub.LastSeen.After(existing.LastSeen) {
+				latest[member] = stub
+			}
+		}
+	}
+
+	stubs := make([]RecentStub, 0, len(latest))
+	for _, stub := range latest {
+		stubs = append(stubs, stub)
+	}
+	sort.Slice(stubs, func(i, j int) bool {
+		return stubs[i].LastSeen.After(stubs[j].LastSeen)
+	})
 	return stubs, nil
 }
 
@@ -320,7 +357,7 @@ func (m *Metadata) ReleaseReconcileLock(locality, logicalHost, hash string) erro
 	return m.lock.Release(MetadataKeys.MetadataReconcileLock(locality, logicalHost, hash))
 }
 
-func recentStubMember(workspaceID, stubID string) string {
+func RecentStubKey(workspaceID, stubID string) string {
 	return workspaceID + "|" + stubID
 }
 

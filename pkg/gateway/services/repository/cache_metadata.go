@@ -168,15 +168,19 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}, nil
 }
 
-func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, req *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
-	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, _ *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	if s.backendRepo == nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: "backend repository is unavailable"}, nil
 	}
 
-	checkpoints, err := s.backendRepo.PruneStaleCheckpoints(ctx, req.Locality, req.ActiveStubIds)
+	activeKeys, err := s.activeRecentCacheStubKeys(ctx)
+	if err != nil {
+		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	checkpoints, err := s.backendRepo.PruneStaleCheckpoints(ctx, activeKeys)
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -197,6 +201,44 @@ func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context
 	}
 
 	return &pb.PruneStaleCacheCheckpointsResponse{Ok: true, Pruned: int32(len(checkpoints))}, nil
+}
+
+type anyLocalityRecentStubStore interface {
+	ListRecentStubsAnyLocality(ctx context.Context, ttl time.Duration) ([]cache.RecentStub, error)
+}
+
+func (s *WorkerRepositoryService) activeRecentCacheStubKeys(ctx context.Context) ([]string, error) {
+	store, ok := s.cacheMetadata.(anyLocalityRecentStubStore)
+	if !ok {
+		return nil, fmt.Errorf("cache metadata store cannot list recent stubs across localities")
+	}
+
+	stubs, err := store.ListRecentStubsAnyLocality(ctx, s.recentCacheStubTTL())
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(stubs))
+	seen := map[string]struct{}{}
+	for _, stub := range stubs {
+		if stub.WorkspaceID == "" || stub.StubID == "" {
+			continue
+		}
+		key := cache.RecentStubKey(stub.WorkspaceID, stub.StubID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+func (s *WorkerRepositoryService) recentCacheStubTTL() time.Duration {
+	seconds := s.appConfig.Cache.Reconciliation.RecentStubTTLSeconds
+	if seconds <= 0 {
+		seconds = cache.DefaultReconcileRecentStubTTLS
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // workspaceStorageCredentials resolves a workspace's (decrypted) object storage

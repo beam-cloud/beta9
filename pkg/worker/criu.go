@@ -196,9 +196,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
-		err := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, nil)
-		if err != nil {
-			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", err)
+		if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", stateErr)
 		}
 
 		if opts.OutputLogger != nil {
@@ -219,7 +218,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
 	if err != nil {
-		_ = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, nil)
+		_ = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to persist checkpoint: %v", err)
 		return err
 	}
@@ -233,7 +232,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 	}
 
-	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, metadata)
+	err = s.createAvailableCheckpointState(opts.CheckpointId, opts.Request, opts.ContainerIp, metadata)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", err)
 		return err
@@ -344,6 +343,8 @@ func (s *Worker) ensureCheckpointMaterialized(ctx context.Context, request *type
 	if checkpoint.CacheHash == "" || checkpoint.CacheSizeBytes <= 0 || checkpoint.OriginKey == "" {
 		return "", fmt.Errorf("checkpoint cache metadata is incomplete")
 	}
+	s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
+	s.cacheManager.requestReconcile()
 
 	archivePath := s.checkpointArchivePath(checkpoint.CheckpointId)
 	if archivePath == "" {
@@ -511,6 +512,20 @@ func fileSHA256(filePath string) (string, int64, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), size, nil
 }
 
+func checkpointCacheMetadataFromRecord(request *types.ContainerRequest, checkpoint *types.Checkpoint) *checkpointCacheMetadata {
+	accelerator := checkpoint.Accelerator
+	if accelerator == "" {
+		accelerator = checkpointAccelerator(request)
+	}
+	return &checkpointCacheMetadata{
+		hash:        checkpoint.CacheHash,
+		sizeBytes:   checkpoint.CacheSizeBytes,
+		originKey:   checkpoint.OriginKey,
+		locality:    checkpoint.Locality,
+		accelerator: accelerator,
+	}
+}
+
 func (s *Worker) reportCheckpointRequiredContent(request *types.ContainerRequest, checkpointId string, metadata *checkpointCacheMetadata) {
 	if s.cacheManager == nil || metadata == nil {
 		return
@@ -571,8 +586,27 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	return pool.CRIUEnabled
 }
 
-func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string, metadata *checkpointCacheMetadata) error {
-	req := &pb.CreateCheckpointRequest{
+func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string) error {
+	req := checkpointStateRequest(checkpointId, request, status, containerIp)
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
+
+	return err
+}
+
+func (s *Worker) createAvailableCheckpointState(checkpointId string, request *types.ContainerRequest, containerIp string, metadata *checkpointCacheMetadata) error {
+	req := checkpointStateRequest(checkpointId, request, types.CheckpointStatusAvailable, containerIp)
+	req.CacheHash = metadata.hash
+	req.CacheSizeBytes = metadata.sizeBytes
+	req.OriginKey = metadata.originKey
+	req.Locality = metadata.locality
+	req.Accelerator = metadata.accelerator
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
+
+	return err
+}
+
+func checkpointStateRequest(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string) *pb.CreateCheckpointRequest {
+	return &pb.CreateCheckpointRequest{
 		CheckpointId:      checkpointId,
 		SourceContainerId: request.ContainerId,
 		ContainerIp:       containerIp,
@@ -581,16 +615,6 @@ func (s *Worker) createCheckpointState(checkpointId string, request *types.Conta
 		StubId:            request.Stub.ExternalId,
 		ExposedPorts:      request.Ports,
 	}
-	if metadata != nil {
-		req.CacheHash = metadata.hash
-		req.CacheSizeBytes = metadata.sizeBytes
-		req.OriginKey = metadata.originKey
-		req.Locality = metadata.locality
-		req.Accelerator = metadata.accelerator
-	}
-	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
-
-	return err
 }
 
 func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus) error {

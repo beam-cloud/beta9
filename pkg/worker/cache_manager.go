@@ -55,7 +55,7 @@ const (
 	cacheServerDaemonSetMarkerName      = ".beta9-cache-server-daemonset"
 
 	cacheDefaultReconcileIntervalS      = 60
-	cacheDefaultReconcileRecentStubTTLS = 7 * 24 * 60 * 60 // 7 days after a stub's last container
+	cacheDefaultReconcileRecentStubTTLS = cache.DefaultReconcileRecentStubTTLS
 	cacheDefaultReconcileLockTTLS       = 300
 	cacheDefaultReconcileMaxStubsCycle  = 256
 	cacheDefaultVolumeReportMinBytes    = 128 * 1024 * 1024
@@ -84,6 +84,7 @@ type WorkerCacheManager struct {
 	originCredsCache      map[string]*originCredentials
 	reconcileFailuresMu   sync.Mutex
 	reconcileFailures     map[string]time.Time
+	reconcileNow          chan struct{}
 	client                *cache.Client
 	server                *cache.Server
 	serverLock            *os.File
@@ -120,6 +121,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		accelerator:        cacheAccelerator(poolConfig),
 		originCredsCache:   make(map[string]*originCredentials),
 		reconcileFailures:  make(map[string]time.Time),
+		reconcileNow:       make(chan struct{}, 1),
 	}
 }
 
@@ -286,6 +288,16 @@ func (m *WorkerCacheManager) CheckpointRoot() string {
 		return ""
 	}
 	return m.checkpointRoot
+}
+
+func (m *WorkerCacheManager) requestReconcile() {
+	if m == nil || m.reconcileNow == nil {
+		return
+	}
+	select {
+	case m.reconcileNow <- struct{}{}:
+	default:
+	}
 }
 
 func (m *WorkerCacheManager) Drain() error {

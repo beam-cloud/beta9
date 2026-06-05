@@ -2767,20 +2767,20 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	return &checkpoint, nil
 }
 
-func (r *PostgresBackendRepository) PruneStaleCheckpoints(ctx context.Context, locality string, activeStubExternalIds []string) ([]types.Checkpoint, error) {
+func (r *PostgresBackendRepository) PruneStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
 	query := `
 		UPDATE checkpoint c
 		SET deleted_at = CURRENT_TIMESTAMP
 		FROM stub s
+		INNER JOIN workspace w ON s.workspace_id = w.id
 		WHERE c.stub_id = s.id
 		  AND c.deleted_at IS NULL
-		  AND c.locality = $1
-		  AND NOT (s.external_id = ANY($2::text[]))
+		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
 		RETURNING c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		          c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
 		          c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator;`
 
-	rows, err := r.client.QueryxContext(ctx, query, locality, pq.Array(activeStubExternalIds))
+	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys))
 	if err != nil {
 		return nil, err
 	}

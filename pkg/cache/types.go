@@ -15,6 +15,7 @@ const (
 const (
 	defaultHostStorageCapacityThresholdPct float64 = 0.95
 	defaultHostKeepAliveTimeoutS           int     = 60
+	DefaultReconcileRecentStubTTLS         int     = 7 * 24 * 60 * 60
 )
 
 type Config struct {
