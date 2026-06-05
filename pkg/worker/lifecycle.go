@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	baseConfigPath              string = "/tmp"
+	baseConfigPath              string = types.AgentTmpPath
 	defaultContainerDirectory   string = types.WorkerUserCodeVolume
 	specBaseName                string = "config.json"
 	initialSpecBaseName         string = "initial_config.json"

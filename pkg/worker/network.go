@@ -49,8 +49,8 @@ const (
 
 	containerNetworkCleanupInterval     time.Duration = time.Minute * 1
 	defaultContainerNetworkSlotPoolSize               = 16
-	containerNetworkSlotPoolEnv         string        = "CONTAINER_NETWORK_SLOT_POOL_SIZE"
-	workerIptablesModeEnv               string        = "WORKER_IPTABLES_MODE"
+	containerNetworkSlotPoolEnv         string        = types.WorkerNetworkSlotsEnv
+	workerIptablesModeEnv               string        = types.WorkerIptablesModeEnv
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 	containerNetworkCleanupLockRetries                = 14
@@ -464,7 +464,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		}
 	}
 
-	baseNetworkPrefix := os.Getenv("NETWORK_PREFIX")
+	baseNetworkPrefix := os.Getenv(types.WorkerNetworkPrefixEnv)
 	if baseNetworkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
 	}
@@ -727,7 +727,7 @@ func (m *ContainerNetworkManager) workerExists(workerID string) (bool, error) {
 }
 
 func (m *ContainerNetworkManager) networkSlotResourcesExist(slotID string) bool {
-	if _, err := os.Stat(filepath.Join("/var/run/netns", slotID)); err != nil {
+	if _, err := os.Stat(filepath.Join(types.HostNetnsPath, slotID)); err != nil {
 		return false
 	}
 
@@ -1149,7 +1149,7 @@ func (m *ContainerNetworkManager) createNetworkSlotLocked() (*containerNetworkSl
 		vethHost:      vethHost,
 		ip:            ipAddr.IP.String(),
 		ipv6:          ipv6,
-		netnsPath:     filepath.Join("/var/run/netns", namespace),
+		netnsPath:     filepath.Join(types.HostNetnsPath, namespace),
 	}, nil
 }
 
@@ -1391,7 +1391,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	// Update the runc spec to use the new network namespace
 	spec.Linux.Namespaces = append(spec.Linux.Namespaces, specs.LinuxNamespace{
 		Type: specs.NetworkNamespace,
-		Path: filepath.Join("/var/run/netns", namespace),
+		Path: filepath.Join(types.HostNetnsPath, namespace),
 	})
 
 	// Configure the network inside the container's namespace
@@ -2422,17 +2422,17 @@ func getRandomFreePort() (int, error) {
 // GetPodAddr gets the IP from the POD_IP env var.
 // Returns an error if it fails to retrieve an IP.
 func GetPodAddr() (string, error) {
-	addr, exists := os.LookupEnv("POD_HOSTNAME")
+	addr, exists := os.LookupEnv(types.WorkerPodHostEnv)
 	if exists {
 		return addr, nil
 	}
 
-	return getIPFromEnv("POD_IP")
+	return getIPFromEnv(types.WorkerPodIPEnv)
 }
 
 // getDefaultInterface returns the link that goes to the internet.
 func getDefaultInterface() (netlink.Link, error) {
-	if name := strings.TrimSpace(os.Getenv("WORKER_DEFAULT_INTERFACE")); name != "" {
+	if name := strings.TrimSpace(os.Getenv(types.WorkerDefaultInterfaceEnv)); name != "" {
 		return netlink.LinkByName(name)
 	}
 

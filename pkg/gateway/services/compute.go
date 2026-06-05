@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	defaultPrivateTransport = "tsnet_restricted"
-	defaultPrivateFallback  = "internal"
+	defaultPrivateTransport = types.BackendRouteTransportTSNet
+	defaultPrivateFallback  = types.PrivatePoolFallbackInternal
 	defaultPrivatePriority  = int32(1000)
 	defaultPrivateExecutor  = types.DefaultAgentWorkerContainerMode
 	defaultPrivateJoinTTL   = 30 * time.Minute
@@ -916,7 +916,7 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 		out.Selector = out.Name
 	}
 	if out.Mode == "" {
-		out.Mode = "private"
+		out.Mode = string(types.PoolModePrivate)
 	}
 	if out.Transport == "" {
 		out.Transport = defaultPrivateTransport
@@ -935,8 +935,8 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (compute.P
 	if in == nil {
 		return compute.Pool{}, fmt.Errorf("pool config is required")
 	}
-	if in.Mode != "" && in.Mode != "private" {
-		return compute.Pool{}, fmt.Errorf("private pool mode must be %q", "private")
+	if in.Mode != "" && in.Mode != string(types.PoolModePrivate) {
+		return compute.Pool{}, fmt.Errorf("private pool mode must be %q", types.PoolModePrivate)
 	}
 	switch in.Transport {
 	case "", defaultPrivateTransport:
@@ -944,7 +944,7 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (compute.P
 		return compute.Pool{}, fmt.Errorf("unsupported agent transport %q", in.Transport)
 	}
 	switch in.Fallback {
-	case "", "internal", "wait", "fail":
+	case "", types.PrivatePoolFallbackInternal, types.PrivatePoolFallbackWait, types.PrivatePoolFallbackFail:
 	default:
 		return compute.Pool{}, fmt.Errorf("unsupported private pool fallback %q", in.Fallback)
 	}
@@ -1068,7 +1068,7 @@ func agentMachineToProto(state *compute.AgentTokenState) *pb.Machine {
 		GpuCount:      state.GPUCount,
 		Status:        computeMachineStatus(state),
 		PoolName:      state.PoolName,
-		ProviderName:  "agent",
+		ProviderName:  types.DefaultAgentName,
 		Created:       formatComputeTime(state.CreatedAt),
 		LastKeepalive: formatComputeTime(state.LastJoinAt),
 	}

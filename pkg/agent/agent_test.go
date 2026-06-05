@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/network"
-	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -77,8 +76,8 @@ func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
 	defer conn.Close()
 }
 
-func TestNormalizeBootstrapForAgentContainerUsesReachableGatewayHost(t *testing.T) {
-	t.Setenv("BEAM_AGENT_CONTAINER", "1")
+func TestNormalizeBootstrapForAgentRuntimeUsesReachableGatewayHost(t *testing.T) {
+	t.Setenv(types.AgentInContainerEnv, "1")
 
 	got := normalizeBootstrapForAgentRuntime("http://host.docker.internal:1994", bootstrapConfig{
 		GatewayHTTPURL:  "http://localhost:1994",
@@ -95,8 +94,8 @@ func TestNormalizeBootstrapForAgentContainerUsesReachableGatewayHost(t *testing.
 }
 
 func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
-	t.Setenv("BEAM_AGENT_LOCAL_TARGET_HOST", "host.docker.internal")
-	t.Setenv(agentDockerHostAliasesEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")
+	t.Setenv(types.AgentTargetHostEnv, "host.docker.internal")
+	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")
 
 	args := dockerRunArgs("slot-one", "worker:dev", "/tmp/config.json", bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
@@ -115,32 +114,32 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		ContainerStartConcurrency: 12,
 	}, agentWorkerDirs("/tmp/agent-state", "worker-one"))
 
-	if !containsArg(args, "-e", types.WorkerEnvRouteLocalTargetHost+"=host.docker.internal") {
+	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
 		t.Fatalf("expected route target host env in docker args: %#v", args)
 	}
 	for _, want := range []string{
-		"CACHE_LOCALITY=private",
-		"CACHE_NODE_ID=machine",
-		"CACHE_HOST_NETWORK=true",
-		"BEAM_GATEWAY_HTTP_URL=http://host.docker.internal:1994",
-		"BETA9_GATEWAY_HOST=host.docker.internal",
-		"BETA9_GATEWAY_PORT=1993",
-		"BETA9_GATEWAY_HOST_HTTP=host.docker.internal",
-		"BETA9_GATEWAY_PORT_HTTP=1994",
-		"NVIDIA_VISIBLE_DEVICES=0,1",
-		"WORKER_CONTAINER_START_CONCURRENCY=12",
-		"CONTAINER_NETWORK_SLOT_POOL_SIZE=64",
+		types.CacheLocalityEnv + "=private",
+		types.CacheNodeEnv + "=machine",
+		types.CacheHostNetworkEnv + "=true",
+		types.AgentGatewayURLEnv + "=http://host.docker.internal:1994",
+		types.ContainerGatewayGRPCHostEnv + "=host.docker.internal",
+		types.ContainerGatewayGRPCPortEnv + "=1993",
+		types.ContainerGatewayHTTPHostEnv + "=host.docker.internal",
+		types.ContainerGatewayHTTPPortEnv + "=1994",
+		types.NvidiaVisibleDevicesEnv + "=0,1",
+		types.WorkerStartConcurrencyEnv + "=12",
+		types.WorkerNetworkSlotsEnv + "=64",
 	} {
 		if !containsArg(args, "-e", want) {
 			t.Fatalf("expected %s env in docker args: %#v", want, args)
 		}
 	}
 	for _, want := range []string{
-		"/tmp/agent-state/images:/images",
-		"/tmp/agent-state/data:/data",
-		"/tmp/agent-state/workspace-data:/workspace/data",
-		"/tmp/agent-state/cache:/var/lib/beta9/cache",
-		"/tmp/agent-state/checkpoints:/checkpoints",
+		"/tmp/agent-state/images:" + types.AgentImagesPath,
+		"/tmp/agent-state/data:" + types.AgentDataPath,
+		"/tmp/agent-state/workspace-data:" + types.AgentWorkspacePath,
+		"/tmp/agent-state/cache:" + types.AgentCachePath,
+		"/tmp/agent-state/checkpoints:" + types.AgentCheckpointPath,
 	} {
 		if !containsArg(args, "-v", want) {
 			t.Fatalf("expected %s volume in docker args: %#v", want, args)
@@ -179,7 +178,7 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 		GatewayGRPCHost: "host.docker.internal",
 		GatewayGRPCPort: 1993,
 		GatewayGRPCTLS:  false,
-	}, slot, agentWorkerDirs("/tmp/agent-state", "worker-one")); err != nil {
+	}, slot); err != nil {
 		t.Fatal(err)
 	}
 
@@ -210,7 +209,7 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
-	t.Setenv(agentLocalRegistryForwardEnv, "host.docker.internal:5001")
+	t.Setenv(types.AgentRegistryForwardEnv, "host.docker.internal:5001")
 
 	got := agentLocalRegistryForwardTarget()
 	if got != "host.docker.internal:5001" {
@@ -225,7 +224,7 @@ func TestAgentLocalRegistryForwardTargetDisabledByDefault(t *testing.T) {
 }
 
 func TestAgentDockerHostAliasesAreEnvironmentDriven(t *testing.T) {
-	t.Setenv(agentDockerHostAliasesEnv, "registry.localhost:127.0.0.1, localstack:host-gateway")
+	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1, localstack:host-gateway")
 
 	got := agentDockerHostAliases()
 	want := []string{"registry.localhost:127.0.0.1", "localstack:host-gateway"}
@@ -296,7 +295,7 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 		ContainerStartConcurrency: 12,
 	}
 
-	if err := writeWorkerConfig(path, bootstrapConfig{}, slot, agentWorkerDirs("/tmp/agent-state", "worker-one")); err != nil {
+	if err := writeWorkerConfig(path, bootstrapConfig{}, slot); err != nil {
 		t.Fatal(err)
 	}
 
@@ -310,18 +309,18 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 
 	storageConfig := config["storage"].(map[string]any)
-	if got := storageConfig["fsPath"]; got != agentContainerDataPath {
-		t.Fatalf("storage fsPath = %v, want %q", got, agentContainerDataPath)
+	if got := storageConfig["fsPath"]; got != types.AgentDataPath {
+		t.Fatalf("storage fsPath = %v, want %q", got, types.AgentDataPath)
 	}
-	if got := storageConfig["objectPath"]; got != "/data/objects" {
-		t.Fatalf("storage objectPath = %v, want /data/objects", got)
+	if got := storageConfig["objectPath"]; got != filepath.Join(types.AgentDataPath, "objects") {
+		t.Fatalf("storage objectPath = %v, want %q", got, filepath.Join(types.AgentDataPath, "objects"))
 	}
 	workspaceStorage := storageConfig["workspaceStorage"].(map[string]any)
-	if got := workspaceStorage["baseMountPath"]; got != agentContainerWorkspaceStoragePath {
-		t.Fatalf("workspace base path = %v, want %q", got, agentContainerWorkspaceStoragePath)
+	if got := workspaceStorage["baseMountPath"]; got != types.AgentWorkspacePath {
+		t.Fatalf("workspace base path = %v, want %q", got, types.AgentWorkspacePath)
 	}
-	if got := workspaceStorage["defaultStorageMode"]; got != storage.StorageModeGeese {
-		t.Fatalf("workspace storage mode = %v, want %q", got, storage.StorageModeGeese)
+	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
+		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
 
 	monitoringConfig := config["monitoring"].(map[string]any)
@@ -342,8 +341,8 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 	pools := workerConfig["pools"].(map[string]any)
 	pool := pools["private-dev"].(map[string]any)
-	if got := pool["storageMode"]; got != storage.StorageModeGeese {
-		t.Fatalf("pool storage mode = %v, want %q", got, storage.StorageModeGeese)
+	if got := pool["storageMode"]; got != types.StorageModeGeese {
+		t.Fatalf("pool storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
 	if got := pool["networkPreallocation"]; got != true {
 		t.Fatalf("pool networkPreallocation = %v, want true", got)
@@ -359,8 +358,8 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := poolCache["enabled"]; got != true {
 		t.Fatalf("pool cache enabled = %v, want true", got)
 	}
-	if got := poolDisk["mountPath"]; got != agentContainerCachePath {
-		t.Fatalf("pool cache mount path = %v, want %q", got, agentContainerCachePath)
+	if got := poolDisk["mountPath"]; got != types.AgentCachePath {
+		t.Fatalf("pool cache mount path = %v, want %q", got, types.AgentCachePath)
 	}
 
 	cacheConfig := config["cache"].(map[string]any)
@@ -371,14 +370,14 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := cacheConfig["enabled"]; got != true {
 		t.Fatalf("cache enabled = %v, want true", got)
 	}
-	if got := cacheDisk["mountPath"]; got != agentContainerCachePath {
-		t.Fatalf("cache disk mount path = %v, want %q", got, agentContainerCachePath)
+	if got := cacheDisk["mountPath"]; got != types.AgentCachePath {
+		t.Fatalf("cache disk mount path = %v, want %q", got, types.AgentCachePath)
 	}
-	if got := cacheServer["diskCacheDir"]; got != "/var/lib/beta9/cache/private-dev/machine-a" {
+	if got := cacheServer["diskCacheDir"]; got != filepath.Join(types.AgentCachePath, "private-dev", "machine-a") {
 		t.Fatalf("cache disk dir = %v, want machine-scoped persistent path", got)
 	}
-	if got := cacheFS["mountPoint"]; got != agentContainerCacheFSMountPath {
-		t.Fatalf("cachefs mount point = %v, want %q", got, agentContainerCacheFSMountPath)
+	if got := cacheFS["mountPoint"]; got != types.AgentCacheFSMountPath {
+		t.Fatalf("cachefs mount point = %v, want %q", got, types.AgentCacheFSMountPath)
 	}
 }
 

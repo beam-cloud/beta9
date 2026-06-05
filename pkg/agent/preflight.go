@@ -49,7 +49,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Severity: "info",
 		})
 	}
-	if envBool("BEAM_AGENT_CONTAINER") {
+	if envBool(types.AgentInContainerEnv) {
 		checks = append(checks, check{
 			Name:     "agent-container",
 			Ok:       true,
@@ -93,7 +93,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Severity: severity(netns),
 		})
 
-		netnsRunDir := writableDirOrCreatable("/var/run/netns")
+		netnsRunDir := writableDirOrCreatable(types.HostNetnsPath)
 		checks = append(checks, check{
 			Name:     "netns-run-dir",
 			Ok:       netnsRunDir,
@@ -125,7 +125,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Severity: "info",
 		})
 
-		fuse := pathExists("/dev/fuse")
+		fuse := pathExists(types.HostFuseDevicePath)
 		checks = append(checks, check{
 			Name:     "fuse",
 			Ok:       fuse,
@@ -251,7 +251,7 @@ func networkManagerMessage(present bool) string {
 }
 
 func machineFingerprint(hostname string) string {
-	if value := strings.TrimSpace(os.Getenv("BEAM_AGENT_MACHINE_FINGERPRINT")); value != "" {
+	if value := strings.TrimSpace(os.Getenv(types.AgentFingerprintEnv)); value != "" {
 		return value
 	}
 	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {

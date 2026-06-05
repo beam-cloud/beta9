@@ -19,10 +19,10 @@ func gatewayTailscaleConfig(config types.AppConfig) network.TailscaleConfig {
 }
 
 func gatewayTailscaleHostname() string {
-	if hostname := sanitizedGatewayTailscaleHostname(os.Getenv("BETA9_GATEWAY_TSNET_HOSTNAME")); hostname != "" {
+	if hostname := sanitizedGatewayTailscaleHostname(os.Getenv(types.GatewayTSNetHostnameEnv)); hostname != "" {
 		return hostname
 	}
-	for _, envKey := range []string{"POD_NAME", "HOSTNAME"} {
+	for _, envKey := range []string{types.PodNameEnv, types.HostnameEnv} {
 		if hostname := sanitizedGatewayTailscaleHostname(os.Getenv(envKey)); hostname != "" {
 			return hostname
 		}

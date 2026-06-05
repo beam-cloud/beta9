@@ -57,7 +57,7 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, checkpoi
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
 	checkpointPath := filepath.Join(c.checkpointRoot, checkpointId)
-	workDir := filepath.Join("/tmp", checkpointId)
+	workDir := filepath.Join(types.AgentTmpPath, checkpointId)
 
 	// Setup work directory for checkpoint files
 	if err := os.MkdirAll(workDir, 0755); err != nil {
@@ -90,7 +90,7 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Run
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.checkpointRoot, opts.checkpoint.CheckpointId)
-	workDir := filepath.Join("/tmp", opts.checkpoint.CheckpointId)
+	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.CheckpointId)
 
 	// Setup work directory for restore files
 	err := c.setupRestoreWorkDir(workDir)

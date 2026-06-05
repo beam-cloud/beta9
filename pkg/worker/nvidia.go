@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -136,7 +137,7 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string) []string {
 		"NV_CUDA_COMPAT_PACKAGE":     "",
 		"NV_CUDA_CUDART_VERSION":     "",
 		"CUDA_VERSION":               "",
-		"GPU_TYPE":                   "",
+		types.WorkerGPUEnv:           "",
 		"CUDA_HOME":                  fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion),
 	}
 

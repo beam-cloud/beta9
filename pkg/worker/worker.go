@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	containerLogsPath              string        = "/var/log/worker"
+	containerLogsPath              string        = types.AgentLogsPath
 	defaultWorkerSpindownTimeS     float64       = 300 // 5 minutes
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
@@ -155,35 +155,35 @@ func NewWorker() (*Worker, error) {
 
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
-	gpuType := os.Getenv("GPU_TYPE")
-	workerId := os.Getenv(types.WorkerEnvID)
-	workerToken := os.Getenv(types.WorkerEnvToken)
-	workerPoolName := os.Getenv(types.WorkerEnvPoolName)
-	machineID := os.Getenv(types.WorkerEnvMachineID)
-	podHostName := os.Getenv("HOSTNAME")
-	persistent := envBool(types.WorkerEnvPersistent)
-	routeTransport := firstNonEmptyWorkerValue(os.Getenv(types.WorkerEnvRouteTransport))
+	gpuType := os.Getenv(types.WorkerGPUEnv)
+	workerId := os.Getenv(types.WorkerIDEnv)
+	workerToken := os.Getenv(types.WorkerTokenEnv)
+	workerPoolName := os.Getenv(types.WorkerPoolEnv)
+	machineID := os.Getenv(types.WorkerMachineEnv)
+	podHostName := os.Getenv(types.WorkerHostnameEnv)
+	persistent := envBool(types.WorkerPersistentEnv)
+	routeTransport := firstNonEmptyWorkerValue(os.Getenv(types.WorkerRouteTransportEnv))
 	if routeTransport == "" && persistent {
 		routeTransport = types.BackendRouteTransportTSNet
 	}
-	routeLocalTargetHost := firstNonEmptyWorkerValue(os.Getenv(types.WorkerEnvRouteLocalTargetHost))
+	routeLocalTargetHost := firstNonEmptyWorkerValue(os.Getenv(types.WorkerRouteTargetEnv))
 
 	podAddr, err := GetPodAddr()
 	if err != nil {
 		return nil, err
 	}
 
-	gpuCount, err := strconv.ParseInt(os.Getenv("GPU_COUNT"), 10, 64)
+	gpuCount, err := strconv.ParseInt(os.Getenv(types.WorkerGPUCountEnv), 10, 64)
 	if err != nil {
 		return nil, err
 	}
 
-	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
+	cpuLimit, err := strconv.ParseInt(os.Getenv(types.WorkerCPUEnv), 10, 64)
 	if err != nil {
 		return nil, err
 	}
 
-	memoryLimit, err := strconv.ParseInt(os.Getenv("MEMORY_LIMIT"), 10, 64)
+	memoryLimit, err := strconv.ParseInt(os.Getenv(types.WorkerMemoryEnv), 10, 64)
 	if err != nil {
 		return nil, err
 	}
@@ -495,14 +495,14 @@ func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, global
 }
 
 func containerStartLimitWithEnvOverride(limit int) int {
-	raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY")
+	raw := os.Getenv(types.WorkerStartConcurrencyEnv)
 	if raw == "" {
 		return limit
 	}
 
 	parsed, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Warn().Str("value", raw).Err(err).Msg("invalid WORKER_CONTAINER_START_CONCURRENCY")
+		log.Warn().Str("value", raw).Err(err).Msg("invalid " + types.WorkerStartConcurrencyEnv)
 		return limit
 	}
 	if parsed <= 0 {

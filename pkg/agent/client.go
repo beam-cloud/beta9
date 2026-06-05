@@ -74,7 +74,7 @@ func isLoopbackHost(host string) bool {
 }
 
 func normalizeBootstrapForAgentRuntime(gatewayURL string, bootstrap bootstrapConfig) bootstrapConfig {
-	if !envBool("BEAM_AGENT_CONTAINER") {
+	if !envBool(types.AgentInContainerEnv) {
 		return bootstrap
 	}
 
@@ -106,7 +106,7 @@ func urlHostIsLoopback(value string) bool {
 
 func join(ctx context.Context, client *Client, opts JoinOptions) (*joinResponse, error) {
 	hostname, _ := os.Hostname()
-	hostname = firstNonEmpty(os.Getenv("BEAM_AGENT_HOSTNAME"), hostname)
+	hostname = firstNonEmpty(os.Getenv(types.AgentHostnameEnv), hostname)
 	executor := types.DefaultAgentWorkerContainerMode
 	if opts.ExecutorOverride != "" {
 		executor = opts.ExecutorOverride

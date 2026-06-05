@@ -12,8 +12,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-const agentImageArchiveRoot = "/images"
-
 func (g *Gateway) agentImageArchiveHandler() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		cc, ok := c.(*auth.HttpAuthContext)
@@ -30,7 +28,7 @@ func (g *Gateway) agentImageArchiveHandler() echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid image archive")
 		}
 
-		path := filepath.Join(agentImageArchiveRoot, file)
+		path := filepath.Join(types.AgentImagesPath, file)
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
 				return echo.NewHTTPError(http.StatusNotFound, "image archive not found")

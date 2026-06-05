@@ -24,10 +24,10 @@ func agentGatewayEnv(bootstrap bootstrapConfig) map[string]string {
 	}
 
 	return map[string]string{
-		types.ContainerEnvGatewayGRPCHost: bootstrap.GatewayGRPCHost,
-		types.ContainerEnvGatewayGRPCPort: strconv.Itoa(grpcPort),
-		types.ContainerEnvGatewayHTTPHost: httpHost,
-		types.ContainerEnvGatewayHTTPPort: strconv.Itoa(httpPort),
+		types.ContainerGatewayGRPCHostEnv: bootstrap.GatewayGRPCHost,
+		types.ContainerGatewayGRPCPortEnv: strconv.Itoa(grpcPort),
+		types.ContainerGatewayHTTPHostEnv: httpHost,
+		types.ContainerGatewayHTTPPortEnv: strconv.Itoa(httpPort),
 	}
 }
 
@@ -53,7 +53,7 @@ func agentGatewayHTTPParts(bootstrap bootstrapConfig) (string, int, bool) {
 }
 
 func agentDockerHostAliases() []string {
-	raw := strings.TrimSpace(os.Getenv(agentDockerHostAliasesEnv))
+	raw := strings.TrimSpace(os.Getenv(types.AgentDockerHostsEnv))
 	if raw == "" {
 		return nil
 	}
@@ -75,7 +75,7 @@ func startLocalRegistryForwarder(ctx context.Context, stderr io.Writer) (io.Clos
 		return nil, nil
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:5000")
+	listener, err := net.Listen("tcp", types.AgentRegistryAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func startLocalRegistryForwarder(ctx context.Context, stderr io.Writer) (io.Clos
 }
 
 func agentLocalRegistryForwardTarget() string {
-	return strings.TrimSpace(os.Getenv(agentLocalRegistryForwardEnv))
+	return strings.TrimSpace(os.Getenv(types.AgentRegistryForwardEnv))
 }
 
 type tcpForwarder struct {
@@ -140,18 +140,18 @@ func (f *tcpForwarder) handleConn(conn net.Conn) {
 }
 
 func agentStateDir() (string, error) {
-	if dir := strings.TrimSpace(os.Getenv("BEAM_AGENT_STATE_DIR")); dir != "" {
+	if dir := strings.TrimSpace(os.Getenv(types.AgentStateDirEnv)); dir != "" {
 		return dir, os.MkdirAll(dir, 0755)
 	}
-	if runtime.GOOS == "linux" && writableDirOrCreatable("/var/lib/beam/agent") {
-		dir := "/var/lib/beam/agent"
+	if runtime.GOOS == "linux" && writableDirOrCreatable(types.DefaultAgentStateDir) {
+		dir := types.DefaultAgentStateDir
 		return dir, os.MkdirAll(dir, 0755)
 	}
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, "beam", "agent")
+	dir := filepath.Join(base, types.BeamStateDirName, types.AgentStateDirName)
 	return dir, os.MkdirAll(dir, 0755)
 }
 

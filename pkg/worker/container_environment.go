@@ -24,12 +24,12 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	// Most of these env vars are required to communicate with the gateway and vice versa.
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-		fmt.Sprintf("%s=%s", types.ContainerEnvHostname, fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
+		fmt.Sprintf("%s=%s", types.ContainerHostnameEnv, fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("%s=%s", types.ContainerEnvGatewayGRPCHost, gatewayEnv.grpcHost),
-		fmt.Sprintf("%s=%s", types.ContainerEnvGatewayGRPCPort, gatewayEnv.grpcPort),
-		fmt.Sprintf("%s=%s", types.ContainerEnvGatewayHTTPHost, gatewayEnv.httpHost),
-		fmt.Sprintf("%s=%s", types.ContainerEnvGatewayHTTPPort, gatewayEnv.httpPort),
+		fmt.Sprintf("%s=%s", types.ContainerGatewayGRPCHostEnv, gatewayEnv.grpcHost),
+		fmt.Sprintf("%s=%s", types.ContainerGatewayGRPCPortEnv, gatewayEnv.grpcPort),
+		fmt.Sprintf("%s=%s", types.ContainerGatewayHTTPHostEnv, gatewayEnv.httpHost),
+		fmt.Sprintf("%s=%s", types.ContainerGatewayHTTPPortEnv, gatewayEnv.httpPort),
 		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
 		"PYTHONUNBUFFERED=1",
 	}
@@ -45,23 +45,23 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 func (s *Worker) gatewayContainerEnvironment() gatewayContainerEnvironment {
 	return gatewayContainerEnvironment{
 		grpcHost: gatewayHostValue(
-			os.Getenv(types.ContainerEnvGatewayGRPCHost),
+			os.Getenv(types.ContainerGatewayGRPCHostEnv),
 			s.config.GatewayService.GRPC.ExternalHost,
 			s.config.GatewayService.Host,
 		),
 		grpcPort: gatewayPortValue(
-			os.Getenv(types.ContainerEnvGatewayGRPCPort),
+			os.Getenv(types.ContainerGatewayGRPCPortEnv),
 			s.config.GatewayService.GRPC.ExternalPort,
 			s.config.GatewayService.GRPC.Port,
 			s.config.GatewayService.GRPC.TLS,
 		),
 		httpHost: gatewayHostValue(
-			os.Getenv(types.ContainerEnvGatewayHTTPHost),
+			os.Getenv(types.ContainerGatewayHTTPHostEnv),
 			s.config.GatewayService.HTTP.ExternalHost,
 			s.config.GatewayService.Host,
 		),
 		httpPort: gatewayPortValue(
-			os.Getenv(types.ContainerEnvGatewayHTTPPort),
+			os.Getenv(types.ContainerGatewayHTTPPortEnv),
 			s.config.GatewayService.HTTP.ExternalPort,
 			s.config.GatewayService.HTTP.Port,
 			s.config.GatewayService.HTTP.TLS,

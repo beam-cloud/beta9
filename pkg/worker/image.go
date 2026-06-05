@@ -42,17 +42,16 @@ import (
 
 const (
 	imageBundlePath                   string = "/dev/shm/images"
-	imageTmpDir                       string = "/tmp"
+	imageTmpDir                       string = types.AgentTmpPath
 	metricsSourceLabel                       = "image_client"
 	pullLazyBackoff                          = 1000 * time.Millisecond
 	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
-	agentGatewayHTTPURLEnv                   = "BEAM_GATEWAY_HTTP_URL"
 )
 
 var (
-	baseImageCachePath string = "/images/cache"
-	baseImageMountPath string = "/images/mnt/%s"
+	baseImageCachePath string = types.AgentImageCachePath
+	baseImageMountPath string = types.AgentImageMountPattern
 )
 
 func getImageCachePath() string {
@@ -566,7 +565,7 @@ func (c *ImageClient) localArchivePath(imageId string) string {
 }
 
 func (c *ImageClient) clipV1ArchiveCachePath(imageId string) string {
-	return fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+	return fmt.Sprintf("%s/%s.%s", types.AgentImagesPath, imageId, reg.LocalImageFileExtension)
 }
 
 func (c *ImageClient) clipV1ArchiveDataCachePath(imageId string) string {
@@ -795,7 +794,7 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 	}
 
 	// Determine the archive path for this image
-	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+	archivePath := fmt.Sprintf("%s/%s.%s", types.AgentImagesPath, imageId, reg.LocalImageFileExtension)
 
 	// Check if the archive exists
 	if _, err := os.Stat(archivePath); os.IsNotExist(err) {
@@ -1053,8 +1052,8 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 }
 
 func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath, imageId string) error {
-	gatewayURL := strings.TrimRight(os.Getenv(agentGatewayHTTPURLEnv), "/")
-	workerToken := strings.TrimSpace(os.Getenv("WORKER_TOKEN"))
+	gatewayURL := strings.TrimRight(os.Getenv(types.AgentGatewayURLEnv), "/")
+	workerToken := strings.TrimSpace(os.Getenv(types.WorkerTokenEnv))
 	if gatewayURL == "" || workerToken == "" {
 		return fmt.Errorf("gateway image archive proxy is not configured")
 	}
@@ -1093,7 +1092,7 @@ func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath
 }
 
 func agentGatewayImageArchiveAvailable() bool {
-	return strings.TrimSpace(os.Getenv(agentGatewayHTTPURLEnv)) != "" && strings.TrimSpace(os.Getenv("WORKER_TOKEN")) != ""
+	return strings.TrimSpace(os.Getenv(types.AgentGatewayURLEnv)) != "" && strings.TrimSpace(os.Getenv(types.WorkerTokenEnv)) != ""
 }
 
 func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, error) {
@@ -1135,7 +1134,7 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 			ForcePathStyle: sourceRegistry.ForcePathStyle,
 		}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
 	} else {
-		sourcePath := filepath.Join("/images", key)
+		sourcePath := filepath.Join(types.AgentImagesPath, key)
 		info, statErr := os.Stat(sourcePath)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
@@ -1264,7 +1263,7 @@ func isEmbeddedImageCacheMiss(err error) bool {
 }
 
 func (c *ImageClient) imageArchiveCachePath(imageId string) string {
-	return fmt.Sprintf("/images/%s.%s", imageId, c.registry.ImageFileExtension)
+	return fmt.Sprintf("%s/%s.%s", types.AgentImagesPath, imageId, c.registry.ImageFileExtension)
 }
 
 func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, archivePath, imageId, hash string, size int64, routingKey string) error {

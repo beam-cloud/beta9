@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -82,9 +83,7 @@ func (p *routeProxy) watchRoutes(ctx context.Context) error {
 				return ctx.Err()
 			case <-time.After(backoff):
 			}
-			if backoff < 5*time.Second {
-				backoff *= 2
-			}
+			backoff = nextBackoff(backoff, 5*time.Second)
 			continue
 		}
 		backoff = time.Second
@@ -123,18 +122,18 @@ func (p *routeProxy) reconcileRoutes(ctx context.Context, routes []*pb.AgentRout
 		}
 		seen[route.RouteId] = struct{}{}
 		p.setRoute(route.RouteId, route.LocalTarget)
-		if route.State == "ready" && route.ProxyTarget == p.proxyTarget {
+		if route.State == types.BackendRouteStateReady && route.ProxyTarget == p.proxyTarget {
 			continue
 		}
 		if err := checkLocalTargetReady(route.LocalTarget); err != nil {
-			if route.State == "ready" {
-				_ = updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, "degraded", p.proxyTarget, err.Error())
+			if route.State == types.BackendRouteStateReady {
+				_ = updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, types.BackendRouteStateDegraded, p.proxyTarget, err.Error())
 			}
 			continue
 		}
-		if err := updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, "ready", p.proxyTarget, ""); err != nil {
+		if err := updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, types.BackendRouteStateReady, p.proxyTarget, ""); err != nil {
 			p.deleteRoute(route.RouteId)
-			_ = updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, "degraded", p.proxyTarget, err.Error())
+			_ = updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, types.BackendRouteStateDegraded, p.proxyTarget, err.Error())
 			return err
 		}
 	}
@@ -220,7 +219,7 @@ func (p *routeProxy) markRouteDegraded(routeID string, cause error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, "degraded", p.proxyTarget, cause.Error()); err != nil && !isLocalTargetUnavailable(cause) {
+	if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateDegraded, p.proxyTarget, cause.Error()); err != nil && !isLocalTargetUnavailable(cause) {
 		fmt.Fprintf(p.stderr, "route %s status update failed: %v\n", routeID, err)
 	}
 }

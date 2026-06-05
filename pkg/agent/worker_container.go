@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"os"
 	pathpkg "path"
+	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs map[string]string) []string {
-	localTargetHost := firstNonEmpty(os.Getenv("BEAM_AGENT_LOCAL_TARGET_HOST"), "127.0.0.1")
+func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs) []string {
+	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
 	args := []string{
 		"run", "--rm",
 		"--name", name,
@@ -37,85 +37,91 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 		if slot.GpuAssignment != "" {
 			args = append(args, "--gpus", "device="+slot.GpuAssignment)
 		} else {
-			args = append(args, "--gpus", "all")
+			args = append(args, "--gpus", types.NvidiaVisibleDevicesAll)
 		}
 	}
 
 	volumeArgs := []string{
-		dirs["images"] + ":" + agentContainerImagesPath,
-		dirs["tmp"] + ":" + agentContainerTmpPath,
-		dirs["data"] + ":" + agentContainerDataPath,
-		dirs["workspace"] + ":" + agentContainerWorkspaceStoragePath,
-		dirs["cache"] + ":" + agentContainerCachePath,
-		dirs["checkpoints"] + ":" + agentContainerCheckpointPath,
-		dirs["logs"] + ":" + agentContainerLogsPath,
-		configPath + ":" + agentContainerConfigPath + ":ro",
+		dirs.Images + ":" + types.AgentImagesPath,
+		dirs.Tmp + ":" + types.AgentTmpPath,
+		dirs.Data + ":" + types.AgentDataPath,
+		dirs.Workspace + ":" + types.AgentWorkspacePath,
+		dirs.Cache + ":" + types.AgentCachePath,
+		dirs.Checkpoints + ":" + types.AgentCheckpointPath,
+		dirs.Logs + ":" + types.AgentLogsPath,
+		configPath + ":" + types.AgentConfigPath + ":ro",
 	}
-	if pathExists("/var/lib/kubelet/device-plugins") {
-		volumeArgs = append(volumeArgs, "/var/lib/kubelet/device-plugins:/var/lib/kubelet/device-plugins:ro")
+	if pathExists(types.HostKubeletDevicePluginsPath) {
+		volumeArgs = append(volumeArgs, types.HostKubeletDevicePluginsPath+":"+types.HostKubeletDevicePluginsPath+":ro")
 	}
-	if pathExists("/var/run/netns") {
-		volumeArgs = append(volumeArgs, "/var/run/netns:/var/run/netns")
+	if pathExists(types.HostNetnsPath) {
+		volumeArgs = append(volumeArgs, types.HostNetnsPath+":"+types.HostNetnsPath)
 	}
-	if pathExists("/sys/fs/cgroup") {
-		volumeArgs = append(volumeArgs, "/sys/fs/cgroup:/sys/fs/cgroup:rw")
+	if pathExists(types.HostCgroupPath) {
+		volumeArgs = append(volumeArgs, types.HostCgroupPath+":"+types.HostCgroupPath+":rw")
 	}
 	for _, volume := range volumeArgs {
 		args = append(args, "-v", volume)
 	}
-	if pathExists("/dev/fuse") {
-		args = append(args, "--device", "/dev/fuse")
+	if pathExists(types.HostFuseDevicePath) {
+		args = append(args, "--device", types.HostFuseDevicePath)
 	}
 
 	env := map[string]string{
-		"CONFIG_PATH":                       agentContainerConfigPath,
-		types.WorkerEnvID:                   slot.WorkerId,
-		types.WorkerEnvToken:                slot.WorkerToken,
-		types.WorkerEnvPoolName:             slot.PoolName,
-		types.WorkerEnvMachineID:            slot.MachineId,
-		"CPU_LIMIT":                         strconv.FormatInt(slot.Cpu, 10),
-		"MEMORY_LIMIT":                      strconv.FormatInt(slot.Memory, 10),
-		"GPU_TYPE":                          slot.Gpu,
-		"GPU_COUNT":                         strconv.FormatUint(uint64(slot.GpuCount), 10),
-		"POD_HOSTNAME":                      "127.0.0.1",
-		"POD_IP":                            "127.0.0.1",
-		"NETWORK_PREFIX":                    slot.NetworkPrefix,
-		"CACHE_LOCALITY":                    slot.PoolName,
-		"CACHE_NODE_ID":                     slot.MachineId,
-		"CACHE_HOST_NETWORK":                "true",
-		types.WorkerEnvPersistent:           "true",
-		types.WorkerEnvRouteTransport:       normalizeTransport(bootstrap.Transport),
-		types.WorkerEnvRouteLocalTargetHost: localTargetHost,
-		"BEAM_GATEWAY_HTTP_URL":             strings.TrimRight(bootstrap.GatewayHTTPURL, "/"),
+		types.WorkerConfigPathEnv:     types.AgentConfigPath,
+		types.WorkerIDEnv:             slot.WorkerId,
+		types.WorkerTokenEnv:          slot.WorkerToken,
+		types.WorkerPoolEnv:           slot.PoolName,
+		types.WorkerMachineEnv:        slot.MachineId,
+		types.WorkerCPUEnv:            strconv.FormatInt(slot.Cpu, 10),
+		types.WorkerMemoryEnv:         strconv.FormatInt(slot.Memory, 10),
+		types.WorkerGPUEnv:            slot.Gpu,
+		types.WorkerGPUCountEnv:       strconv.FormatUint(uint64(slot.GpuCount), 10),
+		types.WorkerPodHostEnv:        types.LoopbackHost,
+		types.WorkerPodIPEnv:          types.LoopbackHost,
+		types.WorkerNetworkPrefixEnv:  slot.NetworkPrefix,
+		types.CacheLocalityEnv:        slot.PoolName,
+		types.CacheNodeEnv:            slot.MachineId,
+		types.CacheHostNetworkEnv:     "true",
+		types.WorkerPersistentEnv:     "true",
+		types.WorkerRouteTransportEnv: normalizeTransport(bootstrap.Transport),
+		types.WorkerRouteTargetEnv:    localTargetHost,
+		types.AgentGatewayURLEnv:      strings.TrimRight(bootstrap.GatewayHTTPURL, "/"),
 	}
 	if slot.ContainerStartConcurrency > 0 {
-		env["WORKER_CONTAINER_START_CONCURRENCY"] = strconv.FormatUint(uint64(slot.ContainerStartConcurrency), 10)
+		env[types.WorkerStartConcurrencyEnv] = strconv.FormatUint(uint64(slot.ContainerStartConcurrency), 10)
 	}
 	if slot.NetworkSlotPoolSize > 0 {
-		env["CONTAINER_NETWORK_SLOT_POOL_SIZE"] = strconv.FormatUint(uint64(slot.NetworkSlotPoolSize), 10)
+		env[types.WorkerNetworkSlotsEnv] = strconv.FormatUint(uint64(slot.NetworkSlotPoolSize), 10)
 	}
 	for key, value := range agentGatewayEnv(bootstrap) {
 		env[key] = value
 	}
 	if slot.GpuCount > 0 && slot.GpuAssignment != "" {
-		env["NVIDIA_VISIBLE_DEVICES"] = slot.GpuAssignment
+		env[types.NvidiaVisibleDevicesEnv] = slot.GpuAssignment
 	} else if slot.GpuCount > 0 {
-		env["NVIDIA_VISIBLE_DEVICES"] = "all"
+		env[types.NvidiaVisibleDevicesEnv] = types.NvidiaVisibleDevicesAll
 	}
-	for key, value := range env {
+	envKeys := make([]string, 0, len(env))
+	for key := range env {
+		envKeys = append(envKeys, key)
+	}
+	sort.Strings(envKeys)
+	for _, key := range envKeys {
+		value := env[key]
 		args = append(args, "-e", key+"="+value)
 	}
 
-	args = append(args, image, "/usr/local/bin/worker")
+	args = append(args, image, types.AgentWorkerEntrypoint)
 	return args
 }
 
-func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs map[string]string) error {
-	workspaceStorageMode := firstNonEmpty(os.Getenv("BEAM_AGENT_WORKSPACE_STORAGE_MODE"), storage.StorageModeGeese)
-	cacheDir := pathpkg.Join(agentContainerCachePath, sanitizeDockerName(slot.PoolName), sanitizeDockerName(slot.MachineId))
+func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) error {
+	workspaceStorageMode := firstNonEmpty(os.Getenv(types.AgentStorageModeEnv), types.StorageModeGeese)
+	cacheDir := pathpkg.Join(types.AgentCachePath, sanitizeDockerName(slot.PoolName), sanitizeDockerName(slot.MachineId))
 	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
 	config := map[string]any{
-		"clusterName": "agent",
+		"clusterName": types.DefaultAgentName,
 		"debugMode":   false,
 		"prettyLogs":  true,
 		"gateway": map[string]any{
@@ -131,12 +137,12 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 			},
 		},
 		"storage": map[string]any{
-			"mode":       storage.StorageModeLocal,
-			"fsName":     "agent",
-			"fsPath":     agentContainerDataPath,
-			"objectPath": pathpkg.Join(agentContainerDataPath, "objects"),
+			"mode":       types.StorageModeLocal,
+			"fsName":     types.DefaultAgentName,
+			"fsPath":     types.AgentDataPath,
+			"objectPath": pathpkg.Join(types.AgentDataPath, "objects"),
 			"workspaceStorage": map[string]any{
-				"baseMountPath":      agentContainerWorkspaceStoragePath,
+				"baseMountPath":      types.AgentWorkspacePath,
 				"defaultStorageMode": workspaceStorageMode,
 			},
 		},
@@ -151,7 +157,7 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 		"worker": map[string]any{
 			"hostNetwork":                true,
 			"useHostResolvConf":          true,
-			"containerRuntime":           "runc",
+			"containerRuntime":           types.ContainerRuntimeRunc.String(),
 			"cacheEnabled":               true,
 			"terminationGracePeriod":     30,
 			"containerLogLinesPerHour":   6000,
@@ -164,22 +170,22 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 				slot.PoolName: map[string]any{
 					"mode":                      string(types.PoolModePrivate),
 					"gpuType":                   slot.Gpu,
-					"containerRuntime":          "runc",
+					"containerRuntime":          types.ContainerRuntimeRunc.String(),
 					"containerStartConcurrency": int(slot.ContainerStartConcurrency),
 					"networkPreallocation":      true,
 					"networkSlotPoolSize":       int(slot.NetworkSlotPoolSize),
 					"requiresPoolSelector":      true,
 					"priority":                  1000,
 					"criuEnabled":               false,
-					"tmpSizeLimit":              "30Gi",
+					"tmpSizeLimit":              types.AgentTmpSizeLimit,
 					"storageMode":               workspaceStorageMode,
-					"checkpointPath":            agentContainerCheckpointPath,
+					"checkpointPath":            types.AgentCheckpointPath,
 					"cache": map[string]any{
 						"enabled": true,
 						"disk": map[string]any{
 							"enabled":     true,
-							"hostPath":    agentContainerCachePath,
-							"mountPath":   agentContainerCachePath,
+							"hostPath":    types.AgentCachePath,
+							"mountPath":   types.AgentCachePath,
 							"maxUsagePct": 0.95,
 						},
 					},
@@ -190,15 +196,15 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 			"enabled": true,
 			"disk": map[string]any{
 				"enabled":     true,
-				"hostPath":    agentContainerCachePath,
-				"mountPath":   agentContainerCachePath,
+				"hostPath":    types.AgentCachePath,
+				"mountPath":   types.AgentCachePath,
 				"maxUsagePct": 0.95,
 			},
 			"memory": map[string]any{
 				"enabled": false,
 			},
 			"global": map[string]any{
-				"defaultLocality": firstNonEmpty(slot.PoolName, "agent"),
+				"defaultLocality": firstNonEmpty(slot.PoolName, types.DefaultAgentName),
 			},
 			"server": map[string]any{
 				"diskCacheDir": cacheDir,
@@ -206,7 +212,7 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 			"client": map[string]any{
 				"cachefs": map[string]any{
 					"enabled":    true,
-					"mountPoint": agentContainerCacheFSMountPath,
+					"mountPoint": types.AgentCacheFSMountPath,
 				},
 			},
 		},

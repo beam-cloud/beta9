@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -430,17 +431,14 @@ func (cr *ContainerRedisRepository) ListBackendRoutesByMachine(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	routes := make([]types.BackendRoute, 0, len(routeIDs))
-	for _, routeID := range routeIDs {
-		route, err := cr.GetBackendRoute(ctx, routeID)
-		if err != nil {
-			continue
-		}
-		if route == nil {
-			continue
-		}
-		routes = append(routes, *route)
+	sort.Strings(routeIDs)
+	routes, err := cr.routes(ctx, routeIDs)
+	if err != nil {
+		return nil, err
 	}
+	sort.Slice(routes, func(i, j int) bool {
+		return routes[i].RouteID < routes[j].RouteID
+	})
 	return routes, nil
 }
 
@@ -450,21 +448,34 @@ func (cr *ContainerRedisRepository) DeleteBackendRoutesByContainerID(ctx context
 	if err != nil {
 		return err
 	}
-	for _, routeID := range routeIDs {
-		route, _ := cr.GetBackendRoute(ctx, routeID)
-		if err := cr.rdb.Del(ctx, common.RedisKeys.SchedulerBackendRoute(routeID)).Err(); err != nil {
-			return err
-		}
-		if route != nil && route.WorkspaceID != "" && route.PoolName != "" && route.MachineID != "" {
-			if err := cr.rdb.SRem(ctx, common.RedisKeys.SchedulerBackendRouteMachineIndex(route.WorkspaceID, route.PoolName, route.MachineID), routeID).Err(); err != nil {
-				return err
-			}
-			if err := cr.touchBackendRouteMachine(ctx, route.WorkspaceID, route.PoolName, route.MachineID); err != nil {
-				return err
-			}
-		}
+	routes, err := cr.routes(ctx, routeIDs)
+	if err != nil {
+		return err
 	}
-	return cr.rdb.Del(ctx, indexKey).Err()
+
+	type machineKey struct {
+		workspaceID string
+		poolName    string
+		machineID   string
+	}
+	machines := map[machineKey]struct{}{}
+	pipe := cr.rdb.Pipeline()
+	for _, routeID := range routeIDs {
+		pipe.Del(ctx, common.RedisKeys.SchedulerBackendRoute(routeID))
+	}
+	for _, route := range routes {
+		if route.WorkspaceID == "" || route.PoolName == "" || route.MachineID == "" {
+			continue
+		}
+		pipe.SRem(ctx, common.RedisKeys.SchedulerBackendRouteMachineIndex(route.WorkspaceID, route.PoolName, route.MachineID), route.RouteID)
+		machines[machineKey{workspaceID: route.WorkspaceID, poolName: route.PoolName, machineID: route.MachineID}] = struct{}{}
+	}
+	for machine := range machines {
+		pipe.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(machine.workspaceID, machine.poolName, machine.machineID))
+	}
+	pipe.Del(ctx, indexKey)
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 func (cr *ContainerRedisRepository) touchBackendRouteMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
@@ -472,6 +483,44 @@ func (cr *ContainerRedisRepository) touchBackendRouteMachine(ctx context.Context
 		return nil
 	}
 	return cr.rdb.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID)).Err()
+}
+
+func (cr *ContainerRedisRepository) routes(ctx context.Context, routeIDs []string) ([]types.BackendRoute, error) {
+	if len(routeIDs) == 0 {
+		return []types.BackendRoute{}, nil
+	}
+	keys := make([]string, 0, len(routeIDs))
+	for _, routeID := range routeIDs {
+		keys = append(keys, common.RedisKeys.SchedulerBackendRoute(routeID))
+	}
+	values, err := cr.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	routes := make([]types.BackendRoute, 0, len(values))
+	for _, value := range values {
+		data, ok := routeBytes(value)
+		if !ok {
+			continue
+		}
+		var route types.BackendRoute
+		if err := json.Unmarshal(data, &route); err != nil {
+			continue
+		}
+		routes = append(routes, route)
+	}
+	return routes, nil
+}
+
+func routeBytes(value any) ([]byte, bool) {
+	switch v := value.(type) {
+	case string:
+		return []byte(v), true
+	case []byte:
+		return v, true
+	default:
+		return nil, false
+	}
 }
 
 func (cr *ContainerRedisRepository) SetContainerAddressMap(containerId string, addressMap map[int32]string) error {

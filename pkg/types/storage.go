@@ -1,7 +1,9 @@
 package types
 
-import "fmt"
-
-func WorkspaceBucketName(prefix, workspaceExternalId string) string {
-	return fmt.Sprintf("%s-%s", prefix, workspaceExternalId)
-}
+const (
+	StorageModeJuiceFS    = "juicefs"
+	StorageModeMountPoint = "mountpoint"
+	StorageModeGeese      = "geese"
+	StorageModeAlluxio    = "alluxio"
+	StorageModeLocal      = "local"
+)

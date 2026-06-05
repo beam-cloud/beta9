@@ -248,7 +248,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.MaxParallelParts = int(s.config.MaxParallelParts)
 	flags.FsyncOnClose = s.config.FsyncOnClose
 	flags.DebugMain = s.config.Debug
-	effectiveMemoryLimitMB := effectiveGeeseMemoryLimitMB(s.config.MemoryLimit, os.Getenv("MEMORY_LIMIT"))
+	effectiveMemoryLimitMB := effectiveGeeseMemoryLimitMB(s.config.MemoryLimit, os.Getenv(types.WorkerMemoryEnv))
 	if effectiveMemoryLimitMB > 0 {
 		flags.MemoryLimit = uint64(effectiveMemoryLimitMB) * 1024 * 1024
 	}

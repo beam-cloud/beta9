@@ -15,12 +15,10 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-const cacheCoordinatorTokenEnv = "CACHE_COORDINATOR_TOKEN"
-
 var errCacheCoordinatorUnauthorized = errors.New("unauthorized cache coordinator request")
 
 func configuredCacheCoordinatorToken(configured string) string {
-	if token := os.Getenv(cacheCoordinatorTokenEnv); token != "" {
+	if token := os.Getenv(types.CacheCoordinatorTokenEnv); token != "" {
 		return token
 	}
 	return configured

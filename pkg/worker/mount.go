@@ -377,7 +377,7 @@ const (
 )
 
 func checkpointSignalDir(containerId string) string {
-	return fmt.Sprintf("/tmp/%s/criu", containerId)
+	return filepath.Join(types.AgentTmpPath, containerId, "criu")
 }
 
 func getAndExtractStubCodeToPath(ctx context.Context, request *types.ContainerRequest, destPath string) error {

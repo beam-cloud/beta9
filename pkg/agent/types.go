@@ -6,21 +6,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 )
 
-const (
-	agentDockerHostAliasesEnv    = "BEAM_AGENT_DOCKER_HOST_ALIASES"
-	agentLocalRegistryForwardEnv = "BEAM_AGENT_LOCAL_REGISTRY_FORWARD"
-
-	agentContainerImagesPath           = "/images"
-	agentContainerTmpPath              = "/tmp"
-	agentContainerDataPath             = "/data"
-	agentContainerWorkspaceStoragePath = "/workspace/data"
-	agentContainerCachePath            = "/var/lib/beta9/cache"
-	agentContainerCheckpointPath       = "/checkpoints"
-	agentContainerLogsPath             = "/var/log/worker"
-	agentContainerConfigPath           = "/etc/beam/agent-worker.json"
-	agentContainerCacheFSMountPath     = "/cache"
-)
-
 type JoinOptions struct {
 	GatewayURL                string
 	JoinToken                 string

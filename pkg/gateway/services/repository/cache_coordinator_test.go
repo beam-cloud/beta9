@@ -87,7 +87,7 @@ func TestAuthorizeCacheRepositoryRequestRejectsWrongCoordinatorToken(t *testing.
 }
 
 func TestConfiguredCacheCoordinatorTokenUsesEnvOverride(t *testing.T) {
-	t.Setenv(cacheCoordinatorTokenEnv, "env-coordinator-token")
+	t.Setenv(types.CacheCoordinatorTokenEnv, "env-coordinator-token")
 
 	if got := configuredCacheCoordinatorToken("config-coordinator-token"); got != "env-coordinator-token" {
 		t.Fatalf("configuredCacheCoordinatorToken() = %q, want env-coordinator-token", got)

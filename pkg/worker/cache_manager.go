@@ -24,7 +24,7 @@ import (
 
 const (
 	cacheDefaultLocality                = "default"
-	cacheDefaultDiskPath                = "/var/lib/beta9/cache"
+	cacheDefaultDiskPath                = types.AgentCachePath
 	cacheDefaultServerPort              = 2050
 	cacheDefaultDiscoveryS              = 5
 	cacheDefaultDiscoveryJitterS        = 3
@@ -686,7 +686,7 @@ func (m *WorkerCacheManager) cacheAdvertiseHost() string {
 	if net.ParseIP(m.podAddr) != nil {
 		return m.podAddr
 	}
-	if ip, err := getIPFromEnv("POD_IP"); err == nil {
+	if ip, err := getIPFromEnv(types.WorkerPodIPEnv); err == nil {
 		return ip
 	}
 	return ""
@@ -867,7 +867,7 @@ func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.W
 }
 
 func cacheLocality(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {
-	if locality := os.Getenv("CACHE_LOCALITY"); locality != "" {
+	if locality := os.Getenv(types.CacheLocalityEnv); locality != "" {
 		return locality
 	}
 	if poolConfig.ConfigGroup != "" {
@@ -880,7 +880,7 @@ func cacheLocality(config types.AppConfig, poolConfig types.WorkerPoolConfig) st
 }
 
 func cacheNodeID() string {
-	for _, env := range []string{"CACHE_NODE_ID", "NETWORK_PREFIX"} {
+	for _, env := range []string{types.CacheNodeEnv, types.WorkerNetworkPrefixEnv} {
 		if value := os.Getenv(env); value != "" {
 			return value
 		}
@@ -894,7 +894,7 @@ func cacheNodeID() string {
 }
 
 func cacheHostNetwork(config types.AppConfig) bool {
-	if value := os.Getenv("CACHE_HOST_NETWORK"); value != "" {
+	if value := os.Getenv(types.CacheHostNetworkEnv); value != "" {
 		enabled, err := strconv.ParseBool(value)
 		return err == nil && enabled
 	}
@@ -903,12 +903,12 @@ func cacheHostNetwork(config types.AppConfig) bool {
 }
 
 func cacheServerOnlyMode() bool {
-	enabled, err := strconv.ParseBool(os.Getenv("CACHE_SERVER_ONLY"))
+	enabled, err := strconv.ParseBool(os.Getenv(types.CacheServerOnlyEnv))
 	return err == nil && enabled
 }
 
 func cacheAccelerator(poolConfig types.WorkerPoolConfig) string {
-	accelerator := os.Getenv("GPU_TYPE")
+	accelerator := os.Getenv(types.WorkerGPUEnv)
 	if accelerator == "" {
 		accelerator = poolConfig.GPUType
 	}
@@ -922,7 +922,7 @@ func cacheAccelerator(poolConfig types.WorkerPoolConfig) string {
 // CACHE_SERVER_PORT, or 0 when unset/invalid. It lets the deployment pin the
 // port without editing the shared config secret.
 func cacheServerPortFromEnv() uint {
-	value := os.Getenv("CACHE_SERVER_PORT")
+	value := os.Getenv(types.CacheServerPortEnv)
 	if value == "" {
 		return 0
 	}
@@ -934,7 +934,7 @@ func cacheServerPortFromEnv() uint {
 }
 
 func cacheWorkerInstanceID(workerID string) string {
-	for _, env := range []string{"POD_UID", "POD_HOSTNAME", "HOSTNAME"} {
+	for _, env := range []string{types.WorkerPodUIDEnv, types.WorkerPodHostEnv, types.WorkerHostnameEnv} {
 		if value := os.Getenv(env); value != "" {
 			return value
 		}

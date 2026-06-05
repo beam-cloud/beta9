@@ -57,17 +57,11 @@ func (r *ComputeRedisRepository) ListPoolStates(ctx context.Context, workspaceID
 		names = names[:limit]
 	}
 
-	states := make([]*compute.PoolState, 0, len(names))
+	keys := make([]string, 0, len(names))
 	for _, name := range names {
-		state, err := r.GetPoolState(ctx, workspaceID, name)
-		if err != nil {
-			return nil, err
-		}
-		if state != nil {
-			states = append(states, state)
-		}
+		keys = append(keys, common.RedisKeys.ComputePoolState(workspaceID, name))
 	}
-	return states, nil
+	return r.poolStates(ctx, keys)
 }
 
 func (r *ComputeRedisRepository) DeletePoolState(ctx context.Context, workspaceID, name string) error {
@@ -145,17 +139,13 @@ func (r *ComputeRedisRepository) ListAgentTokenStates(ctx context.Context, works
 	if err != nil {
 		return nil, err
 	}
-	states := make([]*compute.AgentTokenState, 0, len(machineIDs))
+	keys := make([]string, 0, len(machineIDs))
 	for _, machineID := range machineIDs {
-		data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeAgentMachine(workspaceID, poolName, machineID)).Bytes()
-		if err != nil {
-			continue
-		}
-		var state compute.AgentTokenState
-		if err := json.Unmarshal(data, &state); err != nil {
-			continue
-		}
-		states = append(states, &state)
+		keys = append(keys, common.RedisKeys.ComputeAgentMachine(workspaceID, poolName, machineID))
+	}
+	states, err := r.machines(ctx, keys)
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(states, func(i, j int) bool {
 		return states[i].MachineID < states[j].MachineID
@@ -187,17 +177,13 @@ func (r *ComputeRedisRepository) ListAgentWorkerSlotStates(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	states := make([]*compute.AgentWorkerSlotState, 0, len(workerIDs))
+	keys := make([]string, 0, len(workerIDs))
 	for _, workerID := range workerIDs {
-		data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeAgentSlot(workspaceID, poolName, machineID, workerID)).Bytes()
-		if err != nil {
-			continue
-		}
-		var state compute.AgentWorkerSlotState
-		if err := json.Unmarshal(data, &state); err != nil {
-			continue
-		}
-		states = append(states, &state)
+		keys = append(keys, common.RedisKeys.ComputeAgentSlot(workspaceID, poolName, machineID, workerID))
+	}
+	states, err := r.slots(ctx, keys)
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(states, func(i, j int) bool {
 		return states[i].WorkerID < states[j].WorkerID
@@ -210,4 +196,96 @@ func (r *ComputeRedisRepository) DeleteAgentWorkerSlotState(ctx context.Context,
 		return err
 	}
 	return r.rdb.SRem(ctx, common.RedisKeys.ComputeAgentSlotIndex(workspaceID, poolName, machineID), workerID).Err()
+}
+
+func (r *ComputeRedisRepository) poolStates(ctx context.Context, keys []string) ([]*compute.PoolState, error) {
+	if len(keys) == 0 {
+		return []*compute.PoolState{}, nil
+	}
+
+	values, err := r.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	states := make([]*compute.PoolState, 0, len(values))
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		data, ok := stateBytes(value)
+		if !ok {
+			return nil, fmt.Errorf("unexpected redis value type %T for %s", value, keys[i])
+		}
+
+		var state compute.PoolState
+		if err := json.Unmarshal(data, &state); err != nil {
+			return nil, err
+		}
+		states = append(states, &state)
+	}
+	return states, nil
+}
+
+func (r *ComputeRedisRepository) machines(ctx context.Context, keys []string) ([]*compute.AgentTokenState, error) {
+	if len(keys) == 0 {
+		return []*compute.AgentTokenState{}, nil
+	}
+
+	values, err := r.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	states := make([]*compute.AgentTokenState, 0, len(values))
+	for _, value := range values {
+		data, ok := stateBytes(value)
+		if !ok {
+			continue
+		}
+
+		var state compute.AgentTokenState
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+		states = append(states, &state)
+	}
+	return states, nil
+}
+
+func (r *ComputeRedisRepository) slots(ctx context.Context, keys []string) ([]*compute.AgentWorkerSlotState, error) {
+	if len(keys) == 0 {
+		return []*compute.AgentWorkerSlotState{}, nil
+	}
+
+	values, err := r.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	states := make([]*compute.AgentWorkerSlotState, 0, len(values))
+	for _, value := range values {
+		data, ok := stateBytes(value)
+		if !ok {
+			continue
+		}
+
+		var state compute.AgentWorkerSlotState
+		if err := json.Unmarshal(data, &state); err != nil {
+			continue
+		}
+		states = append(states, &state)
+	}
+	return states, nil
+}
+
+func stateBytes(value any) ([]byte, bool) {
+	switch v := value.(type) {
+	case string:
+		return []byte(v), true
+	case []byte:
+		return v, true
+	default:
+		return nil, false
+	}
 }

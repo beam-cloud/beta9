@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	reg "github.com/beam-cloud/beta9/pkg/registry"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func TestPullImageArchiveFromGateway(t *testing.T) {
@@ -22,8 +23,8 @@ func TestPullImageArchiveFromGateway(t *testing.T) {
 		_, _ = w.Write([]byte("clip-archive"))
 	}))
 	t.Cleanup(server.Close)
-	t.Setenv(agentGatewayHTTPURLEnv, server.URL)
-	t.Setenv("WORKER_TOKEN", "worker-token")
+	t.Setenv(types.AgentGatewayURLEnv, server.URL)
+	t.Setenv(types.WorkerTokenEnv, "worker-token")
 
 	client := &ImageClient{
 		registry: &reg.ImageRegistry{ImageFileExtension: reg.LocalImageFileExtension},

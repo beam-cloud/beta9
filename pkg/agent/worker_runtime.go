@@ -92,6 +92,8 @@ func (m *workerRuntimeManager) reconcile(ctx context.Context, slots []*pb.AgentW
 }
 
 func (m *workerRuntimeManager) ensureSlot(ctx context.Context, slot *pb.AgentWorkerSlot) {
+	slot = cloneAgentWorkerSlot(slot)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -104,7 +106,7 @@ func (m *workerRuntimeManager) ensureSlot(ctx context.Context, slot *pb.AgentWor
 	}
 
 	slotCtx, cancel := context.WithCancel(ctx)
-	m.supervisors[slot.WorkerId] = &workerRuntimeSupervisor{slot: slot, cancel: cancel}
+	m.supervisors[slot.WorkerId] = &workerRuntimeSupervisor{slot: cloneAgentWorkerSlot(slot), cancel: cancel}
 	go m.superviseSlot(slotCtx, slot)
 }
 
@@ -125,9 +127,7 @@ func (m *workerRuntimeManager) superviseSlot(ctx context.Context, slot *pb.Agent
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
+		backoff = nextBackoff(backoff, 30*time.Second)
 	}
 }
 
@@ -141,22 +141,22 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		return err
 	}
 	dirs := agentWorkerDirs(stateDir, slot.WorkerId)
-	for _, dir := range []string{dirs["tmp"]} {
+	for _, dir := range []string{dirs.Tmp} {
 		_ = os.RemoveAll(dir)
 	}
-	for _, dir := range dirs {
+	for _, dir := range dirs.All() {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
 	}
 
-	configPath := filepath.Join(dirs["slot"], "config.json")
-	if err := writeWorkerConfig(configPath, r.bootstrap, slot, dirs); err != nil {
+	configPath := filepath.Join(dirs.Slot, "config.json")
+	if err := writeWorkerConfig(configPath, r.bootstrap, slot); err != nil {
 		return err
 	}
 
 	name := "beam-agent-" + sanitizeDockerName(slot.WorkerId)
-	image := firstNonEmpty(r.opts.WorkerImage, os.Getenv("BEAM_WORKER_IMAGE"), slot.WorkerImage)
+	image := firstNonEmpty(r.opts.WorkerImage, os.Getenv(types.AgentWorkerImageEnv), slot.WorkerImage)
 	if image == "" {
 		return fmt.Errorf("worker image is required for slot %s", slot.WorkerId)
 	}
@@ -209,18 +209,12 @@ func (m *workerRuntimeManager) stopAll() {
 	}
 }
 
-func agentWorkerDirs(stateDir, workerID string) map[string]string {
-	slotName := sanitizeDockerName(workerID)
-	return map[string]string{
-		"slot":        filepath.Join(stateDir, "slots", slotName),
-		"images":      filepath.Join(stateDir, "images"),
-		"tmp":         filepath.Join(stateDir, "tmp", slotName),
-		"data":        filepath.Join(stateDir, "data"),
-		"workspace":   filepath.Join(stateDir, "workspace-data"),
-		"cache":       filepath.Join(stateDir, "cache"),
-		"checkpoints": filepath.Join(stateDir, "checkpoints"),
-		"logs":        filepath.Join(stateDir, "logs", slotName),
+func cloneAgentWorkerSlot(slot *pb.AgentWorkerSlot) *pb.AgentWorkerSlot {
+	if slot == nil {
+		return nil
 	}
+	clone := *slot
+	return &clone
 }
 
 func sameWorkerSlot(a, b *pb.AgentWorkerSlot) bool {
