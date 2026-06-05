@@ -27,7 +27,6 @@ const (
 	tmpVolumeName               string  = "beta9-tmp"
 	imagesVolumeName            string  = "beta9-images"
 	storageVolumeName           string  = "beta9-storage"
-	checkpointVolumeName        string  = "beta9-checkpoints"
 	cacheVolumeName             string  = "beta9-cache"
 	devicePluginVolumeName      string  = "kubelet-device-plugins"
 	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
@@ -35,7 +34,6 @@ const (
 	defaultWorkerInit           string  = "/usr/bin/tini"
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultImagesPath           string  = "/images"
-	defaultCheckpointPath       string  = "/checkpoints"
 	defaultStoragePath          string  = "/storage"
 	defaultCachePath            string  = "/var/lib/beta9/cache"
 	defaultSharedMemoryPct      float32 = 0.5

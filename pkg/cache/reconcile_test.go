@@ -128,6 +128,27 @@ func TestRecentStubsExcludesExpiredByTTL(t *testing.T) {
 	require.Empty(t, stubs)
 }
 
+func TestRecentStubsAnyLocalityDedupesByNewestSeen(t *testing.T) {
+	ctx := context.Background()
+	m := newTestMetadata(t)
+
+	require.NoError(t, m.AddRecentStub(ctx, "locality-a", "ws", "stub-a", time.Hour))
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, m.AddRecentStub(ctx, "locality-b", "ws", "stub-a", time.Hour))
+	require.NoError(t, m.AddRecentStub(ctx, "locality-b", "ws", "stub-b", time.Hour))
+
+	stubs, err := m.ListRecentStubsAnyLocality(ctx, time.Hour)
+	require.NoError(t, err)
+
+	require.Len(t, stubs, 2)
+	byKey := map[string]RecentStub{}
+	for _, stub := range stubs {
+		byKey[RecentStubKey(stub.WorkspaceID, stub.StubID)] = stub
+	}
+	require.Contains(t, byKey, RecentStubKey("ws", "stub-a"))
+	require.Contains(t, byKey, RecentStubKey("ws", "stub-b"))
+}
+
 func TestMarkStubReportedClaimsOnce(t *testing.T) {
 	ctx := context.Background()
 	m := newTestMetadata(t)

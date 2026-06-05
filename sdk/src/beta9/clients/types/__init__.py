@@ -44,6 +44,11 @@ class Checkpoint(betterproto.Message):
     created_at: datetime = betterproto.message_field(13)
     last_restored_at: datetime = betterproto.message_field(14)
     deleted_at: "NullTime" = betterproto.message_field(15)
+    cache_hash: str = betterproto.string_field(16)
+    cache_size_bytes: int = betterproto.int64_field(17)
+    origin_key: str = betterproto.string_field(18)
+    locality: str = betterproto.string_field(19)
+    accelerator: str = betterproto.string_field(20)
 
 
 @dataclass(eq=False, repr=False)

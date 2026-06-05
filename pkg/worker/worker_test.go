@@ -360,6 +360,10 @@ type fakeContainerRepoClient struct {
 	lastDeleteContainerID string
 	updateStatusCalls     int
 	lastUpdateStatus      *pb.UpdateContainerStatusRequest
+	setAddressCalls       int
+	lastSetAddress        *pb.SetContainerAddressRequest
+	setAddressMapCalls    int
+	lastSetAddressMap     *pb.SetContainerAddressMapRequest
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
@@ -395,10 +399,14 @@ func (f *fakeContainerRepoClient) SetContainerExitCode(ctx context.Context, in *
 }
 
 func (f *fakeContainerRepoClient) SetContainerAddress(ctx context.Context, in *pb.SetContainerAddressRequest, opts ...grpc.CallOption) (*pb.SetContainerAddressResponse, error) {
+	f.setAddressCalls++
+	f.lastSetAddress = in
 	return &pb.SetContainerAddressResponse{Ok: true}, nil
 }
 
 func (f *fakeContainerRepoClient) SetContainerAddressMap(ctx context.Context, in *pb.SetContainerAddressMapRequest, opts ...grpc.CallOption) (*pb.SetContainerAddressMapResponse, error) {
+	f.setAddressMapCalls++
+	f.lastSetAddressMap = in
 	return &pb.SetContainerAddressMapResponse{Ok: true}, nil
 }
 

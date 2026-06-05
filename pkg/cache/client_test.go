@@ -1590,6 +1590,89 @@ func TestStoreContentFromReaderDoesNotUseRankedReplicaWhenSelectedHostUnavailabl
 	require.Empty(t, fallbackStream.sent.Bytes())
 }
 
+func TestSelectedStoreHostAvailableRequiresSelectedEndpointClient(t *testing.T) {
+	ctx := context.Background()
+	selectedHost := &Host{HostId: "selected-host", PrivateAddr: "selected-host:2049"}
+	client := &Client{
+		ctx:            ctx,
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		grpcClients:    map[string]proto.CacheClient{},
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{selectedHost}},
+	}
+
+	require.False(t, client.SelectedStoreHostAvailable("hash", "routing-key"))
+
+	client.grpcClients[selectedHost.HostId] = &fakeStoreCacheClient{stream: &fakeStoreContentStream{}}
+	require.True(t, client.SelectedStoreHostAvailable("hash", "routing-key"))
+}
+
+func TestSelectedStoreHostAvailableRefreshesStaleSelectedHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("logical-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	activeHost := &Host{HostId: "logical-host", PrivateAddr: addr}
+	client := &Client{
+		ctx:            ctx,
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		globalConfig:   cfg.Global,
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher:         rendezvous.New[*Host](),
+		hostMap:        NewHostMap(cfg.Global, nil),
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			return []*Host{activeHost}, nil
+		}),
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap.onHostAdded = client.addHost
+	defer client.Cleanup()
+
+	client.hostMap.Set(activeHost.LogicalOnly())
+	require.False(t, client.hasCacheClient("logical-host"))
+
+	require.True(t, client.SelectedStoreHostAvailable("hash", "routing-key"))
+	require.True(t, client.hasCacheClient("logical-host"))
+}
+
+func TestSelectedStoreHostAvailableRejectsLogicalOnlyHost(t *testing.T) {
+	ctx := context.Background()
+	selectedHost := &Host{HostId: "selected-host"}
+	client := &Client{
+		ctx:            ctx,
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		grpcClients:    map[string]proto.CacheClient{selectedHost.HostId: &fakeStoreCacheClient{stream: &fakeStoreContentStream{}}},
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{selectedHost}},
+	}
+
+	require.False(t, client.SelectedStoreHostAvailable("hash", "routing-key"))
+}
+
 type fakeStoreCacheClient struct {
 	stream   proto.Cache_StoreContentClient
 	state    *proto.CacheGetStateResponse

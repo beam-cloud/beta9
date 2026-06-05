@@ -54,9 +54,10 @@ var (
 type CacheContentKind string
 
 const (
-	CacheContentKindClipV1 CacheContentKind = "clip_v1"
-	CacheContentKindClipV2 CacheContentKind = "clip_v2"
-	CacheContentKindVolume CacheContentKind = "volume"
+	CacheContentKindClipV1     CacheContentKind = "clip_v1"
+	CacheContentKindClipV2     CacheContentKind = "clip_v2"
+	CacheContentKindVolume     CacheContentKind = "volume"
+	CacheContentKindCheckpoint CacheContentKind = "checkpoint"
 )
 
 // Platform cache audit statuses for EventPlatformCacheSchema.Status.
@@ -83,6 +84,8 @@ type CacheRequiredContentItem struct {
 	ExpectedHash string           `json:"expected_hash,omitempty"`
 	Source       string           `json:"source,omitempty"`
 	Kind         CacheContentKind `json:"kind,omitempty"`
+	CheckpointID string           `json:"checkpoint_id,omitempty"`
+	Accelerator  string           `json:"accelerator,omitempty"`
 }
 
 // EventStubCacheRequiredContentSchema is the coalesced required-content report

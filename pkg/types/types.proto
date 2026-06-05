@@ -38,6 +38,11 @@ message Checkpoint {
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp last_restored_at = 14;
   NullTime deleted_at = 15;
+  string cache_hash = 16;
+  int64 cache_size_bytes = 17;
+  string origin_key = 18;
+  string locality = 19;
+  string accelerator = 20;
 }
 
 message ConcurrencyLimit {

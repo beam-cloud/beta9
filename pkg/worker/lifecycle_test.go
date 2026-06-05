@@ -14,11 +14,13 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
@@ -427,6 +429,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
+			nil,
 		)
 		result <- err
 	}()
@@ -437,6 +440,114 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 
 	require.NoError(t, <-rt.ctxErr)
 	require.NoError(t, <-result)
+}
+
+func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+	tmpDir := t.TempDir()
+	checkpointId := "checkpoint-1"
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
+
+	bundleDir := filepath.Join(tmpDir, "bundle")
+	require.NoError(t, os.MkdirAll(bundleDir, 0755))
+	configPath := filepath.Join(bundleDir, specBaseName)
+	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
+
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+	}
+	backendRepoClient := &fakeBackendRepoClient{}
+	rt := &mockRuntime{
+		name:         "runc",
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+	}
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         &startedCRIUManager{},
+		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient: repoClient,
+		backendRepoClient:   backendRepoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		ConfigPath:  configPath,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointId,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Runtime: rt,
+	})
+
+	exitCode, err := worker.runContainer(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+		time.Now(),
+		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, 1, repoClient.setAddressCalls)
+	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddress.Address)
+	require.Equal(t, 1, repoClient.setAddressMapCalls)
+	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, 1, repoClient.updateStatusCalls)
+	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
+	require.Equal(t, 1, backendRepoClient.updateCalls)
+}
+
+func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
+	restoreErr := assert.AnError
+	containerID := "container-restore-generic-error"
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
+
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{
+		criuManager:        &restoreErrorCRIUManager{exitCode: 17, err: restoreErr},
+		backendRepoClient:  backendRepoClient,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: &mockRuntime{name: "runc"},
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-generic-error",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, restored, err := worker.attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+	)
+
+	require.ErrorIs(t, err, restoreErr)
+	require.False(t, restored)
+	require.Equal(t, 17, exitCode)
+	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
+	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
 }
 
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
@@ -955,6 +1066,65 @@ func (m *mockRuntime) Restore(ctx context.Context, containerID string, opts *run
 
 func (m *mockRuntime) Close() error {
 	return nil
+}
+
+type startedCRIUManager struct{}
+
+func (m *startedCRIUManager) Available() bool {
+	return true
+}
+
+func (m *startedCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+	return "", nil
+}
+
+func (m *startedCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
+	opts.started <- 1234
+	return 0, nil
+}
+
+type restoreErrorCRIUManager struct {
+	exitCode int
+	err      error
+}
+
+func (m *restoreErrorCRIUManager) Available() bool {
+	return true
+}
+
+func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+	return "", nil
+}
+
+func (m *restoreErrorCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
+	return m.exitCode, m.err
+}
+
+type fakeBackendRepoClient struct {
+	updateCalls int
+	lastUpdate  *pb.UpdateCheckpointRequest
+}
+
+func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
+	return &pb.GetCheckpointByIdResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) GetLatestCheckpointByStubId(ctx context.Context, in *pb.GetLatestCheckpointByStubIdRequest, opts ...grpc.CallOption) (*pb.GetLatestCheckpointByStubIdResponse, error) {
+	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) ListCheckpoints(ctx context.Context, in *pb.ListCheckpointsRequest, opts ...grpc.CallOption) (*pb.ListCheckpointsResponse, error) {
+	return &pb.ListCheckpointsResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) CreateCheckpoint(ctx context.Context, in *pb.CreateCheckpointRequest, opts ...grpc.CallOption) (*pb.CreateCheckpointResponse, error) {
+	return &pb.CreateCheckpointResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) UpdateCheckpoint(ctx context.Context, in *pb.UpdateCheckpointRequest, opts ...grpc.CallOption) (*pb.UpdateCheckpointResponse, error) {
+	f.updateCalls++
+	f.lastUpdate = in
+	return &pb.UpdateCheckpointResponse{Ok: true}, nil
 }
 
 type mockResourceRuntime struct {

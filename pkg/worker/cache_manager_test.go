@@ -165,6 +165,7 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, client)
 	defer func() { _ = manager.Close() }()
+	require.DirExists(t, filepath.Join(cacheDir, "checkpoints"))
 
 	require.Eventually(t, func() bool {
 		return manager.runningCacheServer() && len(repo.activeHosts()) == 1

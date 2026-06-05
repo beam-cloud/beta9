@@ -122,6 +122,10 @@ func (c *RedisCacheMetadataStore) ListRecentStubs(ctx context.Context, locality 
 	return c.metadata.ListRecentStubs(ctx, locality, ttl, limit)
 }
 
+func (c *RedisCacheMetadataStore) ListRecentStubsAnyLocality(ctx context.Context, ttl time.Duration) ([]RecentStub, error) {
+	return c.metadata.ListRecentStubsAnyLocality(ctx, ttl)
+}
+
 func (c *RedisCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
 	return c.metadata.MarkStubReported(ctx, locality, stubID, ttl)
 }

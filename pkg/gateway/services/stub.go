@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -288,18 +286,15 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 		return nil
 	}
 
+	if !workspace.StorageAvailable() {
+		return fmt.Errorf("workspace storage is required for checkpoints")
+	}
+
 	volumeName := "checkpoint-model-cache"
 	modelCachePath := fmt.Sprintf("/%s", volumeName)
 	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
 	if err != nil {
 		return err
-	}
-
-	if !workspace.StorageAvailable() {
-		volumePath := path.Join(append([]string{types.DefaultVolumesPath, workspace.Name, volume.ExternalId})...)
-		if _, err := os.Stat(volumePath); os.IsNotExist(err) {
-			os.MkdirAll(volumePath, os.FileMode(0755))
-		}
 	}
 
 	// Force set cache vars

@@ -89,7 +89,6 @@ type Worker struct {
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
-	checkpointStorage       storage.Storage
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -307,11 +306,14 @@ func NewWorker() (*Worker, error) {
 	}
 
 	var criuManager CRIUManager = nil
-	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
-		criuManager, err = InitializeCRIUManager(ctx, config.Worker.CRIU)
-		if err != nil {
-			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
+		if cacheManager == nil {
+			log.Warn().Str("worker_id", workerId).Msg("C/R unavailable, cache is required for checkpoints")
+		} else {
+			criuManager, err = InitializeCRIUManager(ctx, config.Worker.CRIU, cacheManager.CheckpointRoot())
+			if err != nil {
+				log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
+			}
 		}
 	}
 
@@ -366,7 +368,6 @@ func NewWorker() (*Worker, error) {
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
-		checkpointStorage:   checkpointStorage,
 	}
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
@@ -999,13 +1000,6 @@ func (s *Worker) shutdown() error {
 	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to unmount data storage: %v", err))
-	}
-
-	if s.checkpointStorage != nil {
-		err = s.checkpointStorage.Unmount(s.config.Worker.CRIU.Storage.MountPath)
-		if err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to unmount checkpoint storage: %v", err))
-		}
 	}
 
 	err = s.imageClient.Cleanup()

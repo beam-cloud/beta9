@@ -60,6 +60,7 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 			pb.WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName:        true,
 			pb.WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName:        true,
 			pb.WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName:        true,
+			pb.WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName:       true,
 		},
 	}
 }

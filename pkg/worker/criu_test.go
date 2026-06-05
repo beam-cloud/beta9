@@ -165,13 +165,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 			}
 			defer os.RemoveAll(tmpDir)
 
-			config := types.CRIUConfig{
-				Storage: types.CheckpointStorageConfig{
-					MountPath: tmpDir,
-				},
-			}
+			config := types.CRIUConfig{}
 
-			manager, err := InitializeNvidiaCRIU(context.Background(), config)
+			manager, err := InitializeNvidiaCRIU(context.Background(), config, tmpDir)
 			if err != nil {
 				t.Fatalf("Failed to initialize NVIDIA CRIU manager: %v", err)
 			}
@@ -247,13 +243,9 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	config := types.CRIUConfig{
-		Storage: types.CheckpointStorageConfig{
-			MountPath: tmpDir,
-		},
-	}
+	config := types.CRIUConfig{}
 
-	manager, err := InitializeNvidiaCRIU(context.Background(), config)
+	manager, err := InitializeNvidiaCRIU(context.Background(), config, tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to initialize NVIDIA CRIU manager: %v", err)
 	}
@@ -351,13 +343,9 @@ func TestRuntimeCompatibility(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	config := types.CRIUConfig{
-		Storage: types.CheckpointStorageConfig{
-			MountPath: tmpDir,
-		},
-	}
+	config := types.CRIUConfig{}
 
-	manager, err := InitializeNvidiaCRIU(context.Background(), config)
+	manager, err := InitializeNvidiaCRIU(context.Background(), config, tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to initialize NVIDIA CRIU manager: %v", err)
 	}

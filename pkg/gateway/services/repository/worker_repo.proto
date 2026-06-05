@@ -52,6 +52,8 @@ service WorkerRepositoryService {
       returns (ReleaseCacheReconcileLockResponse) {}
   rpc GetCacheOriginCredentials(GetCacheOriginCredentialsRequest)
       returns (GetCacheOriginCredentialsResponse) {}
+  rpc PruneStaleCacheCheckpoints(PruneStaleCacheCheckpointsRequest)
+      returns (PruneStaleCacheCheckpointsResponse) {}
   rpc SetCacheFsNode(SetCacheFsNodeRequest) returns (SetCacheFsNodeResponse) {}
   rpc GetCacheFsNode(GetCacheFsNodeRequest) returns (GetCacheFsNodeResponse) {}
   rpc AddCacheFsNodeChild(AddCacheFsNodeChildRequest)
@@ -362,6 +364,17 @@ message GetCacheOriginCredentialsResponse {
   // Short-lived and used in-memory by the worker only; never persisted.
   string registry_credentials = 3;
   CacheWorkspaceStorageCredentials workspace_storage = 4;
+}
+
+message PruneStaleCacheCheckpointsRequest {
+  string locality = 1;
+  repeated string active_stub_ids = 2;
+}
+
+message PruneStaleCacheCheckpointsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  int32 pruned = 3;
 }
 
 message RemoveCacheStoreFromContentLockRequest {
