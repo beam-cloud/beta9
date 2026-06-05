@@ -190,6 +190,11 @@ func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
 		return err
 	}
 
+	err = r.rdb.Del(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId)).Err()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

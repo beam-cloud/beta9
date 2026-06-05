@@ -101,7 +101,7 @@ SERVER_PHASES = (
     ("network_create_namespace_ms", "network.create_namespace", "Create namespace", False),
     ("network_configure_namespace_ms", "network.configure_namespace", "Configure namespace", False),
     ("network_ip_lock_ms", "network.ip_lock", "Acquire IP lock", False),
-    ("network_ip_scan_ms", "network.ip_scan", "Scan allocated IPs", False),
+    ("network_ip_load_ms", "network.ip_load", "Load allocated IPs", False),
     ("network_ip_assign_ms", "network.ip_assign", "Assign container IP", False),
     ("network_set_container_ip_ms", "network.set_container_ip", "Persist container IP", False),
     ("network_restrictions_ms", "network.restrictions", "Network restrictions", False),

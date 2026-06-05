@@ -225,6 +225,8 @@ class BenchmarkConfig:
     direct_cache_disk_probe_size_mb: int
     sandbox_cpu: str
     sandbox_memory: str
+    sandbox_gpu: str
+    sandbox_gpu_count: int
     sandbox_keep_warm_seconds: int
     sandbox_create_retries: int
     sandbox_ready_timeout_seconds: float
@@ -364,6 +366,12 @@ class BenchmarkConfig:
         )
         add("--sandbox-cpu", default=os.getenv("BENCH_CACHE_SANDBOX_CPU", "4"))
         add("--sandbox-memory", default=os.getenv("BENCH_CACHE_SANDBOX_MEMORY", "4096"))
+        add("--sandbox-gpu", default=os.getenv("BENCH_CACHE_SANDBOX_GPU", ""))
+        add(
+            "--sandbox-gpu-count",
+            type=int,
+            default=env_int("BENCH_CACHE_SANDBOX_GPU_COUNT", 0),
+        )
         add(
             "--sandbox-keep-warm-seconds",
             type=int,
@@ -2378,7 +2386,8 @@ class SandboxRunner:
             image=image,
             cpu=parse_sdk_cpu(self.config.sandbox_cpu),
             memory=parse_sdk_memory(self.config.sandbox_memory),
-            gpu="",
+            gpu=self.config.sandbox_gpu,
+            gpu_count=self.config.sandbox_gpu_count,
             keep_warm_seconds=self.config.sandbox_keep_warm_seconds,
             authorized=False,
             volumes=[volume],
@@ -3876,6 +3885,8 @@ class CacheBenchmark:
             "readMethod": self.config.read_method,
             "sandboxCpu": self.config.sandbox_cpu,
             "sandboxMemory": self.config.sandbox_memory,
+            "sandboxGpu": self.config.sandbox_gpu,
+            "sandboxGpuCount": self.config.sandbox_gpu_count,
             "forceNewImage": self.config.force_new_image,
             "forceReadThroughAfterPrepare": self.config.force_read_through_after_prepare,
         }

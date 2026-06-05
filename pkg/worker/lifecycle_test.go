@@ -550,6 +550,54 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
 }
 
+func TestCreateCheckpointUnblocksRunnerOnPersistenceFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	containerID := "checkpoint-unblock"
+	signalDir := checkpointSignalDir(containerID)
+	require.NoError(t, os.RemoveAll(signalDir))
+	require.NoError(t, os.MkdirAll(signalDir, 0755))
+	t.Cleanup(func() { _ = os.RemoveAll(signalDir) })
+	require.NoError(t, os.WriteFile(filepath.Join(signalDir, checkpointSignalFileName), nil, 0644))
+
+	layerDir := filepath.Join(tmpDir, "layer-0")
+	mergedDir := filepath.Join(layerDir, "merged")
+	upperDir := filepath.Join(layerDir, "upper")
+	require.NoError(t, os.MkdirAll(mergedDir, 0755))
+	require.NoError(t, os.MkdirAll(upperDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(upperDir, "ready.txt"), []byte("ok"), 0644))
+
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		Stub:        types.StubWithRelated{Stub: types.Stub{ExternalId: "stub"}},
+		Workspace:   types.Workspace{Name: "workspace"},
+	}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		criuManager:        &checkpointPathCRIUManager{path: filepath.Join(tmpDir, "checkpoint")},
+		backendRepoClient:  &fakeBackendRepoClient{},
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: &mockRuntime{},
+		Overlay: common.NewContainerOverlay(
+			request,
+			mergedDir,
+			filepath.Join(tmpDir, "overlay"),
+		),
+	})
+
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request:       request,
+		CheckpointId:  "checkpoint",
+		ContainerIp:   "127.0.0.1",
+		OutputLogger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WaitForSignal: true,
+	})
+
+	require.Error(t, err)
+	require.FileExists(t, filepath.Join(signalDir, checkpointCompleteFileName))
+}
+
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "volume")
 	spec := getTestBaseSpec()
@@ -1080,6 +1128,25 @@ func (m *startedCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Ru
 
 func (m *startedCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	opts.started <- 1234
+	return 0, nil
+}
+
+type checkpointPathCRIUManager struct {
+	path string
+}
+
+func (m *checkpointPathCRIUManager) Available() bool {
+	return true
+}
+
+func (m *checkpointPathCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+	if err := os.MkdirAll(m.path, 0755); err != nil {
+		return "", err
+	}
+	return m.path, nil
+}
+
+func (m *checkpointPathCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	return 0, nil
 }
 

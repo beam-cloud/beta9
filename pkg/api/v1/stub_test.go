@@ -249,6 +249,22 @@ func TestUpdateConfig(t *testing.T) {
 			expectedFields: []string{"runtime.cpu", "runtime.gpu"},
 		},
 		{
+			name:        "Test checkpoint update requires workspace storage",
+			stubID:      "test-stub-checkpoint",
+			workspaceID: 1,
+			requestBody: UpdateConfigRequest{
+				Fields: map[string]interface{}{
+					"checkpoint_enabled": true,
+				},
+			},
+			setupMock: func(mock *sqlmock.Sqlmock) {
+				rows := generateMockStubRows(1, "test-stub-checkpoint", "Test Stub", `{"runtime":{"cpu":1000,"memory":1000},"checkpoint_enabled":false}`, 1)
+				(*mock).ExpectQuery("SELECT").WithArgs("test-stub-checkpoint").WillReturnRows(rows)
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  true,
+		},
+		{
 			name:        "Test stub not found",
 			stubID:      "non-existent-stub",
 			workspaceID: 1,

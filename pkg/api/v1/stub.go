@@ -615,6 +615,21 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPBadRequest(errorMsg)
 	}
 
+	if stubConfig.CheckpointEnabled {
+		if stub.Type.IsServe() {
+			return HTTPBadRequest("Checkpoints are not supported for serve stubs")
+		}
+		if stubConfig.Runtime.GpuCount > 1 {
+			return HTTPBadRequest("Checkpoints are yet not supported for multi-GPU")
+		}
+		if len(stubConfig.Runtime.Gpus) > 1 {
+			return HTTPBadRequest("Checkpoints are yet not supported between multiple GPUs")
+		}
+		if !stub.Workspace.StorageAvailable() {
+			return HTTPBadRequest("workspace storage is required for checkpoints")
+		}
+	}
+
 	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to update stub config")
 	}

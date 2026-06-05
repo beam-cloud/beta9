@@ -301,7 +301,7 @@ func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 	if err != nil && err != redis.Nil {
 		return 0, err
 	} else if err == redis.Nil {
-		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, rb.maxTokens, 0).Result()
+		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, rb.maxTokens, rb.requestTokenTTL()).Result()
 		if err != nil {
 			return 0, err
 		}
@@ -321,6 +321,15 @@ func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 	return val, nil
 }
 
+func (rb *RequestBuffer) requestTokenTTL() time.Duration {
+	ttl := time.Duration(rb.stubConfig.TaskPolicy.Timeout) * time.Second
+	if ttl <= 0 {
+		return time.Duration(DefaultEndpointRequestTimeoutS) * time.Second
+	}
+
+	return ttl
+}
+
 func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
 	tokenCount, err := rb.rdb.Decr(rb.ctx, tokenKey).Result()
@@ -336,7 +345,7 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 		return errors.New("too many in-flight requests")
 	}
 
-	err = rb.rdb.Expire(rb.ctx, tokenKey, time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, tokenKey, rb.requestTokenTTL()).Err()
 	if err != nil {
 		return err
 	}
@@ -352,7 +361,7 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 		return err
 	}
 
-	err = rb.rdb.Expire(rb.ctx, tokenKey, time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
+	err = rb.rdb.Expire(rb.ctx, tokenKey, rb.requestTokenTTL()).Err()
 	if err != nil {
 		return err
 	}
