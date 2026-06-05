@@ -254,25 +254,25 @@ func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 	a.cacheBytes += event.Bytes
 	a.cacheTotal += event.Duration
 	switch {
-	case event.Result == "hit" ||
-		event.Result == "stored_or_present" ||
+	case event.Result == imageContentCacheResultHit ||
+		event.Result == imageContentCacheResultStoredOrPresent ||
 		event.Result == "already_present" ||
 		event.Result == "already_present_after_lock" ||
 		event.Result == "lock_wait_present":
 		a.cacheHitCount++
-	case event.Result == "miss" ||
+	case event.Result == imageContentCacheResultMiss ||
 		event.Result == "missing" ||
 		event.Result == "partial" ||
 		event.Result == "size_mismatch" ||
 		event.Result == "stored" ||
 		strings.HasPrefix(event.Result, "stored_"):
 		a.cacheMissCount++
-	case event.Result == "unavailable" || event.Result == "lock_unavailable":
+	case event.Result == imageContentCacheResultUnavailable || event.Result == "lock_unavailable":
 		a.cacheUnavailableCount++
-	case event.Result == "error":
+	case event.Result == imageContentCacheResultError:
 		a.cacheErrorCount++
 	}
-	if event.Error != "" && event.Result != "error" {
+	if event.Error != "" && event.Result != imageContentCacheResultError {
 		a.cacheErrorCount++
 		if a.firstError == "" && event.Error != "" {
 			a.firstError = event.Error
@@ -369,7 +369,7 @@ func (a *clipReadAggregate) addCacheRollup(target map[string]*clipCacheRollup, k
 	}
 
 	rollup.Count++
-	if err != "" || result == "miss" || result == "unavailable" || result == "error" {
+	if err != "" || result == imageContentCacheResultMiss || result == imageContentCacheResultUnavailable || result == imageContentCacheResultError {
 		rollup.ErrorCount++
 	}
 	rollup.TotalUs += durationUs

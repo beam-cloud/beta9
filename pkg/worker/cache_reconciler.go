@@ -434,7 +434,6 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
-	activeStubIDs := make([]string, 0, len(stubs))
 	activeCheckpointIDs := map[string]struct{}{}
 	for _, stub := range stubs {
 		select {
@@ -442,14 +441,13 @@ func (m *WorkerCacheManager) reconcileOnce() {
 			return
 		default:
 		}
-		activeStubIDs = append(activeStubIDs, stub.StubID)
 		for _, checkpointID := range m.reconcileStub(server, localHostID, stub) {
 			activeCheckpointIDs[checkpointID] = struct{}{}
 		}
 	}
 	if len(stubs) < maxStubs {
 		m.pruneLocalCheckpoints(activeCheckpointIDs)
-		m.pruneStaleCacheCheckpoints(activeStubIDs)
+		m.pruneStaleCacheCheckpoints()
 	}
 }
 
@@ -647,14 +645,11 @@ func (m *WorkerCacheManager) pruneLocalCheckpoints(active map[string]struct{}) {
 	}
 }
 
-func (m *WorkerCacheManager) pruneStaleCacheCheckpoints(activeStubIDs []string) {
+func (m *WorkerCacheManager) pruneStaleCacheCheckpoints() {
 	if m.workerRepo == nil || m.locality == "" {
 		return
 	}
-	resp, err := handleGRPCResponse(m.workerRepo.PruneStaleCacheCheckpoints(m.ctx, &pb.PruneStaleCacheCheckpointsRequest{
-		Locality:      m.locality,
-		ActiveStubIds: activeStubIDs,
-	}))
+	resp, err := handleGRPCResponse(m.workerRepo.PruneStaleCacheCheckpoints(m.ctx, &pb.PruneStaleCacheCheckpointsRequest{}))
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Msg("cache reconciliation failed to prune stale checkpoints")
 		return

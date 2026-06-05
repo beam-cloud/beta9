@@ -98,7 +98,7 @@ func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T)
 
 	resp, err := service.PruneStaleCacheCheckpoints(
 		cacheRepositoryAuthContext(types.TokenTypeWorker),
-		&pb.PruneStaleCacheCheckpointsRequest{Locality: "locality-a", ActiveStubIds: []string{"stub-a"}},
+		&pb.PruneStaleCacheCheckpointsRequest{},
 	)
 
 	require.NoError(t, err)
