@@ -1,4 +1,4 @@
-package vast
+package compute
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,8 +17,8 @@ func TestListOffersNormalizesVastBundle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(Config{APIKey: "test-key", BaseURL: server.URL})
-	offers, err := client.ListOffers(context.Background(), compute.OfferRequest{GPUs: []string{"H100"}})
+	client := NewVast(VastConfig{APIKey: "test-key", BaseURL: server.URL})
+	offers, err := client.ListOffers(context.Background(), OfferRequest{GPUs: []string{"H100"}})
 
 	require.NoError(t, err)
 	require.Len(t, offers, 1)
@@ -27,6 +26,6 @@ func TestListOffersNormalizesVastBundle(t *testing.T) {
 	require.Equal(t, "vast", offers[0].Provider)
 	require.Equal(t, "H100", offers[0].GPU)
 	require.Equal(t, uint32(8), offers[0].GPUCount)
-	require.Equal(t, compute.DollarsToMicros(10.5), offers[0].HourlyCostMicros)
+	require.Equal(t, DollarsToMicros(10.5), offers[0].HourlyCostMicros)
 	require.Equal(t, uint32(2), offers[0].Available)
 }

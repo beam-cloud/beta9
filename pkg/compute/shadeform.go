@@ -1,4 +1,4 @@
-package shadeform
+package compute
 
 import (
 	"context"
@@ -7,28 +7,27 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 )
 
-const DefaultBaseURL = "https://api.shadeform.ai/v1"
+const ShadeformDefaultBaseURL = "https://api.shadeform.ai/v1"
 
-type Client struct {
+type ShadeformClient struct {
 	api httpjson.Client
 }
 
-type Config struct {
+type ShadeformConfig struct {
 	APIKey  string
 	BaseURL string
 	Client  *http.Client
 }
 
-func New(config Config) *Client {
+func NewShadeform(config ShadeformConfig) *ShadeformClient {
 	baseURL := config.BaseURL
 	if baseURL == "" {
-		baseURL = DefaultBaseURL
+		baseURL = ShadeformDefaultBaseURL
 	}
-	return &Client{
+	return &ShadeformClient{
 		api: httpjson.Client{
 			BaseURL: baseURL,
 			Token:   config.APIKey,
@@ -37,20 +36,20 @@ func New(config Config) *Client {
 	}
 }
 
-func (c *Client) Name() string {
+func (c *ShadeformClient) Name() string {
 	return "shadeform"
 }
 
-func (c *Client) ListOffers(ctx context.Context, req compute.OfferRequest) ([]compute.Offer, error) {
+func (c *ShadeformClient) ListOffers(ctx context.Context, req OfferRequest) ([]Offer, error) {
 	var raw any
 	if err := c.api.Do(ctx, http.MethodGet, "/instances/types", nil, &raw); err != nil {
 		return nil, err
 	}
 
-	items := flattenTypes(raw)
-	offers := make([]compute.Offer, 0, len(items))
+	items := shadeformFlattenTypes(raw)
+	offers := make([]Offer, 0, len(items))
 	for _, item := range items {
-		offer := offerFromMap(item)
+		offer := shadeformOfferFromMap(item)
 		if offer.ID == "" || offer.GPUCount == 0 {
 			continue
 		}
@@ -59,7 +58,7 @@ func (c *Client) ListOffers(ctx context.Context, req compute.OfferRequest) ([]co
 	return offers, nil
 }
 
-func (c *Client) CreateReservation(ctx context.Context, req compute.ReservationRequest) (*compute.Reservation, error) {
+func (c *ShadeformClient) CreateReservation(ctx context.Context, req ReservationRequest) (*Reservation, error) {
 	if req.Offer.ID == "" {
 		return nil, fmt.Errorf("missing Shadeform cloud or instance type id")
 	}
@@ -83,7 +82,7 @@ func (c *Client) CreateReservation(ctx context.Context, req compute.ReservationR
 
 	instanceID := httpjson.String(raw, "id", "instance_id")
 	now := time.Now()
-	return &compute.Reservation{
+	return &Reservation{
 		ID:               instanceID,
 		PoolName:         req.PoolName,
 		Selector:         req.Selector,
@@ -96,22 +95,22 @@ func (c *Client) CreateReservation(ctx context.Context, req compute.ReservationR
 		CPUMillicores:    req.Offer.CPUMillicores,
 		MemoryMB:         req.Offer.MemoryMB,
 		HourlyCostMicros: req.Offer.HourlyCostMicros,
-		CommittedMicros:  req.Offer.HourlyCostMicros * compute.WholeHours(req.TTL),
+		CommittedMicros:  req.Offer.HourlyCostMicros * WholeHours(req.TTL),
 		Source:           req.Source,
-		Status:           compute.ReservationPending,
+		Status:           ReservationPending,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(req.TTL),
 		BillingRenewalAt: now.Add(time.Hour),
 	}, nil
 }
 
-func (c *Client) GetReservation(ctx context.Context, id string) (*compute.Reservation, error) {
+func (c *ShadeformClient) GetReservation(ctx context.Context, id string) (*Reservation, error) {
 	var raw map[string]any
 	if err := c.api.Do(ctx, http.MethodGet, fmt.Sprintf("/instances/%s/info", id), nil, &raw); err != nil {
 		return nil, err
 	}
-	offer := offerFromMap(raw)
-	return &compute.Reservation{
+	offer := shadeformOfferFromMap(raw)
+	return &Reservation{
 		ID:               id,
 		Provider:         c.Name(),
 		OfferID:          offer.ID,
@@ -122,21 +121,21 @@ func (c *Client) GetReservation(ctx context.Context, id string) (*compute.Reserv
 		CPUMillicores:    offer.CPUMillicores,
 		MemoryMB:         offer.MemoryMB,
 		HourlyCostMicros: offer.HourlyCostMicros,
-		Status:           compute.ReservationActive,
+		Status:           ReservationActive,
 	}, nil
 }
 
-func (c *Client) DeleteReservation(ctx context.Context, id string) error {
+func (c *ShadeformClient) DeleteReservation(ctx context.Context, id string) error {
 	return c.api.Do(ctx, http.MethodPost, fmt.Sprintf("/instances/%s/delete", id), map[string]any{}, nil)
 }
 
-func flattenTypes(raw any) []map[string]any {
+func shadeformFlattenTypes(raw any) []map[string]any {
 	switch t := raw.(type) {
 	case []any:
-		return mapsFromArray(t)
+		return shadeformMapsFromArray(t)
 	case map[string]any:
 		if arr := httpjson.Array(t, "instance_types", "types", "data"); arr != nil {
-			return mapsFromArray(arr)
+			return shadeformMapsFromArray(arr)
 		}
 		result := []map[string]any{}
 		for cloud, value := range t {
@@ -161,7 +160,7 @@ func flattenTypes(raw any) []map[string]any {
 	}
 }
 
-func mapsFromArray(items []any) []map[string]any {
+func shadeformMapsFromArray(items []any) []map[string]any {
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
 		m, ok := item.(map[string]any)
@@ -172,7 +171,7 @@ func mapsFromArray(items []any) []map[string]any {
 	return result
 }
 
-func offerFromMap(m map[string]any) compute.Offer {
+func shadeformOfferFromMap(m map[string]any) Offer {
 	raw, _ := json.Marshal(m)
 	gpuCount := uint32(httpjson.Int64(m, "gpu_count", "num_gpus", "gpus"))
 	hourlyCost := httpjson.Float64(m, "hourly_price", "price", "cost_per_hour", "hourly_cost")
@@ -180,7 +179,7 @@ func offerFromMap(m map[string]any) compute.Offer {
 	if provider == "" {
 		provider = "shadeform"
 	}
-	return compute.Offer{
+	return Offer{
 		ID:               httpjson.String(m, "id", "instance_type", "shade_instance_type"),
 		Provider:         "shadeform",
 		InstanceType:     httpjson.String(m, "instance_type", "name", "id"),
@@ -189,7 +188,7 @@ func offerFromMap(m map[string]any) compute.Offer {
 		GPUCount:         gpuCount,
 		CPUMillicores:    int64(httpjson.Float64(m, "vcpus", "cpu", "cpus") * 1000),
 		MemoryMB:         httpjson.Int64(m, "memory_mb", "memory", "ram"),
-		HourlyCostMicros: compute.DollarsToMicros(hourlyCost),
+		HourlyCostMicros: DollarsToMicros(hourlyCost),
 		Reliability:      httpjson.Float64(m, "reliability", "availability"),
 		Available:        uint32(httpjson.Int64(m, "available", "availability_count", "capacity")),
 		Labels:           map[string]string{"cloud": provider},

@@ -1,4 +1,4 @@
-package vast
+package compute
 
 import (
 	"context"
@@ -8,28 +8,27 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 )
 
-const DefaultBaseURL = "https://console.vast.ai/api/v0"
+const VastDefaultBaseURL = "https://console.vast.ai/api/v0"
 
-type Client struct {
+type VastClient struct {
 	api httpjson.Client
 }
 
-type Config struct {
+type VastConfig struct {
 	APIKey  string
 	BaseURL string
 	Client  *http.Client
 }
 
-func New(config Config) *Client {
+func NewVast(config VastConfig) *VastClient {
 	baseURL := config.BaseURL
 	if baseURL == "" {
-		baseURL = DefaultBaseURL
+		baseURL = VastDefaultBaseURL
 	}
-	return &Client{
+	return &VastClient{
 		api: httpjson.Client{
 			BaseURL: baseURL,
 			Token:   config.APIKey,
@@ -38,11 +37,11 @@ func New(config Config) *Client {
 	}
 }
 
-func (c *Client) Name() string {
+func (c *VastClient) Name() string {
 	return "vast"
 }
 
-func (c *Client) ListOffers(ctx context.Context, req compute.OfferRequest) ([]compute.Offer, error) {
+func (c *VastClient) ListOffers(ctx context.Context, req OfferRequest) ([]Offer, error) {
 	body := map[string]any{
 		"type": "on-demand",
 		"q": map[string]any{
@@ -66,13 +65,13 @@ func (c *Client) ListOffers(ctx context.Context, req compute.OfferRequest) ([]co
 		}
 	}
 
-	offers := make([]compute.Offer, 0, len(items))
+	offers := make([]Offer, 0, len(items))
 	for _, item := range items {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		offer := offerFromMap(m)
+		offer := vastOfferFromMap(m)
 		if offer.ID == "" || offer.GPUCount == 0 {
 			continue
 		}
@@ -84,7 +83,7 @@ func (c *Client) ListOffers(ctx context.Context, req compute.OfferRequest) ([]co
 	return offers, nil
 }
 
-func (c *Client) CreateReservation(ctx context.Context, req compute.ReservationRequest) (*compute.Reservation, error) {
+func (c *VastClient) CreateReservation(ctx context.Context, req ReservationRequest) (*Reservation, error) {
 	if req.Offer.ID == "" {
 		return nil, fmt.Errorf("missing Vast offer id")
 	}
@@ -104,7 +103,7 @@ func (c *Client) CreateReservation(ctx context.Context, req compute.ReservationR
 
 	instanceID := httpjson.String(raw, "new_contract", "instance_id", "id")
 	now := time.Now()
-	return &compute.Reservation{
+	return &Reservation{
 		ID:               instanceID,
 		PoolName:         req.PoolName,
 		Selector:         req.Selector,
@@ -117,22 +116,22 @@ func (c *Client) CreateReservation(ctx context.Context, req compute.ReservationR
 		CPUMillicores:    req.Offer.CPUMillicores,
 		MemoryMB:         req.Offer.MemoryMB,
 		HourlyCostMicros: req.Offer.HourlyCostMicros,
-		CommittedMicros:  req.Offer.HourlyCostMicros * compute.WholeHours(req.TTL),
+		CommittedMicros:  req.Offer.HourlyCostMicros * WholeHours(req.TTL),
 		Source:           req.Source,
-		Status:           compute.ReservationPending,
+		Status:           ReservationPending,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(req.TTL),
 		BillingRenewalAt: now.Add(time.Hour),
 	}, nil
 }
 
-func (c *Client) GetReservation(ctx context.Context, id string) (*compute.Reservation, error) {
+func (c *VastClient) GetReservation(ctx context.Context, id string) (*Reservation, error) {
 	var raw map[string]any
 	if err := c.api.Do(ctx, http.MethodGet, fmt.Sprintf("/instances/%s/", id), nil, &raw); err != nil {
 		return nil, err
 	}
-	offer := offerFromMap(raw)
-	return &compute.Reservation{
+	offer := vastOfferFromMap(raw)
+	return &Reservation{
 		ID:               id,
 		Provider:         c.Name(),
 		OfferID:          offer.ID,
@@ -143,15 +142,15 @@ func (c *Client) GetReservation(ctx context.Context, id string) (*compute.Reserv
 		CPUMillicores:    offer.CPUMillicores,
 		MemoryMB:         offer.MemoryMB,
 		HourlyCostMicros: offer.HourlyCostMicros,
-		Status:           compute.ReservationActive,
+		Status:           ReservationActive,
 	}, nil
 }
 
-func (c *Client) DeleteReservation(ctx context.Context, id string) error {
+func (c *VastClient) DeleteReservation(ctx context.Context, id string) error {
 	return c.api.Do(ctx, http.MethodDelete, fmt.Sprintf("/instances/%s/", id), nil, nil)
 }
 
-func offerFromMap(m map[string]any) compute.Offer {
+func vastOfferFromMap(m map[string]any) Offer {
 	raw, _ := json.Marshal(m)
 	id := httpjson.String(m, "id", "ask_contract_id", "bundle_id")
 	if id == "" {
@@ -161,7 +160,7 @@ func offerFromMap(m map[string]any) compute.Offer {
 	}
 	gpuCount := uint32(httpjson.Int64(m, "num_gpus", "gpu_count", "gpus"))
 	hourlyCost := httpjson.Float64(m, "dph_total", "price", "hourly_cost", "cost_per_hour")
-	return compute.Offer{
+	return Offer{
 		ID:               id,
 		Provider:         "vast",
 		InstanceType:     httpjson.String(m, "machine_id", "instance_type", "hostname"),
@@ -170,7 +169,7 @@ func offerFromMap(m map[string]any) compute.Offer {
 		GPUCount:         gpuCount,
 		CPUMillicores:    int64(httpjson.Float64(m, "cpu_cores", "vcpus", "cpu") * 1000),
 		MemoryMB:         int64(httpjson.Float64(m, "cpu_ram", "memory_mb", "ram") * 1024),
-		HourlyCostMicros: compute.DollarsToMicros(hourlyCost),
+		HourlyCostMicros: DollarsToMicros(hourlyCost),
 		Reliability:      httpjson.Float64(m, "reliability2", "reliability", "score"),
 		Available:        uint32(httpjson.Int64(m, "available", "availability", "rentable_count")),
 		Raw:              raw,

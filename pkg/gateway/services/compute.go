@@ -17,9 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
-	"github.com/beam-cloud/beta9/pkg/compute/shadeform"
 	"github.com/beam-cloud/beta9/pkg/compute/solver"
-	"github.com/beam-cloud/beta9/pkg/compute/vast"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -898,13 +896,13 @@ func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.Up
 func (gws *GatewayService) computeVendors() map[string]compute.Vendor {
 	vendors := map[string]compute.Vendor{}
 	if gws.appConfig.Providers.Vast.ApiKey != "" {
-		vendors["vast"] = vast.New(vast.Config{
+		vendors["vast"] = compute.NewVast(compute.VastConfig{
 			APIKey:  gws.appConfig.Providers.Vast.ApiKey,
 			BaseURL: gws.appConfig.Providers.Vast.BaseURL,
 		})
 	}
 	if gws.appConfig.Providers.Shadeform.ApiKey != "" {
-		vendors["shadeform"] = shadeform.New(shadeform.Config{
+		vendors["shadeform"] = compute.NewShadeform(compute.ShadeformConfig{
 			APIKey:  gws.appConfig.Providers.Shadeform.ApiKey,
 			BaseURL: gws.appConfig.Providers.Shadeform.BaseURL,
 		})
