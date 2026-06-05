@@ -39,6 +39,9 @@ func TestAddAndRemoveWorker(t *testing.T) {
 	err = repo.AddWorker(newWorker)
 	assert.Nil(t, err)
 
+	err = rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(newWorker.Id), "scheduler:container:state:stale").Err()
+	assert.Nil(t, err)
+
 	worker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, newWorker.FreeCpu, worker.FreeCpu)
@@ -48,6 +51,10 @@ func TestAddAndRemoveWorker(t *testing.T) {
 
 	err = repo.RemoveWorker(newWorker.Id)
 	assert.Nil(t, err)
+
+	exists, err := rdb.Exists(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(newWorker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), exists)
 
 	err = repo.RemoveWorker(newWorker.Id)
 	assert.Error(t, err)

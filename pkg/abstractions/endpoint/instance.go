@@ -33,7 +33,7 @@ type endpointInstance struct {
 }
 
 func (i *endpointInstance) startContainers(containersToRun int) error {
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.buffer.stubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			containerId,
 			i.Stub.Object.ExternalId,
 			i.Workspace,
-			*i.buffer.stubConfig,
+			*i.StubConfig,
 			i.Stub.ExternalId,
 		)
 		if err != nil {

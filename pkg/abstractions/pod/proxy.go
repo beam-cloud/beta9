@@ -503,7 +503,7 @@ func (pb *PodProxyBuffer) containerConnections(containerId string) (int, error) 
 	if err != nil && err != redis.Nil {
 		return 0, err
 	} else if err == redis.Nil {
-		created, err := pb.rdb.SetNX(pb.ctx, tokenKey, 0, 0).Result()
+		created, err := pb.rdb.SetNX(pb.ctx, tokenKey, 0, podContainerConnectionTimeout).Result()
 		if err != nil {
 			return 0, err
 		}

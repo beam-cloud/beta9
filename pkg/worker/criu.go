@@ -28,6 +28,7 @@ import (
 const (
 	gpuCntEnvKey               = "GPU_COUNT"
 	defaultCheckpointDeadline  = 10 * time.Minute
+	checkpointStateRPCTimeout  = 5 * time.Second
 	readyLogRate               = 10
 	checkpointFsDir            = "filesystem"
 	checkpointArchiveExtension = ".tar"
@@ -173,7 +174,7 @@ type CreateCheckpointOpts struct {
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
-func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpts) error {
+func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpts) (err error) {
 	instance, exists := s.containerInstances.Get(opts.Request.ContainerId)
 	if !exists {
 		return fmt.Errorf("container instance not found")
@@ -185,17 +186,53 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("creating checkpoint")
 
+	readyForCheckpoint := false
+	checkpointComplete := false
+	writeCheckpointComplete := func() error {
+		if !opts.WaitForSignal || !readyForCheckpoint || checkpointComplete {
+			return nil
+		}
+		f, err := os.Create(filepath.Join(checkpointSignalDir(opts.Request.ContainerId), checkpointCompleteFileName))
+		if err != nil {
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint complete file: %v", err)
+			return err
+		}
+		if err := f.Close(); err != nil {
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to close checkpoint complete file: %v", err)
+			return err
+		}
+		checkpointComplete = true
+		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint complete signal created")
+		return nil
+	}
+	defer func() {
+		if err == nil || !opts.WaitForSignal || !readyForCheckpoint || checkpointComplete {
+			return
+		}
+		if signalErr := writeCheckpointComplete(); signalErr != nil {
+			log.Error().Err(signalErr).Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("failed to unblock checkpoint waiter")
+		}
+	}()
+
 	if opts.WaitForSignal {
 		err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
 		if err != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to wait for checkpoint signal: %v", err)
 			return err
 		}
+		readyForCheckpoint = true
 	}
 
+	checkpointCtx, cancel := context.WithTimeout(ctx, defaultCheckpointDeadline)
+	defer cancel()
+
 	// Proceed to create the checkpoint
-	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
+	phaseStart := time.Now()
+	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("runtime checkpoint starting")
+	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
+		log.Error().Err(err).Dur("duration", time.Since(phaseStart)).Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("runtime checkpoint failed")
+		_ = writeCheckpointComplete()
 		if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", stateErr)
 		}
@@ -206,28 +243,39 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 		return err
 	}
+	log.Info().Dur("duration", time.Since(phaseStart)).Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Str("checkpoint_path", checkpointPath).Msg("runtime checkpoint completed")
 
 	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
 	upperDir := path.Join(parentDir, "upper")
 
+	phaseStart = time.Now()
+	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Str("upper_dir", upperDir).Msg("checkpoint filesystem copy starting")
 	err = copyDirectory(upperDir, path.Join(checkpointPath, checkpointFsDir), []string{"config.json", "outputs", "snapshot"})
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Error("Failed to copy checkpoint filesystem")
+		}
 		return err
 	}
+	log.Info().Dur("duration", time.Since(phaseStart)).Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint filesystem copy completed")
 
-	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
+	phaseStart = time.Now()
+	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint persistence starting")
+	metadata, err := s.persistCheckpoint(checkpointCtx, opts.Request, opts.CheckpointId, checkpointPath)
 	if err != nil {
+		_ = writeCheckpointComplete()
 		_ = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to persist checkpoint: %v", err)
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Error("Failed to persist checkpoint")
+		}
 		return err
 	}
+	log.Info().Dur("duration", time.Since(phaseStart)).Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Str("hash", metadata.hash).Int64("size_bytes", metadata.sizeBytes).Msg("checkpoint persistence completed")
 
 	if opts.WaitForSignal {
-		// Create a file accessible to the container to indicate that the checkpoint has been captured
-		_, err = os.Create(filepath.Join(checkpointSignalDir(opts.Request.ContainerId), checkpointCompleteFileName))
-		if err != nil {
-			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint complete file: %v", err)
+		if err := writeCheckpointComplete(); err != nil {
 			return err
 		}
 	}
@@ -287,13 +335,25 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	_ = os.Remove(archivePath)
 	defer os.Remove(archivePath)
 
+	phaseStart := time.Now()
+	log.Info().Str("checkpoint_id", checkpointId).Str("archive_path", archivePath).Msg("checkpoint archive creation starting")
 	if err := createTar(checkpointPath, archivePath); err != nil {
 		return nil, err
 	}
+	archiveInfo, _ := os.Stat(archivePath)
+	archiveSize := int64(0)
+	if archiveInfo != nil {
+		archiveSize = archiveInfo.Size()
+	}
+	log.Info().Dur("duration", time.Since(phaseStart)).Str("checkpoint_id", checkpointId).Int64("size_bytes", archiveSize).Msg("checkpoint archive creation completed")
+
+	phaseStart = time.Now()
+	log.Info().Str("checkpoint_id", checkpointId).Str("archive_path", archivePath).Msg("checkpoint archive hash starting")
 	hash, size, err := fileSHA256(archivePath)
 	if err != nil {
 		return nil, err
 	}
+	log.Info().Dur("duration", time.Since(phaseStart)).Str("checkpoint_id", checkpointId).Str("hash", hash).Int64("size_bytes", size).Msg("checkpoint archive hash completed")
 
 	originKey := checkpointOriginKey(checkpointId)
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
@@ -304,6 +364,8 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	if err != nil {
 		return nil, err
 	}
+	phaseStart = time.Now()
+	log.Info().Str("checkpoint_id", checkpointId).Str("origin_key", originKey).Int64("size_bytes", size).Msg("checkpoint workspace upload starting")
 	if err := storageClient.UploadWithReader(ctx, originKey, f); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -311,12 +373,17 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
+	log.Info().Dur("duration", time.Since(phaseStart)).Str("checkpoint_id", checkpointId).Str("origin_key", originKey).Int64("size_bytes", size).Msg("checkpoint workspace upload completed")
 
+	phaseStart = time.Now()
+	log.Info().Str("checkpoint_id", checkpointId).Str("hash", hash).Int64("size_bytes", size).Msg("checkpoint cache store starting")
 	if _, err := s.cacheManager.client.StoreContentFromLocalFile(cache.LocalContentSource{
 		Path:      archivePath,
 		CachePath: originKey,
 	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
-		log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
+		log.Warn().Err(err).Dur("duration", time.Since(phaseStart)).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
+	} else {
+		log.Info().Dur("duration", time.Since(phaseStart)).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("checkpoint cache store completed")
 	}
 
 	return &checkpointCacheMetadata{
@@ -588,7 +655,9 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 
 func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string) error {
 	req := checkpointStateRequest(checkpointId, request, status, containerIp)
-	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
+	ctx, cancel := context.WithTimeout(context.Background(), checkpointStateRPCTimeout)
+	defer cancel()
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(ctx, req))
 
 	return err
 }
@@ -600,7 +669,9 @@ func (s *Worker) createAvailableCheckpointState(checkpointId string, request *ty
 	req.OriginKey = metadata.originKey
 	req.Locality = metadata.locality
 	req.Accelerator = metadata.accelerator
-	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
+	ctx, cancel := context.WithTimeout(context.Background(), checkpointStateRPCTimeout)
+	defer cancel()
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(ctx, req))
 
 	return err
 }
@@ -618,7 +689,9 @@ func checkpointStateRequest(checkpointId string, request *types.ContainerRequest
 }
 
 func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus) error {
-	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(context.Background(), &pb.UpdateCheckpointRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), checkpointStateRPCTimeout)
+	defer cancel()
+	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(ctx, &pb.UpdateCheckpointRequest{
 		CheckpointId: checkpointId,
 		Status:       string(status),
 	}))
@@ -627,7 +700,9 @@ func (s *Worker) updateCheckpointState(checkpointId string, request *types.Conta
 }
 
 func (s *Worker) updateCheckpointRestored(checkpointId string) error {
-	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(context.Background(), &pb.UpdateCheckpointRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), checkpointStateRPCTimeout)
+	defer cancel()
+	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(ctx, &pb.UpdateCheckpointRequest{
 		CheckpointId:   checkpointId,
 		LastRestoredAt: timestamppb.Now(),
 	}))
