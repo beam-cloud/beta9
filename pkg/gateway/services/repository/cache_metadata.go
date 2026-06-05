@@ -180,27 +180,38 @@ func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	checkpoints, err := s.backendRepo.PruneStaleCheckpoints(ctx, activeKeys)
+	checkpoints, err := s.backendRepo.ListStaleCheckpoints(ctx, activeKeys)
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	pruneIDs := make([]string, 0, len(checkpoints))
 	for _, checkpoint := range checkpoints {
-		if checkpoint.OriginKey == "" {
-			continue
+		if checkpoint.OriginKey != "" {
+			workspace, err := s.backendRepo.GetWorkspace(ctx, checkpoint.WorkspaceId)
+			if err != nil {
+				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			}
+			if !workspace.StorageAvailable() {
+				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: fmt.Sprintf("workspace storage is unavailable for checkpoint %s", checkpoint.CheckpointId)}, nil
+			}
+			storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+			if err != nil {
+				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			}
+			if err := storageClient.Delete(ctx, checkpoint.OriginKey); err != nil {
+				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			}
 		}
-		workspace, err := s.backendRepo.GetWorkspace(ctx, checkpoint.WorkspaceId)
-		if err != nil || !workspace.StorageAvailable() {
-			continue
-		}
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
-		if err != nil {
-			continue
-		}
-		_ = storageClient.Delete(ctx, checkpoint.OriginKey)
+		pruneIDs = append(pruneIDs, checkpoint.CheckpointId)
 	}
 
-	return &pb.PruneStaleCacheCheckpointsResponse{Ok: true, Pruned: int32(len(checkpoints))}, nil
+	pruned, err := s.backendRepo.PruneCheckpoints(ctx, pruneIDs)
+	if err != nil {
+		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.PruneStaleCacheCheckpointsResponse{Ok: true, Pruned: int32(len(pruned))}, nil
 }
 
 type anyLocalityRecentStubStore interface {

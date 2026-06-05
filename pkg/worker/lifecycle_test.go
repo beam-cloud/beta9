@@ -508,6 +508,48 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Equal(t, 1, backendRepoClient.updateCalls)
 }
 
+func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
+	restoreErr := assert.AnError
+	containerID := "container-restore-generic-error"
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
+
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{
+		criuManager:        &restoreErrorCRIUManager{exitCode: 17, err: restoreErr},
+		backendRepoClient:  backendRepoClient,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: &mockRuntime{name: "runc"},
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-generic-error",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, restored, err := worker.attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+	)
+
+	require.ErrorIs(t, err, restoreErr)
+	require.False(t, restored)
+	require.Equal(t, 17, exitCode)
+	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
+	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+}
+
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "volume")
 	spec := getTestBaseSpec()
@@ -1041,8 +1083,26 @@ func (m *startedCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.R
 	return 0, nil
 }
 
+type restoreErrorCRIUManager struct {
+	exitCode int
+	err      error
+}
+
+func (m *restoreErrorCRIUManager) Available() bool {
+	return true
+}
+
+func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+	return "", nil
+}
+
+func (m *restoreErrorCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
+	return m.exitCode, m.err
+}
+
 type fakeBackendRepoClient struct {
 	updateCalls int
+	lastUpdate  *pb.UpdateCheckpointRequest
 }
 
 func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
@@ -1063,6 +1123,7 @@ func (f *fakeBackendRepoClient) CreateCheckpoint(ctx context.Context, in *pb.Cre
 
 func (f *fakeBackendRepoClient) UpdateCheckpoint(ctx context.Context, in *pb.UpdateCheckpointRequest, opts ...grpc.CallOption) (*pb.UpdateCheckpointResponse, error) {
 	f.updateCalls++
+	f.lastUpdate = in
 	return &pb.UpdateCheckpointResponse{Ok: true}, nil
 }
 

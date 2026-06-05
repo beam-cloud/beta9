@@ -581,7 +581,7 @@ func (m *WorkerCacheManager) reconcileBackingOff(hash, routingKey string, stubLa
 	if !ok {
 		return false
 	}
-	if !stubLastSeen.IsZero() && stubLastSeen.After(failedAt) {
+	if reconcileStubSeenAfterFailure(stubLastSeen, failedAt) {
 		delete(m.reconcileFailures, key)
 		return false
 	}
@@ -589,6 +589,19 @@ func (m *WorkerCacheManager) reconcileBackingOff(hash, routingKey string, stubLa
 		return true
 	}
 	delete(m.reconcileFailures, key)
+	return false
+}
+
+func reconcileStubSeenAfterFailure(stubLastSeen, failedAt time.Time) bool {
+	if stubLastSeen.IsZero() {
+		return false
+	}
+	if stubLastSeen.After(failedAt) {
+		return true
+	}
+	if stubLastSeen.Nanosecond() == 0 {
+		return !stubLastSeen.Before(failedAt.Truncate(time.Second))
+	}
 	return false
 }
 

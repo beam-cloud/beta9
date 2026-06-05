@@ -1980,21 +1980,28 @@ func (c *Client) SelectedStoreHostAvailable(hash string, routingKey string) bool
 		routingKey = hash
 	}
 
-	host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
-	if err != nil || host == nil {
-		return false
-	}
-	if c.localDiskStoreForHost(host) != nil {
-		return true
-	}
-	if !host.HasEndpoint() {
-		return false
-	}
+	for attempt := 0; attempt < 2; attempt++ {
+		host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
+		if err == nil && host != nil {
+			if c.localDiskStoreForHost(host) != nil {
+				return true
+			}
+			if host.HasEndpoint() {
+				c.mu.RLock()
+				_, exists := c.grpcClients[host.HostId]
+				c.mu.RUnlock()
+				if exists {
+					return true
+				}
+			}
+		}
 
-	c.mu.RLock()
-	_, exists := c.grpcClients[host.HostId]
-	c.mu.RUnlock()
-	return exists
+		if attempt > 0 || c.hostDirectory == nil || c.hostMap == nil {
+			return false
+		}
+		_ = c.refreshRoutableHosts(c.ctx)
+	}
+	return false
 }
 
 func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts StoreContentOptions) (string, error) {

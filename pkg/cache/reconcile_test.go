@@ -140,11 +140,11 @@ func TestRecentStubsAnyLocalityDedupesByNewestSeen(t *testing.T) {
 	stubs, err := m.ListRecentStubsAnyLocality(ctx, time.Hour)
 	require.NoError(t, err)
 
+	require.Len(t, stubs, 2)
 	byKey := map[string]RecentStub{}
 	for _, stub := range stubs {
 		byKey[RecentStubKey(stub.WorkspaceID, stub.StubID)] = stub
 	}
-	require.Len(t, byKey, 2)
 	require.Contains(t, byKey, RecentStubKey("ws", "stub-a"))
 	require.Contains(t, byKey, RecentStubKey("ws", "stub-b"))
 }

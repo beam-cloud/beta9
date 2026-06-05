@@ -18,12 +18,33 @@ import (
 
 type pruneCheckpointBackendRepo struct {
 	repository.BackendRepository
-	activeKeys []string
+	activeKeys  []string
+	checkpoints []types.Checkpoint
+	pruneIDs    []string
+	workspaces  map[uint]*types.Workspace
 }
 
-func (r *pruneCheckpointBackendRepo) PruneStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
+func (r *pruneCheckpointBackendRepo) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
 	r.activeKeys = append([]string(nil), activeRecentStubKeys...)
-	return nil, nil
+	return r.checkpoints, nil
+}
+
+func (r *pruneCheckpointBackendRepo) PruneCheckpoints(ctx context.Context, checkpointIDs []string) ([]types.Checkpoint, error) {
+	r.pruneIDs = append([]string(nil), checkpointIDs...)
+	pruned := make([]types.Checkpoint, 0, len(checkpointIDs))
+	for _, checkpointID := range checkpointIDs {
+		pruned = append(pruned, types.Checkpoint{CheckpointId: checkpointID})
+	}
+	return pruned, nil
+}
+
+func (r *pruneCheckpointBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
+	if r.workspaces != nil {
+		if workspace, ok := r.workspaces[workspaceID]; ok {
+			return workspace, nil
+		}
+	}
+	return &types.Workspace{}, nil
 }
 
 func TestAuthorizeCacheRepositoryRequestWithWorkerToken(t *testing.T) {
@@ -107,6 +128,44 @@ func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T)
 		cache.RecentStubKey("workspace", "stub-a"),
 		cache.RecentStubKey("workspace", "stub-b"),
 	}, backendRepo.activeKeys)
+}
+
+func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
+	backendRepo := &pruneCheckpointBackendRepo{
+		checkpoints: []types.Checkpoint{{
+			CheckpointId: "checkpoint-a",
+			WorkspaceId:  7,
+			OriginKey:    "checkpoints/checkpoint-a.tar",
+		}},
+		workspaces: map[uint]*types.Workspace{7: {Name: "workspace"}},
+	}
+	service := &WorkerRepositoryService{
+		cacheMetadata: metadataStore,
+		backendRepo:   backendRepo,
+		appConfig: types.AppConfig{
+			Cache: cache.Config{
+				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 3600},
+			},
+		},
+	}
+
+	resp, err := service.PruneStaleCacheCheckpoints(
+		cacheRepositoryAuthContext(types.TokenTypeWorker),
+		&pb.PruneStaleCacheCheckpointsRequest{},
+	)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "workspace storage is unavailable")
+	require.Empty(t, backendRepo.pruneIDs)
 }
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {

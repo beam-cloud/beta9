@@ -263,6 +263,18 @@ func TestReconcileBackoffIsBypassedByNewStubSighting(t *testing.T) {
 	require.Empty(t, manager.reconcileFailures)
 }
 
+func TestReconcileBackoffIsBypassedBySecondPrecisionStubSighting(t *testing.T) {
+	failedAt := time.Unix(1_700_000_000, int64(750*time.Millisecond))
+	manager := &WorkerCacheManager{
+		reconcileFailures: map[string]time.Time{
+			"hash\x00route": failedAt,
+		},
+	}
+
+	require.False(t, manager.reconcileBackingOff("hash", "route", time.Unix(failedAt.Unix(), 0)))
+	require.Empty(t, manager.reconcileFailures)
+}
+
 func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

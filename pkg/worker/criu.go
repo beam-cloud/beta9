@@ -142,7 +142,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		started:      startedChan,
 		configPath:   request.ConfigPath,
 	})
-	if err != nil && IsCRIURestoreError(err) {
+	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to restore checkpoint: %v", err)
 
 		outputLogger.Info("Failed to restore checkpoint")
