@@ -86,6 +86,50 @@ func (r *RedisClient) ToStruct(m map[string]string, out interface{}) error {
 	return ToStruct(m, out)
 }
 
+// Keys gets all keys using a pattern. Prefer explicit indexes for hot paths.
+func (r *RedisClient) Keys(ctx context.Context, pattern string) ([]string, error) {
+	return r.Scan(ctx, pattern)
+}
+
+func (r *RedisClient) Scan(ctx context.Context, pattern string) ([]string, error) {
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	keys := []string{}
+
+	scanAndCollect := func(rdb *redis.Client) error {
+		iter := rdb.Scan(ctx, 0, pattern, 10_000).Iterator()
+
+		for iter.Next(ctx) {
+			key := iter.Val()
+
+			mu.Lock()
+			if !seen[key] {
+				seen[key] = true
+				keys = append(keys, key)
+			}
+			mu.Unlock()
+		}
+
+		return iter.Err()
+	}
+
+	switch client := r.UniversalClient.(type) {
+	case *redis.Client:
+		if err := scanAndCollect(client); err != nil {
+			return nil, err
+		}
+
+	case *redis.ClusterClient:
+		if err := client.ForEachMaster(ctx, func(ctx context.Context, rdb *redis.Client) error {
+			return scanAndCollect(rdb)
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	return keys, nil
+}
+
 func (r *RedisClient) LRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
 	return r.UniversalClient.LRange(ctx, key, start, stop).Result()
 }

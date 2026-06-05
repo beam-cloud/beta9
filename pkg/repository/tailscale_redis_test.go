@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/stretchr/testify/require"
@@ -20,8 +19,6 @@ func TestTailscaleHostnamesUseServiceIndexAndPruneExpiredEntries(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, rdb.SAdd(ctx, common.RedisKeys.TailscaleServiceHostnameIndex("svc-a"), "expired").Err())
-	require.NoError(t, rdb.Set(ctx, common.RedisKeys.TailscaleServiceHostname("svc-a", "expired"), "host-expired", time.Millisecond).Err())
-	time.Sleep(2 * time.Millisecond)
 
 	hostnames, err := repo.GetHostnamesForService("svc-a")
 	require.NoError(t, err)
