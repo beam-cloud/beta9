@@ -44,6 +44,7 @@ type imageContentCache struct {
 	storeRequests    atomic.Int64
 	storeBytes       atomic.Int64
 	storeSuccesses   atomic.Int64
+	storeSkipped     atomic.Int64
 	storeErrors      atomic.Int64
 	lastSummaryNS    atomic.Int64
 }
@@ -336,6 +337,23 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 
 	started := time.Now()
 	c.storeRequests.Add(1)
+	if c.skipRuntimeStoreWhenUnavailable(hash, opts.RoutingKey) {
+		go drainImageContentChunks(chunks)
+		c.storeSkipped.Add(1)
+		c.observeContentCacheTrace(imageContentCacheTrace{
+			Operation:  "store_stream",
+			Result:     "skipped_unavailable",
+			ImageID:    c.imageID,
+			Kind:       c.kind,
+			Hash:       hash,
+			RoutingKey: opts.RoutingKey,
+			StartedAt:  started,
+			Duration:   time.Since(started),
+		})
+		c.maybeLogSummary()
+		return hash, nil
+	}
+
 	countingChunks := make(chan []byte, 2)
 	done := make(chan struct{})
 	var storeBytes atomic.Int64
@@ -359,7 +377,13 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	close(done)
 	elapsed := time.Since(started)
 	result := "stored_or_present"
-	if err != nil {
+	traceErr := err
+	if err != nil && c.bestEffortRuntimeStore() && cache.IsStoreHostUnavailable(err) {
+		result = "skipped_unavailable"
+		c.storeSkipped.Add(1)
+		actualHash = hash
+		err = nil
+	} else if err != nil {
 		result = "error"
 		c.storeErrors.Add(1)
 		log.Warn().
@@ -375,7 +399,7 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	} else {
 		c.storeSuccesses.Add(1)
 	}
-	if err == nil && elapsed > imageContentCacheSlowStore {
+	if err == nil && result != "skipped_unavailable" && elapsed > imageContentCacheSlowStore {
 		log.Debug().
 			Str("cache_result", "stored_or_present").
 			Str("image_id", c.imageID).
@@ -398,7 +422,7 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 		Bytes:      storeBytes.Load(),
 		StartedAt:  started,
 		Duration:   elapsed,
-		Error:      imageContentCacheErrorString(err),
+		Error:      imageContentCacheErrorString(traceErr),
 	})
 
 	return actualHash, err
@@ -415,12 +439,30 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 	started := time.Now()
 	var cacheTrace cache.OperationTrace
 	c.storeRequests.Add(1)
+	if c.skipRuntimeStoreWhenUnavailable(hash, opts.RoutingKey) {
+		c.storeSkipped.Add(1)
+		c.observeContentCacheTrace(imageContentCacheTrace{
+			Operation:  "store_local_path",
+			Result:     "skipped_unavailable",
+			ImageID:    c.imageID,
+			Kind:       c.kind,
+			Hash:       hash,
+			RoutingKey: opts.RoutingKey,
+			Bytes:      fileSize(path),
+			StartedAt:  started,
+			Duration:   time.Since(started),
+		})
+		c.maybeLogSummary()
+		return hash, nil
+	}
+
 	defer func() {
 		elapsed := time.Since(started)
 		result := cacheTrace.Result
 		if result == "" {
 			result = "stored_or_present"
 		}
+		skipped := result == "skipped_unavailable"
 		if err != nil {
 			result = "error"
 			c.storeErrors.Add(1)
@@ -434,10 +476,12 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 				Str("path", path).
 				Dur("elapsed", elapsed).
 				Msg("clip image content cache local-path store result")
+		} else if skipped {
+			c.storeSkipped.Add(1)
 		} else {
 			c.storeSuccesses.Add(1)
 		}
-		if err == nil && elapsed > imageContentCacheSlowStore {
+		if err == nil && !skipped && elapsed > imageContentCacheSlowStore {
 			log.Debug().
 				Str("cache_result", result).
 				Str("image_id", c.imageID).
@@ -472,6 +516,11 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 		RoutingKey: opts.RoutingKey,
 		Lock:       true,
 	})
+	if err != nil && c.bestEffortRuntimeStore() && cache.IsStoreHostUnavailable(err) {
+		cacheTrace.Result = "skipped_unavailable"
+		actualHash = hash
+		err = nil
+	}
 	return actualHash, err
 }
 
@@ -518,8 +567,17 @@ func (c *imageContentCache) maybeLogSummary() {
 		Int64("store_requests", c.storeRequests.Load()).
 		Int64("store_bytes", c.storeBytes.Load()).
 		Int64("store_successes", c.storeSuccesses.Load()).
+		Int64("store_skipped", c.storeSkipped.Load()).
 		Int64("store_errors", c.storeErrors.Load()).
 		Msg("clip image content cache summary")
+}
+
+func (c *imageContentCache) bestEffortRuntimeStore() bool {
+	return c != nil && (c.kind == "legacy-file-runtime" || c.kind == "oci-layer-runtime")
+}
+
+func (c *imageContentCache) skipRuntimeStoreWhenUnavailable(hash string, routingKey string) bool {
+	return c.bestEffortRuntimeStore() && !c.client.SelectedStoreHostAvailable(hash, routingKey)
 }
 
 func imageContentCacheErrorString(err error) string {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -165,6 +166,37 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		// Short-lived registry credentials for OCI layer pulls from the build registry.
 		RegistryCredentials: s.buildRegistryCredentials(ctx, req.Registry),
 	}, nil
+}
+
+func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, req *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
+	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
+		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	if s.backendRepo == nil {
+		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: "backend repository is unavailable"}, nil
+	}
+
+	checkpoints, err := s.backendRepo.PruneStaleCheckpoints(ctx, req.Locality, req.ActiveStubIds)
+	if err != nil {
+		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	for _, checkpoint := range checkpoints {
+		if checkpoint.OriginKey == "" {
+			continue
+		}
+		workspace, err := s.backendRepo.GetWorkspace(ctx, checkpoint.WorkspaceId)
+		if err != nil || !workspace.StorageAvailable() {
+			continue
+		}
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			continue
+		}
+		_ = storageClient.Delete(ctx, checkpoint.OriginKey)
+	}
+
+	return &pb.PruneStaleCacheCheckpointsResponse{Ok: true, Pruned: int32(len(checkpoints))}, nil
 }
 
 // workspaceStorageCredentials resolves a workspace's (decrypted) object storage

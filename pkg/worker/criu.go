@@ -2,8 +2,9 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,21 +14,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/runtime"
-	storage "github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	gpuCntEnvKey              = "GPU_COUNT"
-	defaultCheckpointDeadline = 10 * time.Minute
-	readyLogRate              = 10
-	checkpointFsDir           = "filesystem"
+	gpuCntEnvKey               = "GPU_COUNT"
+	defaultCheckpointDeadline  = 10 * time.Minute
+	readyLogRate               = 10
+	checkpointFsDir            = "filesystem"
+	checkpointArchiveExtension = ".tar"
+	checkpointOriginPrefix     = "checkpoints"
 )
+
+type checkpointCacheMetadata struct {
+	hash        string
+	sizeBytes   int64
+	originKey   string
+	locality    string
+	accelerator string
+}
 
 type RestoreOpts struct {
 	request      *types.ContainerRequest
@@ -44,13 +57,16 @@ type CRIUManager interface {
 }
 
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers.
-func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
+func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpointRoot string) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
+	if checkpointRoot == "" {
+		return nil, fmt.Errorf("checkpoint root is required")
+	}
 
 	switch config.Mode {
 	case types.CRIUConfigModeNvidia:
-		criuManager, err = InitializeNvidiaCRIU(ctx, config)
+		criuManager, err = InitializeNvidiaCRIU(ctx, config, checkpointRoot)
 	default:
 		return nil, fmt.Errorf("unsupported CRIU mode: %s", config.Mode)
 	}
@@ -59,26 +75,8 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 		return nil, err
 	}
 
-	if err := os.MkdirAll(config.Storage.MountPath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(checkpointRoot, os.ModePerm); err != nil {
 		return nil, err
-	}
-
-	// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
-	if config.Storage.Mode == string(types.CheckpointStorageModeS3) {
-		checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-			BucketName:  config.Storage.ObjectStore.BucketName,
-			AccessKey:   config.Storage.ObjectStore.AccessKey,
-			SecretKey:   config.Storage.ObjectStore.SecretKey,
-			EndpointURL: config.Storage.ObjectStore.EndpointURL,
-			Region:      config.Storage.ObjectStore.Region,
-			ReadOnly:    false,
-		})
-
-		err := checkpointStorage.Mount(config.Storage.MountPath)
-		if err != nil {
-			log.Warn().Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
-			return nil, err
-		}
 	}
 
 	return criuManager, nil
@@ -116,12 +114,6 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	checkpoint := request.Checkpoint
 	if checkpoint.Status != string(types.CheckpointStatusAvailable) {
 		return -1, false, fmt.Errorf("checkpoint not available")
-	}
-
-	err = s.waitForSyncFile(request, outputLogger)
-	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to wait for sync file: %v", err)
-		return -1, false, err
 	}
 
 	outputLogger.Info("Attempting to restore container from checkpoint...")
@@ -162,6 +154,9 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 
 		return exitCode, false, err
 	}
+	if err := s.updateCheckpointRestored(checkpoint.CheckpointId); err != nil {
+		log.Warn().Err(err).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
+	}
 
 	outputLogger.Info("Checkpoint found and restored")
 	return exitCode, true, nil
@@ -201,7 +196,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
-		err := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
+		err := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, nil)
 		if err != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", err)
 		}
@@ -222,9 +217,10 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		return err
 	}
 
-	err = s.createSyncFile(opts.Request, opts.CheckpointId, checkpointPath)
+	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
 	if err != nil {
-		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create sync file: %v", err)
+		_ = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, nil)
+		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to persist checkpoint: %v", err)
 		return err
 	}
 
@@ -237,11 +233,12 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 	}
 
-	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp)
+	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, metadata)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", err)
 		return err
 	}
+	s.reportCheckpointRequiredContent(opts.Request, opts.CheckpointId, metadata)
 
 	if opts.OutputLogger != nil {
 		opts.OutputLogger.Info("Checkpoint created successfully")
@@ -251,95 +248,287 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	return nil
 }
 
-type syncFile struct {
-	Path string `json:"path"`
-	Type string `json:"type"`
+func (s *Worker) checkpointPath(checkpointId string) string {
+	if s.cacheManager == nil {
+		return ""
+	}
+	return filepath.Join(s.cacheManager.CheckpointRoot(), checkpointId)
 }
 
-const (
-	syncFileExtension    = "crsync" // TODO: this should be in config or consolidated into a centralized checkpoint manager
-	syncFileTimeout      = 600 * time.Second
-	syncFilePollInterval = 1 * time.Second
-)
+func (s *Worker) checkpointArchivePath(checkpointId string) string {
+	if s.cacheManager == nil {
+		return ""
+	}
+	return filepath.Join(s.cacheManager.CheckpointRoot(), checkpointId+checkpointArchiveExtension)
+}
 
-func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointId string, checkpointPath string) error {
-	cacheType := "CPU"
-	if request.Gpu != "" {
-		cacheType = strings.ToUpper(request.Gpu)
+func checkpointOriginKey(checkpointId string) string {
+	return path.Join(checkpointOriginPrefix, checkpointId+checkpointArchiveExtension)
+}
+
+func checkpointAccelerator(request *types.ContainerRequest) string {
+	if request != nil && request.Gpu != "" {
+		return strings.ToUpper(request.Gpu)
+	}
+	return "CPU"
+}
+
+func (s *Worker) persistCheckpoint(ctx context.Context, request *types.ContainerRequest, checkpointId, checkpointPath string) (*checkpointCacheMetadata, error) {
+	if s.cacheManager == nil || s.cacheManager.client == nil {
+		return nil, fmt.Errorf("cache is required for checkpoint persistence")
+	}
+	if request == nil || !request.StorageAvailable() {
+		return nil, fmt.Errorf("workspace storage is required for checkpoint persistence")
 	}
 
-	syncFile := syncFile{
-		Path: filepath.Base(checkpointPath),
-		Type: cacheType,
+	archivePath := s.checkpointArchivePath(checkpointId)
+	if archivePath == "" {
+		return nil, fmt.Errorf("checkpoint archive path is unavailable")
 	}
-	syncFileBytes, err := json.Marshal(syncFile)
+	_ = os.Remove(archivePath)
+	defer os.Remove(archivePath)
+
+	if err := createTar(checkpointPath, archivePath); err != nil {
+		return nil, err
+	}
+	hash, size, err := fileSHA256(archivePath)
 	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to marshal sync file: %v", err)
+		return nil, err
+	}
+
+	originKey := checkpointOriginKey(checkpointId)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := storageClient.UploadWithReader(ctx, originKey, f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+
+	if _, err := s.cacheManager.client.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      archivePath,
+		CachePath: originKey,
+	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
+		log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
+	}
+
+	return &checkpointCacheMetadata{
+		hash:        hash,
+		sizeBytes:   size,
+		originKey:   originKey,
+		locality:    s.cacheManager.locality,
+		accelerator: checkpointAccelerator(request),
+	}, nil
+}
+
+func (s *Worker) ensureCheckpointMaterialized(ctx context.Context, request *types.ContainerRequest, checkpoint *types.Checkpoint) (string, error) {
+	if checkpoint == nil {
+		return "", fmt.Errorf("checkpoint is required")
+	}
+
+	checkpointPath := s.checkpointPath(checkpoint.CheckpointId)
+	if checkpointPath == "" {
+		return "", fmt.Errorf("checkpoint path is unavailable")
+	}
+	if checkpointMaterialized(checkpointPath) {
+		return checkpointPath, nil
+	}
+	if checkpoint.CacheHash == "" || checkpoint.CacheSizeBytes <= 0 || checkpoint.OriginKey == "" {
+		return "", fmt.Errorf("checkpoint cache metadata is incomplete")
+	}
+
+	archivePath := s.checkpointArchivePath(checkpoint.CheckpointId)
+	if archivePath == "" {
+		return "", fmt.Errorf("checkpoint archive path is unavailable")
+	}
+	if err := s.writeCheckpointArchiveFromCache(ctx, archivePath, checkpoint); err != nil {
+		if err := s.downloadCheckpointArchive(ctx, request, archivePath, checkpoint); err != nil {
+			return "", err
+		}
+	}
+	defer os.Remove(archivePath)
+
+	if err := materializeCheckpointArchive(archivePath, checkpointPath, checkpoint.CheckpointId); err != nil {
+		return "", err
+	}
+	return checkpointPath, nil
+}
+
+func materializeCheckpointArchive(archivePath, checkpointPath, checkpointID string) error {
+	tmpRoot := filepath.Join(filepath.Dir(checkpointPath), "."+checkpointID+".extract")
+	_ = os.RemoveAll(tmpRoot)
+	if err := os.MkdirAll(tmpRoot, 0755); err != nil {
 		return err
 	}
+	defer os.RemoveAll(tmpRoot)
 
-	err = os.WriteFile(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", checkpointId, syncFileExtension)), syncFileBytes, 0644)
-	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to write sync file: %v", err)
+	if err := untarTar(archivePath, tmpRoot); err != nil {
 		return err
 	}
-
+	extractedPath := filepath.Join(tmpRoot, checkpointID)
+	if !checkpointMaterialized(extractedPath) {
+		return fmt.Errorf("checkpoint archive missing filesystem payload")
+	}
+	_ = os.RemoveAll(checkpointPath)
+	if err := os.Rename(extractedPath, checkpointPath); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (s *Worker) checkpointPath(checkpointId string) string {
-	return filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s", checkpointId))
+func checkpointMaterialized(checkpointPath string) bool {
+	info, err := os.Stat(filepath.Join(checkpointPath, checkpointFsDir))
+	return err == nil && info.IsDir()
 }
 
-func (s *Worker) waitForSyncFile(request *types.ContainerRequest, outputLogger *slog.Logger) error {
-	timeout := syncFileTimeout
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+func (s *Worker) writeCheckpointArchiveFromCache(ctx context.Context, archivePath string, checkpoint *types.Checkpoint) error {
+	if s.cacheManager == nil || s.cacheManager.client == nil {
+		return fmt.Errorf("cache is unavailable")
+	}
+	return writeCacheContentFile(ctx, s.cacheManager.client, archivePath, checkpoint.CacheHash, checkpoint.CacheSizeBytes, checkpoint.CacheHash)
+}
 
-	syncFilePath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.Checkpoint.CheckpointId, syncFileExtension))
-	checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
+func writeCacheContentFile(ctx context.Context, client *cache.Client, filePath, hash string, size int64, routingKey string) error {
+	if client == nil {
+		return fmt.Errorf("cache is unavailable")
+	}
+	tmpPath := filePath + ".tmp"
+	_ = os.Remove(tmpPath)
 
-	// Check if sync file exists but checkpoint data is missing (cleaned up due to inactivity)
-	// If so, delete the sync file to force a re-sync from S3
-	if _, err := os.Stat(syncFilePath); err == nil {
-		if _, err := os.Stat(checkpointPath); os.IsNotExist(err) {
-			outputLogger.Info("Checkpoint data missing, forcing re-sync")
-			os.Remove(syncFilePath)
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	hasher := sha256.New()
+	buf := make([]byte, 4*1024*1024)
+	for offset := int64(0); offset < size; {
+		length := min(int64(len(buf)), size-offset)
+		n, err := client.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		if n != length {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("short checkpoint cache read: expected %d bytes, got %d", length, n)
+		}
+		if _, err := f.Write(buf[:n]); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		if _, err := hasher.Write(buf[:n]); err != nil {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+			return err
+		}
+		offset += n
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if actual := hex.EncodeToString(hasher.Sum(nil)); actual != hash {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("cache hash mismatch: expected %s, got %s", hash, actual)
+	}
+	return os.Rename(tmpPath, filePath)
+}
+
+func (s *Worker) downloadCheckpointArchive(ctx context.Context, request *types.ContainerRequest, archivePath string, checkpoint *types.Checkpoint) error {
+	if request == nil || !request.StorageAvailable() {
+		return fmt.Errorf("workspace storage is required for checkpoint restore")
+	}
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		return err
+	}
+	reader, err := storageClient.DownloadWithReader(ctx, checkpoint.OriginKey)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	tmpPath := archivePath + ".tmp"
+	_ = os.Remove(tmpPath)
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	hasher := sha256.New()
+	size, err := io.Copy(f, io.TeeReader(reader, hasher))
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if size != checkpoint.CacheSizeBytes {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("checkpoint origin size mismatch: expected %d, got %d", checkpoint.CacheSizeBytes, size)
+	}
+	if actual := hex.EncodeToString(hasher.Sum(nil)); actual != checkpoint.CacheHash {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("checkpoint origin hash mismatch: expected %s, got %s", checkpoint.CacheHash, actual)
+	}
+	if err := os.Rename(tmpPath, archivePath); err != nil {
+		return err
+	}
+	if s.cacheManager != nil && s.cacheManager.client != nil {
+		if _, err := s.cacheManager.client.StoreContentFromLocalFile(cache.LocalContentSource{
+			Path:      archivePath,
+			CachePath: checkpoint.OriginKey,
+		}, cache.StoreContentOptions{RoutingKey: checkpoint.CacheHash, Lock: true}); err != nil {
+			log.Warn().Err(err).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to cache restored checkpoint archive")
 		}
 	}
+	return nil
+}
 
-	// Check if both sync file and checkpoint data exist
-	if _, err := os.Stat(syncFilePath); err == nil {
-		if _, err := os.Stat(checkpointPath); err == nil {
-			return nil
-		}
+func fileSHA256(filePath string) (string, int64, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", 0, err
 	}
+	defer f.Close()
 
-	outputLogger.Info("Waiting for checkpoint to sync")
-	for {
-		syncFileExists := false
-		checkpointExists := false
-
-		if _, err := os.Stat(syncFilePath); err == nil {
-			syncFileExists = true
-		}
-		if _, err := os.Stat(checkpointPath); err == nil {
-			checkpointExists = true
-		}
-
-		if syncFileExists && checkpointExists {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			outputLogger.Info("Timeout waiting for checkpoint to sync")
-			return fmt.Errorf("timeout waiting for sync file")
-		default:
-		}
-
-		time.Sleep(syncFilePollInterval)
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, f)
+	if err != nil {
+		return "", 0, err
 	}
+	return hex.EncodeToString(hasher.Sum(nil)), size, nil
+}
+
+func (s *Worker) reportCheckpointRequiredContent(request *types.ContainerRequest, checkpointId string, metadata *checkpointCacheMetadata) {
+	if s.cacheManager == nil || metadata == nil {
+		return
+	}
+	reporter := s.cacheManager.ContentReporter()
+	if reporter == nil {
+		return
+	}
+	reporter.reportItems(cacheRequestWorkspaceID(request), cacheRequestStubID(request), types.CacheContentKindCheckpoint, []types.CacheRequiredContentItem{{
+		Hash:         metadata.hash,
+		RoutingKey:   metadata.hash,
+		SizeBytes:    metadata.sizeBytes,
+		ExpectedHash: metadata.hash,
+		Source:       metadata.originKey,
+		Kind:         types.CacheContentKindCheckpoint,
+		CheckpointID: checkpointId,
+		Accelerator:  metadata.accelerator,
+	}})
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
@@ -382,8 +571,8 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	return pool.CRIUEnabled
 }
 
-func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string) error {
-	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), &pb.CreateCheckpointRequest{
+func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string, metadata *checkpointCacheMetadata) error {
+	req := &pb.CreateCheckpointRequest{
 		CheckpointId:      checkpointId,
 		SourceContainerId: request.ContainerId,
 		ContainerIp:       containerIp,
@@ -391,7 +580,15 @@ func (s *Worker) createCheckpointState(checkpointId string, request *types.Conta
 		RemoteKey:         checkpointId,
 		StubId:            request.Stub.ExternalId,
 		ExposedPorts:      request.Ports,
-	}))
+	}
+	if metadata != nil {
+		req.CacheHash = metadata.hash
+		req.CacheSizeBytes = metadata.sizeBytes
+		req.OriginKey = metadata.originKey
+		req.Locality = metadata.locality
+		req.Accelerator = metadata.accelerator
+	}
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
 
 	return err
 }
@@ -402,6 +599,14 @@ func (s *Worker) updateCheckpointState(checkpointId string, request *types.Conta
 		Status:       string(status),
 	}))
 
+	return err
+}
+
+func (s *Worker) updateCheckpointRestored(checkpointId string) error {
+	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(context.Background(), &pb.UpdateCheckpointRequest{
+		CheckpointId:   checkpointId,
+		LastRestoredAt: timestamppb.Now(),
+	}))
 	return err
 }
 

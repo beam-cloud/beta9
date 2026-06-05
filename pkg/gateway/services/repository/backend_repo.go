@@ -67,6 +67,11 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 		StubType:          string(stub.Type),
 		AppId:             stub.AppId,
 		ExposedPorts:      req.ExposedPorts,
+		CacheHash:         req.CacheHash,
+		CacheSizeBytes:    req.CacheSizeBytes,
+		OriginKey:         req.OriginKey,
+		Locality:          req.Locality,
+		Accelerator:       req.Accelerator,
 	})
 	if err != nil {
 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -76,9 +81,15 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 }
 
 func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb.UpdateCheckpointRequest) (*pb.UpdateCheckpointResponse, error) {
+	lastRestoredAt := types.Time{}
+	if req.LastRestoredAt != nil {
+		lastRestoredAt = types.Time{Time: req.LastRestoredAt.AsTime()}
+	}
+
 	checkpoint, err := s.backendRepo.UpdateCheckpoint(ctx, &types.Checkpoint{
-		CheckpointId: req.CheckpointId,
-		Status:       req.Status,
+		CheckpointId:   req.CheckpointId,
+		Status:         req.Status,
+		LastRestoredAt: lastRestoredAt,
 	})
 	if err != nil {
 		return &pb.UpdateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil

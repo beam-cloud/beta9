@@ -449,7 +449,6 @@ type WorkerPoolConfig struct {
 	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 	StoragePath               string                            `key:"storagePath" json:"storage_path"`
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
-	CheckpointPath            string                            `key:"checkpointPath" json:"checkpoint_path"`
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
 }
 
@@ -665,26 +664,12 @@ var (
 )
 
 type CRIUConfig struct {
-	Mode    CRIUConfigMode          `key:"mode" json:"mode"`
-	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
-	Nvidia  NvidiaCRIUConfig        `key:"nvidia" json:"nvidia"`
+	Mode   CRIUConfigMode   `key:"mode" json:"mode"`
+	Nvidia NvidiaCRIUConfig `key:"nvidia" json:"nvidia"`
 }
 
 type NvidiaCRIUConfig struct {
 }
-
-type CheckpointStorageConfig struct {
-	MountPath   string            `key:"mountPath" json:"mount_path"`
-	Mode        string            `key:"mode" json:"mode"`
-	ObjectStore ObjectStoreConfig `key:"objectStore" json:"object_store"`
-}
-
-type CheckpointStorageMode string
-
-var (
-	CheckpointStorageModeLocal CheckpointStorageMode = "local"
-	CheckpointStorageModeS3    CheckpointStorageMode = "s3"
-)
 
 type AbstractionConfig struct {
 	Bot BotConfig `key:"bot" json:"bot"`

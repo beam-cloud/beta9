@@ -7,8 +7,8 @@ package worker
 //     (coalesced to S2) and refreshes the per-stub recency window. It never
 //     decides placement or moves bytes.
 //   - WorkerCacheManager reconcile loop: on the node that currently hosts the
-//     cache server, materializes content the local host owns (HRW) and is
-//     missing, copying from a replica or fetching from origin.
+//     cache server, materializes content the local host owns (HRW), except
+//     checkpoints which materialize on every matching accelerator in locality.
 //
 // The worker is trustless: all coordinator state (recent stubs, locks) is
 // brokered through the gateway, and all origin credentials are fetched from the
@@ -18,6 +18,8 @@ package worker
 import (
 	"compress/gzip"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -430,27 +432,37 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
+	activeStubIDs := make([]string, 0, len(stubs))
+	activeCheckpointIDs := map[string]struct{}{}
 	for _, stub := range stubs {
 		select {
 		case <-m.ctx.Done():
 			return
 		default:
 		}
-		m.reconcileStub(server, localHostID, stub)
+		activeStubIDs = append(activeStubIDs, stub.StubID)
+		for _, checkpointID := range m.reconcileStub(server, localHostID, stub) {
+			activeCheckpointIDs[checkpointID] = struct{}{}
+		}
+	}
+	if len(stubs) < maxStubs {
+		m.pruneLocalCheckpoints(activeCheckpointIDs)
+		m.pruneStaleCacheCheckpoints(activeStubIDs)
 	}
 }
 
-func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID string, stub cache.RecentStub) {
+func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID string, stub cache.RecentStub) []string {
 	items, err := m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
 	if err != nil {
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
-		return
+		return nil
 	}
 
+	checkpointIDs := []string{}
 	for _, item := range items {
 		select {
 		case <-m.ctx.Done():
-			return
+			return checkpointIDs
 		default:
 		}
 
@@ -459,13 +471,19 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 			routingKey = item.Hash
 		}
 
-		// Materialize only on the host a read would actually resolve to (the
-		// primary host in the read's HRW window). This keeps reconciled content
-		// on the same host the read path looks up first, preventing misses for
-		// recent stubs; other hosts leave the item to the primary.
-		primary, err := m.client.PrimaryReadHost(routingKey)
-		if err != nil || primary == nil || primary.HostId != localHostID {
-			continue
+		if item.Kind == types.CacheContentKindCheckpoint {
+			if !m.checkpointAcceleratorMatches(item) {
+				continue
+			}
+			if item.CheckpointID != "" {
+				checkpointIDs = append(checkpointIDs, item.CheckpointID)
+			}
+		} else {
+			// Materialize only on the host a read would actually resolve to.
+			primary, err := m.client.PrimaryReadHost(routingKey)
+			if err != nil || primary == nil || primary.HostId != localHostID {
+				continue
+			}
 		}
 
 		if m.requiredContentComplete(server, item, routingKey) {
@@ -481,6 +499,7 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 
 		m.materializeOwnedItem(server, localHostID, stub, item, routingKey)
 	}
+	return checkpointIDs
 }
 
 func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) {
@@ -596,6 +615,49 @@ func (m *WorkerCacheManager) pruneReconcileFailures() {
 	}
 }
 
+func (m *WorkerCacheManager) pruneLocalCheckpoints(active map[string]struct{}) {
+	if m.checkpointRoot == "" {
+		return
+	}
+	entries, err := os.ReadDir(m.checkpointRoot)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		checkpointID := name
+		if strings.HasSuffix(name, checkpointArchiveExtension) {
+			checkpointID = strings.TrimSuffix(name, checkpointArchiveExtension)
+		} else if !entry.IsDir() {
+			continue
+		}
+		if _, ok := active[checkpointID]; ok {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(m.checkpointRoot, name))
+	}
+}
+
+func (m *WorkerCacheManager) pruneStaleCacheCheckpoints(activeStubIDs []string) {
+	if m.workerRepo == nil || m.locality == "" {
+		return
+	}
+	resp, err := handleGRPCResponse(m.workerRepo.PruneStaleCacheCheckpoints(m.ctx, &pb.PruneStaleCacheCheckpointsRequest{
+		Locality:      m.locality,
+		ActiveStubIds: activeStubIDs,
+	}))
+	if err != nil {
+		log.Debug().Err(err).Str("locality", m.locality).Msg("cache reconciliation failed to prune stale checkpoints")
+		return
+	}
+	if resp.Pruned > 0 {
+		log.Info().Str("locality", m.locality).Int32("pruned", resp.Pruned).Msg("pruned stale cache checkpoints")
+	}
+}
+
 // reconcileLogFields adds the fields common to per-item reconciliation logs.
 func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem) *zerolog.Event {
 	return event.
@@ -611,6 +673,10 @@ func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostI
 // prefers a reachable replica and otherwise fetches from the item's origin in
 // the same way the read path does. It never persists credentials in Redis or S2.
 func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+	if item.Kind == types.CacheContentKindCheckpoint {
+		return m.materializeCheckpoint(ctx, server, stub, item, routingKey)
+	}
+
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation replica copy failed")
 	} else if ok {
@@ -628,7 +694,7 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 		// read path. The local mounted-source path is not valid for layers.
 		return m.materializeOCILayer(ctx, server, stub, item)
 	case types.CacheContentKindVolume:
-		return m.materializeVolumeObject(ctx, server, stub, item)
+		return m.materializeWorkspaceObject(ctx, server, stub, item)
 	case types.CacheContentKindClipV1:
 		// The v1 archive is one content-addressed object; re-fetch the whole
 		// archive from the image registry (the same source the image-load path
@@ -677,14 +743,56 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
+	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
+		return server.HasCompleteContent(item.Hash, item.SizeBytes) &&
+			checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
+	}
 	return server.HasCompleteContent(item.Hash, item.SizeBytes)
 }
 
-// materializeVolumeObject fetches a workspace object from object storage using
+func (m *WorkerCacheManager) checkpointAcceleratorMatches(item types.CacheRequiredContentItem) bool {
+	return item.Accelerator == "" || strings.EqualFold(item.Accelerator, m.accelerator)
+}
+
+func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+	if item.CheckpointID == "" || item.Hash == "" || item.SizeBytes <= 0 {
+		return types.CacheAuditStatusMiss
+	}
+	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
+		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation checkpoint replica copy failed")
+	} else if !ok {
+		if item.Source == "" {
+			return types.CacheAuditStatusMiss
+		}
+		if status := m.materializeWorkspaceObject(ctx, server, stub, item); status != types.CacheAuditStatusMaterialized {
+			return status
+		}
+	}
+	if err := m.extractCheckpointArchive(ctx, item, routingKey); err != nil {
+		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint extract failed")
+		return types.CacheAuditStatusOriginFailure
+	}
+	return types.CacheAuditStatusMaterialized
+}
+
+func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, item types.CacheRequiredContentItem, routingKey string) error {
+	checkpointPath := filepath.Join(m.checkpointRoot, item.CheckpointID)
+	if checkpointMaterialized(checkpointPath) {
+		return nil
+	}
+	archivePath := filepath.Join(m.checkpointRoot, item.CheckpointID+checkpointArchiveExtension)
+	if err := writeCacheContentFile(ctx, m.client, archivePath, item.Hash, item.SizeBytes, routingKey); err != nil {
+		return err
+	}
+	defer os.Remove(archivePath)
+	return materializeCheckpointArchive(archivePath, checkpointPath, item.CheckpointID)
+}
+
+// materializeWorkspaceObject fetches a workspace object from object storage using
 // gateway-brokered workspace storage credentials and stores it under its content
 // hash. Credentials ride only in the in-flight store request; they are not
 // persisted on the worker.
-func (m *WorkerCacheManager) materializeVolumeObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem) string {
+func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem) string {
 	creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "")
 	if creds == nil || creds.workspaceStorage == nil {
 		log.Debug().Str("hash", item.Hash).Str("workspace_id", stub.WorkspaceID).Msg("cache reconciliation has no workspace storage credentials")

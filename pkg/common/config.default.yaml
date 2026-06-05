@@ -190,7 +190,6 @@ worker:
       jobSpec:
         nodeSelector: {}
       criuEnabled: true
-      checkpointPath: /data/checkpoints
       poolSizing:
         defaultWorkerCpu: 2000m
         defaultWorkerGpuType: ""
@@ -277,9 +276,6 @@ worker:
     minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
     mode: nvidia
-    storage:
-      mode: local
-      mountPath: /data/checkpoints
 
 cache:
   enabled: true

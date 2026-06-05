@@ -1972,6 +1972,31 @@ func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	return c.storeContentFromChunks(chunks, hash, "", opts.RoutingKey)
 }
 
+func (c *Client) SelectedStoreHostAvailable(hash string, routingKey string) bool {
+	if c == nil {
+		return false
+	}
+	if routingKey == "" {
+		routingKey = hash
+	}
+
+	host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
+	if err != nil || host == nil {
+		return false
+	}
+	if c.localDiskStoreForHost(host) != nil {
+		return true
+	}
+	if !host.HasEndpoint() {
+		return false
+	}
+
+	c.mu.RLock()
+	_, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	return exists
+}
+
 func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts StoreContentOptions) (string, error) {
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = cachePath
@@ -2643,6 +2668,10 @@ func isStoreHostUnavailable(err error) bool {
 		errors.Is(err, ErrSelectedHostUnavailable) ||
 		errors.Is(err, ErrUnableToReachHost) ||
 		errors.Is(err, ErrClientNotFound)
+}
+
+func IsStoreHostUnavailable(err error) bool {
+	return isStoreHostUnavailable(err)
 }
 
 func (c *Client) HostsAvailable() bool {

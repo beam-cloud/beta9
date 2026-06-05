@@ -582,23 +582,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		},
 	}
 
-	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
-		path := defaultCheckpointPath
-		if wpc.workerPoolConfig.CheckpointPath != "" {
-			path = wpc.workerPoolConfig.CheckpointPath
-		}
-
-		volumes = append(volumes, corev1.Volume{
-			Name: checkpointVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: path,
-					Type: &hostPathType,
-				},
-			},
-		})
-	}
-
 	if wpc.workerPoolConfig.StoragePath != "" {
 		volumes = append(volumes, corev1.Volume{
 			Name: storageVolumeName,
@@ -660,14 +643,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		MountPath: defaultDevicePluginPath,
 		ReadOnly:  true,
 	})
-
-	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
-		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      checkpointVolumeName,
-			MountPath: defaultCheckpointPath,
-			ReadOnly:  false,
-		})
-	}
 
 	if wpc.workerPoolConfig.StoragePath != "" {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{

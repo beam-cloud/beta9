@@ -138,6 +138,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.files_synced: bool = False
         self.stub_created: bool = False
         self.runtime_ready: bool = False
+        self._runtime_prepare_lock = threading.Lock()
         self.object_id: str = ""
         self.image_id: str = ""
         self.stub_id: str = ""
@@ -425,144 +426,145 @@ class RunnerAbstraction(BaseAbstraction):
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
-        if self.runtime_ready:
-            return True
+        with self._runtime_prepare_lock:
+            if self.runtime_ready:
+                return True
 
-        if not self.image_available:
-            image_build_result: ImageBuildResult = self.image.build()
+            if not self.image_available:
+                image_build_result: ImageBuildResult = self.image.build()
 
-            if image_build_result and image_build_result.success:
-                self.image_available = True
-                self.image_id = image_build_result.image_id
-                self.image.python_version = image_build_result.python_version
-            else:
-                terminal.error("Image build failed ❌", exit=False)
+                if image_build_result and image_build_result.success:
+                    self.image_available = True
+                    self.image_id = image_build_result.image_id
+                    self.image.python_version = image_build_result.python_version
+                else:
+                    terminal.error("Image build failed ❌", exit=False)
+                    return False
+
+            if not self.files_synced:
+                sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
+                self._remove_tmp_files()
+
+                if sync_result.success:
+                    self.files_synced = True
+                    self.object_id = sync_result.object_id
+                else:
+                    terminal.error("File sync failed", exit=False)
+                    return False
+
+            for v in self.volumes:
+                if not v.ready and not v.get_or_create():
+                    terminal.error(f"Volume is not ready: {v.name}", exit=False)
+                    return False
+
+            try:
+                self.gpu = self.parse_gpu(self.gpu)
+            except ValueError:
+                terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
                 return False
 
-        if not self.files_synced:
-            sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
-            self._remove_tmp_files()
-
-            if sync_result.success:
-                self.files_synced = True
-                self.object_id = sync_result.object_id
-            else:
-                terminal.error("File sync failed", exit=False)
-                return False
-
-        for v in self.volumes:
-            if not v.ready and not v.get_or_create():
-                terminal.error(f"Volume is not ready: {v.name}", exit=False)
-                return False
-
-        try:
-            self.gpu = self.parse_gpu(self.gpu)
-        except ValueError:
-            terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
-            return False
-
-        autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
-        if not autoscaler_type:
-            terminal.error(
-                f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
-                exit=False,
-            )
-            return False
-
-        if not self.app:
-            self.app = self.name or os.path.basename(os.getcwd())
-
-        inputs = None
-        if self.inputs:
-            inputs = self._schema_to_proto(self.inputs)
-
-        outputs = None
-        if self.outputs:
-            outputs = self._schema_to_proto(self.outputs)
-
-        if not self.stub_created:
-            stub_request = GetOrCreateStubRequest(
-                object_id=self.object_id,
-                image_id=self.image_id,
-                stub_type=stub_type,
-                name=stub_name,
-                app_name=self.app,
-                python_version=self.image.python_version,
-                cpu=self.cpu,
-                memory=self.memory,
-                gpu=self.gpu,
-                gpu_count=self.gpu_count,
-                handler=self.handler,
-                on_start=self.on_start,
-                on_deploy=self.on_deploy.parent.handler if self.on_deploy else "",
-                on_deploy_stub_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
-                callback_url=self.callback_url,
-                keep_warm_seconds=self.keep_warm_seconds,
-                workers=self.workers,
-                max_pending_tasks=self.max_pending_tasks,
-                volumes=[v.export() for v in self.volumes],
-                secrets=self.secrets,
-                env=self.env,
-                force_create=force_create_stub,
-                authorized=self.authorized,
-                autoscaler=AutoscalerProto(
-                    type=autoscaler_type,
-                    max_containers=self.autoscaler.max_containers,
-                    tasks_per_container=self.autoscaler.tasks_per_container,
-                    min_containers=self.autoscaler.min_containers,
-                ),
-                task_policy=TaskPolicyProto(
-                    max_retries=self.task_policy.max_retries,
-                    timeout=self.task_policy.timeout,
-                    ttl=self.task_policy.ttl,
-                ),
-                concurrent_requests=self.concurrent_requests,
-                checkpoint_enabled=self.checkpoint_enabled,
-                extra=json.dumps(self.extra),
-                entrypoint=self.entrypoint,
-                ports=self.ports,
-                pricing=PricingPolicyProto(
-                    cost_per_task=self.pricing.cost_per_task,
-                    cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
-                    cost_model=self.pricing.cost_model,
-                    max_in_flight=self.pricing.max_in_flight,
+            autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
+            if not autoscaler_type:
+                terminal.error(
+                    f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
+                    exit=False,
                 )
-                if self.pricing
-                else None,
-                inputs=inputs,
-                outputs=outputs,
-                docker_enabled=self.docker_enabled,
-                tcp=self.tcp,
-                block_network=self.block_network,
-                allow_list=self.allow_list,
-            )
+                return False
 
-            if _is_stub_created_for_workspace():
-                stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
-                    stub_request
+            if not self.app:
+                self.app = self.name or os.path.basename(os.getcwd())
+
+            inputs = None
+            if self.inputs:
+                inputs = self._schema_to_proto(self.inputs)
+
+            outputs = None
+            if self.outputs:
+                outputs = self._schema_to_proto(self.outputs)
+
+            if not self.stub_created:
+                stub_request = GetOrCreateStubRequest(
+                    object_id=self.object_id,
+                    image_id=self.image_id,
+                    stub_type=stub_type,
+                    name=stub_name,
+                    app_name=self.app,
+                    python_version=self.image.python_version,
+                    cpu=self.cpu,
+                    memory=self.memory,
+                    gpu=self.gpu,
+                    gpu_count=self.gpu_count,
+                    handler=self.handler,
+                    on_start=self.on_start,
+                    on_deploy=self.on_deploy.parent.handler if self.on_deploy else "",
+                    on_deploy_stub_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
+                    callback_url=self.callback_url,
+                    keep_warm_seconds=self.keep_warm_seconds,
+                    workers=self.workers,
+                    max_pending_tasks=self.max_pending_tasks,
+                    volumes=[v.export() for v in self.volumes],
+                    secrets=self.secrets,
+                    env=self.env,
+                    force_create=force_create_stub,
+                    authorized=self.authorized,
+                    autoscaler=AutoscalerProto(
+                        type=autoscaler_type,
+                        max_containers=self.autoscaler.max_containers,
+                        tasks_per_container=self.autoscaler.tasks_per_container,
+                        min_containers=self.autoscaler.min_containers,
+                    ),
+                    task_policy=TaskPolicyProto(
+                        max_retries=self.task_policy.max_retries,
+                        timeout=self.task_policy.timeout,
+                        ttl=self.task_policy.ttl,
+                    ),
+                    concurrent_requests=self.concurrent_requests,
+                    checkpoint_enabled=self.checkpoint_enabled,
+                    extra=json.dumps(self.extra),
+                    entrypoint=self.entrypoint,
+                    ports=self.ports,
+                    pricing=PricingPolicyProto(
+                        cost_per_task=self.pricing.cost_per_task,
+                        cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
+                        cost_model=self.pricing.cost_model,
+                        max_in_flight=self.pricing.max_in_flight,
+                    )
+                    if self.pricing
+                    else None,
+                    inputs=inputs,
+                    outputs=outputs,
+                    docker_enabled=self.docker_enabled,
+                    tcp=self.tcp,
+                    block_network=self.block_network,
+                    allow_list=self.allow_list,
                 )
-            else:
-                with _stub_creation_lock:
+
+                if _is_stub_created_for_workspace():
                     stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
                         stub_request
                     )
-
-                    _set_stub_created_for_workspace(True)
-
-            if stub_response.ok:
-                self.stub_created = True
-                self.stub_id = stub_response.stub_id
-                if stub_response.warn_msg:
-                    terminal.warn(stub_response.warn_msg)
-            else:
-                if err := stub_response.err_msg:
-                    terminal.error(err, exit=False)
                 else:
-                    terminal.error("Failed to get or create stub", exit=False)
-                return False
+                    with _stub_creation_lock:
+                        stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                            stub_request
+                        )
 
-        self.runtime_ready = True
-        return True
+                        _set_stub_created_for_workspace(True)
+
+                if stub_response.ok:
+                    self.stub_created = True
+                    self.stub_id = stub_response.stub_id
+                    if stub_response.warn_msg:
+                        terminal.warn(stub_response.warn_msg)
+                else:
+                    if err := stub_response.err_msg:
+                        terminal.error(err, exit=False)
+                    else:
+                        terminal.error("Failed to get or create stub", exit=False)
+                    return False
+
+            self.runtime_ready = True
+            return True
 
 
 class AbstractCallableWrapper:

@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,9 +25,12 @@ import (
 // interface so only the methods exercised by the reporter need implementations.
 type fakeEventRepo struct {
 	repo.EventRepository
-	mu     sync.Mutex
-	pushed []types.EventStubCacheRequiredContentSchema
-	err    error
+	mu          sync.Mutex
+	pushed      []types.EventStubCacheRequiredContentSchema
+	cacheEvents []types.EventPlatformCacheSchema
+	items       []types.CacheRequiredContentItem
+	err         error
+	readErr     error
 }
 
 func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error {
@@ -36,6 +41,27 @@ func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCache
 	}
 	f.pushed = append(f.pushed, schema)
 	return nil
+}
+
+func (f *fakeEventRepo) PushPlatformCacheEvent(schema types.EventPlatformCacheSchema) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cacheEvents = append(f.cacheEvents, schema)
+}
+
+func (f *fakeEventRepo) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	return append([]types.CacheRequiredContentItem(nil), f.items...), nil
+}
+
+type testHostDirectoryFunc func(context.Context, string) ([]*cache.Host, error)
+
+func (f testHostDirectoryFunc) GetAvailableHosts(ctx context.Context, locality string) ([]*cache.Host, error) {
+	return f(ctx, locality)
 }
 
 func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
@@ -199,6 +225,129 @@ func TestCacheVolumeReportMinBytesDefaultAndOverride(t *testing.T) {
 
 	manager.config.Cache.Reconciliation.VolumeMinBytes = 64 << 20
 	require.Equal(t, int64(64<<20), manager.cacheVolumeReportMinBytes())
+}
+
+func TestCheckpointAcceleratorMatch(t *testing.T) {
+	manager := &WorkerCacheManager{accelerator: "A10G"}
+
+	require.True(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{Accelerator: "a10g"}))
+	require.True(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{}))
+	require.False(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{Accelerator: "T4"}))
+}
+
+func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Client.NTopHosts = 1
+
+	localServer, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	localAddr, err := localServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
+
+	remoteCfg := cfg
+	remoteCfg.Server.DiskCacheDir = t.TempDir()
+	remoteServer, err := cache.NewServerWithOptions(ctx, remoteCfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	remoteAddr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+
+	localHost := localServer.Host()
+	require.NotNil(t, localHost)
+	localHost.Addr = localAddr
+	localHost.PrivateAddr = localAddr
+	remoteHost := remoteServer.Host()
+	require.NotNil(t, remoteHost)
+	remoteHost.Addr = remoteAddr
+	remoteHost.PrivateAddr = remoteAddr
+
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	client, err := cache.NewClientWithHostDirectory(ctx, clientCfg, cache.NewMockCacheMetadataStore(), testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{localHost, remoteHost}, nil
+	}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	routingKey := ""
+	require.Eventually(t, func() bool {
+		for i := 0; i < 1000; i++ {
+			key := fmt.Sprintf("route-%d", i)
+			primary, err := client.PrimaryReadHost(key)
+			if err == nil && primary.HostId == remoteHost.HostId {
+				routingKey = key
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond)
+
+	fake := &fakeEventRepo{items: []types.CacheRequiredContentItem{
+		{
+			Kind:         types.CacheContentKindCheckpoint,
+			Hash:         strings.Repeat("a", 64),
+			RoutingKey:   routingKey,
+			SizeBytes:    1,
+			CheckpointID: "checkpoint-a",
+			Accelerator:  "A10G",
+		},
+		{
+			Kind:       types.CacheContentKindClipV2,
+			Hash:       strings.Repeat("b", 64),
+			RoutingKey: routingKey,
+			SizeBytes:  1,
+		},
+	}}
+	manager := &WorkerCacheManager{
+		ctx:               ctx,
+		locality:          "test",
+		accelerator:       "A10G",
+		metadataStore:     cache.NewMockCacheMetadataStore(),
+		eventRepo:         fake,
+		client:            client,
+		checkpointRoot:    filepath.Join(t.TempDir(), "checkpoints"),
+		reconcileFailures: make(map[string]time.Time),
+	}
+
+	checkpointIDs := manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"})
+
+	require.Equal(t, []string{"checkpoint-a"}, checkpointIDs)
+	require.Len(t, fake.cacheEvents, 1)
+	require.Equal(t, types.CacheContentKindCheckpoint, fake.cacheEvents[0].Kind)
+	require.Equal(t, localHost.HostId, fake.cacheEvents[0].LogicalHost)
+	require.Equal(t, types.CacheAuditStatusMiss, fake.cacheEvents[0].Status)
+
+	fake.mu.Lock()
+	fake.cacheEvents = nil
+	fake.items[0].Accelerator = "T4"
+	fake.mu.Unlock()
+
+	checkpointIDs = manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"})
+	require.Empty(t, checkpointIDs)
+	require.Empty(t, fake.cacheEvents)
+}
+
+func TestPruneLocalCheckpointsKeepsActive(t *testing.T) {
+	root := t.TempDir()
+	manager := &WorkerCacheManager{checkpointRoot: root}
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "keep", checkpointFsDir), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "drop", checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "keep"+checkpointArchiveExtension), []byte("archive"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "drop"+checkpointArchiveExtension), []byte("archive"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".extracting"), 0755))
+
+	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}})
+
+	require.DirExists(t, filepath.Join(root, "keep"))
+	require.FileExists(t, filepath.Join(root, "keep"+checkpointArchiveExtension))
+	require.NoDirExists(t, filepath.Join(root, "drop"))
+	require.NoFileExists(t, filepath.Join(root, "drop"+checkpointArchiveExtension))
+	require.DirExists(t, filepath.Join(root, ".extracting"))
 }
 
 func testClipV1Metadata(t *testing.T) *clipCommon.ClipArchiveMetadata {

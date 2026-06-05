@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,6 +75,8 @@ type WorkerCacheManager struct {
 	podAddr               string
 	nodeID                string
 	locality              string
+	accelerator           string
+	checkpointRoot        string
 	cacheIdentityPath     string
 	metadataStore         cache.CacheMetadataStore
 	reporter              *cacheContentReporter
@@ -114,6 +117,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		podAddr:            podAddr,
 		nodeID:             nodeID,
 		locality:           locality,
+		accelerator:        cacheAccelerator(poolConfig),
 		originCredsCache:   make(map[string]*originCredentials),
 		reconcileFailures:  make(map[string]time.Time),
 	}
@@ -138,6 +142,11 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 
 	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
 	m.cacheIdentityPath = cachePlacementIdentityPath(m.config, cacheConfig)
+	m.checkpointRoot = checkpointRootFromCacheConfig(cacheConfig)
+	if err := os.MkdirAll(m.checkpointRoot, 0755); err != nil {
+		m.cancel()
+		return nil, err
+	}
 	metadataStore := newGatewayCacheMetadataStore(m.workerRepo)
 	m.metadataStore = metadataStore
 
@@ -270,6 +279,13 @@ func (m *WorkerCacheManager) runningCacheServer() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.server != nil
+}
+
+func (m *WorkerCacheManager) CheckpointRoot() string {
+	if m == nil {
+		return ""
+	}
+	return m.checkpointRoot
 }
 
 func (m *WorkerCacheManager) Drain() error {
@@ -809,6 +825,10 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	return cacheConfig
 }
 
+func checkpointRootFromCacheConfig(cacheConfig cache.Config) string {
+	return filepath.Join(cacheConfig.Server.DiskCacheDir, "checkpoints")
+}
+
 func cachePlacementIdentityPath(config types.AppConfig, cacheConfig cache.Config) string {
 	if config.Cache.Server.DiskCacheDir != "" {
 		return filepath.Clean(cacheConfig.Server.DiskCacheDir)
@@ -873,6 +893,17 @@ func cacheHostNetwork(config types.AppConfig) bool {
 func cacheServerOnlyMode() bool {
 	enabled, err := strconv.ParseBool(os.Getenv("CACHE_SERVER_ONLY"))
 	return err == nil && enabled
+}
+
+func cacheAccelerator(poolConfig types.WorkerPoolConfig) string {
+	accelerator := os.Getenv("GPU_TYPE")
+	if accelerator == "" {
+		accelerator = poolConfig.GPUType
+	}
+	if accelerator == "" {
+		return "CPU"
+	}
+	return strings.ToUpper(accelerator)
 }
 
 // cacheServerPortFromEnv returns the cache server listen port set via
