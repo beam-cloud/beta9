@@ -1615,7 +1615,7 @@ func orderedContainerLifecycleIDs() []types.ContainerLifecycleID {
 		types.ContainerLifecycleNetworkCreateNamespace,
 		types.ContainerLifecycleNetworkConfigureNamespace,
 		types.ContainerLifecycleNetworkIPLock,
-		types.ContainerLifecycleNetworkIPScan,
+		types.ContainerLifecycleNetworkIPLoad,
 		types.ContainerLifecycleNetworkIPAssign,
 		types.ContainerLifecycleNetworkSetContainerIP,
 		types.ContainerLifecycleNetworkRestrictions,

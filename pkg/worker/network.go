@@ -1520,8 +1520,8 @@ func (m *ContainerNetworkManager) reserveContainerIP(opts *containerNetworkConfi
 
 	phaseStart = time.Now()
 	err := m.reloadAllocatedIPsLocked()
-	metrics.RecordWorkerStartupPhase("network_ip_scan", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	m.recordNetworkLifecycle(opts.request, types.ContainerLifecycleNetworkIPScan, phaseStart, err == nil, map[string]string{
+	metrics.RecordWorkerStartupPhase("network_ip_load", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	m.recordNetworkLifecycle(opts.request, types.ContainerLifecycleNetworkIPLoad, phaseStart, err == nil, map[string]string{
 		"source": "redis",
 	})
 	if err != nil {

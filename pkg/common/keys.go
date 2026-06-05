@@ -69,12 +69,13 @@ var (
 var (
 	workspacePrefix string = "workspace"
 
-	workspaceVolumePathDownloadToken     string = "workspace:volume_path_download_token:%s"
-	workspaceConcurrencyLimit            string = "workspace:concurrency_limit:%s"
-	workspaceConcurrencyLimitLock        string = "workspace:concurrency_limit:lock:%s"
-	workspaceConcurrencyLimitUsage       string = "workspace:{%s}:concurrency_limit:usage"
-	workspaceConcurrencyLimitReservation string = "workspace:{%s}:concurrency_limit:reservation:%s"
-	workspaceAuthorizedToken             string = "workspace:authorization:token:%s"
+	workspaceVolumePathDownloadToken          string = "workspace:volume_path_download_token:%s"
+	workspaceConcurrencyLimit                 string = "workspace:concurrency_limit:%s"
+	workspaceConcurrencyLimitLock             string = "workspace:concurrency_limit:lock:%s"
+	workspaceConcurrencyLimitUsage            string = "workspace:{%s}:concurrency_limit:usage"
+	workspaceConcurrencyLimitReservation      string = "workspace:{%s}:concurrency_limit:reservation:%s"
+	workspaceConcurrencyLimitReservationIndex string = "workspace:{%s}:concurrency_limit:reservation_index"
+	workspaceAuthorizedToken                  string = "workspace:authorization:token:%s"
 )
 
 var (
@@ -86,8 +87,9 @@ var (
 )
 
 var (
-	tailscalePrefix          string = "tailscale"
-	tailscaleServiceHostname string = "tailscale:%s:%s"
+	tailscalePrefix               string = "tailscale"
+	tailscaleServiceHostname      string = "tailscale:%s:%s"
+	tailscaleServiceHostnameIndex string = "tailscale:%s:index"
 )
 
 var (
@@ -320,6 +322,10 @@ func (rk *redisKeys) WorkspaceConcurrencyLimitReservation(workspaceId, container
 	return fmt.Sprintf(workspaceConcurrencyLimitReservation, workspaceId, containerId)
 }
 
+func (rk *redisKeys) WorkspaceConcurrencyLimitReservationIndex(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimitReservationIndex, workspaceId)
+}
+
 func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
 	return fmt.Sprintf(workspaceVolumePathDownloadToken, token)
 }
@@ -335,6 +341,10 @@ func (rk *redisKeys) TailscalePrefix() string {
 
 func (rk *redisKeys) TailscaleServiceHostname(serviceName, hostName string) string {
 	return fmt.Sprintf(tailscaleServiceHostname, serviceName, hostName)
+}
+
+func (rk *redisKeys) TailscaleServiceHostnameIndex(serviceName string) string {
+	return fmt.Sprintf(tailscaleServiceHostnameIndex, serviceName)
 }
 
 // Provider keys

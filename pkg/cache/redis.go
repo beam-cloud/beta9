@@ -86,8 +86,7 @@ func (r *RedisClient) ToStruct(m map[string]string, out interface{}) error {
 	return ToStruct(m, out)
 }
 
-// Gets all keys using a pattern
-// Actually runs a scan since keys locks up the database.
+// Keys gets all keys using a pattern. Prefer explicit indexes for hot paths.
 func (r *RedisClient) Keys(ctx context.Context, pattern string) ([]string, error) {
 	return r.Scan(ctx, pattern)
 }

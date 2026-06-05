@@ -375,7 +375,6 @@ func TestRedisClientScan(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Generate 1000 items, add to map var, add to redis
 	keys := map[string]string{}
 	for i := 0; i < 1000; i++ {
 		key := fmt.Sprint(i)
@@ -384,17 +383,14 @@ func TestRedisClientScan(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// Make sure 1000 items were added to redis
 	items, err := rdb.Scan(ctx, "*")
 	assert.NoError(t, err)
 	assert.Len(t, items, 1000)
 
-	// Scan/search for 100 items e.g. 800 - 899
 	items, err = rdb.Scan(ctx, "8??")
 	assert.NoError(t, err)
 	assert.Len(t, items, 100)
 
-	// Get values for all items, compare their values to map
 	for _, item := range items {
 		expect := keys[item]
 		actual, err := rdb.Get(ctx, item).Result()

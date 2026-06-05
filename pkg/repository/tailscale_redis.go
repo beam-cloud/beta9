@@ -22,33 +22,44 @@ func NewTailscaleRedisRepository(r *common.RedisClient, config types.AppConfig) 
 }
 
 func (ts *TailscaleRedisRepository) GetHostnamesForService(serviceName string) ([]string, error) {
+	ctx := context.TODO()
 	hostnames := []string{}
 
-	keys, err := ts.rdb.Keys(context.TODO(), common.RedisKeys.TailscaleServiceHostname(serviceName, "*"))
+	serviceIds, err := ts.rdb.SMembers(ctx, common.RedisKeys.TailscaleServiceHostnameIndex(serviceName)).Result()
 	if err != nil {
 		return hostnames, err
 	}
 
-	if len(keys) == 0 {
+	if len(serviceIds) == 0 {
 		return hostnames, fmt.Errorf("no hostname found for service<%s>", serviceName)
 	}
 
-	for _, key := range keys {
-		hostname, err := ts.rdb.Get(context.TODO(), key).Result()
+	for _, serviceId := range serviceIds {
+		hostname, err := ts.rdb.Get(ctx, common.RedisKeys.TailscaleServiceHostname(serviceName, serviceId)).Result()
 		if err != nil {
+			ts.rdb.SRem(ctx, common.RedisKeys.TailscaleServiceHostnameIndex(serviceName), serviceId)
 			continue
 		}
 
 		hostnames = append(hostnames, hostname)
 	}
 
+	if len(hostnames) == 0 {
+		return hostnames, fmt.Errorf("no hostname found for service<%s>", serviceName)
+	}
+
 	return hostnames, nil
 }
 
 func (ts *TailscaleRedisRepository) SetHostname(serviceName, serviceId string, hostName string) error {
-	return ts.rdb.SetEx(context.TODO(),
+	ctx := context.TODO()
+	pipe := ts.rdb.TxPipeline()
+	pipe.SAdd(ctx, common.RedisKeys.TailscaleServiceHostnameIndex(serviceName), serviceId)
+	pipe.SetEx(ctx,
 		common.RedisKeys.TailscaleServiceHostname(serviceName, serviceId),
 		hostName,
 		tailscaleHostNameExpiration,
-	).Err()
+	)
+	_, err := pipe.Exec(ctx)
+	return err
 }
