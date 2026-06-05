@@ -63,8 +63,9 @@ func TestRouteProxySingleListenerRoutesByPreface(t *testing.T) {
 	}
 }
 
-func TestRouteProxyMarksRouteReadyWhenLocalTargetComesUp(t *testing.T) {
-	target := freeTCPAddress(t)
+func TestRouteProxyMarksRouteReadyForReachableLocalTarget(t *testing.T) {
+	backend := startEchoListener(t, "127.0.0.1:0")
+	target := backend.Addr().String()
 	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
 	client := &routeStatusClient{updates: updates}
 	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard)
@@ -74,23 +75,6 @@ func TestRouteProxyMarksRouteReadyWhenLocalTargetComesUp(t *testing.T) {
 
 	proxy.setRoute("route-one", target)
 	proxy.ensureRouteReady(ctx, "route-one", target)
-
-	time.AfterFunc(150*time.Millisecond, func() {
-		listener, err := net.Listen("tcp", target)
-		if err != nil {
-			return
-		}
-		t.Cleanup(func() { _ = listener.Close() })
-		go func() {
-			for {
-				conn, err := listener.Accept()
-				if err != nil {
-					return
-				}
-				_ = conn.Close()
-			}
-		}()
-	})
 
 	select {
 	case update := <-updates:
@@ -104,7 +88,7 @@ func TestRouteProxyMarksRouteReadyWhenLocalTargetComesUp(t *testing.T) {
 			t.Fatalf("proxy target = %q, want agent.tailnet:29443", update.ProxyTarget)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("route was not marked ready after local target became available")
+		t.Fatal("route was not marked ready for reachable local target")
 	}
 }
 
@@ -134,20 +118,6 @@ func (c *routeStatusClient) UpdateAgentRouteStatus(ctx context.Context, in *pb.U
 		return nil, ctx.Err()
 	}
 	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
-}
-
-func freeTCPAddress(t *testing.T) string {
-	t.Helper()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
 }
 
 func TestNormalizeBootstrapForAgentRuntimeUsesReachableGatewayHost(t *testing.T) {

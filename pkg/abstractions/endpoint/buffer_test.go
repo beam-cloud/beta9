@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -24,6 +25,15 @@ func TestBackendHTTPURLPreservesDirectAddressAndQuery(t *testing.T) {
 	got := backendHTTPURL("http", "127.0.0.1:8001", "/invoke", "a=b")
 	if got != "http://127.0.0.1:8001/invoke?a=b" {
 		t.Fatalf("direct backend url = %q", got)
+	}
+}
+
+func TestBackendDialTimeoutCapsLongRequestTimeouts(t *testing.T) {
+	if got := backendDialTimeout(175 * time.Second); got != backendConnectTimeout {
+		t.Fatalf("backend dial timeout = %s, want %s", got, backendConnectTimeout)
+	}
+	if got := backendDialTimeout(3 * time.Second); got != 3*time.Second {
+		t.Fatalf("backend dial timeout = %s, want caller timeout", got)
 	}
 }
 

@@ -201,23 +201,31 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 		if ctx.Err() != nil || !p.routeTargetMatches(routeID, localTarget) {
 			return
 		}
-		if err := checkLocalTargetReady(localTarget); err == nil {
-			if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateReady, p.proxyTarget, ""); err == nil {
-				return
-			} else if ctx.Err() != nil {
-				return
-			} else {
-				fmt.Fprintf(p.stderr, "route %s ready status update failed: %v\n", routeID, err)
-			}
+
+		if err := checkLocalTargetReady(localTarget); err != nil {
+			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
+			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
+		if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateReady, p.proxyTarget, ""); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(p.stderr, "route %s ready status update failed: %v\n", routeID, err)
+			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
+			continue
 		}
-		backoff = nextBackoff(backoff, time.Second)
+
+		return
 	}
+}
+
+func (p *routeProxy) waitBeforeNextReadinessCheck(ctx context.Context, backoff time.Duration) time.Duration {
+	select {
+	case <-ctx.Done():
+	case <-time.After(backoff):
+	}
+	return nextBackoff(backoff, time.Second)
 }
 
 func (p *routeProxy) routeTargetMatches(routeID, localTarget string) bool {

@@ -24,12 +24,13 @@ import (
 )
 
 const (
-	defaultPrivateTransport = types.BackendRouteTransportTSNet
-	defaultPrivateFallback  = types.PrivatePoolFallbackInternal
-	defaultPrivatePriority  = int32(1000)
-	defaultPrivateExecutor  = types.DefaultAgentWorkerContainerMode
-	defaultPrivateJoinTTL   = 30 * time.Minute
-	agentStreamRefresh      = 30 * time.Second
+	defaultPrivateTransport  = types.BackendRouteTransportTSNet
+	defaultPrivateFallback   = types.PrivatePoolFallbackInternal
+	defaultPrivatePriority   = int32(1000)
+	defaultPrivateExecutor   = types.DefaultAgentWorkerContainerMode
+	defaultPrivateJoinTTL    = 30 * time.Minute
+	agentStreamRefresh       = 30 * time.Second
+	agentStreamEventCoalesce = 25 * time.Millisecond
 )
 
 func (gws *GatewayService) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersRequest) (*pb.ListPoolOffersResponse, error) {
@@ -628,7 +629,7 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 	events := make(chan common.KeyEvent, 32)
 	if gws.keyEventManager != nil {
 		routeRevisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
-		if err := gws.keyEventManager.ListenForPattern(ctx, routeRevisionKey, events); err != nil {
+		if err := gws.keyEventManager.ListenForPublishedPattern(ctx, routeRevisionKey, events); err != nil {
 			return err
 		}
 	}
@@ -641,6 +642,7 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-events:
+			coalesceAgentStreamEvents(ctx, events)
 			if err := sendSnapshot(); err != nil {
 				return err
 			}
@@ -648,6 +650,22 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 			if err := sendSnapshot(); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+func coalesceAgentStreamEvents(ctx context.Context, events <-chan common.KeyEvent) {
+	timer := time.NewTimer(agentStreamEventCoalesce)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-events:
+			continue
+		case <-timer.C:
+			return
 		}
 	}
 }

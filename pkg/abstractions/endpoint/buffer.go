@@ -35,6 +35,7 @@ const (
 	httpConnectionTimeout          time.Duration = 2 * time.Second
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
 	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
+	backendConnectTimeout          time.Duration = 10 * time.Second
 )
 
 type request struct {
@@ -408,7 +409,7 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *h
 			}
 
 			start := time.Now()
-			conn, err := network.ConnectToBackend(ctx, dialAddress, connectToHostTimeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
+			conn, err := network.ConnectToBackend(ctx, dialAddress, backendDialTimeout(timeout), rb.tailscale, rb.tsConfig, rb.containerRepo)
 			metrics.RecordDialTime(time.Since(start), dialAddress)
 			metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", err == nil, time.Since(start))
 			return conn, err
@@ -474,6 +475,16 @@ func (rb *RequestBuffer) workspaceName() string {
 	return rb.workspace.Name
 }
 
+func backendDialTimeout(requestTimeout time.Duration) time.Duration {
+	if requestTimeout <= 0 {
+		return backendConnectTimeout
+	}
+	if requestTimeout < backendConnectTimeout {
+		return requestTimeout
+	}
+	return backendConnectTimeout
+}
+
 func (rb *RequestBuffer) recordBufferOccupancy() {
 	metrics.RecordRingBufferOccupancy("endpoint", rb.workspaceName(), rb.stubId, rb.buffer.Len(), rb.buffer.Capacity())
 }
@@ -485,7 +496,7 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 			if _, isRoute := types.ParseBackendRouteAddress(c.address); isRoute {
 				dialAddress = c.address
 			}
-			return network.ConnectToBackend(ctx, dialAddress, connectToHostTimeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
+			return network.ConnectToBackend(ctx, dialAddress, backendDialTimeout(handleHttpRequestClientTimeout), rb.tailscale, rb.tsConfig, rb.containerRepo)
 		},
 	}
 
