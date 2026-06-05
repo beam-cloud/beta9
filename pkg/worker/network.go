@@ -402,7 +402,7 @@ func iptablesRuleTarget(rule string) string {
 func iptablesRuleFields(rule string) []string {
 	fields := strings.Fields(rule)
 	for i, field := range fields {
-		fields[i] = strings.Trim(strings.ReplaceAll(field, `"`, ""), "[]")
+		fields[i] = strings.ReplaceAll(field, `"`, "")
 	}
 	return fields
 }

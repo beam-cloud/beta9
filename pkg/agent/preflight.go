@@ -85,6 +85,32 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Severity: severity(runtimeOK),
 		})
 
+		if envBool(types.AgentInContainerEnv) {
+			socketOK := dockerSocketMounted()
+			checks = append(checks, check{
+				Name:     "docker-socket",
+				Ok:       socketOK,
+				Message:  "requires /var/run/docker.sock so the agent can start worker containers as siblings",
+				Severity: severity(socketOK),
+			})
+		}
+
+		daemonOK := runtimeOK && dockerDaemonAvailable()
+		checks = append(checks, check{
+			Name:     "docker-daemon",
+			Ok:       daemonOK,
+			Message:  "requires access to a running Docker daemon",
+			Severity: severity(daemonOK),
+		})
+
+		hostNetworkOK := daemonOK && dockerHostNetworkAvailable()
+		checks = append(checks, check{
+			Name:     "docker-host-network",
+			Ok:       hostNetworkOK,
+			Message:  "requires Docker host networking because the agent routes worker and container host ports",
+			Severity: severity(hostNetworkOK),
+		})
+
 		netns := pathExists("/proc/self/ns/net")
 		checks = append(checks, check{
 			Name:     "network-namespace",
@@ -237,6 +263,19 @@ func iptablesNatAvailable() bool {
 		}
 	}
 	return false
+}
+
+func dockerSocketMounted() bool {
+	info, err := os.Stat("/var/run/docker.sock")
+	return err == nil && !info.IsDir()
+}
+
+func dockerDaemonAvailable() bool {
+	return exec.Command("docker", "version", "--format", "{{.Server.Version}}").Run() == nil
+}
+
+func dockerHostNetworkAvailable() bool {
+	return exec.Command("docker", "network", "inspect", "host").Run() == nil
 }
 
 func networkManagerPresent() bool {

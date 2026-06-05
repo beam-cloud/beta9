@@ -485,6 +485,10 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 }
 
 func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.ContainerRequest, bindings []PortBinding) error {
+	if s.agentWorker() {
+		return nil
+	}
+
 	containerId := request.ContainerId
 	if len(bindings) > 0 {
 		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindings[0].HostPort)

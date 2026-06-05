@@ -25,13 +25,22 @@ NETWORK_SLOTS=""
 CONTAINER_START_CONCURRENCY=""
 LOCAL_DEV_GATEWAY="0"
 
+require_value() {
+  if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then
+    echo "$1 requires a value" >&2
+    exit 2
+  fi
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --gateway)
+      require_value "$1" "${2:-}"
       GATEWAY="$2"
       shift 2
       ;;
     --join-token)
+      require_value "$1" "${2:-}"
       JOIN_TOKEN="$2"
       shift 2
       ;;
@@ -40,42 +49,52 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --agent-bin)
+      require_value "$1" "${2:-}"
       AGENT_BIN="$2"
       shift 2
       ;;
     --transport)
+      require_value "$1" "${2:-}"
       TRANSPORT="$2"
       shift 2
       ;;
     --executor)
+      require_value "$1" "${2:-}"
       EXECUTOR="$2"
       shift 2
       ;;
     --worker-image)
+      require_value "$1" "${2:-}"
       WORKER_IMAGE="$2"
       shift 2
       ;;
     --max-cpu)
+      require_value "$1" "${2:-}"
       MAX_CPU="$2"
       shift 2
       ;;
     --max-memory)
+      require_value "$1" "${2:-}"
       MAX_MEMORY="$2"
       shift 2
       ;;
     --max-gpus)
+      require_value "$1" "${2:-}"
       MAX_GPUS="$2"
       shift 2
       ;;
     --gpu-ids)
+      require_value "$1" "${2:-}"
       GPU_IDS="$2"
       shift 2
       ;;
     --network-slots)
+      require_value "$1" "${2:-}"
       NETWORK_SLOTS="$2"
       shift 2
       ;;
     --container-start-concurrency)
+      require_value "$1" "${2:-}"
       CONTAINER_START_CONCURRENCY="$2"
       shift 2
       ;;
@@ -90,6 +109,14 @@ if [ -z "$GATEWAY" ] || [ -z "$JOIN_TOKEN" ]; then
   echo "usage: install/agent --gateway <url> --join-token <token>" >&2
   exit 2
 fi
+
+case "$GATEWAY" in
+  http://*|https://*) ;;
+  *)
+    echo "--gateway must start with http:// or https://" >&2
+    exit 2
+    ;;
+esac
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required" >&2
@@ -173,6 +200,14 @@ if [ "$OS" = "darwin" ] && [ "${BEAM_AGENT_NATIVE:-0}" != "1" ]; then
     echo "Docker is required on macOS for agent worker-container execution" >&2
     exit 1
   fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker Desktop must be running before joining an agent pool" >&2
+    exit 1
+  fi
+  if ! docker run --rm --network host --entrypoint /bin/sh "$AGENT_CONTAINER_IMAGE" -c true >/dev/null 2>&1; then
+    echo "Docker host networking is required for local agent workers" >&2
+    exit 1
+  fi
 
   AGENT_LINUX_BIN="${BEAM_AGENT_LINUX_BIN:-${HOME}/.beam/bin/beam-agent-linux-${ARCH}}"
   HOST_STATE_DIR="${BEAM_AGENT_STATE_DIR:-${HOME}/.beam/agent}"
@@ -198,6 +233,7 @@ if [ "$OS" = "darwin" ] && [ "${BEAM_AGENT_NATIVE:-0}" != "1" ]; then
 
   echo "starting Linux beam-agent in Docker on macOS" >&2
   exec docker run --rm \
+    --init \
     --privileged \
     --network host \
     -v /var/run/docker.sock:/var/run/docker.sock \

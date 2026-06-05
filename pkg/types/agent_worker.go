@@ -7,6 +7,7 @@ const (
 	AgentWorkerEntrypoint           = "/usr/local/bin/worker"
 	AgentTmpSizeLimit               = "30Gi"
 	AgentStateDirName               = "agent"
+	AgentLockFileName               = "agent.lock"
 	BeamStateDirName                = "beam"
 	LoopbackHost                    = "127.0.0.1"
 	HostnameEnv                     = "HOSTNAME"
@@ -41,6 +42,10 @@ const (
 	HostNetnsPath                   = "/var/run/netns"
 	HostCgroupPath                  = "/sys/fs/cgroup"
 	HostFuseDevicePath              = "/dev/fuse"
+	AgentDockerLabelManaged         = "dev.beam.agent.worker"
+	AgentDockerLabelWorkerID        = "dev.beam.agent.worker_id"
+	AgentDockerLabelMachineID       = "dev.beam.agent.machine_id"
+	AgentDockerLabelPoolName        = "dev.beam.agent.pool_name"
 )
 
 const (

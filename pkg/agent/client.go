@@ -40,7 +40,9 @@ func newGatewayGRPCClient(gatewayURL, host string, port int, useTLS bool) (pb.Ga
 	if useTLS || strings.HasSuffix(addr, ":443") {
 		creds = credentials.NewTLS(&tls.Config{NextProtos: []string{"h2"}})
 	}
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(creds))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(creds), grpc.WithBlock())
 	if err != nil {
 		return nil, nil, err
 	}

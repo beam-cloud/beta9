@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -26,13 +27,14 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		stderr = io.Discard
 	}
 	return &routeProxy{
-		agentToken:  agentToken,
-		client:      client,
-		listener:    listener,
-		proxyTarget: proxyTarget,
-		workers:     workers,
-		stderr:      stderr,
-		routes:      map[string]string{},
+		agentToken:      agentToken,
+		client:          client,
+		listener:        listener,
+		proxyTarget:     proxyTarget,
+		workers:         workers,
+		stderr:          stderr,
+		routes:          map[string]string{},
+		readinessChecks: map[string]string{},
 	}
 }
 
@@ -45,6 +47,9 @@ type routeProxy struct {
 	stderr      io.Writer
 	mu          sync.Mutex
 	routes      map[string]string
+
+	// routeID -> local target currently being probed for readiness.
+	readinessChecks map[string]string
 }
 
 func (p *routeProxy) run(ctx context.Context) error {
@@ -123,19 +128,10 @@ func (p *routeProxy) reconcileRoutes(ctx context.Context, routes []*pb.AgentRout
 		seen[route.RouteId] = struct{}{}
 		p.setRoute(route.RouteId, route.LocalTarget)
 		if route.State == types.BackendRouteStateReady && route.ProxyTarget == p.proxyTarget {
+			p.clearReadinessCheck(route.RouteId, route.LocalTarget)
 			continue
 		}
-		if err := checkLocalTargetReady(route.LocalTarget); err != nil {
-			if route.State == types.BackendRouteStateReady {
-				_ = updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, types.BackendRouteStateDegraded, p.proxyTarget, err.Error())
-			}
-			continue
-		}
-		if err := updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, types.BackendRouteStateReady, p.proxyTarget, ""); err != nil {
-			p.deleteRoute(route.RouteId)
-			_ = updateRouteStatus(ctx, p.client, p.agentToken, route.RouteId, types.BackendRouteStateDegraded, p.proxyTarget, err.Error())
-			return err
-		}
+		p.ensureRouteReady(ctx, route.RouteId, route.LocalTarget)
 	}
 	p.deleteRoutesNotIn(seen)
 	return nil
@@ -143,6 +139,15 @@ func (p *routeProxy) reconcileRoutes(ctx context.Context, routes []*pb.AgentRout
 
 func (p *routeProxy) setRoute(routeID, localTarget string) {
 	p.mu.Lock()
+	if p.routes == nil {
+		p.routes = map[string]string{}
+	}
+	if p.readinessChecks == nil {
+		p.readinessChecks = map[string]string{}
+	}
+	if previous := p.routes[routeID]; previous != "" && previous != localTarget {
+		delete(p.readinessChecks, routeID)
+	}
 	p.routes[routeID] = localTarget
 	p.mu.Unlock()
 }
@@ -150,6 +155,7 @@ func (p *routeProxy) setRoute(routeID, localTarget string) {
 func (p *routeProxy) deleteRoute(routeID string) {
 	p.mu.Lock()
 	delete(p.routes, routeID)
+	delete(p.readinessChecks, routeID)
 	p.mu.Unlock()
 }
 
@@ -159,6 +165,7 @@ func (p *routeProxy) deleteRoutesNotIn(seen map[string]struct{}) {
 	for routeID := range p.routes {
 		if _, ok := seen[routeID]; !ok {
 			delete(p.routes, routeID)
+			delete(p.readinessChecks, routeID)
 		}
 	}
 }
@@ -170,19 +177,96 @@ func (p *routeProxy) localTarget(routeID string) (string, bool) {
 	return target, ok
 }
 
+func (p *routeProxy) ensureRouteReady(ctx context.Context, routeID, localTarget string) {
+	p.mu.Lock()
+	if p.routes[routeID] != localTarget {
+		p.mu.Unlock()
+		return
+	}
+	if p.readinessChecks[routeID] == localTarget {
+		p.mu.Unlock()
+		return
+	}
+	p.readinessChecks[routeID] = localTarget
+	p.mu.Unlock()
+
+	go p.waitForRouteReady(ctx, routeID, localTarget)
+}
+
+func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget string) {
+	defer p.clearReadinessCheck(routeID, localTarget)
+
+	backoff := 100 * time.Millisecond
+	for {
+		if ctx.Err() != nil || !p.routeTargetMatches(routeID, localTarget) {
+			return
+		}
+		if err := checkLocalTargetReady(localTarget); err == nil {
+			if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateReady, p.proxyTarget, ""); err == nil {
+				return
+			} else if ctx.Err() != nil {
+				return
+			} else {
+				fmt.Fprintf(p.stderr, "route %s ready status update failed: %v\n", routeID, err)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = nextBackoff(backoff, time.Second)
+	}
+}
+
+func (p *routeProxy) routeTargetMatches(routeID, localTarget string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.routes[routeID] == localTarget
+}
+
+func (p *routeProxy) clearReadinessCheck(routeID, localTarget string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.readinessChecks[routeID] == localTarget {
+		delete(p.readinessChecks, routeID)
+	}
+}
+
 func (p *routeProxy) accept(ctx context.Context) error {
+	backoff := 100 * time.Millisecond
 	for {
 		conn, err := p.listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !temporaryAcceptError(err) {
+				return err
+			}
+			fmt.Fprintf(p.stderr, "agent route listener accept failed: %v\n", err)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			default:
-				return err
+			case <-time.After(backoff):
 			}
+			backoff = nextBackoff(backoff, time.Second)
+			continue
 		}
+		backoff = 100 * time.Millisecond
 		go p.handleConn(conn)
 	}
+}
+
+func temporaryAcceptError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "too many open files") ||
+		strings.Contains(msg, "resource temporarily unavailable")
 }
 
 func (p *routeProxy) handleConn(conn net.Conn) {

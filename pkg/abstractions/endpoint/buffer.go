@@ -408,7 +408,7 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *h
 			}
 
 			start := time.Now()
-			conn, err := network.ConnectToBackend(ctx, dialAddress, timeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
+			conn, err := network.ConnectToBackend(ctx, dialAddress, connectToHostTimeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
 			metrics.RecordDialTime(time.Since(start), dialAddress)
 			metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", err == nil, time.Since(start))
 			return conn, err
@@ -417,6 +417,7 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *h
 
 	return &http.Client{
 		Transport: transport,
+		Timeout:   timeout,
 	}
 }
 
@@ -484,7 +485,7 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 			if _, isRoute := types.ParseBackendRouteAddress(c.address); isRoute {
 				dialAddress = c.address
 			}
-			return network.ConnectToBackend(ctx, dialAddress, handleHttpRequestClientTimeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
+			return network.ConnectToBackend(ctx, dialAddress, connectToHostTimeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
 		},
 	}
 

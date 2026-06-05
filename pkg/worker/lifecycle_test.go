@@ -216,6 +216,26 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.Empty(t, repoClient.lastSetAddressMap.Routes)
 }
 
+func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{
+		persistent:          true,
+		machineID:           "machine-one",
+		routeTransport:      types.BackendRouteTransportTSNet,
+		containerRepoClient: repoClient,
+		podAddr:             "127.0.0.1",
+	}
+
+	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
+		ContainerId: "container-agent",
+	}, []PortBinding{
+		{HostPort: 60081, ContainerPort: 8001},
+	})
+	require.NoError(t, err)
+	require.Zero(t, repoClient.setAddressCalls)
+	require.Zero(t, repoClient.setAddressMapCalls)
+}
+
 func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
 	tests := []struct {
 		name           string

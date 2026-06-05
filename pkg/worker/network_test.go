@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -604,6 +605,21 @@ func TestContainerIdFromIptablesRuleHandlesIPv6Colons(t *testing.T) {
 	}
 	if containerId != "sandbox-123" {
 		t.Fatalf("expected sandbox-123, got %s", containerId)
+	}
+}
+
+func TestIPTablesRuleFieldsPreservesIPv6DNATBrackets(t *testing.T) {
+	rule := `-A PREROUTING -p tcp -m tcp --dport 56449 -j DNAT --to-destination [fd00:abcd::11]:2222 -m comment --comment "b9h1a5f2d74dd3b:endpoint-one:slot-one"`
+
+	parts := iptablesRuleFields(rule)
+	if !slices.Contains(parts, "[fd00:abcd::11]:2222") {
+		t.Fatalf("expected bracketed IPv6 DNAT destination in rule fields: %#v", parts)
+	}
+	if slices.Contains(parts, "fd00:abcd::11]:2222") {
+		t.Fatalf("found malformed IPv6 DNAT destination in rule fields: %#v", parts)
+	}
+	if !iptablesRuleMatchesIP(rule, "fd00:abcd::11") {
+		t.Fatal("expected bracketed IPv6 DNAT destination to match exact IP")
 	}
 }
 

@@ -474,15 +474,29 @@ func (cr *ContainerRedisRepository) DeleteBackendRoutesByContainerID(ctx context
 		pipe.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(machine.workspaceID, machine.poolName, machine.machineID))
 	}
 	pipe.Del(ctx, indexKey)
-	_, err = pipe.Exec(ctx)
-	return err
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	for machine := range machines {
+		if err := cr.publishBackendRouteMachine(ctx, machine.workspaceID, machine.poolName, machine.machineID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (cr *ContainerRedisRepository) touchBackendRouteMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
 	if workspaceID == "" || poolName == "" || machineID == "" {
 		return nil
 	}
-	return cr.rdb.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID)).Err()
+	if err := cr.rdb.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID)).Err(); err != nil {
+		return err
+	}
+	return cr.publishBackendRouteMachine(ctx, workspaceID, poolName, machineID)
+}
+
+func (cr *ContainerRedisRepository) publishBackendRouteMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
+	return cr.rdb.Publish(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID), common.KeyOperationSet).Err()
 }
 
 func (cr *ContainerRedisRepository) routes(ctx context.Context, routeIDs []string) ([]types.BackendRoute, error) {

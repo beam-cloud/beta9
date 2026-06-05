@@ -21,6 +21,10 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 		"--privileged",
 		"--network", "host",
 		"--cgroupns", "host",
+		"--label", types.AgentDockerLabelManaged + "=true",
+		"--label", types.AgentDockerLabelWorkerID + "=" + slot.WorkerId,
+		"--label", types.AgentDockerLabelMachineID + "=" + slot.MachineId,
+		"--label", types.AgentDockerLabelPoolName + "=" + slot.PoolName,
 	}
 	for _, alias := range agentDockerHostAliases() {
 		args = append(args, "--add-host", alias)

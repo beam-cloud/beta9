@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc"
 )
 
 func TestRouteProxySingleListenerRoutesByPreface(t *testing.T) {
@@ -62,6 +63,51 @@ func TestRouteProxySingleListenerRoutesByPreface(t *testing.T) {
 	}
 }
 
+func TestRouteProxyMarksRouteReadyWhenLocalTargetComesUp(t *testing.T) {
+	target := freeTCPAddress(t)
+	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
+	client := &routeStatusClient{updates: updates}
+	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	proxy.setRoute("route-one", target)
+	proxy.ensureRouteReady(ctx, "route-one", target)
+
+	time.AfterFunc(150*time.Millisecond, func() {
+		listener, err := net.Listen("tcp", target)
+		if err != nil {
+			return
+		}
+		t.Cleanup(func() { _ = listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn.Close()
+			}
+		}()
+	})
+
+	select {
+	case update := <-updates:
+		if update.RouteId != "route-one" {
+			t.Fatalf("route id = %q, want route-one", update.RouteId)
+		}
+		if update.State != types.BackendRouteStateReady {
+			t.Fatalf("route state = %q, want ready", update.State)
+		}
+		if update.ProxyTarget != "agent.tailnet:29443" {
+			t.Fatalf("proxy target = %q, want agent.tailnet:29443", update.ProxyTarget)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("route was not marked ready after local target became available")
+	}
+}
+
 func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
 	backend := startEchoListener(t, "127.0.0.1:0")
 	_, port, err := net.SplitHostPort(backend.Addr().String())
@@ -74,6 +120,34 @@ func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+}
+
+type routeStatusClient struct {
+	pb.GatewayServiceClient
+	updates chan *pb.UpdateAgentRouteStatusRequest
+}
+
+func (c *routeStatusClient) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest, _ ...grpc.CallOption) (*pb.UpdateAgentRouteStatusResponse, error) {
+	select {
+	case c.updates <- in:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
+}
+
+func freeTCPAddress(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
 }
 
 func TestNormalizeBootstrapForAgentRuntimeUsesReachableGatewayHost(t *testing.T) {
@@ -152,12 +226,88 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		t.Fatalf("expected GPU device assignment: %#v", args)
 	}
 	for _, want := range []string{
+		types.AgentDockerLabelManaged + "=true",
+		types.AgentDockerLabelWorkerID + "=worker-one",
+		types.AgentDockerLabelMachineID + "=machine",
+		types.AgentDockerLabelPoolName + "=private",
+	} {
+		if !containsArg(args, "--label", want) {
+			t.Fatalf("expected %s docker label in args: %#v", want, args)
+		}
+	}
+	for _, want := range []string{
 		"registry.localhost:127.0.0.1",
 		"localstack:host-gateway",
 	} {
 		if !containsArg(args, "--add-host", want) {
 			t.Fatalf("expected %s host alias in docker args: %#v", want, args)
 		}
+	}
+}
+
+func TestDockerContainerInspectOwnedByAgentAcceptsLabelsAndLegacyEnv(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		WorkerId:  "worker-one",
+		MachineId: "machine-one",
+		PoolName:  "private-dev",
+	}
+
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{
+			name: "current labels",
+			data: `{"Config":{"Labels":{"dev.beam.agent.worker":"true","dev.beam.agent.worker_id":"worker-one","dev.beam.agent.machine_id":"machine-one","dev.beam.agent.pool_name":"private-dev"}}}`,
+			want: true,
+		},
+		{
+			name: "legacy env",
+			data: `{"Config":{"Labels":{},"Env":["WORKER_ID=worker-one","WORKER_MACHINE_ID=machine-one","WORKER_POOL_NAME=private-dev"]}}`,
+			want: true,
+		},
+		{
+			name: "wrong worker",
+			data: `{"Config":{"Labels":{"dev.beam.agent.worker":"true","dev.beam.agent.worker_id":"worker-two","dev.beam.agent.machine_id":"machine-one","dev.beam.agent.pool_name":"private-dev"}}}`,
+			want: false,
+		},
+		{
+			name: "unrelated container",
+			data: `{"Config":{"Labels":{},"Env":["WORKER_ID=worker-one","WORKER_MACHINE_ID=other","WORKER_POOL_NAME=private-dev"]}}`,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := dockerContainerInspectOwnedByAgent([]byte(tt.data), slot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("owned = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentLockRejectsSecondAgentForSameStateDir(t *testing.T) {
+	t.Setenv(types.AgentStateDirEnv, t.TempDir())
+
+	first, err := acquireAgentLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.release()
+
+	second, err := acquireAgentLock()
+	if err == nil {
+		second.release()
+		t.Fatal("expected second agent lock acquisition to fail")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("expected already running error, got %v", err)
 	}
 }
 

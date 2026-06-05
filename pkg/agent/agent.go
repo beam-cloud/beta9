@@ -20,6 +20,12 @@ func RunJoin(ctx context.Context, opts JoinOptions) error {
 		opts.Stderr = io.Discard
 	}
 
+	lock, err := acquireAgentLock()
+	if err != nil {
+		return err
+	}
+	defer lock.release()
+
 	client := NewClient(opts.GatewayURL)
 	res, err := join(ctx, client, opts)
 	if err != nil {

@@ -221,6 +221,11 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 
 	repo := NewContainerRedisRepositoryForTest(rdb)
 	ctx := context.Background()
+	revisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision("workspace-one", "pool-one", "machine-one")
+	pubsubCtx, cancelPubsub := context.WithCancel(ctx)
+	defer cancelPubsub()
+	messages, errs := rdb.Subscribe(pubsubCtx, revisionKey)
+
 	route := types.BackendRoute{
 		RouteID:     "route-one",
 		WorkspaceID: "workspace-one",
@@ -237,10 +242,23 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	if err := repo.SetBackendRoute(ctx, route); err != nil {
 		t.Fatal(err)
 	}
-	revisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision("workspace-one", "pool-one", "machine-one")
 	if rev := rdb.Get(ctx, revisionKey).Val(); rev != "1" {
 		t.Fatalf("route machine revision after create = %q, want 1", rev)
 	}
+	select {
+	case message := <-messages:
+		if message.Channel != revisionKey {
+			t.Fatalf("route machine event channel = %q, want %q", message.Channel, revisionKey)
+		}
+		if message.Payload != common.KeyOperationSet {
+			t.Fatalf("route machine event payload = %q, want %q", message.Payload, common.KeyOperationSet)
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for route machine event")
+	}
+
 	if err := repo.SetBackendRoute(ctx, types.BackendRoute{
 		RouteID:     "route-two",
 		WorkspaceID: "workspace-one",
