@@ -47,6 +47,42 @@ func (r *pruneCheckpointBackendRepo) GetWorkspace(ctx context.Context, workspace
 	return &types.Workspace{}, nil
 }
 
+type originCredentialsBackendRepo struct {
+	repository.BackendRepository
+	workspace  *types.Workspace
+	secretName string
+	secret     *types.Secret
+}
+
+func (r *originCredentialsBackendRepo) GetImageCredentialSecret(ctx context.Context, imageID string) (string, string, error) {
+	return r.secretName, "", nil
+}
+
+func (r *originCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
+	if r.workspace == nil {
+		return types.Workspace{}, nil
+	}
+	workspace := *r.workspace
+	workspace.ExternalId = externalID
+	return workspace, nil
+}
+
+func (r *originCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
+	if r.workspace == nil {
+		return &types.Workspace{Id: workspaceID}, nil
+	}
+	workspace := *r.workspace
+	workspace.Id = workspaceID
+	return &workspace, nil
+}
+
+func (r *originCredentialsBackendRepo) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	if name != r.secretName {
+		return nil, nil
+	}
+	return r.secret, nil
+}
+
 func TestAuthorizeCacheRepositoryRequestWithWorkerToken(t *testing.T) {
 	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
 
@@ -168,8 +204,52 @@ func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *tes
 	require.Empty(t, backendRepo.pruneIDs)
 }
 
+func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo: &originCredentialsBackendRepo{
+			workspace:  &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+			secretName: "registry-secret",
+			secret:     &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
+		},
+	}
+
+	resp, err := service.GetCacheOriginCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetCacheOriginCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ImageId:     "image-id",
+			Registry:    "registry.example.com",
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
+}
+
+func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {
+	service := &WorkerRepositoryService{}
+
+	resp, err := service.GetCacheOriginCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-a"),
+		&pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-b"},
+	)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "workspace")
+}
+
 func cacheRepositoryAuthContext(tokenType string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Token: &types.Token{TokenType: tokenType},
+	})
+}
+
+func cacheRepositoryWorkspaceAuthContext(workspaceID string) context.Context {
+	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: workspaceID},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker},
 	})
 }

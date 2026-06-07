@@ -80,6 +80,10 @@ func (r *ImageRegistry) Pull(ctx context.Context, localPath string, imageId stri
 	return r.store.Get(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension), localPath)
 }
 
+func (r *ImageRegistry) GetReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	return r.store.GetReader(ctx, key)
+}
+
 func (r *ImageRegistry) Size(ctx context.Context, imageId string) (int64, error) {
 	return r.store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
@@ -269,6 +273,18 @@ func (s *S3Store) objectExists(ctx context.Context, key string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+func IsObjectNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if os.IsNotExist(err) {
+		return true
+	}
+
+	return errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound))
 }
 
 func NewLocalObjectStore() (*LocalObjectStore, error) {

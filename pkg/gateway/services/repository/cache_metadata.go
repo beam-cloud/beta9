@@ -6,9 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -159,13 +161,32 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	if err := authorizeOriginCredentialWorkspace(ctx, req.WorkspaceId); err != nil {
+		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 
 	return &pb.GetCacheOriginCredentialsResponse{
 		Ok:               true,
 		WorkspaceStorage: s.workspaceStorageCredentials(ctx, req.WorkspaceId),
-		// Short-lived registry credentials for OCI layer pulls from the build registry.
-		RegistryCredentials: s.buildRegistryCredentials(ctx, req.Registry),
+		// Short-lived registry credentials for direct OCI pulls. Private image
+		// credentials are resolved by image/workspace; build-registry credentials
+		// are vended only for the exact configured build registry host.
+		RegistryCredentials: s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry),
 	}, nil
+}
+
+func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string) error {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+		return nil
+	}
+	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
+		return fmt.Errorf("worker token is not scoped to a workspace")
+	}
+	if workspaceID == "" || workspaceID != authInfo.Workspace.ExternalId {
+		return fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
+	}
+	return nil
 }
 
 func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, _ *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
@@ -305,6 +326,39 @@ func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, 
 		}
 	}
 	return ""
+}
+
+func (s *WorkerRepositoryService) registryOriginCredentials(ctx context.Context, workspaceID, imageID, registry string) string {
+	if credentials := s.imageRegistryCredentials(ctx, workspaceID, imageID); credentials != "" {
+		return credentials
+	}
+	return s.buildRegistryCredentials(ctx, registry)
+}
+
+func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, workspaceID, imageID string) string {
+	if s.backendRepo == nil || workspaceID == "" || imageID == "" {
+		return ""
+	}
+
+	secretName, _, err := s.backendRepo.GetImageCredentialSecret(ctx, imageID)
+	if err != nil || secretName == "" {
+		return ""
+	}
+
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
+	if err != nil {
+		return ""
+	}
+	fullWorkspace, err := s.backendRepo.GetWorkspace(ctx, workspace.Id)
+	if err != nil {
+		return ""
+	}
+
+	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, fullWorkspace, secretName)
+	if err != nil || secret == nil {
+		return ""
+	}
+	return secret.Value
 }
 
 func derefString(s *string) string {

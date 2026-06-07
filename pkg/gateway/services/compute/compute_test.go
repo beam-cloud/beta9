@@ -134,9 +134,3 @@ func TestAgentInstallCommandDevModeRunsWithoutSudo(t *testing.T) {
 		t.Fatalf("dev command should include --dev: %s", command)
 	}
 }
-
-func TestShellQuoteEscapesSingleQuotes(t *testing.T) {
-	if got := shellQuote("token'with'quote"); got != `'token'\''with'\''quote'` {
-		t.Fatalf("shellQuote() = %s", got)
-	}
-}

@@ -4,12 +4,23 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/cockroachdb/redact"
+)
+
+const telemetrySensitiveLogKeyPattern = `[A-Za-z0-9_.-]*(?:access[_-]?key|accesskey|api[_-]?key|apikey|secret|token|password|credentials?)[A-Za-z0-9_.-]*`
+
+var (
+	telemetryAuthorizationPattern     = regexp.MustCompile(`(?i)(["']?authorization["']?\s*[:=]\s*)("?)(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]+)("?)`)
+	telemetryBearerTokenPattern       = regexp.MustCompile(`(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]+)`)
+	telemetrySensitiveKeyValuePattern = regexp.MustCompile(`(?i)(["']?` + telemetrySensitiveLogKeyPattern + `["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,}\]]+)`)
+	telemetryRedactedValue            = redact.Sprintf("%s", redact.Unsafe("redacted")).Redact().StripMarkers()
 )
 
 func (s *Service) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelemetryServer) error {
@@ -79,9 +90,15 @@ func (s *Service) recordAgentLogs(agentState *model.AgentTokenState, logs []*pb.
 			WorkerID:    record.WorkerId,
 			Level:       firstNonEmpty(record.Level, "info"),
 			Stream:      record.Stream,
-			Line:        record.Line,
+			Line:        redactTelemetryLogLine(record.Line),
 		})
 	}
+}
+
+func redactTelemetryLogLine(line string) string {
+	line = telemetryAuthorizationPattern.ReplaceAllString(line, "${1}${2}${3}${4}"+telemetryRedactedValue+"${6}")
+	line = telemetryBearerTokenPattern.ReplaceAllString(line, "${1}${2}"+telemetryRedactedValue)
+	return telemetrySensitiveKeyValuePattern.ReplaceAllString(line, "${1}"+telemetryRedactedValue)
 }
 
 func (s *Service) recordAgentEvents(agentState *model.AgentTokenState, events []*pb.AgentEventRecord) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -108,19 +109,12 @@ func (s *Service) createPrivatePoolJoinCommandForOwner(ctx context.Context, work
 }
 
 func agentInstallCommand(gatewayURL, token string, devMode bool) string {
-	installURL := shellQuote(strings.TrimRight(gatewayURL, "/") + "/install/agent")
-	args := fmt.Sprintf("--gateway %s --join-token %s", shellQuote(gatewayURL), shellQuote(token))
+	installURL := common.ShellQuote(strings.TrimRight(gatewayURL, "/") + "/install/agent")
+	args := fmt.Sprintf("--gateway %s --join-token %s", common.ShellQuote(gatewayURL), common.ShellQuote(token))
 	if devMode {
 		return fmt.Sprintf("curl -fsSL %s | sh -s -- %s --dev", installURL, args)
 	}
 	return fmt.Sprintf(`if [ "$(uname -s)" = "Darwin" ] || [ "$(id -u)" -eq 0 ]; then curl -fsSL %[1]s | sh -s -- %[2]s; else curl -fsSL %[1]s | sudo sh -s -- %[2]s; fi`, installURL, args)
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func (s *Service) createPrivatePoolJoinToken(ctx context.Context, poolName, ttlValue string) (string, time.Time, error) {

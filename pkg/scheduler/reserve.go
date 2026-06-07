@@ -110,7 +110,7 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 		return
 	}
 
-	if err := a.scheduler.requestBacklog.PushAfter(a.request, provisioningWorkerRequeueDelay); err != nil {
+	if err := a.scheduler.pushBacklog(a.request, provisioningWorkerRequeueDelay); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
 		a.fail("worker_wait_requeue_failed")
 	}
@@ -133,7 +133,7 @@ func (a *schedulingAttempt) retrySoon(reason string) {
 
 	a.request.RetryCount++
 	metrics.RecordRequestRetry(a.request)
-	if err := a.scheduler.requestBacklog.PushAfter(a.request, requestProcessingInterval); err != nil {
+	if err := a.scheduler.pushBacklog(a.request, requestProcessingInterval); err != nil {
 		requestLog(log.Error(), a.request).
 			Str("reason", reason).
 			Err(err).

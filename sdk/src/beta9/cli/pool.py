@@ -673,4 +673,8 @@ def _append_join_args(
         extra.extend(["--container-start-concurrency", str(container_start_concurrency)])
     if not extra:
         return command
-    return command + " " + " ".join(shlex.quote(value) for value in extra)
+    extra_args = " ".join(shlex.quote(value) for value in extra)
+    if command.strip().startswith("if ") and "; else " in command and "; fi" in command:
+        command = command.replace("; else ", " " + extra_args + "; else ", 1)
+        return command.replace("; fi", " " + extra_args + "; fi", 1)
+    return command + " " + extra_args

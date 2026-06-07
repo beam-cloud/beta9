@@ -41,6 +41,49 @@ func TestAgentInstallScriptDownloadsAgentFromGateway(t *testing.T) {
 	}
 }
 
+func TestAgentInstallScriptInstallFromURLWritesDestination(t *testing.T) {
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeCurl := filepath.Join(binDir, "curl")
+	if err := os.WriteFile(fakeCurl, []byte(`#!/bin/sh
+set -eu
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="$1"
+  fi
+  shift || true
+done
+printf 'agent-binary' > "$out"
+`), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(tmp, "agent", "beam-agent-linux-arm64")
+	script := strings.TrimSuffix(agentInstallScript, "\nmain \"$@\"\n") +
+		"\ninstall_from_url https://example.com/agent " + target + " Test\n"
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install_from_url failed: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "agent-binary" {
+		t.Fatalf("target content = %q", string(data))
+	}
+}
+
 func TestAgentInstallScriptUsesInvokingUserHomeForMacOSDocker(t *testing.T) {
 	for _, want := range []string{
 		"HOST_HOME=\"$(agent_host_home)\"",

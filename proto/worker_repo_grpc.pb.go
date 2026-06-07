@@ -45,6 +45,7 @@ const (
 	WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName        = "/WorkerRepositoryService/AcquireCacheReconcileLock"
 	WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName        = "/WorkerRepositoryService/ReleaseCacheReconcileLock"
 	WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName        = "/WorkerRepositoryService/GetCacheOriginCredentials"
+	WorkerRepositoryService_GetContainerRuntimeCredentials_FullMethodName   = "/WorkerRepositoryService/GetContainerRuntimeCredentials"
 	WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName       = "/WorkerRepositoryService/PruneStaleCacheCheckpoints"
 	WorkerRepositoryService_SetCacheFsNode_FullMethodName                   = "/WorkerRepositoryService/SetCacheFsNode"
 	WorkerRepositoryService_GetCacheFsNode_FullMethodName                   = "/WorkerRepositoryService/GetCacheFsNode"
@@ -92,6 +93,7 @@ type WorkerRepositoryServiceClient interface {
 	AcquireCacheReconcileLock(ctx context.Context, in *AcquireCacheReconcileLockRequest, opts ...grpc.CallOption) (*AcquireCacheReconcileLockResponse, error)
 	ReleaseCacheReconcileLock(ctx context.Context, in *ReleaseCacheReconcileLockRequest, opts ...grpc.CallOption) (*ReleaseCacheReconcileLockResponse, error)
 	GetCacheOriginCredentials(ctx context.Context, in *GetCacheOriginCredentialsRequest, opts ...grpc.CallOption) (*GetCacheOriginCredentialsResponse, error)
+	GetContainerRuntimeCredentials(ctx context.Context, in *GetContainerRuntimeCredentialsRequest, opts ...grpc.CallOption) (*GetContainerRuntimeCredentialsResponse, error)
 	PruneStaleCacheCheckpoints(ctx context.Context, in *PruneStaleCacheCheckpointsRequest, opts ...grpc.CallOption) (*PruneStaleCacheCheckpointsResponse, error)
 	SetCacheFsNode(ctx context.Context, in *SetCacheFsNodeRequest, opts ...grpc.CallOption) (*SetCacheFsNodeResponse, error)
 	GetCacheFsNode(ctx context.Context, in *GetCacheFsNodeRequest, opts ...grpc.CallOption) (*GetCacheFsNodeResponse, error)
@@ -397,6 +399,15 @@ func (c *workerRepositoryServiceClient) GetCacheOriginCredentials(ctx context.Co
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) GetContainerRuntimeCredentials(ctx context.Context, in *GetContainerRuntimeCredentialsRequest, opts ...grpc.CallOption) (*GetContainerRuntimeCredentialsResponse, error) {
+	out := new(GetContainerRuntimeCredentialsResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerRuntimeCredentials_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerRepositoryServiceClient) PruneStaleCacheCheckpoints(ctx context.Context, in *PruneStaleCacheCheckpointsRequest, opts ...grpc.CallOption) (*PruneStaleCacheCheckpointsResponse, error) {
 	out := new(PruneStaleCacheCheckpointsResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName, in, out, opts...)
@@ -562,6 +573,7 @@ type WorkerRepositoryServiceServer interface {
 	AcquireCacheReconcileLock(context.Context, *AcquireCacheReconcileLockRequest) (*AcquireCacheReconcileLockResponse, error)
 	ReleaseCacheReconcileLock(context.Context, *ReleaseCacheReconcileLockRequest) (*ReleaseCacheReconcileLockResponse, error)
 	GetCacheOriginCredentials(context.Context, *GetCacheOriginCredentialsRequest) (*GetCacheOriginCredentialsResponse, error)
+	GetContainerRuntimeCredentials(context.Context, *GetContainerRuntimeCredentialsRequest) (*GetContainerRuntimeCredentialsResponse, error)
 	PruneStaleCacheCheckpoints(context.Context, *PruneStaleCacheCheckpointsRequest) (*PruneStaleCacheCheckpointsResponse, error)
 	SetCacheFsNode(context.Context, *SetCacheFsNodeRequest) (*SetCacheFsNodeResponse, error)
 	GetCacheFsNode(context.Context, *GetCacheFsNodeRequest) (*GetCacheFsNodeResponse, error)
@@ -661,6 +673,9 @@ func (UnimplementedWorkerRepositoryServiceServer) ReleaseCacheReconcileLock(cont
 }
 func (UnimplementedWorkerRepositoryServiceServer) GetCacheOriginCredentials(context.Context, *GetCacheOriginCredentialsRequest) (*GetCacheOriginCredentialsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCacheOriginCredentials not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) GetContainerRuntimeCredentials(context.Context, *GetContainerRuntimeCredentialsRequest) (*GetContainerRuntimeCredentialsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetContainerRuntimeCredentials not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) PruneStaleCacheCheckpoints(context.Context, *PruneStaleCacheCheckpointsRequest) (*PruneStaleCacheCheckpointsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PruneStaleCacheCheckpoints not implemented")
@@ -1195,6 +1210,24 @@ func _WorkerRepositoryService_GetCacheOriginCredentials_Handler(srv interface{},
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_GetContainerRuntimeCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetContainerRuntimeCredentialsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetContainerRuntimeCredentials(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetContainerRuntimeCredentials_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetContainerRuntimeCredentials(ctx, req.(*GetContainerRuntimeCredentialsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerRepositoryService_PruneStaleCacheCheckpoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PruneStaleCacheCheckpointsRequest)
 	if err := dec(in); err != nil {
@@ -1567,6 +1600,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCacheOriginCredentials",
 			Handler:    _WorkerRepositoryService_GetCacheOriginCredentials_Handler,
+		},
+		{
+			MethodName: "GetContainerRuntimeCredentials",
+			Handler:    _WorkerRepositoryService_GetContainerRuntimeCredentials_Handler,
 		},
 		{
 			MethodName: "PruneStaleCacheCheckpoints",

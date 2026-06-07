@@ -336,48 +336,48 @@ install_agent_binary() {
 }
 
 install_from_url() {
-  URL="$1"
-  DEST="$2"
-  MESSAGE="$3"
-  TMP="$(mktemp)"
-  say "$MESSAGE"
-  if ! download_file "$URL" "$TMP"; then
-    rm -f "$TMP"
-    fail "Unable to download Beam agent from $URL" 1
+  INSTALL_URL="$1"
+  INSTALL_DEST="$2"
+  INSTALL_MESSAGE="$3"
+  INSTALL_TMP="$(mktemp)"
+  say "$INSTALL_MESSAGE"
+  if ! download_file "$INSTALL_URL" "$INSTALL_TMP"; then
+    rm -f "$INSTALL_TMP"
+    fail "Unable to download Beam agent from $INSTALL_URL" 1
   fi
-  chmod 0755 "$TMP"
-  mkdir -p "$(dirname "$DEST")"
-  if [ -d "$DEST" ]; then
-    rmdir "$DEST" 2>/dev/null || {
-      rm -f "$TMP"
-      fail "$DEST is a directory; remove it or set BEAM_AGENT_LINUX_BIN to a file path" 1
+  chmod 0755 "$INSTALL_TMP"
+  mkdir -p "$(dirname "$INSTALL_DEST")"
+  if [ -d "$INSTALL_DEST" ]; then
+    rmdir "$INSTALL_DEST" 2>/dev/null || {
+      rm -f "$INSTALL_TMP"
+      fail "$INSTALL_DEST is a directory; remove it or set BEAM_AGENT_LINUX_BIN to a file path" 1
     }
   fi
-  mv "$TMP" "$DEST"
+  mv "$INSTALL_TMP" "$INSTALL_DEST"
 }
 
 download_file() {
-  URL="$1"
-  DEST="$2"
+  DOWNLOAD_URL="$1"
+  DOWNLOAD_DEST="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$URL" -o "$DEST"
+    curl -fsSL "$DOWNLOAD_URL" -o "$DOWNLOAD_DEST"
     return
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget -q -O "$DEST" "$URL"
+    wget -q -O "$DOWNLOAD_DEST" "$DOWNLOAD_URL"
     return
   fi
   fail "curl or wget is required to download Beam agent" 1
 }
 
 download_to_stdout() {
-  URL="$1"
+  STDOUT_URL="$1"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$URL"
+    curl -fsSL "$STDOUT_URL"
     return
   fi
   if command -v wget >/dev/null 2>&1; then
-    wget -q -O- "$URL"
+    wget -q -O- "$STDOUT_URL"
     return
   fi
   fail "curl or wget is required to download Docker" 1

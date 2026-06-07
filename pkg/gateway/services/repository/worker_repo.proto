@@ -52,6 +52,8 @@ service WorkerRepositoryService {
       returns (ReleaseCacheReconcileLockResponse) {}
   rpc GetCacheOriginCredentials(GetCacheOriginCredentialsRequest)
       returns (GetCacheOriginCredentialsResponse) {}
+  rpc GetContainerRuntimeCredentials(GetContainerRuntimeCredentialsRequest)
+      returns (GetContainerRuntimeCredentialsResponse) {}
   rpc PruneStaleCacheCheckpoints(PruneStaleCacheCheckpointsRequest)
       returns (PruneStaleCacheCheckpointsResponse) {}
   rpc SetCacheFsNode(SetCacheFsNodeRequest) returns (SetCacheFsNodeResponse) {}
@@ -355,6 +357,7 @@ message GetCacheOriginCredentialsRequest {
   string workspace_id = 1;
   string stub_id = 2;
   string registry = 3;
+  string image_id = 4;
 }
 
 message GetCacheOriginCredentialsResponse {
@@ -364,6 +367,34 @@ message GetCacheOriginCredentialsResponse {
   // Short-lived and used in-memory by the worker only; never persisted.
   string registry_credentials = 3;
   CacheWorkspaceStorageCredentials workspace_storage = 4;
+}
+
+message RuntimeMountCredentialRequest {
+  string mount_path = 1;
+  string bucket_name = 2;
+}
+
+message RuntimeMountCredentials {
+  string mount_path = 1;
+  types.MountPointConfig config = 2;
+}
+
+message GetContainerRuntimeCredentialsRequest {
+  string workspace_id = 1;
+  string stub_id = 2;
+  string container_id = 3;
+  repeated string secret_names = 4;
+  bool runtime_token = 5;
+  bool workspace_storage = 6;
+  repeated RuntimeMountCredentialRequest mount_credentials = 7;
+}
+
+message GetContainerRuntimeCredentialsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated string env = 3;
+  CacheWorkspaceStorageCredentials workspace_storage = 4;
+  repeated RuntimeMountCredentials mount_credentials = 5;
 }
 
 message PruneStaleCacheCheckpointsRequest {

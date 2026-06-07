@@ -233,7 +233,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	requestedEvent := cloneContainerRequest(request)
+	requestedEvent := request.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
 
 	quota, err := s.getConcurrencyLimit(request)
@@ -431,13 +431,13 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	s.attachImageCredentials(request)
 	s.attachBuildRegistryCredentials(request)
 
-	workerRequest := cloneContainerRequest(request)
+	workerRequest := s.workerRequest(worker, request)
 	workerRequest.Timestamp = time.Now()
 	if err := s.pushWorkerRequest(worker, request, workerRequest); err != nil {
 		return err
 	}
 
-	scheduledEvent := cloneContainerRequest(workerRequest)
+	scheduledEvent := workerRequest.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
 	return nil
 }
@@ -451,19 +451,21 @@ func (s *Scheduler) pushWorkerRequest(worker *types.Worker, originalRequest, wor
 	return err
 }
 
-func cloneContainerRequest(request *types.ContainerRequest) *types.ContainerRequest {
-	if request == nil {
-		return nil
+func (s *Scheduler) workerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
+	workerRequest := request.Clone()
+	if s.privateWorkerRequest(worker) {
+		return workerRequest.PrivateWorkerRequest()
+	}
+	return workerRequest
+}
+
+func (s *Scheduler) privateWorkerRequest(worker *types.Worker) bool {
+	if s == nil || worker == nil || s.workerPoolManager == nil {
+		return false
 	}
 
-	cloned := *request
-	cloned.EntryPoint = append([]string(nil), request.EntryPoint...)
-	cloned.Env = append([]string(nil), request.Env...)
-	cloned.GpuRequest = append([]string(nil), request.GpuRequest...)
-	cloned.Mounts = append([]types.Mount(nil), request.Mounts...)
-	cloned.Ports = append([]uint32(nil), request.Ports...)
-	cloned.AllowList = append([]string(nil), request.AllowList...)
-	return &cloned
+	pool, ok := s.workerPoolManager.GetPool(worker.PoolName)
+	return ok && pool.Config.Mode == types.PoolModePrivate
 }
 
 func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, attrs map[string]string) {
@@ -937,7 +939,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 
 	if request.RetryCount == 0 {
 		request.RetryCount++
-		return s.requestBacklog.Push(request)
+		return s.pushBacklog(request, 0)
 	}
 
 	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
@@ -948,7 +950,22 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	delay := calculateBackoffDelay(request.RetryCount)
 	request.RetryCount++
 	metrics.RecordRequestRetry(request)
+	return s.pushBacklog(request, delay)
+}
+
+func (s *Scheduler) pushBacklog(request *types.ContainerRequest, delay time.Duration) error {
+	if s.privateBacklogRequest(request) {
+		request = request.PrivateWorkerRequest()
+	}
 	return s.requestBacklog.PushAfter(request, delay)
+}
+
+func (s *Scheduler) privateBacklogRequest(request *types.ContainerRequest) bool {
+	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
+		return false
+	}
+	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
+	return ok && pool.Config.Mode == types.PoolModePrivate
 }
 
 func calculateBackoffDelay(retryCount int) time.Duration {
