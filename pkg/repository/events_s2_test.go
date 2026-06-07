@@ -876,6 +876,15 @@ func TestS2ReadEmptyRecognizesStreamNotFoundByCodeAndMessage(t *testing.T) {
 	if !isS2ReadEmpty(messageErr) {
 		t.Fatal("expected stream missing message to be treated as empty")
 	}
+
+	genericNotFound := fmt.Errorf("read stream: %w", &s2.S2Error{
+		Code:   "not_found",
+		Status: 404,
+		Origin: "server",
+	})
+	if isS2ReadEmpty(genericNotFound) {
+		t.Fatal("generic not_found should not be treated as an empty stream read")
+	}
 }
 
 func TestAugmentContainerEventResponseBuildsLifecycleSummary(t *testing.T) {

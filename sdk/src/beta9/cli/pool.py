@@ -23,7 +23,9 @@ from ..clients.gateway import (
     Machine,
     ListPoolMachinesRequest,
     ListPoolOffersRequest,
+    ListPoolsRequest,
     ListPrivatePoolsRequest,
+    Pool as ControlPlanePool,
     PoolConfig,
     PrivatePool,
     StringList,
@@ -38,7 +40,7 @@ def common(**_):
 
 @click.group(
     name="pool",
-    help="Manage private compute pools.",
+    help="Manage compute pools.",
     cls=ClickManagementGroup,
 )
 def management():
@@ -83,47 +85,116 @@ def _get_pool_renderable(
     limit: int,
     output_format: str,
     filters: Dict[str, StringList],
+    scope: str = "all",
 ) -> Any:
     """
-    Returns a Rich renderable for private compute pools.
+    Returns a Rich renderable for compute pools.
     """
-    res = service.gateway.list_private_pools(
-        ListPrivatePoolsRequest(filters=filters, limit=limit)
-    )
-    if not res.ok:
-        return Text(res.err_msg, style="bold red")
+    private_pools: List[PrivatePool] = []
+    control_plane_pools: List[ControlPlanePool] = []
+    private_error = ""
+    control_plane_error = ""
+
+    if scope in ("all", "private"):
+        private_res = service.gateway.list_private_pools(
+            ListPrivatePoolsRequest(filters=filters, limit=limit)
+        )
+        if private_res.ok:
+            private_pools = list(private_res.pools)
+        else:
+            private_error = private_res.err_msg
+            if scope == "private":
+                return Text(private_error, style="bold red")
+
+    if scope in ("all", "control-plane"):
+        control_plane_res = service.gateway.list_pools(
+            ListPoolsRequest(filters=filters, limit=limit)
+        )
+        if control_plane_res.ok:
+            control_plane_pools = list(control_plane_res.pools)
+        else:
+            control_plane_error = control_plane_res.err_msg
+            if scope == "control-plane":
+                return Text(control_plane_error, style="bold red")
+
+    if scope == "all" and private_error and control_plane_error:
+        return Text(private_error or control_plane_error, style="bold red")
 
     if output_format == "json":
-        pools = [pool.to_dict(casing=Casing.SNAKE) for pool in res.pools]  # type: ignore
-        return Text(json.dumps({"pools": pools}, indent=2))
+        return Text(
+            json.dumps(
+                {
+                    "private_pools": [
+                        pool.to_dict(casing=Casing.SNAKE) for pool in private_pools
+                    ],
+                    "control_plane_pools": [
+                        pool.to_dict(casing=Casing.SNAKE)
+                        for pool in control_plane_pools
+                    ],
+                },
+                indent=2,
+            )
+        )
 
-    return _private_pool_table(res.pools)
+    return _pool_table(private_pools, control_plane_pools)
 
 
-def _private_pool_table(pools: List[PrivatePool]) -> Table:
+def _pool_table(
+    private_pools: List[PrivatePool], control_plane_pools: List[ControlPlanePool]
+) -> Table:
     table = Table(
         Column("Name"),
+        Column("Type"),
         Column("Status"),
         Column("Machines", justify="right"),
         Column("GPU"),
-        Column("GPUs", justify="right"),
-        Column("Spend", justify="right"),
-        Column("Fallback"),
+        Column("Details"),
         box=box.SIMPLE,
     )
-    for pool in pools:
+    for pool in private_pools:
         table.add_row(
             pool.name,
+            "private",
             pool.status or "-",
             f"{pool.ready_machine_count}/{pool.machine_count}",
             ", ".join(pool.config.gpu) if pool.config.gpu else "-",
-            str(pool.reserved_gpus),
-            f"${pool.committed_spend_micros / 1_000_000:.2f}",
-            pool.config.fallback or "-",
+            _private_pool_details(pool),
+        )
+    if private_pools and control_plane_pools:
+        table.add_section()
+    for pool in control_plane_pools:
+        table.add_row(
+            pool.name,
+            "control-plane",
+            pool.state.status or ("active" if pool.active else "inactive"),
+            f"{pool.state.ready_machines}/{pool.state.registered_machines}",
+            pool.gpu or "-",
+            _control_plane_pool_details(pool),
         )
     table.add_section()
-    table.add_row(f"[bold]{len(pools)} items")
+    table.add_row(f"[bold]{len(private_pools) + len(control_plane_pools)} items")
     return table
+
+
+def _private_pool_details(pool: PrivatePool) -> str:
+    return "/".join(
+        [
+            f"{pool.reserved_gpus}GPU",
+            f"${pool.committed_spend_micros / 1_000_000:.2f}",
+            pool.config.fallback or "-",
+        ]
+    )
+
+
+def _control_plane_pool_details(pool: ControlPlanePool) -> str:
+    parts = []
+    if pool.state.free_gpu > 0:
+        parts.append(f"{pool.state.free_gpu}GPU")
+    if pool.state.free_cpu > 0:
+        parts.append(_format_cpu(pool.state.free_cpu))
+    if pool.state.free_memory > 0:
+        parts.append(_format_memory(pool.state.free_memory))
+    return "/".join(parts) if parts else "-"
 
 
 def _machine_table(machines: List[Machine]) -> Table:
@@ -131,10 +202,8 @@ def _machine_table(machines: List[Machine]) -> Table:
         Column("Pool"),
         Column("Machine"),
         Column("Status"),
-        Column("CPU", justify="right"),
-        Column("Memory", justify="right"),
+        Column("Resources"),
         Column("GPU"),
-        Column("GPUs", justify="right"),
         Column("Last Seen"),
         box=box.SIMPLE,
     )
@@ -143,12 +212,8 @@ def _machine_table(machines: List[Machine]) -> Table:
             machine.pool_name or "-",
             machine.id,
             machine.status or "-",
-            f"{machine.cpu:,}m" if machine.cpu > 0 else "-",
-            terminal.humanize_memory(machine.memory * 1024 * 1024)
-            if machine.memory > 0
-            else "-",
-            machine.gpu or "-",
-            str(machine.gpu_count),
+            _machine_resources(machine),
+            _machine_gpu(machine),
             _machine_last_seen(machine),
         )
     table.add_section()
@@ -156,17 +221,63 @@ def _machine_table(machines: List[Machine]) -> Table:
     return table
 
 
+def _machine_resources(machine: Machine) -> str:
+    parts = []
+    if machine.cpu > 0:
+        parts.append(_format_cpu(machine.cpu))
+    if machine.memory > 0:
+        parts.append(_format_memory(machine.memory))
+    return "/".join(parts) if parts else "-"
+
+
+def _format_cpu(millicores: int) -> str:
+    cores = millicores / 1000
+    if cores.is_integer():
+        return f"{int(cores)}CPU"
+    return f"{cores:.2f}CPU"
+
+
+def _format_memory(memory_mb: int) -> str:
+    if memory_mb >= 1024:
+        return f"{memory_mb / 1024:.1f}GiB"
+    return f"{memory_mb}MiB"
+
+
+def _machine_gpu(machine: Machine) -> str:
+    if not machine.gpu:
+        return "-"
+    if machine.gpu_count == 0:
+        return machine.gpu
+    return f"{machine.gpu} x {machine.gpu_count}"
+
+
 def _machine_last_seen(machine: Machine) -> str:
     if not machine.last_keepalive:
         return "Never"
-    return terminal.humanize_date(
-        datetime.fromtimestamp(int(machine.last_keepalive), tz=timezone.utc)
-    )
+    try:
+        last_seen = datetime.fromtimestamp(int(machine.last_keepalive), tz=timezone.utc)
+    except ValueError:
+        last_seen = datetime.fromisoformat(
+            machine.last_keepalive.replace("Z", "+00:00")
+        )
+    return _format_age(last_seen)
+
+
+def _format_age(value: datetime) -> str:
+    diff = datetime.now(timezone.utc) - value
+    if diff.days > 0:
+        return f"{diff.days}d ago"
+    seconds = max(0, int(diff.total_seconds()))
+    if seconds >= 3600:
+        return f"{seconds // 3600}h ago"
+    if seconds >= 60:
+        return f"{seconds // 60}m ago"
+    return "just now"
 
 
 @management.command(
     name="list",
-    help="List private compute pools.",
+    help="List compute pools.",
     epilog="""
     Examples:
 
@@ -175,6 +286,9 @@ def _machine_last_seen(machine: Machine) -> str:
 
       # List pools and output in JSON format
       {cli_name} pool list --format json
+
+      # List only control-plane pools (admin tokens only)
+      {cli_name} pool list --scope control-plane
       
       # Continuously refresh and show pool information every 1 second (default)
       {cli_name} pool list --watch
@@ -204,6 +318,13 @@ def _machine_last_seen(machine: Machine) -> str:
     help="Filters pools. Add this option for each field you want to filter on.",
 )
 @click.option(
+    "--scope",
+    type=click.Choice(("all", "private", "control-plane")),
+    default="all",
+    show_default=True,
+    help="Pool scope to show.",
+)
+@click.option(
     "-w",
     "--watch",
     is_flag=True,
@@ -224,25 +345,26 @@ def list_pools(
     limit: int,
     format: str,
     filter: Dict[str, StringList],
+    scope: str,
     watch: bool,
     period: float,
 ):
     """
-    List private compute pools
+    List compute pools
     """
     if not watch:
-        terminal.print(_get_pool_renderable(service, limit, format, filter))
+        terminal.print(_get_pool_renderable(service, limit, format, filter, scope))
         return
 
     with Live(
-        _get_pool_renderable(service, limit, format, filter),
+        _get_pool_renderable(service, limit, format, filter, scope),
         console=terminal._console,
         screen=True,
         refresh_per_second=1 / period,
     ) as live:
         try:
             while True:
-                live.update(_get_pool_renderable(service, limit, format, filter))
+                live.update(_get_pool_renderable(service, limit, format, filter, scope))
                 time.sleep(period)
         except KeyboardInterrupt:
             pass
@@ -441,7 +563,7 @@ def launch(
 )
 @extraclick.pass_service_client
 def private_pools(service: ServiceClient, limit: int, format: str):
-    terminal.print(_get_pool_renderable(service, limit, format, {}))
+    terminal.print(_get_pool_renderable(service, limit, format, {}, "private"))
 
 
 @management.command(name="machines", help="List machines joined to a private pool.")

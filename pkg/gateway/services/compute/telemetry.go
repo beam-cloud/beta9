@@ -110,8 +110,11 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		return nil
 	}
 	current, err := s.currentComputeAgentState(ctx, agentState)
-	if err != nil || current == nil {
+	if err != nil {
 		return err
+	}
+	if current == nil {
+		return fmt.Errorf("agent token is no longer current")
 	}
 	agentState = current
 

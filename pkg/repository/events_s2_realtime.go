@@ -618,11 +618,8 @@ func isS2StreamNotFound(err error) bool {
 	}
 	if errors.As(err, &s2Err) {
 		code := strings.ToLower(strings.TrimSpace(s2Err.Code))
-		return s2Err.Status == httpStatusNotFound ||
-			code == "stream_not_found" ||
-			code == "stream_does_not_exist" ||
-			code == "resource_not_found" ||
-			code == "not_found"
+		return code == "stream_not_found" ||
+			code == "stream_does_not_exist"
 	}
 
 	message := strings.ToLower(err.Error())
@@ -636,4 +633,3 @@ func isS2ReadEmpty(err error) bool {
 }
 
 const httpStatusRangeNotSatisfiable = 416
-const httpStatusNotFound = 404

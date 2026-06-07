@@ -3,6 +3,7 @@ package compute
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestAgentWorkerSlotStateDoesNotSerializeWorkerToken(t *testing.T) {
@@ -24,5 +25,18 @@ func TestAgentWorkerSlotStateDoesNotSerializeWorkerToken(t *testing.T) {
 	}
 	if values["worker_token_id"] != "token-id" || values["worker_token_hash"] != "token-hash" {
 		t.Fatalf("AgentWorkerSlotState token metadata = %#v", values)
+	}
+}
+
+func TestAgentMachineConnectedRejectsFutureHeartbeat(t *testing.T) {
+	now := time.Now().UTC()
+	state := &AgentTokenState{
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now.Add(time.Minute),
+	}
+
+	if AgentMachineConnected(state, now) {
+		t.Fatal("future heartbeat was treated as connected")
 	}
 }

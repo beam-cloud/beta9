@@ -461,7 +461,7 @@ func (g *EventGroup) GetEventHistory(ctx echo.Context) error {
 	response, err := g.eventRepo.GetEventHistory(ctx.Request().Context(), query)
 	if err != nil {
 		if errors.Is(err, repository.ErrEventReadUnsupported) {
-			return ctx.JSON(http.StatusOK, &types.EventHistoryResponse{Events: []types.ContainerEventRecord{}, Streams: []string{}})
+			return NewHTTPError(http.StatusServiceUnavailable, "Event history reads are not configured")
 		}
 		if IsRequestCanceled(ctx, err) {
 			return HTTPClientClosedRequest(ctx)

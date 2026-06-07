@@ -131,6 +131,9 @@ func AgentMachineConnected(state *AgentTokenState, now time.Time) bool {
 	if now.IsZero() {
 		now = time.Now()
 	}
+	if lastSeen.After(now) {
+		return false
+	}
 	return now.Sub(lastSeen) <= AgentHeartbeatTimeout
 }
 

@@ -21,9 +21,6 @@ func NewHTTPError(code int, message string) error {
 }
 
 func HTTPClientClosedRequest(ctx echo.Context) error {
-	if ctx.Request().Context().Err() != nil {
-		return nil
-	}
 	return ctx.NoContent(statusClientClosedRequest)
 }
 

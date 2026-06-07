@@ -177,7 +177,11 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 			return err
 		}
 		if current == nil {
-			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "agent token is no longer current"})
+			msg := "agent token is no longer current"
+			if err := stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: msg}); err != nil {
+				return err
+			}
+			return fmt.Errorf("agent token is no longer current")
 		}
 		agentState = current
 		if s.scheduler != nil {

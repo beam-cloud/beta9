@@ -2,7 +2,13 @@ import pytest
 
 from beta9 import Pool
 from beta9.abstractions.function import Function
-from beta9.cli.pool import _append_join_args, _join_transport
+from beta9.cli.pool import _append_join_args, _get_pool_renderable, _join_transport
+from beta9.clients.gateway import (
+    ListPoolsResponse,
+    ListPrivatePoolsResponse,
+    PoolConfig,
+    PrivatePool,
+)
 from beta9.config import ConfigContext
 
 
@@ -92,3 +98,28 @@ def test_pool_join_appends_agent_flags():
     assert "--gpu-ids 0,1" in command
     assert "--network-slots 64" in command
     assert "--container-start-concurrency 12" in command
+
+
+def test_pool_list_ignores_denied_control_plane_scope_for_default_view():
+    class Gateway:
+        def list_private_pools(self, _req):
+            return ListPrivatePoolsResponse(
+                ok=True,
+                pools=[
+                    PrivatePool(
+                        name="private-dev",
+                        config=PoolConfig(name="private-dev", fallback="internal"),
+                        status="active",
+                    )
+                ],
+            )
+
+        def list_pools(self, _req):
+            return ListPoolsResponse(ok=False, err_msg="This action is not permitted")
+
+    service = type("Service", (), {"gateway": Gateway()})()
+
+    renderable = _get_pool_renderable(service, 20, "json", {}, "all")
+
+    assert "private-dev" in renderable.plain
+    assert "[red]" not in renderable.plain

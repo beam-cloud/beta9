@@ -444,10 +444,10 @@ func agentBinaryHandler() echo.HandlerFunc {
 func resolveAgentBinary(ctx context.Context, osName, arch string, forceBuild bool) (string, error) {
 	if forceBuild {
 		path, err := buildAgentBinary(ctx, osName, arch)
-		if err == nil {
-			return path, nil
+		if err != nil {
+			return "", fmt.Errorf("agent binary source build failed for %s/%s: %w", osName, arch, err)
 		}
-		return "", fmt.Errorf("agent binary source build failed for %s/%s: %w", osName, arch, err)
+		return path, nil
 	}
 
 	path := agentBinaryPath(osName, arch)
