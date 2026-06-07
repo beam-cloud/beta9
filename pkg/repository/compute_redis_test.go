@@ -103,4 +103,39 @@ func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 	if len(slots) != 0 {
 		t.Fatalf("slots after delete = %#v, want empty", slots)
 	}
+
+	if err := repo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
+		t.Fatal(err)
+	}
+	machineByID, err = repo.GetAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if machineByID != nil {
+		t.Fatalf("machine after delete = %#v, want nil", machineByID)
+	}
+	machineByWorkspace, err = repo.GetAgentMachineStateForWorkspace(ctx, machine.WorkspaceID, machine.MachineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if machineByWorkspace != nil {
+		t.Fatalf("workspace machine after delete = %#v, want nil", machineByWorkspace)
+	}
+	slots, err = repo.ListAgentWorkerSlotStates(ctx, slot.WorkspaceID, slot.PoolName, slot.MachineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slots) != 0 {
+		t.Fatalf("slots after machine delete = %#v, want empty", slots)
+	}
+	tokenState, err := repo.GetAgentTokenState(ctx, machine.TokenHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenState != nil {
+		t.Fatalf("agent token after machine delete = %#v, want nil", tokenState)
+	}
 }

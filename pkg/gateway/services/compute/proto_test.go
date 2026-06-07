@@ -63,3 +63,45 @@ func TestAgentMachineStatusPreflightFailureIsDisabled(t *testing.T) {
 		t.Fatalf("agentMachineStatus() = %q, want %q", got, types.MachineStatusDisabled)
 	}
 }
+
+func TestAgentMachineMetricsUseScheduledCapacity(t *testing.T) {
+	state := &model.AgentTokenState{
+		CPUMillicores: 16000,
+		MemoryMB:      32768,
+		GPUCount:      4,
+		Metrics: model.AgentMachineMetrics{
+			CPUUtilizationPct:    90,
+			MemoryUtilizationPct: 80,
+			MemoryUsedMB:         1000,
+			DiskUsedMB:           10,
+			DiskTotalMB:          100,
+			DiskUsagePct:         10,
+		},
+	}
+	worker := &types.Worker{
+		TotalCpu:         16000,
+		FreeCpu:          12000,
+		TotalMemory:      32768,
+		FreeMemory:       24576,
+		TotalGpuCount:    4,
+		FreeGpuCount:     3,
+		ActiveContainers: []types.Container{{ContainerId: "container-one"}, {ContainerId: "container-two"}},
+	}
+
+	metrics := agentMachineMetrics(state, worker)
+	if metrics.CpuUtilizationPct != 25 {
+		t.Fatalf("cpu utilization = %v, want 25", metrics.CpuUtilizationPct)
+	}
+	if metrics.MemoryUtilizationPct != 25 {
+		t.Fatalf("memory utilization = %v, want 25", metrics.MemoryUtilizationPct)
+	}
+	if metrics.MemoryUsedMb != 8192 {
+		t.Fatalf("memory used = %d, want 8192", metrics.MemoryUsedMb)
+	}
+	if metrics.FreeGpuCount != 3 {
+		t.Fatalf("free gpu count = %d, want 3", metrics.FreeGpuCount)
+	}
+	if metrics.ContainerCount != 2 {
+		t.Fatalf("container count = %d, want 2", metrics.ContainerCount)
+	}
+}

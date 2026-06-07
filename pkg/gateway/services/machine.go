@@ -217,6 +217,13 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if gws.computeService != nil {
+		handled, res, err := gws.computeService.DeletePoolMachine(ctx, in)
+		if handled || err != nil {
+			return res, err
+		}
+	}
+
 	if !auth.HasPermission(authInfo) {
 		return &pb.DeleteMachineResponse{
 			Ok:     false,

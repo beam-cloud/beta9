@@ -100,6 +100,7 @@ type ComputeRepository interface {
 	GetAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) (*compute.AgentTokenState, error)
 	GetAgentMachineStateForWorkspace(ctx context.Context, workspaceID, machineID string) (*compute.AgentTokenState, error)
 	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error)
+	DeleteAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) error
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error

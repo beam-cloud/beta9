@@ -183,6 +183,38 @@ func (r *ComputeRedisRepository) ListAgentTokenStates(ctx context.Context, works
 	return states, nil
 }
 
+func (r *ComputeRedisRepository) DeleteAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) error {
+	state, err := r.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
+	if err != nil {
+		return err
+	}
+
+	workerIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeAgentSlotIndex(workspaceID, poolName, machineID)).Result()
+	if err != nil {
+		return err
+	}
+
+	keys := make([]string, 0, len(workerIDs)+4)
+	for _, workerID := range workerIDs {
+		keys = append(keys, common.RedisKeys.ComputeAgentSlot(workspaceID, poolName, machineID, workerID))
+	}
+	keys = append(keys,
+		common.RedisKeys.ComputeAgentSlotIndex(workspaceID, poolName, machineID),
+		common.RedisKeys.ComputeAgentMachine(workspaceID, poolName, machineID),
+		common.RedisKeys.ComputeAgentMachinePool(workspaceID, machineID),
+	)
+	if state != nil && state.TokenHash != "" {
+		keys = append(keys, common.RedisKeys.ComputeAgentToken(state.TokenHash))
+	}
+
+	if len(keys) > 0 {
+		if err := r.rdb.Del(ctx, keys...).Err(); err != nil {
+			return err
+		}
+	}
+	return r.rdb.SRem(ctx, common.RedisKeys.ComputeAgentMachineIndex(workspaceID, poolName), machineID).Err()
+}
+
 func (r *ComputeRedisRepository) scanAgentMachineStateForWorkspace(ctx context.Context, workspaceID, machineID string) (*compute.AgentTokenState, error) {
 	pools, err := r.ListPoolStates(ctx, workspaceID, 0)
 	if err != nil {
