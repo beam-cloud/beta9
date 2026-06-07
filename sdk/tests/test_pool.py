@@ -106,6 +106,20 @@ def test_pool_join_appends_agent_flags():
     assert "--container-start-concurrency 12" in command
 
 
+def test_pool_join_appends_agent_flags_to_branched_command():
+    command = _append_join_args(
+        "if [ \"$(uname -s)\" = \"Darwin\" ] || [ \"$(id -u)\" -eq 0 ]; then curl -fsSL 'https://app.stage.beam.cloud/install/agent' | sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'token'; else curl -fsSL 'https://app.stage.beam.cloud/install/agent' | sudo sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'token'; fi",
+        max_cpu="4",
+        max_memory="8Gi",
+        network_slots=16,
+    )
+
+    assert "fi --max-cpu" not in command
+    assert command.count("--max-cpu 4") == 2
+    assert command.count("--max-memory 8Gi") == 2
+    assert command.count("--network-slots 16") == 2
+
+
 def test_pool_list_ignores_denied_control_plane_scope_for_default_view():
     class Gateway:
         def list_private_pools(self, _req):
