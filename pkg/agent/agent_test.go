@@ -159,6 +159,40 @@ func TestNormalizeBootstrapForAgentRuntimePreservesPublicGRPCHost(t *testing.T) 
 	}
 }
 
+func TestNormalizeBootstrapForAgentRuntimeKeepsEmptyPublicGRPCHost(t *testing.T) {
+	t.Setenv(types.AgentInContainerEnv, "1")
+
+	got := normalizeBootstrapForAgentRuntime("https://app.stage.beam.cloud", bootstrapConfig{
+		GatewayHTTPURL:  "https://app.stage.beam.cloud",
+		GatewayGRPCPort: 443,
+		GatewayGRPCTLS:  true,
+	})
+
+	if got.GatewayGRPCHost != "" {
+		t.Fatalf("expected empty public grpc host to remain unset, got %q", got.GatewayGRPCHost)
+	}
+}
+
+func TestGatewayGRPCAddrDoesNotInferPublicGRPCHost(t *testing.T) {
+	_, err := gatewayGRPCAddr("https://app.stage.beam.cloud", "", 443)
+	if err == nil {
+		t.Fatal("expected missing public grpc host to fail")
+	}
+	if !strings.Contains(err.Error(), "gateway.grpc.externalHost") {
+		t.Fatalf("expected config-specific error, got %v", err)
+	}
+}
+
+func TestGatewayGRPCAddrInfersLoopbackGRPCHost(t *testing.T) {
+	addr, err := gatewayGRPCAddr("http://localhost:1994", "", 1993)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr != "localhost:1993" {
+		t.Fatalf("addr = %q, want localhost:1993", addr)
+	}
+}
+
 func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv(types.AgentTargetHostEnv, "host.docker.internal")
 	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")

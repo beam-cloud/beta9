@@ -62,14 +62,12 @@ func gatewayGRPCAddr(gatewayURL, host string, port int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if isLoopbackHost(u.Hostname()) {
-		host = u.Hostname()
+	gatewayHost := u.Hostname()
+	if isLoopbackHost(gatewayHost) {
+		host = gatewayHost
 	}
 	if host == "" {
-		host = u.Hostname()
-	}
-	if host == "" {
-		return "", fmt.Errorf("gateway grpc host is required")
+		return "", fmt.Errorf("gateway grpc host is required; check gateway.grpc.externalHost in the control plane config")
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }

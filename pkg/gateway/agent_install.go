@@ -220,8 +220,9 @@ run_macos_docker_agent() {
   fi
 
   require_docker_desktop
-  AGENT_LINUX_BIN="${BEAM_AGENT_LINUX_BIN:-${HOME}/.beam/bin/beam-agent-linux-${ARCH}}"
-  HOST_STATE_DIR="${BEAM_AGENT_STATE_DIR:-${HOME}/.beam/agent}"
+  HOST_HOME="$(agent_host_home)"
+  AGENT_LINUX_BIN="${BEAM_AGENT_LINUX_BIN:-${HOST_HOME}/.beam/bin/beam-agent-linux-${ARCH}}"
+  HOST_STATE_DIR="${BEAM_AGENT_STATE_DIR:-${HOST_HOME}/.beam/agent}"
   HOSTNAME_VALUE="$(hostname 2>/dev/null || echo macos-agent)"
   HOST_FINGERPRINT="$(host_fingerprint "$HOSTNAME_VALUE")"
 
@@ -378,6 +379,38 @@ docker_reachable_url() {
         -e 's#://localhost/#://host.docker.internal/#' \
         -e 's#://127\.0\.0\.1:#://host.docker.internal:#' \
         -e 's#://127\.0\.0\.1/#://host.docker.internal/#'
+}
+
+agent_host_home() {
+  if [ -n "${BEAM_AGENT_HOME:-}" ]; then
+    printf '%s\n' "$BEAM_AGENT_HOME"
+    return
+  fi
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    if command -v dscl >/dev/null 2>&1; then
+      HOME_DIR="$(dscl . -read "/Users/${SUDO_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2; exit}')"
+      if [ -n "$HOME_DIR" ]; then
+        printf '%s\n' "$HOME_DIR"
+        return
+      fi
+    fi
+    if command -v getent >/dev/null 2>&1; then
+      HOME_DIR="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+      if [ -n "$HOME_DIR" ]; then
+        printf '%s\n' "$HOME_DIR"
+        return
+      fi
+    fi
+    if [ -d "/Users/${SUDO_USER}" ]; then
+      printf '%s\n' "/Users/${SUDO_USER}"
+      return
+    fi
+    if [ -d "/home/${SUDO_USER}" ]; then
+      printf '%s\n' "/home/${SUDO_USER}"
+      return
+    fi
+  fi
+  printf '%s\n' "$HOME"
 }
 
 host_fingerprint() {
