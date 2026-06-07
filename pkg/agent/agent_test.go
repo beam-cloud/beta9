@@ -196,6 +196,7 @@ func TestGatewayGRPCAddrInfersLoopbackGRPCHost(t *testing.T) {
 func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv(types.AgentTargetHostEnv, "host.docker.internal")
 	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")
+	t.Setenv(types.AgentWorkerPlatformEnv, "linux/amd64")
 
 	args := dockerRunArgs("slot-one", "worker:dev", "/tmp/config.json", bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
@@ -216,6 +217,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 
 	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
 		t.Fatalf("expected route target host env in docker args: %#v", args)
+	}
+	if !containsArg(args, "--platform", "linux/amd64") {
+		t.Fatalf("expected worker platform in docker args: %#v", args)
 	}
 	for _, want := range []string{
 		types.CacheLocalityEnv + "=private",

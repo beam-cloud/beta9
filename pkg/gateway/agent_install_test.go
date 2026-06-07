@@ -55,6 +55,17 @@ func TestAgentInstallScriptUsesInvokingUserHomeForMacOSDocker(t *testing.T) {
 	}
 }
 
+func TestAgentInstallScriptDefaultsMacOSWorkerPlatform(t *testing.T) {
+	for _, want := range []string{
+		`export BEAM_AGENT_WORKER_PLATFORM="linux/amd64"`,
+		"-e BEAM_AGENT_WORKER_PLATFORM",
+	} {
+		if !strings.Contains(agentInstallScript, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
 func TestAgentBinaryHandlerServesConfiguredBinary(t *testing.T) {
 	path := writeAgentBinary(t)
 	t.Setenv(types.AgentBinaryPathEnv, path)
