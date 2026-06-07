@@ -18,7 +18,6 @@ from ..clients.gateway import (
     DeletePoolRequest,
     ExtendPoolCapacityRequest,
     GetPoolJoinCommandRequest,
-    LaunchPoolCapacityRequest,
     Machine,
     ListPoolMachinesRequest,
     ListPoolsRequest,
@@ -361,46 +360,6 @@ def create(
     if not res.ok:
         return terminal.error(res.err_msg)
     terminal.success(f"Created private pool '{res.pool.name}'")
-
-
-@management.command(name="launch", help="Launch provider-backed capacity for a private pool.")
-@click.argument("name")
-@click.option("--gpu", "gpu", multiple=True, required=True)
-@click.option("--gpus", type=click.IntRange(1), required=True)
-@click.option("--ttl", required=True)
-@click.option("--max-spend", type=float, required=True)
-@click.option("--provider", multiple=True)
-@click.option("--region", multiple=True)
-@click.option("--min-reliability", type=click.FloatRange(0, 1), default=0)
-@extraclick.pass_service_client
-def launch(
-    service: ServiceClient,
-    name: str,
-    gpu: Tuple[str, ...],
-    gpus: int,
-    ttl: str,
-    max_spend: float,
-    provider: Tuple[str, ...],
-    region: Tuple[str, ...],
-    min_reliability: float,
-):
-    res = service.gateway.launch_pool_capacity(
-        LaunchPoolCapacityRequest(
-            pool=_pool_config(
-                name=name,
-                gpu=gpu,
-                gpus=gpus,
-                ttl=ttl,
-                max_spend=max_spend,
-                provider=provider,
-                region=region,
-                min_reliability=min_reliability,
-            )
-        )
-    )
-    if not res.ok:
-        return terminal.error(res.err_msg)
-    terminal.success(f"Launched capacity for private pool '{res.pool.name}'")
 
 
 @management.command(name="private", help="List private compute pools.", hidden=True)

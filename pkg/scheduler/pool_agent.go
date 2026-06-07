@@ -157,10 +157,20 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 		return nil, err
 	}
 	readyMachines := int64(0)
+	pendingMachines := int64(0)
 	for _, machine := range machines {
-		if wpc.machineSchedulable(machine) {
-			readyMachines++
+		if !wpc.machineSchedulable(machine) {
+			continue
 		}
+		worker, err := wpc.machineWorker(machine)
+		if err != nil {
+			return nil, err
+		}
+		if worker != nil && worker.Status == types.WorkerStatusAvailable {
+			readyMachines++
+			continue
+		}
+		pendingMachines++
 	}
 	status := types.WorkerPoolStatusHealthy
 	if readyMachines == 0 {
@@ -169,6 +179,7 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 	return &types.WorkerPoolState{
 		Status:             status,
 		RegisteredMachines: int64(len(machines)),
+		PendingMachines:    pendingMachines,
 		ReadyMachines:      readyMachines,
 	}, nil
 }

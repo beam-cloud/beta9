@@ -8,6 +8,8 @@ const (
 	MachineStatusRegistered          MachineStatus = "registered"
 	MachineStatusPending             MachineStatus = "pending"
 	MachineStatusReady               MachineStatus = "ready"
+	MachineStatusAvailable           MachineStatus = "available"
+	MachineStatusDisabled            MachineStatus = "disabled"
 	MachinePendingExpirationS        int           = 3600 // 1 hour
 	MachineKeepaliveExpirationS      int           = 300  // 5 minutes
 	MachineEmptyConsolidationPeriodM time.Duration = 10 * time.Minute

@@ -178,7 +178,25 @@ func timestampOrNil(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
 }
 
-func agentMachineToProto(state *model.AgentTokenState) *pb.Machine {
+func (s *Service) agentMachineToProto(state *model.AgentTokenState) *pb.Machine {
+	return agentMachineToProto(state, s.agentMachineStatusWorker(state))
+}
+
+func (s *Service) agentMachineStatusWorker(state *model.AgentTokenState) *types.Worker {
+	if s == nil || s.workerRepo == nil || state == nil {
+		return nil
+	}
+	worker, err := s.workerRepo.GetWorkerById(model.AgentMachineWorkerID(state.MachineID))
+	if err != nil || worker == nil {
+		return nil
+	}
+	if worker.MachineId != state.MachineID || worker.PoolName != state.PoolName {
+		return nil
+	}
+	return worker
+}
+
+func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb.Machine {
 	if state == nil {
 		return &pb.Machine{}
 	}
@@ -193,7 +211,7 @@ func agentMachineToProto(state *model.AgentTokenState) *pb.Machine {
 		Memory:        int64(state.MemoryMB),
 		Gpu:           gpu,
 		GpuCount:      state.GPUCount,
-		Status:        computeMachineStatus(state),
+		Status:        string(agentMachineStatus(state, worker, time.Now())),
 		PoolName:      state.PoolName,
 		ProviderName:  types.DefaultAgentName,
 		Created:       formatComputeTime(state.CreatedAt),
@@ -210,6 +228,31 @@ func agentMachineToProto(state *model.AgentTokenState) *pb.Machine {
 			CacheCapacity:        int32(state.Metrics.DiskTotalMB),
 			CacheMemoryUsage:     int32(state.Metrics.MemoryUsedMB),
 		},
+	}
+}
+
+func agentMachineStatus(state *model.AgentTokenState, worker *types.Worker, now time.Time) types.MachineStatus {
+	if state == nil {
+		return ""
+	}
+	if model.AgentMachineStatus(state, now) == types.AgentMachineStatusPreflightFail {
+		return types.MachineStatusDisabled
+	}
+	if !model.AgentMachineConnected(state, now) {
+		return types.MachineStatusRegistered
+	}
+	if worker == nil {
+		return types.MachineStatusRegistered
+	}
+	switch worker.Status {
+	case types.WorkerStatusAvailable:
+		return types.MachineStatusAvailable
+	case types.WorkerStatusPending:
+		return types.MachineStatusPending
+	case types.WorkerStatusDisabled:
+		return types.MachineStatusDisabled
+	default:
+		return types.MachineStatusPending
 	}
 }
 

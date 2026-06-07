@@ -2,7 +2,7 @@ import pytest
 
 from beta9 import Pool
 from beta9.abstractions.function import Function
-from beta9.cli.pool import _append_join_args, _get_pool_renderable, _join_transport
+from beta9.cli.pool import _append_join_args, _get_pool_renderable, _join_transport, management
 from beta9.clients.gateway import (
     ListPoolsResponse,
     ListPrivatePoolsResponse,
@@ -123,3 +123,9 @@ def test_pool_list_ignores_denied_control_plane_scope_for_default_view():
 
     assert "private-dev" in renderable.plain
     assert "[red]" not in renderable.plain
+
+
+def test_pool_launch_command_is_not_exposed():
+    assert "launch" not in management.commands
+    assert "join" in management.commands
+    assert "create" in management.commands

@@ -1,3 +1,5 @@
+from typing import Any, Dict, List, Sequence
+
 import click
 from betterproto import Casing
 
@@ -14,9 +16,10 @@ from ..clients.gateway import (
     ListMachinesRequest,
     ListMachinesResponse,
     ListWorkersRequest,
+    Machine,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
-from .machine_format import machine_table
+from .machine_format import gpu_availability_table, machine_table
 
 
 @click.group(cls=ClickCommonGroup)
@@ -31,6 +34,10 @@ def common(**_):
 )
 def management():
     pass
+
+
+def _machine_list_renderables(gpus: Dict[str, bool], machines: Sequence[Machine]) -> List[Any]:
+    return [gpu_availability_table(gpus), machine_table(machines)]
 
 
 @management.command(
@@ -85,7 +92,8 @@ def list_machines(
         terminal.print_json({"machines": machines, "gpus": res.gpus})
         return
 
-    terminal.print(machine_table(res.machines))
+    for renderable in _machine_list_renderables(res.gpus, res.machines):
+        terminal.print(renderable)
 
 
 @management.command(

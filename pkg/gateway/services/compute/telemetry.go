@@ -145,7 +145,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		PoolName:    agentState.PoolName,
 		MachineID:   agentState.MachineID,
 		Action:      types.EventComputeActionMachineHeartbeat,
-		Status:      computeMachineStatus(agentState),
+		Status:      string(agentMachineStatus(agentState, s.agentMachineStatusWorker(agentState), metrics.Timestamp)),
 		CPUCount:    agentState.CPUCount,
 		MemoryMB:    firstNonZeroUint64(metrics.MemoryTotalMB, agentState.MemoryMB),
 		GPUCount:    agentState.GPUCount,
@@ -185,7 +185,7 @@ func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.A
 		PoolName:    agentState.PoolName,
 		MachineID:   agentState.MachineID,
 		Action:      types.EventComputeActionMachineDisconnected,
-		Status:      model.AgentMachineStatus(agentState, agentState.LastDisconnectAt),
+		Status:      string(agentMachineStatus(agentState, nil, agentState.LastDisconnectAt)),
 		Message:     "agent telemetry stream disconnected",
 	})
 }

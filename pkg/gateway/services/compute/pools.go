@@ -40,7 +40,9 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		out = append(out, privatePoolStateToProtoWithMachines(state, machines))
+		pool := privatePoolStateToProtoWithMachines(state, machines)
+		pool.ReadyMachineCount = s.readyAgentMachineCount(machines)
+		out = append(out, pool)
 	}
 	return &pb.ListPrivatePoolsResponse{Ok: true, Pools: out}, nil
 }
@@ -202,7 +204,18 @@ func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesR
 
 	out := make([]*pb.Machine, 0, len(machines))
 	for _, machine := range machines {
-		out = append(out, agentMachineToProto(machine))
+		out = append(out, s.agentMachineToProto(machine))
 	}
 	return &pb.ListPoolMachinesResponse{Ok: true, Machines: out}, nil
+}
+
+func (s *Service) readyAgentMachineCount(machines []*model.AgentTokenState) uint32 {
+	ready := uint32(0)
+	now := time.Now()
+	for _, machine := range machines {
+		if agentMachineStatus(machine, s.agentMachineStatusWorker(machine), now) == types.MachineStatusAvailable {
+			ready++
+		}
+	}
+	return ready
 }

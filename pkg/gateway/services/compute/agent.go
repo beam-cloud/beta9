@@ -82,7 +82,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		PoolName:    tokenState.PoolName,
 		MachineID:   machineID,
 		Action:      types.EventComputeActionMachineJoined,
-		Status:      computeMachineStatus(agentState),
+		Status:      string(agentMachineStatus(agentState, s.agentMachineStatusWorker(agentState), now)),
 		Transport:   normalizePoolConfig(poolState.Config).Transport,
 		Executor:    agentState.Executor,
 		Hostname:    agentState.Hostname,
@@ -557,10 +557,6 @@ func preflightChecksFromProto(in []*pb.AgentPreflightCheck) []model.PreflightChe
 		})
 	}
 	return checks
-}
-
-func computeMachineStatus(state *model.AgentTokenState) string {
-	return model.AgentMachineStatus(state, time.Now())
 }
 
 func boolPtr(value bool) *bool {

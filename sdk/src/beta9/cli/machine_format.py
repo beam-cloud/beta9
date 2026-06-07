@@ -1,31 +1,53 @@
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Dict, Optional, Sequence
 
 from rich.table import Column, Table, box
 
+from .. import terminal
 from ..clients.gateway import Machine
+
+
+def gpu_availability_table(gpus: Dict[str, bool]) -> Table:
+    table = Table(
+        Column("GPU Type"),
+        Column("Available", justify="center"),
+        box=box.SIMPLE,
+    )
+    for gpu_type, gpu_available in sorted(gpus.items()):
+        table.add_row(gpu_type, "✅" if gpu_available else "❌")
+    if not gpus:
+        table.add_row("-", "-")
+    table.add_section()
+    table.add_row(f"[bold]{len(gpus)} items")
+    return table
 
 
 def machine_table(machines: Sequence[Machine]) -> Table:
     table = Table(
-        Column("Pool"),
-        Column("Machine"),
-        Column("Status"),
-        Column("CPU", justify="right"),
-        Column("Memory", justify="right"),
+        Column("ID"),
+        Column("CPU"),
+        Column("Memory"),
         Column("GPU"),
-        Column("Last Seen"),
+        Column("Status"),
+        Column("Pool"),
+        Column("Created"),
+        Column("Last Keepalive"),
+        Column("Agent Version"),
+        Column("Free GPU Count"),
         box=box.SIMPLE,
     )
     for machine in machines:
         table.add_row(
-            machine.pool_name or "-",
             machine.id,
-            machine.status or "-",
             machine_cpu(machine),
             machine_memory(machine),
             machine_gpu(machine),
-            machine_last_seen(machine.last_keepalive),
+            machine_status(machine.status),
+            machine.pool_name or "-",
+            machine_created(machine.created),
+            machine_last_keepalive(machine.last_keepalive),
+            f"v{machine.agent_version}" if machine.agent_version else "-",
+            machine_free_gpu_count(machine),
         )
 
     table.add_section()
@@ -36,16 +58,13 @@ def machine_table(machines: Sequence[Machine]) -> Table:
 def machine_cpu(machine: Machine) -> str:
     if machine.cpu <= 0:
         return "-"
-    cores = machine.cpu / 1000
-    if cores.is_integer():
-        return str(int(cores))
-    return f"{cores:.2f}"
+    return f"{machine.cpu:,}m"
 
 
 def machine_memory(machine: Machine) -> str:
     if machine.memory <= 0:
         return "-"
-    return format_memory(machine.memory)
+    return terminal.humanize_memory(machine.memory * 1024 * 1024)
 
 
 def format_cpu(millicores: int) -> str:
@@ -69,23 +88,48 @@ def machine_gpu(machine: Machine) -> str:
     return f"{machine.gpu} x {machine.gpu_count}"
 
 
-def machine_last_seen(value: str) -> str:
+def machine_free_gpu_count(machine: Machine) -> str:
+    metrics = getattr(machine, "machine_metrics", None)
+    if metrics is None:
+        return "-"
+    return str(metrics.free_gpu_count)
+
+
+def machine_status(status: str) -> str:
+    styles = {
+        "available": "green",
+        "ready": "green",
+        "pending": "yellow",
+        "registered": "yellow",
+        "disabled": "red",
+        "failed": "red",
+        "preflight_failed": "red",
+        "disconnected": "yellow",
+    }
+    normalized = (status or "").lower()
+    style = styles.get(normalized)
+    if not status or not style:
+        return status or "-"
+    return f"[{style}]{status}[/{style}]"
+
+
+def machine_created(value: str) -> str:
+    created = machine_datetime(value)
+    return terminal.humanize_date(created) if created else "-"
+
+
+def machine_last_keepalive(value: str) -> str:
+    last_seen = machine_datetime(value)
+    return terminal.humanize_date(last_seen) if last_seen else "Never"
+
+
+def machine_datetime(value: str) -> Optional[datetime]:
     if not value:
-        return "Never"
+        return None
     try:
-        last_seen = datetime.fromtimestamp(int(value), tz=timezone.utc)
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
     except ValueError:
-        last_seen = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return format_age(last_seen)
-
-
-def format_age(value: datetime) -> str:
-    diff = datetime.now(timezone.utc) - value
-    if diff.days > 0:
-        return f"{diff.days}d ago"
-    seconds = max(0, int(diff.total_seconds()))
-    if seconds >= 3600:
-        return f"{seconds // 3600}h ago"
-    if seconds >= 60:
-        return f"{seconds // 60}m ago"
-    return "just now"
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
