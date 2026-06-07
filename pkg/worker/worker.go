@@ -593,6 +593,12 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 		go s.cancelBuildIfAlreadyStopping(ctx, cancel, containerId)
 	}
 
+	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to hydrate runtime credentials")
+		s.failContainerRequest(containerId, request, err)
+		return
+	}
+
 	run := func() error {
 		if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
 			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")

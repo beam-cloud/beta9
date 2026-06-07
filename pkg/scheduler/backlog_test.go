@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -94,4 +95,62 @@ func TestRequestBacklogDelayedRequestsOnlyPopWhenReady(t *testing.T) {
 	poppedReq, err := rb.Pop()
 	assert.NoError(t, err)
 	assert.Equal(t, request.ContainerId, poppedReq.ContainerId)
+}
+
+func TestSchedulerPushBacklogSanitizesPrivatePoolRequests(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.NoError(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.NoError(t, err)
+
+	manager := NewWorkerPoolManager(false)
+	manager.SetPool("private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+
+	storageID := uint(1)
+	storageSecret := "storage-secret"
+	signingKey := "workspace-signing-key"
+	scheduler := &Scheduler{
+		requestBacklog:    NewRequestBacklogForTest(redisClient),
+		workerPoolManager: manager,
+	}
+	stubConfig, err := json.Marshal(types.StubConfigV1{
+		Secrets: []types.Secret{{Name: "SECRET"}},
+	})
+	assert.NoError(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId:  "container-1",
+		PoolSelector: "private-pool",
+		Env:          []string{"BETA9_TOKEN=user-token", "SECRET=value", "SAFE=value"},
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Config: string(stubConfig)},
+		},
+		Workspace: types.Workspace{
+			SigningKey: &signingKey,
+			Storage: &types.WorkspaceStorage{
+				Id:        &storageID,
+				SecretKey: &storageSecret,
+			},
+		},
+		Mounts: []types.Mount{{
+			MountPointConfig: &types.MountPointConfig{
+				AccessKey: "mount-access",
+				SecretKey: "mount-secret",
+			},
+		}},
+	}
+
+	assert.NoError(t, scheduler.pushBacklog(request, 0))
+
+	poppedReq, err := scheduler.requestBacklog.Pop()
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"SAFE=value"}, poppedReq.Env)
+	assert.Nil(t, poppedReq.Workspace.SigningKey)
+	assert.NotNil(t, poppedReq.Workspace.Storage)
+	assert.Nil(t, poppedReq.Workspace.Storage.SecretKey)
+	assert.Empty(t, poppedReq.Mounts[0].MountPointConfig.AccessKey)
+	assert.Empty(t, poppedReq.Mounts[0].MountPointConfig.SecretKey)
 }

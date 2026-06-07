@@ -95,6 +95,22 @@ func (w *Workspace) StorageAvailable() bool {
 	return w.Storage != nil && w.Storage.Id != nil && *w.Storage.Id > 0
 }
 
+func (w Workspace) WithoutSigningKey() Workspace {
+	w.SigningKey = nil
+	return w
+}
+
+func (w Workspace) WithoutPrivateCredentials() Workspace {
+	w.SigningKey = nil
+	if w.Storage != nil {
+		storage := *w.Storage
+		storage.AccessKey = nil
+		storage.SecretKey = nil
+		w.Storage = &storage
+	}
+	return w
+}
+
 func (w *Workspace) ToProto() *pb.Workspace {
 	concurrencyLimit := &pb.ConcurrencyLimit{}
 	if w.ConcurrencyLimit != nil {
@@ -173,17 +189,34 @@ func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
 }
 
 func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
-	return &pb.WorkspaceStorage{
-		Id:          uint32(*w.Id),
-		ExternalId:  *w.ExternalId,
-		BucketName:  *w.BucketName,
-		AccessKey:   *w.AccessKey,
-		SecretKey:   *w.SecretKey,
-		Region:      *w.Region,
-		EndpointUrl: *w.EndpointUrl,
-		CreatedAt:   timestamppb.New(*w.CreatedAt),
-		UpdatedAt:   timestamppb.New(*w.UpdatedAt),
+	createdAt := timestamppb.New(time.Time{})
+	if w.CreatedAt != nil {
+		createdAt = timestamppb.New(*w.CreatedAt)
 	}
+
+	updatedAt := timestamppb.New(time.Time{})
+	if w.UpdatedAt != nil {
+		updatedAt = timestamppb.New(*w.UpdatedAt)
+	}
+
+	return &pb.WorkspaceStorage{
+		Id:          uint32(getUintOrDefault(w.Id)),
+		ExternalId:  getStringOrDefault(w.ExternalId),
+		BucketName:  getStringOrDefault(w.BucketName),
+		AccessKey:   getStringOrDefault(w.AccessKey),
+		SecretKey:   getStringOrDefault(w.SecretKey),
+		Region:      getStringOrDefault(w.Region),
+		EndpointUrl: getStringOrDefault(w.EndpointUrl),
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+	}
+}
+
+func getUintOrDefault(value *uint) uint {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 const (

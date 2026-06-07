@@ -1,0 +1,238 @@
+package repository_services
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"path"
+
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+)
+
+func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*pb.GetContainerRuntimeCredentialsResponse, error) {
+	workspace, err := s.authorizeRuntimeCredentialRequest(ctx, req)
+	if err != nil {
+		return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	resp := &pb.GetContainerRuntimeCredentialsResponse{Ok: true}
+
+	if req.RuntimeToken || len(req.SecretNames) > 0 {
+		resp.Env, err = s.containerRuntimeEnv(ctx, workspace, req)
+		if err != nil {
+			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+	}
+
+	if req.WorkspaceStorage {
+		resp.WorkspaceStorage = s.workspaceStorageCredentials(ctx, req.WorkspaceId)
+	}
+
+	if len(req.MountCredentials) > 0 {
+		resp.MountCredentials, err = s.externalMountCredentials(ctx, workspace, req)
+		if err != nil {
+			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+	}
+
+	return resp, nil
+}
+
+func (s *WorkerRepositoryService) authorizeRuntimeCredentialRequest(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+	workspaceID, err := s.workerTokenWorkspaceID(ctx, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.containerRepo == nil {
+		return nil, fmt.Errorf("container repository is unavailable")
+	}
+	if s.backendRepo == nil {
+		return nil, fmt.Errorf("backend repository is unavailable")
+	}
+
+	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	if err != nil {
+		return nil, err
+	}
+	if state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
+		return nil, fmt.Errorf("container %q is not assigned to workspace/stub", req.ContainerId)
+	}
+
+	workspace, err := s.backendRepo.GetWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if workspace == nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
+		return nil, fmt.Errorf("workspace signing key is unavailable")
+	}
+	return workspace, nil
+}
+
+func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+		return 0, fmt.Errorf("worker token is required")
+	}
+	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
+		return 0, fmt.Errorf("worker token is not scoped to a workspace")
+	}
+	if workspaceID == "" || workspaceID != authInfo.Workspace.ExternalId {
+		return 0, fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
+	}
+	if authInfo.Workspace.Id > 0 {
+		return authInfo.Workspace.Id, nil
+	}
+	if authInfo.Token.WorkspaceId != nil && *authInfo.Token.WorkspaceId > 0 {
+		return *authInfo.Token.WorkspaceId, nil
+	}
+	if s.backendRepo == nil {
+		return 0, fmt.Errorf("backend repository is unavailable")
+	}
+
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return workspace.Id, nil
+}
+
+func (s *WorkerRepositoryService) containerRuntimeEnv(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]string, error) {
+	env := make([]string, 0, len(req.SecretNames)+1)
+	if len(req.SecretNames) > 0 {
+		secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, req.SecretNames)
+		if err != nil {
+			return nil, err
+		}
+		byName := make(map[string]types.Secret, len(secrets))
+		for _, secret := range secrets {
+			byName[secret.Name] = secret
+		}
+		seen := make(map[string]struct{}, len(req.SecretNames))
+		for _, name := range req.SecretNames {
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			secret, ok := byName[name]
+			if !ok {
+				return nil, fmt.Errorf("secret %q is unavailable", name)
+			}
+			env = append(env, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
+		}
+	}
+
+	if req.RuntimeToken {
+		token, err := s.runtimeToken(ctx, workspace.Id)
+		if err != nil {
+			return nil, err
+		}
+		env = append(env, fmt.Sprintf("BETA9_TOKEN=%s", token))
+	}
+	return env, nil
+}
+
+func (s *WorkerRepositoryService) runtimeToken(ctx context.Context, workspaceID uint) (string, error) {
+	tokens, err := s.backendRepo.ListTokens(ctx, workspaceID)
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	for _, token := range tokens {
+		if token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkspaceRestricted {
+			return token.Key, nil
+		}
+	}
+
+	token, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkspaceRestricted, true)
+	if err != nil {
+		return "", err
+	}
+	return token.Key, nil
+}
+
+func (s *WorkerRepositoryService) externalMountCredentials(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]*pb.RuntimeMountCredentials, error) {
+	stubConfig, err := s.stubConfig(ctx, req.StubId, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+
+	byKey := make(map[string]*types.MountPointConfig, len(stubConfig.Volumes)*2)
+	for _, volume := range stubConfig.Volumes {
+		if volume == nil || volume.Config == nil {
+			continue
+		}
+		config, err := decryptMountPointConfig(secretKey, volume.Config)
+		if err != nil {
+			return nil, err
+		}
+		for _, mountPath := range mountPathsForVolume(volume.MountPath) {
+			byKey[types.MountPointCredentialKey(mountPath, config.BucketName)] = config
+		}
+	}
+
+	out := make([]*pb.RuntimeMountCredentials, 0, len(req.MountCredentials))
+	for _, wanted := range req.MountCredentials {
+		if wanted == nil {
+			continue
+		}
+		config := byKey[types.MountPointCredentialKey(wanted.MountPath, wanted.BucketName)]
+		if config == nil {
+			return nil, fmt.Errorf("mount credentials are unavailable for %s", wanted.MountPath)
+		}
+		out = append(out, &pb.RuntimeMountCredentials{
+			MountPath: wanted.MountPath,
+			Config:    config.ToProto(),
+		})
+	}
+	return out, nil
+}
+
+func (s *WorkerRepositoryService) stubConfig(ctx context.Context, stubID, workspaceID string) (*types.StubConfigV1, error) {
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubID, types.QueryFilter{Field: "workspace_id", Value: workspaceID})
+	if err != nil {
+		return nil, err
+	}
+	return stub.UnmarshalConfig()
+}
+
+func decryptMountPointConfig(secretKey []byte, config *pb.MountPointConfig) (*types.MountPointConfig, error) {
+	accessKey, err := common.Decrypt(secretKey, config.AccessKey)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := common.Decrypt(secretKey, config.SecretKey)
+	if err != nil {
+		return nil, err
+	}
+	return &types.MountPointConfig{
+		BucketName:     config.BucketName,
+		AccessKey:      string(accessKey),
+		SecretKey:      string(secret),
+		EndpointURL:    config.EndpointUrl,
+		Region:         config.Region,
+		ReadOnly:       config.ReadOnly,
+		ForcePathStyle: config.ForcePathStyle,
+	}, nil
+}
+
+func mountPathsForVolume(volumePath string) []string {
+	paths := []string{path.Join(types.WorkerContainerVolumePath, volumePath)}
+	if path.IsAbs(volumePath) {
+		paths = append(paths, volumePath)
+	}
+	return paths
+}

@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
@@ -61,6 +63,10 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		}
 	}
 
+	if minimalConfigEnabled() {
+		return cm, nil
+	}
+
 	// Attempt to load configs from /etc/beta9.d/
 	for ext := range parserMap {
 		if matches, err := filepath.Glob(fmt.Sprintf("/etc/beta9.d/*%s", ext)); err == nil {
@@ -89,6 +95,15 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	}
 
 	return cm, nil
+}
+
+func minimalConfigEnabled() bool {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv(types.WorkerMinimalConfigEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Print returns a string representation of the current configuration state.

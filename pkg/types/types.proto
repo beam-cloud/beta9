@@ -98,6 +98,8 @@ message ContainerRequest {
   bool block_network = 28;
   repeated string allow_list = 29;
   bool docker_enabled = 30;
+  repeated string runtime_secret_names = 31;
+  bool runtime_token_required = 32;
 }
 
 message ContainerState {

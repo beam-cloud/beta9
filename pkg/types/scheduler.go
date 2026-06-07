@@ -13,6 +13,7 @@ import (
 const (
 	DefaultServeContainerTimeout = time.Minute * 10
 	DefaultCPUWorkerPoolName     = "default"
+	ContainerRuntimeTokenEnv     = "BETA9_TOKEN"
 )
 
 type WorkerStatus string
@@ -240,6 +241,8 @@ type ContainerRequest struct {
 	BlockNetwork             bool            `json:"block_network"`
 	AllowList                []string        `json:"allow_list"`
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker (gVisor only)
+	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
+	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
 }
 
 type ContainerNetworkPolicy string
@@ -336,6 +339,137 @@ func (c *ContainerRequest) NetworkRestricted() bool {
 	return c.NetworkPolicy() != ContainerNetworkPolicyOpen
 }
 
+func (c *ContainerRequest) Clone() *ContainerRequest {
+	if c == nil {
+		return nil
+	}
+
+	cloned := *c
+	cloned.EntryPoint = append([]string(nil), c.EntryPoint...)
+	cloned.Env = append([]string(nil), c.Env...)
+	cloned.GpuRequest = append([]string(nil), c.GpuRequest...)
+	cloned.Mounts = cloneMounts(c.Mounts)
+	cloned.Ports = append([]uint32(nil), c.Ports...)
+	cloned.AllowList = append([]string(nil), c.AllowList...)
+	cloned.BuildOptions.BuildSecrets = append([]string(nil), c.BuildOptions.BuildSecrets...)
+	cloned.RuntimeSecretNames = append([]string(nil), c.RuntimeSecretNames...)
+	return &cloned
+}
+
+func (c *ContainerRequest) PrivateWorkerRequest() *ContainerRequest {
+	request := c.Clone()
+	if request == nil {
+		return nil
+	}
+
+	secretNames := c.runtimeSecretNames()
+	tokenRequired := c.runtimeTokenRequired()
+
+	request.RuntimeSecretNames = secretNames
+	request.RuntimeTokenRequired = tokenRequired
+	request.Workspace = request.Workspace.WithoutPrivateCredentials()
+	request.Env = c.privateWorkerEnv(secretNames, tokenRequired)
+	request.Mounts = request.privateWorkerMounts()
+	request.ImageCredentials = ""
+	request.BuildRegistryCredentials = ""
+	request.BuildOptions.SourceImageCreds = ""
+	request.BuildOptions.BuildSecrets = nil
+	return request
+}
+
+func (c *ContainerRequest) privateWorkerEnv(secretNames []string, tokenRequired bool) []string {
+	if c == nil {
+		return nil
+	}
+
+	secretNameSet := stringSet(secretNames)
+	env := make([]string, 0, len(c.Env))
+	for _, item := range c.Env {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			env = append(env, item)
+			continue
+		}
+		if tokenRequired && key == ContainerRuntimeTokenEnv {
+			continue
+		}
+		if _, ok := secretNameSet[key]; ok {
+			continue
+		}
+		env = append(env, item)
+	}
+	return env
+}
+
+func (c *ContainerRequest) runtimeSecretNames() []string {
+	if len(c.RuntimeSecretNames) > 0 {
+		return uniqueStrings(c.RuntimeSecretNames)
+	}
+
+	names := make([]string, 0)
+	if c.Stub.Config != "" {
+		if stubConfig, err := c.Stub.UnmarshalConfig(); err == nil && stubConfig != nil {
+			for _, secret := range stubConfig.Secrets {
+				if secret.Name != "" {
+					names = append(names, secret.Name)
+				}
+			}
+		}
+	}
+	return uniqueStrings(names)
+}
+
+func (c *ContainerRequest) runtimeTokenRequired() bool {
+	if c.RuntimeTokenRequired {
+		return true
+	}
+	for _, item := range c.Env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && key == ContainerRuntimeTokenEnv {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	return set
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (c *ContainerRequest) privateWorkerMounts() []Mount {
+	mounts := cloneMounts(c.Mounts)
+	for i := range mounts {
+		if mounts[i].MountPointConfig == nil {
+			continue
+		}
+		config := mounts[i].MountPointConfig.WithoutCredentials()
+		mounts[i].MountPointConfig = &config
+	}
+	return mounts
+}
+
 func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 	mounts := make([]*pb.Mount, len(c.Mounts))
 	for i, m := range c.Mounts {
@@ -391,6 +525,8 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		BlockNetwork:             c.BlockNetwork,
 		AllowList:                c.AllowList,
 		DockerEnabled:            c.DockerEnabled,
+		RuntimeSecretNames:       c.RuntimeSecretNames,
+		RuntimeTokenRequired:     c.RuntimeTokenRequired,
 	}
 }
 
@@ -445,6 +581,8 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		BlockNetwork:             in.BlockNetwork,
 		AllowList:                in.AllowList,
 		DockerEnabled:            in.DockerEnabled,
+		RuntimeSecretNames:       in.RuntimeSecretNames,
+		RuntimeTokenRequired:     in.RuntimeTokenRequired,
 	}
 }
 
@@ -460,6 +598,18 @@ func getStringOrDefault(s *string) string {
 		return *s
 	}
 	return ""
+}
+
+func cloneMounts(mounts []Mount) []Mount {
+	out := append([]Mount(nil), mounts...)
+	for i := range out {
+		if out[i].MountPointConfig == nil {
+			continue
+		}
+		config := *out[i].MountPointConfig
+		out[i].MountPointConfig = &config
+	}
+	return out
 }
 
 const ContainerExitCodeTtlS int = 300

@@ -144,6 +144,8 @@ type ImageClient struct {
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
 	contentReporter    *cacheContentReporter
+	originCredsMu      sync.Mutex
+	originCredsCache   map[string]*originCredentials
 	// archiveContentMetadata resolves the cached image archive object (hash/size)
 	// for a cachefs path. It is a field so tests can inject a fake; in production
 	// it delegates to the cache client.
@@ -193,6 +195,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		clipPIDCache:       make(map[int]clipPIDReference),
 		clipReadEvents:     make(chan clipCommon.ReadTraceEvent, clipReadEventQueueSize),
 		clipAggregates:     make(map[string]*clipReadAggregate),
+		originCredsCache:   make(map[string]*originCredentials),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
@@ -835,7 +838,7 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return nil
 	}
 
-	registry := reg.ParseRegistry(sourceRef)
+	registry := registryFromImageRef(sourceRef)
 	if registry == "" {
 		return nil
 	}
@@ -843,6 +846,10 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	// Priority 1: Runtime credentials (from secret)
 	if request.ImageCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
+	}
+
+	if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
+		return provider
 	}
 
 	// Priority 2: Build registry credentials (for images we built and pushed)
@@ -1022,26 +1029,30 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	tempPath := archivePath + ".tmp"
 	defer os.Remove(tempPath)
 
-	if err = c.registry.Pull(ctx, tempPath, imageId); err != nil {
-		if gatewayErr := c.pullImageArchiveFromGateway(ctx, tempPath, imageId); gatewayErr == nil {
-			err = nil
-		} else if agentGatewayImageArchiveAvailable() {
-			log.Warn().Err(gatewayErr).Str("image_id", imageId).Msg("failed to pull image archive from gateway")
-		}
-		if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
-			if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
-				_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
-				if err2 := c.registry.Pull(ctx, tempPath, imageId); err2 == nil {
-					err = nil
-				} else {
-					err = err2
-				}
+	err = c.registry.Pull(ctx, tempPath, imageId)
+	if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+		if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
+			_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
+			if err2 := c.registry.Pull(ctx, tempPath, imageId); err2 == nil {
+				err = nil
+			} else {
+				err = err2
 			}
 		}
-		if err != nil {
-			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
-			return nil, err
+	}
+
+	if err != nil && agentGatewayImageArchiveAvailable() {
+		if gatewayErr := c.pullImageArchiveFromGateway(ctx, tempPath, imageId); gatewayErr == nil {
+			err = nil
+		} else {
+			log.Error().Err(gatewayErr).Str("image_id", imageId).Msg("failed to pull image metadata archive from gateway")
+			return nil, gatewayErr
 		}
+	}
+
+	if err != nil {
+		log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
+		return nil, err
 	}
 
 	if err := os.Rename(tempPath, archivePath); err != nil {
@@ -1052,13 +1063,34 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 }
 
 func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath, imageId string) error {
+	var lastErr error
+	for _, extension := range gatewayImageArchiveExtensions(c.registry.ImageFileExtension) {
+		err := c.pullGatewayImageArchive(ctx, localPath, imageId, extension)
+		if err == nil {
+			return nil
+		}
+
+		var statusErr *gatewayImageArchiveStatusError
+		if errors.As(err, &statusErr) && statusErr.statusCode == http.StatusNotFound {
+			lastErr = err
+			continue
+		}
+		return err
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("gateway image archive proxy is not configured")
+}
+
+func (c *ImageClient) pullGatewayImageArchive(ctx context.Context, localPath, imageId, extension string) error {
 	gatewayURL := strings.TrimRight(os.Getenv(types.AgentGatewayURLEnv), "/")
 	workerToken := strings.TrimSpace(os.Getenv(types.WorkerTokenEnv))
 	if gatewayURL == "" || workerToken == "" {
 		return fmt.Errorf("gateway image archive proxy is not configured")
 	}
 
-	file := fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
+	file := fmt.Sprintf("%s.%s", imageId, extension)
 	imageURL := fmt.Sprintf("%s/api/v1/agent/images/%s/%s", gatewayURL, url.PathEscape(imageId), url.PathEscape(file))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
@@ -1072,7 +1104,7 @@ func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gateway image archive request failed: %s", resp.Status)
+		return &gatewayImageArchiveStatusError{statusCode: resp.StatusCode, status: resp.Status}
 	}
 
 	if err := ensureImageDirectory(filepath.Dir(localPath), 0755); err != nil {
@@ -1089,6 +1121,35 @@ func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath
 
 	log.Info().Str("image_id", imageId).Str("path", localPath).Msg("pulled image archive from gateway")
 	return nil
+}
+
+type gatewayImageArchiveStatusError struct {
+	statusCode int
+	status     string
+}
+
+func (e *gatewayImageArchiveStatusError) Error() string {
+	return fmt.Sprintf("gateway image archive request failed: %s", e.status)
+}
+
+func gatewayImageArchiveExtensions(preferred string) []string {
+	extensions := []string{}
+	for _, extension := range []string{preferred, registry.RemoteImageFileExtension, registry.LocalImageFileExtension} {
+		if extension == "" {
+			continue
+		}
+		seen := false
+		for _, existing := range extensions {
+			if extension == existing {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			extensions = append(extensions, extension)
+		}
+	}
+	return extensions
 }
 
 func agentGatewayImageArchiveAvailable() bool {
@@ -1751,7 +1812,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		pushArgs = append(pushArgs, "--retry", "5")
 		pushArgs = append(pushArgs, "--retry-delay", "1s")
 
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
+		buildRegistryCredentials := request.BuildRegistryCredentials
+		if buildRegistryCredentials == "" {
+			buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
+		}
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, buildRegistryCredentials); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
 

@@ -356,6 +356,16 @@ type MountPointConfig struct {
 	ForcePathStyle bool   `json:"force_path_style"`
 }
 
+func (m MountPointConfig) WithoutCredentials() MountPointConfig {
+	m.AccessKey = ""
+	m.SecretKey = ""
+	return m
+}
+
+func MountPointCredentialKey(mountPath, bucketName string) string {
+	return mountPath + "\x00" + bucketName
+}
+
 func (m *MountPointConfig) ToProto() *pb.MountPointConfig {
 	return &pb.MountPointConfig{
 		BucketName:     m.BucketName,

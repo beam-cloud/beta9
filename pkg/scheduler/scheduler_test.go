@@ -79,6 +79,17 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	}, nil
 }
 
+func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
+	manager := NewWorkerPoolManager(false)
+	manager.SetPool("private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	manager.SetPool("local-pool", types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
+	scheduler := &Scheduler{workerPoolManager: manager}
+
+	assert.True(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "private-pool"}))
+	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "local-pool"}))
+	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "missing-pool"}))
+}
+
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string

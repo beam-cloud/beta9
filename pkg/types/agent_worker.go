@@ -111,6 +111,7 @@ const (
 	WorkerIptablesModeEnv     = "WORKER_IPTABLES_MODE"
 	WorkerStartConcurrencyEnv = "WORKER_CONTAINER_START_CONCURRENCY"
 	WorkerNetworkSlotsEnv     = "CONTAINER_NETWORK_SLOT_POOL_SIZE"
+	WorkerMinimalConfigEnv    = "BEAM_WORKER_MINIMAL_CONFIG"
 
 	ContainerGatewayGRPCHostEnv = "BETA9_GATEWAY_HOST"
 	ContainerGatewayGRPCPortEnv = "BETA9_GATEWAY_PORT"

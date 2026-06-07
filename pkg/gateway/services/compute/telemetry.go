@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -79,7 +80,7 @@ func (s *Service) recordAgentLogs(agentState *model.AgentTokenState, logs []*pb.
 			WorkerID:    record.WorkerId,
 			Level:       firstNonEmpty(record.Level, "info"),
 			Stream:      record.Stream,
-			Line:        record.Line,
+			Line:        common.RedactSecrets(record.Line),
 		})
 	}
 }
