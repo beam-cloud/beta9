@@ -119,7 +119,7 @@ func (m *workerRuntimeManager) ensureSlot(ctx context.Context, slot *pb.AgentWor
 
 	slotCtx, cancel := context.WithCancel(ctx)
 	m.supervisors[slot.WorkerId] = &workerRuntimeSupervisor{slot: cloneAgentWorkerSlot(slot), cancel: cancel}
-	statusf(m.stdout, "Starting worker %q", slot.WorkerId)
+	statusf(m.stdout, "Preparing worker %q", slot.WorkerId)
 	go m.superviseSlot(slotCtx, slot)
 }
 
@@ -211,6 +211,7 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	)
 
 	done := make(chan error, 1)
+	statusf(r.stdout, "Starting worker %q", slot.WorkerId)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -236,10 +237,12 @@ func (r *workerContainerRuntime) pullImage(ctx context.Context, image string) (s
 	}
 	r.imageMu.Unlock()
 
-	imageID, err := pullDockerImage(ctx, image)
+	statusf(r.stdout, "Pulling worker image %q", image)
+	imageID, err := pullDockerImage(ctx, image, r.stdout)
 	if err != nil {
 		return "", err
 	}
+	statusf(r.stdout, "Worker image ready")
 
 	r.imageMu.Lock()
 	r.images[key] = imageID

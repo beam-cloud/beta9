@@ -22,10 +22,18 @@ type workerRuntimeCredentialsBackendRepo struct {
 	tokens                     []types.Token
 	secrets                    []types.Secret
 	workspaceByExternalIDCalls int
+	workspaceWithSigningCalls  int
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
 	r.workspaceByExternalIDCalls++
+	workspace := *r.workspace
+	workspace.ExternalId = externalID
+	return workspace, nil
+}
+
+func (r *workerRuntimeCredentialsBackendRepo) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalID string) (types.Workspace, error) {
+	r.workspaceWithSigningCalls++
 	workspace := *r.workspace
 	workspace.ExternalId = externalID
 	return workspace, nil
@@ -186,6 +194,113 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Zero(t, backendRepo.workspaceByExternalIDCalls)
+}
+
+func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRuntimeToken(t *testing.T) {
+	storageID := uint(1)
+	storageBucket := "workspace-bucket"
+	storageAccess := "storage-access"
+	storageSecret := "storage-secret"
+	storageEndpoint := "https://storage.example.com"
+	storageRegion := "us-east-1"
+	backendRepo := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{
+			Id:         7,
+			ExternalId: "workspace-id",
+			Name:       "workspace",
+			Storage: &types.WorkspaceStorage{
+				Id:          &storageID,
+				BucketName:  &storageBucket,
+				AccessKey:   &storageAccess,
+				SecretKey:   &storageSecret,
+				EndpointUrl: &storageEndpoint,
+				Region:      &storageRegion,
+			},
+		},
+		tokens: []types.Token{{
+			Key:       "restricted-runtime-token",
+			Active:    true,
+			TokenType: types.TokenTypeWorkspaceRestricted,
+		}},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: backendRepo,
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
+		},
+	}
+
+	resp, err := service.GetContainerRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{
+			WorkspaceId:      "workspace-id",
+			StubId:           "stub-id",
+			ContainerId:      "container-id",
+			RuntimeToken:     true,
+			WorkspaceStorage: true,
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token"}, resp.Env)
+	require.NotNil(t, resp.WorkspaceStorage)
+	require.Equal(t, "storage-access", resp.WorkspaceStorage.AccessKey)
+	require.Equal(t, "storage-secret", resp.WorkspaceStorage.SecretKey)
+	require.Zero(t, backendRepo.workspaceWithSigningCalls)
+}
+
+func TestGetContainerRuntimeCredentialsRequiresSigningKeyForSecrets(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
+			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+		},
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
+		},
+	}
+
+	resp, err := service.GetContainerRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ContainerId: "container-id",
+			SecretNames: []string{"SECRET"},
+		},
+	)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "workspace signing key is unavailable")
+}
+
+func TestGetContainerRuntimeCredentialsRequiresSigningKeyForMountCredentials(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
+			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+		},
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
+		},
+	}
+
+	resp, err := service.GetContainerRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ContainerId: "container-id",
+			MountCredentials: []*pb.RuntimeMountCredentialRequest{{
+				MountPath:  "/volumes/data",
+				BucketName: "mount-bucket",
+			}},
+		},
+	)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "workspace signing key is unavailable")
 }
 
 func TestGetContainerRuntimeCredentialsRejectsMismatchedContainerState(t *testing.T) {
