@@ -766,6 +766,50 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := cacheFS["mountPoint"]; got != types.AgentCacheFSMountPath {
 		t.Fatalf("cachefs mount point = %v, want %q", got, types.AgentCacheFSMountPath)
 	}
+	if got := cacheFS["enabled"]; got != true {
+		t.Fatalf("cachefs enabled = %v, want true", got)
+	}
+}
+
+func TestWriteWorkerConfigDisablesCacheFSInAgentContainer(t *testing.T) {
+	t.Setenv(types.AgentInContainerEnv, "1")
+	path := filepath.Join(t.TempDir(), "config.json")
+	slot := &pb.AgentWorkerSlot{
+		PoolName:  "private-dev",
+		MachineId: "machine-a",
+	}
+
+	if err := writeWorkerConfig(path, bootstrapConfig{}, slot); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+
+	storageConfig := config["storage"].(map[string]any)
+	workspaceStorage := storageConfig["workspaceStorage"].(map[string]any)
+	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
+		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
+	}
+	workerConfig := config["worker"].(map[string]any)
+	pools := workerConfig["pools"].(map[string]any)
+	pool := pools["private-dev"].(map[string]any)
+	if got := pool["storageMode"]; got != types.StorageModeGeese {
+		t.Fatalf("pool storage mode = %v, want %q", got, types.StorageModeGeese)
+	}
+
+	cacheConfig := config["cache"].(map[string]any)
+	cacheClient := cacheConfig["client"].(map[string]any)
+	cacheFS := cacheClient["cachefs"].(map[string]any)
+	if got := cacheFS["enabled"]; got != false {
+		t.Fatalf("cachefs enabled = %v, want false", got)
+	}
 }
 
 func containsArg(args []string, prefix, value string) bool {

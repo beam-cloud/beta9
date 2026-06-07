@@ -138,6 +138,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	workspaceStorageMode := firstNonEmpty(os.Getenv(types.AgentStorageModeEnv), types.StorageModeGeese)
 	cache := agentDiskCacheConfig()
 	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
+	cacheFSEnabled := !envBool(types.AgentInContainerEnv)
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
@@ -212,7 +213,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			},
 			Client: &agentConfigCacheClient{
 				CacheFS: agentConfigCacheFS{
-					Enabled:    true,
+					Enabled:    cacheFSEnabled,
 					MountPoint: types.AgentCacheFSMountPath,
 				},
 			},

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 
 type StorageLayer interface {
 }
+
+const readAheadUpdateTimeout = 2 * time.Second
 
 // Generates a directory ID based on parent ID and name.
 func GenerateFsID(name string) string {
@@ -160,16 +163,39 @@ func updateReadAheadKB(mountPoint string, valueKB int) error {
 		return fmt.Errorf("mount point %s not found", mountPoint)
 	}
 
-	// Construct path to read_ahead_kb
 	readAheadPath := fmt.Sprintf("/sys/class/bdi/%s/read_ahead_kb", deviceID)
+	return writeReadAheadKB(readAheadPath, valueKB, readAheadUpdateTimeout)
+}
 
-	// Update read_ahead_kb
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("echo %d > %s", valueKB, readAheadPath))
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to update read_ahead_kb: %w read_ahead_path: %s", err, readAheadPath)
+func writeReadAheadKB(path string, valueKB int, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = readAheadUpdateTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.Command("sh", "-c", "cat > \"$1\"", "sh", path)
+	cmd.Stdin = strings.NewReader(strconv.Itoa(valueKB))
+	done := make(chan error, 1)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to update read_ahead_kb: %w read_ahead_path: %s", err, path)
 	}
 
-	return nil
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("failed to update read_ahead_kb: %w read_ahead_path: %s", err, path)
+		}
+		return nil
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		go func() { <-done }()
+		return fmt.Errorf("timed out updating read_ahead_kb read_ahead_path: %s", path)
+	}
 }
 
 // NewFileSystem initializes a new CacheFS with root metadata.
