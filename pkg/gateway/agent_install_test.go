@@ -41,6 +41,20 @@ func TestAgentInstallScriptDownloadsAgentFromGateway(t *testing.T) {
 	}
 }
 
+func TestAgentInstallScriptUsesInvokingUserHomeForMacOSDocker(t *testing.T) {
+	for _, want := range []string{
+		"HOST_HOME=\"$(agent_host_home)\"",
+		"${HOST_HOME}/.beam/bin/beam-agent-linux-${ARCH}",
+		"${HOST_HOME}/.beam/agent",
+		"${SUDO_USER:-}",
+		"${BEAM_AGENT_HOME:-}",
+	} {
+		if !strings.Contains(agentInstallScript, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
 func TestAgentBinaryHandlerServesConfiguredBinary(t *testing.T) {
 	path := writeAgentBinary(t)
 	t.Setenv(types.AgentBinaryPathEnv, path)
