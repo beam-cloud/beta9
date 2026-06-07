@@ -123,7 +123,7 @@ def _get_pool_renderable(
         return Text(
             json.dumps(
                 {
-                    "private_pools": [pool.to_dict(casing=Casing.SNAKE) for pool in private_pools],
+                    "private_pools": [_private_pool_dict(pool) for pool in private_pools],
                     "control_plane_pools": [
                         pool.to_dict(casing=Casing.SNAKE) for pool in control_plane_pools
                     ],
@@ -135,6 +135,15 @@ def _get_pool_renderable(
     return _pool_table(private_pools, control_plane_pools)
 
 
+def _private_pool_dict(pool: PrivatePool) -> Dict[str, Any]:
+    data = pool.to_dict(casing=Casing.SNAKE)  # type: ignore
+    data.pop("source", None)
+    config = data.get("config")
+    if isinstance(config, dict):
+        config.pop("fallback", None)
+    return data
+
+
 def _pool_table(
     private_pools: List[PrivatePool], control_plane_pools: List[ControlPlanePool]
 ) -> Table:
@@ -144,7 +153,6 @@ def _pool_table(
         Column("Status"),
         Column("Machines", justify="right"),
         Column("Compute"),
-        Column("Source"),
         box=box.SIMPLE,
     )
     for pool in private_pools:
@@ -154,7 +162,6 @@ def _pool_table(
             _pool_status(pool.status),
             f"{pool.ready_machine_count}/{pool.machine_count}",
             _private_pool_compute(pool),
-            _private_pool_source(pool),
         )
     if private_pools and control_plane_pools:
         table.add_section()
@@ -165,7 +172,6 @@ def _pool_table(
             _pool_status(pool.state.status or ("active" if pool.active else "inactive")),
             f"{pool.state.ready_machines}/{pool.state.registered_machines}",
             _control_plane_pool_details(pool),
-            "Beam",
         )
     table.add_section()
     table.add_row(f"[bold]{len(private_pools) + len(control_plane_pools)} items")
@@ -193,24 +199,6 @@ def _private_pool_compute(pool: PrivatePool) -> str:
     if pool.reserved_gpus > 0:
         return f"{pool.reserved_gpus}x GPU"
     return "CPU"
-
-
-def _private_pool_source(pool: PrivatePool) -> str:
-    source = (pool.source or "").lower()
-    if source in ("attached", "manual"):
-        return "Attached"
-    if source in ("provider", "launch", "launched"):
-        return _provider_spend(pool)
-    if source == "":
-        return "-"
-    return source.title()
-
-
-def _provider_spend(pool: PrivatePool) -> str:
-    spend = pool.committed_spend_micros / 1_000_000
-    if spend <= 0:
-        return "Launched"
-    return f"Launched (${spend:.2f}/hr)"
 
 
 def _control_plane_pool_details(pool: ControlPlanePool) -> str:

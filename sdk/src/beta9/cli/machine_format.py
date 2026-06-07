@@ -11,7 +11,8 @@ def machine_table(machines: Sequence[Machine]) -> Table:
         Column("Pool"),
         Column("Machine"),
         Column("Status"),
-        Column("Resources"),
+        Column("CPU", justify="right"),
+        Column("Memory", justify="right"),
         Column("GPU"),
         Column("Last Seen"),
         box=box.SIMPLE,
@@ -21,7 +22,8 @@ def machine_table(machines: Sequence[Machine]) -> Table:
             machine.pool_name or "-",
             machine.id,
             machine.status or "-",
-            machine_resources(machine),
+            machine_cpu(machine),
+            machine_memory(machine),
             machine_gpu(machine),
             machine_last_seen(machine.last_keepalive),
         )
@@ -31,13 +33,19 @@ def machine_table(machines: Sequence[Machine]) -> Table:
     return table
 
 
-def machine_resources(machine: Machine) -> str:
-    parts = []
-    if machine.cpu > 0:
-        parts.append(format_cpu(machine.cpu))
-    if machine.memory > 0:
-        parts.append(format_memory(machine.memory))
-    return "/".join(parts) if parts else "-"
+def machine_cpu(machine: Machine) -> str:
+    if machine.cpu <= 0:
+        return "-"
+    cores = machine.cpu / 1000
+    if cores.is_integer():
+        return str(int(cores))
+    return f"{cores:.2f}"
+
+
+def machine_memory(machine: Machine) -> str:
+    if machine.memory <= 0:
+        return "-"
+    return format_memory(machine.memory)
 
 
 def format_cpu(millicores: int) -> str:
