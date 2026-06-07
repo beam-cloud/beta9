@@ -329,25 +329,11 @@ func (g *LogGroup) privateMachineForWorkspace(ctx echo.Context, workspaceID, mac
 		return nil, HTTPInternalServerError("Compute repository is unavailable")
 	}
 
-	pools, err := g.computeRepo.ListPoolStates(ctx.Request().Context(), workspaceID, 0)
+	machine, err := g.computeRepo.GetAgentMachineStateForWorkspace(ctx.Request().Context(), workspaceID, machineID)
 	if err != nil {
-		return nil, HTTPInternalServerError("Failed to retrieve private pools")
+		return nil, HTTPInternalServerError("Failed to retrieve private machine")
 	}
-	for _, pool := range pools {
-		if pool == nil || pool.Name == "" {
-			continue
-		}
-		machines, err := g.computeRepo.ListAgentTokenStates(ctx.Request().Context(), workspaceID, pool.Name)
-		if err != nil {
-			return nil, HTTPInternalServerError("Failed to retrieve private machines")
-		}
-		for _, machine := range machines {
-			if machine != nil && machine.MachineID == machineID {
-				return machine, nil
-			}
-		}
-	}
-	return nil, nil
+	return machine, nil
 }
 
 func logQueryLimit(ctx echo.Context) (uint64, error) {

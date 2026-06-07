@@ -51,6 +51,40 @@ type agentMachineWorker struct {
 	buildVersion         string
 }
 
+type AgentPoolCapacityError struct {
+	WorkspaceID         string
+	PoolName            string
+	CPU                 int64
+	Memory              int64
+	GPUType             string
+	GPUCount            uint32
+	Machines            int
+	SchedulableMachines int
+	MaxAvailableCPU     int64
+	MaxAvailableMemory  int64
+	MaxAvailableGPU     uint32
+}
+
+func (e *AgentPoolCapacityError) Error() string {
+	if e == nil {
+		return "agent pool capacity unavailable"
+	}
+	return fmt.Sprintf(
+		"no joined agent machine in workspace %q pool %q has enough capacity (requested cpu=%d memory=%d gpu=%q gpu_count=%d, schedulable_machines=%d/%d, max_available_cpu=%d max_available_memory=%d max_available_gpu=%d)",
+		e.WorkspaceID,
+		e.PoolName,
+		e.CPU,
+		e.Memory,
+		e.GPUType,
+		e.GPUCount,
+		e.SchedulableMachines,
+		e.Machines,
+		e.MaxAvailableCPU,
+		e.MaxAvailableMemory,
+		e.MaxAvailableGPU,
+	)
+}
+
 func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (WorkerPoolController, error) {
 	if opts.WorkspaceID == "" {
 		return nil, errors.New("workspace id is required")
@@ -140,14 +174,12 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 }
 
 func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
-	machine, err := wpc.findMachine(func(machine *compute.AgentTokenState) bool {
-		return wpc.machineCanFit(machine, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
-	})
+	machine, err := wpc.findMachineForRequest(cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	if err != nil {
 		return nil, err
 	}
 	if machine == nil {
-		return nil, fmt.Errorf("no joined agent machine in pool %q has enough capacity", wpc.name)
+		return nil, wpc.capacityError(cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	}
 	return wpc.ensureMachineWorker(machine)
 }
@@ -211,6 +243,50 @@ func (wpc *AgentWorkerPoolController) findMachine(match func(*compute.AgentToken
 	return nil, nil
 }
 
+func (wpc *AgentWorkerPoolController) findMachineForRequest(cpu int64, memory int64, gpuType string, gpuCount uint32) (*compute.AgentTokenState, error) {
+	return wpc.findMachine(func(machine *compute.AgentTokenState) bool {
+		return wpc.machineCanFit(machine, cpu, memory, gpuType, gpuCount)
+	})
+}
+
+func (wpc *AgentWorkerPoolController) capacityError(cpu int64, memory int64, gpuType string, gpuCount uint32) error {
+	err := &AgentPoolCapacityError{
+		WorkspaceID: wpc.workspaceID,
+		PoolName:    wpc.poolName(),
+		CPU:         cpu,
+		Memory:      memory,
+		GPUType:     gpuType,
+		GPUCount:    gpuCount,
+	}
+
+	machines, listErr := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	if listErr != nil {
+		return listErr
+	}
+	err.Machines = len(machines)
+	for _, machine := range machines {
+		if !wpc.machineSchedulable(machine) {
+			continue
+		}
+		err.SchedulableMachines++
+		worker, workerErr := wpc.machineWorker(machine)
+		if workerErr != nil {
+			continue
+		}
+		availableCPU, availableMemory, availableGPU := wpc.machineAvailableCapacity(machine, worker)
+		if availableCPU > err.MaxAvailableCPU {
+			err.MaxAvailableCPU = availableCPU
+		}
+		if availableMemory > err.MaxAvailableMemory {
+			err.MaxAvailableMemory = availableMemory
+		}
+		if availableGPU > err.MaxAvailableGPU {
+			err.MaxAvailableGPU = availableGPU
+		}
+	}
+	return err
+}
+
 func (wpc *AgentWorkerPoolController) machineSchedulable(machine *compute.AgentTokenState) bool {
 	return machine != nil &&
 		compute.AgentMachineConnected(machine, time.Now()) &&
@@ -227,24 +303,7 @@ func (wpc *AgentWorkerPoolController) machineCanFit(machine *compute.AgentTokenS
 	if err != nil {
 		return false
 	}
-	capacity := wpc.agentMachineWorker(machine)
-	availableCPU := capacity.cpu
-	availableMemory := capacity.memory
-	availableGPU := capacity.gpuCount
-	if worker != nil {
-		switch worker.Status {
-		case types.WorkerStatusAvailable:
-			availableCPU = worker.FreeCpu
-			availableMemory = worker.FreeMemory
-			availableGPU = worker.FreeGpuCount
-		case types.WorkerStatusPending:
-			availableCPU = worker.TotalCpu
-			availableMemory = worker.TotalMemory
-			availableGPU = worker.TotalGpuCount
-		default:
-			return false
-		}
-	}
+	availableCPU, availableMemory, availableGPU := wpc.machineAvailableCapacity(machine, worker)
 	if availableCPU < cpu || availableMemory < memory || availableGPU < gpuCount {
 		return false
 	}
@@ -260,6 +319,23 @@ func (wpc *AgentWorkerPoolController) machineCanFit(machine *compute.AgentTokenS
 		}
 	}
 	return false
+}
+
+func (wpc *AgentWorkerPoolController) machineAvailableCapacity(machine *compute.AgentTokenState, worker *types.Worker) (int64, int64, uint32) {
+	capacity := wpc.agentMachineWorker(machine)
+	if worker == nil {
+		return capacity.cpu, capacity.memory, capacity.gpuCount
+	}
+	switch worker.Status {
+	case types.WorkerStatusAvailable:
+		return worker.FreeCpu, worker.FreeMemory, worker.FreeGpuCount
+	case types.WorkerStatusPending:
+		return worker.TotalCpu, worker.TotalMemory, worker.TotalGpuCount
+	case types.WorkerStatusDisabled:
+		return capacity.cpu, capacity.memory, capacity.gpuCount
+	default:
+		return 0, 0, 0
+	}
 }
 
 func (wpc *AgentWorkerPoolController) machineWorker(machine *compute.AgentTokenState) (*types.Worker, error) {

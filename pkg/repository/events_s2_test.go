@@ -286,6 +286,24 @@ func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
 	}
 }
 
+func TestResolveWorkspaceMachineLogHistoryUsesSingleAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+		WorkspaceID: "workspace-123",
+		MachineID:   "machine-123",
+		WorkerID:    "agent-worker-123",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123"}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected machine history stream target: got %q want %q", streams, want)
+	}
+}
+
 func TestStreamMachineLogsUsesWorkspaceAggregateStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -293,7 +311,7 @@ func TestStreamMachineLogsUsesWorkspaceAggregateStream(t *testing.T) {
 		WorkspaceID: "workspace-123",
 		MachineID:   "machine-123",
 		WorkerID:    "agent-worker-123",
-	}, true)
+	})
 
 	want := []s2.StreamName{"events/logs/workspaces/workspace-123"}
 	if !reflect.DeepEqual(streams, want) {

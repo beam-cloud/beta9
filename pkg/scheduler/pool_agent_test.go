@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -128,8 +129,12 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if err := workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewAgentWorkerPoolController(opts); err != nil {
+	restoredFromAddWorker, err := controller.AddWorker(1000, 1024, 1)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if restoredFromAddWorker.Id != worker.Id {
+		t.Fatalf("restored worker = %q, want stable worker %q", restoredFromAddWorker.Id, worker.Id)
 	}
 	restoredWorker, err := workerRepo.GetWorkerById(worker.Id)
 	if err != nil {
@@ -137,5 +142,34 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	}
 	if restoredWorker.Status != types.WorkerStatusPending {
 		t.Fatalf("restored worker status = %q, want %q", restoredWorker.Status, types.WorkerStatusPending)
+	}
+
+	if err := workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAgentWorkerPoolController(opts); err != nil {
+		t.Fatal(err)
+	}
+	restoredWorker, err = workerRepo.GetWorkerById(worker.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredWorker.Status != types.WorkerStatusPending {
+		t.Fatalf("restored worker status = %q, want %q", restoredWorker.Status, types.WorkerStatusPending)
+	}
+
+	_, err = controller.AddWorker(999999, 1024, 1)
+	if err == nil {
+		t.Fatal("expected capacity error")
+	}
+	var capacityErr *AgentPoolCapacityError
+	if !errors.As(err, &capacityErr) {
+		t.Fatalf("error = %T %v, want AgentPoolCapacityError", err, err)
+	}
+	if capacityErr.WorkspaceID != workspaceID || capacityErr.PoolName != poolState.Name {
+		t.Fatalf("capacity error scope = workspace %q pool %q", capacityErr.WorkspaceID, capacityErr.PoolName)
+	}
+	if capacityErr.SchedulableMachines != 1 || capacityErr.Machines != 1 {
+		t.Fatalf("capacity error machine counts = %d/%d, want 1/1", capacityErr.SchedulableMachines, capacityErr.Machines)
 	}
 }

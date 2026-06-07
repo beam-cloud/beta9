@@ -222,7 +222,7 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 
 	switch {
 	case query.MachineID != "":
-		return addKnownMany(r.machineLogStreams(query, createCanonical)...)
+		return addKnownMany(r.machineLogStreams(query)...)
 	case query.TaskID != "" && query.WorkspaceID != "":
 		return addKnown(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
 	case query.ContainerID != "" && query.WorkspaceID != "" && query.StubID != "":
@@ -243,8 +243,8 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 	}
 }
 
-func (r *S2EventRepository) machineLogStreams(query types.LogQuery, live bool) []s2.StreamName {
-	if live && query.WorkspaceID != "" {
+func (r *S2EventRepository) machineLogStreams(query types.LogQuery) []s2.StreamName {
+	if query.WorkspaceID != "" {
 		return []s2.StreamName{r.workspaceLogStreamName(query.WorkspaceID)}
 	}
 	return []s2.StreamName{

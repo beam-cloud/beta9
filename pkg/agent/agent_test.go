@@ -1,11 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,6 +264,107 @@ func TestDockerContainerInspectOwnedByAgentAcceptsLabelsAndLegacyEnv(t *testing.
 			}
 		})
 	}
+
+	got, err := dockerContainerInspectOwnedByAgent([]byte(`{"Config":{"Labels":{"dev.beam.agent.worker":"true","dev.beam.agent.worker_id":"worker-one","dev.beam.agent.machine_id":"machine-one","dev.beam.agent.pool_name":"private-dev"}}}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Fatal("nil slot must not own a managed container")
+	}
+}
+
+func TestDetailLogWriterReportsUnconsumedBytesOnFlushError(t *testing.T) {
+	writer := newDetailLogWriter(errorWriter{})
+	n, err := writer.Write([]byte("hello\nworld"))
+	if err == nil {
+		t.Fatal("expected flush error")
+	}
+	if n != 0 {
+		t.Fatalf("written = %d, want 0", n)
+	}
+}
+
+func TestResolveAgentIdentityDoesNotFallbackWhenJoinRejected(t *testing.T) {
+	t.Setenv(types.AgentStateDirEnv, t.TempDir())
+	if err := saveRuntimeState("http://gateway.local", &joinResponse{
+		Ok:          true,
+		WorkspaceID: "workspace-one",
+		PoolName:    "pool-one",
+		MachineID:   "machine-one",
+		AgentToken:  "saved-token",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(joinResponse{Ok: false, ErrMsg: "join token revoked"})
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := resolveAgentIdentity(context.Background(), NewClient(server.URL), types.AgentJoinOptions{
+		GatewayURL: server.URL,
+		JoinToken:  "bad-token",
+		DevMode:    true,
+		Stdout:     io.Discard,
+		Stderr:     io.Discard,
+	})
+	if err == nil {
+		t.Fatal("expected rejected join token error")
+	}
+	if !strings.Contains(err.Error(), "join token revoked") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTelemetryTeeCloseFlushesBufferedLogLine(t *testing.T) {
+	telemetry := &agentTelemetry{
+		ch: make(chan *pb.AgentTelemetryRequest, 1),
+	}
+	out := &bytes.Buffer{}
+	writer := telemetry.teeLogWriter(out, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStderr)
+	if _, err := writer.Write([]byte("partial log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "partial log" {
+		t.Fatalf("tee output = %q, want partial log", out.String())
+	}
+
+	select {
+	case req := <-telemetry.ch:
+		if len(req.Logs) != 1 || req.Logs[0].Line != "partial log" {
+			t.Fatalf("unexpected telemetry request: %#v", req)
+		}
+	default:
+		t.Fatal("expected buffered log line to flush on close")
+	}
+}
+
+func TestTelemetryEnqueueReportsDroppedRecords(t *testing.T) {
+	t.Setenv(types.AgentVerboseEnv, "1")
+	stderr := &bytes.Buffer{}
+	telemetry := &agentTelemetry{
+		stderr: stderr,
+		ch:     make(chan *pb.AgentTelemetryRequest, 1),
+	}
+	telemetry.enqueue(&pb.AgentTelemetryRequest{Logs: []*pb.AgentLogRecord{{Line: "queued"}}})
+	telemetry.enqueue(&pb.AgentTelemetryRequest{Logs: []*pb.AgentLogRecord{{Line: "dropped"}}})
+
+	if telemetry.dropped.Load() != 1 {
+		t.Fatalf("dropped = %d, want 1", telemetry.dropped.Load())
+	}
+	if !strings.Contains(stderr.String(), "dropped 1 records") {
+		t.Fatalf("missing drop warning: %q", stderr.String())
+	}
+}
+
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
 }
 
 func TestAgentLockRejectsSecondAgentForSameStateDir(t *testing.T) {

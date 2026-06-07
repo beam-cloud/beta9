@@ -112,6 +112,9 @@ func (r *ComputeRedisRepository) SaveAgentTokenState(ctx context.Context, state 
 	if err := r.rdb.Set(ctx, common.RedisKeys.ComputeAgentMachine(state.WorkspaceID, state.PoolName, state.MachineID), data, 0).Err(); err != nil {
 		return err
 	}
+	if err := r.rdb.Set(ctx, common.RedisKeys.ComputeAgentMachinePool(state.WorkspaceID, state.MachineID), state.PoolName, 0).Err(); err != nil {
+		return err
+	}
 	return r.rdb.SAdd(ctx, common.RedisKeys.ComputeAgentMachineIndex(state.WorkspaceID, state.PoolName), state.MachineID).Err()
 }
 
@@ -150,6 +153,17 @@ func (r *ComputeRedisRepository) GetAgentMachineState(ctx context.Context, works
 	return &state, nil
 }
 
+func (r *ComputeRedisRepository) GetAgentMachineStateForWorkspace(ctx context.Context, workspaceID, machineID string) (*compute.AgentTokenState, error) {
+	poolName, err := r.rdb.Get(ctx, common.RedisKeys.ComputeAgentMachinePool(workspaceID, machineID)).Result()
+	if err == nil && poolName != "" {
+		return r.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
+	}
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	return r.scanAgentMachineStateForWorkspace(ctx, workspaceID, machineID)
+}
+
 func (r *ComputeRedisRepository) ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error) {
 	machineIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeAgentMachineIndex(workspaceID, poolName)).Result()
 	if err != nil {
@@ -167,6 +181,26 @@ func (r *ComputeRedisRepository) ListAgentTokenStates(ctx context.Context, works
 		return states[i].MachineID < states[j].MachineID
 	})
 	return states, nil
+}
+
+func (r *ComputeRedisRepository) scanAgentMachineStateForWorkspace(ctx context.Context, workspaceID, machineID string) (*compute.AgentTokenState, error) {
+	pools, err := r.ListPoolStates(ctx, workspaceID, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, pool := range pools {
+		if pool == nil || pool.Name == "" {
+			continue
+		}
+		machine, err := r.GetAgentMachineState(ctx, workspaceID, pool.Name, machineID)
+		if err != nil {
+			return nil, err
+		}
+		if machine != nil {
+			return machine, nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *ComputeRedisRepository) SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error {

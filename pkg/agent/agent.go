@@ -50,6 +50,7 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	telemetry := newAgentTelemetry(grpcClient, res.AgentToken, res.Bootstrap, opts.Stderr)
 	go telemetry.run(ctx)
 	agentLogs := telemetry.teeLogWriter(opts.Stderr, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStderr)
+	defer agentLogs.Close()
 
 	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr, agentLogs, telemetry)
 	telemetry.setStatsProvider(workers.stats)
@@ -105,28 +106,21 @@ func resolveAgentIdentity(ctx context.Context, client *Client, opts types.AgentJ
 	if err == nil && res != nil && res.Ok {
 		return res, nil
 	}
-	if savedState != nil {
-		logJoinFallback(opts.Stderr, res, err)
-		return savedState, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("join failed: %w", err)
-	}
 	if res != nil {
 		return nil, fmt.Errorf("join failed: %s", res.ErrMsg)
+	}
+	if err != nil {
+		if savedState != nil {
+			logJoinFallback(opts.Stderr, err)
+			return savedState, nil
+		}
+		return nil, fmt.Errorf("join failed: %w", err)
 	}
 	return nil, fmt.Errorf("join failed")
 }
 
-func logJoinFallback(stderr io.Writer, res *joinResponse, err error) {
-	switch {
-	case err != nil:
-		fmt.Fprintf(stderr, "join failed, resuming saved agent identity: %v\n", err)
-	case res != nil:
-		fmt.Fprintf(stderr, "join failed, resuming saved agent identity: %s\n", res.ErrMsg)
-	default:
-		fmt.Fprintln(stderr, "join failed, resuming saved agent identity")
-	}
+func logJoinFallback(stderr io.Writer, err error) {
+	fmt.Fprintf(stderr, "join failed, resuming saved agent identity: %v\n", err)
 }
 
 func preflightFailureSummary(checks []check) string {

@@ -2,13 +2,12 @@ import json
 import shlex
 import subprocess
 import time
-from typing import Any, Dict, List, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
 import click
 from betterproto import Casing
-from rich.columns import Columns
 from rich.live import Live
-from rich.panel import Panel
 from rich.table import Column, Table, box
 from rich.text import Text
 
@@ -21,12 +20,12 @@ from ..clients.gateway import (
     ExtendPoolCapacityRequest,
     GetPoolJoinCommandRequest,
     LaunchPoolCapacityRequest,
+    Machine,
     ListPoolMachinesRequest,
     ListPoolOffersRequest,
-    ListPoolsRequest,
-    ListPoolsResponse,
     ListPrivatePoolsRequest,
     PoolConfig,
+    PrivatePool,
     StringList,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
@@ -39,18 +38,11 @@ def common(**_):
 
 @click.group(
     name="pool",
-    help="Manage worker pools.",
+    help="Manage private compute pools.",
     cls=ClickManagementGroup,
 )
 def management():
     pass
-
-
-def _create_table(rows: List[Tuple[str, str]]) -> Table:
-    table = Table(show_header=False, box=None, expand=True)
-    for label, value in rows:
-        table.add_row(label, value)
-    return table
 
 
 def _pool_config(
@@ -93,63 +85,88 @@ def _get_pool_renderable(
     filters: Dict[str, StringList],
 ) -> Any:
     """
-    Returns a Rich renderable for the pool list
+    Returns a Rich renderable for private compute pools.
     """
-    res: ListPoolsResponse = service.gateway.list_pools(
-        ListPoolsRequest(filters, limit)
+    res = service.gateway.list_private_pools(
+        ListPrivatePoolsRequest(filters=filters, limit=limit)
     )
     if not res.ok:
-        return Text(f"[red]{res.err_msg}")
+        return Text(res.err_msg, style="bold red")
 
     if output_format == "json":
-        pools = [d.to_dict(casing=Casing.SNAKE) for d in res.pools]  # type: ignore
-        return Text(json.dumps(pools, indent=2))
-    else:
-        name_filters = filters.get("name", StringList())
-        pool_cards = []
-        for pool in res.pools:
-            if name_filters.values and pool.name not in name_filters.values:
-                continue
+        pools = [pool.to_dict(casing=Casing.SNAKE) for pool in res.pools]  # type: ignore
+        return Text(json.dumps({"pools": pools}, indent=2))
 
-            # Create pool config table
-            config_rows = [
-                ("GPU:", pool.gpu),
-                ("Minimum Free GPU:", pool.min_free_gpu or "0"),
-                ("Minimum Free CPU:", pool.min_free_cpu or "0"),
-                ("Minimum Free Memory:", pool.min_free_memory or "0"),
-                (
-                    "Default GPU Count (per worker):",
-                    pool.default_worker_gpu_count or "0",
-                ),
-            ]
-            config_table = _create_table(config_rows)
+    return _private_pool_table(res.pools)
 
-            # Create pool state table
-            state_rows = [
-                ("Status:", pool.state.status),
-                ("Scheduling Latency (ms):", str(pool.state.scheduling_latency)),
-                ("Free GPU:", str(pool.state.free_gpu)),
-                ("Free CPU (millicores):", str(pool.state.free_cpu)),
-                ("Free Memory (MB):", str(pool.state.free_memory)),
-                ("Pending Workers:", str(pool.state.pending_workers)),
-                ("Available Workers:", str(pool.state.available_workers)),
-                ("Pending Containers:", str(pool.state.pending_containers)),
-                ("Running Containers:", str(pool.state.running_containers)),
-                ("Registered Machines:", str(pool.state.registered_machines)),
-                ("Pending Machines:", str(pool.state.pending_machines)),
-            ]
-            state_table = _create_table(state_rows)
 
-            content = Columns([config_table, state_table], equal=True, expand=True)
-            card = Panel(content, title=pool.name, border_style="blue")
-            pool_cards.append(card)
+def _private_pool_table(pools: List[PrivatePool]) -> Table:
+    table = Table(
+        Column("Name"),
+        Column("Status"),
+        Column("Machines", justify="right"),
+        Column("GPU"),
+        Column("GPUs", justify="right"),
+        Column("Spend", justify="right"),
+        Column("Fallback"),
+        box=box.SIMPLE,
+    )
+    for pool in pools:
+        table.add_row(
+            pool.name,
+            pool.status or "-",
+            f"{pool.ready_machine_count}/{pool.machine_count}",
+            ", ".join(pool.config.gpu) if pool.config.gpu else "-",
+            str(pool.reserved_gpus),
+            f"${pool.committed_spend_micros / 1_000_000:.2f}",
+            pool.config.fallback or "-",
+        )
+    table.add_section()
+    table.add_row(f"[bold]{len(pools)} items")
+    return table
 
-        return Columns(pool_cards, expand=True)
+
+def _machine_table(machines: List[Machine]) -> Table:
+    table = Table(
+        Column("Pool"),
+        Column("Machine"),
+        Column("Status"),
+        Column("CPU", justify="right"),
+        Column("Memory", justify="right"),
+        Column("GPU"),
+        Column("GPUs", justify="right"),
+        Column("Last Seen"),
+        box=box.SIMPLE,
+    )
+    for machine in machines:
+        table.add_row(
+            machine.pool_name or "-",
+            machine.id,
+            machine.status or "-",
+            f"{machine.cpu:,}m" if machine.cpu > 0 else "-",
+            terminal.humanize_memory(machine.memory * 1024 * 1024)
+            if machine.memory > 0
+            else "-",
+            machine.gpu or "-",
+            str(machine.gpu_count),
+            _machine_last_seen(machine),
+        )
+    table.add_section()
+    table.add_row(f"[bold]{len(machines)} items")
+    return table
+
+
+def _machine_last_seen(machine: Machine) -> str:
+    if not machine.last_keepalive:
+        return "Never"
+    return terminal.humanize_date(
+        datetime.fromtimestamp(int(machine.last_keepalive), tz=timezone.utc)
+    )
 
 
 @management.command(
     name="list",
-    help="List all worker pools.",
+    help="List private compute pools.",
     epilog="""
     Examples:
 
@@ -211,7 +228,7 @@ def list_pools(
     period: float,
 ):
     """
-    List all worker pools
+    List private compute pools
     """
     if not watch:
         terminal.print(_get_pool_renderable(service, limit, format, filter))
@@ -417,82 +434,69 @@ def launch(
     terminal.success(f"Launched capacity for private pool '{res.pool.name}'")
 
 
-@management.command(name="private", help="List private compute pools.")
+@management.command(name="private", help="List private compute pools.", hidden=True)
 @click.option("--limit", type=click.IntRange(1, 100), default=20, show_default=True)
 @click.option(
     "--format", type=click.Choice(("table", "json")), default="table", show_default=True
 )
 @extraclick.pass_service_client
 def private_pools(service: ServiceClient, limit: int, format: str):
-    res = service.gateway.list_private_pools(ListPrivatePoolsRequest(limit=limit))
-    if not res.ok:
-        return terminal.error(res.err_msg)
-    if format == "json":
-        terminal.print_json(
-            {"pools": [p.to_dict(casing=Casing.SNAKE) for p in res.pools]}
-        )
-        return
-
-    table = Table(
-        Column("Name"),
-        Column("Status"),
-        Column("GPUs", justify="right"),
-        Column("Spend", justify="right"),
-        Column("Source"),
-        box=box.SIMPLE,
-    )
-    for pool in res.pools:
-        table.add_row(
-            pool.name,
-            pool.status,
-            str(pool.reserved_gpus),
-            f"${pool.committed_spend_micros / 1_000_000:.2f}",
-            pool.source,
-        )
-    terminal.print(table)
+    terminal.print(_get_pool_renderable(service, limit, format, {}))
 
 
 @management.command(name="machines", help="List machines joined to a private pool.")
-@click.argument("name")
+@click.argument("name", required=False)
 @click.option("--limit", type=click.IntRange(1, 100), default=20, show_default=True)
 @click.option(
     "--format", type=click.Choice(("table", "json")), default="table", show_default=True
 )
 @extraclick.pass_service_client
-def machines(service: ServiceClient, name: str, limit: int, format: str):
-    res = service.gateway.list_pool_machines(
-        ListPoolMachinesRequest(pool_name=name, limit=limit)
-    )
-    if not res.ok:
-        return terminal.error(res.err_msg)
+def machines(service: ServiceClient, name: str | None, limit: int, format: str):
+    machines = _list_pool_machines(service, name, limit)
     if format == "json":
         terminal.print_json(
-            {"machines": [m.to_dict(casing=Casing.SNAKE) for m in res.machines]}
+            {"machines": [m.to_dict(casing=Casing.SNAKE) for m in machines]}  # type: ignore
         )
         return
 
-    table = Table(
-        Column("Machine"),
-        Column("Status"),
-        Column("CPU", justify="right"),
-        Column("Memory", justify="right"),
-        Column("GPU"),
-        Column("GPUs", justify="right"),
-        box=box.SIMPLE,
+    terminal.print(_machine_table(machines))
+
+
+def _list_pool_machines(
+    service: ServiceClient, pool_name: str | None, limit: int
+) -> List[Machine]:
+    if pool_name:
+        return _fetch_pool_machines(service, pool_name, limit)
+
+    pools_res = service.gateway.list_private_pools(ListPrivatePoolsRequest(limit=limit))
+    if not pools_res.ok:
+        terminal.error(pools_res.err_msg)
+
+    machines: List[Machine] = []
+    for pool in pools_res.pools:
+        remaining = limit - len(machines)
+        if remaining <= 0:
+            break
+        machines.extend(_fetch_pool_machines(service, pool.name, remaining))
+    return machines
+
+
+def _fetch_pool_machines(
+    service: ServiceClient, pool_name: str, limit: int
+) -> List[Machine]:
+    res = service.gateway.list_pool_machines(
+        ListPoolMachinesRequest(pool_name=pool_name, limit=limit)
     )
+    if not res.ok:
+        terminal.error(res.err_msg)
+
     for machine in res.machines:
-        table.add_row(
-            machine.id,
-            machine.status,
-            str(machine.cpu),
-            str(machine.memory),
-            machine.gpu or "-",
-            str(machine.gpu_count),
-        )
-    terminal.print(table)
+        if not machine.pool_name:
+            machine.pool_name = pool_name
+    return list(res.machines)
 
 
-@management.command(name="extend", help="Extend private pool capacity.")
+@management.command(name="extend", help="Extend private pool capacity.", hidden=True)
 @click.argument("name")
 @click.option("--ttl", default="")
 @click.option("--max-spend", type=float, default=0)
@@ -506,7 +510,7 @@ def extend(service: ServiceClient, name: str, ttl: str, max_spend: float):
     terminal.success(f"Extended private pool '{name}'")
 
 
-@management.command(name="terminate", help="Terminate and delete a private pool.")
+@management.command(name="terminate", help="Terminate and delete a private pool.", hidden=True)
 @click.argument("name")
 @extraclick.pass_service_client
 def terminate(service: ServiceClient, name: str):

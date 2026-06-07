@@ -102,6 +102,7 @@ var (
 	computeJoinToken         string = "compute:join:%s"
 	computeAgentToken        string = "compute:agent:token:%s"
 	computeAgentMachine      string = "compute:{%s}:pool:%s:machine:%s"
+	computeAgentMachinePool  string = "compute:{%s}:machine:%s:pool"
 	computeAgentMachineIndex string = "compute:{%s}:pool:%s:machines"
 	computeAgentSlot         string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
 	computeAgentSlotIndex    string = "compute:{%s}:pool:%s:machine:%s:workers"
@@ -310,6 +311,10 @@ func (rk *redisKeys) ComputeAgentToken(tokenHash string) string {
 
 func (rk *redisKeys) ComputeAgentMachine(workspaceID, poolName, machineID string) string {
 	return fmt.Sprintf(computeAgentMachine, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) ComputeAgentMachinePool(workspaceID, machineID string) string {
+	return fmt.Sprintf(computeAgentMachinePool, workspaceID, machineID)
 }
 
 func (rk *redisKeys) ComputeAgentMachineIndex(workspaceID, poolName string) string {

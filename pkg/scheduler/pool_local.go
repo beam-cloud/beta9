@@ -158,7 +158,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		log.Error().Err(err).Msg("unable to create worker")
+		workerLog(log.Error(), worker).Err(err).Msg("unable to create worker")
 		return nil, err
 	}
 

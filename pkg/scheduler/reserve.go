@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -55,9 +56,7 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 	}
 
 	if err := a.scheduler.scheduleRequest(worker, a.request); err != nil {
-		log.Error().
-			Str("container_id", a.request.ContainerId).
-			Str("worker_id", worker.Id).
+		workerLog(requestLog(log.Error(), a.request), worker).
 			Err(err).
 			Msg("unable to schedule request on existing worker")
 		a.recordBacklogWait(false, "schedule_failed")
@@ -91,13 +90,7 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 func (a *schedulingAttempt) provisionWorker() {
 	controllers, err := a.scheduler.getControllers(a.request)
 	if err != nil {
-		log.Error().
-			Str("container_id", a.request.ContainerId).
-			Str("stub_id", a.request.StubId).
-			Str("workspace_id", a.request.WorkspaceId).
-			Int64("cpu", a.request.Cpu).
-			Int64("memory", a.request.Memory).
-			Uint32("gpu_count", a.request.GpuCount).
+		requestLog(log.Error(), a.request).
 			Err(err).
 			Msg("no controller found for request")
 		a.fail("no_controller")
@@ -118,7 +111,7 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 	}
 
 	if err := a.scheduler.requestBacklog.PushAfter(a.request, provisioningWorkerRequeueDelay); err != nil {
-		log.Error().Str("container_id", a.request.ContainerId).Err(err).Msg("failed to requeue request waiting for worker capacity")
+		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
 		a.fail("worker_wait_requeue_failed")
 	}
 }
@@ -141,8 +134,7 @@ func (a *schedulingAttempt) retrySoon(reason string) {
 	a.request.RetryCount++
 	metrics.RecordRequestRetry(a.request)
 	if err := a.scheduler.requestBacklog.PushAfter(a.request, requestProcessingInterval); err != nil {
-		log.Error().
-			Str("container_id", a.request.ContainerId).
+		requestLog(log.Error(), a.request).
 			Str("reason", reason).
 			Err(err).
 			Msg("failed to requeue request")
@@ -151,19 +143,17 @@ func (a *schedulingAttempt) retrySoon(reason string) {
 }
 
 func (a *schedulingAttempt) fail(reason string) {
-	log.Error().
-		Str("container_id", a.request.ContainerId).
+	requestLog(log.Error(), a.request).
 		Str("reason", reason).
-		Int("retry_count", a.request.RetryCount).
 		Msg("giving up on request")
 
 	a.recordBacklogWait(false, reason)
 
 	if err := a.scheduler.containerRepo.DeleteContainerState(a.request.ContainerId); err != nil {
-		log.Error().Str("container_id", a.request.ContainerId).Err(err).Msg("failed to delete container state after scheduling failure")
+		requestLog(log.Error(), a.request).Err(err).Msg("failed to delete container state after scheduling failure")
 	}
 	if err := a.scheduler.containerRepo.SetContainerRequestStatus(a.request.ContainerId, types.ContainerRequestStatusFailed); err != nil {
-		log.Error().Str("container_id", a.request.ContainerId).Err(err).Msg("failed to record container request scheduling failure")
+		requestLog(log.Error(), a.request).Err(err).Msg("failed to record container request scheduling failure")
 	}
 	metrics.RecordRequestScheduleFailure(a.request)
 }
@@ -229,7 +219,7 @@ func (a *workerProvisioningAttempt) run() {
 			continue
 		}
 
-		log.Info().Str("worker_id", newWorker.Id).Str("container_id", a.request.ContainerId).Msg("added new worker")
+		workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
 		releaseOnReturn = false
 		time.AfterFunc(provisioningReservationHandoff, func() {
 			a.scheduler.provisioning.release(a.reservationID)
@@ -237,8 +227,28 @@ func (a *workerProvisioningAttempt) run() {
 		return
 	}
 
-	log.Error().Str("container_id", a.request.ContainerId).Err(addWorkerErr).Msg("unable to add worker")
+	a.logAddWorkerFailure(addWorkerErr)
 	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "add_worker_failed")
+}
+
+func (a *workerProvisioningAttempt) logAddWorkerFailure(err error) {
+	var capacityErr *AgentPoolCapacityError
+	if errors.As(err, &capacityErr) {
+		requestLog(log.Debug(), a.request).
+			Str("pool_name", capacityErr.PoolName).
+			Int("machines", capacityErr.Machines).
+			Int("schedulable_machines", capacityErr.SchedulableMachines).
+			Int64("max_available_cpu", capacityErr.MaxAvailableCPU).
+			Int64("max_available_memory", capacityErr.MaxAvailableMemory).
+			Uint32("max_available_gpu", capacityErr.MaxAvailableGPU).
+			Err(err).
+			Msg("agent pool capacity unavailable")
+		return
+	}
+
+	requestLog(log.Error(), a.request).
+		Err(err).
+		Msg("unable to add worker")
 }
 
 type provisioningTracker struct {

@@ -94,7 +94,7 @@ func (s *WorkerPoolSizer) Start() {
 			if err != nil {
 				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker")
 			} else if newWorker != nil {
-				log.Info().Str("pool_name", s.controller.Name()).Interface("worker", newWorker).Msg("added new worker to maintain pool size")
+				workerLog(log.Info(), newWorker).Msg("added new worker to maintain pool size")
 			}
 
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
@@ -134,7 +134,7 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 
 		worker, err := s.controller.AddWorkerToMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
 		if err != nil {
-			log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker to machine")
+			log.Error().Str("pool_name", s.controller.Name()).Str("machine_id", m.State.MachineId).Err(err).Msg("failed to add worker to machine")
 			continue
 		}
 		// When there is no capacity of the machine is not ready the worker will be nil with no error
@@ -142,7 +142,7 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 			continue
 		}
 
-		log.Info().Str("pool_name", s.controller.Name()).Interface("worker", worker).Msg("added new worker to occupy existing machine")
+		workerLog(log.Info(), worker).Msg("added new worker to occupy existing machine")
 	}
 
 	return nil

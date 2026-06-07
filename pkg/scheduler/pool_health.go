@@ -241,7 +241,7 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 
 			err = p.workerRepo.CordonAllPendingWorkersInPool(p.wpc.Name())
 			if err != nil {
-				log.Error().Err(err).Msg("failed to cordon all workers in pool")
+				log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to cordon all workers in pool")
 				return err
 			}
 		} else if previousState.Status != status && nextState.Status == types.WorkerPoolStatusHealthy {

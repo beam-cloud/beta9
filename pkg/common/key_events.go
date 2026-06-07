@@ -55,44 +55,15 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
 	keyspacePattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
-	messages, errs, close := kem.rdb.PSubscribe(ctx, keyspacePattern)
-
-	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
-	if err != nil {
-		return err
-	}
-
-	for _, key := range existingKeys {
-		keyEventChan <- KeyEvent{
-			Key:       key,
-			Operation: KeyOperationSet,
-		}
-	}
-
-	go func() {
-		defer close()
-
-	retry:
-		for {
-			select {
-			case m := <-messages:
-				keyEventChan <- kem.messageToKeyEvent(patternPrefix, m.Channel, string(m.Payload))
-
-			case <-ctx.Done():
-				return
-
-			case err := <-errs:
-				log.Error().Err(err).Msg("error with key manager subscription")
-				break retry
-			}
-		}
-	}()
-
-	return nil
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePattern, keyEventChan)
 }
 
 func (kem *KeyEventManager) ListenForPublishedPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
 	pattern := fmt.Sprintf("%s*", patternPrefix)
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, pattern, keyEventChan)
+}
+
+func (kem *KeyEventManager) listenForSubscriptionPattern(ctx context.Context, patternPrefix, pattern string, keyEventChan chan KeyEvent) error {
 	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
 
 	existingKeys, err := kem.fetchExistingKeys(patternPrefix)

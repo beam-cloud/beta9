@@ -124,9 +124,7 @@ func (b *schedulingBatch) dispatch() {
 
 func (b *schedulingBatch) dispatchSchedule(schedule plannedSchedule) {
 	if err := b.scheduler.scheduleRequest(schedule.worker, schedule.request); err != nil {
-		log.Error().
-			Str("container_id", schedule.request.ContainerId).
-			Str("worker_id", schedule.worker.Id).
+		workerLog(requestLog(log.Error(), schedule.request), schedule.worker).
 			Err(err).
 			Msg("unable to schedule planned request on worker")
 

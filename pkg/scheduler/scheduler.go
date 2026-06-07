@@ -208,14 +208,8 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	log.Info().
-		Str("container_id", request.ContainerId).
-		Str("stub_id", request.StubId).
+	requestLog(log.Info(), request).
 		Str("stub_type", string(request.Stub.Type.Kind())).
-		Str("workspace_id", request.WorkspaceId).
-		Int64("cpu", request.Cpu).
-		Int64("memory", request.Memory).
-		Uint32("gpu_count", request.GpuCount).
 		Msg("received run request")
 
 	request.Timestamp = time.Now()
@@ -234,7 +228,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	if request.CheckpointEnabled && request.Checkpoint == nil {
 		checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(context.Background(), request.StubId)
 		if err == nil && checkpoint != nil {
-			log.Info().Str("container_id", request.ContainerId).Str("stub_id", request.StubId).Str("checkpoint_id", checkpoint.CheckpointId).Msg("adding checkpoint to request")
+			requestLog(log.Info(), request).Str("checkpoint_id", checkpoint.CheckpointId).Msg("adding checkpoint to request")
 			request.Checkpoint = checkpoint
 		}
 	}
@@ -258,7 +252,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		"retry_count": fmt.Sprintf("%d", request.RetryCount),
 	})
 	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to add request to backlog")
+		requestLog(log.Error(), request).Err(err).Msg("failed to add request to backlog")
 		newSchedulingAttempt(s, request, nil).fail("backlog_push_failed")
 		return err
 	}
@@ -428,7 +422,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	normalizeGPURequest(request)
 
 	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
-		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to update assigned container gpu")
+		workerLog(requestLog(log.Error(), request), worker).Err(err).Msg("failed to update assigned container gpu")
 		return err
 	}
 
@@ -524,10 +518,9 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) {
 	result, err := s.loadImageCredentials(request)
 	s.recordCredentialLifecycle(request, types.ContainerLifecycleSchedulerImageCredentials, start, result, err)
 	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", request.ContainerId).
+		requestLog(log.Warn(), request).
 			Str("image_id", request.ImageId).
+			Err(err).
 			Msg("failed to attach OCI credentials, will use default provider")
 	}
 }
@@ -548,10 +541,9 @@ func (s *Scheduler) loadImageCredentials(request *types.ContainerRequest) (sched
 	credential, cacheHit, err := s.credentials.getOrLoad(cacheKey, schedulerImageCredentialTTL, func() (cachedSchedulerCredential, error) {
 		secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
 		if err != nil {
-			log.Debug().
-				Err(err).
-				Str("container_id", request.ContainerId).
+			requestLog(log.Debug(), request).
 				Str("image_id", request.ImageId).
+				Err(err).
 				Msg("error getting image credential secret")
 			return cachedSchedulerCredential{}, err
 		}
@@ -562,11 +554,10 @@ func (s *Scheduler) loadImageCredentials(request *types.ContainerRequest) (sched
 
 		secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
 		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("container_id", request.ContainerId).
+			requestLog(log.Warn(), request).
 				Str("image_id", request.ImageId).
 				Str("secret_name", secretName).
+				Err(err).
 				Msg("failed to get secret by name")
 			return cachedSchedulerCredential{}, err
 		}
@@ -586,8 +577,7 @@ func (s *Scheduler) loadImageCredentials(request *types.ContainerRequest) (sched
 
 	request.ImageCredentials = credential.value
 
-	log.Debug().
-		Str("container_id", request.ContainerId).
+	requestLog(log.Debug(), request).
 		Str("image_id", request.ImageId).
 		Str("secret_name", credential.source).
 		Bool("cache_hit", cacheHit).
@@ -606,9 +596,8 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	result, err := s.loadBuildRegistryCredentials(request)
 	s.recordCredentialLifecycle(request, types.ContainerLifecycleSchedulerBuildCredentials, start, result, err)
 	if err != nil {
-		log.Warn().
+		requestLog(log.Warn(), request).
 			Err(err).
-			Str("container_id", request.ContainerId).
 			Msg("failed to attach build registry credentials to request")
 	}
 }
@@ -618,8 +607,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest) (schedulerCredentialAttachResult, error) {
 	buildRegistry := s.config.ImageService.BuildRegistry
 	if buildRegistry == "" || isLocalBuildRegistry(buildRegistry) {
-		log.Debug().
-			Str("container_id", request.ContainerId).
+		requestLog(log.Debug(), request).
 			Str("build_registry", buildRegistry).
 			Msg("no remote build registry configured, skipping credential generation")
 		return schedulerCredentialAttachResult{}, nil
@@ -637,11 +625,10 @@ func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest
 			var err error
 			token, err = reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
 			if err != nil {
-				log.Warn().
-					Err(err).
-					Str("container_id", request.ContainerId).
+				requestLog(log.Warn(), request).
 					Str("build_registry", buildRegistry).
 					Str("cred_type", buildRegistryCredentials.Type).
+					Err(err).
 					Msg("failed to generate build registry token from configured credentials")
 			}
 			if token != "" {
@@ -653,10 +640,9 @@ func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest
 			var err error
 			token, err = reg.GetAmbientECRTokenForImage(context.TODO(), dummyImageRef)
 			if err != nil {
-				log.Warn().
-					Err(err).
-					Str("container_id", request.ContainerId).
+				requestLog(log.Warn(), request).
 					Str("build_registry", buildRegistry).
+					Err(err).
 					Msg("failed to generate build registry token from ambient credentials")
 				return cachedSchedulerCredential{}, err
 			}
@@ -673,8 +659,7 @@ func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest
 	}
 
 	if !credential.exists {
-		log.Debug().
-			Str("container_id", request.ContainerId).
+		requestLog(log.Debug(), request).
 			Str("build_registry", buildRegistry).
 			Str("cred_type", buildRegistryCredentials.Type).
 			Msg("no token generated (public registry?), will use ambient auth")
@@ -683,8 +668,7 @@ func (s *Scheduler) loadBuildRegistryCredentials(request *types.ContainerRequest
 
 	request.BuildRegistryCredentials = credential.value
 
-	log.Debug().
-		Str("container_id", request.ContainerId).
+	requestLog(log.Debug(), request).
 		Str("build_registry", buildRegistry).
 		Str("auth_source", credential.source).
 		Bool("cache_hit", cacheHit).

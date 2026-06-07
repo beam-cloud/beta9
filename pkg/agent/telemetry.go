@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -29,6 +30,7 @@ type agentTelemetry struct {
 	stderr     io.Writer
 	stateDir   string
 	stats      func() agentWorkerStats
+	dropped    atomic.Uint64
 
 	ch chan *pb.AgentTelemetryRequest
 }
@@ -149,14 +151,16 @@ func (t *agentTelemetry) logWriter(source, workerID, stream string) io.Writer {
 	}
 }
 
-func (t *agentTelemetry) teeLogWriter(w io.Writer, source, workerID, stream string) io.Writer {
+func (t *agentTelemetry) teeLogWriter(w io.Writer, source, workerID, stream string) io.WriteCloser {
 	if w == nil {
 		w = io.Discard
 	}
 	if t == nil {
-		return w
+		return nopWriteCloser{Writer: w}
 	}
-	return io.MultiWriter(w, t.logWriter(source, workerID, stream))
+	return &teeLogWriter{
+		writers: []io.Writer{w, t.logWriter(source, workerID, stream)},
+	}
 }
 
 func (t *agentTelemetry) enqueue(req *pb.AgentTelemetryRequest) {
@@ -166,6 +170,11 @@ func (t *agentTelemetry) enqueue(req *pb.AgentTelemetryRequest) {
 	select {
 	case t.ch <- req:
 	default:
+		size := agentTelemetryRequestSize(req)
+		dropped := t.dropped.Add(uint64(size))
+		if dropped == uint64(size) || dropped%agentTelemetryBuffer == 0 {
+			verbosef(t.stderr, "agent telemetry buffer full; dropped %d records\n", dropped)
+		}
 	}
 }
 
@@ -235,6 +244,45 @@ func (b *telemetryBatch) request(agentToken string) *pb.AgentTelemetryRequest {
 	}
 }
 
+type teeLogWriter struct {
+	writers []io.Writer
+}
+
+func (w *teeLogWriter) Write(p []byte) (int, error) {
+	for _, writer := range w.writers {
+		n, err := writer.Write(p)
+		if err != nil {
+			return n, err
+		}
+		if n != len(p) {
+			return n, io.ErrShortWrite
+		}
+	}
+	return len(p), nil
+}
+
+func (w *teeLogWriter) Close() error {
+	var err error
+	for _, writer := range w.writers {
+		closer, ok := writer.(io.Closer)
+		if !ok {
+			continue
+		}
+		if closeErr := closer.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+	return err
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (w nopWriteCloser) Close() error {
+	return nil
+}
+
 type telemetryLineWriter struct {
 	telemetry *agentTelemetry
 	source    string
@@ -292,4 +340,18 @@ func (w *telemetryLineWriter) flushLocked() {
 
 func (w *telemetryLineWriter) String() string {
 	return fmt.Sprintf("%s:%s", w.source, w.stream)
+}
+
+func agentTelemetryRequestSize(req *pb.AgentTelemetryRequest) int {
+	if req == nil {
+		return 0
+	}
+	size := len(req.Logs) + len(req.Events)
+	if req.Metrics != nil {
+		size++
+	}
+	if size == 0 {
+		return 1
+	}
+	return size
 }

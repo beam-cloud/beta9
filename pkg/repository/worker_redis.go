@@ -817,7 +817,14 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	*worker = *updatedWorker
 	metrics.RecordWorkerQueueDepth(worker.Id, r.rdb.LLen(ctx, common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 
-	log.Info().Str("container_id", request.ContainerId).Str("worker_id", worker.Id).Msg("request for container added")
+	log.Info().
+		Str("workspace_id", request.WorkspaceId).
+		Str("stub_id", request.StubId).
+		Str("container_id", request.ContainerId).
+		Str("worker_id", worker.Id).
+		Str("pool_name", worker.PoolName).
+		Str("machine_id", worker.MachineId).
+		Msg("request for container added")
 
 	return nil
 }

@@ -20,6 +20,9 @@ type dockerContainerInspect struct {
 }
 
 func removeManagedWorkerContainer(name string, slot *pb.AgentWorkerSlot) error {
+	if slot == nil {
+		return fmt.Errorf("worker slot is required to remove managed container %q", name)
+	}
 	owned, exists, err := dockerContainerOwnedByAgent(name, slot)
 	if err != nil {
 		return err
@@ -35,6 +38,9 @@ func removeManagedWorkerContainer(name string, slot *pb.AgentWorkerSlot) error {
 }
 
 func removeStaleManagedWorkerContainers(slot *pb.AgentWorkerSlot) error {
+	if slot == nil {
+		return nil
+	}
 	out, err := exec.Command("docker", "ps", "-aq", "--filter", "label="+types.AgentDockerLabelManaged+"=true").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("list managed worker containers: %w: %s", err, strings.TrimSpace(string(out)))
@@ -102,7 +108,7 @@ func dockerContainerLabelsMatchSlot(labels map[string]string, slot *pb.AgentWork
 		return false
 	}
 	if slot == nil {
-		return true
+		return false
 	}
 	return labels[types.AgentDockerLabelWorkerID] == slot.WorkerId &&
 		labels[types.AgentDockerLabelMachineID] == slot.MachineId &&
