@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/beam-cloud/beta9/pkg/agent"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type commandFunc func(context.Context, []string) error
+
+const agentInterruptedExitCode = 130
 
 var commands = map[string]commandFunc{
 	"join":            runJoin,
@@ -33,9 +37,19 @@ func main() {
 	defer stop()
 
 	if err := cmd(ctx, os.Args[2:]); err != nil {
+		if code, ok := commandExitCode(err); ok {
+			os.Exit(code)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func commandExitCode(err error) (int, bool) {
+	if errors.Is(err, agent.ErrInterrupted) {
+		return agentInterruptedExitCode, true
+	}
+	return 0, false
 }
 
 func usage() {

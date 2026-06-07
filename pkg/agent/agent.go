@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
+
+var ErrInterrupted = errors.New("agent interrupted")
 
 func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	var err error
@@ -65,9 +68,17 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 
 	transport := normalizeTransport(firstNonEmpty(opts.TransportOverride, res.Bootstrap.Transport))
 	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, workers, opts.Stdout, agentLogs); err != nil {
+		if agentInterrupted(ctx, err) {
+			statusf(opts.Stdout, "Disconnecting machine %q", res.MachineID)
+			return ErrInterrupted
+		}
 		return fmt.Errorf("route proxy stopped: %w", err)
 	}
 	return nil
+}
+
+func agentInterrupted(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
 }
 
 func normalizeJoinOptions(opts types.AgentJoinOptions) (types.AgentJoinOptions, error) {

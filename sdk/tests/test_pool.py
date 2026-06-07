@@ -2,7 +2,13 @@ import pytest
 
 from beta9 import Pool
 from beta9.abstractions.function import Function
-from beta9.cli.pool import _append_join_args, _get_pool_renderable, _join_transport, management
+from beta9.cli.pool import (
+    _agent_join_interrupted,
+    _append_join_args,
+    _get_pool_renderable,
+    _join_transport,
+    management,
+)
 from beta9.clients.gateway import (
     ListPoolsResponse,
     ListPrivatePoolsResponse,
@@ -129,3 +135,9 @@ def test_pool_launch_command_is_not_exposed():
     assert "launch" not in management.commands
     assert "join" in management.commands
     assert "create" in management.commands
+
+
+def test_pool_join_treats_sigint_exit_as_clean_stop():
+    assert _agent_join_interrupted(130)
+    assert _agent_join_interrupted(-2)
+    assert not _agent_join_interrupted(1)

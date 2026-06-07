@@ -1,4 +1,5 @@
 import json
+import signal
 import shlex
 import subprocess
 import time
@@ -604,7 +605,12 @@ def join(
         terminal.detail(command, crop=False, overflow="ignore")
         return
 
-    exit_code = subprocess.call(command, shell=True)
+    try:
+        exit_code = subprocess.call(command, shell=True)
+    except KeyboardInterrupt:
+        return
+    if _agent_join_interrupted(exit_code):
+        return
     if exit_code == 0:
         terminal.success("Agent is running.")
     raise SystemExit(exit_code)
@@ -614,6 +620,10 @@ def _join_transport(service: ServiceClient, transport: str) -> str:
     if transport != "auto":
         return transport
     return "tsnet_restricted"
+
+
+def _agent_join_interrupted(exit_code: int) -> bool:
+    return exit_code in (-signal.SIGINT, 128 + signal.SIGINT)
 
 
 def _append_join_args(

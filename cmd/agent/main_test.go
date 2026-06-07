@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/agent"
 )
 
 func TestJoinArgsUseTokenFileWhenPresent(t *testing.T) {
@@ -17,5 +20,15 @@ func TestJoinArgsUseTokenFileWhenPresent(t *testing.T) {
 	}
 	if slices.Contains(argv, "plain-token") {
 		t.Fatalf("join args should not include plaintext token: %v", argv)
+	}
+}
+
+func TestCommandExitCodeUsesInterruptCodeForAgentInterrupt(t *testing.T) {
+	code, ok := commandExitCode(fmt.Errorf("wrapped: %w", agent.ErrInterrupted))
+	if !ok {
+		t.Fatal("expected handled interrupt error")
+	}
+	if code != agentInterruptedExitCode {
+		t.Fatalf("exit code = %d, want %d", code, agentInterruptedExitCode)
 	}
 }
