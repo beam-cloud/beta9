@@ -2864,6 +2864,26 @@
         "cacheCpuUsage": {
           "type": "number",
           "format": "float"
+        },
+        "memoryUsedMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memoryTotalMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "diskUsedMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "diskTotalMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "diskUsagePct": {
+          "type": "number",
+          "format": "float"
         }
       }
     },
