@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -277,11 +280,26 @@ func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
 		snapshot.CpuUtilizationPct = float32(values[0])
 	}
 	if memory, err := mem.VirtualMemory(); err == nil && memory != nil {
-		snapshot.MemoryUsedMb = bytesToMiB(memory.Used)
-		snapshot.MemoryTotalMb = bytesToMiB(memory.Total)
-		snapshot.MemoryUtilizationPct = float32(memory.UsedPercent)
+		total := memory.Total
+		used := memory.Used
+		// When running under a cgroup memory limit (e.g. containerized agent),
+		// report the machine's actual allocation rather than the whole host.
+		if cgUsed, cgLimit, ok := readCgroupMemory(); ok && cgLimit > 0 && cgLimit < total {
+			total = cgLimit
+			used = cgUsed
+		}
+		snapshot.MemoryUsedMb = bytesToMiB(used)
+		snapshot.MemoryTotalMb = bytesToMiB(total)
+		if total > 0 {
+			snapshot.MemoryUtilizationPct = float32(float64(used) / float64(total) * 100)
+		} else {
+			snapshot.MemoryUtilizationPct = float32(memory.UsedPercent)
+		}
 	}
-	if usage, err := disk.Usage(firstNonEmpty(t.stateDir, "/")); err == nil && usage != nil {
+	// Measure the machine's root filesystem. The agent state dir can live on a
+	// large pooled/overlay mount that reports an inflated total, which is not
+	// representative of the machine's actual storage.
+	if usage, err := disk.Usage("/"); err == nil && usage != nil {
 		snapshot.DiskUsedMb = bytesToMiB(usage.Used)
 		snapshot.DiskTotalMb = bytesToMiB(usage.Total)
 		snapshot.DiskUsagePct = float32(usage.UsedPercent)
@@ -297,6 +315,47 @@ func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
 
 func bytesToMiB(value uint64) uint64 {
 	return value / 1024 / 1024
+}
+
+// readCgroupMemory returns the cgroup memory usage and limit in bytes when a
+// bounded memory limit is configured (cgroup v2 then v1). ok is false on bare
+// hosts / unlimited cgroups, in which case the host totals should be used.
+func readCgroupMemory() (used uint64, limit uint64, ok bool) {
+	// cgroup v2
+	if l, lok := readCgroupUint("/sys/fs/cgroup/memory.max"); lok {
+		if u, uok := readCgroupUint("/sys/fs/cgroup/memory.current"); uok {
+			return u, l, true
+		}
+	}
+	// cgroup v1
+	if l, lok := readCgroupUint("/sys/fs/cgroup/memory/memory.limit_in_bytes"); lok {
+		if u, uok := readCgroupUint("/sys/fs/cgroup/memory/memory.usage_in_bytes"); uok {
+			return u, l, true
+		}
+	}
+	return 0, 0, false
+}
+
+// readCgroupUint parses a single-value cgroup file, treating "max" and the
+// cgroup v1 "unlimited" sentinel as no limit.
+func readCgroupUint(path string) (uint64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "" || text == "max" {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(text, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	// cgroup v1 reports an enormous sentinel value when memory is unlimited.
+	if value >= (uint64(1) << 62) {
+		return 0, false
+	}
+	return value, true
 }
 
 func (w *telemetryLineWriter) Write(p []byte) (int, error) {
