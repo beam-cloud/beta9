@@ -273,8 +273,8 @@ install_linux_agent_for_docker() {
     return
   fi
 
-  URL="${AGENT_DOWNLOAD_URL:-${GATEWAY}/install/agent/linux/${ARCH}}"
-  install_from_url "$URL" "$BIN" "Installing Beam agent"
+	URL="${AGENT_DOWNLOAD_URL:-${GATEWAY}/install/agent/linux/${ARCH}?dev=1}"
+	install_from_url "$URL" "$BIN" "Installing Beam agent"
 }
 
 ensure_linux_docker() {
@@ -429,7 +429,7 @@ func agentBinaryHandler() echo.HandlerFunc {
 		osName := strings.ToLower(strings.TrimSpace(c.Param("os")))
 		arch := strings.ToLower(strings.TrimSpace(c.Param("arch")))
 
-		path, err := resolveAgentBinary(c.Request().Context(), osName, arch)
+		path, err := resolveAgentBinary(c.Request().Context(), osName, arch, c.QueryParam("dev") == "1")
 		if err != nil {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		}
@@ -441,7 +441,15 @@ func agentBinaryHandler() echo.HandlerFunc {
 	}
 }
 
-func resolveAgentBinary(ctx context.Context, osName, arch string) (string, error) {
+func resolveAgentBinary(ctx context.Context, osName, arch string, forceBuild bool) (string, error) {
+	if forceBuild {
+		path, err := buildAgentBinary(ctx, osName, arch)
+		if err == nil {
+			return path, nil
+		}
+		return "", fmt.Errorf("agent binary source build failed for %s/%s: %w", osName, arch, err)
+	}
+
 	path := agentBinaryPath(osName, arch)
 	if fileExists(path) {
 		return path, nil

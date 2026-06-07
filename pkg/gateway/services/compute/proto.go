@@ -148,8 +148,9 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		reservations = append(reservations, providerInstanceToProto(reservation))
 	}
 	readyMachineCount := uint32(0)
+	now := time.Now()
 	for _, machine := range machines {
-		if machine != nil && machine.Schedulable {
+		if model.AgentMachineConnected(machine, now) {
 			readyMachineCount++
 		}
 	}
@@ -185,10 +186,7 @@ func agentMachineToProto(state *model.AgentTokenState) *pb.Machine {
 	if len(state.GPUs) > 0 {
 		gpu = strings.Join(state.GPUs, ",")
 	}
-	lastKeepalive := state.LastJoinAt
-	if !state.LastHeartbeatAt.IsZero() {
-		lastKeepalive = state.LastHeartbeatAt
-	}
+	lastKeepalive := model.AgentMachineLastSeen(state)
 	return &pb.Machine{
 		Id:            state.MachineID,
 		Cpu:           state.CPUMillicores,

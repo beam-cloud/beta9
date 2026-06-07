@@ -47,6 +47,28 @@ func (s *Service) getComputeAgentTokenState(ctx context.Context, token string) (
 	return s.computeRepo.GetAgentTokenState(ctx, hashComputeToken(token))
 }
 
+func (s *Service) getCurrentComputeAgentTokenState(ctx context.Context, token string) (*model.AgentTokenState, error) {
+	state, err := s.getComputeAgentTokenState(ctx, token)
+	if err != nil || state == nil {
+		return state, err
+	}
+	return s.currentComputeAgentState(ctx, state)
+}
+
+func (s *Service) currentComputeAgentState(ctx context.Context, state *model.AgentTokenState) (*model.AgentTokenState, error) {
+	if state == nil {
+		return nil, nil
+	}
+	current, err := s.computeRepo.GetAgentMachineState(ctx, state.WorkspaceID, state.PoolName, state.MachineID)
+	if err != nil || current == nil {
+		return current, err
+	}
+	if current.TokenHash != state.TokenHash {
+		return nil, nil
+	}
+	return current, nil
+}
+
 func (s *Service) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*model.PoolState, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {

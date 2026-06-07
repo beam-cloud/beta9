@@ -3,6 +3,7 @@ package compute
 import (
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -59,6 +60,7 @@ type AgentTokenState struct {
 	CreatedAt                 time.Time             `json:"created_at"`
 	LastJoinAt                time.Time             `json:"last_join_at"`
 	LastHeartbeatAt           time.Time             `json:"last_heartbeat_at"`
+	LastDisconnectAt          time.Time             `json:"last_disconnect_at"`
 }
 
 type AgentMachineMetrics struct {
@@ -101,4 +103,52 @@ type PreflightCheckState struct {
 	OK       bool   `json:"ok"`
 	Message  string `json:"message"`
 	Severity string `json:"severity"`
+}
+
+const AgentHeartbeatTimeout = 30 * time.Second
+
+func AgentMachineStatus(state *AgentTokenState, now time.Time) string {
+	if AgentMachineConnected(state, now) {
+		return types.AgentMachineStatusSchedulable
+	}
+	if state != nil && !state.Schedulable && hasPreflightFailure(state.Preflight) {
+		return types.AgentMachineStatusPreflightFail
+	}
+	return types.AgentMachineStatusDisconnected
+}
+
+func AgentMachineConnected(state *AgentTokenState, now time.Time) bool {
+	if state == nil || !state.Schedulable {
+		return false
+	}
+	lastSeen := AgentMachineLastSeen(state)
+	if lastSeen.IsZero() {
+		return false
+	}
+	if !state.LastDisconnectAt.IsZero() && !state.LastDisconnectAt.Before(lastSeen) {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Sub(lastSeen) <= AgentHeartbeatTimeout
+}
+
+func AgentMachineLastSeen(state *AgentTokenState) time.Time {
+	if state == nil {
+		return time.Time{}
+	}
+	if state.LastHeartbeatAt.After(state.LastJoinAt) {
+		return state.LastHeartbeatAt
+	}
+	return state.LastJoinAt
+}
+
+func hasPreflightFailure(checks []PreflightCheckState) bool {
+	for _, check := range checks {
+		if check.Severity == "error" && !check.OK {
+			return true
+		}
+	}
+	return false
 }

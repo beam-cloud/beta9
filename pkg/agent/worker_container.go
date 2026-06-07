@@ -1,10 +1,8 @@
 package agent
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	pathpkg "path"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,113 +116,4 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 
 	args = append(args, image, types.AgentWorkerEntrypoint)
 	return args
-}
-
-func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) error {
-	workspaceStorageMode := firstNonEmpty(os.Getenv(types.AgentStorageModeEnv), types.StorageModeGeese)
-	cacheDir := pathpkg.Join(types.AgentCachePath, sanitizeDockerName(slot.PoolName), sanitizeDockerName(slot.MachineId))
-	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
-	config := map[string]any{
-		"clusterName": types.DefaultAgentName,
-		"debugMode":   false,
-		"prettyLogs":  true,
-		"gateway": map[string]any{
-			"grpc": map[string]any{
-				"externalHost": bootstrap.GatewayGRPCHost,
-				"externalPort": bootstrap.GatewayGRPCPort,
-				"tls":          bootstrap.GatewayGRPCTLS,
-			},
-			"http": map[string]any{
-				"externalHost": httpHost,
-				"externalPort": httpPort,
-				"tls":          httpTLS,
-			},
-		},
-		"storage": map[string]any{
-			"mode":       types.StorageModeLocal,
-			"fsName":     types.DefaultAgentName,
-			"fsPath":     types.AgentDataPath,
-			"objectPath": pathpkg.Join(types.AgentDataPath, "objects"),
-			"workspaceStorage": map[string]any{
-				"baseMountPath":      types.AgentWorkspacePath,
-				"defaultStorageMode": workspaceStorageMode,
-			},
-		},
-		"monitoring": map[string]any{
-			"metricsCollector":         string(types.MetricsCollectorNone),
-			"containerMetricsInterval": "3s",
-			"prometheus": map[string]any{
-				"scrapeWorkers": false,
-				"port":          0,
-			},
-		},
-		"worker": map[string]any{
-			"hostNetwork":                true,
-			"useHostResolvConf":          true,
-			"containerRuntime":           types.ContainerRuntimeRunc.String(),
-			"cacheEnabled":               true,
-			"terminationGracePeriod":     30,
-			"containerLogLinesPerHour":   6000,
-			"defaultWorkerCPURequest":    slot.Cpu,
-			"defaultWorkerMemoryRequest": slot.Memory,
-			"failover": map[string]any{
-				"maxSchedulingLatencyMs": 300000,
-			},
-			"pools": map[string]any{
-				slot.PoolName: map[string]any{
-					"mode":                      string(types.PoolModePrivate),
-					"gpuType":                   slot.Gpu,
-					"containerRuntime":          types.ContainerRuntimeRunc.String(),
-					"containerStartConcurrency": int(slot.ContainerStartConcurrency),
-					"networkPreallocation":      true,
-					"networkSlotPoolSize":       int(slot.NetworkSlotPoolSize),
-					"requiresPoolSelector":      true,
-					"priority":                  1000,
-					"criuEnabled":               false,
-					"tmpSizeLimit":              types.AgentTmpSizeLimit,
-					"storageMode":               workspaceStorageMode,
-					"checkpointPath":            types.AgentCheckpointPath,
-					"cache": map[string]any{
-						"enabled": true,
-						"disk": map[string]any{
-							"enabled":     true,
-							"hostPath":    types.AgentCachePath,
-							"mountPath":   types.AgentCachePath,
-							"maxUsagePct": 0.95,
-						},
-					},
-				},
-			},
-		},
-		"cache": map[string]any{
-			"enabled": true,
-			"disk": map[string]any{
-				"enabled":     true,
-				"hostPath":    types.AgentCachePath,
-				"mountPath":   types.AgentCachePath,
-				"maxUsagePct": 0.95,
-			},
-			"memory": map[string]any{
-				"enabled": false,
-			},
-			"global": map[string]any{
-				"defaultLocality": firstNonEmpty(slot.PoolName, types.DefaultAgentName),
-			},
-			"server": map[string]any{
-				"diskCacheDir": cacheDir,
-			},
-			"client": map[string]any{
-				"cachefs": map[string]any{
-					"enabled":    true,
-					"mountPoint": types.AgentCacheFSMountPath,
-				},
-			},
-		},
-	}
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0600)
 }

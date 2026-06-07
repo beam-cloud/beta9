@@ -134,6 +134,22 @@ func (r *ComputeRedisRepository) GetAgentTokenState(ctx context.Context, tokenHa
 	return &state, nil
 }
 
+func (r *ComputeRedisRepository) GetAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) (*compute.AgentTokenState, error) {
+	data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeAgentMachine(workspaceID, poolName, machineID)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var state compute.AgentTokenState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
 func (r *ComputeRedisRepository) ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error) {
 	machineIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeAgentMachineIndex(workspaceID, poolName)).Result()
 	if err != nil {

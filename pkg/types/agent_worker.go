@@ -11,11 +11,17 @@ const (
 	AgentServiceManagerSystemd      = "systemd"
 	AgentServiceManagerLaunchd      = "launchd"
 	AgentServiceManagerNone         = "none"
+	AgentServiceUnitExtension       = ".service"
+	AgentSystemdNetworkOnlineTarget = "network-online.target"
+	AgentSystemdDockerService       = "docker.service"
 	AgentSystemdUnitDir             = "/etc/systemd/system"
 	AgentSystemdRuntimeDir          = "/run/systemd/system"
 	AgentLaunchdUserDir             = "Library/LaunchAgents"
 	AgentLaunchdSystemDir           = "/Library/LaunchDaemons"
 	AgentLaunchdLabel               = "dev.beam.agent"
+	AgentLaunchdPlistExtension      = ".plist"
+	AgentLaunchdSystemDomain        = "system"
+	AgentLaunchdUserDomainPrefix    = "gui/"
 	AgentSystemctlCommand           = "systemctl"
 	AgentLaunchctlCommand           = "launchctl"
 	AgentPathEnv                    = "PATH"
@@ -76,6 +82,9 @@ const (
 	AgentDockerLabelPoolName        = "dev.beam.agent.pool_name"
 	AgentTelemetrySourceAgent       = "agent"
 	AgentTelemetrySourceWorker      = "worker"
+	AgentMachineStatusSchedulable   = "schedulable"
+	AgentMachineStatusDisconnected  = "disconnected"
+	AgentMachineStatusPreflightFail = "preflight_failed"
 )
 
 const (

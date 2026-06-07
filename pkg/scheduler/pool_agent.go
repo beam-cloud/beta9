@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -212,7 +213,7 @@ func (wpc *AgentWorkerPoolController) findMachine(match func(*compute.AgentToken
 
 func (wpc *AgentWorkerPoolController) machineSchedulable(machine *compute.AgentTokenState) bool {
 	return machine != nil &&
-		machine.Schedulable &&
+		compute.AgentMachineConnected(machine, time.Now()) &&
 		machine.Executor == types.DefaultAgentWorkerContainerMode &&
 		machine.WorkspaceID == wpc.workspaceID &&
 		machine.PoolName == wpc.poolName()
@@ -281,15 +282,19 @@ func (wpc *AgentWorkerPoolController) machineWorker(machine *compute.AgentTokenS
 
 func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.AgentTokenState) (*types.Worker, error) {
 	spec := wpc.agentMachineWorker(machine)
-	if worker, err := wpc.machineWorker(machine); err != nil || worker != nil {
-		return worker, err
-	}
-
-	worker := spec.worker()
-	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+	worker, err := wpc.machineWorker(machine)
+	if err != nil {
 		return nil, err
 	}
-	return worker, nil
+	if worker != nil && worker.Status != types.WorkerStatusDisabled {
+		return worker, nil
+	}
+
+	next := spec.worker()
+	if err := wpc.workerRepo.AddWorker(next); err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentTokenState) agentMachineWorker {

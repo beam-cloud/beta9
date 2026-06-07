@@ -11,6 +11,8 @@ import (
 )
 
 type dockerContainerInspect struct {
+	ID     string `json:"Id"`
+	Name   string `json:"Name"`
 	Config struct {
 		Labels map[string]string `json:"Labels"`
 		Env    []string          `json:"Env"`
@@ -29,6 +31,36 @@ func removeManagedWorkerContainer(name string, slot *pb.AgentWorkerSlot) error {
 		return fmt.Errorf("docker container %q already exists and is not managed by the Beam agent", name)
 	}
 
+	return removeDockerContainer(name)
+}
+
+func removeStaleManagedWorkerContainers(slot *pb.AgentWorkerSlot) error {
+	out, err := exec.Command("docker", "ps", "-aq", "--filter", "label="+types.AgentDockerLabelManaged+"=true").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("list managed worker containers: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	var failures []string
+	for _, id := range strings.Fields(string(out)) {
+		owned, exists, err := dockerContainerOwnedByAgent(id, slot)
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		if !exists || owned {
+			continue
+		}
+		if err := removeDockerContainer(id); err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func removeDockerContainer(name string) error {
 	out, err := exec.Command("docker", "rm", "-f", name).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("remove worker container %q: %w: %s", name, err, strings.TrimSpace(string(out)))
@@ -66,6 +98,9 @@ func dockerContainerInspectOwnedByAgent(data []byte, slot *pb.AgentWorkerSlot) (
 }
 
 func dockerContainerLabelsMatchSlot(labels map[string]string, slot *pb.AgentWorkerSlot) bool {
+	if labels[types.AgentDockerLabelManaged] != "true" {
+		return false
+	}
 	if slot == nil {
 		return true
 	}

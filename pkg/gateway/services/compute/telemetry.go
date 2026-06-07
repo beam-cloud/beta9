@@ -20,15 +20,21 @@ func (s *Service) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelem
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
+			if agentState != nil {
+				s.recordAgentDisconnect(ctx, agentState)
+			}
 			return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: true})
 		}
 		if err != nil {
+			if agentState != nil && ctx.Err() != nil {
+				s.recordAgentDisconnect(context.Background(), agentState)
+			}
 			return err
 		}
 
 		if agentState == nil {
 			agentToken = strings.TrimSpace(req.AgentToken)
-			state, err := s.getComputeAgentTokenState(ctx, agentToken)
+			state, err := s.getCurrentComputeAgentTokenState(ctx, agentToken)
 			if err != nil {
 				return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: err.Error()})
 			}
@@ -103,6 +109,11 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	if agentState == nil || snapshot == nil {
 		return nil
 	}
+	current, err := s.currentComputeAgentState(ctx, agentState)
+	if err != nil || current == nil {
+		return err
+	}
+	agentState = current
 
 	metrics := model.AgentMachineMetrics{
 		Timestamp:            timeFromUnixNano(snapshot.TimestampUnixNano),
@@ -120,6 +131,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 	agentState.Metrics = metrics
 	agentState.LastHeartbeatAt = metrics.Timestamp
+	agentState.LastDisconnectAt = time.Time{}
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return err
 	}
@@ -149,6 +161,30 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		},
 	})
 	return nil
+}
+
+func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.AgentTokenState) {
+	if agentState == nil {
+		return
+	}
+	current, err := s.currentComputeAgentState(ctx, agentState)
+	if err != nil || current == nil {
+		return
+	}
+	agentState = current
+	agentState.LastDisconnectAt = time.Now().UTC()
+	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
+		return
+	}
+	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
+		Timestamp:   agentState.LastDisconnectAt,
+		WorkspaceID: agentState.WorkspaceID,
+		PoolName:    agentState.PoolName,
+		MachineID:   agentState.MachineID,
+		Action:      types.EventComputeActionMachineDisconnected,
+		Status:      model.AgentMachineStatus(agentState, agentState.LastDisconnectAt),
+		Message:     "agent telemetry stream disconnected",
+	})
 }
 
 func timeFromUnixNano(value int64) time.Time {

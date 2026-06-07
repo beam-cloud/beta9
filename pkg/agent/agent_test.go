@@ -362,7 +362,7 @@ func TestMachineFingerprintCanBeProvidedByHost(t *testing.T) {
 }
 
 func TestResolveAgentCapacityAppliesHardCaps(t *testing.T) {
-	capacity, checks, schedulable := resolveAgentCapacity(JoinOptions{
+	capacity, checks, schedulable := resolveAgentCapacity(types.AgentJoinOptions{
 		MaxCPU:    "999999",
 		MaxMemory: "999999Ti",
 	}, preflightResult{
@@ -381,7 +381,7 @@ func TestResolveAgentCapacityAppliesHardCaps(t *testing.T) {
 }
 
 func TestResolveAgentCapacitySelectsGPUIDs(t *testing.T) {
-	capacity, _, schedulable := resolveAgentCapacity(JoinOptions{
+	capacity, _, schedulable := resolveAgentCapacity(types.AgentJoinOptions{
 		GPUIDs: "GPU-a,1",
 	}, preflightResult{
 		gpus: []string{"A10G", "A10G"},

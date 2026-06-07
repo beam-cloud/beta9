@@ -46,7 +46,7 @@ func (m Systemd) Install(ctx context.Context, spec Spec) error {
 		return err
 	}
 
-	unitPath := filepath.Join(unitDir, spec.Name+".service")
+	unitPath := filepath.Join(unitDir, spec.Name+types.AgentServiceUnitExtension)
 	if err := os.WriteFile(unitPath, []byte(SystemdUnit(spec)), 0644); err != nil {
 		return err
 	}
@@ -54,8 +54,8 @@ func (m Systemd) Install(ctx context.Context, spec Spec) error {
 	runner := m.runner()
 	for _, args := range [][]string{
 		{"daemon-reload"},
-		{"enable", spec.Name + ".service"},
-		{"restart", spec.Name + ".service"},
+		{"enable", spec.Name + types.AgentServiceUnitExtension},
+		{"restart", spec.Name + types.AgentServiceUnitExtension},
 	} {
 		if err := runner.Run(ctx, types.AgentSystemctlCommand, args...); err != nil {
 			return fmt.Errorf("%s %s: %w", types.AgentSystemctlCommand, strings.Join(args, " "), err)
@@ -78,8 +78,8 @@ func SystemdUnit(spec Spec) string {
 	writeLines(&b,
 		"[Unit]",
 		"Description="+spec.Description,
-		"Wants=network-online.target docker.service",
-		"After=network-online.target docker.service",
+		"Wants="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
+		"After="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
 		"",
 		"[Service]",
 		"Type=simple",

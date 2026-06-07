@@ -10,7 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func RunJoin(ctx context.Context, opts JoinOptions) error {
+func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	var err error
 	if opts, err = normalizeJoinOptions(opts); err != nil {
 		return err
@@ -69,19 +69,19 @@ func RunJoin(ctx context.Context, opts JoinOptions) error {
 	return nil
 }
 
-func normalizeJoinOptions(opts JoinOptions) (JoinOptions, error) {
+func normalizeJoinOptions(opts types.AgentJoinOptions) (types.AgentJoinOptions, error) {
 	opts.GatewayURL = strings.TrimRight(strings.TrimSpace(opts.GatewayURL), "/")
 	opts.JoinToken = strings.TrimSpace(opts.JoinToken)
 	opts.JoinTokenFile = strings.TrimSpace(opts.JoinTokenFile)
 	if opts.JoinToken == "" && opts.JoinTokenFile != "" {
 		data, err := os.ReadFile(opts.JoinTokenFile)
 		if err != nil {
-			return JoinOptions{}, fmt.Errorf("read join token file: %w", err)
+			return types.AgentJoinOptions{}, fmt.Errorf("read join token file: %w", err)
 		}
 		opts.JoinToken = strings.TrimSpace(string(data))
 	}
 	if opts.GatewayURL == "" {
-		return JoinOptions{}, fmt.Errorf("gateway is required")
+		return types.AgentJoinOptions{}, fmt.Errorf("gateway is required")
 	}
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
@@ -92,7 +92,7 @@ func normalizeJoinOptions(opts JoinOptions) (JoinOptions, error) {
 	return opts, nil
 }
 
-func resolveAgentIdentity(ctx context.Context, client *Client, opts JoinOptions) (*joinResponse, error) {
+func resolveAgentIdentity(ctx context.Context, client *Client, opts types.AgentJoinOptions) (*joinResponse, error) {
 	savedState, _ := loadRuntimeState(opts.GatewayURL)
 	if opts.JoinToken == "" {
 		if savedState == nil {

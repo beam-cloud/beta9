@@ -67,7 +67,7 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+	opts := AgentWorkerPoolControllerOptions{
 		Context:     ctx,
 		Name:        poolState.Selector,
 		WorkspaceID: workspaceID,
@@ -88,7 +88,8 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		PoolState:   poolState,
 		WorkerRepo:  workerRepo,
 		ComputeRepo: computeRepo,
-	})
+	}
+	controller, err := NewAgentWorkerPoolController(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,5 +123,19 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	}
 	if secondWorker.Id != worker.Id {
 		t.Fatalf("second worker = %q, want stable worker %q", secondWorker.Id, worker.Id)
+	}
+
+	if err := workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAgentWorkerPoolController(opts); err != nil {
+		t.Fatal(err)
+	}
+	restoredWorker, err := workerRepo.GetWorkerById(worker.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredWorker.Status != types.WorkerStatusPending {
+		t.Fatalf("restored worker status = %q, want %q", restoredWorker.Status, types.WorkerStatusPending)
 	}
 }

@@ -180,6 +180,7 @@ const (
 	EventComputeActionJoinTokenRevoked          = "join_token.revoked"
 	EventComputeActionMachineJoined             = "machine.joined"
 	EventComputeActionMachineHeartbeat          = "machine.heartbeat"
+	EventComputeActionMachineDisconnected       = "machine.disconnected"
 	EventComputeActionWorkerSlotCreated         = "worker_slot.created"
 	EventComputeActionWorkerSlotPruned          = "worker_slot.pruned"
 	EventComputeActionTransportCredentialVended = "transport.credential_vended"

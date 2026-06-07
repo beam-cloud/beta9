@@ -52,6 +52,13 @@ func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 	if machines[0].Metrics.CPUUtilizationPct != machine.Metrics.CPUUtilizationPct || machines[0].Metrics.MemoryTotalMB != machine.Metrics.MemoryTotalMB {
 		t.Fatalf("machine metrics = %#v, want %#v", machines[0].Metrics, machine.Metrics)
 	}
+	machineByID, err := repo.GetAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if machineByID == nil || machineByID.TokenHash != machine.TokenHash {
+		t.Fatalf("machine by id = %#v, want token %s", machineByID, machine.TokenHash)
+	}
 
 	slot := &compute.AgentWorkerSlotState{
 		WorkerID:    "worker-one",

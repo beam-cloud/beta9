@@ -613,7 +613,22 @@ func isS2RangeNotSatisfiable(err error) bool {
 
 func isS2StreamNotFound(err error) bool {
 	var s2Err *s2.S2Error
-	return err != nil && errors.As(err, &s2Err) && s2Err.Status == httpStatusNotFound
+	if err == nil {
+		return false
+	}
+	if errors.As(err, &s2Err) {
+		code := strings.ToLower(strings.TrimSpace(s2Err.Code))
+		return s2Err.Status == httpStatusNotFound ||
+			code == "stream_not_found" ||
+			code == "stream_does_not_exist" ||
+			code == "resource_not_found" ||
+			code == "not_found"
+	}
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "stream not found") ||
+		strings.Contains(message, "stream does not exist") ||
+		strings.Contains(message, "no such stream")
 }
 
 func isS2ReadEmpty(err error) bool {

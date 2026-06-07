@@ -20,7 +20,7 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 	}
 	spec := Spec{
 		Name:       "beam agent!",
-		BinaryPath: "/usr/local/bin/beam-agent",
+		BinaryPath: types.DefaultAgentBinaryPath,
 		Args: []string{
 			"join",
 			"--gateway", "https://gateway.beam.cloud",
@@ -37,7 +37,7 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unit, err := os.ReadFile(filepath.Join(tmp, "beam-agent.service"))
+	unit, err := os.ReadFile(filepath.Join(tmp, types.DefaultAgentServiceName+types.AgentServiceUnitExtension))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 		`Description=Beam Agent`,
 		`Environment="BEAM_AGENT_STATE_DIR=` + filepath.Join(tmp, "state") + `"`,
 		`Environment="BEAM_WORKER_IMAGE=registry.example.com/worker:latest"`,
-		`ExecStart="/usr/local/bin/beam-agent" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
+		`ExecStart="` + types.DefaultAgentBinaryPath + `" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
 		`Restart=always`,
 	} {
 		if !strings.Contains(unitText, want) {
@@ -55,9 +55,9 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 	}
 
 	if got, want := strings.Join(runner.commands, "\n"), strings.Join([]string{
-		"systemctl daemon-reload",
-		"systemctl enable beam-agent.service",
-		"systemctl restart beam-agent.service",
+		types.AgentSystemctlCommand + " daemon-reload",
+		types.AgentSystemctlCommand + " enable " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
+		types.AgentSystemctlCommand + " restart " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
 	}, "\n"); got != want {
 		t.Fatalf("unexpected commands:\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -66,7 +66,7 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 func TestLaunchdPlistRendersAgentProgram(t *testing.T) {
 	spec := Spec{
 		Name:       "private pool",
-		BinaryPath: "/usr/local/bin/beam-agent",
+		BinaryPath: types.DefaultAgentBinaryPath,
 		Args: []string{
 			"join",
 			"--gateway", "https://gateway.beam.cloud",
@@ -81,7 +81,7 @@ func TestLaunchdPlistRendersAgentProgram(t *testing.T) {
 	plist := LaunchdPlist(spec)
 	for _, want := range []string{
 		`<string>dev.beam.agent.private-pool</string>`,
-		`<string>/usr/local/bin/beam-agent</string>`,
+		`<string>` + types.DefaultAgentBinaryPath + `</string>`,
 		`<string>--join-token</string>`,
 		`<string>token&amp;value</string>`,
 		`<key>BEAM_AGENT_STATE_DIR</key>`,

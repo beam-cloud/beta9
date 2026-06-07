@@ -29,7 +29,7 @@ func TestAgentInstallScriptDownloadsAgentFromGateway(t *testing.T) {
 	}
 	for _, want := range []string{
 		"${GATEWAY}/install/agent/${OS_NAME}/${ARCH_NAME}",
-		"${GATEWAY}/install/agent/linux/${ARCH}",
+		"${GATEWAY}/install/agent/linux/${ARCH}?dev=1",
 		"ensure_linux_docker",
 	} {
 		if !strings.Contains(agentInstallScript, want) {
@@ -70,34 +70,9 @@ func TestAgentBinaryHandlerRejectsWrongPlatform(t *testing.T) {
 }
 
 func TestAgentBinaryHandlerBuildsMissingBinaryFromSource(t *testing.T) {
-	sourceDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte("module test\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(sourceDir, "cmd", "agent"), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	binDir := t.TempDir()
-	fakeGo := filepath.Join(binDir, "go")
-	if err := os.WriteFile(fakeGo, []byte(`#!/bin/sh
-set -eu
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then
-    shift
-    out="$1"
-  fi
-  shift || true
-done
-printf 'built-agent' > "$out"
-`), 0755); err != nil {
-		t.Fatal(err)
-	}
-
+	sourceDir := fakeAgentSourceTree(t, "built-agent")
 	t.Setenv(types.AgentSourceDirEnv, sourceDir)
 	t.Setenv(types.AgentBuildCacheDirEnv, t.TempDir())
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rec := httptest.NewRecorder()
 	ctx := newAgentBinaryContext(rec, "linux", "arm64")
@@ -110,6 +85,24 @@ printf 'built-agent' > "$out"
 	}
 	if got := rec.Body.String(); got != "built-agent" {
 		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestAgentBinaryHandlerDevQueryBuildsEvenWhenStaticBinaryExists(t *testing.T) {
+	staticPath := writeAgentBinary(t)
+	sourceDir := fakeAgentSourceTree(t, "dev-agent")
+	t.Setenv(types.AgentBinaryPathEnv, staticPath)
+	t.Setenv(types.AgentSourceDirEnv, sourceDir)
+	t.Setenv(types.AgentBuildCacheDirEnv, t.TempDir())
+
+	rec := httptest.NewRecorder()
+	ctx := newAgentBinaryContext(rec, "linux", "arm64")
+	ctx.Request().URL.RawQuery = "dev=1"
+	if err := agentBinaryHandler()(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Body.String(); got != "dev-agent" {
+		t.Fatalf("body = %q, want dev-built binary", got)
 	}
 }
 
@@ -130,6 +123,38 @@ func writeAgentBinary(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return file.Name()
+}
+
+func fakeAgentSourceTree(t *testing.T, output string) string {
+	t.Helper()
+
+	sourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sourceDir, "go.mod"), []byte("module test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourceDir, "cmd", "agent"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	fakeGo := filepath.Join(binDir, "go")
+	script := `#!/bin/sh
+set -eu
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    out="$1"
+  fi
+  shift || true
+done
+printf '` + output + `' > "$out"
+`
+	if err := os.WriteFile(fakeGo, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return sourceDir
 }
 
 func newAgentBinaryContext(rec *httptest.ResponseRecorder, osName, arch string) echo.Context {

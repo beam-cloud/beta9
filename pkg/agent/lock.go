@@ -29,7 +29,7 @@ func acquireAgentLock() (*agentLock, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-			return nil, fmt.Errorf("another beam-agent is already running for state dir %s", stateDir)
+			return nil, fmt.Errorf("another %s is already running for state dir %s", types.DefaultAgentServiceName, stateDir)
 		}
 		return nil, err
 	}

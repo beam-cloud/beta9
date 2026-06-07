@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type gpuDevice struct {
@@ -26,7 +28,7 @@ type agentCapacity struct {
 	ContainerStartConcurrency uint32
 }
 
-func resolveAgentCapacity(opts JoinOptions, preflight preflightResult) (agentCapacity, []check, bool) {
+func resolveAgentCapacity(opts types.AgentJoinOptions, preflight preflightResult) (agentCapacity, []check, bool) {
 	checks := append([]check{}, preflight.checks...)
 	schedulable := preflight.schedulable
 
@@ -150,7 +152,7 @@ func parseMemoryMB(value string) (uint64, error) {
 	return uint64(math.Round(amount * scale)), nil
 }
 
-func selectGPUDevices(opts JoinOptions, devices []gpuDevice) ([]gpuDevice, bool, []check) {
+func selectGPUDevices(opts types.AgentJoinOptions, devices []gpuDevice) ([]gpuDevice, bool, []check) {
 	gpuIDs := splitCSV(opts.GPUIDs)
 	if len(gpuIDs) > 0 && opts.MaxGPUs > 0 {
 		return nil, true, []check{{

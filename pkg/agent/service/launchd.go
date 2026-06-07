@@ -14,7 +14,8 @@ import (
 )
 
 type Launchd struct {
-	Runner Runner
+	Runner   Runner
+	Platform LaunchdPlatform
 }
 
 func (m Launchd) Name() string {
@@ -22,7 +23,7 @@ func (m Launchd) Name() string {
 }
 
 func (m Launchd) Available() bool {
-	if runtime.GOOS != "darwin" {
+	if !m.platform().Supported() {
 		return false
 	}
 	_, err := m.runner().LookPath(types.AgentLaunchctlCommand)
@@ -38,23 +39,23 @@ func (m Launchd) Install(ctx context.Context, spec Spec) error {
 		return err
 	}
 
-	path, domain, label, err := launchdTarget(spec.Name)
+	target, err := m.platform().Target(spec.Name)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target.Path), 0755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(LaunchdPlist(spec)), 0644); err != nil {
+	if err := os.WriteFile(target.Path, []byte(LaunchdPlist(spec)), 0644); err != nil {
 		return err
 	}
 
 	runner := m.runner()
-	_ = runner.Run(ctx, types.AgentLaunchctlCommand, "bootout", domain, path)
-	if err := runner.Run(ctx, types.AgentLaunchctlCommand, "bootstrap", domain, path); err != nil {
+	_ = runner.Run(ctx, types.AgentLaunchctlCommand, "bootout", target.Domain, target.Path)
+	if err := runner.Run(ctx, types.AgentLaunchctlCommand, "bootstrap", target.Domain, target.Path); err != nil {
 		return fmt.Errorf("%s bootstrap: %w", types.AgentLaunchctlCommand, err)
 	}
-	if err := runner.Run(ctx, types.AgentLaunchctlCommand, "kickstart", "-k", domain+"/"+label); err != nil {
+	if err := runner.Run(ctx, types.AgentLaunchctlCommand, "kickstart", "-k", target.Domain+"/"+target.Label); err != nil {
 		return fmt.Errorf("%s kickstart: %w", types.AgentLaunchctlCommand, err)
 	}
 	return nil
@@ -65,6 +66,13 @@ func (m Launchd) runner() Runner {
 		return m.Runner
 	}
 	return osRunner{}
+}
+
+func (m Launchd) platform() LaunchdPlatform {
+	if m.Platform != nil {
+		return m.Platform
+	}
+	return osLaunchdPlatform{}
 }
 
 func LaunchdPlist(spec Spec) string {
@@ -86,18 +94,42 @@ func LaunchdPlist(spec Spec) string {
 	return p.String()
 }
 
-func launchdTarget(serviceName string) (path, domain, label string, err error) {
-	label = launchdLabel(serviceName)
+type LaunchdPlatform interface {
+	Supported() bool
+	Target(serviceName string) (LaunchdTarget, error)
+}
+
+type LaunchdTarget struct {
+	Path   string
+	Domain string
+	Label  string
+}
+
+type osLaunchdPlatform struct{}
+
+func (osLaunchdPlatform) Supported() bool {
+	return runtime.GOOS == "darwin"
+}
+
+func (osLaunchdPlatform) Target(serviceName string) (LaunchdTarget, error) {
+	label := launchdLabel(serviceName)
 	if os.Geteuid() == 0 {
-		return filepath.Join(types.AgentLaunchdSystemDir, label+".plist"), "system", label, nil
+		return LaunchdTarget{
+			Path:   filepath.Join(types.AgentLaunchdSystemDir, label+types.AgentLaunchdPlistExtension),
+			Domain: types.AgentLaunchdSystemDomain,
+			Label:  label,
+		}, nil
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", "", "", err
+		return LaunchdTarget{}, err
 	}
-	domain = "gui/" + strconv.Itoa(os.Getuid())
-	return filepath.Join(home, types.AgentLaunchdUserDir, label+".plist"), domain, label, nil
+	return LaunchdTarget{
+		Path:   filepath.Join(home, types.AgentLaunchdUserDir, label+types.AgentLaunchdPlistExtension),
+		Domain: types.AgentLaunchdUserDomainPrefix + strconv.Itoa(os.Getuid()),
+		Label:  label,
+	}, nil
 }
 
 func launchdLabel(rawName string) string {

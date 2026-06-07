@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type EventGroup struct {
@@ -460,8 +461,12 @@ func (g *EventGroup) GetEventHistory(ctx echo.Context) error {
 	response, err := g.eventRepo.GetEventHistory(ctx.Request().Context(), query)
 	if err != nil {
 		if errors.Is(err, repository.ErrEventReadUnsupported) {
-			return NewHTTPError(http.StatusServiceUnavailable, "Event reads are not configured")
+			return ctx.JSON(http.StatusOK, &types.EventHistoryResponse{Events: []types.ContainerEventRecord{}, Streams: []string{}})
 		}
+		if IsRequestCanceled(ctx, err) {
+			return HTTPClientClosedRequest(ctx)
+		}
+		log.Warn().Err(err).Str("workspace_id", query.WorkspaceID).Str("stub_id", query.StubID).Str("container_id", query.ContainerID).Str("task_id", query.TaskID).Msg("failed to retrieve event history")
 		return HTTPInternalServerError("Failed to retrieve event history")
 	}
 

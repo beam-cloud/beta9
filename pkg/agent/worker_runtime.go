@@ -33,13 +33,13 @@ type workerRuntimeSupervisor struct {
 
 type workerContainerRuntime struct {
 	bootstrap bootstrapConfig
-	opts      JoinOptions
+	opts      types.AgentJoinOptions
 	stdout    io.Writer
 	stderr    io.Writer
 	telemetry *agentTelemetry
 }
 
-func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts JoinOptions, stdout, stderr, agentLogs io.Writer, telemetry *agentTelemetry) *workerRuntimeManager {
+func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts types.AgentJoinOptions, stdout, stderr, agentLogs io.Writer, telemetry *agentTelemetry) *workerRuntimeManager {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -165,12 +165,15 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		return err
 	}
 
-	name := "beam-agent-" + sanitizeDockerName(slot.WorkerId)
+	name := types.DefaultAgentServiceName + "-" + sanitizeDockerName(slot.WorkerId)
 	image := firstNonEmpty(r.opts.WorkerImage, os.Getenv(types.AgentWorkerImageEnv), slot.WorkerImage)
 	if image == "" {
 		return fmt.Errorf("worker image is required for slot %s", slot.WorkerId)
 	}
 
+	if err := removeStaleManagedWorkerContainers(slot); err != nil {
+		fmt.Fprintf(r.stderr, "failed to clean stale worker containers: %v\n", err)
+	}
 	if err := removeManagedWorkerContainer(name, slot); err != nil {
 		return err
 	}

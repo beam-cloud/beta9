@@ -21,6 +21,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+type Client struct {
+	http httpjson.Client
+}
+
 func NewClient(gatewayURL string) *Client {
 	return &Client{
 		http: httpjson.Client{
@@ -106,7 +110,7 @@ func urlHostIsLoopback(value string) bool {
 	return isLoopbackHost(u.Hostname())
 }
 
-func join(ctx context.Context, client *Client, opts JoinOptions) (*joinResponse, error) {
+func join(ctx context.Context, client *Client, opts types.AgentJoinOptions) (*joinResponse, error) {
 	hostname, _ := os.Hostname()
 	hostname = firstNonEmpty(os.Getenv(types.AgentHostnameEnv), hostname)
 	executor := types.DefaultAgentWorkerContainerMode

@@ -67,6 +67,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		Preflight:                 preflightChecksFromProto(in.Preflight),
 		CreatedAt:                 now,
 		LastJoinAt:                now,
+		LastHeartbeatAt:           now,
 	}
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -113,7 +114,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 }
 
 func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
-	agentState, err := s.getComputeAgentTokenState(ctx, in.AgentToken)
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -145,7 +146,7 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 }
 
 func (s *Service) ListAgentRoutes(ctx context.Context, in *pb.ListAgentRoutesRequest) (*pb.ListAgentRoutesResponse, error) {
-	agentState, err := s.getComputeAgentTokenState(ctx, in.AgentToken)
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -162,7 +163,7 @@ func (s *Service) ListAgentRoutes(ctx context.Context, in *pb.ListAgentRoutesReq
 
 func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	ctx := stream.Context()
-	agentState, err := s.getComputeAgentTokenState(ctx, in.AgentToken)
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
 	}
@@ -171,6 +172,14 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 	}
 
 	sendSnapshot := func() error {
+		current, err := s.currentComputeAgentState(ctx, agentState)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "agent token is no longer current"})
+		}
+		agentState = current
 		if s.scheduler != nil {
 			if poolState, err := s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
 				if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
@@ -430,7 +439,7 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 }
 
 func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest) (*pb.UpdateAgentRouteStatusResponse, error) {
-	agentState, err := s.getComputeAgentTokenState(ctx, in.AgentToken)
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -547,10 +556,7 @@ func preflightChecksFromProto(in []*pb.AgentPreflightCheck) []model.PreflightChe
 }
 
 func computeMachineStatus(state *model.AgentTokenState) string {
-	if state != nil && state.Schedulable {
-		return "schedulable"
-	}
-	return "preflight_failed"
+	return model.AgentMachineStatus(state, time.Now())
 }
 
 func boolPtr(value bool) *bool {

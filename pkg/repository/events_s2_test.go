@@ -844,6 +844,22 @@ func TestS2StreamDeletionPendingErrorIsTransient(t *testing.T) {
 	}
 }
 
+func TestS2ReadEmptyRecognizesStreamNotFoundByCodeAndMessage(t *testing.T) {
+	codeErr := fmt.Errorf("read stream: %w", &s2.S2Error{
+		Code:   "stream_not_found",
+		Status: 400,
+		Origin: "server",
+	})
+	if !isS2ReadEmpty(codeErr) {
+		t.Fatal("expected stream_not_found code to be treated as empty")
+	}
+
+	messageErr := fmt.Errorf("read stream: stream does not exist")
+	if !isS2ReadEmpty(messageErr) {
+		t.Fatal("expected stream missing message to be treated as empty")
+	}
+}
+
 func TestAugmentContainerEventResponseBuildsLifecycleSummary(t *testing.T) {
 	now := time.Now().UTC()
 	response := &types.ContainerEventsResponse{
