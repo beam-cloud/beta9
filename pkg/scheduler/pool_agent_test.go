@@ -108,6 +108,9 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if worker.MachineId != machine.MachineID {
 		t.Fatalf("worker machine = %q, want %q", worker.MachineId, machine.MachineID)
 	}
+	if len(worker.Id) != 8 {
+		t.Fatalf("worker id = %q, want shared 8-character worker id shape", worker.Id)
+	}
 	if worker.TotalCpu != machine.CPUMillicores {
 		t.Fatalf("worker cpu = %d, want %d", worker.TotalCpu, machine.CPUMillicores)
 	}

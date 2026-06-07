@@ -2,8 +2,6 @@ package compute
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -43,7 +41,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	machineID := computeMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
+	machineID := model.AgentMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
 	now := time.Now()
 	agentState := &model.AgentTokenState{
 		TokenHash:                 hashComputeToken(agentToken),
@@ -532,15 +530,6 @@ func (s *Service) validateAgentTransportConfig(transport string) error {
 	default:
 		return fmt.Errorf("unsupported agent transport %q", transport)
 	}
-}
-
-func computeMachineID(workspaceID, poolName, fingerprint string) string {
-	seed := fingerprint
-	if seed == "" {
-		seed = fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	sum := sha256.Sum256([]byte(workspaceID + "\x00" + poolName + "\x00" + seed))
-	return "machine-" + hex.EncodeToString(sum[:])[:20]
 }
 
 func preflightChecksFromProto(in []*pb.AgentPreflightCheck) []model.PreflightCheckState {
