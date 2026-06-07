@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -387,7 +386,7 @@ func (w *telemetryLineWriter) Close() error {
 }
 
 func (w *telemetryLineWriter) flushLocked() {
-	line := common.RedactLogSecrets(string(bytes.TrimRight(w.buf.Bytes(), "\r")))
+	line := string(bytes.TrimRight(w.buf.Bytes(), "\r"))
 	w.buf.Reset()
 	if line == "" {
 		return

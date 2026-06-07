@@ -23,6 +23,7 @@ require (
 	github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.2
+	github.com/cockroachdb/redact v1.1.8
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/go-faker/faker/v4 v4.6.0
 	github.com/go-playground/validator/v10 v10.26.0
@@ -308,7 +309,7 @@ require (
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/oauth2 v0.25.0 // indirect
-	golang.org/x/term v0.29.0 // indirect
+	golang.org/x/term v0.29.0
 	golang.org/x/text v0.22.0 // indirect
 	golang.org/x/tools v0.30.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
