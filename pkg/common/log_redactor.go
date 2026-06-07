@@ -7,7 +7,8 @@ var (
 	bearerTokenPattern       = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
 )
 
-func RedactSecrets(value string) string {
+// RedactLogSecrets performs best-effort masking for unstructured agent and worker logs.
+func RedactLogSecrets(value string) string {
 	value = bearerTokenPattern.ReplaceAllString(value, "Bearer [redacted]")
 	return sensitiveKeyValuePattern.ReplaceAllString(value, `$1$2[redacted]`)
 }

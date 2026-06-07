@@ -5,10 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -1041,15 +1038,6 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		}
 	}
 
-	if err != nil && agentGatewayImageArchiveAvailable() {
-		if gatewayErr := c.pullImageArchiveFromGateway(ctx, tempPath, imageId); gatewayErr == nil {
-			err = nil
-		} else {
-			log.Error().Err(gatewayErr).Str("image_id", imageId).Msg("failed to pull image metadata archive from gateway")
-			return nil, gatewayErr
-		}
-	}
-
 	if err != nil {
 		log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
 		return nil, err
@@ -1060,100 +1048,6 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	return &sourceRegistry, nil
-}
-
-func (c *ImageClient) pullImageArchiveFromGateway(ctx context.Context, localPath, imageId string) error {
-	var lastErr error
-	for _, extension := range gatewayImageArchiveExtensions(c.registry.ImageFileExtension) {
-		err := c.pullGatewayImageArchive(ctx, localPath, imageId, extension)
-		if err == nil {
-			return nil
-		}
-
-		var statusErr *gatewayImageArchiveStatusError
-		if errors.As(err, &statusErr) && statusErr.statusCode == http.StatusNotFound {
-			lastErr = err
-			continue
-		}
-		return err
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("gateway image archive proxy is not configured")
-}
-
-func (c *ImageClient) pullGatewayImageArchive(ctx context.Context, localPath, imageId, extension string) error {
-	gatewayURL := strings.TrimRight(os.Getenv(types.AgentGatewayURLEnv), "/")
-	workerToken := strings.TrimSpace(os.Getenv(types.WorkerTokenEnv))
-	if gatewayURL == "" || workerToken == "" {
-		return fmt.Errorf("gateway image archive proxy is not configured")
-	}
-
-	file := fmt.Sprintf("%s.%s", imageId, extension)
-	imageURL := fmt.Sprintf("%s/api/v1/agent/images/%s/%s", gatewayURL, url.PathEscape(imageId), url.PathEscape(file))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+workerToken)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return &gatewayImageArchiveStatusError{statusCode: resp.StatusCode, status: resp.Status}
-	}
-
-	if err := ensureImageDirectory(filepath.Dir(localPath), 0755); err != nil {
-		return err
-	}
-	out, err := os.Create(localPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		return err
-	}
-
-	log.Info().Str("image_id", imageId).Str("path", localPath).Msg("pulled image archive from gateway")
-	return nil
-}
-
-type gatewayImageArchiveStatusError struct {
-	statusCode int
-	status     string
-}
-
-func (e *gatewayImageArchiveStatusError) Error() string {
-	return fmt.Sprintf("gateway image archive request failed: %s", e.status)
-}
-
-func gatewayImageArchiveExtensions(preferred string) []string {
-	extensions := []string{}
-	for _, extension := range []string{preferred, registry.RemoteImageFileExtension, registry.LocalImageFileExtension} {
-		if extension == "" {
-			continue
-		}
-		seen := false
-		for _, existing := range extensions {
-			if extension == existing {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			extensions = append(extensions, extension)
-		}
-	}
-	return extensions
-}
-
-func agentGatewayImageArchiveAvailable() bool {
-	return strings.TrimSpace(os.Getenv(types.AgentGatewayURLEnv)) != "" && strings.TrimSpace(os.Getenv(types.WorkerTokenEnv)) != ""
 }
 
 func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, error) {

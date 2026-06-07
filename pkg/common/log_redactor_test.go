@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestRedactSecrets(t *testing.T) {
+func TestRedactLogSecrets(t *testing.T) {
 	line := `access_key=abc secretKey:xyz Authorization: Bearer token-value password="p" normal=value`
-	redacted := RedactSecrets(line)
+	redacted := RedactLogSecrets(line)
 
 	for _, leaked := range []string{"abc", "xyz", "token-value", `"p"`} {
 		if strings.Contains(redacted, leaked) {

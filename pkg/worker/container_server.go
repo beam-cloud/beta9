@@ -972,11 +972,14 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 
-		// Move to target location inside container
-		quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
 		tempContainerPath := filepath.Join(types.WorkerContainerUploadsMountPath, tempFile)
 		cmd := fmt.Sprintf("mkdir -p %s && mv %s %s && chmod %o %s",
-			quote(filepath.Dir(containerPath)), quote(tempContainerPath), quote(containerPath), in.Mode, quote(containerPath))
+			common.ShellQuote(filepath.Dir(containerPath)),
+			common.ShellQuote(tempContainerPath),
+			common.ShellQuote(containerPath),
+			in.Mode,
+			common.ShellQuote(containerPath),
+		)
 
 		if resp, err := s.ContainerExec(ctx, &pb.ContainerExecRequest{
 			ContainerId: in.ContainerId,

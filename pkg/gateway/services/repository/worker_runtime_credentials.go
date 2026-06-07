@@ -12,8 +12,12 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+// GetContainerRuntimeCredentials vends per-container credentials over the worker
+// repository service. It intentionally uses the existing backend/container repos
+// instead of introducing a persistence repository because this path does not own
+// durable state.
 func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*pb.GetContainerRuntimeCredentialsResponse, error) {
-	workspace, err := s.authorizeRuntimeCredentialRequest(ctx, req)
+	workspace, err := s.authorizeWorkerRuntimeCredentialRequest(ctx, req)
 	if err != nil {
 		return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -21,7 +25,7 @@ func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Con
 	resp := &pb.GetContainerRuntimeCredentialsResponse{Ok: true}
 
 	if req.RuntimeToken || len(req.SecretNames) > 0 {
-		resp.Env, err = s.containerRuntimeEnv(ctx, workspace, req)
+		resp.Env, err = s.workerRuntimeEnv(ctx, workspace, req)
 		if err != nil {
 			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
@@ -32,7 +36,7 @@ func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Con
 	}
 
 	if len(req.MountCredentials) > 0 {
-		resp.MountCredentials, err = s.externalMountCredentials(ctx, workspace, req)
+		resp.MountCredentials, err = s.workerRuntimeMountCredentials(ctx, workspace, req)
 		if err != nil {
 			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
@@ -41,7 +45,7 @@ func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Con
 	return resp, nil
 }
 
-func (s *WorkerRepositoryService) authorizeRuntimeCredentialRequest(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
+func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
@@ -103,7 +107,7 @@ func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, wo
 	return workspace.Id, nil
 }
 
-func (s *WorkerRepositoryService) containerRuntimeEnv(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]string, error) {
+func (s *WorkerRepositoryService) workerRuntimeEnv(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]string, error) {
 	env := make([]string, 0, len(req.SecretNames)+1)
 	if len(req.SecretNames) > 0 {
 		secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, req.SecretNames)
@@ -132,7 +136,7 @@ func (s *WorkerRepositoryService) containerRuntimeEnv(ctx context.Context, works
 	}
 
 	if req.RuntimeToken {
-		token, err := s.runtimeToken(ctx, workspace.Id)
+		token, err := s.workspaceRuntimeToken(ctx, workspace.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +145,7 @@ func (s *WorkerRepositoryService) containerRuntimeEnv(ctx context.Context, works
 	return env, nil
 }
 
-func (s *WorkerRepositoryService) runtimeToken(ctx context.Context, workspaceID uint) (string, error) {
+func (s *WorkerRepositoryService) workspaceRuntimeToken(ctx context.Context, workspaceID uint) (string, error) {
 	tokens, err := s.backendRepo.ListTokens(ctx, workspaceID)
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
@@ -159,8 +163,8 @@ func (s *WorkerRepositoryService) runtimeToken(ctx context.Context, workspaceID 
 	return token.Key, nil
 }
 
-func (s *WorkerRepositoryService) externalMountCredentials(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]*pb.RuntimeMountCredentials, error) {
-	stubConfig, err := s.stubConfig(ctx, req.StubId, req.WorkspaceId)
+func (s *WorkerRepositoryService) workerRuntimeMountCredentials(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]*pb.RuntimeMountCredentials, error) {
+	stubConfig, err := s.workerRuntimeStubConfig(ctx, req.StubId, req.WorkspaceId)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +205,7 @@ func (s *WorkerRepositoryService) externalMountCredentials(ctx context.Context, 
 	return out, nil
 }
 
-func (s *WorkerRepositoryService) stubConfig(ctx context.Context, stubID, workspaceID string) (*types.StubConfigV1, error) {
+func (s *WorkerRepositoryService) workerRuntimeStubConfig(ctx context.Context, stubID, workspaceID string) (*types.StubConfigV1, error) {
 	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubID, types.QueryFilter{Field: "workspace_id", Value: workspaceID})
 	if err != nil {
 		return nil, err

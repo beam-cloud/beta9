@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type runtimeCredentialsBackendRepo struct {
+type workerRuntimeCredentialsBackendRepo struct {
 	repository.BackendRepository
 	workspace                  *types.Workspace
 	stub                       *types.StubWithRelated
@@ -24,43 +24,43 @@ type runtimeCredentialsBackendRepo struct {
 	workspaceByExternalIDCalls int
 }
 
-func (r *runtimeCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
+func (r *workerRuntimeCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
 	r.workspaceByExternalIDCalls++
 	workspace := *r.workspace
 	workspace.ExternalId = externalID
 	return workspace, nil
 }
 
-func (r *runtimeCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
+func (r *workerRuntimeCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
 	workspace := *r.workspace
 	workspace.Id = workspaceID
 	return &workspace, nil
 }
 
-func (r *runtimeCredentialsBackendRepo) GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
+func (r *workerRuntimeCredentialsBackendRepo) GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
 	return r.secrets, nil
 }
 
-func (r *runtimeCredentialsBackendRepo) ListTokens(ctx context.Context, workspaceID uint) ([]types.Token, error) {
+func (r *workerRuntimeCredentialsBackendRepo) ListTokens(ctx context.Context, workspaceID uint) ([]types.Token, error) {
 	return r.tokens, nil
 }
 
-func (r *runtimeCredentialsBackendRepo) CreateToken(ctx context.Context, workspaceID uint, tokenType string, reusable bool) (types.Token, error) {
+func (r *workerRuntimeCredentialsBackendRepo) CreateToken(ctx context.Context, workspaceID uint, tokenType string, reusable bool) (types.Token, error) {
 	token := types.Token{Key: "created-runtime-token", Active: true, TokenType: tokenType, Reusable: reusable}
 	r.tokens = append(r.tokens, token)
 	return token, nil
 }
 
-func (r *runtimeCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, externalID string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
+func (r *workerRuntimeCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, externalID string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	return r.stub, nil
 }
 
-type runtimeCredentialsContainerRepo struct {
+type workerRuntimeCredentialsContainerRepo struct {
 	repository.ContainerRepository
 	state *types.ContainerState
 }
 
-func (r *runtimeCredentialsContainerRepo) GetContainerState(containerID string) (*types.ContainerState, error) {
+func (r *workerRuntimeCredentialsContainerRepo) GetContainerState(containerID string) (*types.ContainerState, error) {
 	return r.state, nil
 }
 
@@ -96,7 +96,7 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 	require.NoError(t, err)
 
 	service := &WorkerRepositoryService{
-		backendRepo: &runtimeCredentialsBackendRepo{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{
 				Id:         7,
 				ExternalId: "workspace-id",
@@ -121,7 +121,7 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 			}},
 			secrets: []types.Secret{{Name: "SECRET", Value: "secret-value"}},
 		},
-		containerRepo: &runtimeCredentialsContainerRepo{
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
 			state: &types.ContainerState{
 				ContainerId: "container-id",
 				WorkspaceId: "workspace-id",
@@ -160,7 +160,7 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) {
 	signingKey, _ := testSigningKey(t)
 	workspaceID := uint(7)
-	backendRepo := &runtimeCredentialsBackendRepo{
+	backendRepo := &workerRuntimeCredentialsBackendRepo{
 		workspace: &types.Workspace{
 			Id:         workspaceID,
 			ExternalId: "workspace-id",
@@ -169,7 +169,7 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
-		containerRepo: &runtimeCredentialsContainerRepo{
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
 			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
 		},
 	}
@@ -191,10 +191,10 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 func TestGetContainerRuntimeCredentialsRejectsMismatchedContainerState(t *testing.T) {
 	signingKey, _ := testSigningKey(t)
 	service := &WorkerRepositoryService{
-		backendRepo: &runtimeCredentialsBackendRepo{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
 		},
-		containerRepo: &runtimeCredentialsContainerRepo{
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
 			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "other-workspace", StubId: "stub-id"},
 		},
 	}

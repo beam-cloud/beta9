@@ -387,7 +387,7 @@ func (w *telemetryLineWriter) Close() error {
 }
 
 func (w *telemetryLineWriter) flushLocked() {
-	line := common.RedactSecrets(string(bytes.TrimRight(w.buf.Bytes(), "\r")))
+	line := common.RedactLogSecrets(string(bytes.TrimRight(w.buf.Bytes(), "\r")))
 	w.buf.Reset()
 	if line == "" {
 		return

@@ -80,7 +80,7 @@ func (s *Service) recordAgentLogs(agentState *model.AgentTokenState, logs []*pb.
 			WorkerID:    record.WorkerId,
 			Level:       firstNonEmpty(record.Level, "info"),
 			Stream:      record.Stream,
-			Line:        common.RedactSecrets(record.Line),
+			Line:        common.RedactLogSecrets(record.Line),
 		})
 	}
 }
