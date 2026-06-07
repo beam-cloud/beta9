@@ -906,6 +906,11 @@ class MachineMetrics(betterproto.Message):
     cache_capacity: int = betterproto.int32_field(9)
     cache_memory_usage: int = betterproto.int32_field(10)
     cache_cpu_usage: float = betterproto.float_field(11)
+    memory_used_mb: int = betterproto.int64_field(12)
+    memory_total_mb: int = betterproto.int64_field(13)
+    disk_used_mb: int = betterproto.int64_field(14)
+    disk_total_mb: int = betterproto.int64_field(15)
+    disk_usage_pct: float = betterproto.float_field(16)
 
 
 @dataclass(eq=False, repr=False)

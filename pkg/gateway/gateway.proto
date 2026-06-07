@@ -1016,6 +1016,11 @@ message MachineMetrics {
   int32 cache_capacity = 9;
   int32 cache_memory_usage = 10;
   float cache_cpu_usage = 11;
+  int64 memory_used_mb = 12;
+  int64 memory_total_mb = 13;
+  int64 disk_used_mb = 14;
+  int64 disk_total_mb = 15;
+  float disk_usage_pct = 16;
 }
 
 message ListMachinesRequest {

@@ -227,6 +227,11 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 			CacheUsagePct:        state.Metrics.DiskUsagePct,
 			CacheCapacity:        int32(state.Metrics.DiskTotalMB),
 			CacheMemoryUsage:     int32(state.Metrics.MemoryUsedMB),
+			MemoryUsedMb:         int64(state.Metrics.MemoryUsedMB),
+			MemoryTotalMb:        int64(firstNonZeroUint64(state.Metrics.MemoryTotalMB, state.MemoryMB)),
+			DiskUsedMb:           int64(state.Metrics.DiskUsedMB),
+			DiskTotalMb:          int64(state.Metrics.DiskTotalMB),
+			DiskUsagePct:         state.Metrics.DiskUsagePct,
 		},
 	}
 }
