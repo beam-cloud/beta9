@@ -141,6 +141,24 @@ func TestNormalizeBootstrapForAgentRuntimeUsesReachableGatewayHost(t *testing.T)
 	}
 }
 
+func TestNormalizeBootstrapForAgentRuntimePreservesPublicGRPCHost(t *testing.T) {
+	t.Setenv(types.AgentInContainerEnv, "1")
+
+	got := normalizeBootstrapForAgentRuntime("https://app.stage.beam.cloud", bootstrapConfig{
+		GatewayHTTPURL:  "https://app.stage.beam.cloud",
+		GatewayGRPCHost: "gateway.stage.beam.cloud",
+		GatewayGRPCPort: 443,
+		GatewayGRPCTLS:  true,
+	})
+
+	if got.GatewayHTTPURL != "https://app.stage.beam.cloud" {
+		t.Fatalf("expected public http url to be preserved, got %q", got.GatewayHTTPURL)
+	}
+	if got.GatewayGRPCHost != "gateway.stage.beam.cloud" {
+		t.Fatalf("expected public grpc host to be preserved, got %q", got.GatewayGRPCHost)
+	}
+}
+
 func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv(types.AgentTargetHostEnv, "host.docker.internal")
 	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")

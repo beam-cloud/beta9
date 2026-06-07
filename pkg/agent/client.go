@@ -93,7 +93,9 @@ func normalizeBootstrapForAgentRuntime(gatewayURL string, bootstrap bootstrapCon
 		return bootstrap
 	}
 
-	bootstrap.GatewayGRPCHost = runtimeHost
+	if bootstrap.GatewayHTTPURL == "" || urlHostIsLoopback(bootstrap.GatewayHTTPURL) || isLoopbackHost(bootstrap.GatewayGRPCHost) {
+		bootstrap.GatewayGRPCHost = runtimeHost
+	}
 
 	if bootstrap.GatewayHTTPURL == "" || urlHostIsLoopback(bootstrap.GatewayHTTPURL) {
 		bootstrap.GatewayHTTPURL = gatewayURL
