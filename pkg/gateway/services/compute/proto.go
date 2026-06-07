@@ -207,16 +207,16 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 	lastKeepalive := model.AgentMachineLastSeen(state)
 	metrics := agentMachineMetrics(state, worker)
 	return &pb.Machine{
-		Id:            state.MachineID,
-		Cpu:           state.CPUMillicores,
-		Memory:        int64(state.MemoryMB),
-		Gpu:           gpu,
-		GpuCount:      state.GPUCount,
-		Status:        string(agentMachineStatus(state, worker, time.Now())),
-		PoolName:      state.PoolName,
-		ProviderName:  types.DefaultAgentName,
-		Created:       formatComputeTime(state.CreatedAt),
-		LastKeepalive: formatComputeTime(lastKeepalive),
+		Id:             state.MachineID,
+		Cpu:            state.CPUMillicores,
+		Memory:         int64(state.MemoryMB),
+		Gpu:            gpu,
+		GpuCount:       state.GPUCount,
+		Status:         string(agentMachineStatus(state, worker, time.Now())),
+		PoolName:       state.PoolName,
+		ProviderName:   types.DefaultAgentName,
+		Created:        formatComputeTime(state.CreatedAt),
+		LastKeepalive:  formatComputeTime(lastKeepalive),
 		MachineMetrics: metrics,
 	}
 }
