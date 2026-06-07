@@ -353,9 +353,9 @@ providers:
 tailscale:
   controlUrl:
   user: beta9
-  # Gateway tsnet auth key. Use a key tagged for gateway nodes, for example tag:beam-gateway.
+  # Gateway tsnet auth key. Use an environment-scoped gateway tag, for example tag:beam-staging-gateway.
   authKey:
-  # Private pool agent tsnet auth key. Use a separate key tagged for Beam agents, for example tag:beam-agent.
+  # Private pool agent tsnet auth key. Use a separate environment-scoped agent tag, for example tag:beam-staging-agent.
   agentAuthKey:
   enabled: false
   debug: false

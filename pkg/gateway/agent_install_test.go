@@ -29,12 +29,15 @@ func TestAgentInstallScriptDownloadsAgentFromGateway(t *testing.T) {
 	}
 	for _, want := range []string{
 		"${GATEWAY}/install/agent/${OS_NAME}/${ARCH_NAME}",
-		"${GATEWAY}/install/agent/linux/${ARCH}?dev=1",
+		"${GATEWAY}/install/agent/linux/${ARCH}",
 		"ensure_linux_docker",
 	} {
 		if !strings.Contains(agentInstallScript, want) {
 			t.Fatalf("install script missing %q", want)
 		}
+	}
+	if !strings.Contains(agentInstallScript, `elif [ "$DEV" = "1" ]; then`) || !strings.Contains(agentInstallScript, `${GATEWAY}/install/agent/linux/${ARCH}?dev=1`) {
+		t.Fatal("install script should only request source-built Linux agent binaries in dev mode")
 	}
 }
 
