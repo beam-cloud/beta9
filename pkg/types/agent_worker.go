@@ -57,6 +57,7 @@ const (
 	AgentDownloadURLEnv             = "BEAM_AGENT_URL"
 	AgentInstallDockerEnv           = "BEAM_AGENT_INSTALL_DOCKER"
 	AgentStorageModeEnv             = "BEAM_AGENT_WORKSPACE_STORAGE_MODE"
+	AgentWorkerPlatformEnv          = "BEAM_AGENT_WORKER_PLATFORM"
 	AgentVerboseEnv                 = "BEAM_AGENT_VERBOSE"
 	AgentNoColorEnv                 = "NO_COLOR"
 	AgentGatewayURLEnv              = "BEAM_GATEWAY_HTTP_URL"

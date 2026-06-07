@@ -225,6 +225,9 @@ run_macos_docker_agent() {
   HOST_STATE_DIR="${BEAM_AGENT_STATE_DIR:-${HOST_HOME}/.beam/agent}"
   HOSTNAME_VALUE="$(hostname 2>/dev/null || echo macos-agent)"
   HOST_FINGERPRINT="$(host_fingerprint "$HOSTNAME_VALUE")"
+  if [ -z "${BEAM_AGENT_WORKER_PLATFORM:-}" ]; then
+    export BEAM_AGENT_WORKER_PLATFORM="linux/amd64"
+  fi
 
   mkdir -p "$(dirname "$AGENT_LINUX_BIN")" "$HOST_STATE_DIR"
   install_linux_agent_for_docker "$AGENT_LINUX_BIN"
@@ -244,6 +247,7 @@ run_macos_docker_agent() {
     -e BEAM_WORKER_IMAGE="$WORKER_IMAGE" \
     -e BEAM_AGENT_DOCKER_HOST_ALIASES \
     -e BEAM_AGENT_LOCAL_REGISTRY_FORWARD \
+    -e BEAM_AGENT_WORKER_PLATFORM \
     -e BEAM_AGENT_VERBOSE \
     -e NO_COLOR \
     "$AGENT_CONTAINER_IMAGE" /usr/local/bin/beam-agent "$@"
@@ -343,6 +347,12 @@ install_from_url() {
   fi
   chmod 0755 "$TMP"
   mkdir -p "$(dirname "$DEST")"
+  if [ -d "$DEST" ]; then
+    rmdir "$DEST" 2>/dev/null || {
+      rm -f "$TMP"
+      fail "$DEST is a directory; remove it or set BEAM_AGENT_LINUX_BIN to a file path" 1
+    }
+  fi
   mv "$TMP" "$DEST"
 }
 

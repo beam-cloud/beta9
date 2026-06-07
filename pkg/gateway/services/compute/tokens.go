@@ -102,12 +102,25 @@ func (s *Service) createPrivatePoolJoinCommandForOwner(ctx context.Context, work
 		return "", "", time.Time{}, err
 	}
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
-	command := fmt.Sprintf(`curl -fsSL %s/install/agent | if [ "$(id -u)" -eq 0 ]; then sh -s -- --gateway %s --join-token %s; else sudo sh -s -- --gateway %s --join-token %s; fi`, gatewayURL, gatewayURL, token, gatewayURL, token)
 	devMode := isLocalGatewayURL(gatewayURL)
-	if devMode {
-		command = fmt.Sprintf("curl -fsSL %s/install/agent | sh -s -- --gateway %s --join-token %s --dev", gatewayURL, gatewayURL, token)
-	}
+	command := agentInstallCommand(gatewayURL, token, devMode)
 	return command, token, expiresAt, nil
+}
+
+func agentInstallCommand(gatewayURL, token string, devMode bool) string {
+	installURL := shellQuote(strings.TrimRight(gatewayURL, "/") + "/install/agent")
+	args := fmt.Sprintf("--gateway %s --join-token %s", shellQuote(gatewayURL), shellQuote(token))
+	if devMode {
+		return fmt.Sprintf("curl -fsSL %s | sh -s -- %s --dev", installURL, args)
+	}
+	return fmt.Sprintf(`if [ "$(uname -s)" = "Darwin" ] || [ "$(id -u)" -eq 0 ]; then curl -fsSL %[1]s | sh -s -- %[2]s; else curl -fsSL %[1]s | sudo sh -s -- %[2]s; fi`, installURL, args)
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func (s *Service) createPrivatePoolJoinToken(ctx context.Context, poolName, ttlValue string) (string, time.Time, error) {

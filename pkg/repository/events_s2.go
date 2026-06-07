@@ -400,11 +400,27 @@ func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, quer
 		return addKnown(r.appStreamName(query.WorkspaceID, query.AppID))
 	case query.StubID != "" && query.WorkspaceID != "":
 		return addKnown(r.stubStreamName(query.WorkspaceID, query.StubID))
+	case query.WorkspaceID != "" && allComputeEventTypes(query.EventTypes):
+		return addKnown(r.workspaceComputeStreamName(query.WorkspaceID))
 	case query.WorkspaceID != "":
 		return addKnown(r.workspaceStreamName(query.WorkspaceID))
 	default:
 		return nil, nil
 	}
+}
+
+// allComputeEventTypes reports whether the query is scoped exclusively to
+// compute.* event types, so it can be served from the dense compute stream.
+func allComputeEventTypes(eventTypes []string) bool {
+	if len(eventTypes) == 0 {
+		return false
+	}
+	for _, eventType := range eventTypes {
+		if !strings.HasPrefix(strings.TrimSpace(eventType), "compute.") {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName s2.StreamName, limit uint64, query types.EventQuery, response *types.ContainerEventsResponse) error {
@@ -830,7 +846,10 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
 	if isComputeEvent(eventType) && metadata.WorkspaceID != "" {
+		// Workspace stream powers the live workspace SSE; the compute stream keeps
+		// a dense history for fast compute-only history queries.
 		add(r.workspaceStreamName(metadata.WorkspaceID))
+		add(r.workspaceComputeStreamName(metadata.WorkspaceID))
 	}
 	if isTaskEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
@@ -945,6 +964,13 @@ func (r *S2EventRepository) workerPoolStreamName(poolName string) s2.StreamName 
 
 func (r *S2EventRepository) workspaceStreamName(workspaceID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s", r.streamPrefix, workspaceID))
+}
+
+// workspaceComputeStreamName is a dedicated, compute-only stream so that compute
+// event history reads stay dense and fast instead of paging through the busy
+// shared workspace stream (which also carries container metrics/lifecycle).
+func (r *S2EventRepository) workspaceComputeStreamName(workspaceID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/compute", r.streamPrefix, eventStreamPart(workspaceID)))
 }
 
 func (r *S2EventRepository) stubStreamName(workspaceID, stubID string) s2.StreamName {

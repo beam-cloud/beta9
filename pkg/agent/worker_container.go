@@ -24,6 +24,9 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 		"--label", types.AgentDockerLabelMachineID + "=" + slot.MachineId,
 		"--label", types.AgentDockerLabelPoolName + "=" + slot.PoolName,
 	}
+	if platform := strings.TrimSpace(os.Getenv(types.AgentWorkerPlatformEnv)); platform != "" {
+		args = append(args, "--platform", platform)
+	}
 	for _, alias := range agentDockerHostAliases() {
 		args = append(args, "--add-host", alias)
 	}
