@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -95,6 +96,144 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 		{HostPort: 30001, ContainerPort: containerInnerPort},
 		{HostPort: 30002, ContainerPort: int(types.WorkerShellPort)},
 	}, bindings)
+}
+
+func TestCreateOverlayUsesTmpfsForAgentWorkers(t *testing.T) {
+	worker := &Worker{
+		persistent:     true,
+		machineID:      "machine-one",
+		routeTransport: types.BackendRouteTransportTSNet,
+	}
+	request := &types.ContainerRequest{ContainerId: "container-agent"}
+
+	overlay := worker.createOverlay(request, t.TempDir())
+	require.Equal(t, "/dev/shm", overlay.OverlayPath())
+}
+
+func TestCreateOverlayKeepsDefaultPathForNormalWorkers(t *testing.T) {
+	worker := &Worker{}
+	request := &types.ContainerRequest{ContainerId: "container-default"}
+
+	overlay := worker.createOverlay(request, t.TempDir())
+	require.Equal(t, baseConfigPath, overlay.OverlayPath())
+}
+
+func TestGetContainerEnvironmentUsesGatewayConfigFallback(t *testing.T) {
+	worker := &Worker{
+		podAddr: "127.0.0.1",
+		config: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				GRPC: types.GRPCConfig{
+					ExternalHost: "host.docker.internal",
+					ExternalPort: 1993,
+				},
+				HTTP: types.HTTPConfig{
+					ExternalHost: "host.docker.internal",
+					ExternalPort: 1994,
+				},
+			},
+		},
+	}
+
+	env := worker.getContainerEnvironment(
+		&types.ContainerRequest{
+			ContainerId: "container-one",
+			Env:         []string{"BETA9_TOKEN=user-token"},
+		},
+		&ContainerOptions{BindPorts: []int{58083}},
+	)
+	envMap := envListToMap(env)
+
+	require.Equal(t, "host.docker.internal", envMap["BETA9_GATEWAY_HOST"])
+	require.Equal(t, "1993", envMap["BETA9_GATEWAY_PORT"])
+	require.Equal(t, "host.docker.internal", envMap["BETA9_GATEWAY_HOST_HTTP"])
+	require.Equal(t, "1994", envMap["BETA9_GATEWAY_PORT_HTTP"])
+	require.Equal(t, "user-token", envMap["BETA9_TOKEN"])
+}
+
+func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
+	containerID := "container-route"
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{
+		persistent: true,
+		machineID:  "machine-one",
+		workerId:   "worker-one",
+		poolName:   "private-dev",
+		containerNetworkManager: &fakeContainerNetworkController{
+			addresses: map[int]string{
+				8001: "192.168.0.44:8001",
+				2222: "192.168.0.44:2222",
+			},
+		},
+		routeTransport:      types.BackendRouteTransportTSNet,
+		containerRepoClient: repoClient,
+	}
+
+	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
+		ContainerId: containerID,
+		WorkspaceId: "workspace-one",
+	}, []PortBinding{
+		{HostPort: 30001, ContainerPort: 8001},
+		{HostPort: 30002, ContainerPort: 2222},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, repoClient.lastSetAddress)
+	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddress.Address)
+	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddress.Route.LocalTarget)
+
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, "192.168.0.44:2222", repoClient.lastSetAddressMap.AddressMap[2222])
+	require.Len(t, repoClient.lastSetAddressMap.Routes, 2)
+	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddressMap.Routes[0].LocalTarget)
+	require.Equal(t, "192.168.0.44:2222", repoClient.lastSetAddressMap.Routes[1].LocalTarget)
+}
+
+func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
+	containerID := "container-local"
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{
+		containerNetworkManager: &fakeContainerNetworkController{},
+		containerRepoClient:     repoClient,
+	}
+
+	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
+		ContainerId: containerID,
+	}, []PortBinding{
+		{HostPort: 30001, ContainerPort: 8001},
+		{HostPort: 30002, ContainerPort: 2222},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, repoClient.lastSetAddress)
+	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddress.Address)
+	require.Nil(t, repoClient.lastSetAddress.Route)
+
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, "10.0.0.2:30002", repoClient.lastSetAddressMap.AddressMap[2222])
+	require.Empty(t, repoClient.lastSetAddressMap.Routes)
+}
+
+func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{
+		persistent:          true,
+		machineID:           "machine-one",
+		routeTransport:      types.BackendRouteTransportTSNet,
+		containerRepoClient: repoClient,
+		podAddr:             "127.0.0.1",
+	}
+
+	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
+		ContainerId: "container-agent",
+	}, []PortBinding{
+		{HostPort: 60081, ContainerPort: 8001},
+	})
+	require.NoError(t, err)
+	require.Zero(t, repoClient.setAddressCalls)
+	require.Zero(t, repoClient.setAddressMapCalls)
 }
 
 func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
@@ -1012,6 +1151,17 @@ func getTestBaseSpec() specs.Spec {
 			Resources: &specs.LinuxResources{},
 		},
 	}
+}
+
+func envListToMap(env []string) map[string]string {
+	out := map[string]string{}
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 // Mock runtime for testing

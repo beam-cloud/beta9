@@ -424,6 +424,7 @@ type PoolMode string
 var (
 	PoolModeLocal    PoolMode = "local"
 	PoolModeExternal PoolMode = "external"
+	PoolModePrivate  PoolMode = "private"
 )
 
 type WorkerPoolConfig struct {
@@ -515,6 +516,18 @@ type ProviderConfig struct {
 	Crusoe     CrusoeProviderConfig     `key:"crusoe" json:"crusoe"`
 	Hydra      HydraProviderConfig      `key:"hydra" json:"hydra"`
 	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
+	Vast       VastProviderConfig       `key:"vast" json:"vast"`
+	Shadeform  ShadeformProviderConfig  `key:"shadeform" json:"shadeform"`
+}
+
+type VastProviderConfig struct {
+	ApiKey  string `key:"apiKey" json:"api_key"`
+	BaseURL string `key:"baseURL" json:"base_url"`
+}
+
+type ShadeformProviderConfig struct {
+	ApiKey  string `key:"apiKey" json:"api_key"`
+	BaseURL string `key:"baseURL" json:"base_url"`
 }
 
 type AgentConfig struct {
@@ -585,6 +598,7 @@ type MetricsCollector string
 var (
 	MetricsCollectorPrometheus MetricsCollector = "prometheus"
 	MetricsCollectorOpenMeter  MetricsCollector = "openmeter"
+	MetricsCollectorNone       MetricsCollector = "none"
 )
 
 type MonitoringConfig struct {
@@ -628,12 +642,13 @@ type OpenMeterConfig struct {
 }
 
 type TailscaleConfig struct {
-	ControlURL string `key:"controlUrl" json:"control_url"`
-	User       string `key:"user" json:"user"`
-	AuthKey    string `key:"authKey" json:"auth_key"`
-	HostName   string `key:"hostName" json:"host_name"`
-	Enabled    bool   `key:"enabled" json:"enabled"`
-	Debug      bool   `key:"debug" json:"debug"`
+	ControlURL   string `key:"controlUrl" json:"control_url"`
+	User         string `key:"user" json:"user"`
+	AuthKey      string `key:"authKey" json:"auth_key"`
+	AgentAuthKey string `key:"agentAuthKey" json:"agent_auth_key"`
+	HostName     string `key:"hostName" json:"host_name"`
+	Enabled      bool   `key:"enabled" json:"enabled"`
+	Debug        bool   `key:"debug" json:"debug"`
 }
 
 type ProxyConfig struct {

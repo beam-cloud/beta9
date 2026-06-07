@@ -28,7 +28,7 @@ from ..clients.function import (
 from ..env import called_on_import, is_local
 from ..schema import Schema
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias, PricingPolicy, TaskPolicy
+from ..type import GpuType, GpuTypeAlias, Pool, PricingPolicy, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -120,6 +120,7 @@ class Function(RunnerAbstraction):
         pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
+        pool: Optional[Union[str, Pool]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -140,6 +141,7 @@ class Function(RunnerAbstraction):
             pricing=pricing,
             inputs=inputs,
             outputs=outputs,
+            pool=pool,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

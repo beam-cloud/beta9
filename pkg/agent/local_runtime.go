@@ -1,0 +1,184 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/beam-cloud/beta9/pkg/types"
+)
+
+func agentGatewayEnv(bootstrap bootstrapConfig) map[string]string {
+	httpHost, httpPort, _ := agentGatewayHTTPParts(bootstrap)
+	grpcPort := bootstrap.GatewayGRPCPort
+	if grpcPort <= 0 {
+		grpcPort = 443
+	}
+
+	return map[string]string{
+		types.ContainerGatewayGRPCHostEnv: bootstrap.GatewayGRPCHost,
+		types.ContainerGatewayGRPCPortEnv: strconv.Itoa(grpcPort),
+		types.ContainerGatewayHTTPHostEnv: httpHost,
+		types.ContainerGatewayHTTPPortEnv: strconv.Itoa(httpPort),
+	}
+}
+
+func agentGatewayHTTPParts(bootstrap bootstrapConfig) (string, int, bool) {
+	u, err := url.Parse(bootstrap.GatewayHTTPURL)
+	if err != nil || u.Hostname() == "" {
+		return bootstrap.GatewayHTTPURL, 443, true
+	}
+
+	port := 0
+	if u.Port() != "" {
+		port, _ = strconv.Atoi(u.Port())
+	}
+	if port <= 0 {
+		if u.Scheme == "http" {
+			port = 80
+		} else {
+			port = 443
+		}
+	}
+
+	return u.Hostname(), port, u.Scheme == "https"
+}
+
+func agentDockerHostAliases() []string {
+	raw := strings.TrimSpace(os.Getenv(types.AgentDockerHostsEnv))
+	if raw == "" {
+		return nil
+	}
+
+	aliases := []string{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		aliases = append(aliases, entry)
+	}
+	return aliases
+}
+
+func startLocalRegistryForwarder(ctx context.Context, stderr io.Writer) (io.Closer, error) {
+	target := agentLocalRegistryForwardTarget()
+	if target == "" {
+		return nil, nil
+	}
+
+	listener, err := net.Listen("tcp", types.AgentRegistryAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	forwarder := &tcpForwarder{
+		listener: listener,
+		target:   target,
+		stderr:   stderr,
+	}
+	go forwarder.run(ctx)
+	return forwarder, nil
+}
+
+func agentLocalRegistryForwardTarget() string {
+	return strings.TrimSpace(os.Getenv(types.AgentRegistryForwardEnv))
+}
+
+type tcpForwarder struct {
+	listener net.Listener
+	target   string
+	stderr   io.Writer
+}
+
+func (f *tcpForwarder) Close() error {
+	return f.listener.Close()
+}
+
+func (f *tcpForwarder) run(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
+		_ = f.listener.Close()
+	}()
+
+	for {
+		conn, err := f.listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "use of closed network connection") {
+				return
+			}
+			f.logf("local registry forwarder accept failed: %v\n", err)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		go f.handleConn(conn)
+	}
+}
+
+func (f *tcpForwarder) handleConn(conn net.Conn) {
+	defer conn.Close()
+
+	upstream, err := net.DialTimeout("tcp", f.target, 30*time.Second)
+	if err != nil {
+		f.logf("local registry forwarder dial failed: %v\n", err)
+		return
+	}
+	defer upstream.Close()
+
+	copyBoth(conn, upstream)
+}
+
+func (f *tcpForwarder) logf(format string, args ...any) {
+	if f.stderr != nil {
+		fmt.Fprintf(f.stderr, format, args...)
+	}
+}
+
+func agentStateDir() (string, error) {
+	dir := strings.TrimSpace(os.Getenv(types.AgentStateDirEnv))
+	if dir == "" && runtime.GOOS == "linux" && writableDirOrCreatable(types.DefaultAgentStateDir) {
+		dir = types.DefaultAgentStateDir
+	}
+	if dir == "" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(base, types.BeamStateDirName, types.AgentStateDirName)
+	}
+	return dir, os.MkdirAll(dir, 0755)
+}
+
+func sanitizeDockerName(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '.' || r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_.")
+	if out == "" {
+		out = "slot"
+	}
+	if len(out) > 96 {
+		out = out[:96]
+	}
+	return out
+}

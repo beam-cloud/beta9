@@ -93,7 +93,7 @@ func TestCalculateCPUShares(t *testing.T) {
 }
 
 func TestContainerStartLimitForRuntimeUsesRuntimeName(t *testing.T) {
-	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+	t.Setenv(types.WorkerStartConcurrencyEnv, "")
 
 	require.Equal(t, 16, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeRunc.String(), 16, 2))
 	require.Equal(t, 2, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeGvisor.String(), 16, 2))
@@ -101,14 +101,14 @@ func TestContainerStartLimitForRuntimeUsesRuntimeName(t *testing.T) {
 }
 
 func TestContainerStartLimitForRuntimeAllowsExplicitOverride(t *testing.T) {
-	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "4")
+	t.Setenv(types.WorkerStartConcurrencyEnv, "4")
 
 	require.Equal(t, 4, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeRunc.String(), 16, 2))
 	require.Equal(t, 4, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeGvisor.String(), 16, 2))
 }
 
 func TestContainerStartLimitForPoolRuntimeUsesPoolConfig(t *testing.T) {
-	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+	t.Setenv(types.WorkerStartConcurrencyEnv, "")
 
 	poolConfig := types.WorkerPoolConfig{ContainerStartConcurrency: 64}
 
@@ -117,7 +117,7 @@ func TestContainerStartLimitForPoolRuntimeUsesPoolConfig(t *testing.T) {
 }
 
 func TestContainerStartLimitForPoolRuntimeCapsByWorkerCPU(t *testing.T) {
-	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+	t.Setenv(types.WorkerStartConcurrencyEnv, "")
 
 	poolConfig := types.WorkerPoolConfig{
 		ContainerStartConcurrency: 128,
@@ -131,7 +131,7 @@ func TestContainerStartLimitForPoolRuntimeCapsByWorkerCPU(t *testing.T) {
 }
 
 func TestContainerStartLimitForPoolRuntimeScalesWithWorkerCPU(t *testing.T) {
-	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+	t.Setenv(types.WorkerStartConcurrencyEnv, "")
 
 	poolConfig := types.WorkerPoolConfig{
 		ContainerStartConcurrency: 128,
@@ -145,7 +145,7 @@ func TestContainerStartLimitForPoolRuntimeScalesWithWorkerCPU(t *testing.T) {
 }
 
 func TestContainerStartLimitForPoolRuntimeAllowsEnvOverride(t *testing.T) {
-	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "8")
+	t.Setenv(types.WorkerStartConcurrencyEnv, "8")
 
 	poolConfig := types.WorkerPoolConfig{ContainerStartConcurrency: 64}
 
@@ -360,6 +360,7 @@ type fakeContainerRepoClient struct {
 	lastDeleteContainerID string
 	updateStatusCalls     int
 	lastUpdateStatus      *pb.UpdateContainerStatusRequest
+	addressMap            map[int32]string
 	setAddressCalls       int
 	lastSetAddress        *pb.SetContainerAddressRequest
 	setAddressMapCalls    int
@@ -411,7 +412,7 @@ func (f *fakeContainerRepoClient) SetContainerAddressMap(ctx context.Context, in
 }
 
 func (f *fakeContainerRepoClient) GetContainerAddressMap(ctx context.Context, in *pb.GetContainerAddressMapRequest, opts ...grpc.CallOption) (*pb.GetContainerAddressMapResponse, error) {
-	return &pb.GetContainerAddressMapResponse{Ok: true}, nil
+	return &pb.GetContainerAddressMapResponse{Ok: true, AddressMap: f.addressMap}, nil
 }
 
 func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.SetWorkerAddressRequest, opts ...grpc.CallOption) (*pb.SetWorkerAddressResponse, error) {

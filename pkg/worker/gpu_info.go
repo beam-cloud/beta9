@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type GPUInfoClient interface {
@@ -25,7 +27,7 @@ type NvidiaInfoClient struct {
 	visibleDevices string
 }
 
-const defaultDeviceCheckpointPath = "/var/lib/kubelet/device-plugins/kubelet_internal_checkpoint"
+const defaultDeviceCheckpointPath = types.HostKubeletDeviceCheckpointPath
 
 type kubeletCheckpoint struct {
 	Data struct {
@@ -46,19 +48,19 @@ type podDeviceEntry struct {
 // "void". The authoritative GPU assignment lives in the kubelet device plugin
 // checkpoint file, which maps pod UIDs to allocated GPU UUIDs.
 var resolveVisibleDevices = func() string {
-	podUID := os.Getenv("POD_UID")
+	podUID := os.Getenv(types.WorkerPodUIDEnv)
 	if podUID == "" {
-		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+		return os.Getenv(types.NvidiaVisibleDevicesEnv)
 	}
 
 	data, err := os.ReadFile(defaultDeviceCheckpointPath)
 	if err != nil {
-		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+		return os.Getenv(types.NvidiaVisibleDevicesEnv)
 	}
 
 	var checkpoint kubeletCheckpoint
 	if err := json.Unmarshal(data, &checkpoint); err != nil {
-		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+		return os.Getenv(types.NvidiaVisibleDevicesEnv)
 	}
 
 	var allUUIDs []string
@@ -74,7 +76,7 @@ var resolveVisibleDevices = func() string {
 		return strings.Join(allUUIDs, ",")
 	}
 
-	return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+	return os.Getenv(types.NvidiaVisibleDevicesEnv)
 }
 
 func (c *NvidiaInfoClient) hexToPaddedString(hexStr string) (string, error) {

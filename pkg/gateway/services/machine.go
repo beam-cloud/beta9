@@ -66,31 +66,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 				machine.Metrics = &types.ProviderMachineMetrics{}
 			}
 
-			formattedMachines = append(formattedMachines, &pb.Machine{
-				Id:            machine.State.MachineId,
-				Cpu:           machine.State.Cpu,
-				Memory:        machine.State.Memory,
-				Gpu:           machine.State.Gpu,
-				GpuCount:      machine.State.GpuCount,
-				Status:        string(machine.State.Status),
-				PoolName:      machine.State.PoolName,
-				LastKeepalive: machine.State.LastKeepalive,
-				Created:       machine.State.Created,
-				AgentVersion:  machine.State.AgentVersion,
-				MachineMetrics: &pb.MachineMetrics{
-					TotalCpuAvailable:    int32(machine.Metrics.TotalCpuAvailable),
-					TotalMemoryAvailable: int32(machine.Metrics.TotalMemoryAvailable),
-					CpuUtilizationPct:    float32(machine.Metrics.CpuUtilizationPct),
-					MemoryUtilizationPct: float32(machine.Metrics.MemoryUtilizationPct),
-					WorkerCount:          int32(machine.Metrics.WorkerCount),
-					ContainerCount:       int32(machine.Metrics.ContainerCount),
-					FreeGpuCount:         int32(machine.Metrics.FreeGpuCount),
-					CacheUsagePct:        float32(machine.Metrics.CacheUsagePct),
-					CacheCapacity:        int32(machine.Metrics.CacheCapacity),
-					CacheMemoryUsage:     int32(machine.Metrics.CacheMemoryUsage),
-					CacheCpuUsage:        float32(machine.Metrics.CacheCpuUsage),
-				},
-			})
+			formattedMachines = append(formattedMachines, providerMachineToProto(machine))
 		}
 
 	} else {
@@ -112,31 +88,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 					machine.Metrics = &types.ProviderMachineMetrics{}
 				}
 
-				formattedMachines = append(formattedMachines, &pb.Machine{
-					Id:            machine.State.MachineId,
-					Cpu:           machine.State.Cpu,
-					Memory:        machine.State.Memory,
-					Gpu:           machine.State.Gpu,
-					GpuCount:      machine.State.GpuCount,
-					Status:        string(machine.State.Status),
-					PoolName:      machine.State.PoolName,
-					LastKeepalive: machine.State.LastKeepalive,
-					Created:       machine.State.Created,
-					AgentVersion:  machine.State.AgentVersion,
-					MachineMetrics: &pb.MachineMetrics{
-						TotalCpuAvailable:    int32(machine.Metrics.TotalCpuAvailable),
-						TotalMemoryAvailable: int32(machine.Metrics.TotalMemoryAvailable),
-						CpuUtilizationPct:    float32(machine.Metrics.CpuUtilizationPct),
-						MemoryUtilizationPct: float32(machine.Metrics.MemoryUtilizationPct),
-						WorkerCount:          int32(machine.Metrics.WorkerCount),
-						ContainerCount:       int32(machine.Metrics.ContainerCount),
-						FreeGpuCount:         int32(machine.Metrics.FreeGpuCount),
-						CacheUsagePct:        float32(machine.Metrics.CacheUsagePct),
-						CacheCapacity:        int32(machine.Metrics.CacheCapacity),
-						CacheMemoryUsage:     int32(machine.Metrics.CacheMemoryUsage),
-						CacheCpuUsage:        float32(machine.Metrics.CacheCpuUsage),
-					},
-				})
+				formattedMachines = append(formattedMachines, providerMachineToProto(machine))
 			}
 		}
 	}
@@ -146,6 +98,47 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		Gpus:     gpus,
 		Machines: formattedMachines,
 	}, nil
+}
+
+func providerMachineToProto(machine *types.ProviderMachine) *pb.Machine {
+	if machine == nil || machine.State == nil {
+		return &pb.Machine{}
+	}
+	if machine.Metrics == nil {
+		machine.Metrics = &types.ProviderMachineMetrics{}
+	}
+	return &pb.Machine{
+		Id:            machine.State.MachineId,
+		Cpu:           machine.State.Cpu,
+		Memory:        machine.State.Memory,
+		Gpu:           machine.State.Gpu,
+		GpuCount:      machine.State.GpuCount,
+		Status:        string(providerMachineStatus(machine.State.Status)),
+		PoolName:      machine.State.PoolName,
+		LastKeepalive: machine.State.LastKeepalive,
+		Created:       machine.State.Created,
+		AgentVersion:  machine.State.AgentVersion,
+		MachineMetrics: &pb.MachineMetrics{
+			TotalCpuAvailable:    int32(machine.Metrics.TotalCpuAvailable),
+			TotalMemoryAvailable: int32(machine.Metrics.TotalMemoryAvailable),
+			CpuUtilizationPct:    float32(machine.Metrics.CpuUtilizationPct),
+			MemoryUtilizationPct: float32(machine.Metrics.MemoryUtilizationPct),
+			WorkerCount:          int32(machine.Metrics.WorkerCount),
+			ContainerCount:       int32(machine.Metrics.ContainerCount),
+			FreeGpuCount:         int32(machine.Metrics.FreeGpuCount),
+			CacheUsagePct:        float32(machine.Metrics.CacheUsagePct),
+			CacheCapacity:        int32(machine.Metrics.CacheCapacity),
+			CacheMemoryUsage:     int32(machine.Metrics.CacheMemoryUsage),
+			CacheCpuUsage:        float32(machine.Metrics.CacheCpuUsage),
+		},
+	}
+}
+
+func providerMachineStatus(status types.MachineStatus) types.MachineStatus {
+	if status == types.MachineStatusReady {
+		return types.MachineStatusAvailable
+	}
+	return status
 }
 
 func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachineRequest) (*pb.CreateMachineResponse, error) {

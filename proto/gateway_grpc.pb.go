@@ -19,40 +19,56 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_Authorize_FullMethodName             = "/gateway.GatewayService/Authorize"
-	GatewayService_SignPayload_FullMethodName           = "/gateway.GatewayService/SignPayload"
-	GatewayService_HeadObject_FullMethodName            = "/gateway.GatewayService/HeadObject"
-	GatewayService_CreateObject_FullMethodName          = "/gateway.GatewayService/CreateObject"
-	GatewayService_PutObjectStream_FullMethodName       = "/gateway.GatewayService/PutObjectStream"
-	GatewayService_CheckpointContainer_FullMethodName   = "/gateway.GatewayService/CheckpointContainer"
-	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
-	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
-	GatewayService_AttachToContainer_FullMethodName     = "/gateway.GatewayService/AttachToContainer"
-	GatewayService_StartTask_FullMethodName             = "/gateway.GatewayService/StartTask"
-	GatewayService_EndTask_FullMethodName               = "/gateway.GatewayService/EndTask"
-	GatewayService_StopTasks_FullMethodName             = "/gateway.GatewayService/StopTasks"
-	GatewayService_ListTasks_FullMethodName             = "/gateway.GatewayService/ListTasks"
-	GatewayService_GetOrCreateStub_FullMethodName       = "/gateway.GatewayService/GetOrCreateStub"
-	GatewayService_DeployStub_FullMethodName            = "/gateway.GatewayService/DeployStub"
-	GatewayService_GetURL_FullMethodName                = "/gateway.GatewayService/GetURL"
-	GatewayService_ListDeployments_FullMethodName       = "/gateway.GatewayService/ListDeployments"
-	GatewayService_StopDeployment_FullMethodName        = "/gateway.GatewayService/StopDeployment"
-	GatewayService_StartDeployment_FullMethodName       = "/gateway.GatewayService/StartDeployment"
-	GatewayService_ScaleDeployment_FullMethodName       = "/gateway.GatewayService/ScaleDeployment"
-	GatewayService_DeleteDeployment_FullMethodName      = "/gateway.GatewayService/DeleteDeployment"
-	GatewayService_ListPools_FullMethodName             = "/gateway.GatewayService/ListPools"
-	GatewayService_ListMachines_FullMethodName          = "/gateway.GatewayService/ListMachines"
-	GatewayService_CreateMachine_FullMethodName         = "/gateway.GatewayService/CreateMachine"
-	GatewayService_DeleteMachine_FullMethodName         = "/gateway.GatewayService/DeleteMachine"
-	GatewayService_ListTokens_FullMethodName            = "/gateway.GatewayService/ListTokens"
-	GatewayService_CreateToken_FullMethodName           = "/gateway.GatewayService/CreateToken"
-	GatewayService_ToggleToken_FullMethodName           = "/gateway.GatewayService/ToggleToken"
-	GatewayService_DeleteToken_FullMethodName           = "/gateway.GatewayService/DeleteToken"
-	GatewayService_ListWorkers_FullMethodName           = "/gateway.GatewayService/ListWorkers"
-	GatewayService_CordonWorker_FullMethodName          = "/gateway.GatewayService/CordonWorker"
-	GatewayService_UncordonWorker_FullMethodName        = "/gateway.GatewayService/UncordonWorker"
-	GatewayService_DrainWorker_FullMethodName           = "/gateway.GatewayService/DrainWorker"
-	GatewayService_ExportWorkspaceConfig_FullMethodName = "/gateway.GatewayService/ExportWorkspaceConfig"
+	GatewayService_Authorize_FullMethodName                       = "/gateway.GatewayService/Authorize"
+	GatewayService_SignPayload_FullMethodName                     = "/gateway.GatewayService/SignPayload"
+	GatewayService_HeadObject_FullMethodName                      = "/gateway.GatewayService/HeadObject"
+	GatewayService_CreateObject_FullMethodName                    = "/gateway.GatewayService/CreateObject"
+	GatewayService_PutObjectStream_FullMethodName                 = "/gateway.GatewayService/PutObjectStream"
+	GatewayService_CheckpointContainer_FullMethodName             = "/gateway.GatewayService/CheckpointContainer"
+	GatewayService_ListContainers_FullMethodName                  = "/gateway.GatewayService/ListContainers"
+	GatewayService_StopContainer_FullMethodName                   = "/gateway.GatewayService/StopContainer"
+	GatewayService_AttachToContainer_FullMethodName               = "/gateway.GatewayService/AttachToContainer"
+	GatewayService_StartTask_FullMethodName                       = "/gateway.GatewayService/StartTask"
+	GatewayService_EndTask_FullMethodName                         = "/gateway.GatewayService/EndTask"
+	GatewayService_StopTasks_FullMethodName                       = "/gateway.GatewayService/StopTasks"
+	GatewayService_ListTasks_FullMethodName                       = "/gateway.GatewayService/ListTasks"
+	GatewayService_GetOrCreateStub_FullMethodName                 = "/gateway.GatewayService/GetOrCreateStub"
+	GatewayService_DeployStub_FullMethodName                      = "/gateway.GatewayService/DeployStub"
+	GatewayService_GetURL_FullMethodName                          = "/gateway.GatewayService/GetURL"
+	GatewayService_ListDeployments_FullMethodName                 = "/gateway.GatewayService/ListDeployments"
+	GatewayService_StopDeployment_FullMethodName                  = "/gateway.GatewayService/StopDeployment"
+	GatewayService_StartDeployment_FullMethodName                 = "/gateway.GatewayService/StartDeployment"
+	GatewayService_ScaleDeployment_FullMethodName                 = "/gateway.GatewayService/ScaleDeployment"
+	GatewayService_DeleteDeployment_FullMethodName                = "/gateway.GatewayService/DeleteDeployment"
+	GatewayService_ListPools_FullMethodName                       = "/gateway.GatewayService/ListPools"
+	GatewayService_ListPoolOffers_FullMethodName                  = "/gateway.GatewayService/ListPoolOffers"
+	GatewayService_LaunchPoolCapacity_FullMethodName              = "/gateway.GatewayService/LaunchPoolCapacity"
+	GatewayService_ListPrivatePools_FullMethodName                = "/gateway.GatewayService/ListPrivatePools"
+	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
+	GatewayService_DeletePool_FullMethodName                      = "/gateway.GatewayService/DeletePool"
+	GatewayService_ExtendPoolCapacity_FullMethodName              = "/gateway.GatewayService/ExtendPoolCapacity"
+	GatewayService_CreatePoolJoinToken_FullMethodName             = "/gateway.GatewayService/CreatePoolJoinToken"
+	GatewayService_RevokePoolJoinToken_FullMethodName             = "/gateway.GatewayService/RevokePoolJoinToken"
+	GatewayService_GetPoolJoinCommand_FullMethodName              = "/gateway.GatewayService/GetPoolJoinCommand"
+	GatewayService_ListPoolMachines_FullMethodName                = "/gateway.GatewayService/ListPoolMachines"
+	GatewayService_JoinAgent_FullMethodName                       = "/gateway.GatewayService/JoinAgent"
+	GatewayService_RequestAgentTransportCredential_FullMethodName = "/gateway.GatewayService/RequestAgentTransportCredential"
+	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
+	GatewayService_UpdateAgentRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateAgentRouteStatus"
+	GatewayService_StreamAgent_FullMethodName                     = "/gateway.GatewayService/StreamAgent"
+	GatewayService_StreamAgentTelemetry_FullMethodName            = "/gateway.GatewayService/StreamAgentTelemetry"
+	GatewayService_ListMachines_FullMethodName                    = "/gateway.GatewayService/ListMachines"
+	GatewayService_CreateMachine_FullMethodName                   = "/gateway.GatewayService/CreateMachine"
+	GatewayService_DeleteMachine_FullMethodName                   = "/gateway.GatewayService/DeleteMachine"
+	GatewayService_ListTokens_FullMethodName                      = "/gateway.GatewayService/ListTokens"
+	GatewayService_CreateToken_FullMethodName                     = "/gateway.GatewayService/CreateToken"
+	GatewayService_ToggleToken_FullMethodName                     = "/gateway.GatewayService/ToggleToken"
+	GatewayService_DeleteToken_FullMethodName                     = "/gateway.GatewayService/DeleteToken"
+	GatewayService_ListWorkers_FullMethodName                     = "/gateway.GatewayService/ListWorkers"
+	GatewayService_CordonWorker_FullMethodName                    = "/gateway.GatewayService/CordonWorker"
+	GatewayService_UncordonWorker_FullMethodName                  = "/gateway.GatewayService/UncordonWorker"
+	GatewayService_DrainWorker_FullMethodName                     = "/gateway.GatewayService/DrainWorker"
+	GatewayService_ExportWorkspaceConfig_FullMethodName           = "/gateway.GatewayService/ExportWorkspaceConfig"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -88,6 +104,23 @@ type GatewayServiceClient interface {
 	DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
+	// Private compute pools
+	ListPoolOffers(ctx context.Context, in *ListPoolOffersRequest, opts ...grpc.CallOption) (*ListPoolOffersResponse, error)
+	LaunchPoolCapacity(ctx context.Context, in *LaunchPoolCapacityRequest, opts ...grpc.CallOption) (*LaunchPoolCapacityResponse, error)
+	ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error)
+	CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error)
+	DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error)
+	ExtendPoolCapacity(ctx context.Context, in *ExtendPoolCapacityRequest, opts ...grpc.CallOption) (*ExtendPoolCapacityResponse, error)
+	CreatePoolJoinToken(ctx context.Context, in *CreatePoolJoinTokenRequest, opts ...grpc.CallOption) (*CreatePoolJoinTokenResponse, error)
+	RevokePoolJoinToken(ctx context.Context, in *RevokePoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokePoolJoinTokenResponse, error)
+	GetPoolJoinCommand(ctx context.Context, in *GetPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetPoolJoinCommandResponse, error)
+	ListPoolMachines(ctx context.Context, in *ListPoolMachinesRequest, opts ...grpc.CallOption) (*ListPoolMachinesResponse, error)
+	JoinAgent(ctx context.Context, in *JoinAgentRequest, opts ...grpc.CallOption) (*JoinAgentResponse, error)
+	RequestAgentTransportCredential(ctx context.Context, in *RequestAgentTransportCredentialRequest, opts ...grpc.CallOption) (*RequestAgentTransportCredentialResponse, error)
+	ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error)
+	UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error)
+	StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error)
+	StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error)
 	// Machines
 	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
 	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
@@ -359,6 +392,198 @@ func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsReque
 	return out, nil
 }
 
+func (c *gatewayServiceClient) ListPoolOffers(ctx context.Context, in *ListPoolOffersRequest, opts ...grpc.CallOption) (*ListPoolOffersResponse, error) {
+	out := new(ListPoolOffersResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPoolOffers_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) LaunchPoolCapacity(ctx context.Context, in *LaunchPoolCapacityRequest, opts ...grpc.CallOption) (*LaunchPoolCapacityResponse, error) {
+	out := new(LaunchPoolCapacityResponse)
+	err := c.cc.Invoke(ctx, GatewayService_LaunchPoolCapacity_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error) {
+	out := new(ListPrivatePoolsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPrivatePools_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error) {
+	out := new(CreatePoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreatePool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error) {
+	out := new(DeletePoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeletePool_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ExtendPoolCapacity(ctx context.Context, in *ExtendPoolCapacityRequest, opts ...grpc.CallOption) (*ExtendPoolCapacityResponse, error) {
+	out := new(ExtendPoolCapacityResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ExtendPoolCapacity_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreatePoolJoinToken(ctx context.Context, in *CreatePoolJoinTokenRequest, opts ...grpc.CallOption) (*CreatePoolJoinTokenResponse, error) {
+	out := new(CreatePoolJoinTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreatePoolJoinToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RevokePoolJoinToken(ctx context.Context, in *RevokePoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokePoolJoinTokenResponse, error) {
+	out := new(RevokePoolJoinTokenResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RevokePoolJoinToken_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetPoolJoinCommand(ctx context.Context, in *GetPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetPoolJoinCommandResponse, error) {
+	out := new(GetPoolJoinCommandResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetPoolJoinCommand_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListPoolMachines(ctx context.Context, in *ListPoolMachinesRequest, opts ...grpc.CallOption) (*ListPoolMachinesResponse, error) {
+	out := new(ListPoolMachinesResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListPoolMachines_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) JoinAgent(ctx context.Context, in *JoinAgentRequest, opts ...grpc.CallOption) (*JoinAgentResponse, error) {
+	out := new(JoinAgentResponse)
+	err := c.cc.Invoke(ctx, GatewayService_JoinAgent_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RequestAgentTransportCredential(ctx context.Context, in *RequestAgentTransportCredentialRequest, opts ...grpc.CallOption) (*RequestAgentTransportCredentialResponse, error) {
+	out := new(RequestAgentTransportCredentialResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RequestAgentTransportCredential_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error) {
+	out := new(ListAgentRoutesResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListAgentRoutes_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error) {
+	out := new(UpdateAgentRouteStatusResponse)
+	err := c.cc.Invoke(ctx, GatewayService_UpdateAgentRouteStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error) {
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[2], GatewayService_StreamAgent_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &gatewayServiceStreamAgentClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type GatewayService_StreamAgentClient interface {
+	Recv() (*StreamAgentResponse, error)
+	grpc.ClientStream
+}
+
+type gatewayServiceStreamAgentClient struct {
+	grpc.ClientStream
+}
+
+func (x *gatewayServiceStreamAgentClient) Recv() (*StreamAgentResponse, error) {
+	m := new(StreamAgentResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *gatewayServiceClient) StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error) {
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[3], GatewayService_StreamAgentTelemetry_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &gatewayServiceStreamAgentTelemetryClient{stream}
+	return x, nil
+}
+
+type GatewayService_StreamAgentTelemetryClient interface {
+	Send(*AgentTelemetryRequest) error
+	CloseAndRecv() (*AgentTelemetryResponse, error)
+	grpc.ClientStream
+}
+
+type gatewayServiceStreamAgentTelemetryClient struct {
+	grpc.ClientStream
+}
+
+func (x *gatewayServiceStreamAgentTelemetryClient) Send(m *AgentTelemetryRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *gatewayServiceStreamAgentTelemetryClient) CloseAndRecv() (*AgentTelemetryResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(AgentTelemetryResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *gatewayServiceClient) ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error) {
 	out := new(ListMachinesResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListMachines_FullMethodName, in, out, opts...)
@@ -500,6 +725,23 @@ type GatewayServiceServer interface {
 	DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
+	// Private compute pools
+	ListPoolOffers(context.Context, *ListPoolOffersRequest) (*ListPoolOffersResponse, error)
+	LaunchPoolCapacity(context.Context, *LaunchPoolCapacityRequest) (*LaunchPoolCapacityResponse, error)
+	ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error)
+	CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error)
+	DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error)
+	ExtendPoolCapacity(context.Context, *ExtendPoolCapacityRequest) (*ExtendPoolCapacityResponse, error)
+	CreatePoolJoinToken(context.Context, *CreatePoolJoinTokenRequest) (*CreatePoolJoinTokenResponse, error)
+	RevokePoolJoinToken(context.Context, *RevokePoolJoinTokenRequest) (*RevokePoolJoinTokenResponse, error)
+	GetPoolJoinCommand(context.Context, *GetPoolJoinCommandRequest) (*GetPoolJoinCommandResponse, error)
+	ListPoolMachines(context.Context, *ListPoolMachinesRequest) (*ListPoolMachinesResponse, error)
+	JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error)
+	RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error)
+	ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error)
+	UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error)
+	StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error
+	StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error
 	// Machines
 	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
 	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
@@ -588,6 +830,54 @@ func (UnimplementedGatewayServiceServer) DeleteDeployment(context.Context, *Dele
 }
 func (UnimplementedGatewayServiceServer) ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPools not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListPoolOffers(context.Context, *ListPoolOffersRequest) (*ListPoolOffersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPoolOffers not implemented")
+}
+func (UnimplementedGatewayServiceServer) LaunchPoolCapacity(context.Context, *LaunchPoolCapacityRequest) (*LaunchPoolCapacityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LaunchPoolCapacity not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPrivatePools not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreatePool not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeletePool not implemented")
+}
+func (UnimplementedGatewayServiceServer) ExtendPoolCapacity(context.Context, *ExtendPoolCapacityRequest) (*ExtendPoolCapacityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExtendPoolCapacity not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreatePoolJoinToken(context.Context, *CreatePoolJoinTokenRequest) (*CreatePoolJoinTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreatePoolJoinToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) RevokePoolJoinToken(context.Context, *RevokePoolJoinTokenRequest) (*RevokePoolJoinTokenResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokePoolJoinToken not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetPoolJoinCommand(context.Context, *GetPoolJoinCommandRequest) (*GetPoolJoinCommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPoolJoinCommand not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListPoolMachines(context.Context, *ListPoolMachinesRequest) (*ListPoolMachinesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPoolMachines not implemented")
+}
+func (UnimplementedGatewayServiceServer) JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method JoinAgent not implemented")
+}
+func (UnimplementedGatewayServiceServer) RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestAgentTransportCredential not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListAgentRoutes not implemented")
+}
+func (UnimplementedGatewayServiceServer) UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentRouteStatus not implemented")
+}
+func (UnimplementedGatewayServiceServer) StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamAgent not implemented")
+}
+func (UnimplementedGatewayServiceServer) StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamAgentTelemetry not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMachines not implemented")
@@ -1050,6 +1340,305 @@ func _GatewayService_ListPools_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_ListPoolOffers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPoolOffersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListPoolOffers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListPoolOffers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListPoolOffers(ctx, req.(*ListPoolOffersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_LaunchPoolCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LaunchPoolCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).LaunchPoolCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_LaunchPoolCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).LaunchPoolCapacity(ctx, req.(*LaunchPoolCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListPrivatePools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPrivatePoolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListPrivatePools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListPrivatePools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListPrivatePools(ctx, req.(*ListPrivatePoolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreatePool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreatePool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreatePool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreatePool(ctx, req.(*CreatePoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_DeletePool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeletePoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeletePool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeletePool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeletePool(ctx, req.(*DeletePoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ExtendPoolCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExtendPoolCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ExtendPoolCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ExtendPoolCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ExtendPoolCapacity(ctx, req.(*ExtendPoolCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreatePoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePoolJoinTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreatePoolJoinToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreatePoolJoinToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreatePoolJoinToken(ctx, req.(*CreatePoolJoinTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RevokePoolJoinToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokePoolJoinTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RevokePoolJoinToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RevokePoolJoinToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RevokePoolJoinToken(ctx, req.(*RevokePoolJoinTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetPoolJoinCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPoolJoinCommandRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetPoolJoinCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetPoolJoinCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetPoolJoinCommand(ctx, req.(*GetPoolJoinCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListPoolMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPoolMachinesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListPoolMachines(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListPoolMachines_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListPoolMachines(ctx, req.(*ListPoolMachinesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_JoinAgent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinAgentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).JoinAgent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_JoinAgent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).JoinAgent(ctx, req.(*JoinAgentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RequestAgentTransportCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestAgentTransportCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RequestAgentTransportCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RequestAgentTransportCredential_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RequestAgentTransportCredential(ctx, req.(*RequestAgentTransportCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListAgentRoutes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAgentRoutesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListAgentRoutes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListAgentRoutes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListAgentRoutes(ctx, req.(*ListAgentRoutesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_UpdateAgentRouteStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAgentRouteStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).UpdateAgentRouteStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_UpdateAgentRouteStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).UpdateAgentRouteStatus(ctx, req.(*UpdateAgentRouteStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_StreamAgent_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamAgentRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(GatewayServiceServer).StreamAgent(m, &gatewayServiceStreamAgentServer{stream})
+}
+
+type GatewayService_StreamAgentServer interface {
+	Send(*StreamAgentResponse) error
+	grpc.ServerStream
+}
+
+type gatewayServiceStreamAgentServer struct {
+	grpc.ServerStream
+}
+
+func (x *gatewayServiceStreamAgentServer) Send(m *StreamAgentResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _GatewayService_StreamAgentTelemetry_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GatewayServiceServer).StreamAgentTelemetry(&gatewayServiceStreamAgentTelemetryServer{stream})
+}
+
+type GatewayService_StreamAgentTelemetryServer interface {
+	SendAndClose(*AgentTelemetryResponse) error
+	Recv() (*AgentTelemetryRequest, error)
+	grpc.ServerStream
+}
+
+type gatewayServiceStreamAgentTelemetryServer struct {
+	grpc.ServerStream
+}
+
+func (x *gatewayServiceStreamAgentTelemetryServer) SendAndClose(m *AgentTelemetryResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *gatewayServiceStreamAgentTelemetryServer) Recv() (*AgentTelemetryRequest, error) {
+	m := new(AgentTelemetryRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func _GatewayService_ListMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListMachinesRequest)
 	if err := dec(in); err != nil {
@@ -1354,6 +1943,62 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_ListPools_Handler,
 		},
 		{
+			MethodName: "ListPoolOffers",
+			Handler:    _GatewayService_ListPoolOffers_Handler,
+		},
+		{
+			MethodName: "LaunchPoolCapacity",
+			Handler:    _GatewayService_LaunchPoolCapacity_Handler,
+		},
+		{
+			MethodName: "ListPrivatePools",
+			Handler:    _GatewayService_ListPrivatePools_Handler,
+		},
+		{
+			MethodName: "CreatePool",
+			Handler:    _GatewayService_CreatePool_Handler,
+		},
+		{
+			MethodName: "DeletePool",
+			Handler:    _GatewayService_DeletePool_Handler,
+		},
+		{
+			MethodName: "ExtendPoolCapacity",
+			Handler:    _GatewayService_ExtendPoolCapacity_Handler,
+		},
+		{
+			MethodName: "CreatePoolJoinToken",
+			Handler:    _GatewayService_CreatePoolJoinToken_Handler,
+		},
+		{
+			MethodName: "RevokePoolJoinToken",
+			Handler:    _GatewayService_RevokePoolJoinToken_Handler,
+		},
+		{
+			MethodName: "GetPoolJoinCommand",
+			Handler:    _GatewayService_GetPoolJoinCommand_Handler,
+		},
+		{
+			MethodName: "ListPoolMachines",
+			Handler:    _GatewayService_ListPoolMachines_Handler,
+		},
+		{
+			MethodName: "JoinAgent",
+			Handler:    _GatewayService_JoinAgent_Handler,
+		},
+		{
+			MethodName: "RequestAgentTransportCredential",
+			Handler:    _GatewayService_RequestAgentTransportCredential_Handler,
+		},
+		{
+			MethodName: "ListAgentRoutes",
+			Handler:    _GatewayService_ListAgentRoutes_Handler,
+		},
+		{
+			MethodName: "UpdateAgentRouteStatus",
+			Handler:    _GatewayService_UpdateAgentRouteStatus_Handler,
+		},
+		{
 			MethodName: "ListMachines",
 			Handler:    _GatewayService_ListMachines_Handler,
 		},
@@ -1412,6 +2057,16 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "AttachToContainer",
 			Handler:       _GatewayService_AttachToContainer_Handler,
 			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "StreamAgent",
+			Handler:       _GatewayService_StreamAgent_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamAgentTelemetry",
+			Handler:       _GatewayService_StreamAgentTelemetry_Handler,
 			ClientStreams: true,
 		},
 	},

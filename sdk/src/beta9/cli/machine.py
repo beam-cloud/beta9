@@ -1,8 +1,7 @@
-from datetime import datetime, timezone
+from typing import Any, Dict, List, Sequence
 
 import click
 from betterproto import Casing
-from rich.table import Column, Table, box
 
 from .. import terminal
 from ..channel import ServiceClient
@@ -17,8 +16,10 @@ from ..clients.gateway import (
     ListMachinesRequest,
     ListMachinesResponse,
     ListWorkersRequest,
+    Machine,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
+from .machine_format import gpu_availability_table, machine_table
 
 
 @click.group(cls=ClickCommonGroup)
@@ -28,16 +29,20 @@ def common(**_):
 
 @click.group(
     name="machine",
-    help="Manage remote machines.",
+    help="Manage provider machines.",
     cls=ClickManagementGroup,
 )
 def management():
     pass
 
 
+def _machine_list_renderables(gpus: Dict[str, bool], machines: Sequence[Machine]) -> List[Any]:
+    return [gpu_availability_table(gpus), machine_table(machines)]
+
+
 @management.command(
     name="list",
-    help="List all external machines.",
+    help="List provider machines.",
     epilog="""
     Examples:
 
@@ -81,68 +86,14 @@ def list_machines(
     if not res.ok:
         terminal.error(res.err_msg)
 
-    res.gpus = {gpu: res.gpus[gpu] for gpu in sorted(res.gpus)}
-
     if format == "json":
         machines = [d.to_dict(casing=Casing.SNAKE) for d in res.machines]  # type:ignore
+        res.gpus = {gpu: res.gpus[gpu] for gpu in sorted(res.gpus)}
         terminal.print_json({"machines": machines, "gpus": res.gpus})
         return
 
-    # Display GPU types available
-    table = Table(
-        Column("GPU Type"),
-        Column("Available", justify="center"),
-        box=box.SIMPLE,
-    )
-    for gpu_type, gpu_avail in res.gpus.items():
-        table.add_row(gpu_type, "✅" if gpu_avail else "❌")
-    if not res.gpus:
-        table.add_row(*("-" * len(res.gpus)))
-    table.add_section()
-    table.add_row(f"[bold]{len(res.gpus)} items")
-    terminal.print(table)
-
-    # Display external provider machines connected to cluster
-    if res.machines:
-        table = Table(
-            Column("ID"),
-            Column("CPU"),
-            Column("Memory"),
-            Column("GPU"),
-            Column("Status"),
-            Column("Pool"),
-            Column("Created"),
-            Column("Last Keepalive"),
-            Column("Agent Version"),
-            Column("Free GPU Count"),
-            box=box.SIMPLE,
-        )
-
-        for machine in res.machines:
-            table.add_row(
-                machine.id,
-                f"{machine.cpu:,}m" if machine.cpu > 0 else "-",
-                terminal.humanize_memory(machine.memory * 1024 * 1024)
-                if machine.memory > 0
-                else "-",
-                machine.gpu,
-                machine.status,
-                machine.pool_name,
-                terminal.humanize_date(
-                    datetime.fromtimestamp(int(machine.created), tz=timezone.utc)
-                ),
-                terminal.humanize_date(
-                    datetime.fromtimestamp(int(machine.last_keepalive), tz=timezone.utc)
-                )
-                if machine.last_keepalive != ""
-                else "Never",
-                f"v{machine.agent_version}" if machine.agent_version else "-",
-                str(machine.machine_metrics.free_gpu_count),
-            )
-
-        table.add_section()
-        table.add_row(f"[bold]{len(res.machines)} items")
-        terminal.print(table)
+    for renderable in _machine_list_renderables(res.gpus, res.machines):
+        terminal.print(renderable)
 
 
 @management.command(

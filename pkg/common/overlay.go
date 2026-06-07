@@ -178,6 +178,10 @@ func (co *ContainerOverlay) TopLayerPath() string {
 	return layer.merged
 }
 
+func (co *ContainerOverlay) OverlayPath() string {
+	return co.overlayPath
+}
+
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 

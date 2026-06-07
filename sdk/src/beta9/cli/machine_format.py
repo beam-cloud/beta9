@@ -1,0 +1,135 @@
+from datetime import datetime, timezone
+from typing import Dict, Optional, Sequence
+
+from rich.table import Column, Table, box
+
+from .. import terminal
+from ..clients.gateway import Machine
+
+
+def gpu_availability_table(gpus: Dict[str, bool]) -> Table:
+    table = Table(
+        Column("GPU Type"),
+        Column("Available", justify="center"),
+        box=box.SIMPLE,
+    )
+    for gpu_type, gpu_available in sorted(gpus.items()):
+        table.add_row(gpu_type, "✅" if gpu_available else "❌")
+    if not gpus:
+        table.add_row("-", "-")
+    table.add_section()
+    table.add_row(f"[bold]{len(gpus)} items")
+    return table
+
+
+def machine_table(machines: Sequence[Machine]) -> Table:
+    table = Table(
+        Column("ID"),
+        Column("CPU"),
+        Column("Memory"),
+        Column("GPU"),
+        Column("Status"),
+        Column("Pool"),
+        Column("Created"),
+        Column("Last Keepalive"),
+        Column("Agent Version"),
+        Column("Free GPU Count"),
+        box=box.SIMPLE,
+    )
+    for machine in machines:
+        table.add_row(
+            machine.id,
+            machine_cpu(machine),
+            machine_memory(machine),
+            machine_gpu(machine),
+            machine_status(machine.status),
+            machine.pool_name or "-",
+            machine_created(machine.created),
+            machine_last_keepalive(machine.last_keepalive),
+            f"v{machine.agent_version}" if machine.agent_version else "-",
+            machine_free_gpu_count(machine),
+        )
+
+    table.add_section()
+    table.add_row(f"[bold]{len(machines)} items")
+    return table
+
+
+def machine_cpu(machine: Machine) -> str:
+    if machine.cpu <= 0:
+        return "-"
+    return f"{machine.cpu:,}m"
+
+
+def machine_memory(machine: Machine) -> str:
+    if machine.memory <= 0:
+        return "-"
+    return terminal.humanize_memory(machine.memory * 1024 * 1024)
+
+
+def format_cpu(millicores: int) -> str:
+    cores = millicores / 1000
+    if cores.is_integer():
+        return f"{int(cores)}CPU"
+    return f"{cores:.2f}CPU"
+
+
+def format_memory(memory_mb: int) -> str:
+    if memory_mb >= 1024:
+        return f"{memory_mb / 1024:.1f}GiB"
+    return f"{memory_mb}MiB"
+
+
+def machine_gpu(machine: Machine) -> str:
+    if not machine.gpu:
+        return "-"
+    if machine.gpu_count == 0:
+        return machine.gpu
+    return f"{machine.gpu} x {machine.gpu_count}"
+
+
+def machine_free_gpu_count(machine: Machine) -> str:
+    metrics = getattr(machine, "machine_metrics", None)
+    if metrics is None:
+        return "-"
+    return str(metrics.free_gpu_count)
+
+
+def machine_status(status: str) -> str:
+    styles = {
+        "available": "green",
+        "ready": "green",
+        "pending": "yellow",
+        "registered": "yellow",
+        "disabled": "red",
+        "failed": "red",
+        "preflight_failed": "red",
+        "disconnected": "yellow",
+    }
+    normalized = (status or "").lower()
+    style = styles.get(normalized)
+    if not status or not style:
+        return status or "-"
+    return f"[{style}]{status}[/{style}]"
+
+
+def machine_created(value: str) -> str:
+    created = machine_datetime(value)
+    return terminal.humanize_date(created) if created else "-"
+
+
+def machine_last_keepalive(value: str) -> str:
+    last_seen = machine_datetime(value)
+    return terminal.humanize_date(last_seen) if last_seen else "Never"
+
+
+def machine_datetime(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None

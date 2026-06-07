@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	containerLogsPath              string        = "/var/log/worker"
+	containerLogsPath              string        = types.AgentLogsPath
 	defaultWorkerSpindownTimeS     float64       = 300 // 5 minutes
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
@@ -54,6 +54,7 @@ type Worker struct {
 	workerId                string
 	workerToken             string
 	poolName                string
+	machineID               string
 	poolConfig              types.WorkerPoolConfig
 	cpuLimit                int64
 	memoryLimit             int64
@@ -61,6 +62,7 @@ type Worker struct {
 	gpuCount                uint32
 	podAddr                 string
 	podHostName             string
+	routeLocalTargetHost    string
 	imageMountPath          string
 	runtime                 runtime.Runtime
 	runcRuntime             runtime.Runtime
@@ -69,7 +71,7 @@ type Worker struct {
 	cacheManager            *WorkerCacheManager
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
-	containerNetworkManager *ContainerNetworkManager
+	containerNetworkManager ContainerNetwork
 	containerGPUManager     GPUManager
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
@@ -89,6 +91,8 @@ type Worker struct {
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
+	persistent              bool
+	routeTransport          string
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
@@ -151,28 +155,35 @@ func NewWorker() (*Worker, error) {
 
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
-	gpuType := os.Getenv("GPU_TYPE")
-	workerId := os.Getenv("WORKER_ID")
-	workerToken := os.Getenv("WORKER_TOKEN")
-	workerPoolName := os.Getenv("WORKER_POOL_NAME")
-	podHostName := os.Getenv("HOSTNAME")
+	gpuType := os.Getenv(types.WorkerGPUEnv)
+	workerId := os.Getenv(types.WorkerIDEnv)
+	workerToken := os.Getenv(types.WorkerTokenEnv)
+	workerPoolName := os.Getenv(types.WorkerPoolEnv)
+	machineID := os.Getenv(types.WorkerMachineEnv)
+	podHostName := os.Getenv(types.WorkerHostnameEnv)
+	persistent := envBool(types.WorkerPersistentEnv)
+	routeTransport := firstNonEmptyWorkerValue(os.Getenv(types.WorkerRouteTransportEnv))
+	if routeTransport == "" && persistent {
+		routeTransport = types.BackendRouteTransportTSNet
+	}
+	routeLocalTargetHost := firstNonEmptyWorkerValue(os.Getenv(types.WorkerRouteTargetEnv))
 
 	podAddr, err := GetPodAddr()
 	if err != nil {
 		return nil, err
 	}
 
-	gpuCount, err := strconv.ParseInt(os.Getenv("GPU_COUNT"), 10, 64)
+	gpuCount, err := strconv.ParseInt(os.Getenv(types.WorkerGPUCountEnv), 10, 64)
 	if err != nil {
 		return nil, err
 	}
 
-	cpuLimit, err := strconv.ParseInt(os.Getenv("CPU_LIMIT"), 10, 64)
+	cpuLimit, err := strconv.ParseInt(os.Getenv(types.WorkerCPUEnv), 10, 64)
 	if err != nil {
 		return nil, err
 	}
 
-	memoryLimit, err := strconv.ParseInt(os.Getenv("MEMORY_LIMIT"), 10, 64)
+	memoryLimit, err := strconv.ParseInt(os.Getenv(types.WorkerMemoryEnv), 10, 64)
 	if err != nil {
 		return nil, err
 	}
@@ -317,17 +328,19 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
+	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport)
 
 	worker := &Worker{
 		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
 		poolName:                workerPoolName,
+		machineID:               machineID,
 		poolConfig:              poolConfig,
 		cancel:                  cancel,
 		config:                  config,
@@ -346,6 +359,7 @@ func NewWorker() (*Worker, error) {
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config),
 		podAddr:                 podAddr,
+		routeLocalTargetHost:    routeLocalTargetHost,
 		imageClient:             imageClient,
 		criuManager:             criuManager,
 		podHostName:             podHostName,
@@ -368,6 +382,8 @@ func NewWorker() (*Worker, error) {
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
+		persistent:          persistent,
+		routeTransport:      routeTransport,
 	}
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
@@ -377,6 +393,7 @@ func NewWorker() (*Worker, error) {
 		ImageClient:             imageClient,
 		ContainerRepoClient:     containerRepoClient,
 		ContainerNetworkManager: containerNetworkManager,
+		BackendRoute:            worker.backendRouteFor,
 		CreateCheckpoint:        worker.createCheckpoint,
 	})
 	if err != nil {
@@ -478,14 +495,14 @@ func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, global
 }
 
 func containerStartLimitWithEnvOverride(limit int) int {
-	raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY")
+	raw := os.Getenv(types.WorkerStartConcurrencyEnv)
 	if raw == "" {
 		return limit
 	}
 
 	parsed, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Warn().Str("value", raw).Err(err).Msg("invalid WORKER_CONTAINER_START_CONCURRENCY")
+		log.Warn().Str("value", raw).Err(err).Msg("invalid " + types.WorkerStartConcurrencyEnv)
 		return limit
 	}
 	if parsed <= 0 {
@@ -706,6 +723,9 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	case <-s.ctx.Done():
 		return true
 	default:
+		if s.persistent {
+			return false
+		}
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
 			err := s.storageManager.Cleanup()
 			if err != nil {
@@ -984,10 +1004,14 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
-		WorkerId: s.workerId,
-	})); err != nil {
-		errs = errors.Join(errs, err)
+	if s.persistent {
+		s.disableSchedulingForShutdown()
+	} else {
+		if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
+			WorkerId: s.workerId,
+		})); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
 	if s.cacheManager != nil {

@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	gpuCntEnvKey               = "GPU_COUNT"
+	gpuCntEnvKey               = types.WorkerGPUCountEnv
 	defaultCheckpointDeadline  = 10 * time.Minute
 	readyLogRate               = 10
 	checkpointFsDir            = "filesystem"
@@ -571,7 +571,7 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 		return false
 	}
 
-	poolName := os.Getenv("WORKER_POOL_NAME")
+	poolName := os.Getenv(types.WorkerPoolEnv)
 	if poolName == "" {
 		log.Warn().Msg("pool name not set")
 		return false

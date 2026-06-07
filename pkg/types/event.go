@@ -40,6 +40,12 @@ var (
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
 
+	EventComputePool      = "compute.pool"
+	EventComputeJoinToken = "compute.join_token"
+	EventComputeMachine   = "compute.machine"
+	EventComputeTransport = "compute.transport"
+	EventComputeRoute     = "compute.route"
+
 	EventStubCacheRequiredContent = "stub.cache.required_content"
 	EventPlatformCache            = "platform.cache"
 )
@@ -161,6 +167,50 @@ type EventWorkerLifecycleSchema struct {
 	Status    string              `json:"status"`
 	PoolName  string              `json:"pool_name"`
 	Reason    DeletedWorkerReason `json:"reason"`
+}
+
+var EventComputeSchemaVersion = "1.0"
+
+const (
+	EventComputeActionPoolReserved              = "pool.reserved"
+	EventComputeActionPoolCreated               = "pool.created"
+	EventComputeActionPoolDeleted               = "pool.deleted"
+	EventComputeActionPoolExtended              = "pool.extended"
+	EventComputeActionJoinTokenCreated          = "join_token.created"
+	EventComputeActionJoinTokenRevoked          = "join_token.revoked"
+	EventComputeActionMachineJoined             = "machine.joined"
+	EventComputeActionMachineHeartbeat          = "machine.heartbeat"
+	EventComputeActionMachineDisconnected       = "machine.disconnected"
+	EventComputeActionWorkerSlotCreated         = "worker_slot.created"
+	EventComputeActionWorkerSlotPruned          = "worker_slot.pruned"
+	EventComputeActionTransportCredentialVended = "transport.credential_vended"
+	EventComputeActionRouteStatusUpdated        = "route.status_updated"
+)
+
+type EventComputeSchema struct {
+	Timestamp   time.Time         `json:"timestamp"`
+	WorkspaceID string            `json:"workspace_id,omitempty"`
+	PoolName    string            `json:"pool_name,omitempty"`
+	MachineID   string            `json:"machine_id,omitempty"`
+	WorkerID    string            `json:"worker_id,omitempty"`
+	ContainerID string            `json:"container_id,omitempty"`
+	RouteID     string            `json:"route_id,omitempty"`
+	Action      string            `json:"action"`
+	Status      string            `json:"status,omitempty"`
+	Transport   string            `json:"transport,omitempty"`
+	Executor    string            `json:"executor,omitempty"`
+	Fallback    string            `json:"fallback,omitempty"`
+	Source      string            `json:"source,omitempty"`
+	Hostname    string            `json:"hostname,omitempty"`
+	OS          string            `json:"os,omitempty"`
+	Arch        string            `json:"arch,omitempty"`
+	CPUCount    uint32            `json:"cpu_count,omitempty"`
+	MemoryMB    uint64            `json:"memory_mb,omitempty"`
+	GPUCount    uint32            `json:"gpu_count,omitempty"`
+	GPUs        []string          `json:"gpus,omitempty"`
+	Schedulable *bool             `json:"schedulable,omitempty"`
+	Message     string            `json:"message,omitempty"`
+	Attrs       map[string]string `json:"attrs,omitempty"`
 }
 
 type DeletedWorkerReason string
@@ -365,6 +415,7 @@ const (
 const (
 	EventCauseClientContextDone = "client_context_done"
 	EventLogStreamStdout        = "stdout"
+	EventLogStreamStderr        = "stderr"
 	EventStreamSourceContainer  = "container_stream"
 	EventStreamSourceClient     = "client_stream"
 	RunnerEventTypeLifecycle    = "lifecycle"
@@ -687,12 +738,16 @@ type EventContainerLogSchema struct {
 var EventPlatformLogSchemaVersion = "1.0"
 
 type EventPlatformLogSchema struct {
-	Timestamp  time.Time `json:"timestamp"`
-	Service    string    `json:"service,omitempty"`
-	InstanceID string    `json:"instance_id,omitempty"`
-	WorkerID   string    `json:"worker_id,omitempty"`
-	Level      string    `json:"level,omitempty"`
-	Line       string    `json:"line"`
+	Timestamp   time.Time `json:"timestamp"`
+	WorkspaceID string    `json:"workspace_id,omitempty"`
+	PoolName    string    `json:"pool_name,omitempty"`
+	MachineID   string    `json:"machine_id,omitempty"`
+	Service     string    `json:"service,omitempty"`
+	InstanceID  string    `json:"instance_id,omitempty"`
+	WorkerID    string    `json:"worker_id,omitempty"`
+	Level       string    `json:"level,omitempty"`
+	Stream      string    `json:"stream,omitempty"`
+	Line        string    `json:"line"`
 }
 
 type EventQuery struct {
@@ -723,6 +778,8 @@ type LogQuery struct {
 	AppID       string     `json:"app_id,omitempty"`
 	TaskID      string     `json:"task_id,omitempty"`
 	ContainerID string     `json:"container_id,omitempty"`
+	MachineID   string     `json:"machine_id,omitempty"`
+	WorkerID    string     `json:"worker_id,omitempty"`
 	Query       string     `json:"query,omitempty"`
 	StartTime   *time.Time `json:"start_time,omitempty"`
 	EndTime     *time.Time `json:"end_time,omitempty"`
@@ -731,6 +788,16 @@ type LogQuery struct {
 	WaitSeconds *int32     `json:"wait,omitempty"`
 	Clamp       *bool      `json:"clamp,omitempty"`
 }
+
+const (
+	GatewayObjectTypeDeployment = "BETA9_DEPLOYMENT"
+	GatewayObjectTypeTask       = "BETA9_TASK"
+	GatewayObjectTypeStub       = "BETA9_STUB"
+	GatewayObjectTypeContainer  = "BETA9_CONTAINER"
+	GatewayObjectTypeWorkspace  = "BETA9_WORKSPACE"
+	GatewayObjectTypeApp        = "BETA9_APP"
+	GatewayObjectTypeMachine    = "BETA9_MACHINE"
+)
 
 type LogRecord struct {
 	SeqNum      uint64    `json:"seq_num"`
@@ -744,6 +811,7 @@ type LogRecord struct {
 	TaskID      string    `json:"task_id,omitempty"`
 	WorkspaceID string    `json:"workspace_id,omitempty"`
 	AppID       string    `json:"app_id,omitempty"`
+	MachineID   string    `json:"machine_id,omitempty"`
 	WorkerID    string    `json:"worker_id,omitempty"`
 }
 
@@ -820,6 +888,7 @@ type ContainerEventRecord struct {
 	TaskID      string            `json:"task_id,omitempty"`
 	WorkspaceID string            `json:"workspace_id,omitempty"`
 	AppID       string            `json:"app_id,omitempty"`
+	MachineID   string            `json:"machine_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
 }
 

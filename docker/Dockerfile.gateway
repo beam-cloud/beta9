@@ -53,6 +53,9 @@ COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY . .
 
 RUN go build -o /usr/local/bin/gateway /workspace/cmd/gateway/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /usr/local/bin/beam-agent-linux-amd64 /workspace/cmd/agent
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /usr/local/bin/beam-agent-linux-arm64 /workspace/cmd/agent
+RUN cp "/usr/local/bin/beam-agent-linux-$(go env GOARCH)" /usr/local/bin/beam-agent
 
 
 # Target used in production-like environments
@@ -63,6 +66,9 @@ WORKDIR /workspace
 RUN apt-get autoclean
 
 COPY --from=build /usr/local/bin/gateway /usr/local/bin/
+COPY --from=build /usr/local/bin/beam-agent /usr/local/bin/
+COPY --from=build /usr/local/bin/beam-agent-linux-amd64 /usr/local/bin/
+COPY --from=build /usr/local/bin/beam-agent-linux-arm64 /usr/local/bin/
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 RUN /usr/local/bin/skopeo --version

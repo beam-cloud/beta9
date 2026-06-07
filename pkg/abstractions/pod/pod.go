@@ -321,14 +321,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		imageId = &stubConfig.Runtime.ImageId
 	}
 
-	// Validate allowlist CIDR entries before scheduling
-	if len(stubConfig.AllowList) > 0 {
-		if err := common.ValidateAllowList(stubConfig.AllowList); err != nil {
-			return "", err
-		}
-	}
-
-	err = s.scheduler.Run(&types.ContainerRequest{
+	runRequest := &types.ContainerRequest{
 		ContainerId:       containerId,
 		StubId:            stub.ExternalId,
 		Env:               env,
@@ -345,10 +338,13 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		Ports:             ports,
 		CheckpointEnabled: checkpointEnabled,
 		Checkpoint:        checkpoint,
-		BlockNetwork:      stubConfig.BlockNetwork,
-		AllowList:         stubConfig.AllowList,
-		DockerEnabled:     stubConfig.DockerEnabled,
-	})
+		PoolSelector:      stubConfig.PoolSelector(),
+	}
+	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
+		return "", err
+	}
+
+	err = s.scheduler.Run(runRequest)
 	if err != nil {
 		return "", err
 	}

@@ -37,13 +37,13 @@ func RunCacheServer() error {
 		return err
 	}
 
-	poolName := os.Getenv("WORKER_POOL_NAME")
+	poolName := os.Getenv(types.WorkerPoolEnv)
 	if poolName == "" {
 		poolName = "default"
 	}
 	poolConfig := config.Worker.Pools[poolName]
 
-	workerID := os.Getenv("WORKER_ID")
+	workerID := os.Getenv(types.WorkerIDEnv)
 	if workerID == "" {
 		workerID = fmt.Sprintf("cache-server-%s", cacheNodeID())
 	}

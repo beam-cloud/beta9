@@ -2,9 +2,11 @@ package gatewayservices
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -25,6 +27,8 @@ type GatewayService struct {
 	eventRepo        repository.EventRepository
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
+	computeRepo      repository.ComputeRepository
+	computeService   *computesvc.Service
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
@@ -44,6 +48,7 @@ type GatewayServiceOpts struct {
 	EventRepo        repository.EventRepository
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
+	ComputeRepo      repository.ComputeRepository
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
@@ -54,6 +59,23 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 	if err != nil {
 		return nil, err
 	}
+	computeRepo := opts.ComputeRepo
+	if computeRepo == nil {
+		if opts.RedisClient == nil {
+			return nil, fmt.Errorf("compute repository requires redis client")
+		}
+		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
+	}
+	computeService := computesvc.New(computesvc.Options{
+		Config:          opts.Config,
+		BackendRepo:     opts.BackendRepo,
+		ContainerRepo:   opts.ContainerRepo,
+		Scheduler:       opts.Scheduler,
+		EventRepo:       opts.EventRepo,
+		WorkerRepo:      opts.WorkerRepo,
+		ComputeRepo:     computeRepo,
+		KeyEventManager: keyEventManager,
+	})
 
 	return &GatewayService{
 		ctx:              opts.Ctx,
@@ -67,6 +89,8 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		eventRepo:        opts.EventRepo,
 		workerRepo:       opts.WorkerRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
+		computeRepo:      computeRepo,
+		computeService:   computeService,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,6 +82,21 @@ func TestGetIPFromEnv(t *testing.T) {
 				t.Errorf("getIPFromEnv() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultInterfaceNameFromProcRoute(t *testing.T) {
+	route := strings.NewReader(`Iface	Destination	Gateway	Flags	RefCnt	Use	Metric	Mask	MTU	Window	IRTT
+eth0	00000000	010012AC	0003	0	0	0	00000000	0	0	0
+eth1	0012AC0A	00000000	0001	0	0	0	00FFFFFF	0	0	0
+`)
+
+	name, err := defaultInterfaceNameFromProcRoute(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "eth0" {
+		t.Fatalf("expected eth0 default interface, got %q", name)
 	}
 }
 
@@ -591,6 +608,21 @@ func TestContainerIdFromIptablesRuleHandlesIPv6Colons(t *testing.T) {
 	}
 }
 
+func TestIPTablesRuleFieldsPreservesIPv6DNATBrackets(t *testing.T) {
+	rule := `-A PREROUTING -p tcp -m tcp --dport 56449 -j DNAT --to-destination [fd00:abcd::11]:2222 -m comment --comment "b9h1a5f2d74dd3b:endpoint-one:slot-one"`
+
+	parts := iptablesRuleFields(rule)
+	if !slices.Contains(parts, "[fd00:abcd::11]:2222") {
+		t.Fatalf("expected bracketed IPv6 DNAT destination in rule fields: %#v", parts)
+	}
+	if slices.Contains(parts, "fd00:abcd::11]:2222") {
+		t.Fatalf("found malformed IPv6 DNAT destination in rule fields: %#v", parts)
+	}
+	if !iptablesRuleMatchesIP(rule, "fd00:abcd::11") {
+		t.Fatal("expected bracketed IPv6 DNAT destination to match exact IP")
+	}
+}
+
 func TestContainerNetworkRuleInfoFromIptablesRule(t *testing.T) {
 	rule := `-A PREROUTING -p tcp -m tcp --dport 12345 -j DNAT --to-destination 192.168.0.44:8080 -m comment --comment "b9habcdef123456:sandbox-123:network-slot-abc"`
 
@@ -609,6 +641,40 @@ func TestContainerNetworkRuleInfoFromIptablesRule(t *testing.T) {
 	}
 	if info.IPv4 != "192.168.0.44" {
 		t.Fatalf("expected IPv4 destination, got %s", info.IPv4)
+	}
+}
+
+func TestIPTablesRuleMatchesExactIP(t *testing.T) {
+	rule := `-A PREROUTING -p tcp -m tcp --dport 12345 -j DNAT --to-destination 192.168.0.44:8080 -m comment --comment "b9habcdef123456:sandbox-123"`
+
+	if !iptablesRuleMatchesIP(rule, "192.168.0.44") {
+		t.Fatal("expected exact destination IP to match")
+	}
+	if iptablesRuleMatchesIP(rule, "192.168.0.4") {
+		t.Fatal("did not expect substring IP to match")
+	}
+}
+
+func TestIPTablesRuleMatchesCIDRSourceIP(t *testing.T) {
+	rule := `-A FORWARD -s 192.168.0.44/32 -o eth0 -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP -m comment --comment "b9habcdef123456:sandbox-123"`
+
+	if !iptablesRuleMatchesSourceIP(rule, "192.168.0.44") {
+		t.Fatal("expected source CIDR to match")
+	}
+	if iptablesRuleMatchesSourceIP(rule, "192.168.0.4") {
+		t.Fatal("did not expect substring source IP to match")
+	}
+}
+
+func TestNetworkRestrictionMatcherPreservesExposeForwardRule(t *testing.T) {
+	exposeRule := `-A FORWARD -p tcp -d 192.168.0.44/32 --dport 8001 -j ACCEPT -m comment --comment "b9habcdef123456:sandbox-123"`
+	restrictionRule := `-A FORWARD -s 192.168.0.44/32 -o eth0 -d 10.0.0.0/8 -j ACCEPT -m comment --comment "b9habcdef123456:sandbox-123"`
+
+	if iptablesRuleMatchesSourceIP(exposeRule, "192.168.0.44") {
+		t.Fatal("exposed-port rule should not be treated as a network restriction")
+	}
+	if !iptablesRuleMatchesSourceIP(restrictionRule, "192.168.0.44") {
+		t.Fatal("allowlist rule should be treated as a network restriction")
 	}
 }
 

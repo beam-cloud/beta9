@@ -28,7 +28,7 @@ from ..clients.pod import (
 from ..config import ConfigContext, get_settings
 from ..runner.common import USER_CODE_DIR
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias
+from ..type import GpuType, GpuTypeAlias, Pool
 from ..utils import get_init_args_kwargs
 from .base import BaseAbstraction
 
@@ -139,6 +139,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         block_network: bool = False,
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
+        pool: Optional[Union[str, Pool]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -159,6 +160,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             app=app,
             tcp=tcp,
             docker_enabled=docker_enabled,
+            pool=pool,
         )
         self.parent = self
         self.func = None

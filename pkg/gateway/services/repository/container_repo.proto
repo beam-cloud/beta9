@@ -62,6 +62,7 @@ message SetContainerExitCodeResponse {
 message SetContainerAddressRequest {
   string container_id = 1;
   string address = 2;
+  BackendRoute route = 3;
 }
 
 message SetContainerAddressResponse {
@@ -72,6 +73,7 @@ message SetContainerAddressResponse {
 message SetContainerAddressMapRequest {
   string container_id = 1;
   map<int32, string> address_map = 2;
+  repeated BackendRoute routes = 3;
 }
 
 message SetContainerAddressMapResponse {
@@ -90,9 +92,28 @@ message GetContainerAddressMapResponse {
 message SetWorkerAddressRequest {
   string container_id = 1;
   string address = 2;
+  BackendRoute route = 3;
 }
 
 message SetWorkerAddressResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message BackendRoute {
+  string route_id = 1;
+  string workspace_id = 2;
+  string pool_name = 3;
+  string machine_id = 4;
+  string worker_id = 5;
+  string container_id = 6;
+  string kind = 7;
+  int32 port = 8;
+  string protocol = 9;
+  string transport = 10;
+  string local_target = 11;
+  string proxy_target = 12;
+  string state = 13;
+  string error = 14;
+  int64 updated_at = 15;
 }

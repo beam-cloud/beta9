@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	baseConfigPath              string = "/tmp"
+	baseConfigPath              string = types.AgentTmpPath
 	defaultContainerDirectory   string = types.WorkerUserCodeVolume
 	specBaseName                string = "config.json"
 	initialSpecBaseName         string = "initial_config.json"
@@ -250,6 +250,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
+		Route:       s.backendRouteFor(request, types.BackendRouteKindWorker, 0, hostname),
 	}))
 	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, phaseStart, err == nil, nil)
@@ -484,6 +485,10 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 }
 
 func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.ContainerRequest, bindings []PortBinding) error {
+	if s.agentWorker() {
+		return nil
+	}
+
 	containerId := request.ContainerId
 	if len(bindings) > 0 {
 		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindings[0].HostPort)
@@ -929,31 +934,6 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	return &newSpec, nil
 }
 
-func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
-	// Most of these env vars are required to communicate with the gateway and vice versa
-	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
-		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
-		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
-		"PYTHONUNBUFFERED=1",
-	}
-
-	// Add env vars from request
-	env = append(request.Env, env...)
-
-	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
-	if options.InitialSpec != nil && options.InitialSpec.Process != nil {
-		env = append(options.InitialSpec.Process.Env, env...)
-	}
-
-	return env
-}
-
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -1080,6 +1060,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"success":    "true",
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
+
+	if err := s.registerContainerPorts(ctx, request, opts.StartupPortBindings); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to register container network addresses")
+		return
+	}
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -1597,7 +1582,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	}
 
 	overlayPath := baseConfigPath
-	if request.IsBuildRequest() {
+	if s.useMemoryOverlay(request) {
 		overlayPath = "/dev/shm"
 	}
 

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	baseFileCachePath      string = "/cache"
+	baseFileCachePath      string = types.AgentCacheFSMountPath
 	volumeCacheLibraryPath string = "/usr/local/lib/volume_cache.so"
 	volumeCacheMapEnv      string = "VOLUME_CACHE_MAP"
 	ldPreloadEnv           string = "LD_PRELOAD"
@@ -94,7 +94,7 @@ func volumeCacheMounts(workspaceVolumePath string) []specs.Mount {
 	return []specs.Mount{{
 		Type:        "none",
 		Source:      filepath.Join(baseFileCachePath, workspaceVolumePath),
-		Destination: "/cache",
+		Destination: types.AgentCacheFSMountPath,
 		Options:     []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
 	}, {
 		Type:        "none",

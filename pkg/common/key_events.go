@@ -54,7 +54,16 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 }
 
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
-	pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
+	keyspacePattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePattern, keyEventChan)
+}
+
+func (kem *KeyEventManager) ListenForPublishedPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
+	pattern := fmt.Sprintf("%s*", patternPrefix)
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, pattern, keyEventChan)
+}
+
+func (kem *KeyEventManager) listenForSubscriptionPattern(ctx context.Context, patternPrefix, pattern string, keyEventChan chan KeyEvent) error {
 	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
 
 	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
@@ -76,13 +85,7 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 		for {
 			select {
 			case m := <-messages:
-				key := strings.TrimPrefix(m.Channel, fmt.Sprintf("%s%s", keyspacePrefix, patternPrefix))
-				operation := string(m.Payload)
-
-				keyEventChan <- KeyEvent{
-					Key:       key,
-					Operation: operation,
-				}
+				keyEventChan <- kem.messageToKeyEvent(patternPrefix, m.Channel, string(m.Payload))
 
 			case <-ctx.Done():
 				return
@@ -95,4 +98,22 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 	}()
 
 	return nil
+}
+
+func (kem *KeyEventManager) messageToKeyEvent(patternPrefix, channel, payload string) KeyEvent {
+	if strings.HasPrefix(channel, keyspacePrefix) {
+		return KeyEvent{
+			Key:       strings.TrimPrefix(channel, fmt.Sprintf("%s%s", keyspacePrefix, patternPrefix)),
+			Operation: payload,
+		}
+	}
+
+	operation := payload
+	if operation == "" {
+		operation = KeyOperationSet
+	}
+	return KeyEvent{
+		Key:       strings.TrimPrefix(channel, patternPrefix),
+		Operation: operation,
+	}
 }

@@ -25,8 +25,8 @@ func TestNormalizeCacheConfigAppliesPoolDiskOverrides(t *testing.T) {
 			Enabled: true,
 			Disk: cache.DiskConfig{
 				Enabled:     true,
-				HostPath:    "/var/lib/beta9/cache",
-				MountPath:   "/var/lib/beta9/cache",
+				HostPath:    types.AgentCachePath,
+				MountPath:   types.AgentCachePath,
 				MaxUsagePct: 0.95,
 			},
 		},
@@ -56,8 +56,8 @@ func TestNormalizeCacheConfigDefaultsTopHostsToThree(t *testing.T) {
 			Enabled: true,
 			Disk: cache.DiskConfig{
 				Enabled:   true,
-				MountPath: "/var/lib/beta9/cache",
-				HostPath:  "/var/lib/beta9/cache",
+				MountPath: types.AgentCachePath,
+				HostPath:  types.AgentCachePath,
 			},
 		},
 	}
@@ -129,7 +129,7 @@ func TestCacheServerLockAllowsSingleNodeLocalOwner(t *testing.T) {
 }
 
 func TestEmbeddedWorkerSkipsCacheServerWhenDaemonSetMarkerFresh(t *testing.T) {
-	t.Setenv("CACHE_SERVER_ONLY", "false")
+	t.Setenv(types.CacheServerOnlyEnv, "false")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -148,9 +148,9 @@ func TestEmbeddedWorkerSkipsCacheServerWhenDaemonSetMarkerFresh(t *testing.T) {
 }
 
 func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
-	t.Setenv("CACHE_SERVER_ONLY", "false")
-	t.Setenv("CACHE_NODE_ID", "single-node")
-	t.Setenv("CACHE_LOCALITY", "test")
+	t.Setenv(types.CacheServerOnlyEnv, "false")
+	t.Setenv(types.CacheNodeEnv, "single-node")
+	t.Setenv(types.CacheLocalityEnv, "test")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -191,7 +191,7 @@ func TestCacheServerDaemonSetMarkerFreshUsesTTL(t *testing.T) {
 }
 
 func TestCacheServerDaemonSetMarkerLoopStopsOnClose(t *testing.T) {
-	t.Setenv("CACHE_SERVER_ONLY", "true")
+	t.Setenv(types.CacheServerOnlyEnv, "true")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -220,8 +220,8 @@ func TestCacheServerDaemonSetMarkerLoopStopsOnClose(t *testing.T) {
 }
 
 func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testing.T) {
-	t.Setenv("CACHE_NODE_ID", "single-node")
-	t.Setenv("CACHE_LOCALITY", "test")
+	t.Setenv(types.CacheNodeEnv, "single-node")
+	t.Setenv(types.CacheLocalityEnv, "test")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -292,8 +292,8 @@ func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testin
 }
 
 func TestCacheLogicalHostIDDeduplicatesSharedNodeCachePath(t *testing.T) {
-	first := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
-	second := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	first := cacheLogicalHostID("default", "node-a", filepath.Join(types.AgentCachePath, "default", "node-a"))
+	second := cacheLogicalHostID("default", "node-a", filepath.Join(types.AgentCachePath, "default", "node-a"))
 	otherPath := cacheLogicalHostID("default", "node-a", "/mnt/cache/default/node-a")
 
 	require.Equal(t, first, second)
@@ -301,8 +301,8 @@ func TestCacheLogicalHostIDDeduplicatesSharedNodeCachePath(t *testing.T) {
 }
 
 func TestCacheLogicalHostIDIgnoresWorkerPool(t *testing.T) {
-	defaultPool := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
-	buildPool := cacheLogicalHostID("default", "node-a", "/var/lib/beta9/cache/default/node-a")
+	defaultPool := cacheLogicalHostID("default", "node-a", filepath.Join(types.AgentCachePath, "default", "node-a"))
+	buildPool := cacheLogicalHostID("default", "node-a", filepath.Join(types.AgentCachePath, "default", "node-a"))
 
 	require.Equal(t, defaultPool, buildPool)
 }
@@ -562,7 +562,7 @@ func TestCacheAdvertiseHost(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("POD_IP", tc.podIP)
+			t.Setenv(types.WorkerPodIPEnv, tc.podIP)
 			m := &WorkerCacheManager{podAddr: tc.podAddr}
 			require.Equal(t, tc.expected, m.cacheAdvertiseHost())
 		})
@@ -628,9 +628,9 @@ func TestBindAddr(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CACHE_HOST_NETWORK", tc.hostNetwork)
-			t.Setenv("CACHE_SERVER_ONLY", tc.cacheServer)
-			t.Setenv("CACHE_SERVER_PORT", tc.envPort)
+			t.Setenv(types.CacheHostNetworkEnv, tc.hostNetwork)
+			t.Setenv(types.CacheServerOnlyEnv, tc.cacheServer)
+			t.Setenv(types.CacheServerPortEnv, tc.envPort)
 
 			m := &WorkerCacheManager{
 				config: types.AppConfig{

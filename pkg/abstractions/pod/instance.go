@@ -85,9 +85,10 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
 			Ports:             ports,
-			BlockNetwork:      i.StubConfig.BlockNetwork,
-			AllowList:         i.StubConfig.AllowList,
-			DockerEnabled:     i.StubConfig.DockerEnabled,
+			PoolSelector:      i.StubConfig.PoolSelector(),
+		}
+		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {
+			return err
 		}
 
 		ttl := time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second

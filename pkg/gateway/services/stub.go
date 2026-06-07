@@ -124,6 +124,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		outputs = types.NewSchemaFromProto(in.Outputs)
 	}
 
+	poolConfig := poolConfigFromProto(in.Pool)
+	if poolConfig != nil {
+		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
@@ -159,6 +164,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
+		Pool:               poolConfig,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -262,11 +268,107 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	if poolConfig != nil && poolConfig.ReservationRequired {
+		res, err := gws.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
+			Pool: poolConfigToProto(poolConfig),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !res.Ok {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: res.ErrMsg,
+			}, nil
+		}
+	}
+
 	return &pb.GetOrCreateStubResponse{
 		Ok:      err == nil,
 		StubId:  stub.ExternalId,
 		WarnMsg: warning,
 	}, nil
+}
+
+func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
+	if in == nil {
+		return nil
+	}
+	return &types.PoolConfig{
+		Name:                in.Name,
+		GPUs:                in.Gpu,
+		TotalGPUs:           in.Gpus,
+		OfferID:             in.OfferId,
+		TTL:                 in.Ttl,
+		MaxSpend:            in.MaxSpend,
+		Providers:           in.Providers,
+		Regions:             in.Regions,
+		MinReliability:      in.MinReliability,
+		ReservationRequired: in.ReservationRequired,
+		Selector:            in.Selector,
+	}
+}
+
+func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
+	if in == nil {
+		return nil
+	}
+	return &pb.PoolConfig{
+		Name:                in.Name,
+		Gpu:                 in.GPUs,
+		Gpus:                in.TotalGPUs,
+		OfferId:             in.OfferID,
+		Ttl:                 in.TTL,
+		MaxSpend:            in.MaxSpend,
+		Providers:           in.Providers,
+		Regions:             in.Regions,
+		MinReliability:      in.MinReliability,
+		ReservationRequired: in.ReservationRequired,
+		Selector:            in.Selector,
+	}
+}
+
+func configurePoolSelector(pool *types.PoolConfig, workspaceID, stubName string) {
+	if pool.Selector != "" {
+		if pool.Name == "" && pool.ReservationRequired {
+			pool.Name = pool.Selector
+		}
+		return
+	}
+	if pool.Name != "" {
+		pool.Selector = pool.Name
+		return
+	}
+	pool.Selector = sanitizePoolSelector(fmt.Sprintf("private-%s-%s", workspaceID, stubName))
+	if pool.Name == "" && pool.ReservationRequired {
+		pool.Name = pool.Selector
+	}
+}
+
+func sanitizePoolSelector(value string) string {
+	value = strings.ToLower(value)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
+		if ok {
+			b.WriteRune(r)
+			lastDash = r == '-'
+			continue
+		}
+		if !lastDash {
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-._")
+	if out == "" {
+		return "private-pool"
+	}
+	if len(out) > 128 {
+		return out[:128]
+	}
+	return out
 }
 
 func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest, gpus []types.GpuType) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -265,6 +266,59 @@ func TestResolveLogStreamsUsesKnownStreamsWithoutExistenceList(t *testing.T) {
 	}
 }
 
+func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+		MachineID: "machine-123",
+		WorkerID:  "agent-worker-123",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{
+		"events/logs/platform/services/agent/machine-123",
+		"events/logs/platform/workers/agent-worker-123",
+	}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected machine log streams: got %q want %q", streams, want)
+	}
+}
+
+func TestResolveWorkspaceMachineLogHistoryUsesSingleAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+		WorkspaceID: "workspace-123",
+		MachineID:   "machine-123",
+		WorkerID:    "agent-worker-123",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123"}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected machine history stream target: got %q want %q", streams, want)
+	}
+}
+
+func TestStreamMachineLogsUsesWorkspaceAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.machineLogStreams(types.LogQuery{
+		WorkspaceID: "workspace-123",
+		MachineID:   "machine-123",
+		WorkerID:    "agent-worker-123",
+	})
+
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123"}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected machine stream target: got %q want %q", streams, want)
+	}
+}
+
 func TestResolveLogStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
@@ -478,6 +532,53 @@ func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
 	if got, want := serviceStream[0], s2.StreamName("events/logs/platform/services/gateway/pod_1"); got != want {
 		t.Fatalf("unexpected platform service log stream: got %q want %q", got, want)
 	}
+
+	workspaceStreams := repo.streamNamesForEvent(types.EventPlatformLog, eventMetadata{
+		WorkspaceID: "workspace-123",
+		ServiceName: "agent",
+		InstanceID:  "machine-123",
+	})
+	if got, want := workspaceStreams, []s2.StreamName{
+		"events/logs/platform/services/agent/machine-123",
+		"events/logs/workspaces/workspace-123",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected workspace platform log streams: got %q want %q", got, want)
+	}
+}
+
+func TestS2PlatformLogRecordsDecodeForWorkspaceLogs(t *testing.T) {
+	eventRepo := &EventClientRepo{}
+	logAt := time.Date(2026, 6, 6, 15, 0, 0, 0, time.UTC)
+	event, err := eventRepo.createEventObject(types.EventPlatformLog, types.EventPlatformLogSchemaVersion, types.EventPlatformLogSchema{
+		Timestamp:   logAt,
+		WorkspaceID: "workspace-123",
+		PoolName:    "private-dev",
+		MachineID:   "machine-123",
+		Service:     types.AgentTelemetrySourceWorker,
+		InstanceID:  "worker-123",
+		WorkerID:    "worker-123",
+		Stream:      types.EventLogStreamStderr,
+		Line:        "worker ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, ok := logRecordFromS2(s2.SequencedRecord{
+		SeqNum:    7,
+		Timestamp: uint64(logAt.UnixMilli()),
+		Body:      body,
+	})
+	if !ok {
+		t.Fatal("expected platform log record to decode")
+	}
+	if record.Message != "worker ready" || record.Stream != types.EventLogStreamStderr || record.WorkspaceID != "workspace-123" || record.MachineID != "machine-123" || record.WorkerID != "worker-123" {
+		t.Fatalf("unexpected log record: %#v", record)
+	}
 }
 
 func TestS2ContainerScopedEventsDoNotFallbackToNonCanonicalStreams(t *testing.T) {
@@ -522,6 +623,12 @@ func TestS2PlatformEventStreamsUseEntityMetadata(t *testing.T) {
 			want:      "events/workspaces/workspace-1",
 		},
 		{
+			name:      "compute route",
+			eventType: types.EventComputeRoute,
+			metadata:  eventMetadata{WorkspaceID: "workspace-1", WorkerID: "worker-1", RouteID: "route-1"},
+			want:      "events/workspaces/workspace-1",
+		},
+		{
 			name:      "stub state",
 			eventType: "stub.state.degraded",
 			metadata:  eventMetadata{WorkspaceID: "workspace-1", StubID: "stub-1"},
@@ -559,6 +666,33 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		metadata.StubID != "stub-1" ||
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
+		t.Fatalf("metadata did not round trip: %#v", metadata)
+	}
+}
+
+func TestComputeEventMetadataExtensionsRoundTrip(t *testing.T) {
+	repo := &EventClientRepo{}
+	event, err := repo.createEventObject(types.EventComputeRoute, types.EventComputeSchemaVersion, types.EventComputeSchema{
+		WorkspaceID: "workspace-1",
+		PoolName:    "private-gpu",
+		MachineID:   "machine-1",
+		WorkerID:    "worker-1",
+		ContainerID: "container-1",
+		RouteID:     "route-1",
+		Action:      types.EventComputeActionRouteStatusUpdated,
+		Status:      types.BackendRouteStateReady,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := eventMetadataFromCloudEvent(event)
+	if metadata.WorkspaceID != "workspace-1" ||
+		metadata.PoolName != "private-gpu" ||
+		metadata.MachineID != "machine-1" ||
+		metadata.WorkerID != "worker-1" ||
+		metadata.ContainerID != "container-1" ||
+		metadata.RouteID != "route-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)
 	}
 }
@@ -725,6 +859,31 @@ func TestS2StreamDeletionPendingErrorIsTransient(t *testing.T) {
 	}
 	if isS2EventStreamDeletionPending(otherErr) {
 		t.Fatal("unexpectedly treated non-deletion-pending S2 error as transient")
+	}
+}
+
+func TestS2ReadEmptyRecognizesStreamNotFoundByCodeAndMessage(t *testing.T) {
+	codeErr := fmt.Errorf("read stream: %w", &s2.S2Error{
+		Code:   "stream_not_found",
+		Status: 400,
+		Origin: "server",
+	})
+	if !isS2ReadEmpty(codeErr) {
+		t.Fatal("expected stream_not_found code to be treated as empty")
+	}
+
+	messageErr := fmt.Errorf("read stream: stream does not exist")
+	if !isS2ReadEmpty(messageErr) {
+		t.Fatal("expected stream missing message to be treated as empty")
+	}
+
+	genericNotFound := fmt.Errorf("read stream: %w", &s2.S2Error{
+		Code:   "not_found",
+		Status: 404,
+		Origin: "server",
+	})
+	if isS2ReadEmpty(genericNotFound) {
+		t.Fatal("generic not_found should not be treated as an empty stream read")
 	}
 }
 

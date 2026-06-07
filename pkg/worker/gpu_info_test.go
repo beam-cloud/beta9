@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -250,13 +251,13 @@ func TestResolveVisibleDevicesFallsBackWithoutPodUID(t *testing.T) {
 	origResolve := resolveVisibleDevices
 	defer func() { resolveVisibleDevices = origResolve }()
 
-	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
-	defer os.Unsetenv("NVIDIA_VISIBLE_DEVICES")
+	os.Setenv(types.NvidiaVisibleDevicesEnv, types.NvidiaVisibleDevicesAll)
+	defer os.Unsetenv(types.NvidiaVisibleDevicesEnv)
 
 	resolveVisibleDevices = func() string {
 		podUID := ""
 		if podUID == "" {
-			return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+			return os.Getenv(types.NvidiaVisibleDevicesEnv)
 		}
 		return "should-not-reach"
 	}

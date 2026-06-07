@@ -1,10 +1,14 @@
 package apiv1
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -184,4 +188,51 @@ func TestEventHistoryQueryFromContextParsesFilters(t *testing.T) {
 	if got, want := len(query.EventTypes), 2; got != want {
 		t.Fatalf("unexpected event type count: got %d want %d", got, want)
 	}
+}
+
+func TestGetEventHistoryReturnsServiceUnavailableWhenReadsUnsupported(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events/workspace-1/history", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues("workspace-1")
+
+	group := &EventGroup{eventRepo: repository.NewEventClientRepo(types.AppConfig{})}
+	err := group.GetEventHistory(ctx)
+	if err == nil {
+		t.Fatal("expected service unavailable error")
+	}
+	httpErr, ok := err.(*echo.HTTPError)
+	if !ok {
+		t.Fatalf("error = %T, want *echo.HTTPError", err)
+	}
+	if httpErr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", httpErr.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestGetEventHistoryDoesNotReturn500ForCanceledReads(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events/workspace-1/history", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues("workspace-1")
+
+	group := &EventGroup{eventRepo: canceledEventHistoryRepo{}}
+	if err := group.GetEventHistory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != statusClientClosedRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, statusClientClosedRequest)
+	}
+}
+
+type canceledEventHistoryRepo struct {
+	repository.EventRepository
+}
+
+func (canceledEventHistoryRepo) GetEventHistory(context.Context, types.EventQuery) (*types.EventHistoryResponse, error) {
+	return nil, fmt.Errorf("read event history from s2 stream: %w", context.Canceled)
 }

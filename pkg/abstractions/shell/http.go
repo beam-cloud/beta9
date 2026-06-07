@@ -68,7 +68,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	defer clientConn.Close()
 
 	// Dial ssh server in the container
-	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
+	containerConn, err := network.ConnectToBackend(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale, g.ss.containerRepo)
 	if err != nil {
 		fmt.Fprintf(clientConn, "ERROR: %s", err.Error())
 		return err

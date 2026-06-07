@@ -8,9 +8,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -33,13 +35,15 @@ const (
 	httpConnectionTimeout          time.Duration = 2 * time.Second
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
 	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
+	backendConnectTimeout          time.Duration = 10 * time.Second
 )
 
 type request struct {
 	ctx        echo.Context
 	task       *EndpointTask
 	done       chan struct{}
-	processed  bool
+	started    chan struct{}
+	abandoned  atomic.Bool
 	enqueuedAt time.Time
 }
 
@@ -140,9 +144,11 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	ctx.Set("stubId", rb.stubId)
 
 	done := make(chan struct{})
+	started := make(chan struct{})
 	req := &request{
 		ctx:        ctx,
 		done:       done,
+		started:    started,
 		task:       task,
 		enqueuedAt: time.Now(),
 	}
@@ -151,19 +157,47 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	}
 	rb.recordBufferOccupancy()
 
+	waitTimer := time.NewTimer(rb.requestQueueTimeout())
+	defer waitTimer.Stop()
+
 	for {
 		select {
 		case <-rb.ctx.Done():
 			return nil
 		case <-ctx.Request().Context().Done():
-			if !req.processed {
+			select {
+			case <-started:
+			default:
+				req.abandoned.Store(true)
 				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 			}
+			return nil
+		case <-started:
+			started = nil
+			if !waitTimer.Stop() {
+				select {
+				case <-waitTimer.C:
+				default:
+				}
+			}
+		case <-waitTimer.C:
+			req.abandoned.Store(true)
+			rb.cancelInFlightTask(req.task, types.TaskExpired)
+			ctx.JSON(http.StatusGatewayTimeout, map[string]interface{}{
+				"error": "No backend containers available",
+			})
 			return nil
 		case <-done:
 			return nil
 		}
 	}
+}
+
+func (rb *RequestBuffer) requestQueueTimeout() time.Duration {
+	if rb.stubConfig != nil && rb.stubConfig.TaskPolicy.Timeout > 0 {
+		return time.Duration(rb.stubConfig.TaskPolicy.Timeout) * time.Second
+	}
+	return handleHttpRequestClientTimeout
 }
 
 func (rb *RequestBuffer) processRequests() {
@@ -184,6 +218,10 @@ func (rb *RequestBuffer) processRequests() {
 			}
 			rb.recordBufferOccupancy()
 
+			if req.abandoned.Load() {
+				continue
+			}
+
 			if req.ctx.Request().Context().Err() != nil {
 				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 				continue
@@ -195,16 +233,13 @@ func (rb *RequestBuffer) processRequests() {
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
-	httpClient, err := rb.getHttpClient(address, checkAddressIsReadyTimeout)
-	if err != nil {
-		return false
-	}
+	httpClient := rb.getHttpClient(address, checkAddressIsReadyTimeout)
 
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(rb.ctx, httpConnectionTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/health", address), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", backendHTTPURL("http", address, "health", ""), nil)
 	if err != nil {
 		return false
 	}
@@ -360,35 +395,38 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 	return rb.rdb.Del(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId)).Err()
 }
 
-func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*http.Client, error) {
+func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *http.Client {
 	// If it isn't an tailnet address, just return the standard http client
-	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
-		return rb.httpClient, nil
+	if _, isRoute := types.ParseBackendRouteAddress(address); !isRoute && (!rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName)) {
+		return rb.httpClient
 	}
 
-	start := time.Now()
-	conn, err := network.ConnectToHost(rb.ctx, address, timeout, rb.tailscale, rb.tsConfig)
-	if err != nil {
-		return nil, err
-	}
-	metrics.RecordDialTime(time.Since(start), address)
-
-	// Create a custom transport that uses the established connection
-	// Either using tailscale or not
 	transport := &http.Transport{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return conn, nil
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			dialAddress := addr
+			if _, isRoute := types.ParseBackendRouteAddress(address); isRoute {
+				dialAddress = address
+			}
+
+			start := time.Now()
+			conn, err := network.ConnectToBackend(ctx, dialAddress, backendDialTimeout(timeout), rb.tailscale, rb.tsConfig, rb.containerRepo)
+			metrics.RecordDialTime(time.Since(start), dialAddress)
+			metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", err == nil, time.Since(start))
+			return conn, err
 		},
 	}
 
-	client := &http.Client{
+	return &http.Client{
 		Transport: transport,
+		Timeout:   timeout,
 	}
-
-	return client, nil
 }
 
 func (rb *RequestBuffer) handleRequest(req *request) {
+	if req.abandoned.Load() {
+		return
+	}
+
 	rb.availableContainersLock.RLock()
 
 	if len(rb.availableContainers) == 0 {
@@ -416,7 +454,7 @@ func (rb *RequestBuffer) handleRequest(req *request) {
 	}
 	defer rb.afterRequest(req, c.id)
 
-	req.processed = true
+	close(req.started)
 	protocol := "http"
 	if req.ctx.IsWebSocket() {
 		protocol = "ws"
@@ -437,20 +475,36 @@ func (rb *RequestBuffer) workspaceName() string {
 	return rb.workspace.Name
 }
 
+func backendDialTimeout(requestTimeout time.Duration) time.Duration {
+	if requestTimeout <= 0 {
+		return backendConnectTimeout
+	}
+	if requestTimeout < backendConnectTimeout {
+		return requestTimeout
+	}
+	return backendConnectTimeout
+}
+
 func (rb *RequestBuffer) recordBufferOccupancy() {
 	metrics.RecordRingBufferOccupancy("endpoint", rb.workspaceName(), rb.stubId, rb.buffer.Len(), rb.buffer.Capacity())
 }
 
 func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 	dstDialer := websocket.Dialer{
-		NetDialContext: network.GetDialer(c.address, rb.tailscale, rb.tsConfig),
+		NetDialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			dialAddress := addr
+			if _, isRoute := types.ParseBackendRouteAddress(c.address); isRoute {
+				dialAddress = c.address
+			}
+			return network.ConnectToBackend(ctx, dialAddress, backendDialTimeout(handleHttpRequestClientTimeout), rb.tailscale, rb.tsConfig, rb.containerRepo)
+		},
 	}
 
 	err := rb.proxyWebsocketConnection(
 		req,
 		c,
 		dstDialer,
-		fmt.Sprintf("ws://%s/%s", c.address, req.ctx.Param("subPath")),
+		backendHTTPURL("ws", c.address, req.ctx.Param("subPath"), req.ctx.QueryString()),
 	)
 	if err != nil {
 		return
@@ -488,21 +542,12 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		requestBody = io.NopCloser(bytes.NewReader(payloadBytes))
 	}
 
-	httpClient, err := rb.getHttpClient(c.address, handleHttpRequestClientTimeout)
-	if err != nil {
-		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
-		return
-	}
-	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
+	httpClient := rb.getHttpClient(c.address, handleHttpRequestClientTimeout)
+	containerUrl := backendHTTPURL("http", c.address, req.ctx.Param("subPath"), "")
 
 	// Forward query params to the container if ASGI
 	if rb.isASGI {
-		queryParams := req.ctx.QueryString()
-		if queryParams != "" {
-			containerUrl += "?" + queryParams
-		}
+		containerUrl = backendHTTPURL("http", c.address, req.ctx.Param("subPath"), req.ctx.QueryString())
 	}
 
 	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
@@ -527,7 +572,11 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	if err != nil {
 		if req.ctx.Request().Context().Err() == context.Canceled {
 			rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+			return
 		}
+		req.ctx.JSON(http.StatusBadGateway, map[string]interface{}{
+			"error": "Backend route unavailable",
+		})
 		return
 	}
 	defer resp.Body.Close()
@@ -571,7 +620,25 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 }
 
+func backendHTTPURL(scheme, address, subPath, rawQuery string) string {
+	host := address
+	if _, isRoute := types.ParseBackendRouteAddress(address); isRoute {
+		host = "backend.route"
+	}
+
+	u := url.URL{
+		Scheme:   scheme,
+		Host:     host,
+		Path:     "/" + strings.TrimPrefix(subPath, "/"),
+		RawQuery: rawQuery,
+	}
+	return u.String()
+}
+
 func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask, reason types.TaskCancellationReason) {
+	if task == nil {
+		return
+	}
 	task.Cancel(context.Background(), reason)
 }
 
