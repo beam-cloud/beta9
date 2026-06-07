@@ -167,14 +167,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 		}
 
 	case storage.StorageModeLocal:
-		mount, err = storage.NewStorage(types.StorageConfig{
-			Mode:           storage.StorageModeLocal,
-			FilesystemName: workspaceName,
-			FilesystemPath: mountPath,
-		}, sm.cacheClient)
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("workspace storage mode %q is invalid: workspace storage mounts request-scoped credentials through a FUSE backend", storage.StorageModeLocal)
 
 	default:
 		return nil, errors.New("invalid storage mode")

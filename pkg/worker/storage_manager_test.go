@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -10,7 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func TestWorkspaceStorageManagerMountsLocalStorage(t *testing.T) {
+func TestWorkspaceStorageManagerRejectsLocalStorage(t *testing.T) {
 	base := t.TempDir()
 	manager, err := NewWorkspaceStorageManager(
 		context.Background(),
@@ -28,14 +28,11 @@ func TestWorkspaceStorageManagerMountsLocalStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mount, err := manager.Mount("workspace-a", nil)
-	if err != nil {
-		t.Fatal(err)
+	_, err = manager.Mount("workspace-a", nil)
+	if err == nil {
+		t.Fatal("expected local workspace storage to be rejected")
 	}
-	if mount.Mode() != storage.StorageModeLocal {
-		t.Fatalf("expected local storage, got %q", mount.Mode())
-	}
-	if !pathExists(filepath.Join(base, "workspace-a")) {
-		t.Fatal("expected local workspace mount directory to exist")
+	if !strings.Contains(err.Error(), "request-scoped credentials") {
+		t.Fatalf("expected error to describe workspace storage credentials, got %q", err.Error())
 	}
 }
