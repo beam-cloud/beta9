@@ -1,10 +1,10 @@
-package gatewayservices
+package compute
 
 import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/compute"
+	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -15,22 +15,22 @@ func TestPrivatePoolCreatedByAuthRequiresCreatorToken(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		state *compute.PoolState
+		state *model.PoolState
 		want  bool
 	}{
 		{
 			name:  "matching creator",
-			state: &compute.PoolState{CreatedByTokenID: "token-owner"},
+			state: &model.PoolState{CreatedByTokenID: "token-owner"},
 			want:  true,
 		},
 		{
 			name:  "different creator",
-			state: &compute.PoolState{CreatedByTokenID: "other-token"},
+			state: &model.PoolState{CreatedByTokenID: "other-token"},
 			want:  false,
 		},
 		{
 			name:  "missing creator",
-			state: &compute.PoolState{},
+			state: &model.PoolState{},
 			want:  false,
 		},
 		{
@@ -53,7 +53,7 @@ func TestFilterPrivatePoolsCreatedByAuth(t *testing.T) {
 	authInfo := &auth.AuthInfo{
 		Token: &types.Token{ExternalId: "token-owner"},
 	}
-	states := []*compute.PoolState{
+	states := []*model.PoolState{
 		{Name: "owned", CreatedByTokenID: "token-owner"},
 		{Name: "other", CreatedByTokenID: "other-token"},
 		{Name: "legacy"},
@@ -89,7 +89,7 @@ func TestIsLocalGatewayURL(t *testing.T) {
 }
 
 func TestValidateAgentTransportConfig(t *testing.T) {
-	gws := &GatewayService{
+	s := &Service{
 		appConfig: types.AppConfig{
 			Tailscale: types.TailscaleConfig{
 				Enabled:      true,
@@ -99,19 +99,12 @@ func TestValidateAgentTransportConfig(t *testing.T) {
 		},
 	}
 
-	if err := gws.validateAgentTransportConfig(types.BackendRouteTransportTSNet); err != nil {
+	if err := s.validateAgentTransportConfig(types.BackendRouteTransportTSNet); err != nil {
 		t.Fatalf("expected configured tsnet transport to pass, got %v", err)
 	}
 
-	gws.appConfig.Tailscale.AgentAuthKey = ""
-	if err := gws.validateAgentTransportConfig(types.BackendRouteTransportTSNet); err == nil {
+	s.appConfig.Tailscale.AgentAuthKey = ""
+	if err := s.validateAgentTransportConfig(types.BackendRouteTransportTSNet); err == nil {
 		t.Fatal("expected missing agent auth key to fail")
-	}
-}
-
-func TestNewGatewayServiceRequiresComputeRepoOrRedis(t *testing.T) {
-	_, err := NewGatewayService(&GatewayServiceOpts{})
-	if err == nil {
-		t.Fatal("expected missing compute repository and redis client to fail")
 	}
 }

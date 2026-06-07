@@ -781,7 +781,11 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 		if stream == "" {
 			return nil
 		}
-		return []s2.StreamName{stream}
+		streams := []s2.StreamName{stream}
+		if metadata.WorkspaceID != "" {
+			streams = append(streams, r.workspaceLogStreamName(metadata.WorkspaceID))
+		}
+		return streams
 	}
 	// Required-content reports are persisted only to the dedicated stub cache
 	// stream; they must not fan out to the stub/workspace event streams.

@@ -152,11 +152,16 @@ func runPreflight(devMode bool, executor string) preflightResult {
 		})
 
 		fuse := pathExists(types.HostFuseDevicePath)
+		fuseOK := fuse || devMode
+		fuseMessage := "required while the current image path uses CLIP/go-fuse lazy mounts"
+		if devMode && !fuse {
+			fuseMessage = "not detected on the dev agent host; local Docker worker startup will still run and surface runtime mount errors if FUSE is unavailable"
+		}
 		checks = append(checks, check{
 			Name:     "fuse",
-			Ok:       fuse,
-			Message:  "required while the current image path uses CLIP/go-fuse lazy mounts",
-			Severity: severity(fuse),
+			Ok:       fuseOK,
+			Message:  fuseMessage,
+			Severity: severity(fuseOK),
 		})
 	}
 

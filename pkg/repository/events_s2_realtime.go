@@ -204,8 +204,25 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 		}
 		return []s2.StreamName{streamName}, nil
 	}
+	addKnownMany := func(streamNames ...s2.StreamName) ([]s2.StreamName, error) {
+		streams := make([]s2.StreamName, 0, len(streamNames))
+		for _, streamName := range streamNames {
+			if streamName == "" {
+				continue
+			}
+			if createCanonical {
+				if err := r.ensureStream(ctx, streamName); err != nil {
+					return nil, err
+				}
+			}
+			streams = append(streams, streamName)
+		}
+		return streams, nil
+	}
 
 	switch {
+	case query.MachineID != "":
+		return addKnownMany(r.machineLogStreams(query, createCanonical)...)
 	case query.TaskID != "" && query.WorkspaceID != "":
 		return addKnown(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
 	case query.ContainerID != "" && query.WorkspaceID != "" && query.StubID != "":
@@ -223,6 +240,19 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 		return addKnown(r.workspaceLogStreamName(query.WorkspaceID))
 	default:
 		return nil, nil
+	}
+}
+
+func (r *S2EventRepository) machineLogStreams(query types.LogQuery, live bool) []s2.StreamName {
+	if live && query.WorkspaceID != "" {
+		return []s2.StreamName{r.workspaceLogStreamName(query.WorkspaceID)}
+	}
+	return []s2.StreamName{
+		r.platformLogStreamName(eventMetadata{
+			ServiceName: types.AgentTelemetrySourceAgent,
+			InstanceID:  query.MachineID,
+		}),
+		r.platformLogStreamName(eventMetadata{WorkerID: query.WorkerID}),
 	}
 }
 
@@ -266,13 +296,35 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 }
 
 func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
-	eventRecord, ok := containerEventRecordFromS2(record, types.EventQuery{EventTypes: []string{types.EventContainerLog}}, &types.ContainerEventsResponse{})
-	if !ok || eventRecord.Type != types.EventContainerLog {
+	eventRecord, ok := containerEventRecordFromS2(record, types.EventQuery{EventTypes: []string{types.EventContainerLog, types.EventPlatformLog}}, &types.ContainerEventsResponse{})
+	if !ok {
 		return types.LogRecord{}, false
 	}
 	timestamp := eventRecord.Timestamp
 	if timestamp.IsZero() {
 		timestamp = time.UnixMilli(int64(record.Timestamp)).UTC()
+	}
+	if eventRecord.Type == types.EventPlatformLog {
+		var entry types.EventPlatformLogSchema
+		if err := json.Unmarshal(eventRecord.Data, &entry); err != nil || entry.Line == "" {
+			return types.LogRecord{}, false
+		}
+		if !entry.Timestamp.IsZero() {
+			timestamp = entry.Timestamp
+		}
+		return types.LogRecord{
+			SeqNum:      eventRecord.SeqNum,
+			StoredAtNs:  eventRecord.StoredAtNs,
+			Timestamp:   timestamp,
+			Message:     entry.Line,
+			Stream:      entry.Stream,
+			WorkspaceID: entry.WorkspaceID,
+			MachineID:   entry.MachineID,
+			WorkerID:    entry.WorkerID,
+		}, true
+	}
+	if eventRecord.Type != types.EventContainerLog {
+		return types.LogRecord{}, false
 	}
 	return types.LogRecord{
 		SeqNum:      eventRecord.SeqNum,
@@ -291,10 +343,19 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 }
 
 func logRecordMatchesQuery(record types.LogRecord, query types.LogQuery) bool {
+	if query.WorkspaceID != "" && record.WorkspaceID != "" && record.WorkspaceID != query.WorkspaceID {
+		return false
+	}
 	if query.TaskID != "" && record.TaskID != query.TaskID {
 		return false
 	}
 	if query.ContainerID != "" && record.ContainerID != query.ContainerID {
+		return false
+	}
+	if query.MachineID != "" && record.MachineID != query.MachineID {
+		return false
+	}
+	if query.WorkerID != "" && record.WorkerID != "" && record.WorkerID != query.WorkerID {
 		return false
 	}
 	if query.StartTime != nil && record.Timestamp.Before(query.StartTime.UTC()) {
@@ -353,6 +414,7 @@ func containerEventRecordFromLogRecord(record types.LogRecord) types.ContainerEv
 		TaskID:      record.TaskID,
 		WorkspaceID: record.WorkspaceID,
 		AppID:       record.AppID,
+		MachineID:   record.MachineID,
 		WorkerID:    record.WorkerID,
 	}
 }

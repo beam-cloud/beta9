@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -27,6 +28,7 @@ type GatewayService struct {
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
 	computeRepo      repository.ComputeRepository
+	computeService   *computesvc.Service
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
@@ -64,6 +66,16 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		}
 		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
 	}
+	computeService := computesvc.New(computesvc.Options{
+		Config:          opts.Config,
+		BackendRepo:     opts.BackendRepo,
+		ContainerRepo:   opts.ContainerRepo,
+		Scheduler:       opts.Scheduler,
+		EventRepo:       opts.EventRepo,
+		WorkerRepo:      opts.WorkerRepo,
+		ComputeRepo:     computeRepo,
+		KeyEventManager: keyEventManager,
+	})
 
 	return &GatewayService{
 		ctx:              opts.Ctx,
@@ -78,6 +90,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		workerRepo:       opts.WorkerRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		computeRepo:      computeRepo,
+		computeService:   computeService,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,

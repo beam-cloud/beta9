@@ -73,8 +73,16 @@ def test_pool_join_appends_agent_flags():
         gpu_ids="0,1",
         network_slots=64,
         container_start_concurrency=12,
+        background=False,
+        service_manager="systemd",
+        service_name="beam-private",
+        state_dir="/var/lib/beam/private",
     )
 
+    assert "--foreground" in command
+    assert "--service-manager systemd" in command
+    assert "--service-name beam-private" in command
+    assert "--state-dir /var/lib/beam/private" in command
     assert "--agent-bin '/tmp/beam agent'" in command
     assert "--executor worker-container" in command
     assert "--worker-image registry.localhost:5000/beta9-worker:latest" in command

@@ -139,7 +139,7 @@ COPY --exclude=sdk . .
 
 RUN go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
-RUN go build -o /usr/local/bin/agent ./cmd/agent/main.go
+RUN go build -o /usr/local/bin/agent ./cmd/agent
 
 # uv
 # ========================

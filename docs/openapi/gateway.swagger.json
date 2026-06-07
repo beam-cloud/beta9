@@ -1541,6 +1541,106 @@
         }
       }
     },
+    "gatewayAgentEventRecord": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timestampUnixNano": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayAgentLogRecord": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "line": {
+          "type": "string"
+        },
+        "timestampUnixNano": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayAgentMetricSnapshot": {
+      "type": "object",
+      "properties": {
+        "timestampUnixNano": {
+          "type": "string",
+          "format": "int64"
+        },
+        "cpuUtilizationPct": {
+          "type": "number",
+          "format": "float"
+        },
+        "memoryUsedMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "memoryTotalMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "memoryUtilizationPct": {
+          "type": "number",
+          "format": "float"
+        },
+        "diskUsedMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "diskTotalMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "diskUsagePct": {
+          "type": "number",
+          "format": "float"
+        },
+        "diskPath": {
+          "type": "string"
+        },
+        "workerCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "containerCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "freeGpuCount": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
     "gatewayAgentPreflightCheck": {
       "type": "object",
       "properties": {
@@ -1607,6 +1707,17 @@
         "updatedAt": {
           "type": "string",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayAgentTelemetryResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
         }
       }
     },
@@ -2860,6 +2971,9 @@
         "priority": {
           "type": "integer",
           "format": "int32"
+        },
+        "offerId": {
+          "type": "string"
         }
       }
     },
@@ -2904,6 +3018,13 @@
         "available": {
           "type": "integer",
           "format": "int64"
+        },
+        "storageMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "cloud": {
+          "type": "string"
         }
       }
     },
@@ -2947,6 +3068,14 @@
         "expiresAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "machineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

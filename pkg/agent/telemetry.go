@@ -1,0 +1,295 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
+)
+
+const (
+	agentTelemetryBuffer          = 1024
+	agentTelemetryFlushInterval   = time.Second
+	agentTelemetryMetricsInterval = 5 * time.Second
+	agentTelemetryBatchSize       = 128
+)
+
+type agentTelemetry struct {
+	client     pb.GatewayServiceClient
+	agentToken string
+	bootstrap  bootstrapConfig
+	stderr     io.Writer
+	stateDir   string
+	stats      func() agentWorkerStats
+
+	ch chan *pb.AgentTelemetryRequest
+}
+
+type agentWorkerStats struct {
+	WorkerCount    uint32
+	ContainerCount uint32
+}
+
+func newAgentTelemetry(client pb.GatewayServiceClient, agentToken string, bootstrap bootstrapConfig, stderr io.Writer) *agentTelemetry {
+	stateDir, _ := agentStateDir()
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	return &agentTelemetry{
+		client:     client,
+		agentToken: agentToken,
+		bootstrap:  bootstrap,
+		stderr:     stderr,
+		stateDir:   stateDir,
+		ch:         make(chan *pb.AgentTelemetryRequest, agentTelemetryBuffer),
+	}
+}
+
+func (t *agentTelemetry) setStatsProvider(stats func() agentWorkerStats) {
+	if t != nil {
+		t.stats = stats
+	}
+}
+
+func (t *agentTelemetry) run(ctx context.Context) {
+	if t == nil || t.client == nil || t.agentToken == "" {
+		return
+	}
+
+	backoff := time.Second
+	for ctx.Err() == nil {
+		if err := t.runOnce(ctx); err != nil && ctx.Err() == nil {
+			verbosef(t.stderr, "agent telemetry stream disconnected: %v\n", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = nextBackoff(backoff, 10*time.Second)
+	}
+}
+
+func (t *agentTelemetry) runOnce(ctx context.Context) error {
+	stream, err := t.client.StreamAgentTelemetry(ctx)
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.AgentTelemetryRequest{AgentToken: t.agentToken}); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(agentTelemetryMetricsInterval)
+	flush := time.NewTicker(agentTelemetryFlushInterval)
+	defer ticker.Stop()
+	defer flush.Stop()
+
+	batch := &telemetryBatch{}
+	for {
+		select {
+		case <-ctx.Done():
+			_ = stream.CloseSend()
+			return ctx.Err()
+		case req := <-t.ch:
+			batch.add(req)
+			if batch.size() >= agentTelemetryBatchSize {
+				if err := t.sendBatch(stream, batch); err != nil {
+					return err
+				}
+				batch = &telemetryBatch{}
+			}
+		case <-flush.C:
+			if batch.size() == 0 {
+				continue
+			}
+			if err := t.sendBatch(stream, batch); err != nil {
+				return err
+			}
+			batch = &telemetryBatch{}
+		case <-ticker.C:
+			if metrics := t.collectMetrics(); metrics != nil {
+				batch.Metrics = metrics
+			}
+			if batch.size() == 0 {
+				continue
+			}
+			if err := t.sendBatch(stream, batch); err != nil {
+				return err
+			}
+			batch = &telemetryBatch{}
+		}
+	}
+}
+
+type agentTelemetryStream interface {
+	Send(*pb.AgentTelemetryRequest) error
+}
+
+func (t *agentTelemetry) sendBatch(stream agentTelemetryStream, batch *telemetryBatch) error {
+	return stream.Send(batch.request(t.agentToken))
+}
+
+func (t *agentTelemetry) logWriter(source, workerID, stream string) io.Writer {
+	if t == nil {
+		return io.Discard
+	}
+	return &telemetryLineWriter{
+		telemetry: t,
+		source:    source,
+		workerID:  workerID,
+		stream:    stream,
+	}
+}
+
+func (t *agentTelemetry) teeLogWriter(w io.Writer, source, workerID, stream string) io.Writer {
+	if w == nil {
+		w = io.Discard
+	}
+	if t == nil {
+		return w
+	}
+	return io.MultiWriter(w, t.logWriter(source, workerID, stream))
+}
+
+func (t *agentTelemetry) enqueue(req *pb.AgentTelemetryRequest) {
+	if t == nil || req == nil {
+		return
+	}
+	select {
+	case t.ch <- req:
+	default:
+	}
+}
+
+func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
+	now := time.Now().UTC()
+	snapshot := &pb.AgentMetricSnapshot{
+		TimestampUnixNano: now.UnixNano(),
+	}
+
+	if values, err := cpu.Percent(0, false); err == nil && len(values) > 0 {
+		snapshot.CpuUtilizationPct = float32(values[0])
+	}
+	if memory, err := mem.VirtualMemory(); err == nil && memory != nil {
+		snapshot.MemoryUsedMb = bytesToMiB(memory.Used)
+		snapshot.MemoryTotalMb = bytesToMiB(memory.Total)
+		snapshot.MemoryUtilizationPct = float32(memory.UsedPercent)
+	}
+	if usage, err := disk.Usage(firstNonEmpty(t.stateDir, "/")); err == nil && usage != nil {
+		snapshot.DiskUsedMb = bytesToMiB(usage.Used)
+		snapshot.DiskTotalMb = bytesToMiB(usage.Total)
+		snapshot.DiskUsagePct = float32(usage.UsedPercent)
+		snapshot.DiskPath = usage.Path
+	}
+	if t.stats != nil {
+		stats := t.stats()
+		snapshot.WorkerCount = stats.WorkerCount
+		snapshot.ContainerCount = stats.ContainerCount
+	}
+	return snapshot
+}
+
+func bytesToMiB(value uint64) uint64 {
+	return value / 1024 / 1024
+}
+
+type telemetryBatch struct {
+	Logs    []*pb.AgentLogRecord
+	Metrics *pb.AgentMetricSnapshot
+	Events  []*pb.AgentEventRecord
+}
+
+func (b *telemetryBatch) add(req *pb.AgentTelemetryRequest) {
+	if req == nil {
+		return
+	}
+	b.Logs = append(b.Logs, req.Logs...)
+	b.Events = append(b.Events, req.Events...)
+	if req.Metrics != nil {
+		b.Metrics = req.Metrics
+	}
+}
+
+func (b *telemetryBatch) size() int {
+	size := len(b.Logs) + len(b.Events)
+	if b.Metrics != nil {
+		size++
+	}
+	return size
+}
+
+func (b *telemetryBatch) request(agentToken string) *pb.AgentTelemetryRequest {
+	return &pb.AgentTelemetryRequest{
+		AgentToken: agentToken,
+		Logs:       b.Logs,
+		Metrics:    b.Metrics,
+		Events:     b.Events,
+	}
+}
+
+type telemetryLineWriter struct {
+	telemetry *agentTelemetry
+	source    string
+	workerID  string
+	stream    string
+
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *telemetryLineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	originalLen := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			_, _ = w.buf.Write(p)
+			break
+		}
+		_, _ = w.buf.Write(p[:i])
+		w.flushLocked()
+		p = p[i+1:]
+	}
+	return originalLen, nil
+}
+
+func (w *telemetryLineWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.buf.Len() > 0 {
+		w.flushLocked()
+	}
+	return nil
+}
+
+func (w *telemetryLineWriter) flushLocked() {
+	line := string(bytes.TrimRight(w.buf.Bytes(), "\r"))
+	w.buf.Reset()
+	if line == "" {
+		return
+	}
+	w.telemetry.enqueue(&pb.AgentTelemetryRequest{
+		Logs: []*pb.AgentLogRecord{{
+			Source:            firstNonEmpty(w.source, types.AgentTelemetrySourceAgent),
+			WorkerId:          w.workerID,
+			Level:             "info",
+			Stream:            w.stream,
+			Line:              line,
+			TimestampUnixNano: time.Now().UTC().UnixNano(),
+		}},
+	})
+}
+
+func (w *telemetryLineWriter) String() string {
+	return fmt.Sprintf("%s:%s", w.source, w.stream)
+}

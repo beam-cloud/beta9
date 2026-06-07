@@ -44,6 +44,7 @@ type Vendor interface {
 type OfferRequest struct {
 	GPUs            []string
 	TotalGPUs       uint32
+	OfferID         string
 	Providers       []string
 	Regions         []string
 	MinReliability  float64
@@ -64,13 +65,15 @@ type ReservationRequest struct {
 
 type Offer struct {
 	ID               string
-	Provider         string
+	Provider         string // aggregator/vendor (e.g. "shadeform"), used for pool filtering
+	Cloud            string // underlying cloud the vendor sources from (e.g. "imwt")
 	InstanceType     string
 	Region           string
 	GPU              string
 	GPUCount         uint32
 	CPUMillicores    int64
 	MemoryMB         int64
+	StorageMB        int64
 	HourlyCostMicros int64
 	Reliability      float64
 	Available        uint32
@@ -134,6 +137,7 @@ type Pool struct {
 	Selector       string
 	GPUs           []string
 	TotalGPUs      uint32
+	OfferID        string
 	TTL            time.Duration
 	MaxSpendMicros int64
 	Providers      []string
@@ -175,6 +179,9 @@ func (p Pool) Validate() error {
 }
 
 func (p Pool) MatchesOffer(offer Offer) bool {
+	if p.OfferID != "" && p.OfferID != offer.ID {
+		return false
+	}
 	if len(p.GPUs) > 0 && !slices.Contains(p.GPUs, offer.GPU) {
 		return false
 	}
@@ -213,6 +220,7 @@ type Demand struct {
 	Selector       string
 	GPUs           []string
 	TotalGPUs      uint32
+	OfferID        string
 	CPUMillicores  int64
 	MemoryMB       int64
 	TTL            time.Duration
@@ -229,6 +237,7 @@ func (d Demand) Pool() Pool {
 		Selector:       d.Selector,
 		GPUs:           d.GPUs,
 		TotalGPUs:      d.TotalGPUs + d.HeadroomGPUs,
+		OfferID:        d.OfferID,
 		TTL:            d.TTL,
 		MaxSpendMicros: d.MaxSpendMicros,
 		Providers:      d.Providers,

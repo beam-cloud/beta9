@@ -11,9 +11,10 @@ import (
 )
 
 type Client struct {
-	BaseURL string
-	Token   string
-	Client  *http.Client
+	BaseURL    string
+	Token      string
+	AuthHeader string
+	Client     *http.Client
 }
 
 func (c Client) Do(ctx context.Context, method, path string, body any, out any) error {
@@ -34,7 +35,13 @@ func (c Client) Do(ctx context.Context, method, path string, body any, out any) 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		header := c.AuthHeader
+		value := c.Token
+		if header == "" {
+			header = "Authorization"
+			value = "Bearer " + c.Token
+		}
+		req.Header.Set(header, value)
 	}
 
 	client := c.Client

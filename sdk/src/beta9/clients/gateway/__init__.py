@@ -497,6 +497,7 @@ class PoolConfig(betterproto.Message):
     transport: str = betterproto.string_field(12)
     fallback: str = betterproto.string_field(13)
     priority: int = betterproto.int32_field(14)
+    offer_id: str = betterproto.string_field(15)
 
 
 @dataclass(eq=False, repr=False)
@@ -512,6 +513,8 @@ class PoolOffer(betterproto.Message):
     hourly_cost_micros: int = betterproto.int64_field(9)
     reliability: float = betterproto.double_field(10)
     available: int = betterproto.uint32_field(11)
+    storage_mb: int = betterproto.int64_field(12)
+    cloud: str = betterproto.string_field(13)
 
 
 @dataclass(eq=False, repr=False)
@@ -541,6 +544,8 @@ class PrivatePool(betterproto.Message):
     source: str = betterproto.string_field(8)
     created_at: datetime = betterproto.message_field(9)
     expires_at: datetime = betterproto.message_field(10)
+    machine_count: int = betterproto.uint32_field(11)
+    ready_machine_count: int = betterproto.uint32_field(12)
 
 
 @dataclass(eq=False, repr=False)
@@ -815,6 +820,57 @@ class StreamAgentResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     routes: List["AgentRoute"] = betterproto.message_field(3)
     slots: List["AgentWorkerSlot"] = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class AgentLogRecord(betterproto.Message):
+    source: str = betterproto.string_field(1)
+    worker_id: str = betterproto.string_field(2)
+    level: str = betterproto.string_field(3)
+    stream: str = betterproto.string_field(4)
+    line: str = betterproto.string_field(5)
+    timestamp_unix_nano: int = betterproto.int64_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class AgentMetricSnapshot(betterproto.Message):
+    timestamp_unix_nano: int = betterproto.int64_field(1)
+    cpu_utilization_pct: float = betterproto.float_field(2)
+    memory_used_mb: int = betterproto.uint64_field(3)
+    memory_total_mb: int = betterproto.uint64_field(4)
+    memory_utilization_pct: float = betterproto.float_field(5)
+    disk_used_mb: int = betterproto.uint64_field(6)
+    disk_total_mb: int = betterproto.uint64_field(7)
+    disk_usage_pct: float = betterproto.float_field(8)
+    disk_path: str = betterproto.string_field(9)
+    worker_count: int = betterproto.uint32_field(10)
+    container_count: int = betterproto.uint32_field(11)
+    free_gpu_count: int = betterproto.uint32_field(12)
+
+
+@dataclass(eq=False, repr=False)
+class AgentEventRecord(betterproto.Message):
+    action: str = betterproto.string_field(1)
+    status: str = betterproto.string_field(2)
+    message: str = betterproto.string_field(3)
+    attrs: Dict[str, str] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
+    timestamp_unix_nano: int = betterproto.int64_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class AgentTelemetryRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+    logs: List["AgentLogRecord"] = betterproto.message_field(2)
+    metrics: "AgentMetricSnapshot" = betterproto.message_field(3)
+    events: List["AgentEventRecord"] = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class AgentTelemetryResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -1354,6 +1410,19 @@ class GatewayServiceStub(SyncServiceStub):
             StreamAgentResponse,
         )(stream_agent_request):
             yield response
+
+    def stream_agent_telemetry(
+        self, agent_telemetry_request_iterator: Iterable["AgentTelemetryRequest"]
+    ) -> "AgentTelemetryResponse":
+        return (
+            self._stream_unary(
+                "/gateway.GatewayService/StreamAgentTelemetry",
+                AgentTelemetryRequest,
+                AgentTelemetryResponse,
+            )
+            .future(agent_telemetry_request_iterator)
+            .result()
+        )
 
     def list_machines(
         self, list_machines_request: "ListMachinesRequest"

@@ -231,6 +231,8 @@ service GatewayService {
     };
   }
   rpc StreamAgent(StreamAgentRequest) returns (stream StreamAgentResponse);
+  rpc StreamAgentTelemetry(stream AgentTelemetryRequest)
+      returns (AgentTelemetryResponse);
 
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse) {
@@ -667,6 +669,7 @@ message PoolConfig {
   string transport = 12;
   string fallback = 13;
   int32 priority = 14;
+  string offer_id = 15;
 }
 
 message PoolOffer {
@@ -681,6 +684,8 @@ message PoolOffer {
   int64 hourly_cost_micros = 9;
   double reliability = 10;
   uint32 available = 11;
+  int64 storage_mb = 12;
+  string cloud = 13;
 }
 
 message ProviderInstance {
@@ -708,6 +713,8 @@ message PrivatePool {
   string source = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp expires_at = 10;
+  uint32 machine_count = 11;
+  uint32 ready_machine_count = 12;
 }
 
 message ListPoolOffersRequest { PoolConfig pool = 1; }
@@ -932,6 +939,50 @@ message StreamAgentResponse {
   string err_msg = 2;
   repeated AgentRoute routes = 3;
   repeated AgentWorkerSlot slots = 4;
+}
+
+message AgentLogRecord {
+  string source = 1;
+  string worker_id = 2;
+  string level = 3;
+  string stream = 4;
+  string line = 5;
+  int64 timestamp_unix_nano = 6;
+}
+
+message AgentMetricSnapshot {
+  int64 timestamp_unix_nano = 1;
+  float cpu_utilization_pct = 2;
+  uint64 memory_used_mb = 3;
+  uint64 memory_total_mb = 4;
+  float memory_utilization_pct = 5;
+  uint64 disk_used_mb = 6;
+  uint64 disk_total_mb = 7;
+  float disk_usage_pct = 8;
+  string disk_path = 9;
+  uint32 worker_count = 10;
+  uint32 container_count = 11;
+  uint32 free_gpu_count = 12;
+}
+
+message AgentEventRecord {
+  string action = 1;
+  string status = 2;
+  string message = 3;
+  map<string, string> attrs = 4;
+  int64 timestamp_unix_nano = 5;
+}
+
+message AgentTelemetryRequest {
+  string agent_token = 1;
+  repeated AgentLogRecord logs = 2;
+  AgentMetricSnapshot metrics = 3;
+  repeated AgentEventRecord events = 4;
+}
+
+message AgentTelemetryResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }
 
 message Machine {

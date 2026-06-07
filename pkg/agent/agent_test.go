@@ -68,7 +68,7 @@ func TestRouteProxyMarksRouteReadyForReachableLocalTarget(t *testing.T) {
 	target := backend.Addr().String()
 	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
 	client := &routeStatusClient{updates: updates}
-	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard)
+	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

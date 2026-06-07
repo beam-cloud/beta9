@@ -503,6 +503,7 @@ type PoolConfig struct {
 	Name                string   `json:"name,omitempty"`
 	GPUs                []string `json:"gpu,omitempty"`
 	TotalGPUs           uint32   `json:"gpus,omitempty"`
+	OfferID             string   `json:"offer_id,omitempty"`
 	TTL                 string   `json:"ttl,omitempty"`
 	MaxSpend            float64  `json:"max_spend,omitempty"`
 	Providers           []string `json:"providers,omitempty"`

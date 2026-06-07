@@ -138,5 +138,7 @@ func join(ctx context.Context, client *Client, opts JoinOptions) (*joinResponse,
 	if err := client.http.Do(ctx, http.MethodPost, "/api/v1/gateway/agent/join", req, &res); err != nil {
 		return nil, err
 	}
+	res.Preflight = checks
+	res.Schedulable = schedulable
 	return &res, nil
 }

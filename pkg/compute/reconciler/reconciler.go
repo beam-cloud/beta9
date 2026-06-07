@@ -132,6 +132,7 @@ func (r *Reconciler) collectOffers(ctx context.Context, demand compute.Demand) (
 	request := compute.OfferRequest{
 		GPUs:           demand.GPUs,
 		TotalGPUs:      demand.TotalGPUs + demand.HeadroomGPUs,
+		OfferID:        demand.OfferID,
 		Providers:      demand.Providers,
 		Regions:        demand.Regions,
 		MinReliability: demand.MinReliability,

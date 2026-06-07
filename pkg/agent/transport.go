@@ -42,6 +42,8 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		AuthKey:    credential.AuthKey,
 		ControlURL: credential.ControlURL,
 		Ephemeral:  credential.Ephemeral,
+		Logf:       agentTSNetLogf(stderr),
+		UserLogf:   agentTSNetLogf(stderr),
 	}
 	defer server.Close()
 	if _, err := server.Up(ctx); err != nil {
@@ -67,8 +69,16 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	}
 
 	proxyTarget := net.JoinHostPort(hostname, port)
-	fmt.Fprintf(stdout, "agent route listener ready at %s\n", proxyTarget)
-	return newRouteProxy(client, agentToken, listener, proxyTarget, workers, stderr).run(ctx)
+	statusf(stdout, "Network ready")
+	statusf(stdout, "Agent running; leave this terminal open")
+	verbosef(stdout, "agent route listener ready at %s\n", proxyTarget)
+	return newRouteProxy(client, agentToken, listener, proxyTarget, workers, stdout, stderr).run(ctx)
+}
+
+func agentTSNetLogf(stderr io.Writer) func(string, ...any) {
+	return func(format string, args ...any) {
+		verbosef(stderr, format+"\n", args...)
+	}
 }
 
 func requestTransportCredential(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string) (*transportCredentialResponse, error) {

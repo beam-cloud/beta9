@@ -9,32 +9,26 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
-)
-
-const (
-	realtimeObjectTypeDeployment = "BETA9_DEPLOYMENT"
-	realtimeObjectTypeTask       = "BETA9_TASK"
-	realtimeObjectTypeStub       = "BETA9_STUB"
-	realtimeObjectTypeContainer  = "BETA9_CONTAINER"
-	realtimeObjectTypeWorkspace  = "BETA9_WORKSPACE"
-	realtimeObjectTypeApp        = "BETA9_APP"
 )
 
 type LogGroup struct {
 	routerGroup   *echo.Group
 	backendRepo   repository.BackendRepository
 	containerRepo repository.ContainerRepository
+	computeRepo   repository.ComputeRepository
 	eventRepo     repository.EventRepository
 }
 
-func NewLogGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository) *LogGroup {
+func NewLogGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository) *LogGroup {
 	group := &LogGroup{
 		routerGroup:   g,
 		backendRepo:   backendRepo,
 		containerRepo: containerRepo,
+		computeRepo:   computeRepo,
 		eventRepo:     eventRepo,
 	}
 
@@ -124,6 +118,7 @@ func writeLogStream(ctx echo.Context, stream repository.EventStream) error {
 			TaskID:      record.TaskID,
 			WorkspaceID: record.WorkspaceID,
 			AppID:       record.AppID,
+			MachineID:   record.MachineID,
 			WorkerID:    record.WorkerID,
 		}
 		payload, err := json.Marshal(logRecord)
@@ -158,11 +153,13 @@ func (g *LogGroup) logQueryFromContext(ctx echo.Context) (types.LogQuery, error)
 		AppID:       ctx.QueryParam("app_id"),
 		TaskID:      ctx.QueryParam("task_id"),
 		ContainerID: ctx.QueryParam("container_id"),
+		MachineID:   ctx.QueryParam("machine_id"),
+		WorkerID:    ctx.QueryParam("worker_id"),
 		Query:       ctx.QueryParam("query"),
 	}
 
 	if query.ObjectID == "" {
-		query.ObjectID = firstNonEmpty(query.ContainerID, query.TaskID, query.StubID, query.AppID, query.WorkspaceID)
+		query.ObjectID = firstNonEmpty(query.ContainerID, query.TaskID, query.StubID, query.AppID, query.MachineID, query.WorkspaceID)
 	}
 
 	limit, err := logQueryLimit(ctx)
@@ -243,7 +240,7 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 	}
 
 	switch query.ObjectType {
-	case realtimeObjectTypeDeployment:
+	case types.GatewayObjectTypeDeployment:
 		workspace, err := workspaceForGatewayRoute(ctx, g.backendRepo, authInfo)
 		if err != nil {
 			return err
@@ -257,7 +254,7 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 		}
 		query.StubID = deployment.Stub.ExternalId
 		query.AppID = deployment.App.ExternalId
-	case realtimeObjectTypeTask:
+	case types.GatewayObjectTypeTask:
 		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), query.ObjectID)
 		if err != nil {
 			return HTTPInternalServerError("Failed to retrieve task")
@@ -270,7 +267,7 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 		query.AppID = task.App.ExternalId
 		query.TaskID = task.ExternalId
 		query.ContainerID = task.ContainerId
-	case realtimeObjectTypeStub:
+	case types.GatewayObjectTypeStub:
 		stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), query.ObjectID, types.QueryFilter{Field: "workspace_id", Value: query.WorkspaceID})
 		if err != nil {
 			return HTTPInternalServerError("Failed to retrieve stub")
@@ -282,7 +279,7 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 		if stub.App != nil {
 			query.AppID = stub.App.ExternalId
 		}
-	case realtimeObjectTypeContainer:
+	case types.GatewayObjectTypeContainer:
 		query.ContainerID = query.ObjectID
 		if state, err := g.containerRepo.GetContainerState(query.ContainerID); err == nil && state != nil {
 			if !eventWorkspaceAccessAllowed(authInfo, query.WorkspaceID, state.WorkspaceId) {
@@ -303,14 +300,54 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 			query.StubID = task.Stub.ExternalId
 			query.AppID = task.App.ExternalId
 		}
-	case realtimeObjectTypeApp:
+	case types.GatewayObjectTypeApp:
 		query.AppID = query.ObjectID
-	case realtimeObjectTypeWorkspace, "":
+	case types.GatewayObjectTypeMachine:
+		machineID := query.ObjectID
+		if machineID == "" {
+			return HTTPNotFound()
+		}
+		machine, err := g.privateMachineForWorkspace(ctx, query.WorkspaceID, machineID)
+		if err != nil {
+			return err
+		}
+		if machine == nil {
+			return HTTPNotFound()
+		}
+		query.MachineID = machine.MachineID
+		query.WorkerID = compute.AgentMachineWorkerID(machine.MachineID)
+	case types.GatewayObjectTypeWorkspace, "":
 	default:
 		return HTTPBadRequest("Invalid log object type")
 	}
 
 	return nil
+}
+
+func (g *LogGroup) privateMachineForWorkspace(ctx echo.Context, workspaceID, machineID string) (*compute.AgentTokenState, error) {
+	if g.computeRepo == nil {
+		return nil, HTTPInternalServerError("Compute repository is unavailable")
+	}
+
+	pools, err := g.computeRepo.ListPoolStates(ctx.Request().Context(), workspaceID, 0)
+	if err != nil {
+		return nil, HTTPInternalServerError("Failed to retrieve private pools")
+	}
+	for _, pool := range pools {
+		if pool == nil || pool.Name == "" {
+			continue
+		}
+		machines, err := g.computeRepo.ListAgentTokenStates(ctx.Request().Context(), workspaceID, pool.Name)
+		if err != nil {
+			return nil, HTTPInternalServerError("Failed to retrieve private machines")
+		}
+		for _, machine := range machines {
+			if machine != nil && machine.MachineID == machineID {
+				return machine, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func logQueryLimit(ctx echo.Context) (uint64, error) {

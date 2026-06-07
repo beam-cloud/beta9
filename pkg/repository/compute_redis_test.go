@@ -22,6 +22,12 @@ func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 		PoolName:    "pool-one",
 		MachineID:   "machine-one",
 		Schedulable: true,
+		Metrics: compute.AgentMachineMetrics{
+			CPUUtilizationPct: 42,
+			MemoryTotalMB:     8192,
+			DiskTotalMB:       102400,
+			WorkerCount:       1,
+		},
 	}
 	if err := repo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
 		t.Fatal(err)
@@ -42,6 +48,9 @@ func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 	}
 	if len(machines) != 1 || machines[0].MachineID != machine.MachineID {
 		t.Fatalf("machines = %#v, want only %s", machines, machine.MachineID)
+	}
+	if machines[0].Metrics.CPUUtilizationPct != machine.Metrics.CPUUtilizationPct || machines[0].Metrics.MemoryTotalMB != machine.Metrics.MemoryTotalMB {
+		t.Fatalf("machine metrics = %#v, want %#v", machines[0].Metrics, machine.Metrics)
 	}
 
 	slot := &compute.AgentWorkerSlotState{

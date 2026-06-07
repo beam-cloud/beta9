@@ -1290,6 +1290,47 @@ func request_GatewayService_StreamAgent_0(ctx context.Context, marshaler runtime
 	return stream, metadata, nil
 }
 
+func request_GatewayService_StreamAgentTelemetry_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var metadata runtime.ServerMetadata
+	stream, err := client.StreamAgentTelemetry(ctx)
+	if err != nil {
+		grpclog.Errorf("Failed to start streaming: %v", err)
+		return nil, metadata, err
+	}
+	dec := marshaler.NewDecoder(req.Body)
+	for {
+		var protoReq AgentTelemetryRequest
+		err = dec.Decode(&protoReq)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			grpclog.Errorf("Failed to decode request: %v", err)
+			return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
+		if err = stream.Send(&protoReq); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			grpclog.Errorf("Failed to send request: %v", err)
+			return nil, metadata, err
+		}
+	}
+	if err := stream.CloseSend(); err != nil {
+		grpclog.Errorf("Failed to terminate client stream: %v", err)
+		return nil, metadata, err
+	}
+	header, err := stream.Header()
+	if err != nil {
+		grpclog.Errorf("Failed to get header from client: %v", err)
+		return nil, metadata, err
+	}
+	metadata.HeaderMD = header
+	msg, err := stream.CloseAndRecv()
+	metadata.TrailerMD = stream.Trailer()
+	return msg, metadata, err
+}
+
 var filter_GatewayService_ListMachines_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
 
 func request_GatewayService_ListMachines_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
@@ -2405,6 +2446,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 		return
 	})
+
+	mux.Handle(http.MethodPost, pattern_GatewayService_StreamAgentTelemetry_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		err := status.Error(codes.Unimplemented, "streaming calls are not yet supported in the in-process transport")
+		_, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+		return
+	})
 	mux.Handle(http.MethodGet, pattern_GatewayService_ListMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -3314,6 +3362,23 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_StreamAgent_0(annotatedContext, mux, outboundMarshaler, w, req, func() (proto.Message, error) { return resp.Recv() }, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_StreamAgentTelemetry_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StreamAgentTelemetry", runtime.WithHTTPPathPattern("/gateway.GatewayService/StreamAgentTelemetry"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_StreamAgentTelemetry_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_StreamAgentTelemetry_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodGet, pattern_GatewayService_ListMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -3559,6 +3624,7 @@ var (
 	pattern_GatewayService_ListAgentRoutes_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "routes"}, "list"))
 	pattern_GatewayService_UpdateAgentRouteStatus_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"agent", "routes", "status"}, ""))
 	pattern_GatewayService_StreamAgent_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StreamAgent"}, ""))
+	pattern_GatewayService_StreamAgentTelemetry_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StreamAgentTelemetry"}, ""))
 	pattern_GatewayService_ListMachines_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
 	pattern_GatewayService_CreateMachine_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
 	pattern_GatewayService_DeleteMachine_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"machines", "machine_id"}, ""))
@@ -3611,6 +3677,7 @@ var (
 	forward_GatewayService_ListAgentRoutes_0                 = runtime.ForwardResponseMessage
 	forward_GatewayService_UpdateAgentRouteStatus_0          = runtime.ForwardResponseMessage
 	forward_GatewayService_StreamAgent_0                     = runtime.ForwardResponseStream
+	forward_GatewayService_StreamAgentTelemetry_0            = runtime.ForwardResponseMessage
 	forward_GatewayService_ListMachines_0                    = runtime.ForwardResponseMessage
 	forward_GatewayService_CreateMachine_0                   = runtime.ForwardResponseMessage
 	forward_GatewayService_DeleteMachine_0                   = runtime.ForwardResponseMessage

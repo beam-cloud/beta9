@@ -56,6 +56,7 @@ const (
 	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
 	GatewayService_UpdateAgentRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateAgentRouteStatus"
 	GatewayService_StreamAgent_FullMethodName                     = "/gateway.GatewayService/StreamAgent"
+	GatewayService_StreamAgentTelemetry_FullMethodName            = "/gateway.GatewayService/StreamAgentTelemetry"
 	GatewayService_ListMachines_FullMethodName                    = "/gateway.GatewayService/ListMachines"
 	GatewayService_CreateMachine_FullMethodName                   = "/gateway.GatewayService/CreateMachine"
 	GatewayService_DeleteMachine_FullMethodName                   = "/gateway.GatewayService/DeleteMachine"
@@ -119,6 +120,7 @@ type GatewayServiceClient interface {
 	ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error)
 	UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error)
 	StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error)
+	StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error)
 	// Machines
 	ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error)
 	CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error)
@@ -548,6 +550,40 @@ func (x *gatewayServiceStreamAgentClient) Recv() (*StreamAgentResponse, error) {
 	return m, nil
 }
 
+func (c *gatewayServiceClient) StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error) {
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[3], GatewayService_StreamAgentTelemetry_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &gatewayServiceStreamAgentTelemetryClient{stream}
+	return x, nil
+}
+
+type GatewayService_StreamAgentTelemetryClient interface {
+	Send(*AgentTelemetryRequest) error
+	CloseAndRecv() (*AgentTelemetryResponse, error)
+	grpc.ClientStream
+}
+
+type gatewayServiceStreamAgentTelemetryClient struct {
+	grpc.ClientStream
+}
+
+func (x *gatewayServiceStreamAgentTelemetryClient) Send(m *AgentTelemetryRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *gatewayServiceStreamAgentTelemetryClient) CloseAndRecv() (*AgentTelemetryResponse, error) {
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	m := new(AgentTelemetryResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *gatewayServiceClient) ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error) {
 	out := new(ListMachinesResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListMachines_FullMethodName, in, out, opts...)
@@ -705,6 +741,7 @@ type GatewayServiceServer interface {
 	ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error)
 	UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error)
 	StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error
+	StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error
 	// Machines
 	ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error)
 	CreateMachine(context.Context, *CreateMachineRequest) (*CreateMachineResponse, error)
@@ -838,6 +875,9 @@ func (UnimplementedGatewayServiceServer) UpdateAgentRouteStatus(context.Context,
 }
 func (UnimplementedGatewayServiceServer) StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error {
 	return status.Errorf(codes.Unimplemented, "method StreamAgent not implemented")
+}
+func (UnimplementedGatewayServiceServer) StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error {
+	return status.Errorf(codes.Unimplemented, "method StreamAgentTelemetry not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListMachines(context.Context, *ListMachinesRequest) (*ListMachinesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMachines not implemented")
@@ -1573,6 +1613,32 @@ func (x *gatewayServiceStreamAgentServer) Send(m *StreamAgentResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _GatewayService_StreamAgentTelemetry_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GatewayServiceServer).StreamAgentTelemetry(&gatewayServiceStreamAgentTelemetryServer{stream})
+}
+
+type GatewayService_StreamAgentTelemetryServer interface {
+	SendAndClose(*AgentTelemetryResponse) error
+	Recv() (*AgentTelemetryRequest, error)
+	grpc.ServerStream
+}
+
+type gatewayServiceStreamAgentTelemetryServer struct {
+	grpc.ServerStream
+}
+
+func (x *gatewayServiceStreamAgentTelemetryServer) SendAndClose(m *AgentTelemetryResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *gatewayServiceStreamAgentTelemetryServer) Recv() (*AgentTelemetryRequest, error) {
+	m := new(AgentTelemetryRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func _GatewayService_ListMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListMachinesRequest)
 	if err := dec(in); err != nil {
@@ -1997,6 +2063,11 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamAgent",
 			Handler:       _GatewayService_StreamAgent_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamAgentTelemetry",
+			Handler:       _GatewayService_StreamAgentTelemetry_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "gateway.proto",

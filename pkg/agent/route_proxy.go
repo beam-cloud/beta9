@@ -22,7 +22,10 @@ const (
 	routeProxyReadyDialTimeout = 250 * time.Millisecond
 )
 
-func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener net.Listener, proxyTarget string, workers *workerRuntimeManager, stderr io.Writer) *routeProxy {
+func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener net.Listener, proxyTarget string, workers *workerRuntimeManager, stdout, stderr io.Writer) *routeProxy {
+	if stdout == nil {
+		stdout = io.Discard
+	}
 	if stderr == nil {
 		stderr = io.Discard
 	}
@@ -32,6 +35,7 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		listener:        listener,
 		proxyTarget:     proxyTarget,
 		workers:         workers,
+		stdout:          stdout,
 		stderr:          stderr,
 		routes:          map[string]string{},
 		readinessChecks: map[string]string{},
@@ -44,9 +48,11 @@ type routeProxy struct {
 	listener    net.Listener
 	proxyTarget string
 	workers     *workerRuntimeManager
+	stdout      io.Writer
 	stderr      io.Writer
 	mu          sync.Mutex
 	routes      map[string]string
+	noSlotLog   sync.Once
 
 	// routeID -> local target currently being probed for readiness.
 	readinessChecks map[string]string
@@ -111,12 +117,22 @@ func (p *routeProxy) watchRoutesOnce(ctx context.Context) error {
 		if err := p.reconcileRoutes(ctx, msg.Routes); err != nil {
 			return err
 		}
+		p.logNoSlots(msg.Slots)
 		if p.workers != nil {
 			if err := p.workers.reconcile(ctx, msg.Slots); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (p *routeProxy) logNoSlots(slots []*pb.AgentWorkerSlot) {
+	if len(slots) > 0 {
+		return
+	}
+	p.noSlotLog.Do(func() {
+		statusf(p.stdout, "Waiting for worker assignment")
+	})
 }
 
 func (p *routeProxy) reconcileRoutes(ctx context.Context, routes []*pb.AgentRoute) error {

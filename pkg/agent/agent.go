@@ -4,20 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 func RunJoin(ctx context.Context, opts JoinOptions) error {
-	opts.GatewayURL = strings.TrimRight(strings.TrimSpace(opts.GatewayURL), "/")
-	opts.JoinToken = strings.TrimSpace(opts.JoinToken)
-	if opts.GatewayURL == "" || opts.JoinToken == "" {
-		return fmt.Errorf("gateway and join-token are required")
-	}
-	if opts.Stdout == nil {
-		opts.Stdout = io.Discard
-	}
-	if opts.Stderr == nil {
-		opts.Stderr = io.Discard
+	var err error
+	if opts, err = normalizeJoinOptions(opts); err != nil {
+		return err
 	}
 
 	lock, err := acquireAgentLock()
@@ -27,17 +23,21 @@ func RunJoin(ctx context.Context, opts JoinOptions) error {
 	defer lock.release()
 
 	client := NewClient(opts.GatewayURL)
-	res, err := join(ctx, client, opts)
+	res, err := resolveAgentIdentity(ctx, client, opts)
 	if err != nil {
-		return fmt.Errorf("join failed: %w", err)
-	}
-	if !res.Ok {
-		return fmt.Errorf("join failed: %s", res.ErrMsg)
+		return err
 	}
 	res.Bootstrap = normalizeBootstrapForAgentRuntime(opts.GatewayURL, res.Bootstrap)
+	if err := saveRuntimeState(opts.GatewayURL, res); err != nil {
+		fmt.Fprintf(opts.Stderr, "failed to save agent state: %v\n", err)
+	}
 
-	fmt.Fprintf(opts.Stdout, "joined pool %q as machine %q\n", res.PoolName, res.MachineID)
-	fmt.Fprintf(opts.Stdout, "transport=%s executor=%s fallback=%s\n", res.Bootstrap.Transport, res.Bootstrap.Executor, res.Bootstrap.Fallback)
+	statusf(opts.Stdout, "Connected to pool %q", res.PoolName)
+	statusf(opts.Stdout, "Registered machine %q", res.MachineID)
+	if !res.Schedulable && len(res.Preflight) > 0 {
+		statusf(opts.Stdout, "Machine is not schedulable: %s", preflightFailureSummary(res.Preflight))
+	}
+	verbosef(opts.Stdout, "transport=%s executor=%s fallback=%s\n", res.Bootstrap.Transport, res.Bootstrap.Executor, res.Bootstrap.Fallback)
 	if !res.Ok || res.AgentToken == "" {
 		return nil
 	}
@@ -47,19 +47,102 @@ func RunJoin(ctx context.Context, opts JoinOptions) error {
 	}
 	defer grpcConn.Close()
 
-	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr)
+	telemetry := newAgentTelemetry(grpcClient, res.AgentToken, res.Bootstrap, opts.Stderr)
+	go telemetry.run(ctx)
+	agentLogs := telemetry.teeLogWriter(opts.Stderr, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStderr)
+
+	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr, agentLogs, telemetry)
+	telemetry.setStatsProvider(workers.stats)
 	defer workers.stopAll()
 
-	registryForwarder, err := startLocalRegistryForwarder(ctx, opts.Stderr)
+	registryForwarder, err := startLocalRegistryForwarder(ctx, agentLogs)
 	if err != nil {
-		fmt.Fprintf(opts.Stderr, "local registry forwarder disabled: %v\n", err)
+		fmt.Fprintf(agentLogs, "local registry forwarder disabled: %v\n", err)
 	} else if registryForwarder != nil {
 		defer registryForwarder.Close()
 	}
 
 	transport := normalizeTransport(firstNonEmpty(opts.TransportOverride, res.Bootstrap.Transport))
-	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, workers, opts.Stdout, opts.Stderr); err != nil {
+	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, workers, opts.Stdout, agentLogs); err != nil {
 		return fmt.Errorf("route proxy stopped: %w", err)
 	}
 	return nil
+}
+
+func normalizeJoinOptions(opts JoinOptions) (JoinOptions, error) {
+	opts.GatewayURL = strings.TrimRight(strings.TrimSpace(opts.GatewayURL), "/")
+	opts.JoinToken = strings.TrimSpace(opts.JoinToken)
+	opts.JoinTokenFile = strings.TrimSpace(opts.JoinTokenFile)
+	if opts.JoinToken == "" && opts.JoinTokenFile != "" {
+		data, err := os.ReadFile(opts.JoinTokenFile)
+		if err != nil {
+			return JoinOptions{}, fmt.Errorf("read join token file: %w", err)
+		}
+		opts.JoinToken = strings.TrimSpace(string(data))
+	}
+	if opts.GatewayURL == "" {
+		return JoinOptions{}, fmt.Errorf("gateway is required")
+	}
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	return opts, nil
+}
+
+func resolveAgentIdentity(ctx context.Context, client *Client, opts JoinOptions) (*joinResponse, error) {
+	savedState, _ := loadRuntimeState(opts.GatewayURL)
+	if opts.JoinToken == "" {
+		if savedState == nil {
+			return nil, fmt.Errorf("join-token is required")
+		}
+		return savedState, nil
+	}
+
+	res, err := join(ctx, client, opts)
+	if err == nil && res != nil && res.Ok {
+		return res, nil
+	}
+	if savedState != nil {
+		logJoinFallback(opts.Stderr, res, err)
+		return savedState, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("join failed: %w", err)
+	}
+	if res != nil {
+		return nil, fmt.Errorf("join failed: %s", res.ErrMsg)
+	}
+	return nil, fmt.Errorf("join failed")
+}
+
+func logJoinFallback(stderr io.Writer, res *joinResponse, err error) {
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "join failed, resuming saved agent identity: %v\n", err)
+	case res != nil:
+		fmt.Fprintf(stderr, "join failed, resuming saved agent identity: %s\n", res.ErrMsg)
+	default:
+		fmt.Fprintln(stderr, "join failed, resuming saved agent identity")
+	}
+}
+
+func preflightFailureSummary(checks []check) string {
+	failed := make([]string, 0, len(checks))
+	for _, check := range checks {
+		if check.Ok || check.Severity != "error" {
+			continue
+		}
+		if check.Message == "" {
+			failed = append(failed, check.Name)
+			continue
+		}
+		failed = append(failed, fmt.Sprintf("%s (%s)", check.Name, check.Message))
+	}
+	if len(failed) == 0 {
+		return "waiting for schedulable capacity"
+	}
+	return strings.Join(failed, ", ")
 }

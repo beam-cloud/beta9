@@ -9,6 +9,7 @@ import (
 type JoinOptions struct {
 	GatewayURL                string
 	JoinToken                 string
+	JoinTokenFile             string
 	DevMode                   bool
 	ExecutorOverride          string
 	TransportOverride         string
@@ -54,6 +55,8 @@ type joinResponse struct {
 	MachineID   string          `json:"machineId"`
 	AgentToken  string          `json:"agentToken"`
 	Bootstrap   bootstrapConfig `json:"bootstrap"`
+	Preflight   []check         `json:"preflight,omitempty"`
+	Schedulable bool            `json:"schedulable,omitempty"`
 }
 
 type bootstrapConfig struct {

@@ -1088,7 +1088,7 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 	case types.EventContainerLogSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventPlatformLogSchema:
-		return eventMetadata{WorkerID: d.WorkerID, ServiceName: d.Service, InstanceID: d.InstanceID}
+		return eventMetadata{WorkspaceID: d.WorkspaceID, WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName, ServiceName: d.Service, InstanceID: d.InstanceID}
 	case types.EventTaskSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventStubSchema:

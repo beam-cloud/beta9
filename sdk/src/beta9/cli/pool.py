@@ -613,6 +613,19 @@ def join_command(service: ServiceClient, name: str, ttl: str):
     help="Maximum concurrent container starts.",
 )
 @click.option(
+    "--background/--foreground",
+    default=None,
+    help="Install the agent as a background service or run it in the foreground.",
+)
+@click.option(
+    "--service-manager",
+    type=click.Choice(("auto", "systemd", "launchd")),
+    default=None,
+    help="Service manager to use for background installs.",
+)
+@click.option("--service-name", default="", help="Background service name.")
+@click.option("--state-dir", default="", help="Agent state directory.")
+@click.option(
     "--print-only", is_flag=True, help="Only print the generated join command."
 )
 @extraclick.pass_service_client
@@ -634,11 +647,17 @@ def join(
     gpu_ids: str,
     network_slots: int,
     container_start_concurrency: int,
+    background: bool | None,
+    service_manager: str | None,
+    service_name: str,
+    state_dir: str,
     print_only: bool,
 ):
     if gpu_ids and max_gpus:
         return terminal.error("--gpu-ids and --max-gpus cannot both be set.")
 
+    if not print_only:
+        terminal.header("Joining pool", name)
     transport = _join_transport(service, transport)
     res = service.gateway.create_pool(
         CreatePoolRequest(
@@ -672,12 +691,19 @@ def join(
         gpu_ids=gpu_ids,
         network_slots=network_slots,
         container_start_concurrency=container_start_concurrency,
+        background=background,
+        service_manager=service_manager,
+        service_name=service_name,
+        state_dir=state_dir,
     )
-    terminal.detail(command, crop=False, overflow="ignore")
     if print_only:
+        terminal.detail(command, crop=False, overflow="ignore")
         return
 
-    raise SystemExit(subprocess.call(command, shell=True))
+    exit_code = subprocess.call(command, shell=True)
+    if exit_code == 0:
+        terminal.success("Agent is running.")
+    raise SystemExit(exit_code)
 
 
 def _join_transport(service: ServiceClient, transport: str) -> str:
@@ -697,8 +723,22 @@ def _append_join_args(
     gpu_ids: str = "",
     network_slots: int = 0,
     container_start_concurrency: int = 0,
+    background: bool | None = None,
+    service_manager: str | None = None,
+    service_name: str = "",
+    state_dir: str = "",
 ) -> str:
     extra = []
+    if background is True:
+        extra.append("--background")
+    elif background is False:
+        extra.append("--foreground")
+    if service_manager:
+        extra.extend(["--service-manager", service_manager])
+    if service_name:
+        extra.extend(["--service-name", service_name])
+    if state_dir:
+        extra.extend(["--state-dir", state_dir])
     if agent_bin:
         extra.extend(["--agent-bin", agent_bin])
     if executor:
