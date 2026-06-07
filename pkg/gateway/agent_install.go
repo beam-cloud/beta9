@@ -343,6 +343,12 @@ install_from_url() {
   fi
   chmod 0755 "$TMP"
   mkdir -p "$(dirname "$DEST")"
+  if [ -d "$DEST" ]; then
+    rmdir "$DEST" 2>/dev/null || {
+      rm -f "$TMP"
+      fail "$DEST is a directory; remove it or set BEAM_AGENT_LINUX_BIN to a file path" 1
+    }
+  fi
   mv "$TMP" "$DEST"
 }
 
