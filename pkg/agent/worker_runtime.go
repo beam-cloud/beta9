@@ -37,6 +37,8 @@ type workerContainerRuntime struct {
 	stdout    io.Writer
 	stderr    io.Writer
 	telemetry *agentTelemetry
+	imageMu   sync.Mutex
+	images    map[string]string
 }
 
 func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts types.AgentJoinOptions, stdout, stderr, agentLogs io.Writer, telemetry *agentTelemetry) *workerRuntimeManager {
@@ -57,6 +59,7 @@ func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts types.AgentJoinOpti
 			stdout:    stdout,
 			stderr:    stderr,
 			telemetry: telemetry,
+			images:    map[string]string{},
 		},
 		stdout:      stdout,
 		stderr:      agentLogs,
@@ -171,7 +174,12 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		return fmt.Errorf("worker image is required for slot %s", slot.WorkerId)
 	}
 
-	if err := removeStaleManagedWorkerContainers(slot); err != nil {
+	imageID, err := r.pullImage(ctx, image)
+	if err != nil {
+		return err
+	}
+
+	if err := removeOtherManagedWorkerContainers(name, slot); err != nil {
 		fmt.Fprintf(r.stderr, "failed to clean stale worker containers: %v\n", err)
 	}
 	if err := removeManagedWorkerContainer(name, slot); err != nil {
@@ -183,7 +191,7 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		}
 	}()
 
-	args := dockerRunArgs(name, image, configPath, r.bootstrap, slot, dirs)
+	args := dockerRunArgs(name, image, imageID, configPath, r.bootstrap, slot, dirs)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	stdoutLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStdout)
 	stderrLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStderr)
@@ -216,6 +224,27 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		<-done
 		return ctx.Err()
 	}
+}
+
+func (r *workerContainerRuntime) pullImage(ctx context.Context, image string) (string, error) {
+	key := workerImagePullKey(image)
+
+	r.imageMu.Lock()
+	if imageID := r.images[key]; imageID != "" {
+		r.imageMu.Unlock()
+		return imageID, nil
+	}
+	r.imageMu.Unlock()
+
+	imageID, err := pullDockerImage(ctx, image)
+	if err != nil {
+		return "", err
+	}
+
+	r.imageMu.Lock()
+	r.images[key] = imageID
+	r.imageMu.Unlock()
+	return imageID, nil
 }
 
 func (m *workerRuntimeManager) stopSlotsNotIn(seen map[string]struct{}) {

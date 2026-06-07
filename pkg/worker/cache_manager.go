@@ -666,10 +666,10 @@ func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
 	}
 
 	// Host-network embedded workers default to an ephemeral port to avoid
-	// collisions when many share a node (the advertised address carries the real
-	// port). The one-per-node cache-server daemonset always binds the fixed port,
-	// as does any worker with an explicitly configured fixed port.
-	if cacheHostNetwork(m.config) && !cacheServerOnlyMode() && !m.fixedCacheServerPortConfigured() {
+	// collisions when many share a node. The advertised address carries the real
+	// port. The one-per-node cache-server daemonset binds the fixed port, and an
+	// operator can force a fixed embedded-worker port with CACHE_SERVER_PORT.
+	if cacheHostNetwork(m.config) && !cacheServerOnlyMode() && cacheServerPortFromEnv() == 0 {
 		return ":0"
 	}
 
@@ -690,14 +690,6 @@ func (m *WorkerCacheManager) cacheAdvertiseHost() string {
 		return ip
 	}
 	return ""
-}
-
-// fixedCacheServerPortConfigured reports whether a cache server port was
-// explicitly set (via the config or the CACHE_SERVER_PORT env), as opposed to
-// falling back to the default. When set, it is honored even for embedded
-// host-network workers.
-func (m *WorkerCacheManager) fixedCacheServerPortConfigured() bool {
-	return m.config.Cache.Global.ServerPort > 0 || cacheServerPortFromEnv() > 0
 }
 
 func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolConfig, nodeID, locality string) cache.Config {

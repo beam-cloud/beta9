@@ -81,6 +81,7 @@ const (
 	AgentDockerLabelWorkerID        = "dev.beam.agent.worker_id"
 	AgentDockerLabelMachineID       = "dev.beam.agent.machine_id"
 	AgentDockerLabelPoolName        = "dev.beam.agent.pool_name"
+	AgentDockerLabelWorkerImageID   = "dev.beam.agent.worker_image_id"
 	AgentTelemetrySourceAgent       = "agent"
 	AgentTelemetrySourceWorker      = "worker"
 	AgentMachineStatusSchedulable   = "schedulable"

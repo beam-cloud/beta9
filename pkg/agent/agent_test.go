@@ -198,7 +198,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	t.Setenv(types.AgentDockerHostsEnv, "registry.localhost:127.0.0.1,localstack:host-gateway")
 	t.Setenv(types.AgentWorkerPlatformEnv, "linux/amd64")
 
-	args := dockerRunArgs("slot-one", "worker:dev", "/tmp/config.json", bootstrapConfig{
+	args := dockerRunArgs("slot-one", "worker:dev", "sha256:worker-image", "/tmp/config.json", bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
 		GatewayGRPCHost: "host.docker.internal",
 		GatewayGRPCPort: 1993,
@@ -260,6 +260,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		types.AgentDockerLabelWorkerID + "=worker-one",
 		types.AgentDockerLabelMachineID + "=machine",
 		types.AgentDockerLabelPoolName + "=private",
+		types.AgentDockerLabelWorkerImageID + "=sha256:worker-image",
 	} {
 		if !containsArg(args, "--label", want) {
 			t.Fatalf("expected %s docker label in args: %#v", want, args)
@@ -327,6 +328,107 @@ func TestDockerContainerInspectOwnedByAgentAcceptsLabelsAndLegacyEnv(t *testing.
 	}
 	if got {
 		t.Fatal("nil slot must not own a managed container")
+	}
+}
+
+func TestShouldRemoveManagedWorkerContainer(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		WorkerId:  "worker-one",
+		MachineId: "machine-one",
+		PoolName:  "private-dev",
+	}
+
+	tests := []struct {
+		name       string
+		inspect    *dockerContainerInspect
+		desired    string
+		wantRemove bool
+	}{
+		{
+			name: "keep desired worker",
+			inspect: &dockerContainerInspect{
+				Name: "/beam-agent-worker-one",
+				Config: struct {
+					Labels map[string]string `json:"Labels"`
+					Env    []string          `json:"Env"`
+				}{
+					Labels: map[string]string{
+						types.AgentDockerLabelManaged:   "true",
+						types.AgentDockerLabelWorkerID:  "worker-one",
+						types.AgentDockerLabelMachineID: "machine-one",
+						types.AgentDockerLabelPoolName:  "private-dev",
+					},
+				},
+			},
+			desired: "beam-agent-worker-one",
+		},
+		{
+			name: "remove old worker",
+			inspect: &dockerContainerInspect{
+				Name: "/beam-agent-worker-two",
+				Config: struct {
+					Labels map[string]string `json:"Labels"`
+					Env    []string          `json:"Env"`
+				}{
+					Labels: map[string]string{
+						types.AgentDockerLabelManaged:   "true",
+						types.AgentDockerLabelWorkerID:  "worker-two",
+						types.AgentDockerLabelMachineID: "machine-old",
+						types.AgentDockerLabelPoolName:  "old-pool",
+					},
+				},
+			},
+			desired:    "beam-agent-worker-one",
+			wantRemove: true,
+		},
+		{
+			name: "remove duplicate with unexpected name",
+			inspect: &dockerContainerInspect{
+				Name: "/duplicate-worker",
+				Config: struct {
+					Labels map[string]string `json:"Labels"`
+					Env    []string          `json:"Env"`
+				}{
+					Labels: map[string]string{
+						types.AgentDockerLabelManaged:   "true",
+						types.AgentDockerLabelWorkerID:  "worker-one",
+						types.AgentDockerLabelMachineID: "machine-one",
+						types.AgentDockerLabelPoolName:  "private-dev",
+					},
+				},
+			},
+			desired:    "beam-agent-worker-one",
+			wantRemove: true,
+		},
+		{
+			name: "ignore unrelated container",
+			inspect: &dockerContainerInspect{
+				Name: "/postgres",
+				Config: struct {
+					Labels map[string]string `json:"Labels"`
+					Env    []string          `json:"Env"`
+				}{
+					Labels: map[string]string{},
+				},
+			},
+			desired: "beam-agent-worker-one",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldRemoveManagedWorkerContainer(tt.inspect, tt.desired, slot)
+			if got != tt.wantRemove {
+				t.Fatalf("remove = %v, want %v", got, tt.wantRemove)
+			}
+		})
+	}
+}
+
+func TestWorkerImagePullKeyIncludesPlatform(t *testing.T) {
+	t.Setenv(types.AgentWorkerPlatformEnv, "linux/amd64")
+	if got := workerImagePullKey("registry.example.com/worker:latest"); got != "linux/amd64 registry.example.com/worker:latest" {
+		t.Fatalf("pull key = %q", got)
 	}
 }
 

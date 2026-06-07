@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 )
 
 type dockerContainerInspect struct {
+	Image string `json:"Image"`
 	ID    string `json:"Id"`
 	Name  string `json:"Name"`
 	State struct {
@@ -40,7 +43,7 @@ func removeManagedWorkerContainer(name string, slot *pb.AgentWorkerSlot) error {
 	return removeDockerContainer(name)
 }
 
-func removeStaleManagedWorkerContainers(slot *pb.AgentWorkerSlot) error {
+func removeOtherManagedWorkerContainers(name string, slot *pb.AgentWorkerSlot) error {
 	if slot == nil {
 		return nil
 	}
@@ -56,7 +59,7 @@ func removeStaleManagedWorkerContainers(slot *pb.AgentWorkerSlot) error {
 			failures = append(failures, err.Error())
 			continue
 		}
-		if !exists || !dockerContainerLabelsMatchMachine(inspect.Config.Labels, slot) || !dockerContainerStopped(inspect.State.Status) {
+		if !exists || !shouldRemoveManagedWorkerContainer(inspect, name, slot) {
 			continue
 		}
 		if err := removeDockerContainer(id); err != nil {
@@ -67,6 +70,36 @@ func removeStaleManagedWorkerContainers(slot *pb.AgentWorkerSlot) error {
 		return fmt.Errorf("%s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func pullDockerImage(ctx context.Context, image string) (string, error) {
+	args := []string{"pull", "-q"}
+	if platform := strings.TrimSpace(os.Getenv(types.AgentWorkerPlatformEnv)); platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, image)
+
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("pull worker image %q: %w: %s", image, err, strings.TrimSpace(string(out)))
+	}
+	return inspectDockerImageID(image)
+}
+
+func inspectDockerImageID(image string) (string, error) {
+	out, err := exec.Command("docker", "image", "inspect", "--format", "{{.Id}}", image).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("inspect worker image %q: %w: %s", image, err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func workerImagePullKey(image string) string {
+	platform := strings.TrimSpace(os.Getenv(types.AgentWorkerPlatformEnv))
+	if platform == "" {
+		return image
+	}
+	return platform + " " + image
 }
 
 func removeDockerContainer(name string) error {
@@ -126,15 +159,15 @@ func dockerContainerInspectMatchesSlot(inspect *dockerContainerInspect, slot *pb
 	return dockerContainerEnvMatchesSlot(inspect.Config.Env, slot), nil
 }
 
-func dockerContainerLabelsMatchMachine(labels map[string]string, slot *pb.AgentWorkerSlot) bool {
-	if labels[types.AgentDockerLabelManaged] != "true" {
+func shouldRemoveManagedWorkerContainer(inspect *dockerContainerInspect, desiredName string, slot *pb.AgentWorkerSlot) bool {
+	if inspect == nil || slot == nil || inspect.Config.Labels[types.AgentDockerLabelManaged] != "true" {
 		return false
 	}
-	if slot == nil {
-		return false
-	}
-	return labels[types.AgentDockerLabelMachineID] == slot.MachineId &&
-		labels[types.AgentDockerLabelPoolName] == slot.PoolName
+	return !dockerContainerNameMatches(inspect.Name, desiredName) || !dockerContainerLabelsMatchSlot(inspect.Config.Labels, slot)
+}
+
+func dockerContainerNameMatches(actual, desired string) bool {
+	return strings.TrimPrefix(actual, "/") == desired
 }
 
 func dockerContainerLabelsMatchSlot(labels map[string]string, slot *pb.AgentWorkerSlot) bool {
@@ -164,13 +197,4 @@ func dockerContainerEnvMatchesSlot(env []string, slot *pb.AgentWorkerSlot) bool 
 	return values[types.WorkerIDEnv] == slot.WorkerId &&
 		values[types.WorkerMachineEnv] == slot.MachineId &&
 		values[types.WorkerPoolEnv] == slot.PoolName
-}
-
-func dockerContainerStopped(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "dead", "exited":
-		return true
-	default:
-		return false
-	}
 }

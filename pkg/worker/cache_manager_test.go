@@ -595,12 +595,12 @@ func TestBindAddr(t *testing.T) {
 			expected:       ":0",
 		},
 		{
-			name:           "embedded host-network honors explicit config port",
+			name:           "embedded host-network ignores config port",
 			hostNetwork:    "true",
 			cacheServer:    "false",
 			configPort:     9000,
 			normalizedPort: 9000,
-			expected:       ":9000",
+			expected:       ":0",
 		},
 		{
 			name:           "embedded host-network honors CACHE_SERVER_PORT env",

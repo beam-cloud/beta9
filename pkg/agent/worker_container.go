@@ -11,7 +11,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs) []string {
+func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs) []string {
 	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
 	args := []string{
 		"run", "--rm",
@@ -23,6 +23,9 @@ func dockerRunArgs(name, image, configPath string, bootstrap bootstrapConfig, sl
 		"--label", types.AgentDockerLabelWorkerID + "=" + slot.WorkerId,
 		"--label", types.AgentDockerLabelMachineID + "=" + slot.MachineId,
 		"--label", types.AgentDockerLabelPoolName + "=" + slot.PoolName,
+	}
+	if imageID != "" {
+		args = append(args, "--label", types.AgentDockerLabelWorkerImageID+"="+imageID)
 	}
 	if platform := strings.TrimSpace(os.Getenv(types.AgentWorkerPlatformEnv)); platform != "" {
 		args = append(args, "--platform", platform)
