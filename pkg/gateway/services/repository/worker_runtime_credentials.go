@@ -69,14 +69,33 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, fmt.Errorf("container %q is not assigned to workspace/stub", req.ContainerId)
 	}
 
-	workspace, err := s.backendRepo.GetWorkspace(ctx, workspaceID)
+	workspace, err := s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
 	if err != nil {
 		return nil, err
 	}
-	if workspace == nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
-		return nil, fmt.Errorf("workspace signing key is unavailable")
-	}
 	return workspace, nil
+}
+
+func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Context, workspaceID uint, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
+	if runtimeCredentialsNeedsSigningKey(req) {
+		workspace, err := s.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx, req.WorkspaceId)
+		if err != nil {
+			return nil, err
+		}
+		if workspace.Id != workspaceID {
+			return nil, fmt.Errorf("worker token cannot request credentials for workspace %q", req.WorkspaceId)
+		}
+		if workspace.SigningKey == nil || *workspace.SigningKey == "" {
+			return nil, fmt.Errorf("workspace signing key is unavailable")
+		}
+		return &workspace, nil
+	}
+
+	return s.backendRepo.GetWorkspace(ctx, workspaceID)
+}
+
+func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsRequest) bool {
+	return req != nil && (len(req.SecretNames) > 0 || len(req.MountCredentials) > 0)
 }
 
 func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {

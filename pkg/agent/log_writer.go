@@ -32,7 +32,7 @@ func (w *detailLogWriter) Write(p []byte) (int, error) {
 
 	written := 0
 	for len(p) > 0 {
-		i := bytes.IndexByte(p, '\n')
+		i := bytes.IndexAny(p, "\n\r")
 		if i < 0 {
 			_, _ = w.buf.Write(p)
 			return written + len(p), nil

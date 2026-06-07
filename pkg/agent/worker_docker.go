@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -72,16 +74,25 @@ func removeOtherManagedWorkerContainers(name string, slot *pb.AgentWorkerSlot) e
 	return nil
 }
 
-func pullDockerImage(ctx context.Context, image string) (string, error) {
-	args := []string{"pull", "-q"}
+func pullDockerImage(ctx context.Context, image string, output io.Writer) (string, error) {
+	args := []string{"pull"}
 	if platform := strings.TrimSpace(os.Getenv(types.AgentWorkerPlatformEnv)); platform != "" {
 		args = append(args, "--platform", platform)
 	}
 	args = append(args, image)
 
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("pull worker image %q: %w: %s", image, err, strings.TrimSpace(string(out)))
+	var out bytes.Buffer
+	if output == nil {
+		output = io.Discard
+	}
+	details := newDetailLogWriter(output)
+	defer closeRuntimeWriter(details)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout = io.MultiWriter(details, &out)
+	cmd.Stderr = io.MultiWriter(details, &out)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("pull worker image %q: %w: %s", image, err, strings.TrimSpace(out.String()))
 	}
 	return inspectDockerImageID(image)
 }
