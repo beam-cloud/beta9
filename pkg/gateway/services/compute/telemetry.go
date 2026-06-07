@@ -155,6 +155,8 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return err
 	}
+	worker := s.agentMachineStatusWorker(agentState)
+	capacityMetrics := agentMachineMetrics(agentState, worker)
 
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		Timestamp:   metrics.Timestamp,
@@ -162,22 +164,25 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		PoolName:    agentState.PoolName,
 		MachineID:   agentState.MachineID,
 		Action:      types.EventComputeActionMachineHeartbeat,
-		Status:      string(agentMachineStatus(agentState, s.agentMachineStatusWorker(agentState), metrics.Timestamp)),
+		Status:      string(agentMachineStatus(agentState, worker, metrics.Timestamp)),
 		CPUCount:    agentState.CPUCount,
 		MemoryMB:    firstNonZeroUint64(metrics.MemoryTotalMB, agentState.MemoryMB),
 		GPUCount:    agentState.GPUCount,
 		GPUs:        agentState.GPUs,
 		Attrs: map[string]string{
-			"cpu_utilization_pct":    fmt.Sprintf("%.2f", metrics.CPUUtilizationPct),
-			"memory_used_mb":         fmt.Sprintf("%d", metrics.MemoryUsedMB),
-			"memory_utilization_pct": fmt.Sprintf("%.2f", metrics.MemoryUtilizationPct),
-			"disk_used_mb":           fmt.Sprintf("%d", metrics.DiskUsedMB),
-			"disk_total_mb":          fmt.Sprintf("%d", metrics.DiskTotalMB),
-			"disk_usage_pct":         fmt.Sprintf("%.2f", metrics.DiskUsagePct),
-			"disk_path":              metrics.DiskPath,
-			"worker_count":           fmt.Sprintf("%d", metrics.WorkerCount),
-			"container_count":        fmt.Sprintf("%d", metrics.ContainerCount),
-			"free_gpu_count":         fmt.Sprintf("%d", metrics.FreeGPUCount),
+			"cpu_utilization_pct":     fmt.Sprintf("%.2f", capacityMetrics.CpuUtilizationPct),
+			"memory_used_mb":          fmt.Sprintf("%d", capacityMetrics.MemoryUsedMb),
+			"memory_utilization_pct":  fmt.Sprintf("%.2f", capacityMetrics.MemoryUtilizationPct),
+			"host_cpu_utilization_pct": fmt.Sprintf("%.2f", metrics.CPUUtilizationPct),
+			"host_memory_used_mb":      fmt.Sprintf("%d", metrics.MemoryUsedMB),
+			"host_memory_utilization_pct": fmt.Sprintf("%.2f", metrics.MemoryUtilizationPct),
+			"disk_used_mb":            fmt.Sprintf("%d", metrics.DiskUsedMB),
+			"disk_total_mb":           fmt.Sprintf("%d", metrics.DiskTotalMB),
+			"disk_usage_pct":          fmt.Sprintf("%.2f", metrics.DiskUsagePct),
+			"disk_path":               metrics.DiskPath,
+			"worker_count":            fmt.Sprintf("%d", capacityMetrics.WorkerCount),
+			"container_count":         fmt.Sprintf("%d", capacityMetrics.ContainerCount),
+			"free_gpu_count":          fmt.Sprintf("%d", capacityMetrics.FreeGpuCount),
 		},
 	})
 	return nil

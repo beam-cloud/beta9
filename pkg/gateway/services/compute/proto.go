@@ -205,6 +205,7 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 		gpu = strings.Join(state.GPUs, ",")
 	}
 	lastKeepalive := model.AgentMachineLastSeen(state)
+	metrics := agentMachineMetrics(state, worker)
 	return &pb.Machine{
 		Id:            state.MachineID,
 		Cpu:           state.CPUMillicores,
@@ -216,24 +217,59 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 		ProviderName:  types.DefaultAgentName,
 		Created:       formatComputeTime(state.CreatedAt),
 		LastKeepalive: formatComputeTime(lastKeepalive),
-		MachineMetrics: &pb.MachineMetrics{
-			TotalCpuAvailable:    int32(state.CPUMillicores),
-			TotalMemoryAvailable: int32(firstNonZeroUint64(state.Metrics.MemoryTotalMB, state.MemoryMB)),
-			CpuUtilizationPct:    state.Metrics.CPUUtilizationPct,
-			MemoryUtilizationPct: state.Metrics.MemoryUtilizationPct,
-			WorkerCount:          int32(state.Metrics.WorkerCount),
-			ContainerCount:       int32(state.Metrics.ContainerCount),
-			FreeGpuCount:         int32(state.Metrics.FreeGPUCount),
-			CacheUsagePct:        state.Metrics.DiskUsagePct,
-			CacheCapacity:        int32(state.Metrics.DiskTotalMB),
-			CacheMemoryUsage:     int32(state.Metrics.MemoryUsedMB),
-			MemoryUsedMb:         int64(state.Metrics.MemoryUsedMB),
-			MemoryTotalMb:        int64(firstNonZeroUint64(state.Metrics.MemoryTotalMB, state.MemoryMB)),
-			DiskUsedMb:           int64(state.Metrics.DiskUsedMB),
-			DiskTotalMb:          int64(state.Metrics.DiskTotalMB),
-			DiskUsagePct:         state.Metrics.DiskUsagePct,
-		},
+		MachineMetrics: metrics,
 	}
+}
+
+func agentMachineMetrics(state *model.AgentTokenState, worker *types.Worker) *pb.MachineMetrics {
+	totalCPU := state.CPUMillicores
+	totalMemory := int64(firstNonZeroUint64(state.Metrics.MemoryTotalMB, state.MemoryMB))
+	freeGPU := state.Metrics.FreeGPUCount
+	containerCount := state.Metrics.ContainerCount
+	workerCount := state.Metrics.WorkerCount
+	var cpuPct, memoryPct float32
+	var usedMemory int64
+
+	if worker != nil {
+		totalCPU = firstNonZeroInt64(worker.TotalCpu, totalCPU)
+		totalMemory = firstNonZeroInt64(worker.TotalMemory, totalMemory)
+		cpuPct = capacityUtilizationPct(worker.TotalCpu, worker.FreeCpu)
+		memoryPct = capacityUtilizationPct(worker.TotalMemory, worker.FreeMemory)
+		usedMemory = maxInt64(worker.TotalMemory-worker.FreeMemory, 0)
+		freeGPU = worker.FreeGpuCount
+		containerCount = uint32(len(worker.ActiveContainers))
+		workerCount = 1
+	} else {
+		cpuPct = state.Metrics.CPUUtilizationPct
+		memoryPct = state.Metrics.MemoryUtilizationPct
+		usedMemory = int64(state.Metrics.MemoryUsedMB)
+	}
+
+	return &pb.MachineMetrics{
+		TotalCpuAvailable:    int32(totalCPU),
+		TotalMemoryAvailable: int32(totalMemory),
+		CpuUtilizationPct:    cpuPct,
+		MemoryUtilizationPct: memoryPct,
+		WorkerCount:          int32(workerCount),
+		ContainerCount:       int32(containerCount),
+		FreeGpuCount:         int32(freeGPU),
+		CacheUsagePct:        state.Metrics.DiskUsagePct,
+		CacheCapacity:        int32(state.Metrics.DiskTotalMB),
+		CacheMemoryUsage:     int32(state.Metrics.MemoryUsedMB),
+		MemoryUsedMb:         usedMemory,
+		MemoryTotalMb:        totalMemory,
+		DiskUsedMb:           int64(state.Metrics.DiskUsedMB),
+		DiskTotalMb:          int64(state.Metrics.DiskTotalMB),
+		DiskUsagePct:         state.Metrics.DiskUsagePct,
+	}
+}
+
+func capacityUtilizationPct(total, free int64) float32 {
+	if total <= 0 {
+		return 0
+	}
+	used := maxInt64(total-free, 0)
+	return float32(used) * 100 / float32(total)
 }
 
 func agentMachineStatus(state *model.AgentTokenState, worker *types.Worker, now time.Time) types.MachineStatus {
@@ -284,6 +320,13 @@ func firstNonZeroInt64(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func firstNonZeroUint64(values ...uint64) uint64 {

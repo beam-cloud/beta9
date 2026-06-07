@@ -181,6 +181,7 @@ const (
 	EventComputeActionMachineJoined             = "machine.joined"
 	EventComputeActionMachineHeartbeat          = "machine.heartbeat"
 	EventComputeActionMachineDisconnected       = "machine.disconnected"
+	EventComputeActionMachineReleased           = "machine.released"
 	EventComputeActionWorkerSlotCreated         = "worker_slot.created"
 	EventComputeActionWorkerSlotPruned          = "worker_slot.pruned"
 	EventComputeActionTransportCredentialVended = "transport.credential_vended"

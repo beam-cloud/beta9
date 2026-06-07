@@ -209,6 +209,83 @@ func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesR
 	return &pb.ListPoolMachinesResponse{Ok: true, Machines: out}, nil
 }
 
+func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineRequest) (bool, *pb.DeleteMachineResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	workspaceID := computeWorkspaceID(authInfo)
+	if workspaceID == "" || in.MachineId == "" {
+		return false, nil, nil
+	}
+
+	machine, handled, err := s.privateMachineForDelete(ctx, authInfo, workspaceID, in.PoolName, in.MachineId)
+	if err != nil {
+		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if machine == nil {
+		if handled {
+			return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine not found"}, nil
+		}
+		return false, nil, nil
+	}
+
+	if err := s.releasePrivateMachine(ctx, machine); err != nil {
+		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return true, &pb.DeleteMachineResponse{Ok: true}, nil
+}
+
+func (s *Service) privateMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, machineID string) (*model.AgentTokenState, bool, error) {
+	if poolName != "" {
+		pool, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+		if err != nil || pool == nil {
+			return nil, pool != nil, err
+		}
+		if !computePoolCreatedByAuth(pool, authInfo) {
+			return nil, true, nil
+		}
+		machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
+		return machine, true, err
+	}
+	machine, err := s.computeRepo.GetAgentMachineStateForWorkspace(ctx, workspaceID, machineID)
+	if err != nil || machine == nil {
+		return machine, false, err
+	}
+	pool, err := s.getOwnedPrivatePoolState(ctx, authInfo, machine.PoolName)
+	if err != nil || pool == nil {
+		return nil, true, err
+	}
+	return machine, true, nil
+}
+
+func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.AgentTokenState) error {
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	worker, err := s.workerRepo.GetWorkerById(workerID)
+	if err != nil {
+		notFoundErr := &types.ErrWorkerNotFound{}
+		if !notFoundErr.From(err) {
+			return err
+		}
+	}
+	if worker != nil && worker.MachineId == machine.MachineID && worker.PoolName == machine.PoolName {
+		if err := s.workerRepo.RemoveWorker(workerID); err != nil {
+			return err
+		}
+	}
+	if err := s.computeRepo.DeleteAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
+		return err
+	}
+	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
+		Timestamp:   time.Now().UTC(),
+		WorkspaceID: machine.WorkspaceID,
+		PoolName:    machine.PoolName,
+		MachineID:   machine.MachineID,
+		WorkerID:    workerID,
+		Action:      types.EventComputeActionMachineReleased,
+		Status:      string(types.MachineStatusDisabled),
+		Message:     "machine released from private pool",
+	})
+	return nil
+}
+
 func (s *Service) readyAgentMachineCount(machines []*model.AgentTokenState) uint32 {
 	ready := uint32(0)
 	now := time.Now()
