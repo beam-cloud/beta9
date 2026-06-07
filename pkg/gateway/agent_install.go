@@ -273,7 +273,13 @@ install_linux_agent_for_docker() {
     return
   fi
 
-	URL="${AGENT_DOWNLOAD_URL:-${GATEWAY}/install/agent/linux/${ARCH}?dev=1}"
+	if [ -n "$AGENT_DOWNLOAD_URL" ]; then
+		URL="$AGENT_DOWNLOAD_URL"
+	elif [ "$DEV" = "1" ]; then
+		URL="${GATEWAY}/install/agent/linux/${ARCH}?dev=1"
+	else
+		URL="${GATEWAY}/install/agent/linux/${ARCH}"
+	fi
 	install_from_url "$URL" "$BIN" "Installing Beam agent"
 }
 
