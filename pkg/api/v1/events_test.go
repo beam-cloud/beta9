@@ -199,11 +199,16 @@ func TestGetEventHistoryReturnsServiceUnavailableWhenReadsUnsupported(t *testing
 	ctx.SetParamValues("workspace-1")
 
 	group := &EventGroup{eventRepo: repository.NewEventClientRepo(types.AppConfig{})}
-	if err := group.GetEventHistory(ctx); err != nil {
-		t.Fatal(err)
+	err := group.GetEventHistory(ctx)
+	if err == nil {
+		t.Fatal("expected service unavailable error")
 	}
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	httpErr, ok := err.(*echo.HTTPError)
+	if !ok {
+		t.Fatalf("error = %T, want *echo.HTTPError", err)
+	}
+	if httpErr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", httpErr.Code, http.StatusServiceUnavailable)
 	}
 }
 

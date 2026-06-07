@@ -50,17 +50,17 @@ func TestSolveOneEightGPUContainer(t *testing.T) {
 	require.Equal(t, "8xh100", plan.Actions[0].Offer.ID)
 }
 
-func TestManualCapacityIsFreeAndPreferred(t *testing.T) {
+func TestAttachedCapacityIsFreeAndPreferred(t *testing.T) {
 	plan := New().Solve(compute.SolveInput{
 		Demand: compute.Demand{
-			PoolName:       "manual",
+			PoolName:       "attached",
 			GPUs:           []string{"A100-80"},
 			TotalGPUs:      4,
 			TTL:            time.Hour,
 			MaxSpendMicros: compute.DollarsToMicros(1),
 		},
 		Reservations: []compute.Reservation{
-			{ID: "manual-1", PoolName: "manual", GPU: "A100-80", GPUCount: 4, Source: compute.SourceManual, Status: compute.ReservationActive},
+			{ID: "attached-1", PoolName: "attached", GPU: "A100-80", GPUCount: 4, Source: compute.SourceAttached, Status: compute.ReservationActive},
 		},
 		Offers: []compute.Offer{
 			{ID: "paid", Provider: "shadeform", GPU: "A100-80", GPUCount: 4, HourlyCostMicros: compute.DollarsToMicros(20), Available: 1},

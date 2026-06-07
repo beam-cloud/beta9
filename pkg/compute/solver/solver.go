@@ -122,13 +122,13 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 			continue
 		}
 
-		if reservation.Source == compute.SourceManual {
+		if reservation.Source.IsAttached() {
 			totalGPUs += reservation.GPUCount
 			keepActions = append(keepActions, compute.SolveAction{
 				Type:        compute.ActionKeep,
 				Reservation: reservation,
 				Count:       1,
-				Reason:      "manual capacity has no incremental provider cost",
+				Reason:      "attached capacity has no incremental provider cost",
 			})
 			continue
 		}
@@ -146,7 +146,7 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 	}
 
 	for _, reservation := range reservations {
-		if reservation.Source == compute.SourceManual || !reservation.ActiveAt(now) {
+		if reservation.Source.IsAttached() || !reservation.ActiveAt(now) {
 			continue
 		}
 		if reservation.BillingRenewalAt.IsZero() || reservation.BillingRenewalAt.After(now) {
@@ -167,7 +167,7 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 }
 
 func existingReservationCommitment(reservation compute.Reservation, now, leaseEnd time.Time) int64 {
-	if reservation.Source == compute.SourceManual {
+	if reservation.Source.IsAttached() {
 		return 0
 	}
 	if reservation.CommittedMicros > 0 {

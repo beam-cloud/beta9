@@ -2,8 +2,7 @@ import json
 import shlex
 import subprocess
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import click
 from betterproto import Casing
@@ -22,7 +21,6 @@ from ..clients.gateway import (
     LaunchPoolCapacityRequest,
     Machine,
     ListPoolMachinesRequest,
-    ListPoolOffersRequest,
     ListPoolsRequest,
     ListPrivatePoolsRequest,
     Pool as ControlPlanePool,
@@ -31,6 +29,7 @@ from ..clients.gateway import (
     StringList,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
+from .machine_format import format_cpu, format_memory, machine_table
 
 
 @click.group(cls=ClickCommonGroup)
@@ -49,12 +48,12 @@ def management():
 
 def _pool_config(
     name: str,
-    gpu: tuple[str, ...] = (),
+    gpu: Tuple[str, ...] = (),
     gpus: int = 0,
     ttl: str = "",
     max_spend: float = 0,
-    provider: tuple[str, ...] = (),
-    region: tuple[str, ...] = (),
+    provider: Tuple[str, ...] = (),
+    region: Tuple[str, ...] = (),
     min_reliability: float = 0,
     priority: int = 1000,
     transport: str = "tsnet-restricted",
@@ -124,12 +123,9 @@ def _get_pool_renderable(
         return Text(
             json.dumps(
                 {
-                    "private_pools": [
-                        pool.to_dict(casing=Casing.SNAKE) for pool in private_pools
-                    ],
+                    "private_pools": [pool.to_dict(casing=Casing.SNAKE) for pool in private_pools],
                     "control_plane_pools": [
-                        pool.to_dict(casing=Casing.SNAKE)
-                        for pool in control_plane_pools
+                        pool.to_dict(casing=Casing.SNAKE) for pool in control_plane_pools
                     ],
                 },
                 indent=2,
@@ -143,47 +139,78 @@ def _pool_table(
     private_pools: List[PrivatePool], control_plane_pools: List[ControlPlanePool]
 ) -> Table:
     table = Table(
-        Column("Name"),
+        Column("Pool"),
         Column("Type"),
         Column("Status"),
         Column("Machines", justify="right"),
-        Column("GPU"),
-        Column("Details"),
+        Column("Compute"),
+        Column("Source"),
         box=box.SIMPLE,
     )
     for pool in private_pools:
         table.add_row(
             pool.name,
             "private",
-            pool.status or "-",
+            _pool_status(pool.status),
             f"{pool.ready_machine_count}/{pool.machine_count}",
-            ", ".join(pool.config.gpu) if pool.config.gpu else "-",
-            _private_pool_details(pool),
+            _private_pool_compute(pool),
+            _private_pool_source(pool),
         )
     if private_pools and control_plane_pools:
         table.add_section()
     for pool in control_plane_pools:
         table.add_row(
             pool.name,
-            "control-plane",
-            pool.state.status or ("active" if pool.active else "inactive"),
+            "managed",
+            _pool_status(pool.state.status or ("active" if pool.active else "inactive")),
             f"{pool.state.ready_machines}/{pool.state.registered_machines}",
-            pool.gpu or "-",
             _control_plane_pool_details(pool),
+            "Beam",
         )
     table.add_section()
     table.add_row(f"[bold]{len(private_pools) + len(control_plane_pools)} items")
     return table
 
 
-def _private_pool_details(pool: PrivatePool) -> str:
-    return "/".join(
-        [
-            f"{pool.reserved_gpus}GPU",
-            f"${pool.committed_spend_micros / 1_000_000:.2f}",
-            pool.config.fallback or "-",
-        ]
-    )
+def _pool_status(status: str) -> str:
+    normalized = (status or "-").lower()
+    if normalized == "active":
+        return "[green]active[/green]"
+    if normalized in ("degraded", "preflight_failed", "disconnected"):
+        return f"[yellow]{status}[/yellow]"
+    if normalized in ("disabled", "failed"):
+        return f"[red]{status}[/red]"
+    return status or "-"
+
+
+def _private_pool_compute(pool: PrivatePool) -> str:
+    gpu_types = pool.config.gpu
+    requested_gpus = pool.config.gpus or pool.reserved_gpus
+    if gpu_types and requested_gpus > 0:
+        return f"{requested_gpus}x {', '.join(gpu_types)}"
+    if gpu_types:
+        return ", ".join(gpu_types)
+    if pool.reserved_gpus > 0:
+        return f"{pool.reserved_gpus}x GPU"
+    return "CPU"
+
+
+def _private_pool_source(pool: PrivatePool) -> str:
+    source = (pool.source or "").lower()
+    if source in ("attached", "manual"):
+        return "Attached"
+    if source in ("provider", "launch", "launched"):
+        return _provider_spend(pool)
+    if source == "":
+        return "-"
+    return source.title()
+
+
+def _provider_spend(pool: PrivatePool) -> str:
+    spend = pool.committed_spend_micros / 1_000_000
+    if spend <= 0:
+        return "Launched"
+    return f"Launched (${spend:.2f}/hr)"
 
 
 def _control_plane_pool_details(pool: ControlPlanePool) -> str:
@@ -191,88 +218,10 @@ def _control_plane_pool_details(pool: ControlPlanePool) -> str:
     if pool.state.free_gpu > 0:
         parts.append(f"{pool.state.free_gpu}GPU")
     if pool.state.free_cpu > 0:
-        parts.append(_format_cpu(pool.state.free_cpu))
+        parts.append(format_cpu(pool.state.free_cpu))
     if pool.state.free_memory > 0:
-        parts.append(_format_memory(pool.state.free_memory))
+        parts.append(format_memory(pool.state.free_memory))
     return "/".join(parts) if parts else "-"
-
-
-def _machine_table(machines: List[Machine]) -> Table:
-    table = Table(
-        Column("Pool"),
-        Column("Machine"),
-        Column("Status"),
-        Column("Resources"),
-        Column("GPU"),
-        Column("Last Seen"),
-        box=box.SIMPLE,
-    )
-    for machine in machines:
-        table.add_row(
-            machine.pool_name or "-",
-            machine.id,
-            machine.status or "-",
-            _machine_resources(machine),
-            _machine_gpu(machine),
-            _machine_last_seen(machine),
-        )
-    table.add_section()
-    table.add_row(f"[bold]{len(machines)} items")
-    return table
-
-
-def _machine_resources(machine: Machine) -> str:
-    parts = []
-    if machine.cpu > 0:
-        parts.append(_format_cpu(machine.cpu))
-    if machine.memory > 0:
-        parts.append(_format_memory(machine.memory))
-    return "/".join(parts) if parts else "-"
-
-
-def _format_cpu(millicores: int) -> str:
-    cores = millicores / 1000
-    if cores.is_integer():
-        return f"{int(cores)}CPU"
-    return f"{cores:.2f}CPU"
-
-
-def _format_memory(memory_mb: int) -> str:
-    if memory_mb >= 1024:
-        return f"{memory_mb / 1024:.1f}GiB"
-    return f"{memory_mb}MiB"
-
-
-def _machine_gpu(machine: Machine) -> str:
-    if not machine.gpu:
-        return "-"
-    if machine.gpu_count == 0:
-        return machine.gpu
-    return f"{machine.gpu} x {machine.gpu_count}"
-
-
-def _machine_last_seen(machine: Machine) -> str:
-    if not machine.last_keepalive:
-        return "Never"
-    try:
-        last_seen = datetime.fromtimestamp(int(machine.last_keepalive), tz=timezone.utc)
-    except ValueError:
-        last_seen = datetime.fromisoformat(
-            machine.last_keepalive.replace("Z", "+00:00")
-        )
-    return _format_age(last_seen)
-
-
-def _format_age(value: datetime) -> str:
-    diff = datetime.now(timezone.utc) - value
-    if diff.days > 0:
-        return f"{diff.days}d ago"
-    seconds = max(0, int(diff.total_seconds()))
-    if seconds >= 3600:
-        return f"{seconds // 3600}h ago"
-    if seconds >= 60:
-        return f"{seconds // 60}m ago"
-    return "just now"
 
 
 @management.command(
@@ -382,12 +331,8 @@ def list_pools(
     """,
 )
 @click.argument("name")
-@click.option(
-    "--mode", type=click.Choice(("private",)), default="private", show_default=True
-)
-@click.option(
-    "--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool."
-)
+@click.option("--mode", type=click.Choice(("private",)), default="private", show_default=True)
+@click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
 @click.option(
     "--gpus",
     type=click.IntRange(0),
@@ -401,22 +346,15 @@ def list_pools(
     default="tsnet-restricted",
     show_default=True,
 )
-@click.option(
-    "--fallback",
-    type=click.Choice(("internal", "wait", "fail")),
-    default="internal",
-    show_default=True,
-)
 @extraclick.pass_service_client
 def create(
     service: ServiceClient,
     name: str,
     mode: str,
-    gpu: tuple[str, ...],
+    gpu: Tuple[str, ...],
     gpus: int,
     priority: int,
     transport: str,
-    fallback: str,
 ):
     if mode != "private":
         return terminal.error("Only private pools can be created from the CLI.")
@@ -429,7 +367,6 @@ def create(
                 gpus=gpus,
                 priority=priority,
                 transport=transport,
-                fallback=fallback,
             )
         )
     )
@@ -438,85 +375,7 @@ def create(
     terminal.success(f"Created private pool '{res.pool.name}'")
 
 
-@management.command(
-    name="offers", help="List compatible launch offers for a private pool."
-)
-@click.argument("name")
-@click.option(
-    "--gpu", "gpu", multiple=True, required=True, help="GPU type to search for."
-)
-@click.option("--gpus", type=click.IntRange(1), default=1, show_default=True)
-@click.option("--ttl", default="1h", show_default=True)
-@click.option("--max-spend", type=float, default=0)
-@click.option(
-    "--provider", multiple=True, help="Restrict to a vendor such as vast or shadeform."
-)
-@click.option("--region", multiple=True, help="Restrict to a region.")
-@click.option("--min-reliability", type=click.FloatRange(0, 1), default=0)
-@click.option(
-    "--format", type=click.Choice(("table", "json")), default="table", show_default=True
-)
-@extraclick.pass_service_client
-def offers(
-    service: ServiceClient,
-    name: str,
-    gpu: tuple[str, ...],
-    gpus: int,
-    ttl: str,
-    max_spend: float,
-    provider: tuple[str, ...],
-    region: tuple[str, ...],
-    min_reliability: float,
-    format: str,
-):
-    res = service.gateway.list_pool_offers(
-        ListPoolOffersRequest(
-            pool=_pool_config(
-                name=name,
-                gpu=gpu,
-                gpus=gpus,
-                ttl=ttl,
-                max_spend=max_spend,
-                provider=provider,
-                region=region,
-                min_reliability=min_reliability,
-            )
-        )
-    )
-    if not res.ok:
-        return terminal.error(res.err_msg)
-    if format == "json":
-        terminal.print_json(
-            {"offers": [o.to_dict(casing=Casing.SNAKE) for o in res.offers]}
-        )
-        return
-
-    table = Table(
-        Column("Provider"),
-        Column("GPU"),
-        Column("Count", justify="right"),
-        Column("Instance"),
-        Column("Region"),
-        Column("$/hr", justify="right"),
-        Column("Available", justify="right"),
-        box=box.SIMPLE,
-    )
-    for offer in res.offers:
-        table.add_row(
-            offer.provider,
-            offer.gpu,
-            str(offer.gpu_count),
-            offer.instance_type,
-            offer.region or "-",
-            f"{offer.hourly_cost_micros / 1_000_000:.4f}",
-            str(offer.available),
-        )
-    terminal.print(table)
-
-
-@management.command(
-    name="launch", help="Launch provider-backed capacity for a private pool."
-)
+@management.command(name="launch", help="Launch provider-backed capacity for a private pool.")
 @click.argument("name")
 @click.option("--gpu", "gpu", multiple=True, required=True)
 @click.option("--gpus", type=click.IntRange(1), required=True)
@@ -529,12 +388,12 @@ def offers(
 def launch(
     service: ServiceClient,
     name: str,
-    gpu: tuple[str, ...],
+    gpu: Tuple[str, ...],
     gpus: int,
     ttl: str,
     max_spend: float,
-    provider: tuple[str, ...],
-    region: tuple[str, ...],
+    provider: Tuple[str, ...],
+    region: Tuple[str, ...],
     min_reliability: float,
 ):
     res = service.gateway.launch_pool_capacity(
@@ -558,22 +417,18 @@ def launch(
 
 @management.command(name="private", help="List private compute pools.", hidden=True)
 @click.option("--limit", type=click.IntRange(1, 100), default=20, show_default=True)
-@click.option(
-    "--format", type=click.Choice(("table", "json")), default="table", show_default=True
-)
+@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
 @extraclick.pass_service_client
 def private_pools(service: ServiceClient, limit: int, format: str):
     terminal.print(_get_pool_renderable(service, limit, format, {}, "private"))
 
 
-@management.command(name="machines", help="List machines joined to a private pool.")
+@management.command(name="machines", help="List machines joined to private pools.")
 @click.argument("name", required=False)
 @click.option("--limit", type=click.IntRange(1, 100), default=20, show_default=True)
-@click.option(
-    "--format", type=click.Choice(("table", "json")), default="table", show_default=True
-)
+@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
 @extraclick.pass_service_client
-def machines(service: ServiceClient, name: str | None, limit: int, format: str):
+def machines(service: ServiceClient, name: Optional[str], limit: int, format: str):
     machines = _list_pool_machines(service, name, limit)
     if format == "json":
         terminal.print_json(
@@ -581,11 +436,11 @@ def machines(service: ServiceClient, name: str | None, limit: int, format: str):
         )
         return
 
-    terminal.print(_machine_table(machines))
+    terminal.print(machine_table(machines))
 
 
 def _list_pool_machines(
-    service: ServiceClient, pool_name: str | None, limit: int
+    service: ServiceClient, pool_name: Optional[str], limit: int
 ) -> List[Machine]:
     if pool_name:
         return _fetch_pool_machines(service, pool_name, limit)
@@ -603,9 +458,7 @@ def _list_pool_machines(
     return machines
 
 
-def _fetch_pool_machines(
-    service: ServiceClient, pool_name: str, limit: int
-) -> List[Machine]:
+def _fetch_pool_machines(service: ServiceClient, pool_name: str, limit: int) -> List[Machine]:
     res = service.gateway.list_pool_machines(
         ListPoolMachinesRequest(pool_name=pool_name, limit=limit)
     )
@@ -660,9 +513,7 @@ def delete(service: ServiceClient, name: str):
 @click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
 @extraclick.pass_service_client
 def join_command(service: ServiceClient, name: str, ttl: str):
-    res = service.gateway.get_pool_join_command(
-        GetPoolJoinCommandRequest(pool_name=name, ttl=ttl)
-    )
+    res = service.gateway.get_pool_join_command(GetPoolJoinCommandRequest(pool_name=name, ttl=ttl))
     if not res.ok:
         return terminal.error(res.err_msg)
     terminal.detail(res.command, crop=False, overflow="ignore")
@@ -684,9 +535,7 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 )
 @click.argument("name")
 @click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
-@click.option(
-    "--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool."
-)
+@click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
 @click.option(
     "--gpus",
     type=click.IntRange(0),
@@ -694,12 +543,6 @@ def join_command(service: ServiceClient, name: str, ttl: str):
     help="Optional desired pool GPU capacity.",
 )
 @click.option("--priority", type=int, default=1000, show_default=True)
-@click.option(
-    "--fallback",
-    type=click.Choice(("internal", "wait", "fail")),
-    default="internal",
-    show_default=True,
-)
 @click.option(
     "--transport",
     type=click.Choice(("auto", "tsnet-restricted", "tsnet_restricted")),
@@ -713,18 +556,10 @@ def join_command(service: ServiceClient, name: str, ttl: str):
     default=None,
     help="Override the agent executor returned by preflight.",
 )
-@click.option(
-    "--worker-image", default="", help="Worker image for the worker-container executor."
-)
-@click.option(
-    "--max-cpu", default="", help="Maximum CPU cores to advertise from this machine."
-)
-@click.option(
-    "--max-memory", default="", help="Maximum memory to advertise, for example 32Gi."
-)
-@click.option(
-    "--max-gpus", type=click.IntRange(0), default=0, help="Maximum GPUs to advertise."
-)
+@click.option("--worker-image", default="", help="Worker image for the worker-container executor.")
+@click.option("--max-cpu", default="", help="Maximum CPU cores to advertise from this machine.")
+@click.option("--max-memory", default="", help="Maximum memory to advertise, for example 32Gi.")
+@click.option("--max-gpus", type=click.IntRange(0), default=0, help="Maximum GPUs to advertise.")
 @click.option("--gpu-ids", default="", help="Comma-separated GPU device IDs to expose.")
 @click.option(
     "--network-slots",
@@ -751,21 +586,18 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 )
 @click.option("--service-name", default="", help="Background service name.")
 @click.option("--state-dir", default="", help="Agent state directory.")
-@click.option(
-    "--print-only", is_flag=True, help="Only print the generated join command."
-)
+@click.option("--print-only", is_flag=True, help="Only print the generated join command.")
 @extraclick.pass_service_client
 def join(
     service: ServiceClient,
     name: str,
     ttl: str,
-    gpu: tuple[str, ...],
+    gpu: Tuple[str, ...],
     gpus: int,
     priority: int,
-    fallback: str,
     transport: str,
     agent_bin: str,
-    executor: str | None,
+    executor: Optional[str],
     worker_image: str,
     max_cpu: str,
     max_memory: str,
@@ -773,8 +605,8 @@ def join(
     gpu_ids: str,
     network_slots: int,
     container_start_concurrency: int,
-    background: bool | None,
-    service_manager: str | None,
+    background: Optional[bool],
+    service_manager: Optional[str],
     service_name: str,
     state_dir: str,
     print_only: bool,
@@ -793,7 +625,6 @@ def join(
                 gpus=gpus,
                 priority=priority,
                 transport=transport,
-                fallback=fallback,
             )
         )
     )
@@ -849,8 +680,8 @@ def _append_join_args(
     gpu_ids: str = "",
     network_slots: int = 0,
     container_start_concurrency: int = 0,
-    background: bool | None = None,
-    service_manager: str | None = None,
+    background: Optional[bool] = None,
+    service_manager: Optional[str] = None,
     service_name: str = "",
     state_dir: str = "",
 ) -> str:
@@ -882,9 +713,7 @@ def _append_join_args(
     if network_slots:
         extra.extend(["--network-slots", str(network_slots)])
     if container_start_concurrency:
-        extra.extend(
-            ["--container-start-concurrency", str(container_start_concurrency)]
-        )
+        extra.extend(["--container-start-concurrency", str(container_start_concurrency)])
     if not extra:
         return command
     return command + " " + " ".join(shlex.quote(value) for value in extra)

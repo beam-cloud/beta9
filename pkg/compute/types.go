@@ -14,6 +14,7 @@ import (
 const (
 	SourceAutosolver     CapacitySource = "autosolver"
 	SourceCLIReservation CapacitySource = "cli_reservation"
+	SourceAttached       CapacitySource = "attached"
 	SourceManual         CapacitySource = "manual"
 
 	ReservationPending     ReservationStatus = "pending"
@@ -32,6 +33,17 @@ var poolNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 type CapacitySource string
 type ReservationStatus string
 type SolveActionType string
+
+func (s CapacitySource) Canonical() CapacitySource {
+	if s == SourceManual {
+		return SourceAttached
+	}
+	return s
+}
+
+func (s CapacitySource) IsAttached() bool {
+	return s == SourceAttached || s == SourceManual
+}
 
 type Vendor interface {
 	Name() string

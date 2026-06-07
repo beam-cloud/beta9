@@ -343,6 +343,23 @@ func TestTelemetryTeeCloseFlushesBufferedLogLine(t *testing.T) {
 	}
 }
 
+func TestTelemetryTeeCloseDoesNotCloseOutputWriter(t *testing.T) {
+	telemetry := &agentTelemetry{
+		ch: make(chan *pb.AgentTelemetryRequest, 1),
+	}
+	out := &closeTrackingWriter{}
+	writer := telemetry.teeLogWriter(out, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStderr)
+	if _, err := writer.Write([]byte("partial log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if out.closed {
+		t.Fatal("tee close closed caller-owned output writer")
+	}
+}
+
 func TestTelemetryEnqueueReportsDroppedRecords(t *testing.T) {
 	t.Setenv(types.AgentVerboseEnv, "1")
 	stderr := &bytes.Buffer{}
@@ -359,6 +376,16 @@ func TestTelemetryEnqueueReportsDroppedRecords(t *testing.T) {
 	if !strings.Contains(stderr.String(), "dropped 1 records") {
 		t.Fatalf("missing drop warning: %q", stderr.String())
 	}
+}
+
+type closeTrackingWriter struct {
+	bytes.Buffer
+	closed bool
+}
+
+func (w *closeTrackingWriter) Close() error {
+	w.closed = true
+	return nil
 }
 
 type errorWriter struct{}

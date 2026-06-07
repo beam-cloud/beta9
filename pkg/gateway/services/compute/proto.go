@@ -163,7 +163,7 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		ReservedGpus:         state.ReservedGPUs,
 		CommittedSpendMicros: state.CommittedSpendMicros,
 		Status:               state.Status,
-		Source:               string(state.Source),
+		Source:               string(state.Source.Canonical()),
 		CreatedAt:            timestampOrNil(state.CreatedAt),
 		ExpiresAt:            timestampOrNil(state.ExpiresAt),
 		MachineCount:         uint32(len(machines)),

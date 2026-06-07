@@ -80,7 +80,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 		Selector:         config.Selector,
 		Config:           config,
 		Status:           "active",
-		Source:           model.SourceManual,
+		Source:           model.SourceAttached,
 		Mode:             config.Mode,
 		Transport:        config.Transport,
 		Fallback:         config.Fallback,
@@ -126,7 +126,7 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 
 	vendors := s.computeVendors()
 	for _, reservation := range state.Reservations {
-		if reservation.Source == model.SourceManual || reservation.Source == model.SourceAutosolver {
+		if reservation.Source.IsAttached() || reservation.Source == model.SourceAutosolver {
 			continue
 		}
 		vendor := vendors[reservation.Provider]

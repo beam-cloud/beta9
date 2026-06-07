@@ -158,9 +158,14 @@ func (t *agentTelemetry) teeLogWriter(w io.Writer, source, workerID, stream stri
 	if t == nil {
 		return nopWriteCloser{Writer: w}
 	}
-	return &teeLogWriter{
-		writers: []io.Writer{w, t.logWriter(source, workerID, stream)},
+	logWriter := t.logWriter(source, workerID, stream)
+	tee := &teeLogWriter{
+		writers: []io.Writer{w, logWriter},
 	}
+	if closer, ok := logWriter.(io.Closer); ok {
+		tee.closers = append(tee.closers, closer)
+	}
+	return tee
 }
 
 func (t *agentTelemetry) enqueue(req *pb.AgentTelemetryRequest) {
@@ -176,6 +181,90 @@ func (t *agentTelemetry) enqueue(req *pb.AgentTelemetryRequest) {
 			verbosef(t.stderr, "agent telemetry buffer full; dropped %d records\n", dropped)
 		}
 	}
+}
+
+func telemetryRecordCount(logs []*pb.AgentLogRecord, events []*pb.AgentEventRecord, metrics *pb.AgentMetricSnapshot) int {
+	size := len(logs) + len(events)
+	if metrics != nil {
+		size++
+	}
+	return size
+}
+
+type telemetryBatch struct {
+	Logs    []*pb.AgentLogRecord
+	Metrics *pb.AgentMetricSnapshot
+	Events  []*pb.AgentEventRecord
+}
+
+func (b *telemetryBatch) add(req *pb.AgentTelemetryRequest) {
+	if req == nil {
+		return
+	}
+	b.Logs = append(b.Logs, req.Logs...)
+	b.Events = append(b.Events, req.Events...)
+	if req.Metrics != nil {
+		b.Metrics = req.Metrics
+	}
+}
+
+func (b *telemetryBatch) size() int {
+	return telemetryRecordCount(b.Logs, b.Events, b.Metrics)
+}
+
+func (b *telemetryBatch) request(agentToken string) *pb.AgentTelemetryRequest {
+	return &pb.AgentTelemetryRequest{
+		AgentToken: agentToken,
+		Logs:       b.Logs,
+		Metrics:    b.Metrics,
+		Events:     b.Events,
+	}
+}
+
+type teeLogWriter struct {
+	writers []io.Writer
+	closers []io.Closer
+}
+
+func (w *teeLogWriter) Write(p []byte) (int, error) {
+	for _, writer := range w.writers {
+		n, err := writer.Write(p)
+		if err != nil {
+			return n, err
+		}
+		if n != len(p) {
+			return n, io.ErrShortWrite
+		}
+	}
+	return len(p), nil
+}
+
+func (w *teeLogWriter) Close() error {
+	var err error
+	for _, closer := range w.closers {
+		if closeErr := closer.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+	return err
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (w nopWriteCloser) Close() error {
+	return nil
+}
+
+type telemetryLineWriter struct {
+	telemetry *agentTelemetry
+	source    string
+	workerID  string
+	stream    string
+
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
 func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
@@ -208,89 +297,6 @@ func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
 
 func bytesToMiB(value uint64) uint64 {
 	return value / 1024 / 1024
-}
-
-type telemetryBatch struct {
-	Logs    []*pb.AgentLogRecord
-	Metrics *pb.AgentMetricSnapshot
-	Events  []*pb.AgentEventRecord
-}
-
-func (b *telemetryBatch) add(req *pb.AgentTelemetryRequest) {
-	if req == nil {
-		return
-	}
-	b.Logs = append(b.Logs, req.Logs...)
-	b.Events = append(b.Events, req.Events...)
-	if req.Metrics != nil {
-		b.Metrics = req.Metrics
-	}
-}
-
-func (b *telemetryBatch) size() int {
-	size := len(b.Logs) + len(b.Events)
-	if b.Metrics != nil {
-		size++
-	}
-	return size
-}
-
-func (b *telemetryBatch) request(agentToken string) *pb.AgentTelemetryRequest {
-	return &pb.AgentTelemetryRequest{
-		AgentToken: agentToken,
-		Logs:       b.Logs,
-		Metrics:    b.Metrics,
-		Events:     b.Events,
-	}
-}
-
-type teeLogWriter struct {
-	writers []io.Writer
-}
-
-func (w *teeLogWriter) Write(p []byte) (int, error) {
-	for _, writer := range w.writers {
-		n, err := writer.Write(p)
-		if err != nil {
-			return n, err
-		}
-		if n != len(p) {
-			return n, io.ErrShortWrite
-		}
-	}
-	return len(p), nil
-}
-
-func (w *teeLogWriter) Close() error {
-	var err error
-	for _, writer := range w.writers {
-		closer, ok := writer.(io.Closer)
-		if !ok {
-			continue
-		}
-		if closeErr := closer.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-	}
-	return err
-}
-
-type nopWriteCloser struct {
-	io.Writer
-}
-
-func (w nopWriteCloser) Close() error {
-	return nil
-}
-
-type telemetryLineWriter struct {
-	telemetry *agentTelemetry
-	source    string
-	workerID  string
-	stream    string
-
-	mu  sync.Mutex
-	buf bytes.Buffer
 }
 
 func (w *telemetryLineWriter) Write(p []byte) (int, error) {
@@ -346,10 +352,7 @@ func agentTelemetryRequestSize(req *pb.AgentTelemetryRequest) int {
 	if req == nil {
 		return 0
 	}
-	size := len(req.Logs) + len(req.Events)
-	if req.Metrics != nil {
-		size++
-	}
+	size := telemetryRecordCount(req.Logs, req.Events, req.Metrics)
 	if size == 0 {
 		return 1
 	}
