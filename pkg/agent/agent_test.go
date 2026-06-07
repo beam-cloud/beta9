@@ -346,71 +346,39 @@ func TestShouldRemoveManagedWorkerContainer(t *testing.T) {
 	}{
 		{
 			name: "keep desired worker",
-			inspect: &dockerContainerInspect{
-				Name: "/beam-agent-worker-one",
-				Config: struct {
-					Labels map[string]string `json:"Labels"`
-					Env    []string          `json:"Env"`
-				}{
-					Labels: map[string]string{
-						types.AgentDockerLabelManaged:   "true",
-						types.AgentDockerLabelWorkerID:  "worker-one",
-						types.AgentDockerLabelMachineID: "machine-one",
-						types.AgentDockerLabelPoolName:  "private-dev",
-					},
-				},
-			},
+			inspect: dockerInspectWithLabels("/beam-agent-worker-one", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelWorkerID:  "worker-one",
+				types.AgentDockerLabelMachineID: "machine-one",
+				types.AgentDockerLabelPoolName:  "private-dev",
+			}),
 			desired: "beam-agent-worker-one",
 		},
 		{
 			name: "remove old worker",
-			inspect: &dockerContainerInspect{
-				Name: "/beam-agent-worker-two",
-				Config: struct {
-					Labels map[string]string `json:"Labels"`
-					Env    []string          `json:"Env"`
-				}{
-					Labels: map[string]string{
-						types.AgentDockerLabelManaged:   "true",
-						types.AgentDockerLabelWorkerID:  "worker-two",
-						types.AgentDockerLabelMachineID: "machine-old",
-						types.AgentDockerLabelPoolName:  "old-pool",
-					},
-				},
-			},
+			inspect: dockerInspectWithLabels("/beam-agent-worker-two", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelWorkerID:  "worker-two",
+				types.AgentDockerLabelMachineID: "machine-old",
+				types.AgentDockerLabelPoolName:  "old-pool",
+			}),
 			desired:    "beam-agent-worker-one",
 			wantRemove: true,
 		},
 		{
 			name: "remove duplicate with unexpected name",
-			inspect: &dockerContainerInspect{
-				Name: "/duplicate-worker",
-				Config: struct {
-					Labels map[string]string `json:"Labels"`
-					Env    []string          `json:"Env"`
-				}{
-					Labels: map[string]string{
-						types.AgentDockerLabelManaged:   "true",
-						types.AgentDockerLabelWorkerID:  "worker-one",
-						types.AgentDockerLabelMachineID: "machine-one",
-						types.AgentDockerLabelPoolName:  "private-dev",
-					},
-				},
-			},
+			inspect: dockerInspectWithLabels("/duplicate-worker", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelWorkerID:  "worker-one",
+				types.AgentDockerLabelMachineID: "machine-one",
+				types.AgentDockerLabelPoolName:  "private-dev",
+			}),
 			desired:    "beam-agent-worker-one",
 			wantRemove: true,
 		},
 		{
-			name: "ignore unrelated container",
-			inspect: &dockerContainerInspect{
-				Name: "/postgres",
-				Config: struct {
-					Labels map[string]string `json:"Labels"`
-					Env    []string          `json:"Env"`
-				}{
-					Labels: map[string]string{},
-				},
-			},
+			name:    "ignore unrelated container",
+			inspect: dockerInspectWithLabels("/postgres", nil),
 			desired: "beam-agent-worker-one",
 		},
 	}
@@ -423,6 +391,15 @@ func TestShouldRemoveManagedWorkerContainer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func dockerInspectWithLabels(name string, labels map[string]string) *dockerContainerInspect {
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	inspect := &dockerContainerInspect{Name: name}
+	inspect.Config.Labels = labels
+	return inspect
 }
 
 func TestWorkerImagePullKeyIncludesPlatform(t *testing.T) {
