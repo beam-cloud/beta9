@@ -91,7 +91,7 @@ func writeJoinToken(stateDir, token string) (string, error) {
 func executablePath() string {
 	path, err := os.Executable()
 	if err != nil {
-		return "beam-agent"
+		return types.DefaultAgentServiceName
 	}
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return resolved

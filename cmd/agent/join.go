@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/agent"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type joinFlags struct {
-	agent.JoinOptions
+	types.AgentJoinOptions
 }
 
 func runJoin(ctx context.Context, args []string) error {
@@ -21,13 +22,13 @@ func runJoin(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	return agent.RunJoin(ctx, opts.JoinOptions)
+	return agent.RunJoin(ctx, opts.AgentJoinOptions)
 }
 
 func newJoinFlags(name string) (*flag.FlagSet, *joinFlags) {
 	opts := &joinFlags{}
 	flags := flag.NewFlagSet(name, flag.ExitOnError)
-	flags.StringVar(&opts.GatewayURL, "gateway", "", "public Beam gateway HTTP URL")
+	flags.StringVar(&opts.GatewayURL, "gateway", "", "public gateway HTTP URL")
 	flags.StringVar(&opts.JoinToken, "join-token", "", "short-lived pool join token")
 	flags.StringVar(&opts.JoinTokenFile, "join-token-file", "", "file containing a short-lived pool join token")
 	flags.BoolVar(&opts.DevMode, "dev", false, "use local development installer defaults")
