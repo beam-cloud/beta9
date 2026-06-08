@@ -1,7 +1,10 @@
 package compute
 
 import (
+	"time"
+
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -17,6 +20,8 @@ type Service struct {
 	computeRepo          repository.ComputeRepository
 	keyEventManager      *common.KeyEventManager
 	telemetryCredentials telemetryCredentialIssuer
+	tailscale            *network.Tailscale
+	routePrewarm         routePrewarmer
 }
 
 type Options struct {
@@ -28,6 +33,7 @@ type Options struct {
 	WorkerRepo      repository.WorkerRepository
 	ComputeRepo     repository.ComputeRepository
 	KeyEventManager *common.KeyEventManager
+	Tailscale       *network.Tailscale
 }
 
 func New(opts Options) *Service {
@@ -40,6 +46,8 @@ func New(opts Options) *Service {
 		workerRepo:      opts.WorkerRepo,
 		computeRepo:     opts.ComputeRepo,
 		keyEventManager: opts.KeyEventManager,
+		tailscale:       opts.Tailscale,
+		routePrewarm:    routePrewarmer{lastAttempt: map[string]time.Time{}},
 	}
 	service.telemetryCredentials = newTelemetryCredentialIssuer(opts.Config.Database.S2)
 	return service

@@ -470,6 +470,10 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 	if err := s.containerRepo.SetBackendRoute(ctx, *route); err != nil {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	if route.State == types.BackendRouteStateReady &&
+		(previousState != types.BackendRouteStateReady || previousProxyTarget != route.ProxyTarget) {
+		s.prewarmRoute(*route, agentState)
+	}
 	if previousState != route.State || previousProxyTarget != route.ProxyTarget || previousError != route.Error {
 		attrs := map[string]string{
 			"kind":     route.Kind,
