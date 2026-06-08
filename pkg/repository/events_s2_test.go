@@ -247,10 +247,10 @@ func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 func TestResolveLogStreamsUsesKnownStreamsWithoutExistenceList(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
 		TaskID:      "task-123",
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,10 +269,10 @@ func TestResolveLogStreamsUsesKnownStreamsWithoutExistenceList(t *testing.T) {
 func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+	streams, err := repo.resolveLogStreams(types.LogQuery{
 		MachineID: "machine-123",
 		WorkerID:  "agent-worker-123",
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,11 +289,11 @@ func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
 func TestResolveWorkspaceMachineLogHistoryUsesSingleAggregateStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
 		MachineID:   "machine-123",
 		WorkerID:    "agent-worker-123",
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,10 +324,10 @@ func TestResolveLogStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testin
 	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
 	containerID := "sandbox-" + stubID + "-1717f4fc"
 
-	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
 		ContainerID: containerID,
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,10 +346,10 @@ func TestResolveLogStreamsParsesStubScopedContainerIDWithoutPrefixList(t *testin
 func TestResolveLogStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
-	streams, err := repo.resolveLogStreams(context.Background(), types.LogQuery{
+	streams, err := repo.resolveLogStreams(types.LogQuery{
 		WorkspaceID: "workspace-123",
 		ContainerID: "container-789",
-	}, false)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +868,7 @@ func TestMetricsBucketCountsUniqueContainers(t *testing.T) {
 }
 
 func TestS2StreamDeletionPendingErrorIsTransient(t *testing.T) {
-	err := fmt.Errorf("ensure stream: %w", &s2.S2Error{
+	err := fmt.Errorf("append stream: %w", &s2.S2Error{
 		Code:   "stream_deletion_pending",
 		Status: 409,
 		Origin: "server",

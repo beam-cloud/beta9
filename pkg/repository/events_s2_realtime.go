@@ -31,11 +31,7 @@ func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (
 		limit = maxS2LogReadLimit
 	}
 
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
-	}
-
-	streams, err := r.resolveLogStreams(ctx, query, false)
+	streams, err := r.resolveLogStreams(query)
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +67,7 @@ func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (
 }
 
 func (r *S2EventRepository) StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error) {
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
-	}
-
-	streams, err := r.resolveLogStreams(ctx, query, true)
+	streams, err := r.resolveLogStreams(query)
 	if err != nil {
 		return nil, err
 	}
@@ -124,10 +116,6 @@ func (r *S2EventRepository) GetWorkspaceMetricsTimeseries(ctx context.Context, q
 
 func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error) {
 	response := &types.MetricsTimeseriesResponse{}
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
-	}
-
 	buckets := map[int64]*metricsBucketAccumulator{}
 	seqNum := uint64(0)
 	startMs := uint64(start.UTC().UnixMilli())
@@ -191,16 +179,10 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 	return response, nil
 }
 
-func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.LogQuery, createCanonical bool) ([]s2.StreamName, error) {
+func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.StreamName, error) {
 	addKnown := func(streamName s2.StreamName) ([]s2.StreamName, error) {
 		if streamName == "" {
 			return nil, nil
-		}
-		if createCanonical {
-			if err := r.ensureStream(ctx, streamName); err != nil {
-				return nil, err
-			}
-			return []s2.StreamName{streamName}, nil
 		}
 		return []s2.StreamName{streamName}, nil
 	}
@@ -209,11 +191,6 @@ func (r *S2EventRepository) resolveLogStreams(ctx context.Context, query types.L
 		for _, streamName := range streamNames {
 			if streamName == "" {
 				continue
-			}
-			if createCanonical {
-				if err := r.ensureStream(ctx, streamName); err != nil {
-					return nil, err
-				}
 			}
 			streams = append(streams, streamName)
 		}

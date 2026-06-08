@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -29,21 +28,14 @@ const (
 	s2EventHistoryReadLimit = uint64(1000)
 	s2EventQueueSize        = 16384
 	s2EventBatchSize        = 256
-	s2EventRetentionSeconds = int64(30 * 24 * 60 * 60)
 	s2EventWriteTimeout     = 5 * time.Second
 	s2EventEnqueueTimeout   = 250 * time.Millisecond
 	s2EventFlushInterval    = 100 * time.Millisecond
 )
 
 type S2EventRepository struct {
-	config       types.S2Config
-	client       *s2.Client
 	basin        *s2.BasinClient
-	basinName    s2.BasinName
 	streamPrefix string
-	ensured      sync.Map
-	basinMu      sync.Mutex
-	basinEnsured bool
 	queue        chan cloudevents.Event
 }
 
@@ -54,10 +46,9 @@ type ScopedS2EventRepository struct {
 }
 
 type scopedS2EventTarget struct {
-	name    string
-	prefix  string
-	basin   *s2.BasinClient
-	ensured sync.Map
+	name   string
+	prefix string
+	basin  *s2.BasinClient
 }
 
 func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
@@ -131,10 +122,7 @@ func NewS2EventRepository(config types.S2Config) (*S2EventRepository, error) {
 	})
 
 	repo := &S2EventRepository{
-		config:       config,
-		client:       client,
 		basin:        client.Basin(config.Basin),
-		basinName:    s2.BasinName(config.Basin),
 		streamPrefix: streamPrefix,
 		queue:        make(chan cloudevents.Event, s2EventQueueSize),
 	}
@@ -224,18 +212,8 @@ func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) e
 			if len(records) == 0 {
 				continue
 			}
-			if err := target.ensureStream(streamName); err != nil {
-				if isS2EventStreamDeletionPending(err) {
-					target.ensured.Delete(streamName)
-					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping scoped event batch for stream pending deletion")
-					continue
-				}
-				streamErrs = append(streamErrs, fmt.Errorf("ensure scoped s2 stream %q: %w", streamName, err))
-				continue
-			}
 			if err := appendScopedS2Records(target.basin, streamName, records); err != nil {
 				if isS2EventStreamDeletionPending(err) {
-					target.ensured.Delete(streamName)
 					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping scoped event batch for stream pending deletion")
 					continue
 				}
@@ -254,27 +232,6 @@ func (r *ScopedS2EventRepository) targetForStream(streamName s2.StreamName) *sco
 			return target
 		}
 	}
-	return nil
-}
-
-func (t *scopedS2EventTarget) ensureStream(streamName s2.StreamName) error {
-	if _, ok := t.ensured.Load(streamName); ok {
-		return nil
-	}
-
-	ctx, cancel := s2EventWriteContext()
-	defer cancel()
-	retention := s2EventRetentionSeconds
-	_, err := t.basin.Streams.Create(ctx, s2.CreateStreamArgs{
-		Stream: streamName,
-		Config: &s2.StreamConfig{
-			RetentionPolicy: &s2.RetentionPolicy{Age: &retention},
-		},
-	})
-	if err != nil && !isS2ResourceAlreadyExists(err) {
-		return err
-	}
-	t.ensured.Store(streamName, struct{}{})
 	return nil
 }
 
@@ -348,10 +305,6 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 		return nil
 	}
 
-	if err := r.ensureBasinForWrite(); err != nil {
-		return err
-	}
-
 	recordsByStream := map[s2.StreamName][]s2.AppendRecord{}
 	for _, event := range events {
 		record, streamNames, err := r.appendRecordForEvent(event)
@@ -372,18 +325,8 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 		if len(records) == 0 {
 			continue
 		}
-		if err := r.ensureStreamForWrite(streamName); err != nil {
-			if isS2EventStreamDeletionPending(err) {
-				r.ensured.Delete(streamName)
-				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
-				continue
-			}
-			streamErrs = append(streamErrs, fmt.Errorf("ensure s2 stream %q: %w", streamName, err))
-			continue
-		}
 		if err := r.appendRecordsForWrite(streamName, records); err != nil {
 			if isS2EventStreamDeletionPending(err) {
-				r.ensured.Delete(streamName)
 				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
 				continue
 			}
@@ -418,10 +361,6 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	limit := query.Limit
 	if limit == 0 {
 		limit = defaultS2EventReadLimit
-	}
-
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
 	}
 
 	streams, err := r.resolveContainerStreams(ctx, containerID, query)
@@ -466,10 +405,6 @@ func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.Eve
 	limit := query.Limit
 	if limit == 0 {
 		limit = defaultS2EventReadLimit
-	}
-
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
 	}
 
 	streams, err := r.resolveEventHistoryStreams(ctx, query)
@@ -540,13 +475,6 @@ func (r *S2EventRepository) StreamAppEvents(ctx context.Context, query types.Eve
 }
 
 func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.StreamName, containerID string, query types.EventQuery) (EventStream, error) {
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
-	}
-	if err := r.ensureStream(ctx, streamName); err != nil {
-		return nil, err
-	}
-
 	opts := &s2.ReadOptions{
 		SeqNum:     query.SeqNum,
 		Timestamp:  query.Timestamp,
@@ -883,57 +811,6 @@ func s2TimestampMillisToNanos(timestamp uint64) uint64 {
 	return timestamp * uint64(time.Millisecond)
 }
 
-func (r *S2EventRepository) ensureBasin(ctx context.Context) error {
-	r.basinMu.Lock()
-	defer r.basinMu.Unlock()
-
-	if r.basinEnsured {
-		return nil
-	}
-
-	_, err := r.client.Basins.Ensure(ctx, s2.EnsureBasinArgs{
-		Basin: r.basinName,
-	})
-	if err != nil {
-		return fmt.Errorf("ensure s2 event basin %q: %w", r.basinName, err)
-	}
-
-	r.basinEnsured = true
-	return nil
-}
-
-func (r *S2EventRepository) ensureBasinForWrite() error {
-	ctx, cancel := s2EventWriteContext()
-	defer cancel()
-	return r.ensureBasin(ctx)
-}
-
-func (r *S2EventRepository) ensureStream(ctx context.Context, streamName s2.StreamName) error {
-	if _, ok := r.ensured.Load(streamName); ok {
-		return nil
-	}
-
-	retention := s2EventRetentionSeconds
-	_, err := r.basin.Streams.Ensure(ctx, s2.EnsureStreamArgs{
-		Stream: streamName,
-		Config: &s2.StreamConfig{
-			RetentionPolicy: &s2.RetentionPolicy{Age: &retention},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("ensure s2 event stream %q: %w", streamName, err)
-	}
-
-	r.ensured.Store(streamName, struct{}{})
-	return nil
-}
-
-func (r *S2EventRepository) ensureStreamForWrite(streamName s2.StreamName) error {
-	ctx, cancel := s2EventWriteContext()
-	defer cancel()
-	return r.ensureStream(ctx, streamName)
-}
-
 func (r *S2EventRepository) appendRecordsForWrite(streamName s2.StreamName, records []s2.AppendRecord) error {
 	ctx, cancel := s2EventWriteContext()
 	defer cancel()
@@ -948,11 +825,6 @@ func s2EventWriteContext() (context.Context, context.CancelFunc) {
 func isS2EventStreamDeletionPending(err error) bool {
 	var s2Err *s2.S2Error
 	return errors.As(err, &s2Err) && s2Err.Code == "stream_deletion_pending"
-}
-
-func isS2ResourceAlreadyExists(err error) bool {
-	var s2Err *s2.S2Error
-	return errors.As(err, &s2Err) && (s2Err.Status == 409 || s2Err.Code == "resource_already_exists")
 }
 
 func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventMetadata) s2.StreamName {
@@ -1203,10 +1075,6 @@ func (r *S2EventRepository) platformCacheStreamName() s2.StreamName {
 func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
 	if workspaceID == "" || stubID == "" {
 		return nil, fmt.Errorf("workspace id and stub id are required to read stub cache required content")
-	}
-
-	if err := r.ensureBasin(ctx); err != nil {
-		return nil, err
 	}
 
 	streamName := r.stubCacheStreamName(workspaceID, stubID)

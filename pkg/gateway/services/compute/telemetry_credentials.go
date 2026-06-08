@@ -74,7 +74,6 @@ func (s *Service) issueTelemetryCredential(ctx context.Context, workspaceID, kin
 			Basins:  &s2.ResourceSet{Exact: s2.Ptr(basin)},
 			Streams: &s2.ResourceSet{Prefix: s2.Ptr(streamPrefix)},
 			Ops: []string{
-				s2.OperationCreateStream,
 				s2.OperationAppend,
 			},
 		},
