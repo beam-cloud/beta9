@@ -1549,8 +1549,8 @@
         "imageLocalCacheEnabled": {
           "type": "boolean"
         },
-        "s2Telemetry": {
-          "$ref": "#/definitions/gatewayAgentS2TelemetryConfig"
+        "telemetry": {
+          "$ref": "#/definitions/gatewayAgentTelemetryConfig"
         }
       }
     },
@@ -1726,29 +1726,20 @@
         }
       }
     },
-    "gatewayAgentS2TelemetryConfig": {
+    "gatewayAgentTelemetryConfig": {
       "type": "object",
       "properties": {
         "enabled": {
           "type": "boolean"
         },
-        "basin": {
-          "type": "string"
-        },
         "streamPrefix": {
           "type": "string"
         },
-        "logToken": {
-          "type": "string"
+        "logs": {
+          "$ref": "#/definitions/gatewayAgentTelemetrySinkConfig"
         },
-        "logStreamPrefix": {
-          "type": "string"
-        },
-        "eventToken": {
-          "type": "string"
-        },
-        "eventStreamPrefix": {
-          "type": "string"
+        "events": {
+          "$ref": "#/definitions/gatewayAgentTelemetrySinkConfig"
         }
       }
     },
@@ -1759,6 +1750,20 @@
           "type": "boolean"
         },
         "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayAgentTelemetrySinkConfig": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "credential": {
+          "type": "string"
+        },
+        "streamPrefix": {
           "type": "string"
         }
       }

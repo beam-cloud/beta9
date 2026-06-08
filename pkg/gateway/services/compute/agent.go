@@ -517,7 +517,7 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		ImageRegistryStore:     s.appConfig.ImageService.RegistryStore,
 		ImageClipVersion:       s.appConfig.ImageService.ClipVersion,
 		ImageLocalCacheEnabled: s.appConfig.ImageService.LocalCacheEnabled,
-		S2Telemetry:            telemetryConfig,
+		Telemetry:              telemetryConfig,
 		DisabledServices: []string{
 			"redis",
 			"postgres",

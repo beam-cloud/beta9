@@ -32,29 +32,32 @@ type joinResponse struct {
 }
 
 type bootstrapConfig struct {
-	GatewayHTTPURL         string            `json:"gatewayHttpUrl"`
-	GatewayGRPCHost        string            `json:"gatewayGrpcHost"`
-	GatewayGRPCPort        int               `json:"gatewayGrpcPort"`
-	GatewayGRPCTLS         bool              `json:"gatewayGrpcTls"`
-	WorkspaceID            string            `json:"workspaceId"`
-	PoolName               string            `json:"poolName"`
-	Transport              string            `json:"transport"`
-	Executor               string            `json:"executor"`
-	Fallback               string            `json:"fallback"`
-	ImageRegistryStore     string            `json:"imageRegistryStore"`
-	ImageClipVersion       uint32            `json:"imageClipVersion"`
-	ImageLocalCacheEnabled bool              `json:"imageLocalCacheEnabled"`
-	S2Telemetry            s2TelemetryConfig `json:"s2Telemetry"`
+	GatewayHTTPURL         string          `json:"gatewayHttpUrl"`
+	GatewayGRPCHost        string          `json:"gatewayGrpcHost"`
+	GatewayGRPCPort        int             `json:"gatewayGrpcPort"`
+	GatewayGRPCTLS         bool            `json:"gatewayGrpcTls"`
+	WorkspaceID            string          `json:"workspaceId"`
+	PoolName               string          `json:"poolName"`
+	Transport              string          `json:"transport"`
+	Executor               string          `json:"executor"`
+	Fallback               string          `json:"fallback"`
+	ImageRegistryStore     string          `json:"imageRegistryStore"`
+	ImageClipVersion       uint32          `json:"imageClipVersion"`
+	ImageLocalCacheEnabled bool            `json:"imageLocalCacheEnabled"`
+	Telemetry              telemetryConfig `json:"telemetry"`
 }
 
-type s2TelemetryConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Basin             string `json:"basin"`
-	StreamPrefix      string `json:"streamPrefix"`
-	LogToken          string `json:"logToken"`
-	LogStreamPrefix   string `json:"logStreamPrefix"`
-	EventToken        string `json:"eventToken"`
-	EventStreamPrefix string `json:"eventStreamPrefix"`
+type telemetryConfig struct {
+	Enabled      bool                `json:"enabled"`
+	StreamPrefix string              `json:"streamPrefix"`
+	Logs         telemetrySinkConfig `json:"logs"`
+	Events       telemetrySinkConfig `json:"events"`
+}
+
+type telemetrySinkConfig struct {
+	Destination  string `json:"destination"`
+	Credential   string `json:"credential"`
+	StreamPrefix string `json:"streamPrefix"`
 }
 
 type transportCredentialResponse struct {

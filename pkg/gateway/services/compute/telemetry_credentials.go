@@ -29,7 +29,7 @@ func newTelemetryCredentialIssuer(config types.S2Config) telemetryCredentialIssu
 
 const telemetryCredentialIssueTimeout = 10 * time.Second
 
-func (s *Service) scopedTelemetryConfig(ctx context.Context, workspaceID string) (*pb.AgentS2TelemetryConfig, error) {
+func (s *Service) scopedTelemetryConfig(ctx context.Context, workspaceID string) (*pb.AgentTelemetryConfig, error) {
 	config := s.appConfig.Database.S2
 	if config.ApiKey == "" || config.Basin == "" || s.telemetryCredentials == nil {
 		return nil, nil
@@ -51,14 +51,19 @@ func (s *Service) scopedTelemetryConfig(ctx context.Context, workspaceID string)
 		return nil, fmt.Errorf("issue scoped event telemetry token: %w", err)
 	}
 
-	return &pb.AgentS2TelemetryConfig{
-		Enabled:           true,
-		Basin:             config.Basin,
-		StreamPrefix:      streamPrefix,
-		LogToken:          logToken,
-		LogStreamPrefix:   logPrefix,
-		EventToken:        eventToken,
-		EventStreamPrefix: eventPrefix,
+	return &pb.AgentTelemetryConfig{
+		Enabled:      true,
+		StreamPrefix: streamPrefix,
+		Logs: &pb.AgentTelemetrySinkConfig{
+			Destination:  config.Basin,
+			Credential:   logToken,
+			StreamPrefix: logPrefix,
+		},
+		Events: &pb.AgentTelemetrySinkConfig{
+			Destination:  config.Basin,
+			Credential:   eventToken,
+			StreamPrefix: eventPrefix,
+		},
 	}, nil
 }
 

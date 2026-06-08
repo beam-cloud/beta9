@@ -828,17 +828,20 @@ message AgentBootstrapConfig {
   string image_registry_store = 11;
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
-  AgentS2TelemetryConfig s2_telemetry = 14;
+  AgentTelemetryConfig telemetry = 14;
 }
 
-message AgentS2TelemetryConfig {
+message AgentTelemetryConfig {
   bool enabled = 1;
-  string basin = 2;
+  string stream_prefix = 2;
+  AgentTelemetrySinkConfig logs = 3;
+  AgentTelemetrySinkConfig events = 4;
+}
+
+message AgentTelemetrySinkConfig {
+  string destination = 1;
+  string credential = 2;
   string stream_prefix = 3;
-  string log_token = 4;
-  string log_stream_prefix = 5;
-  string event_token = 6;
-  string event_stream_prefix = 7;
 }
 
 message JoinAgentRequest {

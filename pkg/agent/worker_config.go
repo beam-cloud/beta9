@@ -168,12 +168,12 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 		PrettyLogs:  true,
 		Database: agentConfigDatabase{
 			S2: agentConfigS2{
-				Basin:             bootstrap.S2Telemetry.Basin,
-				StreamPrefix:      bootstrap.S2Telemetry.StreamPrefix,
-				LogApiKey:         bootstrap.S2Telemetry.LogToken,
-				LogStreamPrefix:   bootstrap.S2Telemetry.LogStreamPrefix,
-				EventApiKey:       bootstrap.S2Telemetry.EventToken,
-				EventStreamPrefix: bootstrap.S2Telemetry.EventStreamPrefix,
+				Basin:             firstNonEmpty(bootstrap.Telemetry.Events.Destination, bootstrap.Telemetry.Logs.Destination),
+				StreamPrefix:      bootstrap.Telemetry.StreamPrefix,
+				LogApiKey:         bootstrap.Telemetry.Logs.Credential,
+				LogStreamPrefix:   bootstrap.Telemetry.Logs.StreamPrefix,
+				EventApiKey:       bootstrap.Telemetry.Events.Credential,
+				EventStreamPrefix: bootstrap.Telemetry.Events.StreamPrefix,
 			},
 		},
 		Gateway: agentConfigGateway{

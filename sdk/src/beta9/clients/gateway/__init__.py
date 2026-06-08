@@ -692,18 +692,22 @@ class AgentBootstrapConfig(betterproto.Message):
     image_registry_store: str = betterproto.string_field(11)
     image_clip_version: int = betterproto.uint32_field(12)
     image_local_cache_enabled: bool = betterproto.bool_field(13)
-    s2_telemetry: "AgentS2TelemetryConfig" = betterproto.message_field(14)
+    telemetry: "AgentTelemetryConfig" = betterproto.message_field(14)
 
 
 @dataclass(eq=False, repr=False)
-class AgentS2TelemetryConfig(betterproto.Message):
+class AgentTelemetryConfig(betterproto.Message):
     enabled: bool = betterproto.bool_field(1)
-    basin: str = betterproto.string_field(2)
+    stream_prefix: str = betterproto.string_field(2)
+    logs: "AgentTelemetrySinkConfig" = betterproto.message_field(3)
+    events: "AgentTelemetrySinkConfig" = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class AgentTelemetrySinkConfig(betterproto.Message):
+    destination: str = betterproto.string_field(1)
+    credential: str = betterproto.string_field(2)
     stream_prefix: str = betterproto.string_field(3)
-    log_token: str = betterproto.string_field(4)
-    log_stream_prefix: str = betterproto.string_field(5)
-    event_token: str = betterproto.string_field(6)
-    event_stream_prefix: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)

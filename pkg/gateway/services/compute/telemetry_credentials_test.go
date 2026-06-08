@@ -39,11 +39,23 @@ func TestScopedTelemetryConfigUsesWorkspaceWriteOnlyPrefixes(t *testing.T) {
 	if config == nil || !config.Enabled {
 		t.Fatalf("expected enabled scoped telemetry config, got %#v", config)
 	}
-	if got, want := config.LogStreamPrefix, "events/logs/workspaces/workspace-123"; got != want {
+	if config.Logs == nil {
+		t.Fatal("expected logs sink")
+	}
+	if got, want := config.Logs.StreamPrefix, "events/logs/workspaces/workspace-123"; got != want {
 		t.Fatalf("log prefix = %q, want %q", got, want)
 	}
-	if got, want := config.EventStreamPrefix, "events/workspaces/workspace-123"; got != want {
+	if got, want := config.Logs.Destination, "events-basin"; got != want {
+		t.Fatalf("log destination = %q, want %q", got, want)
+	}
+	if config.Events == nil {
+		t.Fatal("expected events sink")
+	}
+	if got, want := config.Events.StreamPrefix, "events/workspaces/workspace-123"; got != want {
 		t.Fatalf("event prefix = %q, want %q", got, want)
+	}
+	if got, want := config.Events.Destination, "events-basin"; got != want {
+		t.Fatalf("event destination = %q, want %q", got, want)
 	}
 	if len(issuer.args) != 2 {
 		t.Fatalf("expected two issued tokens, got %d", len(issuer.args))
