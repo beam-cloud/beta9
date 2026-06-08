@@ -31,3 +31,4 @@ deploy
 bin/worker
 bin/gateway
 sdk
+benchmarks

@@ -722,6 +722,7 @@ func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
 					continue
 				}
 
+				cleaner.MachineId = machine.State.MachineId
 				cleaner.KubeClient = kubeClient
 				cleaner.Clean(wpc.ctx)
 			}

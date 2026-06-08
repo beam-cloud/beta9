@@ -13,10 +13,29 @@ worker:
         volumeMounts:
         - mountPath: /etc/beta9
           name: config
-monitoring:
-  fluentbit:
-    events:
-      endpoint: http://fluent-bit.monitoring:9880
+events:
+  callbacks:
+  - url: ""
+    format: beta9_webhook
+    headers:
+      Authorization: ""
+    eventTypes:
+    - stub.deploy
+    - stub.serve
+    - stub.run
+    - stub.clone
+    - workerpool.degraded
+    - workerpool.healthy
+    - gateway.endpoint.called
+managedCompute:
+  billing:
+    mode: noop
+    endpoint: ""
+    authToken: ""
+    required: false
+    timeout: 5s
+    reconcileInterval: 1m
+    minimumCreditCents: 2500
 cache:
   server:
     pageSizeBytes: 4194304

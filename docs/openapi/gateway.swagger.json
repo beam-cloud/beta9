@@ -2582,6 +2582,17 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
+        },
+        "errorCode": {
+          "type": "string"
+        },
+        "requiredCents": {
+          "type": "string",
+          "format": "int64"
+        },
+        "availableCents": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },
@@ -3186,6 +3197,12 @@
         "billingRenewalAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "statusMessage": {
+          "type": "string"
+        },
+        "terminatingReason": {
+          "type": "string"
         }
       }
     },

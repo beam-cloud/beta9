@@ -255,36 +255,6 @@ func (s *Service) privateMachineForDelete(ctx context.Context, authInfo *auth.Au
 	return machine, true, nil
 }
 
-func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.AgentTokenState) error {
-	workerID := model.AgentMachineWorkerID(machine.MachineID)
-	worker, err := s.workerRepo.GetWorkerById(workerID)
-	if err != nil {
-		notFoundErr := &types.ErrWorkerNotFound{}
-		if !notFoundErr.From(err) {
-			return err
-		}
-	}
-	if worker != nil && worker.MachineId == machine.MachineID && worker.PoolName == machine.PoolName {
-		if err := s.workerRepo.RemoveWorker(workerID); err != nil {
-			return err
-		}
-	}
-	if err := s.computeRepo.DeleteAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
-		return err
-	}
-	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
-		Timestamp:   time.Now().UTC(),
-		WorkspaceID: machine.WorkspaceID,
-		PoolName:    machine.PoolName,
-		MachineID:   machine.MachineID,
-		WorkerID:    workerID,
-		Action:      types.EventComputeActionMachineReleased,
-		Status:      string(types.MachineStatusDisabled),
-		Message:     "machine released from private pool",
-	})
-	return nil
-}
-
 func (s *Service) readyAgentMachineCount(machines []*model.AgentTokenState) uint32 {
 	ready := uint32(0)
 	now := time.Now()

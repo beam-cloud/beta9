@@ -7,14 +7,12 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 )
 
 const VastDefaultBaseURL = "https://console.vast.ai/api/v0"
 
 type VastClient struct {
-	api httpjson.Client
+	api HTTPClient
 }
 
 type VastConfig struct {
@@ -29,7 +27,7 @@ func NewVast(config VastConfig) *VastClient {
 		baseURL = VastDefaultBaseURL
 	}
 	return &VastClient{
-		api: httpjson.Client{
+		api: HTTPClient{
 			BaseURL: baseURL,
 			Token:   config.APIKey,
 			Client:  config.Client,
@@ -58,7 +56,7 @@ func (c *VastClient) ListOffers(ctx context.Context, req OfferRequest) ([]Offer,
 		return nil, err
 	}
 
-	items := httpjson.Array(raw, "offers", "results", "bundles")
+	items := jsonArray(raw, "offers", "results", "bundles")
 	if items == nil {
 		if arr, ok := raw["data"].([]any); ok {
 			items = arr
@@ -101,7 +99,7 @@ func (c *VastClient) CreateReservation(ctx context.Context, req ReservationReque
 		return nil, err
 	}
 
-	instanceID := httpjson.String(raw, "new_contract", "instance_id", "id")
+	instanceID := jsonString(raw, "new_contract", "instance_id", "id")
 	now := time.Now()
 	return &Reservation{
 		ID:               instanceID,
@@ -152,26 +150,26 @@ func (c *VastClient) DeleteReservation(ctx context.Context, id string) error {
 
 func vastOfferFromMap(m map[string]any) Offer {
 	raw, _ := json.Marshal(m)
-	id := httpjson.String(m, "id", "ask_contract_id", "bundle_id")
+	id := jsonString(m, "id", "ask_contract_id", "bundle_id")
 	if id == "" {
-		if value := httpjson.Int64(m, "id", "ask_contract_id"); value > 0 {
+		if value := jsonInt64(m, "id", "ask_contract_id"); value > 0 {
 			id = strconv.FormatInt(value, 10)
 		}
 	}
-	gpuCount := uint32(httpjson.Int64(m, "num_gpus", "gpu_count", "gpus"))
-	hourlyCost := httpjson.Float64(m, "dph_total", "price", "hourly_cost", "cost_per_hour")
+	gpuCount := uint32(jsonInt64(m, "num_gpus", "gpu_count", "gpus"))
+	hourlyCost := jsonFloat64(m, "dph_total", "price", "hourly_cost", "cost_per_hour")
 	return Offer{
 		ID:               id,
 		Provider:         "vast",
-		InstanceType:     httpjson.String(m, "machine_id", "instance_type", "hostname"),
-		Region:           httpjson.String(m, "geolocation", "region", "location"),
-		GPU:              httpjson.String(m, "gpu_name", "gpu", "gpu_type"),
+		InstanceType:     jsonString(m, "machine_id", "instance_type", "hostname"),
+		Region:           jsonString(m, "geolocation", "region", "location"),
+		GPU:              jsonString(m, "gpu_name", "gpu", "gpu_type"),
 		GPUCount:         gpuCount,
-		CPUMillicores:    int64(httpjson.Float64(m, "cpu_cores", "vcpus", "cpu") * 1000),
-		MemoryMB:         int64(httpjson.Float64(m, "cpu_ram", "memory_mb", "ram") * 1024),
+		CPUMillicores:    int64(jsonFloat64(m, "cpu_cores", "vcpus", "cpu") * 1000),
+		MemoryMB:         int64(jsonFloat64(m, "cpu_ram", "memory_mb", "ram") * 1024),
 		HourlyCostMicros: DollarsToMicros(hourlyCost),
-		Reliability:      httpjson.Float64(m, "reliability2", "reliability", "score"),
-		Available:        uint32(httpjson.Int64(m, "available", "availability", "rentable_count")),
+		Reliability:      jsonFloat64(m, "reliability2", "reliability", "score"),
+		Available:        uint32(jsonInt64(m, "available", "availability", "rentable_count")),
 		Raw:              raw,
 	}
 }

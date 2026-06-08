@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -31,12 +33,18 @@ const (
 	s2EventWriteTimeout     = 5 * time.Second
 	s2EventEnqueueTimeout   = 250 * time.Millisecond
 	s2EventFlushInterval    = 100 * time.Millisecond
+	s2StreamResumeDelay     = time.Second
+	s2ScopedWriteWarnEvery  = time.Minute
 )
 
+var lastScopedS2WriteWarning atomic.Int64
+
 type S2EventRepository struct {
-	basin        *s2.BasinClient
-	streamPrefix string
-	queue        chan cloudevents.Event
+	basin              *s2.BasinClient
+	streamPrefix       string
+	queue              chan cloudevents.Event
+	stubCacheContentMu sync.Mutex
+	stubCacheContent   map[s2.StreamName]*stubCacheRequiredContentState
 }
 
 type ScopedS2EventRepository struct {
@@ -49,6 +57,12 @@ type scopedS2EventTarget struct {
 	name   string
 	prefix string
 	basin  *s2.BasinClient
+}
+
+type stubCacheRequiredContentState struct {
+	mu         sync.Mutex
+	nextSeqNum uint64
+	items      map[string]types.CacheRequiredContentItem
 }
 
 func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
@@ -122,9 +136,10 @@ func NewS2EventRepository(config types.S2Config) (*S2EventRepository, error) {
 	})
 
 	repo := &S2EventRepository{
-		basin:        client.Basin(config.Basin),
-		streamPrefix: streamPrefix,
-		queue:        make(chan cloudevents.Event, s2EventQueueSize),
+		basin:            client.Basin(config.Basin),
+		streamPrefix:     streamPrefix,
+		queue:            make(chan cloudevents.Event, s2EventQueueSize),
+		stubCacheContent: map[s2.StreamName]*stubCacheRequiredContentState{},
 	}
 	go repo.runWriter()
 
@@ -159,7 +174,7 @@ func (r *ScopedS2EventRepository) runWriter() {
 			return
 		}
 		if err := r.appendEventBatch(batch); err != nil {
-			log.Debug().Err(err).Int("event_count", len(batch)).Msg("failed to append scoped event batch to s2")
+			warnScopedS2WriteFailure(err, len(batch))
 		}
 		batch = batch[:0]
 	}
@@ -179,6 +194,19 @@ func (r *ScopedS2EventRepository) runWriter() {
 			flush()
 		}
 	}
+}
+
+func warnScopedS2WriteFailure(err error, eventCount int) {
+	now := time.Now()
+	last := lastScopedS2WriteWarning.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < s2ScopedWriteWarnEvery {
+		return
+	}
+	if !lastScopedS2WriteWarning.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+
+	log.Warn().Err(err).Int("event_count", eventCount).Msg("failed to append scoped event batch to s2")
 }
 
 func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) error {
@@ -475,23 +503,18 @@ func (r *S2EventRepository) StreamAppEvents(ctx context.Context, query types.Eve
 }
 
 func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.StreamName, containerID string, query types.EventQuery) (EventStream, error) {
-	opts := &s2.ReadOptions{
-		SeqNum:     query.SeqNum,
-		Timestamp:  query.Timestamp,
-		TailOffset: query.TailOffset,
-		Count:      countOption(query.Limit),
-		Until:      query.Until,
-		Wait:       query.WaitSeconds,
-		Clamp:      query.Clamp,
-	}
+	opts := s2EventReadOptions(query)
 	session, err := r.basin.Stream(streamName).ReadSession(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("stream events from s2 stream %q: %w", streamName, err)
 	}
 
 	return &s2EventStream{
-		session: session,
-		query:   query,
+		ctx:        ctx,
+		basin:      r.basin,
+		streamName: streamName,
+		session:    session,
+		query:      query,
 		response: &types.ContainerEventsResponse{
 			ContainerID: containerID,
 			WorkspaceID: query.WorkspaceID,
@@ -655,23 +678,40 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 }
 
 type s2EventStream struct {
+	ctx     context.Context
+	basin   *s2.BasinClient
 	session *s2.ReadSession
-	query   types.EventQuery
 
-	response *types.ContainerEventsResponse
-	current  types.ContainerEventRecord
+	streamName s2.StreamName
+	query      types.EventQuery
+
+	response   *types.ContainerEventsResponse
+	nextSeqNum *uint64
+	current    types.ContainerEventRecord
+	err        error
 }
 
 func (s *s2EventStream) Next() bool {
-	for s.session.Next() {
-		eventRecord, ok := containerEventRecordFromS2(s.session.Record(), s.query, s.response)
-		if !ok {
-			continue
+	for {
+		for s.session.Next() {
+			record := s.session.Record()
+			s.setNextSeqNum(record.SeqNum + 1)
+			eventRecord, ok := containerEventRecordFromS2(record, s.query, s.response)
+			if !ok {
+				continue
+			}
+			s.current = eventRecord
+			return true
 		}
-		s.current = eventRecord
-		return true
+
+		if err := s.session.Err(); err != nil {
+			s.err = err
+			return false
+		}
+		if !s.reopenCleanSession() {
+			return false
+		}
 	}
-	return false
 }
 
 func (s *s2EventStream) Record() types.ContainerEventRecord {
@@ -679,11 +719,94 @@ func (s *s2EventStream) Record() types.ContainerEventRecord {
 }
 
 func (s *s2EventStream) Err() error {
-	return s.session.Err()
+	return s.err
 }
 
 func (s *s2EventStream) Close() error {
 	return s.session.Close()
+}
+
+func (s *s2EventStream) setNextSeqNum(seqNum uint64) {
+	s.nextSeqNum = &seqNum
+}
+
+func (s *s2EventStream) reopenCleanSession() bool {
+	if !s.shouldResumeCleanSession() {
+		return false
+	}
+
+	nextSeqNum := s.resumeSeqNum()
+	if nextSeqNum == nil {
+		return false
+	}
+	if !sleepWithContext(s.ctx, s2StreamResumeDelay) {
+		return false
+	}
+
+	query := s.query
+	query.SeqNum = nextSeqNum
+	query.Timestamp = nil
+	query.TailOffset = nil
+	clamp := true
+	query.Clamp = &clamp
+
+	session, err := s.basin.Stream(s.streamName).ReadSession(s.ctx, s2EventReadOptions(query))
+	if err != nil {
+		s.err = err
+		return false
+	}
+
+	_ = s.session.Close()
+	s.session = session
+	s.query = query
+	return true
+}
+
+func (s *s2EventStream) shouldResumeCleanSession() bool {
+	if s.ctx.Err() != nil {
+		return false
+	}
+	return s.query.Limit == 0 && s.query.Until == nil && s.query.WaitSeconds == nil
+}
+
+func (s *s2EventStream) resumeSeqNum() *uint64 {
+	if s.nextSeqNum != nil {
+		seqNum := *s.nextSeqNum
+		return &seqNum
+	}
+	if position := s.session.NextReadPosition(); position != nil {
+		seqNum := position.SeqNum
+		return &seqNum
+	}
+	if tail := s.session.LastObservedTail(); tail != nil {
+		seqNum := tail.SeqNum
+		return &seqNum
+	}
+	return nil
+}
+
+func s2EventReadOptions(query types.EventQuery) *s2.ReadOptions {
+	return &s2.ReadOptions{
+		SeqNum:     query.SeqNum,
+		Timestamp:  query.Timestamp,
+		TailOffset: query.TailOffset,
+		Count:      countOption(query.Limit),
+		Until:      query.Until,
+		Wait:       query.WaitSeconds,
+		Clamp:      query.Clamp,
+	}
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuery, response *types.ContainerEventsResponse) (types.ContainerEventRecord, bool) {
@@ -1090,18 +1213,22 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 	}
 
 	streamName := r.stubCacheStreamName(workspaceID, stubID)
+	state := r.stubCacheRequiredContentState(streamName)
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-	// Read the stream (paginating past the per-read limit) so the coalesced
-	// required-content set is not truncated. Required content is coalesced to a
-	// small number of events per stub, so this is short in practice; the read is
-	// bounded so a continuously-appended stream can never stall reconciliation.
-	merged := map[string]types.CacheRequiredContentItem{}
-	seqNum := uint64(0)
+	if state.items == nil {
+		state.items = map[string]types.CacheRequiredContentItem{}
+	}
+
+	// Read only records appended since this repository last coalesced the stub.
+	// Reconciliation calls this repeatedly for recent stubs; restarting from
+	// sequence 0 every cycle makes read bytes grow with stream age.
 	recordsRead := 0
 	for recordsRead < maxStubCacheReadRecords {
 		count := uint64(defaultS2EventReadLimit)
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			SeqNum: &seqNum,
+			SeqNum: &state.nextSeqNum,
 			Count:  &count,
 		})
 		if err != nil {
@@ -1116,32 +1243,10 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		recordsRead += len(batch.Records)
 
 		for _, record := range batch.Records {
-			var envelope struct {
-				Type string          `json:"type"`
-				Data json.RawMessage `json:"data"`
-			}
-			if err := json.Unmarshal(record.Body, &envelope); err != nil {
-				continue
-			}
-			if envelope.Type != types.EventStubCacheRequiredContent {
-				continue
-			}
-			var schema types.EventStubCacheRequiredContentSchema
-			if err := json.Unmarshal(envelope.Data, &schema); err != nil {
-				continue
-			}
-			for _, item := range schema.Items {
-				if item.Hash == "" {
-					continue
-				}
-				if item.Kind == "" {
-					item.Kind = schema.Kind
-				}
-				merged[item.Hash+"\x00"+item.RoutingKey] = item
-			}
+			mergeStubCacheRequiredContentRecord(state.items, record.Body)
 		}
 
-		seqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
+		state.nextSeqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
 		if uint64(len(batch.Records)) < count {
 			break
 		}
@@ -1150,11 +1255,56 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		log.Warn().Str("stream", string(streamName)).Int("records_read", recordsRead).Msg("stub cache required-content read hit record cap; result may be partial")
 	}
 
+	return stubCacheRequiredContentItems(state.items), nil
+}
+
+func (r *S2EventRepository) stubCacheRequiredContentState(streamName s2.StreamName) *stubCacheRequiredContentState {
+	r.stubCacheContentMu.Lock()
+	defer r.stubCacheContentMu.Unlock()
+
+	if r.stubCacheContent == nil {
+		r.stubCacheContent = map[s2.StreamName]*stubCacheRequiredContentState{}
+	}
+	state := r.stubCacheContent[streamName]
+	if state == nil {
+		state = &stubCacheRequiredContentState{}
+		r.stubCacheContent[streamName] = state
+	}
+	return state
+}
+
+func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredContentItem, body []byte) {
+	var envelope struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return
+	}
+	if envelope.Type != types.EventStubCacheRequiredContent {
+		return
+	}
+	var schema types.EventStubCacheRequiredContentSchema
+	if err := json.Unmarshal(envelope.Data, &schema); err != nil {
+		return
+	}
+	for _, item := range schema.Items {
+		if item.Hash == "" {
+			continue
+		}
+		if item.Kind == "" {
+			item.Kind = schema.Kind
+		}
+		merged[item.Hash+"\x00"+item.RoutingKey] = item
+	}
+}
+
+func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
 	items := make([]types.CacheRequiredContentItem, 0, len(merged))
 	for _, item := range merged {
 		items = append(items, item)
 	}
-	return items, nil
+	return items
 }
 
 func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containerID string) s2.StreamName {

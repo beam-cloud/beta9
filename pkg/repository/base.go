@@ -92,6 +92,7 @@ type ComputeRepository interface {
 	SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error
 	GetPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error)
 	ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error)
+	ListAllPoolStates(ctx context.Context, limit int) ([]*compute.PoolState, error)
 	DeletePoolState(ctx context.Context, workspaceID, name string) error
 	SaveJoinTokenState(ctx context.Context, state *compute.JoinTokenState, ttl time.Duration) error
 	GetJoinTokenState(ctx context.Context, tokenHash string) (*compute.JoinTokenState, error)

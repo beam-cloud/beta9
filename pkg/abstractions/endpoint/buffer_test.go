@@ -37,6 +37,40 @@ func TestBackendDialTimeoutCapsLongRequestTimeouts(t *testing.T) {
 	}
 }
 
+func TestRouteHTTPClientReusesTransportForSameAddressAndTimeout(t *testing.T) {
+	routeAddress := types.BackendRouteAddress("machine:worker:container:container:8001")
+	rb := &RequestBuffer{maxTokens: 4}
+
+	first := rb.getHttpClient(routeAddress, handleHttpRequestClientTimeout)
+	second := rb.getHttpClient(routeAddress, handleHttpRequestClientTimeout)
+	if first.Transport == nil || first.Transport != second.Transport {
+		t.Fatal("expected route http clients with matching timeout to share transport")
+	}
+
+	readiness := rb.getHttpClient(routeAddress, checkAddressIsReadyTimeout)
+	if readiness.Transport == first.Transport {
+		t.Fatal("expected readiness and request clients to use separate transports")
+	}
+}
+
+func TestPruneBackendTransportsRemovesStaleAddresses(t *testing.T) {
+	activeAddress := types.BackendRouteAddress("machine:worker:active:container:8001")
+	staleAddress := types.BackendRouteAddress("machine:worker:stale:container:8001")
+	rb := &RequestBuffer{maxTokens: 1}
+
+	rb.getHttpClient(activeAddress, handleHttpRequestClientTimeout)
+	rb.getHttpClient(staleAddress, handleHttpRequestClientTimeout)
+
+	rb.pruneBackendTransports([]container{{address: activeAddress}})
+
+	if _, ok := rb.backendTransports.Load(backendTransportKey{address: activeAddress, timeout: handleHttpRequestClientTimeout}); !ok {
+		t.Fatal("expected active address transport to remain")
+	}
+	if _, ok := rb.backendTransports.Load(backendTransportKey{address: staleAddress, timeout: handleHttpRequestClientTimeout}); ok {
+		t.Fatal("expected stale address transport to be pruned")
+	}
+}
+
 func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	e := echo.New()
 	httpReq := httptest.NewRequest(http.MethodPost, "/", nil)

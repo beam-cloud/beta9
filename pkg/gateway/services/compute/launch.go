@@ -9,7 +9,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
-	"github.com/beam-cloud/beta9/pkg/compute/solver"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -74,7 +73,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		reservations = existing.Reservations
 	}
 
-	plan := solver.New().Solve(model.SolveInput{
+	plan := model.NewSolver().Solve(model.SolveInput{
 		Demand: model.Demand{
 			PoolName:       pool.Name,
 			Selector:       pool.Selector,
@@ -92,26 +91,41 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		Now:          time.Now(),
 	})
 	if !plan.Feasible {
-		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: plan.Reason}, nil
+		return launchPoolError("no_compatible_capacity", plan.Reason, billingDecision{}), nil
 	}
 
-	bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "")
-	if err != nil {
-		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if planRequiresManagedCreate(plan.Actions) {
+		decision, err := s.checkManagedLaunchCredit(ctx, workspaceID, pool.Name, plan)
+		if err != nil {
+			return launchPoolError(launchErrorBillingUnavailable, err.Error(), decision), nil
+		}
+		if !decision.OK {
+			code := firstNonEmpty(decision.ErrorCode, launchErrorInsufficientCredit)
+			msg := firstNonEmpty(decision.Message, "not enough credits to launch managed compute")
+			return launchPoolError(code, msg, decision), nil
+		}
 	}
 
 	vendors := s.computeVendors()
 	newReservations := append([]model.Reservation{}, reservations...)
 	createdReservations := []model.Reservation{}
+	cleanupLaunchFailure := func(code string, cause error) *pb.LaunchPoolCapacityResponse {
+		err := s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, cause)
+		return launchPoolError(code, err.Error(), billingDecision{})
+	}
 	for _, action := range plan.Actions {
 		if action.Type != model.ActionCreate {
 			continue
 		}
 		vendor := vendors[action.Offer.Provider]
 		if vendor == nil {
-			return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: fmt.Sprintf("vendor %q is not configured", action.Offer.Provider)}, nil
+			return launchPoolError("provider_unavailable", fmt.Sprintf("vendor %q is not configured", action.Offer.Provider), billingDecision{}), nil
 		}
 		for i := uint32(0); i < action.Count; i++ {
+			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "")
+			if err != nil {
+				return cleanupLaunchFailure("bootstrap_failed", err), nil
+			}
 			reservation, err := vendor.CreateReservation(ctx, model.ReservationRequest{
 				PoolName:          pool.Name,
 				Selector:          pool.Selector,
@@ -124,11 +138,12 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 				BootstrapCommand:  bootstrapCommand,
 			})
 			if err != nil {
-				return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+				return cleanupLaunchFailure("provider_failure", err), nil
 			}
 			if reservation == nil {
-				return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "vendor returned empty reservation"}, nil
+				return cleanupLaunchFailure("provider_failure", fmt.Errorf("vendor returned empty reservation")), nil
 			}
+			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
 			createdReservations = append(createdReservations, *reservation)
 			newReservations = append(newReservations, *reservation)
 		}
@@ -159,17 +174,66 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	}
 	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
 		err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
-		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return launchPoolError("store_failed", err.Error(), billingDecision{}), nil
 	}
 	if s.scheduler != nil {
 		if err := s.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
 			err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
-			return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+			return launchPoolError("scheduler_failed", err.Error(), billingDecision{}), nil
 		}
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
 	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
+}
+
+func (s *Service) checkManagedLaunchCredit(ctx context.Context, workspaceID, poolName string, plan model.SolvePlan) (billingDecision, error) {
+	if s.billing == nil {
+		return billingDecision{}, errManagedBillingUnavailable
+	}
+	quantity := uint32(0)
+	for _, action := range plan.Actions {
+		if action.Type == model.ActionCreate {
+			quantity += action.Count
+		}
+	}
+	return s.billing.CheckLaunchCredit(ctx, billingCreditRequest{
+		WorkspaceID:               workspaceID,
+		PoolName:                  poolName,
+		RequiredCents:             s.appConfig.ManagedCompute.Billing.MinimumCreditCentsOrDefault(),
+		Quantity:                  quantity,
+		EstimatedHourlyCostMicros: managedHourlyCostMicros(plan.Actions),
+		EstimatedCommittedMicros:  plan.CommittedCostMicros,
+	})
+}
+
+func planRequiresManagedCreate(actions []model.SolveAction) bool {
+	for _, action := range actions {
+		if action.Type == model.ActionCreate {
+			return true
+		}
+	}
+	return false
+}
+
+func managedHourlyCostMicros(actions []model.SolveAction) int64 {
+	var total int64
+	for _, action := range actions {
+		if action.Type == model.ActionCreate {
+			total += action.Offer.HourlyCostMicros * int64(action.Count)
+		}
+	}
+	return total
+}
+
+func launchPoolError(code, msg string, decision billingDecision) *pb.LaunchPoolCapacityResponse {
+	return &pb.LaunchPoolCapacityResponse{
+		Ok:             false,
+		ErrMsg:         msg,
+		ErrorCode:      code,
+		RequiredCents:  decision.RequiredCents,
+		AvailableCents: decision.AvailableCents,
+	}
 }
 
 func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID, poolName string, previous *model.PoolState, vendors map[string]model.Vendor, reservations []model.Reservation, cause error) error {

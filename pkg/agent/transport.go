@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,11 +13,31 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	tsclient "tailscale.com/client/tailscale"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
-const tsnetSnapshotInterval = time.Minute
+const (
+	tsnetSnapshotInterval         = time.Minute
+	tsnetSnapshotTimeout          = 5 * time.Second
+	tsnetFullSnapshotEvery        = 5
+	tsnetSnapshotFailureThreshold = 3
+	tsnetSnapshotFailureInterval  = 10 * time.Minute
+)
+
+type tsnetStatusClient interface {
+	Status(context.Context) (*ipnstate.Status, error)
+	StatusWithoutPeers(context.Context) (*ipnstate.Status, error)
+}
+
+type tsnetSnapshotReporter struct {
+	telemetry        *agentTelemetry
+	client           tsnetStatusClient
+	proxyTarget      string
+	ticks            int
+	failures         int
+	lastFailureEvent time.Time
+}
 
 func runRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
 	if stdout == nil {
@@ -84,11 +105,16 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	return newRouteProxy(client, agentToken, listener, proxyTarget, workers, stdout, stderr).run(ctx)
 }
 
-func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client *tsclient.LocalClient, proxyTarget string) {
+func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client tsnetStatusClient, proxyTarget string) {
 	if telemetry == nil || client == nil {
 		return
 	}
-	emitTSNetSnapshot(ctx, telemetry, client, proxyTarget)
+	reporter := &tsnetSnapshotReporter{
+		telemetry:   telemetry,
+		client:      client,
+		proxyTarget: proxyTarget,
+	}
+	reporter.emit(ctx)
 	ticker := time.NewTicker(tsnetSnapshotInterval)
 	defer ticker.Stop()
 	for {
@@ -96,23 +122,91 @@ func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client *
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			emitTSNetSnapshot(ctx, telemetry, client, proxyTarget)
+			reporter.emit(ctx)
 		}
 	}
 }
 
-func emitTSNetSnapshot(ctx context.Context, telemetry *agentTelemetry, client *tsclient.LocalClient, proxyTarget string) {
-	snapshotCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	attrs := map[string]string{"proxy_target": proxyTarget}
-	status, err := client.Status(snapshotCtx)
-	if err != nil {
-		telemetry.event(types.EventComputeTransport, types.EventComputeActionTransportSnapshot, "error", err.Error(), attrs)
+func (r *tsnetSnapshotReporter) emit(ctx context.Context) {
+	if r == nil || r.telemetry == nil || r.client == nil {
 		return
 	}
 
+	snapshotCtx, cancel := context.WithTimeout(ctx, tsnetSnapshotTimeout)
+	defer cancel()
+
+	status, full, err := r.status(snapshotCtx)
+	if err != nil {
+		r.emitFailure(err)
+		return
+	}
+	if status == nil {
+		r.emitFailure(errors.New("empty tailscale status"))
+		return
+	}
+
+	r.failures = 0
+	attrs := tsnetSnapshotAttrs(status, r.proxyTarget, full)
+	r.telemetry.event(types.EventComputeTransport, types.EventComputeActionTransportSnapshot, status.BackendState, "", attrs)
+}
+
+func (r *tsnetSnapshotReporter) status(ctx context.Context) (*ipnstate.Status, bool, error) {
+	r.ticks++
+	full := r.ticks == 1 || r.ticks%tsnetFullSnapshotEvery == 0
+	if full {
+		status, err := r.client.Status(ctx)
+		return status, true, err
+	}
+	status, err := r.client.StatusWithoutPeers(ctx)
+	return status, false, err
+}
+
+func (r *tsnetSnapshotReporter) emitFailure(err error) {
+	kind, message := tsnetSnapshotFailure(err)
+	if message == "" {
+		return
+	}
+
+	r.failures++
+	now := time.Now()
+	if r.failures < tsnetSnapshotFailureThreshold {
+		return
+	}
+	if !r.lastFailureEvent.IsZero() && now.Sub(r.lastFailureEvent) < tsnetSnapshotFailureInterval {
+		return
+	}
+
+	r.lastFailureEvent = now
+	attrs := map[string]string{
+		"proxy_target":   r.proxyTarget,
+		"error_kind":     kind,
+		"failure_count":  strconv.Itoa(r.failures),
+		"snapshot_error": "true",
+	}
+	r.telemetry.event(types.EventComputeTransport, types.EventComputeActionTransportSnapshot, types.BackendRouteStateDegraded, message, attrs)
+}
+
+func tsnetSnapshotFailure(err error) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled", ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") {
+		return "deadline_exceeded", "transport snapshot timed out"
+	}
+	return "status_unavailable", "transport snapshot unavailable"
+}
+
+func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) map[string]string {
+	if status == nil {
+		return map[string]string{"proxy_target": proxyTarget}
+	}
+
+	attrs := map[string]string{"proxy_target": proxyTarget}
 	attrs["backend_state"] = status.BackendState
+	attrs["full_snapshot"] = strconv.FormatBool(full)
 	attrs["health_count"] = strconv.Itoa(len(status.Health))
 	attrs["peer_count"] = strconv.Itoa(len(status.Peer))
 	if status.Self != nil {
@@ -128,6 +222,10 @@ func emitTSNetSnapshot(ctx context.Context, telemetry *agentTelemetry, client *t
 			ips = append(ips, ip.String())
 		}
 		attrs["tailscale_ips"] = strings.Join(ips, ",")
+	}
+
+	if !full {
+		return attrs
 	}
 
 	onlinePeers := 0
@@ -185,7 +283,7 @@ func emitTSNetSnapshot(ctx context.Context, telemetry *agentTelemetry, client *t
 		sort.Strings(regions)
 		attrs["relay_regions"] = strings.Join(regions, ",")
 	}
-	telemetry.event(types.EventComputeTransport, types.EventComputeActionTransportSnapshot, status.BackendState, "", attrs)
+	return attrs
 }
 
 func agentTSNetLogf(stderr io.Writer) func(string, ...any) {

@@ -56,6 +56,57 @@ func TestAddAndRemoveWorker(t *testing.T) {
 	assert.True(t, ok) // assert that error is of type ErrWorkerNotFound
 }
 
+func TestRemoveWorkerRequeuesPendingWorkerRequests(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:          "worker-with-queued-requests",
+		Status:      types.WorkerStatusAvailable,
+		PoolName:    "default",
+		FreeCpu:     10_000,
+		FreeMemory:  10_000,
+		TotalCpu:    10_000,
+		TotalMemory: 10_000,
+	}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	requests := []*types.ContainerRequest{
+		{ContainerId: "container-1", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, RetryCount: 2},
+		{ContainerId: "container-2", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, RetryCount: 4},
+	}
+	for _, request := range requests {
+		currentWorker, err := repo.GetWorkerById(worker.Id)
+		assert.Nil(t, err)
+		assert.Nil(t, repo.ScheduleContainerRequest(currentWorker, request))
+	}
+
+	assert.Nil(t, repo.RemoveWorker(worker.Id))
+
+	_, err = repo.GetWorkerById(worker.Id)
+	_, workerNotFound := err.(*types.ErrWorkerNotFound)
+	assert.True(t, workerNotFound)
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), queueDepth)
+
+	backlog, err := rdb.ZRange(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), 0, -1).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(backlog))
+
+	retriesByContainer := map[string]int{}
+	for _, raw := range backlog {
+		var request types.ContainerRequest
+		assert.Nil(t, json.Unmarshal([]byte(raw), &request))
+		retriesByContainer[request.ContainerId] = request.RetryCount
+	}
+	assert.Equal(t, 3, retriesByContainer["container-1"])
+	assert.Equal(t, 5, retriesByContainer["container-2"])
+}
+
 func TestGetWorkerById(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

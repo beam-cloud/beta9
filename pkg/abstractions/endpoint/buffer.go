@@ -53,9 +53,15 @@ type container struct {
 	inFlightRequests int
 }
 
+type backendTransportKey struct {
+	address string
+	timeout time.Duration
+}
+
 type RequestBuffer struct {
 	ctx                     context.Context
 	httpClient              *http.Client
+	backendTransports       sync.Map
 	tailscale               *network.Tailscale
 	tsConfig                types.TailscaleConfig
 	stubId                  string
@@ -323,6 +329,7 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainersLock.Lock()
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
+			rb.pruneBackendTransports(availableContainers)
 
 			time.Sleep(readyCheckInterval)
 		}
@@ -401,7 +408,21 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *h
 		return rb.httpClient
 	}
 
+	return &http.Client{
+		Transport: rb.backendTransport(address, timeout),
+		Timeout:   timeout,
+	}
+}
+
+func (rb *RequestBuffer) backendTransport(address string, timeout time.Duration) *http.Transport {
+	key := backendTransportKey{address: address, timeout: timeout}
+	if transport, ok := rb.backendTransports.Load(key); ok {
+		return transport.(*http.Transport)
+	}
+
 	transport := &http.Transport{
+		MaxIdleConnsPerHost: max(2, rb.maxTokens),
+		IdleConnTimeout:     90 * time.Second,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			dialAddress := addr
 			if _, isRoute := types.ParseBackendRouteAddress(address); isRoute {
@@ -416,10 +437,41 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *h
 		},
 	}
 
-	return &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
+	actual, loaded := rb.backendTransports.LoadOrStore(key, transport)
+	if loaded {
+		transport.CloseIdleConnections()
+		return actual.(*http.Transport)
 	}
+	return transport
+}
+
+func (rb *RequestBuffer) pruneBackendTransports(containers []container) {
+	if len(containers) == 0 {
+		rb.backendTransports.Range(func(key, value any) bool {
+			value.(*http.Transport).CloseIdleConnections()
+			rb.backendTransports.Delete(key)
+			return true
+		})
+		return
+	}
+
+	active := make(map[string]struct{}, len(containers))
+	for _, container := range containers {
+		active[container.address] = struct{}{}
+	}
+	rb.backendTransports.Range(func(key, value any) bool {
+		transportKey, ok := key.(backendTransportKey)
+		if !ok {
+			rb.backendTransports.Delete(key)
+			return true
+		}
+		if _, ok := active[transportKey.address]; ok {
+			return true
+		}
+		value.(*http.Transport).CloseIdleConnections()
+		rb.backendTransports.Delete(key)
+		return true
+	})
 }
 
 func (rb *RequestBuffer) handleRequest(req *request) {

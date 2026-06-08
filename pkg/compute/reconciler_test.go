@@ -1,17 +1,15 @@
-package reconciler
+package compute
 
 import (
 	"context"
 	"errors"
 	"testing"
-
-	"github.com/beam-cloud/beta9/pkg/compute"
 )
 
 type fakeVendor struct {
 	name              string
-	offers            []compute.Offer
-	created           *compute.Reservation
+	offers            []Offer
+	created           *Reservation
 	deletedInstanceID string
 }
 
@@ -19,12 +17,12 @@ func (v *fakeVendor) Name() string {
 	return v.name
 }
 
-func (v *fakeVendor) ListOffers(ctx context.Context, req compute.OfferRequest) ([]compute.Offer, error) {
+func (v *fakeVendor) ListOffers(ctx context.Context, req OfferRequest) ([]Offer, error) {
 	return v.offers, nil
 }
 
-func (v *fakeVendor) CreateReservation(ctx context.Context, req compute.ReservationRequest) (*compute.Reservation, error) {
-	v.created = &compute.Reservation{
+func (v *fakeVendor) CreateReservation(ctx context.Context, req ReservationRequest) (*Reservation, error) {
+	v.created = &Reservation{
 		ID:         "reservation-one",
 		Provider:   v.name,
 		InstanceID: "instance-one",
@@ -32,7 +30,7 @@ func (v *fakeVendor) CreateReservation(ctx context.Context, req compute.Reservat
 	return v.created, nil
 }
 
-func (v *fakeVendor) GetReservation(ctx context.Context, id string) (*compute.Reservation, error) {
+func (v *fakeVendor) GetReservation(ctx context.Context, id string) (*Reservation, error) {
 	return nil, nil
 }
 
@@ -43,11 +41,11 @@ func (v *fakeVendor) DeleteReservation(ctx context.Context, id string) error {
 
 type failingStore struct{}
 
-func (failingStore) ListReservations(ctx context.Context, poolName string) ([]compute.Reservation, error) {
+func (failingStore) ListReservations(ctx context.Context, poolName string) ([]Reservation, error) {
 	return nil, nil
 }
 
-func (failingStore) SaveReservation(ctx context.Context, reservation *compute.Reservation) error {
+func (failingStore) SaveReservation(ctx context.Context, reservation *Reservation) error {
 	return errors.New("save failed")
 }
 
@@ -57,15 +55,15 @@ func (failingStore) MarkReservationDeleted(ctx context.Context, reservationID st
 
 func TestApplyDeletesReservationWhenStoreSaveFails(t *testing.T) {
 	vendor := &fakeVendor{name: "vast"}
-	r := New([]compute.Vendor{vendor}, failingStore{})
+	r := NewReconciler([]Vendor{vendor}, failingStore{})
 
-	err := r.Apply(context.Background(), compute.Demand{PoolName: "pool"}, compute.SolvePlan{
+	err := r.Apply(context.Background(), Demand{PoolName: "pool"}, SolvePlan{
 		Feasible: true,
-		Actions: []compute.SolveAction{
+		Actions: []SolveAction{
 			{
-				Type:  compute.ActionCreate,
+				Type:  ActionCreate,
 				Count: 1,
-				Offer: compute.Offer{Provider: "vast"},
+				Offer: Offer{Provider: "vast"},
 			},
 		},
 	}, "")
@@ -78,12 +76,12 @@ func TestApplyDeletesReservationWhenStoreSaveFails(t *testing.T) {
 }
 
 func TestCollectOffersOrdersVendorsDeterministically(t *testing.T) {
-	r := New([]compute.Vendor{
-		&fakeVendor{name: "z", offers: []compute.Offer{{Provider: "z"}}},
-		&fakeVendor{name: "a", offers: []compute.Offer{{Provider: "a"}}},
+	r := NewReconciler([]Vendor{
+		&fakeVendor{name: "z", offers: []Offer{{Provider: "z"}}},
+		&fakeVendor{name: "a", offers: []Offer{{Provider: "a"}}},
 	}, nil)
 
-	offers, err := r.collectOffers(context.Background(), compute.Demand{})
+	offers, err := r.collectOffers(context.Background(), Demand{})
 	if err != nil {
 		t.Fatal(err)
 	}

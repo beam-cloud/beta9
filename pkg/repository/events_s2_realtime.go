@@ -75,24 +75,18 @@ func (r *S2EventRepository) StreamLogs(ctx context.Context, query types.LogQuery
 		return nil, fmt.Errorf("no log stream target")
 	}
 
-	opts := &s2.ReadOptions{
-		SeqNum:     query.SeqNum,
-		TailOffset: query.TailOffset,
-		Wait:       query.WaitSeconds,
-		Clamp:      query.Clamp,
-	}
-	if query.StartTime != nil {
-		timestamp := uint64(query.StartTime.UTC().UnixMilli())
-		opts.Timestamp = &timestamp
-	}
+	opts := s2LogReadOptions(query)
 	session, err := r.basin.Stream(streams[0]).ReadSession(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("stream logs from s2 stream %q: %w", streams[0], err)
 	}
 
 	return &s2LogEventStream{
-		session: session,
-		query:   query,
+		ctx:        ctx,
+		basin:      r.basin,
+		streamName: streams[0],
+		session:    session,
+		query:      query,
 	}, nil
 }
 
@@ -348,21 +342,111 @@ func logRecordMatchesQuery(record types.LogRecord, query types.LogQuery) bool {
 }
 
 type s2LogEventStream struct {
+	ctx     context.Context
+	basin   *s2.BasinClient
 	session *s2.ReadSession
-	query   types.LogQuery
-	current types.ContainerEventRecord
+
+	streamName s2.StreamName
+	query      types.LogQuery
+	nextSeqNum *uint64
+	current    types.ContainerEventRecord
+	err        error
 }
 
 func (s *s2LogEventStream) Next() bool {
-	for s.session.Next() {
-		logRecord, ok := logRecordFromS2(s.session.Record())
-		if !ok || !logRecordMatchesQuery(logRecord, s.query) {
-			continue
+	for {
+		for s.session.Next() {
+			record := s.session.Record()
+			s.setNextSeqNum(record.SeqNum + 1)
+			logRecord, ok := logRecordFromS2(record)
+			if !ok || !logRecordMatchesQuery(logRecord, s.query) {
+				continue
+			}
+			s.current = containerEventRecordFromLogRecord(logRecord)
+			return true
 		}
-		s.current = containerEventRecordFromLogRecord(logRecord)
-		return true
+
+		if err := s.session.Err(); err != nil {
+			s.err = err
+			return false
+		}
+		if !s.reopenCleanSession() {
+			return false
+		}
 	}
-	return false
+}
+
+func (s *s2LogEventStream) setNextSeqNum(seqNum uint64) {
+	s.nextSeqNum = &seqNum
+}
+
+func (s *s2LogEventStream) reopenCleanSession() bool {
+	if !s.shouldResumeCleanSession() {
+		return false
+	}
+
+	nextSeqNum := s.resumeSeqNum()
+	if nextSeqNum == nil {
+		return false
+	}
+	if !sleepWithContext(s.ctx, s2StreamResumeDelay) {
+		return false
+	}
+
+	query := s.query
+	query.SeqNum = nextSeqNum
+	query.StartTime = nil
+	query.TailOffset = nil
+	clamp := true
+	query.Clamp = &clamp
+
+	session, err := s.basin.Stream(s.streamName).ReadSession(s.ctx, s2LogReadOptions(query))
+	if err != nil {
+		s.err = err
+		return false
+	}
+
+	_ = s.session.Close()
+	s.session = session
+	s.query = query
+	return true
+}
+
+func (s *s2LogEventStream) shouldResumeCleanSession() bool {
+	if s.ctx.Err() != nil {
+		return false
+	}
+	return s.query.WaitSeconds == nil
+}
+
+func (s *s2LogEventStream) resumeSeqNum() *uint64 {
+	if s.nextSeqNum != nil {
+		seqNum := *s.nextSeqNum
+		return &seqNum
+	}
+	if position := s.session.NextReadPosition(); position != nil {
+		seqNum := position.SeqNum
+		return &seqNum
+	}
+	if tail := s.session.LastObservedTail(); tail != nil {
+		seqNum := tail.SeqNum
+		return &seqNum
+	}
+	return nil
+}
+
+func s2LogReadOptions(query types.LogQuery) *s2.ReadOptions {
+	opts := &s2.ReadOptions{
+		SeqNum:     query.SeqNum,
+		TailOffset: query.TailOffset,
+		Wait:       query.WaitSeconds,
+		Clamp:      query.Clamp,
+	}
+	if query.StartTime != nil {
+		timestamp := uint64(query.StartTime.UTC().UnixMilli())
+		opts.Timestamp = &timestamp
+	}
+	return opts
 }
 
 func (s *s2LogEventStream) Record() types.ContainerEventRecord {
@@ -370,7 +454,7 @@ func (s *s2LogEventStream) Record() types.ContainerEventRecord {
 }
 
 func (s *s2LogEventStream) Err() error {
-	return s.session.Err()
+	return s.err
 }
 
 func (s *s2LogEventStream) Close() error {

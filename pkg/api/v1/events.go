@@ -808,12 +808,14 @@ func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (typ
 	query := eventQueryFromContext(ctx, authInfo, limit)
 	startSelectors := 0
 
+	hasSeqNumParam := false
 	if raw := ctx.QueryParam("seq_num"); raw != "" {
 		seqNum, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			return types.EventQuery{}, err
 		}
 		query.SeqNum = &seqNum
+		hasSeqNumParam = true
 		startSelectors++
 	}
 
@@ -839,13 +841,15 @@ func eventStreamQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (typ
 		return types.EventQuery{}, fmt.Errorf("multiple stream start selectors")
 	}
 
-	if raw := ctx.Request().Header.Get("Last-Event-ID"); query.SeqNum == nil && query.Timestamp == nil && query.TailOffset == nil && raw != "" {
+	if raw := ctx.Request().Header.Get("Last-Event-ID"); !hasSeqNumParam && raw != "" {
 		lastSeqNum, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			return types.EventQuery{}, err
 		}
 		nextSeqNum := lastSeqNum + 1
 		query.SeqNum = &nextSeqNum
+		query.Timestamp = nil
+		query.TailOffset = nil
 	}
 
 	if raw := ctx.QueryParam("wait"); raw != "" {

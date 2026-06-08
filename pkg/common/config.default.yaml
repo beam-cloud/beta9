@@ -375,6 +375,15 @@ monitoring:
   openmeter:
     serverUrl: ""
     apiKey: ""
+managedCompute:
+  billing:
+    mode: noop
+    endpoint: ""
+    authToken: ""
+    required: false
+    timeout: 5s
+    reconcileInterval: 1m
+    minimumCreditCents: 2500
 abstractions:
   bot:
     systemPrompt: ""

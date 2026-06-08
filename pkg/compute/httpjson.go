@@ -1,4 +1,4 @@
-package httpjson
+package compute
 
 import (
 	"bytes"
@@ -10,14 +10,14 @@ import (
 	"strconv"
 )
 
-type Client struct {
+type HTTPClient struct {
 	BaseURL    string
 	Token      string
 	AuthHeader string
 	Client     *http.Client
 }
 
-func (c Client) Do(ctx context.Context, method, path string, body any, out any) error {
+func (c HTTPClient) Do(ctx context.Context, method, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {
 		payload, err := json.Marshal(body)
@@ -67,23 +67,23 @@ func (c Client) Do(ctx context.Context, method, path string, body any, out any) 
 	return json.Unmarshal(data, out)
 }
 
-func String(m map[string]any, keys ...string) string {
-	return lookup(m, keys, stringValue)
+func jsonString(m map[string]any, keys ...string) string {
+	return jsonLookup(m, keys, jsonStringValue)
 }
 
-func Int64(m map[string]any, keys ...string) int64 {
-	return lookup(m, keys, int64Value)
+func jsonInt64(m map[string]any, keys ...string) int64 {
+	return jsonLookup(m, keys, jsonInt64Value)
 }
 
-func Float64(m map[string]any, keys ...string) float64 {
-	return lookup(m, keys, float64Value)
+func jsonFloat64(m map[string]any, keys ...string) float64 {
+	return jsonLookup(m, keys, jsonFloat64Value)
 }
 
-func Array(data map[string]any, keys ...string) []any {
-	return lookup(data, keys, arrayValue)
+func jsonArray(data map[string]any, keys ...string) []any {
+	return jsonLookup(data, keys, jsonArrayValue)
 }
 
-func lookup[T any](data map[string]any, keys []string, convert func(any) (T, bool)) T {
+func jsonLookup[T any](data map[string]any, keys []string, convert func(any) (T, bool)) T {
 	var zero T
 	for _, key := range keys {
 		if v, ok := data[key]; ok {
@@ -95,7 +95,7 @@ func lookup[T any](data map[string]any, keys []string, convert func(any) (T, boo
 	return zero
 }
 
-func stringValue(value any) (string, bool) {
+func jsonStringValue(value any) (string, bool) {
 	switch t := value.(type) {
 	case string:
 		return t, true
@@ -108,7 +108,7 @@ func stringValue(value any) (string, bool) {
 	}
 }
 
-func int64Value(value any) (int64, bool) {
+func jsonInt64Value(value any) (int64, bool) {
 	switch t := value.(type) {
 	case float64:
 		return int64(t), true
@@ -124,7 +124,7 @@ func int64Value(value any) (int64, bool) {
 	}
 }
 
-func float64Value(value any) (float64, bool) {
+func jsonFloat64Value(value any) (float64, bool) {
 	switch t := value.(type) {
 	case float64:
 		return t, true
@@ -140,7 +140,7 @@ func float64Value(value any) (float64, bool) {
 	}
 }
 
-func arrayValue(value any) ([]any, bool) {
+func jsonArrayValue(value any) ([]any, bool) {
 	arr, ok := value.([]any)
 	return arr, ok
 }

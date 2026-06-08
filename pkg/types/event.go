@@ -176,6 +176,11 @@ const (
 	EventComputeActionPoolCreated               = "pool.created"
 	EventComputeActionPoolDeleted               = "pool.deleted"
 	EventComputeActionPoolExtended              = "pool.extended"
+	EventComputeActionPoolCreditExhausted       = "pool.credit_exhausted"
+	EventComputeActionPoolBillingDegraded       = "pool.billing_degraded"
+	EventComputeActionReservationUsageRecorded  = "reservation.usage_recorded"
+	EventComputeActionReservationTerminating    = "reservation.terminating"
+	EventComputeActionReservationStatusUpdated  = "reservation.status_updated"
 	EventComputeActionJoinTokenCreated          = "join_token.created"
 	EventComputeActionJoinTokenRevoked          = "join_token.revoked"
 	EventComputeActionMachineJoined             = "machine.joined"
@@ -184,6 +189,7 @@ const (
 	EventComputeActionMachineReleased           = "machine.released"
 	EventComputeActionWorkerSlotCreated         = "worker_slot.created"
 	EventComputeActionWorkerSlotPruned          = "worker_slot.pruned"
+	EventComputeActionWorkerDisabled            = "worker.disabled"
 	EventComputeActionTransportCredentialVended = "transport.credential_vended"
 	EventComputeActionTransportPrewarm          = "transport.prewarm"
 	EventComputeActionTransportSnapshot         = "transport.snapshot"
@@ -225,6 +231,8 @@ func (d DeletedWorkerReason) String() string {
 const (
 	DeletedWorkerReasonPodWithoutState            DeletedWorkerReason = "pod_without_state"
 	DeletedWorkerReasonPodExceededPendingAgeLimit DeletedWorkerReason = "pod_exceeded_pending_age_limit"
+	DeletedWorkerReasonPodCompleted               DeletedWorkerReason = "pod_completed"
+	DeletedWorkerReasonWorkerStateWithoutJob      DeletedWorkerReason = "worker_state_without_job"
 )
 
 var EventStubSchemaVersion = "1.0"

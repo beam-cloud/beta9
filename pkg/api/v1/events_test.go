@@ -159,6 +159,45 @@ func TestEventStreamQueryFromContextUsesLastEventID(t *testing.T) {
 	}
 }
 
+func TestEventStreamQueryFromContextLastEventIDOverridesTailOffset(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?tail_offset=0", nil)
+	req.Header.Set("Last-Event-ID", "41")
+	ctx := e.NewContext(req, httptest.NewRecorder())
+
+	query, err := eventStreamQueryFromContext(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.SeqNum == nil || *query.SeqNum != 42 {
+		t.Fatalf("unexpected resumed seq_num: %#v", query.SeqNum)
+	}
+	if query.TailOffset != nil {
+		t.Fatalf("tail_offset should be cleared on resume: %#v", query.TailOffset)
+	}
+}
+
+func TestLogQueryFromContextLastEventIDOverridesStartTime(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/?start_time=2026-05-28T10:00:00Z", nil)
+	req.Header.Set("Last-Event-ID", "41")
+	ctx := e.NewContext(req, httptest.NewRecorder())
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues("workspace-1")
+
+	group := &LogGroup{}
+	query, err := group.logQueryFromContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.SeqNum == nil || *query.SeqNum != 42 {
+		t.Fatalf("unexpected resumed seq_num: %#v", query.SeqNum)
+	}
+	if query.StartTime != nil {
+		t.Fatalf("start_time should be cleared on resume: %#v", query.StartTime)
+	}
+}
+
 func TestEventHistoryQueryFromContextParsesFilters(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/?event_types=stub.state.warning,stub.state.degraded&stub_id=stub-1&container_id=container-1&start_time=2026-05-28T10:00:00Z&end_time=2026-05-28T10:05:00Z&limit=25", nil)

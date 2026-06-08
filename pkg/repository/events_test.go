@@ -126,6 +126,75 @@ func TestEventHTTPSinkSkipsUnmatchedEvents(t *testing.T) {
 	}
 }
 
+func TestBeta9WebhookPayloadMatchesInternalAPIShape(t *testing.T) {
+	repo := &EventClientRepo{}
+	event, err := repo.createEventObject(types.EventStubDeploy, types.EventStubSchemaVersion, types.EventStubSchema{
+		ID:          "stub-1",
+		StubType:    types.StubType(types.StubTypeFunction),
+		WorkspaceID: "workspace-1",
+		StubConfig:  "{}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := beta9WebhookEventPayload(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var delivered []struct {
+		Type        string          `json:"type"`
+		Data        json.RawMessage `json:"data"`
+		WorkspaceID string          `json:"workspaceid"`
+		StubID      string          `json:"stubid"`
+		Date        float64         `json:"date"`
+	}
+	if err := json.Unmarshal(body, &delivered); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := len(delivered), 1; got != want {
+		t.Fatalf("unexpected event count: got %d want %d", got, want)
+	}
+	if got, want := delivered[0].Type, types.EventStubDeploy; got != want {
+		t.Fatalf("unexpected event type: got %q want %q", got, want)
+	}
+	if got, want := delivered[0].WorkspaceID, "workspace-1"; got != want {
+		t.Fatalf("unexpected workspace extension: got %q want %q", got, want)
+	}
+	if got, want := delivered[0].StubID, "stub-1"; got != want {
+		t.Fatalf("unexpected stub extension: got %q want %q", got, want)
+	}
+	if delivered[0].Date == 0 {
+		t.Fatal("expected beta9 webhook callback to include date")
+	}
+}
+
+func TestInternalAPIEventCallbackFilter(t *testing.T) {
+	eventTypes := internalAPICallbackEventTypes()
+	for _, eventType := range eventTypes {
+		if !eventHTTPMatches(eventTypes, eventType) {
+			t.Fatalf("expected callback filter to match %q", eventType)
+		}
+	}
+	if eventHTTPMatches(eventTypes, types.EventWorkerLifecycle) {
+		t.Fatal("expected internal API callback filter to skip worker lifecycle events")
+	}
+}
+
+func internalAPICallbackEventTypes() []string {
+	return []string{
+		types.EventStubDeploy,
+		types.EventStubServe,
+		types.EventStubRun,
+		types.EventStubClone,
+		types.EventWorkerPoolDegraded,
+		types.EventWorkerPoolHealthy,
+		types.EventGatewayEndpointCalled,
+	}
+}
+
 func TestPushContainerTaskEventBuildsCanonicalEvent(t *testing.T) {
 	sink := &captureEventSink{}
 	repo := &EventClientRepo{storageSinks: []eventSink{sink}}

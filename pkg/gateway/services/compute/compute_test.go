@@ -187,6 +187,275 @@ func TestAgentInstallCommandDevModeRunsWithoutSudo(t *testing.T) {
 	}
 }
 
+func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
+	billing := &fakeManagedBilling{
+		launchDecision: billingDecision{OK: true, AvailableCents: 3000, RequiredCents: 2500},
+	}
+	service := &Service{
+		billing: billing,
+		appConfig: types.AppConfig{
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
+			},
+		},
+	}
+
+	plan := model.SolvePlan{
+		Actions: []model.SolveAction{
+			{
+				Type:  model.ActionCreate,
+				Count: 2,
+				Offer: model.Offer{HourlyCostMicros: 1_500_000},
+			},
+			{
+				Type:  model.ActionKeep,
+				Count: 1,
+				Offer: model.Offer{HourlyCostMicros: 9_000_000},
+			},
+		},
+		CommittedCostMicros: 42_000_000,
+	}
+
+	decision, err := service.checkManagedLaunchCredit(context.Background(), "workspace-1", "pool-1", plan)
+	if err != nil {
+		t.Fatalf("checkManagedLaunchCredit() error = %v", err)
+	}
+	if !decision.OK {
+		t.Fatal("checkManagedLaunchCredit() returned non-ok decision")
+	}
+	if billing.launchCalls != 1 {
+		t.Fatalf("CheckLaunchCredit calls = %d, want 1", billing.launchCalls)
+	}
+	req := billing.launchRequest
+	if req.WorkspaceID != "workspace-1" || req.PoolName != "pool-1" {
+		t.Fatalf("billing request identity = %s/%s, want workspace-1/pool-1", req.WorkspaceID, req.PoolName)
+	}
+	if req.RequiredCents != 2500 {
+		t.Fatalf("billing request required cents = %d, want 2500", req.RequiredCents)
+	}
+	if req.Quantity != 2 {
+		t.Fatalf("billing request quantity = %d, want 2", req.Quantity)
+	}
+	if req.EstimatedHourlyCostMicros != 3_000_000 {
+		t.Fatalf("billing request hourly micros = %d, want 3000000", req.EstimatedHourlyCostMicros)
+	}
+	if req.EstimatedCommittedMicros != 42_000_000 {
+		t.Fatalf("billing request committed micros = %d, want 42000000", req.EstimatedCommittedMicros)
+	}
+}
+
+func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:         "workspace-1",
+		PoolName:            "pool-1",
+		MachineID:           "machine-1",
+		Schedulable:         true,
+		LastHeartbeatAt:     now,
+		LastJoinAt:          now,
+		Executor:            types.DefaultAgentWorkerContainerMode,
+		CPUCount:            4,
+		CPUMillicores:       4000,
+		MemoryMB:            8192,
+		NetworkSlotPoolSize: 16,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{
+		computeRepo: repo,
+		billing: &fakeManagedBilling{
+			balanceDecision: billingDecision{
+				OK:             false,
+				ErrorCode:      launchErrorInsufficientCredit,
+				Message:        "credits exhausted",
+				AvailableCents: 0,
+				RequiredCents:  2500,
+			},
+		},
+	}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+
+	saved := repo.pools["workspace-1"][0]
+	if !repo.savedPool {
+		t.Fatal("ReconcileManagedCompute() did not persist the pool transition")
+	}
+	if got, want := saved.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if got, want := saved.Reservations[0].TerminatingReason, "credit_exhausted"; got != want {
+		t.Fatalf("terminating reason = %q, want %q", got, want)
+	}
+	if machine.Schedulable {
+		t.Fatal("credit exhaustion did not mark the machine unschedulable")
+	}
+}
+
+func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				MachineID:        "machine-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	billing := &fakeManagedBilling{}
+	service := &Service{computeRepo: repo, billing: billing}
+
+	if err := service.releasePrivateMachine(context.Background(), machine); err != nil {
+		t.Fatalf("releasePrivateMachine() error = %v", err)
+	}
+
+	saved := repo.pools["workspace-1"][0]
+	if !repo.savedPool {
+		t.Fatal("releasePrivateMachine() did not persist the reservation transition")
+	}
+	if got, want := saved.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if got, want := saved.Reservations[0].TerminatingReason, reconcileReasonMachineReleased; got != want {
+		t.Fatalf("terminating reason = %q, want %q", got, want)
+	}
+	if got, want := saved.Reservations[0].MachineID, "machine-1"; got != want {
+		t.Fatalf("reservation machine id = %q, want %q", got, want)
+	}
+	if !strings.Contains(saved.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
+		t.Fatalf("reservation last error = %q, want missing vendor error", saved.Reservations[0].LastError)
+	}
+	if machine.Schedulable {
+		t.Fatal("releasePrivateMachine() did not mark the machine unschedulable before deleting it")
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
+		t.Fatalf("machine count after release = %d, want 0", got)
+	}
+	if got, want := len(billing.usage), 1; got != want {
+		t.Fatalf("managed usage records = %d, want %d", got, want)
+	}
+}
+
+func TestReleasePrivateMachineRequiresManagedReservationLink(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:         "reservation-1",
+				Provider:   "shadeform",
+				InstanceID: "instance-1",
+				Source:     model.SourceCLIReservation,
+				Status:     model.ReservationActive,
+				CreatedAt:  now.Add(-time.Hour),
+				ExpiresAt:  now.Add(time.Hour),
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{computeRepo: repo}
+
+	err := service.releasePrivateMachine(context.Background(), machine)
+	if err == nil || !strings.Contains(err.Error(), "managed reservation for machine \"machine-1\" is not linked") {
+		t.Fatalf("releasePrivateMachine() error = %v, want unlinked reservation error", err)
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationActive; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if !machine.Schedulable {
+		t.Fatal("failed release should not mark the machine unschedulable")
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 1 {
+		t.Fatalf("machine count after failed release = %d, want 1", got)
+	}
+}
+
+func TestAssignManagedReservationToMachineUsesJoinTokenHash(t *testing.T) {
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:                    "reservation-1",
+				Provider:              "shadeform",
+				Source:                model.SourceCLIReservation,
+				Status:                model.ReservationPending,
+				RegistrationTokenHash: "token-hash",
+			},
+		},
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {state}},
+	}
+	service := &Service{computeRepo: repo}
+
+	err := service.assignManagedReservationToMachine(
+		context.Background(),
+		state,
+		&model.JoinTokenState{TokenHash: "token-hash"},
+		&model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"},
+	)
+	if err != nil {
+		t.Fatalf("assignManagedReservationToMachine() error = %v", err)
+	}
+
+	if !repo.savedPool {
+		t.Fatal("assignManagedReservationToMachine() did not persist the pool state")
+	}
+	if got, want := state.Reservations[0].MachineID, "machine-1"; got != want {
+		t.Fatalf("reservation machine id = %q, want %q", got, want)
+	}
+}
+
 func testAuthContext(workspaceID, tokenID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
@@ -229,6 +498,20 @@ type fakeComputeRepo struct {
 
 func (r *fakeComputeRepo) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {
 	r.savedPool = true
+	if state == nil {
+		return nil
+	}
+	if r.pools == nil {
+		r.pools = map[string][]*model.PoolState{}
+	}
+	state.WorkspaceID = workspaceID
+	for i, pool := range r.pools[workspaceID] {
+		if pool != nil && pool.Name == state.Name {
+			r.pools[workspaceID][i] = state
+			return nil
+		}
+	}
+	r.pools[workspaceID] = append(r.pools[workspaceID], state)
 	return nil
 }
 
@@ -249,6 +532,22 @@ func (r *fakeComputeRepo) ListPoolStates(ctx context.Context, workspaceID string
 	return pools, nil
 }
 
+func (r *fakeComputeRepo) ListAllPoolStates(ctx context.Context, limit int) ([]*model.PoolState, error) {
+	pools := []*model.PoolState{}
+	for workspaceID, states := range r.pools {
+		for _, state := range states {
+			if state != nil && state.WorkspaceID == "" {
+				state.WorkspaceID = workspaceID
+			}
+			pools = append(pools, state)
+			if limit > 0 && len(pools) >= limit {
+				return pools, nil
+			}
+		}
+	}
+	return pools, nil
+}
+
 func (r *fakeComputeRepo) DeletePoolState(ctx context.Context, workspaceID, name string) error {
 	return nil
 }
@@ -262,6 +561,20 @@ func (r *fakeComputeRepo) GetJoinTokenState(ctx context.Context, tokenHash strin
 }
 
 func (r *fakeComputeRepo) SaveAgentTokenState(ctx context.Context, state *model.AgentTokenState, ttl time.Duration) error {
+	if state == nil {
+		return nil
+	}
+	if r.machines == nil {
+		r.machines = map[string][]*model.AgentTokenState{}
+	}
+	key := fakeComputeKey(state.WorkspaceID, state.PoolName)
+	for i, machine := range r.machines[key] {
+		if machine != nil && machine.MachineID == state.MachineID {
+			r.machines[key][i] = state
+			return nil
+		}
+	}
+	r.machines[key] = append(r.machines[key], state)
 	return nil
 }
 
@@ -297,6 +610,19 @@ func (r *fakeComputeRepo) ListAgentTokenStates(ctx context.Context, workspaceID,
 }
 
 func (r *fakeComputeRepo) DeleteAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) error {
+	key := fakeComputeKey(workspaceID, poolName)
+	machines := r.machines[key]
+	kept := machines[:0]
+	for _, machine := range machines {
+		if machine == nil || machine.MachineID != machineID {
+			kept = append(kept, machine)
+		}
+	}
+	if len(kept) == 0 {
+		delete(r.machines, key)
+		return nil
+	}
+	r.machines[key] = kept
 	return nil
 }
 
@@ -314,4 +640,30 @@ func (r *fakeComputeRepo) DeleteAgentWorkerSlotState(ctx context.Context, worksp
 
 func fakeComputeKey(workspaceID, poolName string) string {
 	return workspaceID + "\x00" + poolName
+}
+
+type fakeManagedBilling struct {
+	launchDecision  billingDecision
+	launchErr       error
+	launchCalls     int
+	launchRequest   billingCreditRequest
+	balanceDecision billingDecision
+	balanceErr      error
+	usage           []managedUsage
+	usageErr        error
+}
+
+func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCreditRequest) (billingDecision, error) {
+	b.launchCalls++
+	b.launchRequest = req
+	return b.launchDecision, b.launchErr
+}
+
+func (b *fakeManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+	return b.balanceDecision, b.balanceErr
+}
+
+func (b *fakeManagedBilling) RecordManagedUsage(_ context.Context, usage managedUsage) error {
+	b.usage = append(b.usage, usage)
+	return b.usageErr
 }
