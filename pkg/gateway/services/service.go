@@ -75,6 +75,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		WorkerRepo:      opts.WorkerRepo,
 		ComputeRepo:     computeRepo,
 		KeyEventManager: keyEventManager,
+		Tailscale:       opts.Tailscale,
 	})
 
 	return &GatewayService{
