@@ -261,7 +261,23 @@ func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t 
 			},
 		},
 	}
-	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
+	machine := &model.AgentTokenState{
+		WorkspaceID:         "workspace-1",
+		PoolName:            "pool-1",
+		MachineID:           "machine-1",
+		Schedulable:         true,
+		LastHeartbeatAt:     now,
+		LastJoinAt:          now,
+		Executor:            types.DefaultAgentWorkerContainerMode,
+		CPUCount:            4,
+		CPUMillicores:       4000,
+		MemoryMB:            8192,
+		NetworkSlotPoolSize: 16,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
 	service := &Service{
 		computeRepo: repo,
 		billing: &fakeManagedBilling{
@@ -288,6 +304,9 @@ func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t 
 	}
 	if got, want := saved.Reservations[0].TerminatingReason, "credit_exhausted"; got != want {
 		t.Fatalf("terminating reason = %q, want %q", got, want)
+	}
+	if machine.Schedulable {
+		t.Fatal("credit exhaustion did not mark the machine unschedulable")
 	}
 }
 
@@ -396,6 +415,20 @@ func (r *fakeComputeRepo) GetJoinTokenState(ctx context.Context, tokenHash strin
 }
 
 func (r *fakeComputeRepo) SaveAgentTokenState(ctx context.Context, state *model.AgentTokenState, ttl time.Duration) error {
+	if state == nil {
+		return nil
+	}
+	if r.machines == nil {
+		r.machines = map[string][]*model.AgentTokenState{}
+	}
+	key := fakeComputeKey(state.WorkspaceID, state.PoolName)
+	for i, machine := range r.machines[key] {
+		if machine != nil && machine.MachineID == state.MachineID {
+			r.machines[key][i] = state
+			return nil
+		}
+	}
+	r.machines[key] = append(r.machines[key], state)
 	return nil
 }
 

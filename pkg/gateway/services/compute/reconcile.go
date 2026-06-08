@@ -13,6 +13,11 @@ import (
 const (
 	reconcileStatusCheckInterval  = time.Minute
 	reconcileBillingCheckInterval = time.Minute
+
+	reconcileReasonAgentDisconnected   = "agent_disconnected"
+	reconcileReasonCreditExhausted     = "credit_exhausted"
+	reconcileReasonMachineDisconnected = "machine_disconnected"
+	reconcileReasonReservationExpired  = "expired"
 )
 
 func (s *Service) runReconciler(ctx context.Context) {
@@ -111,8 +116,8 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 	if !decision.OK {
 		reason := firstNonEmpty(decision.Message, "managed compute credits exhausted")
 		s.emitCreditExhaustedEvent(workspaceID, state, decision, reason)
-		s.disablePoolMachines(ctx, workspaceID, state.Name, "credit_exhausted")
-		return s.terminateManagedReservations(ctx, workspaceID, state, "credit_exhausted", reason)
+		s.disablePoolMachines(ctx, workspaceID, state.Name, reconcileReasonCreditExhausted)
+		return s.terminateManagedReservations(ctx, workspaceID, state, reconcileReasonCreditExhausted, reason)
 	}
 
 	return s.recordManagedUsage(ctx, workspaceID, state, now)
@@ -260,7 +265,7 @@ func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID st
 	if !reservation.Managed() || reservation.ExpiresAt.IsZero() || reservation.ExpiresAt.After(now) {
 		return false
 	}
-	return s.terminateReservation(ctx, workspaceID, state, reservation, vendors, "expired", "reservation ttl expired")
+	return s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reconcileReasonReservationExpired, "reservation ttl expired")
 }
 
 func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, reason, message string) bool {
@@ -311,7 +316,7 @@ func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string
 		if model.AgentMachineConnected(machine, now) {
 			continue
 		}
-		changed = s.disableMachineWorker(ctx, machine, "machine_disconnected") || changed
+		changed = s.disableMachineWorker(ctx, machine, reconcileReasonMachineDisconnected) || changed
 	}
 	return changed
 }
@@ -322,6 +327,10 @@ func (s *Service) disablePoolMachines(ctx context.Context, workspaceID, poolName
 		return
 	}
 	for _, machine := range machines {
+		if reason == reconcileReasonCreditExhausted && machine != nil && machine.Schedulable {
+			machine.Schedulable = false
+			_ = s.saveComputeAgentTokenState(ctx, machine)
+		}
 		s.disableMachineWorker(ctx, machine, reason)
 	}
 }

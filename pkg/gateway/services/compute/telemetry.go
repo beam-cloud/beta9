@@ -207,14 +207,14 @@ func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.A
 	agentState = current
 	lastSeen := model.AgentMachineLastSeen(agentState)
 	if !agentState.LastDisconnectAt.IsZero() && !agentState.LastDisconnectAt.Before(lastSeen) {
-		s.disableMachineWorker(ctx, agentState, "agent_disconnected")
+		s.disableMachineWorker(ctx, agentState, reconcileReasonAgentDisconnected)
 		return
 	}
 	agentState.LastDisconnectAt = time.Now().UTC()
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return
 	}
-	s.disableMachineWorker(ctx, agentState, "agent_disconnected")
+	s.disableMachineWorker(ctx, agentState, reconcileReasonAgentDisconnected)
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		Timestamp:   agentState.LastDisconnectAt,
 		WorkspaceID: agentState.WorkspaceID,

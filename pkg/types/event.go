@@ -231,6 +231,8 @@ func (d DeletedWorkerReason) String() string {
 const (
 	DeletedWorkerReasonPodWithoutState            DeletedWorkerReason = "pod_without_state"
 	DeletedWorkerReasonPodExceededPendingAgeLimit DeletedWorkerReason = "pod_exceeded_pending_age_limit"
+	DeletedWorkerReasonPodCompleted               DeletedWorkerReason = "pod_completed"
+	DeletedWorkerReasonWorkerStateWithoutJob      DeletedWorkerReason = "worker_state_without_job"
 )
 
 var EventStubSchemaVersion = "1.0"

@@ -118,6 +118,14 @@ redis.call("HSET", ref_counts_key, ip, 1)
 return 1
 `)
 
+var drainWorkerRequestsScript = redis.NewScript(`
+local requests = redis.call("LRANGE", KEYS[1], 0, -1)
+if #requests > 0 then
+	redis.call("DEL", KEYS[1])
+end
+return requests
+`)
+
 func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
 	lock := common.NewRedisLock(r)
 	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
@@ -156,14 +164,15 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 }
 
 func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	ctx := context.TODO()
+	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
 		return err
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
 	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
-	res, err := r.rdb.Exists(context.TODO(), stateKey).Result()
+	res, err := r.rdb.Exists(ctx, stateKey).Result()
 	if err != nil {
 		return err
 	}
@@ -173,24 +182,97 @@ func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
 		return &types.ErrWorkerNotFound{WorkerId: workerId}
 	}
 
+	requeued, err := r.requeueWorkerRequests(ctx, workerId)
+	if err != nil {
+		return err
+	}
+
 	// Remove worker state from index
 	indexKey := common.RedisKeys.SchedulerWorkerIndex()
-	err = r.rdb.SRem(context.TODO(), indexKey, stateKey).Err()
+	err = r.rdb.SRem(ctx, indexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to remove worker state key from index <%v>: %w", indexKey, err)
 	}
 
-	err = r.rdb.Del(context.TODO(), stateKey).Err()
+	err = r.rdb.Del(ctx, stateKey).Err()
 	if err != nil {
 		return err
 	}
 
-	err = r.rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Err()
-	if err != nil {
-		return err
+	if requeued > 0 {
+		log.Info().Str("worker_id", workerId).Int("request_count", requeued).Msg("requeued requests from removed worker")
 	}
 
 	return nil
+}
+
+func (r *WorkerRedisRepository) requeueWorkerRequests(ctx context.Context, workerId string) (int, error) {
+	queueKey := common.RedisKeys.SchedulerWorkerRequests(workerId)
+	result, err := drainWorkerRequestsScript.Run(ctx, r.rdb, []string{queueKey}).Result()
+	if err != nil {
+		return 0, fmt.Errorf("failed to drain worker request queue <%s>: %w", queueKey, err)
+	}
+
+	items, ok := result.([]interface{})
+	if !ok {
+		return 0, fmt.Errorf("unexpected worker request drain result: %T", result)
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	rawItems := make([]string, 0, len(items))
+	for _, item := range items {
+		raw, ok := item.(string)
+		if !ok {
+			return 0, fmt.Errorf("unexpected worker request type: %T", item)
+		}
+		rawItems = append(rawItems, raw)
+	}
+
+	pipe := r.rdb.Pipeline()
+	now := time.Now()
+	for _, raw := range rawItems {
+		var request types.ContainerRequest
+		if err := json.Unmarshal([]byte(raw), &request); err != nil {
+			_ = r.restoreWorkerRequests(ctx, workerId, rawItems)
+			return 0, fmt.Errorf("failed to deserialize queued request for worker <%s>: %w", workerId, err)
+		}
+
+		request.RetryCount++
+		request.Timestamp = now
+		jsonData, err := json.Marshal(&request)
+		if err != nil {
+			_ = r.restoreWorkerRequests(ctx, workerId, rawItems)
+			return 0, fmt.Errorf("failed to serialize requeued request for worker <%s>: %w", workerId, err)
+		}
+
+		pipe.ZAdd(ctx, common.RedisKeys.SchedulerContainerRequests(), redis.Z{
+			Score:  float64(now.UnixNano()),
+			Member: jsonData,
+		})
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		_ = r.restoreWorkerRequests(ctx, workerId, rawItems)
+		return 0, fmt.Errorf("failed to requeue drained requests for worker <%s>: %w", workerId, err)
+	}
+
+	metrics.RecordSchedulerBacklogDepth(r.rdb.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests()).Val())
+	return len(items), nil
+}
+
+func (r *WorkerRedisRepository) restoreWorkerRequests(ctx context.Context, workerId string, requests []string) error {
+	if len(requests) == 0 {
+		return nil
+	}
+
+	values := make([]interface{}, 0, len(requests))
+	for _, request := range requests {
+		values = append(values, request)
+	}
+
+	return r.rdb.RPush(ctx, common.RedisKeys.SchedulerWorkerRequests(workerId), values...).Err()
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerStatus(workerId string, status types.WorkerStatus) error {
