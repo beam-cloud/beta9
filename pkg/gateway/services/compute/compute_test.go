@@ -642,6 +642,21 @@ func fakeComputeKey(workspaceID, poolName string) string {
 	return workspaceID + "\x00" + poolName
 }
 
+func TestManagedBillingURLMatchesInternalAPIActionRoutes(t *testing.T) {
+	base := "https://api.stage.beam.cloud/v2/payment/managed-compute/"
+	tests := map[string]string{
+		"launch-check/": "https://api.stage.beam.cloud/v2/payment/managed-compute/launch-check/",
+		"balance/":      "https://api.stage.beam.cloud/v2/payment/managed-compute/balance/",
+		"usage/":        "https://api.stage.beam.cloud/v2/payment/managed-compute/usage/",
+	}
+
+	for path, want := range tests {
+		if got := joinBillingURL(base, path); got != want {
+			t.Fatalf("joinBillingURL(%q, %q) = %q, want %q", base, path, got, want)
+		}
+	}
+}
+
 type fakeManagedBilling struct {
 	launchDecision  billingDecision
 	launchErr       error
