@@ -46,8 +46,9 @@ type Scheduler struct {
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
 
-	provisioning *provisioningTracker
-	credentials  *schedulerCredentialCache
+	provisioning              *provisioningTracker
+	workerProvisioningBackoff *workerProvisioningBackoff
+	credentials               *schedulerCredentialCache
 }
 
 type schedulerCredentialAttachResult struct {
@@ -134,8 +135,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
 
-		provisioning: newProvisioningTracker(),
-		credentials:  newSchedulerCredentialCache(),
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
 	}, nil
 }
 

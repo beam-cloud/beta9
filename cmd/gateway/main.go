@@ -18,8 +18,12 @@ func main() {
 		log.Fatal().Err(err).Msg("error creating config manager")
 	}
 	config := configManager.GetConfig()
+	if config.DebugMode {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
 	if config.PrettyLogs {
-		log.Logger = log.Logger.Level(zerolog.DebugLevel)
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 	metrics.InitializeMetricsRepository(config.Monitoring.VictoriaMetrics)

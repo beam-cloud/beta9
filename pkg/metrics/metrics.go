@@ -30,6 +30,7 @@ const (
 	metricRequestRetries            = "scheduler_request_retries"
 	metricRequestScheduleFailure    = "scheduler_request_schedule_failure"
 	metricImagePullTime             = "worker_image_pull_time_seconds"
+	metricImageVerifyPhase          = "image_verify_phase_duration_ms"
 	metricImageBuildSpeed           = "worker_image_build_speed_mbps"
 	metricImageUnpackSpeed          = "worker_image_unpack_speed_mbps"
 	metricImageCopySpeed            = "worker_image_copy_speed_mbps"
@@ -300,6 +301,30 @@ func RecordWorkerStartupPhase(phase string, duration time.Duration, request *typ
 	labels = mergeLabels(labels, extraLabels)
 
 	metricName := metricWithLabels(metricWorkerStartupPhase, labels)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordImageVerifyPhase(phase string, duration time.Duration, labels map[string]string) {
+	metricLabels := map[string]string{
+		"phase":                  phase,
+		"registry_store":         "unknown",
+		"clip_version":           "0",
+		"explicit_image_id":      "false",
+		"success":                "true",
+		"python_version":         "unknown",
+		"custom_base_image":      "false",
+		"dockerfile":             "false",
+		"exists":                 "unknown",
+		"valid":                  "unknown",
+		"metadata_authoritative": "unknown",
+	}
+	for key, value := range labels {
+		if value != "" {
+			metricLabels[key] = value
+		}
+	}
+
+	metricName := metricWithLabels(metricImageVerifyPhase, metricLabels)
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 }
 

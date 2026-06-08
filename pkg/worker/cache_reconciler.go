@@ -846,6 +846,11 @@ func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, ser
 // cache server. This is the same content the clip read path warms into the cache.
 // Registry credentials are brokered from the gateway and used in-memory only.
 func (m *WorkerCacheManager) materializeOCILayer(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem) string {
+	if !isSHA256HexDigest(item.Hash) {
+		log.Debug().Str("hash", item.Hash).Msg("cache reconciliation invalid oci layer content hash")
+		return types.CacheAuditStatusOriginFailure
+	}
+
 	ref, err := name.NewDigest(item.Source)
 	if err != nil {
 		log.Debug().Err(err).Str("source", item.Source).Msg("cache reconciliation could not parse oci layer reference")

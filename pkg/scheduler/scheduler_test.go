@@ -74,8 +74,9 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
 
-		provisioning: newProvisioningTracker(),
-		credentials:  newSchedulerCredentialCache(),
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
 	}, nil
 }
 
@@ -99,6 +100,9 @@ type LocalWorkerPoolControllerForTest struct {
 	workerStatus     types.WorkerStatus
 	addWorkerStarted chan struct{}
 	unblockAddWorker chan struct{}
+	addWorkerErr     error
+	addWorkerMu      sync.Mutex
+	addWorkerCalls   int
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
@@ -130,11 +134,20 @@ func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
+	wpc.addWorkerMu.Lock()
+	wpc.addWorkerCalls++
+	addWorkerErr := wpc.addWorkerErr
+	wpc.addWorkerMu.Unlock()
+
 	if wpc.addWorkerStarted != nil {
 		select {
 		case wpc.addWorkerStarted <- struct{}{}:
 		default:
 		}
+	}
+
+	if addWorkerErr != nil {
+		return nil, addWorkerErr
 	}
 
 	if wpc.unblockAddWorker != nil {
@@ -177,6 +190,12 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	}
 
 	return worker, nil
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) AddWorkerCallCount() int {
+	wpc.addWorkerMu.Lock()
+	defer wpc.addWorkerMu.Unlock()
+	return wpc.addWorkerCalls
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
@@ -1417,7 +1436,7 @@ func TestAddWorkerForReservationReleasesOnContextCancellation(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		newWorkerProvisioningAttempt(wb, request, controllers, reservationID).run()
+		newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
 	}()
 
 	select {
@@ -1465,7 +1484,7 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 	assert.Equal(t, int64(0), reservation.worker.FreeMemory)
 	wb.provisioning.mu.Unlock()
 
-	newWorkerProvisioningAttempt(wb, request, controllers, reservationID).run()
+	newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
 
 	workers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -1514,7 +1533,7 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 	assert.Equal(t, int64(16384-capacityMemoryForScheduling(request)), reservation.worker.FreeMemory)
 	wb.provisioning.mu.Unlock()
 
-	newWorkerProvisioningAttempt(wb, request, controllers, reservationID).run()
+	newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
 
 	workers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)

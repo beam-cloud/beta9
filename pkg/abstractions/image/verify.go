@@ -18,22 +18,34 @@ type imageVerifyResult struct {
 	opts    *BuildOpts
 }
 
-func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (*imageVerifyResult, error) {
+func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (result *imageVerifyResult, err error) {
+	recorder := is.newImageVerifyRecorder(in)
+	defer func() { recorder.total(result, err) }()
+
 	if in.ImageId != nil && *in.ImageId != "" {
-		return is.verifyExplicitImageID(ctx, *in.ImageId)
+		return is.verifyExplicitImageID(ctx, recorder, *in.ImageId)
 	}
 
-	opts, err := is.buildOptionsFromVerifyRequest(ctx, in)
+	opts, err := measureImageVerifyValue(recorder, imageVerifyPhaseBuildOptions, func() (*BuildOpts, error) {
+		return is.buildOptionsFromVerifyRequest(ctx, in)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := is.prepareBuildOptionsForImageID(ctx, in, opts); err != nil {
+
+	if err := recorder.measure(imageVerifyPhasePrepareOptions, func() error {
+		return is.prepareBuildOptionsForImageID(ctx, in, opts)
+	}); err != nil {
 		return nil, err
 	}
 
-	imageID, err := getImageID(opts)
-	valid := err == nil
-	exists, err := is.imageExistsForComputedSpec(ctx, imageID)
+	imageID, imageIDErr := measureImageVerifyValue(recorder, imageVerifyPhaseGetImageID, func() (string, error) {
+		return getImageID(opts)
+	})
+
+	exists, err := measureImageVerifyValue(recorder, imageVerifyPhaseExists, func() (bool, error) {
+		return is.imageExistsForComputedSpec(ctx, imageID)
+	}, imageVerifyAttrMetadataAuthoritative, boolLabel(is.imageMetadataAuthoritative()))
 	if err != nil {
 		return nil, err
 	}
@@ -41,14 +53,16 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 	return &imageVerifyResult{
 		imageID: imageID,
 		exists:  exists,
-		valid:   valid,
+		valid:   imageIDErr == nil,
 		opts:    opts,
 	}, nil
 }
 
-func (is *ContainerImageService) verifyExplicitImageID(ctx context.Context, imageID string) (*imageVerifyResult, error) {
+func (is *ContainerImageService) verifyExplicitImageID(ctx context.Context, recorder imageVerifyRecorder, imageID string) (*imageVerifyResult, error) {
 	if is.imageMetadataAuthoritative() {
-		current, err := is.imageMetadataCurrent(ctx, imageID)
+		current, err := measureImageVerifyValue(recorder, imageVerifyPhaseMetadata, func() (bool, error) {
+			return is.imageMetadataCurrent(ctx, imageID)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -57,7 +71,9 @@ func (is *ContainerImageService) verifyExplicitImageID(ctx context.Context, imag
 		}
 	}
 
-	exists, err := is.builder.Exists(ctx, imageID)
+	exists, err := measureImageVerifyValue(recorder, imageVerifyPhaseRegistryExists, func() (bool, error) {
+		return is.builder.Exists(ctx, imageID)
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -404,7 +404,11 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
 	} else {
-		c.restoreV1ArchiveDataCache(ctx, request)
+		if localArchivePath, ok := c.ensureV1ArchiveDataCache(ctx, request, archive.sourceRegistry); ok {
+			archive.path = localArchivePath
+			archive.sourceRegistry = nil
+			archive.storageMode = string(clipCommon.StorageModeLocal)
+		}
 	}
 
 	c.reportRequiredContent(ctx, request, meta)
@@ -492,31 +496,34 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 func ociRequiredContentItems(ociInfo *clipCommon.OCIStorageInfo) []types.CacheRequiredContentItem {
 	items := make([]types.CacheRequiredContentItem, 0, len(ociInfo.DecompressedHashByLayer))
 	for layerDigest, hash := range ociInfo.DecompressedHashByLayer {
-		if hash == "" {
+		if !isSHA256HexDigest(hash) {
+			continue
+		}
+		source := ociLayerReference(ociInfo, layerDigest)
+		if source == "" {
 			continue
 		}
 		items = append(items, types.CacheRequiredContentItem{
 			Hash:         hash,
 			RoutingKey:   hash,
 			ExpectedHash: hash,
-			Source:       ociLayerReference(ociInfo, layerDigest),
+			Source:       source,
 			Kind:         types.CacheContentKindClipV2,
 		})
 	}
 	return items
 }
 
-// clipV1ArchiveRequiredContent describes the cached CLIP v1 archive as a single
-// content object, routed the same way the read/restore path routes it (by the
-// archive cachefs path). The archive is already populated in the content cache
-// by the embedded-cache pull that runs before this, so its hash/size are
-// available without an extra fetch.
+// clipV1ArchiveRequiredContent describes the cached CLIP v1 data archive as a
+// single content object. Remote CLIP v1 can load metadata from a .rclip archive,
+// but reconciliation must track the full .clip data archive so recent stubs can
+// be re-materialized from source when a cache host disappears.
 func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request *types.ContainerRequest) (types.CacheRequiredContentItem, bool) {
 	if c.archiveContentMetadata == nil || request == nil {
 		return types.CacheRequiredContentItem{}, false
 	}
 
-	cachePath := c.imageArchiveCachePath(request.ImageId)
+	cachePath := c.clipV1ArchiveCachePath(request.ImageId)
 	metadata, err := c.archiveContentMetadata(ctx, cachePath)
 	if err != nil || metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
 		return types.CacheRequiredContentItem{}, false
@@ -527,11 +534,10 @@ func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request 
 		RoutingKey:   cachePath,
 		ExpectedHash: metadata.Hash,
 		SizeBytes:    int64(metadata.Size),
-		// Origin source descriptor: the archive's key in the image registry,
-		// so a cache host that owns the archive but lost it can re-fetch it from
-		// the same place the image-load path pulls it. Non-secret (object key
-		// only); credentials are resolved at fetch time.
-		Source: c.imageArchiveSourceKey(request.ImageId),
+		// Origin source descriptor: the data archive's key in the image
+		// registry. This intentionally stays .clip even when the mounted
+		// metadata archive is .rclip.
+		Source: c.clipV1ArchiveDataSourceKey(request.ImageId),
 		Kind:   types.CacheContentKindClipV1,
 	}, true
 }
@@ -560,6 +566,14 @@ func ociLayerReference(ociInfo *clipCommon.OCIStorageInfo, layerDigest string) s
 	return fmt.Sprintf("%s/%s@%s", registry, ociInfo.Repository, layerDigest)
 }
 
+func isSHA256HexDigest(hash string) bool {
+	if len(hash) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(hash)
+	return err == nil
+}
+
 func (c *ImageClient) localArchivePath(imageId string) string {
 	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 }
@@ -570,6 +584,10 @@ func (c *ImageClient) clipV1ArchiveCachePath(imageId string) string {
 
 func (c *ImageClient) clipV1ArchiveDataCachePath(imageId string) string {
 	return fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, reg.LocalImageFileExtension)
+}
+
+func (c *ImageClient) clipV1ArchiveDataSourceKey(imageId string) string {
+	return fmt.Sprintf("%s.%s", imageId, reg.LocalImageFileExtension)
 }
 
 func fileExists(path string) bool {
@@ -649,26 +667,86 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 	return ""
 }
 
-func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest) {
-	if c.cacheClient == nil || request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
-		return
+func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, sourceRegistry *types.S3ImageRegistryConfig) (string, bool) {
+	if request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
+		return "", false
 	}
 
-	cachePath := c.clipV1ArchiveCachePath(request.ImageId)
-	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
-	if err != nil || metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
-		return
+	imageID := request.ImageId
+	targetPath := c.clipV1ArchiveDataCachePath(imageID)
+	if c.localImageArchiveReady(targetPath, imageID) {
+		return targetPath, true
+	}
+	if c.cacheClient == nil {
+		return "", false
 	}
 
-	exists, err := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
-	if err != nil || !exists {
-		return
+	cachePath := c.clipV1ArchiveCachePath(imageID)
+	if ok, err := c.copyImageArchiveFromContentCachePath(ctx, targetPath, imageID, cachePath); err != nil {
+		log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache restore failed")
+	} else if ok {
+		return targetPath, true
 	}
 
-	targetPath := c.clipV1ArchiveDataCachePath(request.ImageId)
-	if err := c.writeImageArchiveFromContentCache(ctx, targetPath, request.ImageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
-		log.Debug().Err(err).Str("image_id", request.ImageId).Str("cache_path", cachePath).Msg("failed to restore v1 archive data cache")
+	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
+		sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
 	}
+	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
+		return "", false
+	}
+
+	key := c.clipV1ArchiveDataSourceKey(imageID)
+	routingKey := cachePath
+	hash, err := c.cacheClient.StoreContentFromS3Source(cache.S3ContentSource{
+		Path:           key,
+		CachePath:      cachePath,
+		BucketName:     sourceRegistry.BucketName,
+		Region:         sourceRegistry.Region,
+		EndpointURL:    sourceRegistry.Endpoint,
+		AccessKey:      sourceRegistry.AccessKey,
+		SecretKey:      sourceRegistry.SecretKey,
+		ForcePathStyle: sourceRegistry.ForcePathStyle,
+	}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
+	if err != nil {
+		if errors.Is(err, cache.ErrUnableToAcquireLock) {
+			if ok, waitErr := c.waitForImageArchiveContentCachePath(ctx, targetPath, imageID, cachePath); ok {
+				return targetPath, true
+			} else if waitErr != nil {
+				log.Debug().Err(waitErr).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache lock wait failed")
+			}
+		} else {
+			log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Str("source", key).Msg("v1 image data archive content cache store failed")
+		}
+		return "", false
+	}
+
+	size, err := c.imageArchiveSize(ctx, imageID, key, sourceRegistry)
+	if err != nil {
+		log.Debug().Err(err).Str("image_id", imageID).Str("source", key).Msg("v1 image data archive size lookup failed")
+		return "", false
+	}
+	if err := c.writeImageArchiveFromContentCache(ctx, targetPath, imageID, hash, size, routingKey); err != nil {
+		log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache write failed")
+		return "", false
+	}
+	return targetPath, true
+}
+
+func (c *ImageClient) localImageArchiveReady(archivePath, imageID string) bool {
+	info, err := os.Stat(archivePath)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() || info.Size() <= 0 {
+		_ = os.RemoveAll(archivePath)
+		return false
+	}
+	if err := c.validateRestoredImageArchive(archivePath, imageID, info.Size()); err != nil {
+		log.Debug().Err(err).Str("image_id", imageID).Str("path", archivePath).Msg("discarding invalid local image archive")
+		_ = os.Remove(archivePath)
+		return false
+	}
+	return true
 }
 
 func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error) {
@@ -1231,6 +1309,10 @@ func (c *ImageClient) imageArchiveSize(ctx context.Context, imageID, key string,
 }
 
 func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archivePath, imageId string) (bool, error) {
+	return c.waitForImageArchiveContentCachePath(ctx, archivePath, imageId, c.imageArchiveCachePath(imageId))
+}
+
+func (c *ImageClient) waitForImageArchiveContentCachePath(ctx context.Context, archivePath, imageId, cachePath string) (bool, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, embeddedImageCacheLockWaitTimeout)
 	defer cancel()
 
@@ -1239,7 +1321,7 @@ func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archi
 
 	var lastErr error
 	for {
-		ok, err := c.copyImageArchiveFromContentCacheMetadata(waitCtx, archivePath, imageId)
+		ok, err := c.copyImageArchiveFromContentCachePath(waitCtx, archivePath, imageId, cachePath)
 		if ok {
 			return true, nil
 		}
@@ -1262,7 +1344,10 @@ func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archi
 }
 
 func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Context, archivePath, imageId string) (bool, error) {
-	cachePath := c.imageArchiveCachePath(imageId)
+	return c.copyImageArchiveFromContentCachePath(ctx, archivePath, imageId, c.imageArchiveCachePath(imageId))
+}
+
+func (c *ImageClient) copyImageArchiveFromContentCachePath(ctx context.Context, archivePath, imageId, cachePath string) (bool, error) {
 	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
 	if err != nil {
 		if isEmbeddedImageCacheMiss(err) {
