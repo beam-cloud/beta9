@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,9 +39,11 @@ const (
 var lastScopedS2WriteWarning atomic.Int64
 
 type S2EventRepository struct {
-	basin        *s2.BasinClient
-	streamPrefix string
-	queue        chan cloudevents.Event
+	basin              *s2.BasinClient
+	streamPrefix       string
+	queue              chan cloudevents.Event
+	stubCacheContentMu sync.Mutex
+	stubCacheContent   map[s2.StreamName]*stubCacheRequiredContentState
 }
 
 type ScopedS2EventRepository struct {
@@ -53,6 +56,12 @@ type scopedS2EventTarget struct {
 	name   string
 	prefix string
 	basin  *s2.BasinClient
+}
+
+type stubCacheRequiredContentState struct {
+	mu         sync.Mutex
+	nextSeqNum uint64
+	items      map[string]types.CacheRequiredContentItem
 }
 
 func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
@@ -126,9 +135,10 @@ func NewS2EventRepository(config types.S2Config) (*S2EventRepository, error) {
 	})
 
 	repo := &S2EventRepository{
-		basin:        client.Basin(config.Basin),
-		streamPrefix: streamPrefix,
-		queue:        make(chan cloudevents.Event, s2EventQueueSize),
+		basin:            client.Basin(config.Basin),
+		streamPrefix:     streamPrefix,
+		queue:            make(chan cloudevents.Event, s2EventQueueSize),
+		stubCacheContent: map[s2.StreamName]*stubCacheRequiredContentState{},
 	}
 	go repo.runWriter()
 
@@ -1107,18 +1117,22 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 	}
 
 	streamName := r.stubCacheStreamName(workspaceID, stubID)
+	state := r.stubCacheRequiredContentState(streamName)
+	state.mu.Lock()
+	defer state.mu.Unlock()
 
-	// Read the stream (paginating past the per-read limit) so the coalesced
-	// required-content set is not truncated. Required content is coalesced to a
-	// small number of events per stub, so this is short in practice; the read is
-	// bounded so a continuously-appended stream can never stall reconciliation.
-	merged := map[string]types.CacheRequiredContentItem{}
-	seqNum := uint64(0)
+	if state.items == nil {
+		state.items = map[string]types.CacheRequiredContentItem{}
+	}
+
+	// Read only records appended since this repository last coalesced the stub.
+	// Reconciliation calls this repeatedly for recent stubs; restarting from
+	// sequence 0 every cycle makes read bytes grow with stream age.
 	recordsRead := 0
 	for recordsRead < maxStubCacheReadRecords {
 		count := uint64(defaultS2EventReadLimit)
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			SeqNum: &seqNum,
+			SeqNum: &state.nextSeqNum,
 			Count:  &count,
 		})
 		if err != nil {
@@ -1133,32 +1147,10 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		recordsRead += len(batch.Records)
 
 		for _, record := range batch.Records {
-			var envelope struct {
-				Type string          `json:"type"`
-				Data json.RawMessage `json:"data"`
-			}
-			if err := json.Unmarshal(record.Body, &envelope); err != nil {
-				continue
-			}
-			if envelope.Type != types.EventStubCacheRequiredContent {
-				continue
-			}
-			var schema types.EventStubCacheRequiredContentSchema
-			if err := json.Unmarshal(envelope.Data, &schema); err != nil {
-				continue
-			}
-			for _, item := range schema.Items {
-				if item.Hash == "" {
-					continue
-				}
-				if item.Kind == "" {
-					item.Kind = schema.Kind
-				}
-				merged[item.Hash+"\x00"+item.RoutingKey] = item
-			}
+			mergeStubCacheRequiredContentRecord(state.items, record.Body)
 		}
 
-		seqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
+		state.nextSeqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
 		if uint64(len(batch.Records)) < count {
 			break
 		}
@@ -1167,11 +1159,56 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		log.Warn().Str("stream", string(streamName)).Int("records_read", recordsRead).Msg("stub cache required-content read hit record cap; result may be partial")
 	}
 
+	return stubCacheRequiredContentItems(state.items), nil
+}
+
+func (r *S2EventRepository) stubCacheRequiredContentState(streamName s2.StreamName) *stubCacheRequiredContentState {
+	r.stubCacheContentMu.Lock()
+	defer r.stubCacheContentMu.Unlock()
+
+	if r.stubCacheContent == nil {
+		r.stubCacheContent = map[s2.StreamName]*stubCacheRequiredContentState{}
+	}
+	state := r.stubCacheContent[streamName]
+	if state == nil {
+		state = &stubCacheRequiredContentState{}
+		r.stubCacheContent[streamName] = state
+	}
+	return state
+}
+
+func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredContentItem, body []byte) {
+	var envelope struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return
+	}
+	if envelope.Type != types.EventStubCacheRequiredContent {
+		return
+	}
+	var schema types.EventStubCacheRequiredContentSchema
+	if err := json.Unmarshal(envelope.Data, &schema); err != nil {
+		return
+	}
+	for _, item := range schema.Items {
+		if item.Hash == "" {
+			continue
+		}
+		if item.Kind == "" {
+			item.Kind = schema.Kind
+		}
+		merged[item.Hash+"\x00"+item.RoutingKey] = item
+	}
+}
+
+func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
 	items := make([]types.CacheRequiredContentItem, 0, len(merged))
 	for _, item := range merged {
 		items = append(items, item)
 	}
-	return items, nil
+	return items
 }
 
 func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containerID string) s2.StreamName {

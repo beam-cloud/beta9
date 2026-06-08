@@ -178,6 +178,48 @@ func TestS2StubCacheRequiredContentRequiresWorkspaceAndStub(t *testing.T) {
 	}
 }
 
+func TestMergeStubCacheRequiredContentRecordKeepsLatestItem(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	writeRecord := func(kind types.CacheContentKind, item types.CacheRequiredContentItem) {
+		body, err := json.Marshal(struct {
+			Type string                                    `json:"type"`
+			Data types.EventStubCacheRequiredContentSchema `json:"data"`
+		}{
+			Type: types.EventStubCacheRequiredContent,
+			Data: types.EventStubCacheRequiredContentSchema{
+				Kind:  kind,
+				Items: []types.CacheRequiredContentItem{item},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mergeStubCacheRequiredContentRecord(merged, body)
+	}
+
+	writeRecord(types.CacheContentKindClipV2, types.CacheRequiredContentItem{
+		Hash:       "sha256:abc",
+		RoutingKey: "layer",
+		SizeBytes:  100,
+	})
+	writeRecord(types.CacheContentKindClipV2, types.CacheRequiredContentItem{
+		Hash:       "sha256:abc",
+		RoutingKey: "layer",
+		SizeBytes:  200,
+	})
+
+	items := stubCacheRequiredContentItems(merged)
+	if got, want := len(items), 1; got != want {
+		t.Fatalf("unexpected item count: got %d want %d", got, want)
+	}
+	if got, want := items[0].Kind, types.CacheContentKindClipV2; got != want {
+		t.Fatalf("unexpected kind: got %q want %q", got, want)
+	}
+	if got, want := items[0].SizeBytes, int64(200); got != want {
+		t.Fatalf("unexpected size: got %d want %d", got, want)
+	}
+}
+
 func TestS2PlatformCacheUsesPlatformStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
