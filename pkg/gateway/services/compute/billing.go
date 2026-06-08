@@ -139,7 +139,7 @@ func (h *httpManagedBilling) CheckLaunchCredit(ctx context.Context, req billingC
 		req.RequiredCents = h.minimumCents
 	}
 	var decision billingDecision
-	if err := h.post(ctx, "launch-check", req, &decision); err != nil {
+	if err := h.post(ctx, "launch-check/", req, &decision); err != nil {
 		return billingDecision{OK: false, ErrorCode: launchErrorBillingUnavailable, RequiredCents: req.RequiredCents}, err
 	}
 	if decision.RequiredCents <= 0 {
@@ -151,7 +151,7 @@ func (h *httpManagedBilling) CheckLaunchCredit(ctx context.Context, req billingC
 func (h *httpManagedBilling) CheckBalance(ctx context.Context, workspaceID string) (billingDecision, error) {
 	req := map[string]string{"workspace_id": workspaceID}
 	var decision billingDecision
-	if err := h.post(ctx, "balance", req, &decision); err != nil {
+	if err := h.post(ctx, "balance/", req, &decision); err != nil {
 		return billingDecision{OK: false, ErrorCode: launchErrorBillingUnavailable}, err
 	}
 	if decision.RequiredCents <= 0 {
@@ -165,7 +165,7 @@ func (h *httpManagedBilling) RecordManagedUsage(ctx context.Context, usage manag
 		OK      bool   `json:"ok"`
 		Message string `json:"message"`
 	}
-	if err := h.post(ctx, "usage", usage, &response); err != nil {
+	if err := h.post(ctx, "usage/", usage, &response); err != nil {
 		return err
 	}
 	if !response.OK {
