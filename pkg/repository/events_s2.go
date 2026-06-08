@@ -33,6 +33,7 @@ const (
 	s2EventWriteTimeout     = 5 * time.Second
 	s2EventEnqueueTimeout   = 250 * time.Millisecond
 	s2EventFlushInterval    = 100 * time.Millisecond
+	s2StreamResumeDelay     = time.Second
 	s2ScopedWriteWarnEvery  = time.Minute
 )
 
@@ -502,23 +503,18 @@ func (r *S2EventRepository) StreamAppEvents(ctx context.Context, query types.Eve
 }
 
 func (r *S2EventRepository) streamEvents(ctx context.Context, streamName s2.StreamName, containerID string, query types.EventQuery) (EventStream, error) {
-	opts := &s2.ReadOptions{
-		SeqNum:     query.SeqNum,
-		Timestamp:  query.Timestamp,
-		TailOffset: query.TailOffset,
-		Count:      countOption(query.Limit),
-		Until:      query.Until,
-		Wait:       query.WaitSeconds,
-		Clamp:      query.Clamp,
-	}
+	opts := s2EventReadOptions(query)
 	session, err := r.basin.Stream(streamName).ReadSession(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("stream events from s2 stream %q: %w", streamName, err)
 	}
 
 	return &s2EventStream{
-		session: session,
-		query:   query,
+		ctx:        ctx,
+		basin:      r.basin,
+		streamName: streamName,
+		session:    session,
+		query:      query,
 		response: &types.ContainerEventsResponse{
 			ContainerID: containerID,
 			WorkspaceID: query.WorkspaceID,
@@ -682,23 +678,40 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 }
 
 type s2EventStream struct {
+	ctx     context.Context
+	basin   *s2.BasinClient
 	session *s2.ReadSession
-	query   types.EventQuery
 
-	response *types.ContainerEventsResponse
-	current  types.ContainerEventRecord
+	streamName s2.StreamName
+	query      types.EventQuery
+
+	response   *types.ContainerEventsResponse
+	nextSeqNum *uint64
+	current    types.ContainerEventRecord
+	err        error
 }
 
 func (s *s2EventStream) Next() bool {
-	for s.session.Next() {
-		eventRecord, ok := containerEventRecordFromS2(s.session.Record(), s.query, s.response)
-		if !ok {
-			continue
+	for {
+		for s.session.Next() {
+			record := s.session.Record()
+			s.setNextSeqNum(record.SeqNum + 1)
+			eventRecord, ok := containerEventRecordFromS2(record, s.query, s.response)
+			if !ok {
+				continue
+			}
+			s.current = eventRecord
+			return true
 		}
-		s.current = eventRecord
-		return true
+
+		if err := s.session.Err(); err != nil {
+			s.err = err
+			return false
+		}
+		if !s.reopenCleanSession() {
+			return false
+		}
 	}
-	return false
 }
 
 func (s *s2EventStream) Record() types.ContainerEventRecord {
@@ -706,11 +719,94 @@ func (s *s2EventStream) Record() types.ContainerEventRecord {
 }
 
 func (s *s2EventStream) Err() error {
-	return s.session.Err()
+	return s.err
 }
 
 func (s *s2EventStream) Close() error {
 	return s.session.Close()
+}
+
+func (s *s2EventStream) setNextSeqNum(seqNum uint64) {
+	s.nextSeqNum = &seqNum
+}
+
+func (s *s2EventStream) reopenCleanSession() bool {
+	if !s.shouldResumeCleanSession() {
+		return false
+	}
+
+	nextSeqNum := s.resumeSeqNum()
+	if nextSeqNum == nil {
+		return false
+	}
+	if !sleepWithContext(s.ctx, s2StreamResumeDelay) {
+		return false
+	}
+
+	query := s.query
+	query.SeqNum = nextSeqNum
+	query.Timestamp = nil
+	query.TailOffset = nil
+	clamp := true
+	query.Clamp = &clamp
+
+	session, err := s.basin.Stream(s.streamName).ReadSession(s.ctx, s2EventReadOptions(query))
+	if err != nil {
+		s.err = err
+		return false
+	}
+
+	_ = s.session.Close()
+	s.session = session
+	s.query = query
+	return true
+}
+
+func (s *s2EventStream) shouldResumeCleanSession() bool {
+	if s.ctx.Err() != nil {
+		return false
+	}
+	return s.query.Limit == 0 && s.query.Until == nil && s.query.WaitSeconds == nil
+}
+
+func (s *s2EventStream) resumeSeqNum() *uint64 {
+	if s.nextSeqNum != nil {
+		seqNum := *s.nextSeqNum
+		return &seqNum
+	}
+	if position := s.session.NextReadPosition(); position != nil {
+		seqNum := position.SeqNum
+		return &seqNum
+	}
+	if tail := s.session.LastObservedTail(); tail != nil {
+		seqNum := tail.SeqNum
+		return &seqNum
+	}
+	return nil
+}
+
+func s2EventReadOptions(query types.EventQuery) *s2.ReadOptions {
+	return &s2.ReadOptions{
+		SeqNum:     query.SeqNum,
+		Timestamp:  query.Timestamp,
+		TailOffset: query.TailOffset,
+		Count:      countOption(query.Limit),
+		Until:      query.Until,
+		Wait:       query.WaitSeconds,
+		Clamp:      query.Clamp,
+	}
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuery, response *types.ContainerEventsResponse) (types.ContainerEventRecord, bool) {
