@@ -101,32 +101,33 @@ func (o ComputeOffer) CostPerGPU() float64 {
 }
 
 type ComputeReservation struct {
-	ID                 string
-	PoolName           string
-	Selector           string
-	Provider           string
-	OfferID            string
-	InstanceType       string
-	InstanceID         string
-	MachineID          string
-	GPU                string
-	GPUCount           uint32
-	CPUMillicores      int64
-	MemoryMB           int64
-	HourlyCostMicros   int64
-	CommittedMicros    int64
-	Source             ComputeCapacitySource
-	Status             ComputeReservationStatus
-	CreatedAt          time.Time
-	ExpiresAt          time.Time
-	BillingRenewalAt   time.Time
-	BillingCursorAt    time.Time
-	LastStatusCheckAt  time.Time
-	LastBillingCheckAt time.Time
-	LastReconcileAt    time.Time
-	LastStatusMessage  string
-	LastError          string
-	TerminatingReason  string
+	ID                    string
+	PoolName              string
+	Selector              string
+	Provider              string
+	OfferID               string
+	InstanceType          string
+	InstanceID            string
+	MachineID             string
+	GPU                   string
+	GPUCount              uint32
+	CPUMillicores         int64
+	MemoryMB              int64
+	HourlyCostMicros      int64
+	CommittedMicros       int64
+	Source                ComputeCapacitySource
+	Status                ComputeReservationStatus
+	CreatedAt             time.Time
+	ExpiresAt             time.Time
+	BillingRenewalAt      time.Time
+	BillingCursorAt       time.Time
+	LastStatusCheckAt     time.Time
+	LastBillingCheckAt    time.Time
+	LastReconcileAt       time.Time
+	LastStatusMessage     string
+	LastError             string
+	TerminatingReason     string
+	RegistrationTokenHash string
 }
 
 func (r ComputeReservation) ActiveAt(now time.Time) bool {

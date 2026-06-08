@@ -106,14 +106,13 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		}
 	}
 
-	bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "")
-	if err != nil {
-		return launchPoolError("bootstrap_failed", err.Error(), billingDecision{}), nil
-	}
-
 	vendors := s.computeVendors()
 	newReservations := append([]model.Reservation{}, reservations...)
 	createdReservations := []model.Reservation{}
+	cleanupLaunchFailure := func(code string, cause error) *pb.LaunchPoolCapacityResponse {
+		err := s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, cause)
+		return launchPoolError(code, err.Error(), billingDecision{})
+	}
 	for _, action := range plan.Actions {
 		if action.Type != model.ActionCreate {
 			continue
@@ -123,6 +122,10 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 			return launchPoolError("provider_unavailable", fmt.Sprintf("vendor %q is not configured", action.Offer.Provider), billingDecision{}), nil
 		}
 		for i := uint32(0); i < action.Count; i++ {
+			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "")
+			if err != nil {
+				return cleanupLaunchFailure("bootstrap_failed", err), nil
+			}
 			reservation, err := vendor.CreateReservation(ctx, model.ReservationRequest{
 				PoolName:          pool.Name,
 				Selector:          pool.Selector,
@@ -135,11 +138,12 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 				BootstrapCommand:  bootstrapCommand,
 			})
 			if err != nil {
-				return launchPoolError("provider_failure", err.Error(), billingDecision{}), nil
+				return cleanupLaunchFailure("provider_failure", err), nil
 			}
 			if reservation == nil {
-				return launchPoolError("provider_failure", "vendor returned empty reservation", billingDecision{}), nil
+				return cleanupLaunchFailure("provider_failure", fmt.Errorf("vendor returned empty reservation")), nil
 			}
+			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
 			createdReservations = append(createdReservations, *reservation)
 			newReservations = append(newReservations, *reservation)
 		}

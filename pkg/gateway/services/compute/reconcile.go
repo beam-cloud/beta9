@@ -17,6 +17,7 @@ const (
 	reconcileReasonAgentDisconnected   = "agent_disconnected"
 	reconcileReasonCreditExhausted     = "credit_exhausted"
 	reconcileReasonMachineDisconnected = "machine_disconnected"
+	reconcileReasonMachineReleased     = "machine_released"
 	reconcileReasonReservationExpired  = "expired"
 )
 
@@ -72,6 +73,10 @@ func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
 		if !reservation.Managed() {
+			continue
+		}
+		if reservation.Status == model.ReservationTerminating {
+			changed = s.reconcileTerminatingReservation(ctx, workspaceID, state, reservation, vendors, now) || changed
 			continue
 		}
 		changed = s.reconcileReservationStatus(ctx, workspaceID, state, reservation, vendors, now) || changed
@@ -266,6 +271,18 @@ func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID st
 		return false
 	}
 	return s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reconcileReasonReservationExpired, "reservation ttl expired")
+}
+
+func (s *Service) reconcileTerminatingReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, now time.Time) bool {
+	if reservation.Status != model.ReservationTerminating {
+		return false
+	}
+	if !reservation.LastReconcileAt.IsZero() && now.Sub(reservation.LastReconcileAt) < reconcileStatusCheckInterval {
+		return false
+	}
+	reservation.LastReconcileAt = now
+	s.terminateReservation(ctx, workspaceID, state, reservation, vendors, firstNonEmpty(reservation.TerminatingReason, "terminating"), firstNonEmpty(reservation.LastStatusMessage, "reservation terminating"))
+	return true
 }
 
 func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, reason, message string) bool {

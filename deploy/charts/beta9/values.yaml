@@ -10,7 +10,6 @@ global:
 config:
   events:
     callbacks:
-    # Staging URL: https://api.stage.beam.cloud/v2/api/webhook/beta9/
     - url: ""
       format: beta9_webhook
       headers:

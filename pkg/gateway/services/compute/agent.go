@@ -76,6 +76,10 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	if err := s.assignManagedReservationToMachine(ctx, poolState, tokenState, agentState); err != nil {
+		_ = s.computeRepo.DeleteAgentMachineState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
 	if s.scheduler != nil {
 		if err := s.scheduler.RegisterAgentPool(tokenState.WorkspaceID, poolState); err != nil {
 			return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
