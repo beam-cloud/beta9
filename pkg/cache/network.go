@@ -131,6 +131,9 @@ func GetPrivateIpAddr() (string, error) {
 		if ipv4 != nil && ipv4.IsPrivate() {
 			return ipv4.String(), nil
 		}
+		if ipv4 == nil && ip.IsPrivate() {
+			return ip.String(), nil
+		}
 	}
 
 	return "", fmt.Errorf("no active network interface found with a private IP address")

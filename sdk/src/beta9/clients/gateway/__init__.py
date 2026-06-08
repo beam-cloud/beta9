@@ -530,6 +530,8 @@ class ProviderInstance(betterproto.Message):
     created_at: datetime = betterproto.message_field(9)
     expires_at: datetime = betterproto.message_field(10)
     billing_renewal_at: datetime = betterproto.message_field(11)
+    status_message: str = betterproto.string_field(12)
+    terminating_reason: str = betterproto.string_field(13)
 
 
 @dataclass(eq=False, repr=False)
@@ -570,6 +572,9 @@ class LaunchPoolCapacityResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     pool: "PrivatePool" = betterproto.message_field(3)
+    error_code: str = betterproto.string_field(4)
+    required_cents: int = betterproto.int64_field(5)
+    available_cents: int = betterproto.int64_field(6)
 
 
 @dataclass(eq=False, repr=False)

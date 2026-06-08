@@ -67,16 +67,18 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
 	}
 	computeService := computesvc.New(computesvc.Options{
-		Config:          opts.Config,
-		BackendRepo:     opts.BackendRepo,
-		ContainerRepo:   opts.ContainerRepo,
-		Scheduler:       opts.Scheduler,
-		EventRepo:       opts.EventRepo,
-		WorkerRepo:      opts.WorkerRepo,
-		ComputeRepo:     computeRepo,
-		KeyEventManager: keyEventManager,
-		Tailscale:       opts.Tailscale,
+		Config:           opts.Config,
+		BackendRepo:      opts.BackendRepo,
+		ContainerRepo:    opts.ContainerRepo,
+		Scheduler:        opts.Scheduler,
+		EventRepo:        opts.EventRepo,
+		WorkerRepo:       opts.WorkerRepo,
+		UsageMetricsRepo: opts.UsageMetricsRepo,
+		ComputeRepo:      computeRepo,
+		KeyEventManager:  keyEventManager,
+		Tailscale:        opts.Tailscale,
 	})
+	computeService.Start(opts.Ctx)
 
 	return &GatewayService{
 		ctx:              opts.Ctx,

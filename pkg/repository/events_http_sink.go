@@ -16,6 +16,10 @@ import (
 const (
 	defaultEventHTTPTimeout = 5 * time.Second
 	eventHTTPQueueSize      = 4096
+
+	eventCallbackFormatCloudEvent   = "cloud_event"
+	eventCallbackFormatBeta9Webhook = "beta9_webhook"
+	eventCallbackFormatSlack        = "slack"
 )
 
 type eventHTTPSink struct {
@@ -89,13 +93,44 @@ func (s *eventHTTPSink) deliver(event cloudevents.Event) error {
 
 func (s *eventHTTPSink) payload(event cloudevents.Event) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(s.config.Format)) {
-	case "", "cloud_event", "cloudevent", "json":
+	case "", eventCallbackFormatCloudEvent, "cloudevent", "json":
 		return json.Marshal(event)
-	case "slack":
+	case eventCallbackFormatBeta9Webhook, "internal_api":
+		return beta9WebhookEventPayload(event)
+	case eventCallbackFormatSlack:
 		return json.Marshal(map[string]string{"text": slackEventText(event)})
 	default:
 		return nil, fmt.Errorf("unsupported event callback format %q", s.config.Format)
 	}
+}
+
+func beta9WebhookEventPayload(event cloudevents.Event) ([]byte, error) {
+	envelope, err := cloudEventJSONMap(event)
+	if err != nil {
+		return nil, err
+	}
+	envelope["date"] = eventUnixSeconds(event.Time())
+	return json.Marshal([]map[string]interface{}{envelope})
+}
+
+func cloudEventJSONMap(event cloudevents.Event) (map[string]interface{}, error) {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return nil, err
+	}
+
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+	return envelope, nil
+}
+
+func eventUnixSeconds(t time.Time) float64 {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	return float64(t.UnixNano()) / float64(time.Second)
 }
 
 func eventHTTPMatches(filters []string, eventType string) bool {

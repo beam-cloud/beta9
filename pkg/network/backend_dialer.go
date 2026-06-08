@@ -72,7 +72,7 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 		if d.tailscale == nil {
 			return nil, fmt.Errorf("tailscale dialer is unavailable for backend route %s", routeID)
 		}
-		conn, err := d.tailscale.DialTimeout("tcp", route.ProxyTarget, timeout)
+		conn, err := d.tailscale.DialContextTimeout(ctx, "tcp", route.ProxyTarget, timeout)
 		if err != nil {
 			return nil, err
 		}

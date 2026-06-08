@@ -129,9 +129,18 @@ func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, e
 
 // DialTimeout attempts to establish a TCP connection to a tailscale service with the specified timeout duration
 func (t *Tailscale) DialTimeout(network, addr string, timeout time.Duration) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	return t.DialContextTimeout(context.Background(), network, addr, timeout)
+}
 
+func (t *Tailscale) DialContextTimeout(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	return t.Dial(ctx, network, addr)
 }
 

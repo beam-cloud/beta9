@@ -10,8 +10,10 @@ var (
 	UsageMetricsWorkerContainerCost     = "container_cost_cents"
 
 	// Gateway keys
-	UsageMetricsPublicTaskCost  = "public_task_cost_cents"
-	UsageMetricsPublicTaskCount = "public_task_count"
+	UsageMetricsPublicTaskCost                   = "public_task_cost_cents"
+	UsageMetricsPublicTaskCount                  = "public_task_count"
+	UsageMetricsManagedComputeReservationSeconds = "managed_compute_reservation_seconds"
+	UsageMetricsManagedComputeReservationCost    = "managed_compute_reservation_cost_cents"
 )
 
 type TaskMetrics struct {

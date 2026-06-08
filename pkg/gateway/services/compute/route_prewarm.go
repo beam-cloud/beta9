@@ -10,6 +10,7 @@ import (
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -54,7 +55,15 @@ func (s *Service) prewarmRoute(route types.BackendRoute, agentState *model.Agent
 
 func (s *Service) prewarmRouteOnce(route types.BackendRoute, agentState *model.AgentTokenState) {
 	start := time.Now()
-	conn, err := s.tailscale.DialTimeout("tcp", route.ProxyTarget, routePrewarmTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), routePrewarmTimeout)
+	defer cancel()
+
+	conn, err := network.NewBackendDialer(
+		s.tailscale,
+		s.appConfig.Tailscale,
+		s.containerRepo,
+		routePrewarmTimeout,
+	).Dial(ctx, types.BackendRouteAddress(route.RouteID))
 	dialLatency := time.Since(start)
 	if conn != nil {
 		_ = conn.Close()

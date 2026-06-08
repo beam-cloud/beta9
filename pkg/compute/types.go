@@ -101,26 +101,32 @@ func (o Offer) CostPerGPU() float64 {
 }
 
 type Reservation struct {
-	ID                string
-	PoolName          string
-	Selector          string
-	Provider          string
-	OfferID           string
-	InstanceType      string
-	InstanceID        string
-	MachineID         string
-	GPU               string
-	GPUCount          uint32
-	CPUMillicores     int64
-	MemoryMB          int64
-	HourlyCostMicros  int64
-	CommittedMicros   int64
-	Source            CapacitySource
-	Status            ReservationStatus
-	CreatedAt         time.Time
-	ExpiresAt         time.Time
-	BillingRenewalAt  time.Time
-	LastStatusMessage string
+	ID                 string
+	PoolName           string
+	Selector           string
+	Provider           string
+	OfferID            string
+	InstanceType       string
+	InstanceID         string
+	MachineID          string
+	GPU                string
+	GPUCount           uint32
+	CPUMillicores      int64
+	MemoryMB           int64
+	HourlyCostMicros   int64
+	CommittedMicros    int64
+	Source             CapacitySource
+	Status             ReservationStatus
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	BillingRenewalAt   time.Time
+	BillingCursorAt    time.Time
+	LastStatusCheckAt  time.Time
+	LastBillingCheckAt time.Time
+	LastReconcileAt    time.Time
+	LastStatusMessage  string
+	LastError          string
+	TerminatingReason  string
 }
 
 func (r Reservation) ActiveAt(now time.Time) bool {
@@ -128,6 +134,10 @@ func (r Reservation) ActiveAt(now time.Time) bool {
 		return false
 	}
 	return r.ExpiresAt.IsZero() || r.ExpiresAt.After(now)
+}
+
+func (r Reservation) Managed() bool {
+	return !r.Source.IsAttached() && r.Source != SourceAutosolver
 }
 
 func (r Reservation) Offer() Offer {

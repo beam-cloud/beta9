@@ -8,6 +8,7 @@ import (
 )
 
 type PoolState struct {
+	WorkspaceID          string         `json:"workspace_id,omitempty"`
 	Name                 string         `json:"name"`
 	Selector             string         `json:"selector"`
 	Config               *pb.PoolConfig `json:"config"`

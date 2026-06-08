@@ -156,6 +156,13 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return err
 	}
+	if s.scheduler != nil {
+		if poolState, err := s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
+			if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
+				return err
+			}
+		}
+	}
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)
 
@@ -198,10 +205,16 @@ func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.A
 		return
 	}
 	agentState = current
+	lastSeen := model.AgentMachineLastSeen(agentState)
+	if !agentState.LastDisconnectAt.IsZero() && !agentState.LastDisconnectAt.Before(lastSeen) {
+		s.disableMachineWorker(ctx, agentState, "agent_disconnected")
+		return
+	}
 	agentState.LastDisconnectAt = time.Now().UTC()
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return
 	}
+	s.disableMachineWorker(ctx, agentState, "agent_disconnected")
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		Timestamp:   agentState.LastDisconnectAt,
 		WorkspaceID: agentState.WorkspaceID,

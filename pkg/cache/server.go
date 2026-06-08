@@ -111,8 +111,12 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 	}
 
 	currentHost.HostId = hostId
-	currentHost.Addr = fmt.Sprintf("%s:%d", publicIpAddr, cfg.Global.ServerPort)
-	currentHost.PrivateAddr = fmt.Sprintf("%s:%d", privateIpAddr, cfg.Global.ServerPort)
+	if publicIpAddr != "" {
+		currentHost.Addr = net.JoinHostPort(publicIpAddr, fmt.Sprintf("%d", cfg.Global.ServerPort))
+	}
+	if privateIpAddr != "" {
+		currentHost.PrivateAddr = net.JoinHostPort(privateIpAddr, fmt.Sprintf("%d", cfg.Global.ServerPort))
+	}
 	if opts.AdvertiseAddr != "" {
 		currentHost.Addr = opts.AdvertiseAddr
 		currentHost.PrivateAddr = opts.AdvertiseAddr

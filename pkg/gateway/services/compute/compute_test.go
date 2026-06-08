@@ -187,6 +187,110 @@ func TestAgentInstallCommandDevModeRunsWithoutSudo(t *testing.T) {
 	}
 }
 
+func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
+	billing := &fakeManagedBilling{
+		launchDecision: billingDecision{OK: true, AvailableCents: 3000, RequiredCents: 2500},
+	}
+	service := &Service{
+		billing: billing,
+		appConfig: types.AppConfig{
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
+			},
+		},
+	}
+
+	plan := model.SolvePlan{
+		Actions: []model.SolveAction{
+			{
+				Type:  model.ActionCreate,
+				Count: 2,
+				Offer: model.Offer{HourlyCostMicros: 1_500_000},
+			},
+			{
+				Type:  model.ActionKeep,
+				Count: 1,
+				Offer: model.Offer{HourlyCostMicros: 9_000_000},
+			},
+		},
+		CommittedCostMicros: 42_000_000,
+	}
+
+	decision, err := service.checkManagedLaunchCredit(context.Background(), "workspace-1", "pool-1", plan)
+	if err != nil {
+		t.Fatalf("checkManagedLaunchCredit() error = %v", err)
+	}
+	if !decision.OK {
+		t.Fatal("checkManagedLaunchCredit() returned non-ok decision")
+	}
+	if billing.launchCalls != 1 {
+		t.Fatalf("CheckLaunchCredit calls = %d, want 1", billing.launchCalls)
+	}
+	req := billing.launchRequest
+	if req.WorkspaceID != "workspace-1" || req.PoolName != "pool-1" {
+		t.Fatalf("billing request identity = %s/%s, want workspace-1/pool-1", req.WorkspaceID, req.PoolName)
+	}
+	if req.RequiredCents != 2500 {
+		t.Fatalf("billing request required cents = %d, want 2500", req.RequiredCents)
+	}
+	if req.Quantity != 2 {
+		t.Fatalf("billing request quantity = %d, want 2", req.Quantity)
+	}
+	if req.EstimatedHourlyCostMicros != 3_000_000 {
+		t.Fatalf("billing request hourly micros = %d, want 3000000", req.EstimatedHourlyCostMicros)
+	}
+	if req.EstimatedCommittedMicros != 42_000_000 {
+		t.Fatalf("billing request committed micros = %d, want 42000000", req.EstimatedCommittedMicros)
+	}
+}
+
+func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
+	service := &Service{
+		computeRepo: repo,
+		billing: &fakeManagedBilling{
+			balanceDecision: billingDecision{
+				OK:             false,
+				ErrorCode:      launchErrorInsufficientCredit,
+				Message:        "credits exhausted",
+				AvailableCents: 0,
+				RequiredCents:  2500,
+			},
+		},
+	}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+
+	saved := repo.pools["workspace-1"][0]
+	if !repo.savedPool {
+		t.Fatal("ReconcileManagedCompute() did not persist the pool transition")
+	}
+	if got, want := saved.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if got, want := saved.Reservations[0].TerminatingReason, "credit_exhausted"; got != want {
+		t.Fatalf("terminating reason = %q, want %q", got, want)
+	}
+}
+
 func testAuthContext(workspaceID, tokenID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
@@ -229,6 +333,20 @@ type fakeComputeRepo struct {
 
 func (r *fakeComputeRepo) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {
 	r.savedPool = true
+	if state == nil {
+		return nil
+	}
+	if r.pools == nil {
+		r.pools = map[string][]*model.PoolState{}
+	}
+	state.WorkspaceID = workspaceID
+	for i, pool := range r.pools[workspaceID] {
+		if pool != nil && pool.Name == state.Name {
+			r.pools[workspaceID][i] = state
+			return nil
+		}
+	}
+	r.pools[workspaceID] = append(r.pools[workspaceID], state)
 	return nil
 }
 
@@ -245,6 +363,22 @@ func (r *fakeComputeRepo) ListPoolStates(ctx context.Context, workspaceID string
 	pools := append([]*model.PoolState(nil), r.pools[workspaceID]...)
 	if limit > 0 && len(pools) > limit {
 		pools = pools[:limit]
+	}
+	return pools, nil
+}
+
+func (r *fakeComputeRepo) ListAllPoolStates(ctx context.Context, limit int) ([]*model.PoolState, error) {
+	pools := []*model.PoolState{}
+	for workspaceID, states := range r.pools {
+		for _, state := range states {
+			if state != nil && state.WorkspaceID == "" {
+				state.WorkspaceID = workspaceID
+			}
+			pools = append(pools, state)
+			if limit > 0 && len(pools) >= limit {
+				return pools, nil
+			}
+		}
 	}
 	return pools, nil
 }
@@ -314,4 +448,30 @@ func (r *fakeComputeRepo) DeleteAgentWorkerSlotState(ctx context.Context, worksp
 
 func fakeComputeKey(workspaceID, poolName string) string {
 	return workspaceID + "\x00" + poolName
+}
+
+type fakeManagedBilling struct {
+	launchDecision  billingDecision
+	launchErr       error
+	launchCalls     int
+	launchRequest   billingCreditRequest
+	balanceDecision billingDecision
+	balanceErr      error
+	usage           []managedUsage
+	usageErr        error
+}
+
+func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCreditRequest) (billingDecision, error) {
+	b.launchCalls++
+	b.launchRequest = req
+	return b.launchDecision, b.launchErr
+}
+
+func (b *fakeManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+	return b.balanceDecision, b.balanceErr
+}
+
+func (b *fakeManagedBilling) RecordManagedUsage(_ context.Context, usage managedUsage) error {
+	b.usage = append(b.usage, usage)
+	return b.usageErr
 }

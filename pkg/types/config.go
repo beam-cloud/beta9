@@ -24,6 +24,7 @@ type AppConfig struct {
 	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
 	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
+	ManagedCompute ManagedComputeConfig `key:"managedCompute" json:"managed_compute"`
 	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
 	Cache          cache.Config         `key:"cache" json:"cache"`
 	Agent          AgentConfig          `key:"agent" json:"agent"`
@@ -623,6 +624,43 @@ type MonitoringConfig struct {
 	ContainerMetricsInterval time.Duration           `key:"containerMetricsInterval" json:"container_metrics_interval"`
 	VictoriaMetrics          VictoriaMetricsConfig   `key:"victoriametrics" json:"victoriametrics"`
 	ContainerCostHookConfig  ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
+}
+
+const ManagedComputeDefaultMinimumCreditCents int64 = 2500
+
+type ManagedComputeConfig struct {
+	Billing ManagedComputeBillingConfig `key:"billing" json:"billing"`
+}
+
+type ManagedComputeBillingConfig struct {
+	Mode               string        `key:"mode" json:"mode"`
+	Endpoint           string        `key:"endpoint" json:"endpoint"`
+	AuthToken          string        `key:"authToken" json:"auth_token"`
+	Required           bool          `key:"required" json:"required"`
+	Timeout            time.Duration `key:"timeout" json:"timeout"`
+	ReconcileInterval  time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
+	MinimumCreditCents int64         `key:"minimumCreditCents" json:"minimum_credit_cents"`
+}
+
+func (c ManagedComputeBillingConfig) MinimumCreditCentsOrDefault() int64 {
+	if c.MinimumCreditCents > 0 {
+		return c.MinimumCreditCents
+	}
+	return ManagedComputeDefaultMinimumCreditCents
+}
+
+func (c ManagedComputeBillingConfig) TimeoutOrDefault() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return 5 * time.Second
+}
+
+func (c ManagedComputeBillingConfig) ReconcileIntervalOrDefault() time.Duration {
+	if c.ReconcileInterval > 0 {
+		return c.ReconcileInterval
+	}
+	return time.Minute
 }
 
 type VictoriaMetricsConfig struct {

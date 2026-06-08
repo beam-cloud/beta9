@@ -101,17 +101,19 @@ func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
 
 func providerInstanceToProto(reservation model.Reservation) *pb.ProviderInstance {
 	return &pb.ProviderInstance{
-		Id:               reservation.ID,
-		PoolName:         reservation.PoolName,
-		Provider:         reservation.Provider,
-		OfferId:          reservation.OfferID,
-		Status:           string(reservation.Status),
-		GpuCount:         reservation.GPUCount,
-		HourlyCostMicros: reservation.HourlyCostMicros,
-		Source:           string(reservation.Source),
-		CreatedAt:        timestampOrNil(reservation.CreatedAt),
-		ExpiresAt:        timestampOrNil(reservation.ExpiresAt),
-		BillingRenewalAt: timestampOrNil(reservation.BillingRenewalAt),
+		Id:                reservation.ID,
+		PoolName:          reservation.PoolName,
+		Provider:          reservation.Provider,
+		OfferId:           reservation.OfferID,
+		Status:            string(reservation.Status),
+		GpuCount:          reservation.GPUCount,
+		HourlyCostMicros:  reservation.HourlyCostMicros,
+		Source:            string(reservation.Source),
+		CreatedAt:         timestampOrNil(reservation.CreatedAt),
+		ExpiresAt:         timestampOrNil(reservation.ExpiresAt),
+		BillingRenewalAt:  timestampOrNil(reservation.BillingRenewalAt),
+		StatusMessage:     reservation.LastStatusMessage,
+		TerminatingReason: reservation.TerminatingReason,
 	}
 }
 

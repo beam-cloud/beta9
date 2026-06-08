@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -31,7 +32,10 @@ const (
 	s2EventWriteTimeout     = 5 * time.Second
 	s2EventEnqueueTimeout   = 250 * time.Millisecond
 	s2EventFlushInterval    = 100 * time.Millisecond
+	s2ScopedWriteWarnEvery  = time.Minute
 )
+
+var lastScopedS2WriteWarning atomic.Int64
 
 type S2EventRepository struct {
 	basin        *s2.BasinClient
@@ -159,7 +163,7 @@ func (r *ScopedS2EventRepository) runWriter() {
 			return
 		}
 		if err := r.appendEventBatch(batch); err != nil {
-			log.Debug().Err(err).Int("event_count", len(batch)).Msg("failed to append scoped event batch to s2")
+			warnScopedS2WriteFailure(err, len(batch))
 		}
 		batch = batch[:0]
 	}
@@ -179,6 +183,19 @@ func (r *ScopedS2EventRepository) runWriter() {
 			flush()
 		}
 	}
+}
+
+func warnScopedS2WriteFailure(err error, eventCount int) {
+	now := time.Now()
+	last := lastScopedS2WriteWarning.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < s2ScopedWriteWarnEvery {
+		return
+	}
+	if !lastScopedS2WriteWarning.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+
+	log.Warn().Err(err).Int("event_count", eventCount).Msg("failed to append scoped event batch to s2")
 }
 
 func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) error {

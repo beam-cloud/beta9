@@ -683,6 +683,9 @@ func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
 // It prefers an explicit pod IP and otherwise returns "" so the cache server
 // falls back to its own discovered private IP.
 func (m *WorkerCacheManager) cacheAdvertiseHost() string {
+	if addr := strings.TrimSpace(os.Getenv(types.WorkerCacheAdvertiseAddrEnv)); addr != "" {
+		return addr
+	}
 	if net.ParseIP(m.podAddr) != nil {
 		return m.podAddr
 	}

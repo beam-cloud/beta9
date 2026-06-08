@@ -700,6 +700,8 @@ message ProviderInstance {
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp expires_at = 10;
   google.protobuf.Timestamp billing_renewal_at = 11;
+  string status_message = 12;
+  string terminating_reason = 13;
 }
 
 message PrivatePool {
@@ -731,6 +733,9 @@ message LaunchPoolCapacityResponse {
   bool ok = 1;
   string err_msg = 2;
   PrivatePool pool = 3;
+  string error_code = 4;
+  int64 required_cents = 5;
+  int64 available_cents = 6;
 }
 
 message ListPrivatePoolsRequest {

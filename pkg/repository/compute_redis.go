@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -21,6 +22,7 @@ func NewComputeRedisRepository(rdb *common.RedisClient) ComputeRepository {
 }
 
 func (r *ComputeRedisRepository) SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error {
+	state.WorkspaceID = workspaceID
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -28,7 +30,10 @@ func (r *ComputeRedisRepository) SavePoolState(ctx context.Context, workspaceID 
 	if err := r.rdb.Set(ctx, common.RedisKeys.ComputePoolState(workspaceID, state.Name), data, 0).Err(); err != nil {
 		return err
 	}
-	return r.rdb.SAdd(ctx, common.RedisKeys.ComputePoolIndex(workspaceID), state.Name).Err()
+	if err := r.rdb.SAdd(ctx, common.RedisKeys.ComputePoolIndex(workspaceID), state.Name).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SAdd(ctx, common.RedisKeys.ComputePoolWorkspaceIndex(), workspaceID).Err()
 }
 
 func (r *ComputeRedisRepository) GetPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error) {
@@ -44,6 +49,7 @@ func (r *ComputeRedisRepository) GetPoolState(ctx context.Context, workspaceID, 
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, err
 	}
+	state.WorkspaceID = workspaceID
 	return &state, nil
 }
 
@@ -64,11 +70,46 @@ func (r *ComputeRedisRepository) ListPoolStates(ctx context.Context, workspaceID
 	return r.poolStates(ctx, keys)
 }
 
+func (r *ComputeRedisRepository) ListAllPoolStates(ctx context.Context, limit int) ([]*compute.PoolState, error) {
+	workspaceIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputePoolWorkspaceIndex()).Result()
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(workspaceIDs)
+
+	states := []*compute.PoolState{}
+	for _, workspaceID := range workspaceIDs {
+		remaining := 0
+		if limit > 0 {
+			remaining = limit - len(states)
+			if remaining <= 0 {
+				break
+			}
+		}
+		pools, err := r.ListPoolStates(ctx, workspaceID, remaining)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, pools...)
+	}
+	return states, nil
+}
+
 func (r *ComputeRedisRepository) DeletePoolState(ctx context.Context, workspaceID, name string) error {
 	if err := r.rdb.Del(ctx, common.RedisKeys.ComputePoolState(workspaceID, name)).Err(); err != nil {
 		return err
 	}
-	return r.rdb.SRem(ctx, common.RedisKeys.ComputePoolIndex(workspaceID), name).Err()
+	if err := r.rdb.SRem(ctx, common.RedisKeys.ComputePoolIndex(workspaceID), name).Err(); err != nil {
+		return err
+	}
+	remaining, err := r.rdb.SCard(ctx, common.RedisKeys.ComputePoolIndex(workspaceID)).Result()
+	if err != nil {
+		return err
+	}
+	if remaining == 0 {
+		return r.rdb.SRem(ctx, common.RedisKeys.ComputePoolWorkspaceIndex(), workspaceID).Err()
+	}
+	return nil
 }
 
 func (r *ComputeRedisRepository) SaveJoinTokenState(ctx context.Context, state *compute.JoinTokenState, ttl time.Duration) error {
@@ -304,9 +345,21 @@ func (r *ComputeRedisRepository) poolStates(ctx context.Context, keys []string) 
 		if err := json.Unmarshal(data, &state); err != nil {
 			return nil, err
 		}
+		if state.WorkspaceID == "" {
+			state.WorkspaceID = workspaceIDFromComputePoolKey(keys[i])
+		}
 		states = append(states, &state)
 	}
 	return states, nil
+}
+
+func workspaceIDFromComputePoolKey(key string) string {
+	start := strings.Index(key, "{")
+	end := strings.Index(key, "}")
+	if start < 0 || end <= start {
+		return ""
+	}
+	return key[start+1 : end]
 }
 
 func (r *ComputeRedisRepository) machines(ctx context.Context, keys []string) ([]*compute.AgentTokenState, error) {

@@ -97,15 +97,16 @@ var (
 )
 
 var (
-	computePoolState         string = "compute:{%s}:pool:%s"
-	computePoolIndex         string = "compute:{%s}:pools"
-	computeJoinToken         string = "compute:join:%s"
-	computeAgentToken        string = "compute:agent:token:%s"
-	computeAgentMachine      string = "compute:{%s}:pool:%s:machine:%s"
-	computeAgentMachinePool  string = "compute:{%s}:machine:%s:pool"
-	computeAgentMachineIndex string = "compute:{%s}:pool:%s:machines"
-	computeAgentSlot         string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
-	computeAgentSlotIndex    string = "compute:{%s}:pool:%s:machine:%s:workers"
+	computePoolState          string = "compute:{%s}:pool:%s"
+	computePoolIndex          string = "compute:{%s}:pools"
+	computePoolWorkspaceIndex string = "compute:workspaces"
+	computeJoinToken          string = "compute:join:%s"
+	computeAgentToken         string = "compute:agent:token:%s"
+	computeAgentMachine       string = "compute:{%s}:pool:%s:machine:%s"
+	computeAgentMachinePool   string = "compute:{%s}:machine:%s:pool"
+	computeAgentMachineIndex  string = "compute:{%s}:pool:%s:machines"
+	computeAgentSlot          string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
+	computeAgentSlotIndex     string = "compute:{%s}:pool:%s:machine:%s:workers"
 )
 
 var (
@@ -299,6 +300,10 @@ func (rk *redisKeys) ComputePoolState(workspaceID, poolName string) string {
 
 func (rk *redisKeys) ComputePoolIndex(workspaceID string) string {
 	return fmt.Sprintf(computePoolIndex, workspaceID)
+}
+
+func (rk *redisKeys) ComputePoolWorkspaceIndex() string {
+	return computePoolWorkspaceIndex
 }
 
 func (rk *redisKeys) ComputeJoinToken(tokenHash string) string {

@@ -171,6 +171,11 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 	if agentState == nil {
 		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "invalid agent token"})
 	}
+	defer func() {
+		if ctx.Err() != nil {
+			s.recordAgentDisconnect(context.Background(), agentState)
+		}
+	}()
 
 	sendSnapshot := func() error {
 		current, err := s.currentComputeAgentState(ctx, agentState)
