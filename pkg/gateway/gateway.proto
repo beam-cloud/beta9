@@ -825,6 +825,9 @@ message AgentBootstrapConfig {
   string executor = 8;
   string fallback = 9;
   repeated string disabled_services = 10;
+  string image_registry_store = 11;
+  uint32 image_clip_version = 12;
+  bool image_local_cache_enabled = 13;
 }
 
 message JoinAgentRequest {

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/network"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
@@ -682,7 +683,11 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 		ContainerStartConcurrency: 12,
 	}
 
-	if err := writeWorkerConfig(path, bootstrapConfig{}, slot); err != nil {
+	if err := writeWorkerConfig(path, bootstrapConfig{
+		ImageRegistryStore:     reg.S3ImageRegistryStore,
+		ImageClipVersion:       1,
+		ImageLocalCacheEnabled: true,
+	}, slot); err != nil {
 		t.Fatal(err)
 	}
 
@@ -708,6 +713,17 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
 		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
+	}
+
+	imageConfig := config["imageService"].(map[string]any)
+	if got := imageConfig["registryStore"]; got != reg.S3ImageRegistryStore {
+		t.Fatalf("image registry store = %v, want %q", got, reg.S3ImageRegistryStore)
+	}
+	if got := imageConfig["clipVersion"]; got != float64(1) {
+		t.Fatalf("image clip version = %v, want 1", got)
+	}
+	if got := imageConfig["localCacheEnabled"]; got != false {
+		t.Fatalf("image local cache enabled = %v, want false", got)
 	}
 
 	monitoringConfig := config["monitoring"].(map[string]any)

@@ -8,6 +8,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -226,6 +227,44 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
+}
+
+func TestGetCacheOriginCredentialsVendsImageArchiveStorage(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo: &originCredentialsBackendRepo{
+			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+		},
+		appConfig: types.AppConfig{
+			ImageService: types.ImageServiceConfig{
+				RegistryStore: reg.S3ImageRegistryStore,
+				Registries: types.ImageRegistriesConfig{
+					S3: types.S3ImageRegistryConfig{
+						BucketName:     "image-bucket",
+						Region:         "us-east-1",
+						Endpoint:       "https://objects.example.com",
+						AccessKey:      "access",
+						SecretKey:      "secret",
+						ForcePathStyle: true,
+					},
+				},
+			},
+		},
+	}
+
+	resp, err := service.GetCacheOriginCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetCacheOriginCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ImageId:     "image-id",
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.NotNil(t, resp.ImageArchiveStorage)
+	require.Equal(t, "image-bucket", resp.ImageArchiveStorage.BucketName)
+	require.Equal(t, "image-id."+reg.RemoteImageFileExtension, resp.ImageArchiveObjectKey)
 }
 
 func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"os"
 	pathpkg "path"
 
+	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -15,6 +16,7 @@ type agentWorkerConfig struct {
 	PrettyLogs  bool                  `json:"prettyLogs"`
 	Gateway     agentConfigGateway    `json:"gateway"`
 	Storage     agentConfigStorage    `json:"storage"`
+	Image       agentConfigImage      `json:"imageService"`
 	Monitoring  agentConfigMonitoring `json:"monitoring"`
 	Worker      agentConfigWorker     `json:"worker"`
 	Cache       agentConfigCache      `json:"cache"`
@@ -42,6 +44,12 @@ type agentConfigStorage struct {
 type agentConfigWorkspaceStorage struct {
 	BaseMountPath      string `json:"baseMountPath"`
 	DefaultStorageMode string `json:"defaultStorageMode"`
+}
+
+type agentConfigImage struct {
+	LocalCacheEnabled bool   `json:"localCacheEnabled"`
+	RegistryStore     string `json:"registryStore"`
+	ClipVersion       uint32 `json:"clipVersion"`
 }
 
 type agentConfigMonitoring struct {
@@ -166,6 +174,11 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 				DefaultStorageMode: workspaceStorageMode,
 			},
 		},
+		Image: agentConfigImage{
+			LocalCacheEnabled: bootstrap.ImageLocalCacheEnabled,
+			RegistryStore:     firstNonEmpty(bootstrap.ImageRegistryStore, registry.LocalImageRegistryStore),
+			ClipVersion:       firstNonZeroUint32(bootstrap.ImageClipVersion, uint32(types.ClipVersion2)),
+		},
 		Monitoring: agentConfigMonitoring{
 			MetricsCollector:         string(types.MetricsCollectorNone),
 			ContainerMetricsInterval: "3s",
@@ -222,6 +235,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 }
 
 func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
+	c.Image.LocalCacheEnabled = false
 	c.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
 	c.Monitoring.Prometheus = agentConfigPrometheus{}
 	c.Worker.HostNetwork = true

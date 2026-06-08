@@ -15,6 +15,15 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func firstNonZeroUint32(values ...uint32) uint32 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
 func envBool(name string) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
 	return value == "1" || value == "true" || value == "yes" || value == "on"

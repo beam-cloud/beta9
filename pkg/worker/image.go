@@ -1016,7 +1016,10 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		return &sourceRegistry, nil
 	}
 
-	if ok, err := c.pullImageArchiveFromEmbeddedCache(ctx, archivePath, request); ok {
+	if ok, cacheSourceRegistry, err := c.pullImageArchiveFromEmbeddedCache(ctx, archivePath, request); ok {
+		if cacheSourceRegistry != nil {
+			return cacheSourceRegistry, nil
+		}
 		return &sourceRegistry, nil
 	} else if err != nil {
 		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive cache unavailable, falling back to registry")
@@ -1026,8 +1029,19 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	tempPath := archivePath + ".tmp"
 	defer os.Remove(tempPath)
 
+	if c.privateWorkerImageRequest(request) {
+		if brokeredRegistry, err := c.pullImageArchiveFromBrokeredOrigin(ctx, tempPath, request); err == nil && brokeredRegistry != nil {
+			if err := os.Rename(tempPath, archivePath); err != nil {
+				return nil, err
+			}
+			return brokeredRegistry, nil
+		} else if err != nil {
+			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable, falling back to configured registry")
+		}
+	}
+
 	err = c.registry.Pull(ctx, tempPath, imageId)
-	if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+	if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore && !c.privateWorkerImageRequest(request) {
 		if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
 			_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
 			if err2 := c.registry.Pull(ctx, tempPath, imageId); err2 == nil {
@@ -1050,16 +1064,50 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	return &sourceRegistry, nil
 }
 
-func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, error) {
+func (c *ImageClient) privateWorkerImageRequest(request *types.ContainerRequest) bool {
+	if c == nil || request == nil {
+		return false
+	}
+	pool, ok := c.config.Worker.Pools[request.PoolSelector]
+	return ok && pool.Mode == types.PoolModePrivate
+}
+
+func (c *ImageClient) pullImageArchiveFromBrokeredOrigin(ctx context.Context, archivePath string, request *types.ContainerRequest) (*types.S3ImageRegistryConfig, error) {
+	creds := c.originCredentials(ctx, request, request.ImageId, "")
+	if creds == nil || creds.imageArchiveStorage == nil || creds.imageArchiveObjectKey == "" {
+		return nil, nil
+	}
+
+	sourceRegistry := imageArchiveRegistryConfig(creds.imageArchiveStorage)
+	if sourceRegistry.BucketName == "" {
+		return nil, nil
+	}
+
+	store, err := reg.NewS3Store(sourceRegistry)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Get(ctx, creds.imageArchiveObjectKey, archivePath); err != nil {
+		return nil, err
+	}
+
+	log.Info().
+		Str("image_id", request.ImageId).
+		Str("object_key", creds.imageArchiveObjectKey).
+		Msg("pulled image archive from brokered origin")
+	return &sourceRegistry, nil
+}
+
+func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, *types.S3ImageRegistryConfig, error) {
 	imageId := request.ImageId
 	if c.cacheClient == nil {
-		return false, nil
+		return false, nil, nil
 	}
 
 	metadataStart := time.Now()
 	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, nil)
-		return true, nil
+		return true, c.imageArchiveSourceRegistry(ctx, request), nil
 	} else if err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), false, nil)
 		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive content cache metadata unavailable")
@@ -1076,8 +1124,12 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		err  error
 	)
 	storeStart := time.Now()
+	var sourceRegistry *types.S3ImageRegistryConfig
 	if c.config.ImageService.RegistryStore == registry.S3ImageRegistryStore {
-		sourceRegistry := c.registry.Registry()
+		sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
+		if sourceRegistry == nil || sourceRegistry.BucketName == "" {
+			return false, nil, nil
+		}
 		hash, err = c.cacheClient.StoreContentFromS3Source(cache.S3ContentSource{
 			Path:           key,
 			CachePath:      cachePath,
@@ -1093,12 +1145,12 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		info, statErr := os.Stat(sourcePath)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
-				return false, nil
+				return false, nil, nil
 			}
-			return false, statErr
+			return false, nil, statErr
 		}
 		if info.IsDir() {
-			return false, fmt.Errorf("image archive source is a directory: %s", sourcePath)
+			return false, nil, fmt.Errorf("image archive source is a directory: %s", sourcePath)
 		}
 
 		hash, err = c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
@@ -1114,38 +1166,68 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), true, map[string]string{
 					"reason": "store_lock_contended",
 				})
-				return true, nil
+				return true, sourceRegistry, nil
 			} else if waitErr != nil {
 				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), false, map[string]string{
 					"reason": "store_lock_contended",
 				})
-				return false, waitErr
+				return false, nil, waitErr
 			} else {
 				c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, waitStart, time.Since(waitStart), false, map[string]string{
 					"reason": "store_lock_contended",
 				})
-				return false, nil
+				return false, nil, nil
 			}
 		}
-		return false, err
+		return false, nil, err
 	}
 	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheStore, storeStart, time.Since(storeStart), true, map[string]string{
 		"registry_store": c.config.ImageService.RegistryStore,
 	})
 
 	restoreStart := time.Now()
-	size, err := c.registry.Size(ctx, imageId)
+	size, err := c.imageArchiveSize(ctx, imageId, key, sourceRegistry)
 	if err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, nil)
-		return false, err
+		return false, nil, err
 	}
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size, routingKey); err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), false, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
-		return false, err
+		return false, nil, err
 	}
 	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
 
-	return true, nil
+	return true, sourceRegistry, nil
+}
+
+func (c *ImageClient) imageArchiveSourceRegistry(ctx context.Context, request *types.ContainerRequest) *types.S3ImageRegistryConfig {
+	sourceRegistry := c.config.ImageService.Registries.S3
+	if sourceRegistry.BucketName != "" && sourceRegistry.AccessKey != "" && sourceRegistry.SecretKey != "" {
+		return &sourceRegistry
+	}
+	if !c.privateWorkerImageRequest(request) {
+		if sourceRegistry.BucketName == "" {
+			return nil
+		}
+		return &sourceRegistry
+	}
+	creds := c.originCredentials(ctx, request, request.ImageId, "")
+	if creds == nil || creds.imageArchiveStorage == nil {
+		return nil
+	}
+	sourceRegistry = imageArchiveRegistryConfig(creds.imageArchiveStorage)
+	return &sourceRegistry
+}
+
+func (c *ImageClient) imageArchiveSize(ctx context.Context, imageID, key string, sourceRegistry *types.S3ImageRegistryConfig) (int64, error) {
+	if sourceRegistry == nil {
+		return c.registry.Size(ctx, imageID)
+	}
+	store, err := reg.NewS3Store(*sourceRegistry)
+	if err != nil {
+		return 0, err
+	}
+	return store.Size(ctx, key)
 }
 
 func (c *ImageClient) waitForImageArchiveContentCache(ctx context.Context, archivePath, imageId string) (bool, error) {

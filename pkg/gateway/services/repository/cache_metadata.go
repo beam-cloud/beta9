@@ -165,9 +165,12 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	imageArchiveStorage, imageArchiveObjectKey := s.imageArchiveStorageCredentials(req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
-		Ok:               true,
-		WorkspaceStorage: s.workspaceStorageCredentials(ctx, req.WorkspaceId),
+		Ok:                    true,
+		WorkspaceStorage:      s.workspaceStorageCredentials(ctx, req.WorkspaceId),
+		ImageArchiveStorage:   imageArchiveStorage,
+		ImageArchiveObjectKey: imageArchiveObjectKey,
 		// Short-lived registry credentials for direct OCI pulls. Private image
 		// credentials are resolved by image/workspace; build-registry credentials
 		// are vended only for the exact configured build registry host.
@@ -298,6 +301,30 @@ func (s *WorkerRepositoryService) workspaceStorageCredentials(ctx context.Contex
 		SecretKey:      derefString(st.SecretKey),
 		ForcePathStyle: true,
 	}
+}
+
+func (s *WorkerRepositoryService) imageArchiveStorageCredentials(imageID string) (*pb.CacheWorkspaceStorageCredentials, string) {
+	if s.appConfig.ImageService.RegistryStore != reg.S3ImageRegistryStore {
+		return nil, ""
+	}
+
+	st := s.appConfig.ImageService.Registries.S3
+	if st.BucketName == "" {
+		return nil, ""
+	}
+
+	objectKey := ""
+	if imageID != "" {
+		objectKey = fmt.Sprintf("%s.%s", imageID, reg.RemoteImageFileExtension)
+	}
+	return &pb.CacheWorkspaceStorageCredentials{
+		EndpointUrl:    st.Endpoint,
+		Region:         st.Region,
+		BucketName:     st.BucketName,
+		AccessKey:      st.AccessKey,
+		SecretKey:      st.SecretKey,
+		ForcePathStyle: st.ForcePathStyle,
+	}, objectKey
 }
 
 func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, registry string) string {

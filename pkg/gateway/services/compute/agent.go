@@ -492,15 +492,18 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 func (s *Service) agentBootstrapConfig(workspaceID string, poolState *model.PoolState) *pb.AgentBootstrapConfig {
 	config := normalizePoolConfig(poolState.Config)
 	return &pb.AgentBootstrapConfig{
-		GatewayHttpUrl:  s.appConfig.GatewayService.HTTP.GetExternalURL(),
-		GatewayGrpcHost: s.appConfig.GatewayService.GRPC.ExternalHost,
-		GatewayGrpcPort: int32(s.appConfig.GatewayService.GRPC.ExternalPort),
-		GatewayGrpcTls:  s.appConfig.GatewayService.GRPC.TLS,
-		WorkspaceId:     workspaceID,
-		PoolName:        poolState.Name,
-		Transport:       config.Transport,
-		Executor:        defaultPrivateExecutor,
-		Fallback:        config.Fallback,
+		GatewayHttpUrl:         s.appConfig.GatewayService.HTTP.GetExternalURL(),
+		GatewayGrpcHost:        s.appConfig.GatewayService.GRPC.ExternalHost,
+		GatewayGrpcPort:        int32(s.appConfig.GatewayService.GRPC.ExternalPort),
+		GatewayGrpcTls:         s.appConfig.GatewayService.GRPC.TLS,
+		WorkspaceId:            workspaceID,
+		PoolName:               poolState.Name,
+		Transport:              config.Transport,
+		Executor:               defaultPrivateExecutor,
+		Fallback:               config.Fallback,
+		ImageRegistryStore:     s.appConfig.ImageService.RegistryStore,
+		ImageClipVersion:       s.appConfig.ImageService.ClipVersion,
+		ImageLocalCacheEnabled: s.appConfig.ImageService.LocalCacheEnabled,
 		DisabledServices: []string{
 			"redis",
 			"postgres",
