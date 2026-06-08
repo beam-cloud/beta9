@@ -50,9 +50,12 @@ func (r *pruneCheckpointBackendRepo) GetWorkspace(ctx context.Context, workspace
 
 type originCredentialsBackendRepo struct {
 	repository.BackendRepository
-	workspace  *types.Workspace
-	secretName string
-	secret     *types.Secret
+	workspace                 *types.Workspace
+	secretName                string
+	secret                    *types.Secret
+	workspaceByExternalCalls  int
+	workspaceWithSigningCalls int
+	workspaceCalls            int
 }
 
 func (r *originCredentialsBackendRepo) GetImageCredentialSecret(ctx context.Context, imageID string) (string, string, error) {
@@ -60,6 +63,17 @@ func (r *originCredentialsBackendRepo) GetImageCredentialSecret(ctx context.Cont
 }
 
 func (r *originCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
+	r.workspaceByExternalCalls++
+	if r.workspace == nil {
+		return types.Workspace{}, nil
+	}
+	workspace := *r.workspace
+	workspace.ExternalId = externalID
+	return workspace, nil
+}
+
+func (r *originCredentialsBackendRepo) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalID string) (types.Workspace, error) {
+	r.workspaceWithSigningCalls++
 	if r.workspace == nil {
 		return types.Workspace{}, nil
 	}
@@ -69,6 +83,7 @@ func (r *originCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Cont
 }
 
 func (r *originCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
+	r.workspaceCalls++
 	if r.workspace == nil {
 		return &types.Workspace{Id: workspaceID}, nil
 	}
@@ -79,6 +94,9 @@ func (r *originCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspa
 
 func (r *originCredentialsBackendRepo) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
 	if name != r.secretName {
+		return nil, nil
+	}
+	if workspace == nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
 		return nil, nil
 	}
 	return r.secret, nil
@@ -206,6 +224,35 @@ func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *tes
 }
 
 func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
+	signingKey := "workspace-signing-key"
+	backendRepo := &originCredentialsBackendRepo{
+		workspace:  &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
+		secretName: "registry-secret",
+		secret:     &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: backendRepo,
+	}
+
+	resp, err := service.GetCacheOriginCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetCacheOriginCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ImageId:     "image-id",
+			Registry:    "registry.example.com",
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
+	require.Equal(t, 1, backendRepo.workspaceWithSigningCalls)
+	require.Equal(t, 1, backendRepo.workspaceByExternalCalls)
+	require.Equal(t, 1, backendRepo.workspaceCalls)
+}
+
+func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSigningKey(t *testing.T) {
 	service := &WorkerRepositoryService{
 		backendRepo: &originCredentialsBackendRepo{
 			workspace:  &types.Workspace{Id: 7, ExternalId: "workspace-id"},
@@ -226,7 +273,7 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
-	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
+	require.Empty(t, resp.RegistryCredentials)
 }
 
 func TestGetCacheOriginCredentialsVendsImageArchiveStorage(t *testing.T) {
@@ -278,6 +325,16 @@ func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "workspace")
+}
+
+func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {
+	service := &WorkerRepositoryService{}
+
+	resp, err := service.GetCacheOriginCredentials(cacheRepositoryAuthContext(types.TokenTypeWorker), nil)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "request")
 }
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {

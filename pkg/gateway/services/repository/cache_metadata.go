@@ -161,6 +161,9 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	if req == nil {
+		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: "request is required"}, nil
+	}
 	if err := authorizeOriginCredentialWorkspace(ctx, req.WorkspaceId); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -372,16 +375,12 @@ func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, 
 		return ""
 	}
 
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
-	if err != nil {
-		return ""
-	}
-	fullWorkspace, err := s.backendRepo.GetWorkspace(ctx, workspace.Id)
-	if err != nil {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx, workspaceID)
+	if err != nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
 		return ""
 	}
 
-	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, fullWorkspace, secretName)
+	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, &workspace, secretName)
 	if err != nil || secret == nil {
 		return ""
 	}
