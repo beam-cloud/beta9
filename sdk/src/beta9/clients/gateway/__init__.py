@@ -692,6 +692,18 @@ class AgentBootstrapConfig(betterproto.Message):
     image_registry_store: str = betterproto.string_field(11)
     image_clip_version: int = betterproto.uint32_field(12)
     image_local_cache_enabled: bool = betterproto.bool_field(13)
+    s2_telemetry: "AgentS2TelemetryConfig" = betterproto.message_field(14)
+
+
+@dataclass(eq=False, repr=False)
+class AgentS2TelemetryConfig(betterproto.Message):
+    enabled: bool = betterproto.bool_field(1)
+    basin: str = betterproto.string_field(2)
+    stream_prefix: str = betterproto.string_field(3)
+    log_token: str = betterproto.string_field(4)
+    log_stream_prefix: str = betterproto.string_field(5)
+    event_token: str = betterproto.string_field(6)
+    event_stream_prefix: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)
@@ -787,6 +799,9 @@ class UpdateAgentRouteStatusRequest(betterproto.Message):
     state: str = betterproto.string_field(3)
     proxy_target: str = betterproto.string_field(4)
     error: str = betterproto.string_field(5)
+    attrs: Dict[str, str] = betterproto.map_field(
+        6, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
 
 
 @dataclass(eq=False, repr=False)
@@ -860,6 +875,7 @@ class AgentEventRecord(betterproto.Message):
         4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
     )
     timestamp_unix_nano: int = betterproto.int64_field(5)
+    event_type: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)

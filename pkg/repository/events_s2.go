@@ -47,6 +47,67 @@ type S2EventRepository struct {
 	queue        chan cloudevents.Event
 }
 
+type ScopedS2EventRepository struct {
+	streamPrefix string
+	targets      []scopedS2EventTarget
+	queue        chan cloudevents.Event
+}
+
+type scopedS2EventTarget struct {
+	name    string
+	prefix  string
+	basin   *s2.BasinClient
+	ensured sync.Map
+}
+
+func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
+	if config.LogApiKey == "" && config.EventApiKey == "" {
+		return nil, nil
+	}
+	if config.Basin == "" {
+		return nil, fmt.Errorf("s2 basin is required when scoped s2 api keys are configured")
+	}
+
+	streamPrefix := strings.Trim(config.StreamPrefix, "/")
+	if streamPrefix == "" {
+		streamPrefix = defaultS2EventStreamPrefix
+	}
+
+	targets := make([]scopedS2EventTarget, 0, 2)
+	addTarget := func(name, token, prefix string) {
+		token = strings.TrimSpace(token)
+		prefix = strings.Trim(strings.TrimSpace(prefix), "/")
+		if token == "" || prefix == "" {
+			return
+		}
+		client := s2.New(token, &s2.ClientOptions{
+			RequestTimeout: s2EventWriteTimeout,
+			RetryConfig: &s2.RetryConfig{
+				MaxAttempts:       3,
+				AppendRetryPolicy: s2.AppendRetryPolicyAll,
+			},
+		})
+		targets = append(targets, scopedS2EventTarget{
+			name:   name,
+			prefix: prefix,
+			basin:  client.Basin(config.Basin),
+		})
+	}
+	addTarget("logs", config.LogApiKey, config.LogStreamPrefix)
+	addTarget("events", config.EventApiKey, config.EventStreamPrefix)
+	if len(targets) == 0 {
+		return nil, nil
+	}
+
+	repo := &ScopedS2EventRepository{
+		streamPrefix: streamPrefix,
+		targets:      targets,
+		queue:        make(chan cloudevents.Event, s2EventQueueSize),
+	}
+	go repo.runWriter()
+	return repo, nil
+}
+
 func NewS2EventRepository(config types.S2Config) (*S2EventRepository, error) {
 	if config.ApiKey == "" {
 		return nil, nil
@@ -80,6 +141,148 @@ func NewS2EventRepository(config types.S2Config) (*S2EventRepository, error) {
 	go repo.runWriter()
 
 	return repo, nil
+}
+
+func (r *ScopedS2EventRepository) PushEvent(event cloudevents.Event) error {
+	select {
+	case r.queue <- event:
+		return nil
+	default:
+	}
+
+	timer := time.NewTimer(s2EventEnqueueTimeout)
+	defer timer.Stop()
+
+	select {
+	case r.queue <- event:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("scoped s2 event queue is full")
+	}
+}
+
+func (r *ScopedS2EventRepository) runWriter() {
+	ticker := time.NewTicker(s2EventFlushInterval)
+	defer ticker.Stop()
+
+	batch := make([]cloudevents.Event, 0, s2EventBatchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := r.appendEventBatch(batch); err != nil {
+			log.Debug().Err(err).Int("event_count", len(batch)).Msg("failed to append scoped event batch to s2")
+		}
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case event, ok := <-r.queue:
+			if !ok {
+				flush()
+				return
+			}
+			batch = append(batch, event)
+			if len(batch) >= s2EventBatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	planner := &S2EventRepository{streamPrefix: r.streamPrefix}
+	recordsByTarget := map[*scopedS2EventTarget]map[s2.StreamName][]s2.AppendRecord{}
+	for _, event := range events {
+		record, streamNames, err := planner.appendRecordForEvent(event)
+		if err != nil {
+			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to build scoped s2 event record")
+			continue
+		}
+		for _, streamName := range streamNames {
+			target := r.targetForStream(streamName)
+			if target == nil {
+				continue
+			}
+			if recordsByTarget[target] == nil {
+				recordsByTarget[target] = map[s2.StreamName][]s2.AppendRecord{}
+			}
+			recordsByTarget[target][streamName] = append(recordsByTarget[target][streamName], record)
+		}
+	}
+
+	var streamErrs []error
+	for target, recordsByStream := range recordsByTarget {
+		for streamName, records := range recordsByStream {
+			if len(records) == 0 {
+				continue
+			}
+			if err := target.ensureStream(streamName); err != nil {
+				if isS2EventStreamDeletionPending(err) {
+					target.ensured.Delete(streamName)
+					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping scoped event batch for stream pending deletion")
+					continue
+				}
+				streamErrs = append(streamErrs, fmt.Errorf("ensure scoped s2 stream %q: %w", streamName, err))
+				continue
+			}
+			if err := appendScopedS2Records(target.basin, streamName, records); err != nil {
+				if isS2EventStreamDeletionPending(err) {
+					target.ensured.Delete(streamName)
+					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping scoped event batch for stream pending deletion")
+					continue
+				}
+				streamErrs = append(streamErrs, fmt.Errorf("append %d scoped events to s2 stream %q: %w", len(records), streamName, err))
+			}
+		}
+	}
+	return errors.Join(streamErrs...)
+}
+
+func (r *ScopedS2EventRepository) targetForStream(streamName s2.StreamName) *scopedS2EventTarget {
+	stream := strings.Trim(string(streamName), "/")
+	for i := range r.targets {
+		target := &r.targets[i]
+		if stream == target.prefix || strings.HasPrefix(stream, target.prefix+"/") {
+			return target
+		}
+	}
+	return nil
+}
+
+func (t *scopedS2EventTarget) ensureStream(streamName s2.StreamName) error {
+	if _, ok := t.ensured.Load(streamName); ok {
+		return nil
+	}
+
+	ctx, cancel := s2EventWriteContext()
+	defer cancel()
+	retention := s2EventRetentionSeconds
+	_, err := t.basin.Streams.Create(ctx, s2.CreateStreamArgs{
+		Stream: streamName,
+		Config: &s2.StreamConfig{
+			RetentionPolicy: &s2.RetentionPolicy{Age: &retention},
+		},
+	})
+	if err != nil && !isS2ResourceAlreadyExists(err) {
+		return err
+	}
+	t.ensured.Store(streamName, struct{}{})
+	return nil
+}
+
+func appendScopedS2Records(basin *s2.BasinClient, streamName s2.StreamName, records []s2.AppendRecord) error {
+	ctx, cancel := s2EventWriteContext()
+	defer cancel()
+	_, err := basin.Stream(streamName).Append(ctx, &s2.AppendInput{Records: records})
+	return err
 }
 
 func (r *S2EventRepository) PushEvent(event cloudevents.Event) error {
@@ -745,6 +948,11 @@ func s2EventWriteContext() (context.Context, context.CancelFunc) {
 func isS2EventStreamDeletionPending(err error) bool {
 	var s2Err *s2.S2Error
 	return errors.As(err, &s2Err) && s2Err.Code == "stream_deletion_pending"
+}
+
+func isS2ResourceAlreadyExists(err error) bool {
+	var s2Err *s2.S2Error
+	return errors.As(err, &s2Err) && (s2Err.Status == 409 || s2Err.Code == "resource_already_exists")
 }
 
 func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventMetadata) s2.StreamName {

@@ -8,14 +8,15 @@ import (
 )
 
 type Service struct {
-	appConfig       types.AppConfig
-	backendRepo     repository.BackendRepository
-	containerRepo   repository.ContainerRepository
-	scheduler       *scheduler.Scheduler
-	eventRepo       repository.EventRepository
-	workerRepo      repository.WorkerRepository
-	computeRepo     repository.ComputeRepository
-	keyEventManager *common.KeyEventManager
+	appConfig            types.AppConfig
+	backendRepo          repository.BackendRepository
+	containerRepo        repository.ContainerRepository
+	scheduler            *scheduler.Scheduler
+	eventRepo            repository.EventRepository
+	workerRepo           repository.WorkerRepository
+	computeRepo          repository.ComputeRepository
+	keyEventManager      *common.KeyEventManager
+	telemetryCredentials telemetryCredentialIssuer
 }
 
 type Options struct {
@@ -30,7 +31,7 @@ type Options struct {
 }
 
 func New(opts Options) *Service {
-	return &Service{
+	service := &Service{
 		appConfig:       opts.Config,
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
@@ -40,4 +41,6 @@ func New(opts Options) *Service {
 		computeRepo:     opts.ComputeRepo,
 		keyEventManager: opts.KeyEventManager,
 	}
+	service.telemetryCredentials = newTelemetryCredentialIssuer(opts.Config.Database.S2)
+	return service
 }

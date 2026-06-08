@@ -1,5 +1,8 @@
+import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
@@ -20,6 +23,30 @@ from ..env import is_notebook_env
 from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
 
 LOCAL_PYTHON_VERSION = f"python{sys.version_info.major}.{sys.version_info.minor}"
+_image_build_cache: Dict[str, Tuple["ImageBuildResult", float]] = {}
+_image_build_cache_lock = threading.Lock()
+_DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS = 300.0
+
+
+def _sdk_timing_enabled() -> bool:
+    return os.getenv("BETA9_SDK_TIMINGS", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _sdk_timing(label: str, start_ns: int) -> None:
+    if _sdk_timing_enabled():
+        elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+        terminal.detail(f"SDK timing {label}: {elapsed_ms:.1f}ms")
+
+
+def _image_build_cache_ttl_seconds() -> float:
+    value = os.getenv("BETA9_IMAGE_BUILD_CACHE_TTL_SECONDS")
+    if value is None:
+        return _DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS
+
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return _DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS
 
 
 class ImageBuildResult(NamedTuple):
@@ -431,6 +458,53 @@ class Image(BaseAbstraction):
 
         self.build_ctx_object = result.object_id
 
+    def _cache_key(self) -> str:
+        spec = {
+            "python_packages": self.python_packages,
+            "python_version": self.python_version,
+            "commands": self.commands,
+            "build_steps": [repr(step) for step in self.build_steps],
+            "base_image": self.base_image,
+            "env_vars": self.env_vars,
+            "dockerfile": self.dockerfile,
+            "build_ctx_object": self.build_ctx_object,
+            "secrets": self.secrets,
+            "gpu": self.gpu,
+            "ignore_python": self.ignore_python,
+            "image_id": self.image_id,
+            "include_files_patterns": self.include_files_patterns,
+        }
+        return json.dumps(spec, sort_keys=True, separators=(",", ":"))
+
+    def _cached_build_result(self, cache_key: str) -> Optional[ImageBuildResult]:
+        if os.getenv("BETA9_DISABLE_IMAGE_BUILD_CACHE", "").lower() in {"1", "true", "yes", "on"}:
+            return None
+
+        now = time.monotonic()
+        with _image_build_cache_lock:
+            entry = _image_build_cache.get(cache_key)
+            if entry is None:
+                return None
+
+            result, expires_at = entry
+            if expires_at <= now:
+                _image_build_cache.pop(cache_key, None)
+                return None
+
+            return result
+
+    def _remember_build_result(self, cache_key: str, result: ImageBuildResult) -> None:
+        if not result.success:
+            return
+
+        self.image_id = result.image_id
+        self.python_version = result.python_version
+
+        expires_at = time.monotonic() + _image_build_cache_ttl_seconds()
+        with _image_build_cache_lock:
+            _image_build_cache[cache_key] = (result, expires_at)
+            _image_build_cache[self._cache_key()] = (result, expires_at)
+
     @classmethod
     def from_registry(
         cls,
@@ -502,6 +576,7 @@ class Image(BaseAbstraction):
         )
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
+        started_ns = time.monotonic_ns()
         r: VerifyImageBuildResponse = self.stub.verify_image_build(
             VerifyImageBuildRequest(
                 python_packages=self.python_packages,
@@ -519,6 +594,7 @@ class Image(BaseAbstraction):
                 image_id=self.image_id,
             )
         )
+        _sdk_timing("image.verify_build", started_ns)
 
         return (
             r.exists,
@@ -530,8 +606,6 @@ class Image(BaseAbstraction):
     def build(
         self,
     ) -> ImageBuildResult:
-        terminal.header("Building image")
-
         if is_notebook_env():
             if LOCAL_PYTHON_VERSION != self.python_version:
                 terminal.warn(
@@ -546,15 +620,27 @@ class Image(BaseAbstraction):
             # Compared to a custom Dockerfile build context, which does upload all files.
             self.sync_files(cache_object_id=False)
 
+        cache_key = self._cache_key()
+        if cached_result := self._cached_build_result(cache_key):
+            terminal.header("Using cached image")
+            self.image_id = cached_result.image_id
+            self.python_version = cached_result.python_version
+            return cached_result
+
+        terminal.header("Building image")
+
         exists, exists_response = self.exists()
         if exists:
             terminal.header("Using cached image")
-            return ImageBuildResult(
+            result = ImageBuildResult(
                 success=True,
                 image_id=exists_response.image_id,
                 python_version=exists_response.python_version,
             )
+            self._remember_build_result(cache_key, result)
+            return result
 
+        build_started_ns = time.monotonic_ns()
         with terminal.progress("Working..."):
             last_response = BuildImageResponse(success=False)
             for r in self.stub.build_image(
@@ -581,17 +667,20 @@ class Image(BaseAbstraction):
                 if r.done:
                     last_response = r
                     break
+        _sdk_timing("image.build_stream", build_started_ns)
 
         if not last_response.success:
             terminal.error(str(last_response.msg).rstrip(), exit=False)
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")
-        return ImageBuildResult(
+        result = ImageBuildResult(
             success=True,
             image_id=last_response.image_id,
             python_version=last_response.python_version,
         )
+        self._remember_build_result(cache_key, result)
+        return result
 
     def get_credentials_from_env(self) -> Dict[str, str]:
         if env.is_remote():

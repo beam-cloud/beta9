@@ -109,7 +109,8 @@ func (s *Service) recordAgentEvents(agentState *model.AgentTokenState, events []
 		if record == nil || record.Action == "" {
 			continue
 		}
-		s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
+		eventType := firstNonEmpty(record.EventType, types.EventComputeMachine)
+		s.emitComputeEvent(eventType, types.EventComputeSchema{
 			Timestamp:   timeFromUnixNano(record.TimestampUnixNano),
 			WorkspaceID: agentState.WorkspaceID,
 			PoolName:    agentState.PoolName,

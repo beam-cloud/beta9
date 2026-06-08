@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 import threading
+import time
 from typing import Callable, Dict, List, Optional, Union
 
 import cloudpickle
@@ -73,6 +74,16 @@ SANDBOX_STUB_TYPE = "sandbox"
 
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
+
+
+def _sdk_timing_enabled() -> bool:
+    return os.getenv("BETA9_SDK_TIMINGS", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _sdk_timing(label: str, start_ns: int) -> None:
+    if _sdk_timing_enabled():
+        elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+        terminal.detail(f"SDK timing {label}: {elapsed_ms:.1f}ms")
 
 
 def _is_stub_created_for_workspace() -> bool:
@@ -456,17 +467,24 @@ class RunnerAbstraction(BaseAbstraction):
         if called_on_import():
             return False
 
+        prepare_started_ns = time.monotonic_ns()
+
         if func is not None:
             self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
+        lock_started_ns = time.monotonic_ns()
         with self._runtime_prepare_lock:
+            _sdk_timing("prepare_runtime.lock_wait", lock_started_ns)
             if self.runtime_ready:
+                _sdk_timing("prepare_runtime.total", prepare_started_ns)
                 return True
 
             if not self.image_available:
+                image_started_ns = time.monotonic_ns()
                 image_build_result: ImageBuildResult = self.image.build()
+                _sdk_timing("prepare_runtime.image", image_started_ns)
 
                 if image_build_result and image_build_result.success:
                     self.image_available = True
@@ -477,8 +495,10 @@ class RunnerAbstraction(BaseAbstraction):
                     return False
 
             if not self.files_synced:
+                sync_started_ns = time.monotonic_ns()
                 sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
                 self._remove_tmp_files()
+                _sdk_timing("prepare_runtime.files_sync", sync_started_ns)
 
                 if sync_result.success:
                     self.files_synced = True
@@ -487,11 +507,14 @@ class RunnerAbstraction(BaseAbstraction):
                     terminal.error("File sync failed", exit=False)
                     return False
 
+            volumes_started_ns = time.monotonic_ns()
             for v in self.volumes:
                 if not v.ready and not v.get_or_create():
                     terminal.error(f"Volume is not ready: {v.name}", exit=False)
                     return False
+            _sdk_timing("prepare_runtime.volumes", volumes_started_ns)
 
+            config_started_ns = time.monotonic_ns()
             try:
                 self.gpu = self.parse_gpu(self.gpu)
             except ValueError:
@@ -516,8 +539,10 @@ class RunnerAbstraction(BaseAbstraction):
             outputs = None
             if self.outputs:
                 outputs = self._schema_to_proto(self.outputs)
+            _sdk_timing("prepare_runtime.config", config_started_ns)
 
             if not self.stub_created:
+                stub_started_ns = time.monotonic_ns()
                 stub_request = GetOrCreateStubRequest(
                     object_id=self.object_id,
                     image_id=self.image_id,
@@ -590,6 +615,7 @@ class RunnerAbstraction(BaseAbstraction):
                 if stub_response.ok:
                     self.stub_created = True
                     self.stub_id = stub_response.stub_id
+                    _sdk_timing("prepare_runtime.stub", stub_started_ns)
                     if stub_response.warn_msg:
                         terminal.warn(stub_response.warn_msg)
                 else:
@@ -600,6 +626,7 @@ class RunnerAbstraction(BaseAbstraction):
                     return False
 
             self.runtime_ready = True
+            _sdk_timing("prepare_runtime.total", prepare_started_ns)
             return True
 
 

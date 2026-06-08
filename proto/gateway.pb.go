@@ -5605,19 +5605,20 @@ type AgentBootstrapConfig struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	GatewayHttpUrl         string   `protobuf:"bytes,1,opt,name=gateway_http_url,json=gatewayHttpUrl,proto3" json:"gateway_http_url,omitempty"`
-	GatewayGrpcHost        string   `protobuf:"bytes,2,opt,name=gateway_grpc_host,json=gatewayGrpcHost,proto3" json:"gateway_grpc_host,omitempty"`
-	GatewayGrpcPort        int32    `protobuf:"varint,3,opt,name=gateway_grpc_port,json=gatewayGrpcPort,proto3" json:"gateway_grpc_port,omitempty"`
-	GatewayGrpcTls         bool     `protobuf:"varint,4,opt,name=gateway_grpc_tls,json=gatewayGrpcTls,proto3" json:"gateway_grpc_tls,omitempty"`
-	WorkspaceId            string   `protobuf:"bytes,5,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	PoolName               string   `protobuf:"bytes,6,opt,name=pool_name,json=poolName,proto3" json:"pool_name,omitempty"`
-	Transport              string   `protobuf:"bytes,7,opt,name=transport,proto3" json:"transport,omitempty"`
-	Executor               string   `protobuf:"bytes,8,opt,name=executor,proto3" json:"executor,omitempty"`
-	Fallback               string   `protobuf:"bytes,9,opt,name=fallback,proto3" json:"fallback,omitempty"`
-	DisabledServices       []string `protobuf:"bytes,10,rep,name=disabled_services,json=disabledServices,proto3" json:"disabled_services,omitempty"`
-	ImageRegistryStore     string   `protobuf:"bytes,11,opt,name=image_registry_store,json=imageRegistryStore,proto3" json:"image_registry_store,omitempty"`
-	ImageClipVersion       uint32   `protobuf:"varint,12,opt,name=image_clip_version,json=imageClipVersion,proto3" json:"image_clip_version,omitempty"`
-	ImageLocalCacheEnabled bool     `protobuf:"varint,13,opt,name=image_local_cache_enabled,json=imageLocalCacheEnabled,proto3" json:"image_local_cache_enabled,omitempty"`
+	GatewayHttpUrl         string                  `protobuf:"bytes,1,opt,name=gateway_http_url,json=gatewayHttpUrl,proto3" json:"gateway_http_url,omitempty"`
+	GatewayGrpcHost        string                  `protobuf:"bytes,2,opt,name=gateway_grpc_host,json=gatewayGrpcHost,proto3" json:"gateway_grpc_host,omitempty"`
+	GatewayGrpcPort        int32                   `protobuf:"varint,3,opt,name=gateway_grpc_port,json=gatewayGrpcPort,proto3" json:"gateway_grpc_port,omitempty"`
+	GatewayGrpcTls         bool                    `protobuf:"varint,4,opt,name=gateway_grpc_tls,json=gatewayGrpcTls,proto3" json:"gateway_grpc_tls,omitempty"`
+	WorkspaceId            string                  `protobuf:"bytes,5,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	PoolName               string                  `protobuf:"bytes,6,opt,name=pool_name,json=poolName,proto3" json:"pool_name,omitempty"`
+	Transport              string                  `protobuf:"bytes,7,opt,name=transport,proto3" json:"transport,omitempty"`
+	Executor               string                  `protobuf:"bytes,8,opt,name=executor,proto3" json:"executor,omitempty"`
+	Fallback               string                  `protobuf:"bytes,9,opt,name=fallback,proto3" json:"fallback,omitempty"`
+	DisabledServices       []string                `protobuf:"bytes,10,rep,name=disabled_services,json=disabledServices,proto3" json:"disabled_services,omitempty"`
+	ImageRegistryStore     string                  `protobuf:"bytes,11,opt,name=image_registry_store,json=imageRegistryStore,proto3" json:"image_registry_store,omitempty"`
+	ImageClipVersion       uint32                  `protobuf:"varint,12,opt,name=image_clip_version,json=imageClipVersion,proto3" json:"image_clip_version,omitempty"`
+	ImageLocalCacheEnabled bool                    `protobuf:"varint,13,opt,name=image_local_cache_enabled,json=imageLocalCacheEnabled,proto3" json:"image_local_cache_enabled,omitempty"`
+	S2Telemetry            *AgentS2TelemetryConfig `protobuf:"bytes,14,opt,name=s2_telemetry,json=s2Telemetry,proto3" json:"s2_telemetry,omitempty"`
 }
 
 func (x *AgentBootstrapConfig) Reset() {
@@ -5743,6 +5744,108 @@ func (x *AgentBootstrapConfig) GetImageLocalCacheEnabled() bool {
 	return false
 }
 
+func (x *AgentBootstrapConfig) GetS2Telemetry() *AgentS2TelemetryConfig {
+	if x != nil {
+		return x.S2Telemetry
+	}
+	return nil
+}
+
+type AgentS2TelemetryConfig struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Enabled           bool   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Basin             string `protobuf:"bytes,2,opt,name=basin,proto3" json:"basin,omitempty"`
+	StreamPrefix      string `protobuf:"bytes,3,opt,name=stream_prefix,json=streamPrefix,proto3" json:"stream_prefix,omitempty"`
+	LogToken          string `protobuf:"bytes,4,opt,name=log_token,json=logToken,proto3" json:"log_token,omitempty"`
+	LogStreamPrefix   string `protobuf:"bytes,5,opt,name=log_stream_prefix,json=logStreamPrefix,proto3" json:"log_stream_prefix,omitempty"`
+	EventToken        string `protobuf:"bytes,6,opt,name=event_token,json=eventToken,proto3" json:"event_token,omitempty"`
+	EventStreamPrefix string `protobuf:"bytes,7,opt,name=event_stream_prefix,json=eventStreamPrefix,proto3" json:"event_stream_prefix,omitempty"`
+}
+
+func (x *AgentS2TelemetryConfig) Reset() {
+	*x = AgentS2TelemetryConfig{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[81]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *AgentS2TelemetryConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentS2TelemetryConfig) ProtoMessage() {}
+
+func (x *AgentS2TelemetryConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[81]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentS2TelemetryConfig.ProtoReflect.Descriptor instead.
+func (*AgentS2TelemetryConfig) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *AgentS2TelemetryConfig) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *AgentS2TelemetryConfig) GetBasin() string {
+	if x != nil {
+		return x.Basin
+	}
+	return ""
+}
+
+func (x *AgentS2TelemetryConfig) GetStreamPrefix() string {
+	if x != nil {
+		return x.StreamPrefix
+	}
+	return ""
+}
+
+func (x *AgentS2TelemetryConfig) GetLogToken() string {
+	if x != nil {
+		return x.LogToken
+	}
+	return ""
+}
+
+func (x *AgentS2TelemetryConfig) GetLogStreamPrefix() string {
+	if x != nil {
+		return x.LogStreamPrefix
+	}
+	return ""
+}
+
+func (x *AgentS2TelemetryConfig) GetEventToken() string {
+	if x != nil {
+		return x.EventToken
+	}
+	return ""
+}
+
+func (x *AgentS2TelemetryConfig) GetEventStreamPrefix() string {
+	if x != nil {
+		return x.EventStreamPrefix
+	}
+	return ""
+}
+
 type JoinAgentRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -5769,7 +5872,7 @@ type JoinAgentRequest struct {
 func (x *JoinAgentRequest) Reset() {
 	*x = JoinAgentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[81]
+		mi := &file_gateway_proto_msgTypes[82]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5782,7 +5885,7 @@ func (x *JoinAgentRequest) String() string {
 func (*JoinAgentRequest) ProtoMessage() {}
 
 func (x *JoinAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[81]
+	mi := &file_gateway_proto_msgTypes[82]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5795,7 +5898,7 @@ func (x *JoinAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinAgentRequest.ProtoReflect.Descriptor instead.
 func (*JoinAgentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{81}
+	return file_gateway_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *JoinAgentRequest) GetJoinToken() string {
@@ -5927,7 +6030,7 @@ type JoinAgentResponse struct {
 func (x *JoinAgentResponse) Reset() {
 	*x = JoinAgentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[82]
+		mi := &file_gateway_proto_msgTypes[83]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5940,7 +6043,7 @@ func (x *JoinAgentResponse) String() string {
 func (*JoinAgentResponse) ProtoMessage() {}
 
 func (x *JoinAgentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[82]
+	mi := &file_gateway_proto_msgTypes[83]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5953,7 +6056,7 @@ func (x *JoinAgentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinAgentResponse.ProtoReflect.Descriptor instead.
 func (*JoinAgentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{82}
+	return file_gateway_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *JoinAgentResponse) GetOk() bool {
@@ -6019,7 +6122,7 @@ type AgentPreflightCheck struct {
 func (x *AgentPreflightCheck) Reset() {
 	*x = AgentPreflightCheck{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[83]
+		mi := &file_gateway_proto_msgTypes[84]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6032,7 +6135,7 @@ func (x *AgentPreflightCheck) String() string {
 func (*AgentPreflightCheck) ProtoMessage() {}
 
 func (x *AgentPreflightCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[83]
+	mi := &file_gateway_proto_msgTypes[84]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6045,7 +6148,7 @@ func (x *AgentPreflightCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentPreflightCheck.ProtoReflect.Descriptor instead.
 func (*AgentPreflightCheck) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{83}
+	return file_gateway_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *AgentPreflightCheck) GetName() string {
@@ -6101,7 +6204,7 @@ type AgentRoute struct {
 func (x *AgentRoute) Reset() {
 	*x = AgentRoute{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[84]
+		mi := &file_gateway_proto_msgTypes[85]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6114,7 +6217,7 @@ func (x *AgentRoute) String() string {
 func (*AgentRoute) ProtoMessage() {}
 
 func (x *AgentRoute) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[84]
+	mi := &file_gateway_proto_msgTypes[85]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6127,7 +6230,7 @@ func (x *AgentRoute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRoute.ProtoReflect.Descriptor instead.
 func (*AgentRoute) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{84}
+	return file_gateway_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *AgentRoute) GetRouteId() string {
@@ -6247,7 +6350,7 @@ type RequestAgentTransportCredentialRequest struct {
 func (x *RequestAgentTransportCredentialRequest) Reset() {
 	*x = RequestAgentTransportCredentialRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[85]
+		mi := &file_gateway_proto_msgTypes[86]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6260,7 +6363,7 @@ func (x *RequestAgentTransportCredentialRequest) String() string {
 func (*RequestAgentTransportCredentialRequest) ProtoMessage() {}
 
 func (x *RequestAgentTransportCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[85]
+	mi := &file_gateway_proto_msgTypes[86]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6273,7 +6376,7 @@ func (x *RequestAgentTransportCredentialRequest) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use RequestAgentTransportCredentialRequest.ProtoReflect.Descriptor instead.
 func (*RequestAgentTransportCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{85}
+	return file_gateway_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *RequestAgentTransportCredentialRequest) GetAgentToken() string {
@@ -6306,7 +6409,7 @@ type RequestAgentTransportCredentialResponse struct {
 func (x *RequestAgentTransportCredentialResponse) Reset() {
 	*x = RequestAgentTransportCredentialResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[86]
+		mi := &file_gateway_proto_msgTypes[87]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6319,7 +6422,7 @@ func (x *RequestAgentTransportCredentialResponse) String() string {
 func (*RequestAgentTransportCredentialResponse) ProtoMessage() {}
 
 func (x *RequestAgentTransportCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[86]
+	mi := &file_gateway_proto_msgTypes[87]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6332,7 +6435,7 @@ func (x *RequestAgentTransportCredentialResponse) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use RequestAgentTransportCredentialResponse.ProtoReflect.Descriptor instead.
 func (*RequestAgentTransportCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{86}
+	return file_gateway_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *RequestAgentTransportCredentialResponse) GetOk() bool {
@@ -6388,7 +6491,7 @@ type ListAgentRoutesRequest struct {
 func (x *ListAgentRoutesRequest) Reset() {
 	*x = ListAgentRoutesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[87]
+		mi := &file_gateway_proto_msgTypes[88]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6401,7 +6504,7 @@ func (x *ListAgentRoutesRequest) String() string {
 func (*ListAgentRoutesRequest) ProtoMessage() {}
 
 func (x *ListAgentRoutesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[87]
+	mi := &file_gateway_proto_msgTypes[88]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6414,7 +6517,7 @@ func (x *ListAgentRoutesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentRoutesRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentRoutesRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{87}
+	return file_gateway_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *ListAgentRoutesRequest) GetAgentToken() string {
@@ -6437,7 +6540,7 @@ type ListAgentRoutesResponse struct {
 func (x *ListAgentRoutesResponse) Reset() {
 	*x = ListAgentRoutesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[88]
+		mi := &file_gateway_proto_msgTypes[89]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6450,7 +6553,7 @@ func (x *ListAgentRoutesResponse) String() string {
 func (*ListAgentRoutesResponse) ProtoMessage() {}
 
 func (x *ListAgentRoutesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[88]
+	mi := &file_gateway_proto_msgTypes[89]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6463,7 +6566,7 @@ func (x *ListAgentRoutesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentRoutesResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentRoutesResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{88}
+	return file_gateway_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *ListAgentRoutesResponse) GetOk() bool {
@@ -6492,17 +6595,18 @@ type UpdateAgentRouteStatusRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	AgentToken  string `protobuf:"bytes,1,opt,name=agent_token,json=agentToken,proto3" json:"agent_token,omitempty"`
-	RouteId     string `protobuf:"bytes,2,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
-	State       string `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	ProxyTarget string `protobuf:"bytes,4,opt,name=proxy_target,json=proxyTarget,proto3" json:"proxy_target,omitempty"`
-	Error       string `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	AgentToken  string            `protobuf:"bytes,1,opt,name=agent_token,json=agentToken,proto3" json:"agent_token,omitempty"`
+	RouteId     string            `protobuf:"bytes,2,opt,name=route_id,json=routeId,proto3" json:"route_id,omitempty"`
+	State       string            `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	ProxyTarget string            `protobuf:"bytes,4,opt,name=proxy_target,json=proxyTarget,proto3" json:"proxy_target,omitempty"`
+	Error       string            `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	Attrs       map[string]string `protobuf:"bytes,6,rep,name=attrs,proto3" json:"attrs,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 }
 
 func (x *UpdateAgentRouteStatusRequest) Reset() {
 	*x = UpdateAgentRouteStatusRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[89]
+		mi := &file_gateway_proto_msgTypes[90]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6515,7 +6619,7 @@ func (x *UpdateAgentRouteStatusRequest) String() string {
 func (*UpdateAgentRouteStatusRequest) ProtoMessage() {}
 
 func (x *UpdateAgentRouteStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[89]
+	mi := &file_gateway_proto_msgTypes[90]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6528,7 +6632,7 @@ func (x *UpdateAgentRouteStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentRouteStatusRequest.ProtoReflect.Descriptor instead.
 func (*UpdateAgentRouteStatusRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{89}
+	return file_gateway_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *UpdateAgentRouteStatusRequest) GetAgentToken() string {
@@ -6566,6 +6670,13 @@ func (x *UpdateAgentRouteStatusRequest) GetError() string {
 	return ""
 }
 
+func (x *UpdateAgentRouteStatusRequest) GetAttrs() map[string]string {
+	if x != nil {
+		return x.Attrs
+	}
+	return nil
+}
+
 type UpdateAgentRouteStatusResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -6578,7 +6689,7 @@ type UpdateAgentRouteStatusResponse struct {
 func (x *UpdateAgentRouteStatusResponse) Reset() {
 	*x = UpdateAgentRouteStatusResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[90]
+		mi := &file_gateway_proto_msgTypes[91]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6591,7 +6702,7 @@ func (x *UpdateAgentRouteStatusResponse) String() string {
 func (*UpdateAgentRouteStatusResponse) ProtoMessage() {}
 
 func (x *UpdateAgentRouteStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[90]
+	mi := &file_gateway_proto_msgTypes[91]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6604,7 +6715,7 @@ func (x *UpdateAgentRouteStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateAgentRouteStatusResponse.ProtoReflect.Descriptor instead.
 func (*UpdateAgentRouteStatusResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{90}
+	return file_gateway_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *UpdateAgentRouteStatusResponse) GetOk() bool {
@@ -6644,7 +6755,7 @@ type AgentWorkerSlot struct {
 func (x *AgentWorkerSlot) Reset() {
 	*x = AgentWorkerSlot{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[91]
+		mi := &file_gateway_proto_msgTypes[92]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6657,7 +6768,7 @@ func (x *AgentWorkerSlot) String() string {
 func (*AgentWorkerSlot) ProtoMessage() {}
 
 func (x *AgentWorkerSlot) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[91]
+	mi := &file_gateway_proto_msgTypes[92]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6670,7 +6781,7 @@ func (x *AgentWorkerSlot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentWorkerSlot.ProtoReflect.Descriptor instead.
 func (*AgentWorkerSlot) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{91}
+	return file_gateway_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *AgentWorkerSlot) GetWorkerId() string {
@@ -6775,7 +6886,7 @@ type StreamAgentRequest struct {
 func (x *StreamAgentRequest) Reset() {
 	*x = StreamAgentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[92]
+		mi := &file_gateway_proto_msgTypes[93]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6788,7 +6899,7 @@ func (x *StreamAgentRequest) String() string {
 func (*StreamAgentRequest) ProtoMessage() {}
 
 func (x *StreamAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[92]
+	mi := &file_gateway_proto_msgTypes[93]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6801,7 +6912,7 @@ func (x *StreamAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamAgentRequest.ProtoReflect.Descriptor instead.
 func (*StreamAgentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{92}
+	return file_gateway_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *StreamAgentRequest) GetAgentToken() string {
@@ -6825,7 +6936,7 @@ type StreamAgentResponse struct {
 func (x *StreamAgentResponse) Reset() {
 	*x = StreamAgentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[93]
+		mi := &file_gateway_proto_msgTypes[94]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6838,7 +6949,7 @@ func (x *StreamAgentResponse) String() string {
 func (*StreamAgentResponse) ProtoMessage() {}
 
 func (x *StreamAgentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[93]
+	mi := &file_gateway_proto_msgTypes[94]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6851,7 +6962,7 @@ func (x *StreamAgentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamAgentResponse.ProtoReflect.Descriptor instead.
 func (*StreamAgentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{93}
+	return file_gateway_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *StreamAgentResponse) GetOk() bool {
@@ -6898,7 +7009,7 @@ type AgentLogRecord struct {
 func (x *AgentLogRecord) Reset() {
 	*x = AgentLogRecord{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[94]
+		mi := &file_gateway_proto_msgTypes[95]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6911,7 +7022,7 @@ func (x *AgentLogRecord) String() string {
 func (*AgentLogRecord) ProtoMessage() {}
 
 func (x *AgentLogRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[94]
+	mi := &file_gateway_proto_msgTypes[95]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6924,7 +7035,7 @@ func (x *AgentLogRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentLogRecord.ProtoReflect.Descriptor instead.
 func (*AgentLogRecord) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{94}
+	return file_gateway_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *AgentLogRecord) GetSource() string {
@@ -6991,7 +7102,7 @@ type AgentMetricSnapshot struct {
 func (x *AgentMetricSnapshot) Reset() {
 	*x = AgentMetricSnapshot{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[95]
+		mi := &file_gateway_proto_msgTypes[96]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7004,7 +7115,7 @@ func (x *AgentMetricSnapshot) String() string {
 func (*AgentMetricSnapshot) ProtoMessage() {}
 
 func (x *AgentMetricSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[95]
+	mi := &file_gateway_proto_msgTypes[96]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7017,7 +7128,7 @@ func (x *AgentMetricSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentMetricSnapshot.ProtoReflect.Descriptor instead.
 func (*AgentMetricSnapshot) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{95}
+	return file_gateway_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *AgentMetricSnapshot) GetTimestampUnixNano() int64 {
@@ -7114,12 +7225,13 @@ type AgentEventRecord struct {
 	Message           string            `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
 	Attrs             map[string]string `protobuf:"bytes,4,rep,name=attrs,proto3" json:"attrs,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	TimestampUnixNano int64             `protobuf:"varint,5,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
+	EventType         string            `protobuf:"bytes,6,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
 }
 
 func (x *AgentEventRecord) Reset() {
 	*x = AgentEventRecord{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[96]
+		mi := &file_gateway_proto_msgTypes[97]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7132,7 +7244,7 @@ func (x *AgentEventRecord) String() string {
 func (*AgentEventRecord) ProtoMessage() {}
 
 func (x *AgentEventRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[96]
+	mi := &file_gateway_proto_msgTypes[97]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7145,7 +7257,7 @@ func (x *AgentEventRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentEventRecord.ProtoReflect.Descriptor instead.
 func (*AgentEventRecord) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{96}
+	return file_gateway_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *AgentEventRecord) GetAction() string {
@@ -7183,6 +7295,13 @@ func (x *AgentEventRecord) GetTimestampUnixNano() int64 {
 	return 0
 }
 
+func (x *AgentEventRecord) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
 type AgentTelemetryRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -7197,7 +7316,7 @@ type AgentTelemetryRequest struct {
 func (x *AgentTelemetryRequest) Reset() {
 	*x = AgentTelemetryRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[97]
+		mi := &file_gateway_proto_msgTypes[98]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7210,7 +7329,7 @@ func (x *AgentTelemetryRequest) String() string {
 func (*AgentTelemetryRequest) ProtoMessage() {}
 
 func (x *AgentTelemetryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[97]
+	mi := &file_gateway_proto_msgTypes[98]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7223,7 +7342,7 @@ func (x *AgentTelemetryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentTelemetryRequest.ProtoReflect.Descriptor instead.
 func (*AgentTelemetryRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{97}
+	return file_gateway_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *AgentTelemetryRequest) GetAgentToken() string {
@@ -7266,7 +7385,7 @@ type AgentTelemetryResponse struct {
 func (x *AgentTelemetryResponse) Reset() {
 	*x = AgentTelemetryResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[98]
+		mi := &file_gateway_proto_msgTypes[99]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7279,7 +7398,7 @@ func (x *AgentTelemetryResponse) String() string {
 func (*AgentTelemetryResponse) ProtoMessage() {}
 
 func (x *AgentTelemetryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[98]
+	mi := &file_gateway_proto_msgTypes[99]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7292,7 +7411,7 @@ func (x *AgentTelemetryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentTelemetryResponse.ProtoReflect.Descriptor instead.
 func (*AgentTelemetryResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{98}
+	return file_gateway_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *AgentTelemetryResponse) GetOk() bool {
@@ -7335,7 +7454,7 @@ type Machine struct {
 func (x *Machine) Reset() {
 	*x = Machine{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[99]
+		mi := &file_gateway_proto_msgTypes[100]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7348,7 +7467,7 @@ func (x *Machine) String() string {
 func (*Machine) ProtoMessage() {}
 
 func (x *Machine) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[99]
+	mi := &file_gateway_proto_msgTypes[100]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7361,7 +7480,7 @@ func (x *Machine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Machine.ProtoReflect.Descriptor instead.
 func (*Machine) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{99}
+	return file_gateway_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *Machine) GetId() string {
@@ -7502,7 +7621,7 @@ type MachineMetrics struct {
 func (x *MachineMetrics) Reset() {
 	*x = MachineMetrics{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[100]
+		mi := &file_gateway_proto_msgTypes[101]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7515,7 +7634,7 @@ func (x *MachineMetrics) String() string {
 func (*MachineMetrics) ProtoMessage() {}
 
 func (x *MachineMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[100]
+	mi := &file_gateway_proto_msgTypes[101]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7528,7 +7647,7 @@ func (x *MachineMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MachineMetrics.ProtoReflect.Descriptor instead.
 func (*MachineMetrics) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{100}
+	return file_gateway_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *MachineMetrics) GetTotalCpuAvailable() int32 {
@@ -7655,7 +7774,7 @@ type ListMachinesRequest struct {
 func (x *ListMachinesRequest) Reset() {
 	*x = ListMachinesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[101]
+		mi := &file_gateway_proto_msgTypes[102]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7668,7 +7787,7 @@ func (x *ListMachinesRequest) String() string {
 func (*ListMachinesRequest) ProtoMessage() {}
 
 func (x *ListMachinesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[101]
+	mi := &file_gateway_proto_msgTypes[102]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7681,7 +7800,7 @@ func (x *ListMachinesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMachinesRequest.ProtoReflect.Descriptor instead.
 func (*ListMachinesRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{101}
+	return file_gateway_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *ListMachinesRequest) GetPoolName() string {
@@ -7712,7 +7831,7 @@ type ListMachinesResponse struct {
 func (x *ListMachinesResponse) Reset() {
 	*x = ListMachinesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[102]
+		mi := &file_gateway_proto_msgTypes[103]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7725,7 +7844,7 @@ func (x *ListMachinesResponse) String() string {
 func (*ListMachinesResponse) ProtoMessage() {}
 
 func (x *ListMachinesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[102]
+	mi := &file_gateway_proto_msgTypes[103]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7738,7 +7857,7 @@ func (x *ListMachinesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMachinesResponse.ProtoReflect.Descriptor instead.
 func (*ListMachinesResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{102}
+	return file_gateway_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *ListMachinesResponse) GetOk() bool {
@@ -7780,7 +7899,7 @@ type CreateMachineRequest struct {
 func (x *CreateMachineRequest) Reset() {
 	*x = CreateMachineRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[103]
+		mi := &file_gateway_proto_msgTypes[104]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7793,7 +7912,7 @@ func (x *CreateMachineRequest) String() string {
 func (*CreateMachineRequest) ProtoMessage() {}
 
 func (x *CreateMachineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[103]
+	mi := &file_gateway_proto_msgTypes[104]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7806,7 +7925,7 @@ func (x *CreateMachineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMachineRequest.ProtoReflect.Descriptor instead.
 func (*CreateMachineRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{103}
+	return file_gateway_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *CreateMachineRequest) GetPoolName() string {
@@ -7832,7 +7951,7 @@ type CreateMachineResponse struct {
 func (x *CreateMachineResponse) Reset() {
 	*x = CreateMachineResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[104]
+		mi := &file_gateway_proto_msgTypes[105]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7845,7 +7964,7 @@ func (x *CreateMachineResponse) String() string {
 func (*CreateMachineResponse) ProtoMessage() {}
 
 func (x *CreateMachineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[104]
+	mi := &file_gateway_proto_msgTypes[105]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7858,7 +7977,7 @@ func (x *CreateMachineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMachineResponse.ProtoReflect.Descriptor instead.
 func (*CreateMachineResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{104}
+	return file_gateway_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *CreateMachineResponse) GetOk() bool {
@@ -7915,7 +8034,7 @@ type DeleteMachineRequest struct {
 func (x *DeleteMachineRequest) Reset() {
 	*x = DeleteMachineRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[105]
+		mi := &file_gateway_proto_msgTypes[106]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7928,7 +8047,7 @@ func (x *DeleteMachineRequest) String() string {
 func (*DeleteMachineRequest) ProtoMessage() {}
 
 func (x *DeleteMachineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[105]
+	mi := &file_gateway_proto_msgTypes[106]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7941,7 +8060,7 @@ func (x *DeleteMachineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteMachineRequest.ProtoReflect.Descriptor instead.
 func (*DeleteMachineRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{105}
+	return file_gateway_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *DeleteMachineRequest) GetMachineId() string {
@@ -7970,7 +8089,7 @@ type DeleteMachineResponse struct {
 func (x *DeleteMachineResponse) Reset() {
 	*x = DeleteMachineResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[106]
+		mi := &file_gateway_proto_msgTypes[107]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7983,7 +8102,7 @@ func (x *DeleteMachineResponse) String() string {
 func (*DeleteMachineResponse) ProtoMessage() {}
 
 func (x *DeleteMachineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[106]
+	mi := &file_gateway_proto_msgTypes[107]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7996,7 +8115,7 @@ func (x *DeleteMachineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteMachineResponse.ProtoReflect.Descriptor instead.
 func (*DeleteMachineResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{106}
+	return file_gateway_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *DeleteMachineResponse) GetOk() bool {
@@ -8031,7 +8150,7 @@ type Token struct {
 func (x *Token) Reset() {
 	*x = Token{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[107]
+		mi := &file_gateway_proto_msgTypes[108]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8044,7 +8163,7 @@ func (x *Token) String() string {
 func (*Token) ProtoMessage() {}
 
 func (x *Token) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[107]
+	mi := &file_gateway_proto_msgTypes[108]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8057,7 +8176,7 @@ func (x *Token) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Token.ProtoReflect.Descriptor instead.
 func (*Token) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{107}
+	return file_gateway_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *Token) GetTokenId() string {
@@ -8125,7 +8244,7 @@ type ListTokensRequest struct {
 func (x *ListTokensRequest) Reset() {
 	*x = ListTokensRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[108]
+		mi := &file_gateway_proto_msgTypes[109]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8138,7 +8257,7 @@ func (x *ListTokensRequest) String() string {
 func (*ListTokensRequest) ProtoMessage() {}
 
 func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[108]
+	mi := &file_gateway_proto_msgTypes[109]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8151,7 +8270,7 @@ func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListTokensRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{108}
+	return file_gateway_proto_rawDescGZIP(), []int{109}
 }
 
 type ListTokensResponse struct {
@@ -8167,7 +8286,7 @@ type ListTokensResponse struct {
 func (x *ListTokensResponse) Reset() {
 	*x = ListTokensResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[109]
+		mi := &file_gateway_proto_msgTypes[110]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8180,7 +8299,7 @@ func (x *ListTokensResponse) String() string {
 func (*ListTokensResponse) ProtoMessage() {}
 
 func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[109]
+	mi := &file_gateway_proto_msgTypes[110]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8193,7 +8312,7 @@ func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensResponse.ProtoReflect.Descriptor instead.
 func (*ListTokensResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{109}
+	return file_gateway_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *ListTokensResponse) GetOk() bool {
@@ -8228,7 +8347,7 @@ type CreateTokenRequest struct {
 func (x *CreateTokenRequest) Reset() {
 	*x = CreateTokenRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[110]
+		mi := &file_gateway_proto_msgTypes[111]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8241,7 +8360,7 @@ func (x *CreateTokenRequest) String() string {
 func (*CreateTokenRequest) ProtoMessage() {}
 
 func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[110]
+	mi := &file_gateway_proto_msgTypes[111]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8254,7 +8373,7 @@ func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{110}
+	return file_gateway_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *CreateTokenRequest) GetTokenType() string {
@@ -8277,7 +8396,7 @@ type CreateTokenResponse struct {
 func (x *CreateTokenResponse) Reset() {
 	*x = CreateTokenResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[111]
+		mi := &file_gateway_proto_msgTypes[112]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8290,7 +8409,7 @@ func (x *CreateTokenResponse) String() string {
 func (*CreateTokenResponse) ProtoMessage() {}
 
 func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[111]
+	mi := &file_gateway_proto_msgTypes[112]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8303,7 +8422,7 @@ func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{111}
+	return file_gateway_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *CreateTokenResponse) GetOk() bool {
@@ -8338,7 +8457,7 @@ type ToggleTokenRequest struct {
 func (x *ToggleTokenRequest) Reset() {
 	*x = ToggleTokenRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[112]
+		mi := &file_gateway_proto_msgTypes[113]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8351,7 +8470,7 @@ func (x *ToggleTokenRequest) String() string {
 func (*ToggleTokenRequest) ProtoMessage() {}
 
 func (x *ToggleTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[112]
+	mi := &file_gateway_proto_msgTypes[113]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8364,7 +8483,7 @@ func (x *ToggleTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToggleTokenRequest.ProtoReflect.Descriptor instead.
 func (*ToggleTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{112}
+	return file_gateway_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ToggleTokenRequest) GetTokenId() string {
@@ -8387,7 +8506,7 @@ type ToggleTokenResponse struct {
 func (x *ToggleTokenResponse) Reset() {
 	*x = ToggleTokenResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[113]
+		mi := &file_gateway_proto_msgTypes[114]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8400,7 +8519,7 @@ func (x *ToggleTokenResponse) String() string {
 func (*ToggleTokenResponse) ProtoMessage() {}
 
 func (x *ToggleTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[113]
+	mi := &file_gateway_proto_msgTypes[114]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8413,7 +8532,7 @@ func (x *ToggleTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToggleTokenResponse.ProtoReflect.Descriptor instead.
 func (*ToggleTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{113}
+	return file_gateway_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ToggleTokenResponse) GetOk() bool {
@@ -8448,7 +8567,7 @@ type DeleteTokenRequest struct {
 func (x *DeleteTokenRequest) Reset() {
 	*x = DeleteTokenRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[114]
+		mi := &file_gateway_proto_msgTypes[115]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8461,7 +8580,7 @@ func (x *DeleteTokenRequest) String() string {
 func (*DeleteTokenRequest) ProtoMessage() {}
 
 func (x *DeleteTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[114]
+	mi := &file_gateway_proto_msgTypes[115]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8474,7 +8593,7 @@ func (x *DeleteTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{114}
+	return file_gateway_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *DeleteTokenRequest) GetTokenId() string {
@@ -8496,7 +8615,7 @@ type DeleteTokenResponse struct {
 func (x *DeleteTokenResponse) Reset() {
 	*x = DeleteTokenResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[115]
+		mi := &file_gateway_proto_msgTypes[116]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8509,7 +8628,7 @@ func (x *DeleteTokenResponse) String() string {
 func (*DeleteTokenResponse) ProtoMessage() {}
 
 func (x *DeleteTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[115]
+	mi := &file_gateway_proto_msgTypes[116]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8522,7 +8641,7 @@ func (x *DeleteTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenResponse.ProtoReflect.Descriptor instead.
 func (*DeleteTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{115}
+	return file_gateway_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *DeleteTokenResponse) GetOk() bool {
@@ -8553,7 +8672,7 @@ type GetURLRequest struct {
 func (x *GetURLRequest) Reset() {
 	*x = GetURLRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[116]
+		mi := &file_gateway_proto_msgTypes[117]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8566,7 +8685,7 @@ func (x *GetURLRequest) String() string {
 func (*GetURLRequest) ProtoMessage() {}
 
 func (x *GetURLRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[116]
+	mi := &file_gateway_proto_msgTypes[117]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8579,7 +8698,7 @@ func (x *GetURLRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetURLRequest.ProtoReflect.Descriptor instead.
 func (*GetURLRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{116}
+	return file_gateway_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *GetURLRequest) GetStubId() string {
@@ -8623,7 +8742,7 @@ type GetURLResponse struct {
 func (x *GetURLResponse) Reset() {
 	*x = GetURLResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[117]
+		mi := &file_gateway_proto_msgTypes[118]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8636,7 +8755,7 @@ func (x *GetURLResponse) String() string {
 func (*GetURLResponse) ProtoMessage() {}
 
 func (x *GetURLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[117]
+	mi := &file_gateway_proto_msgTypes[118]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8649,7 +8768,7 @@ func (x *GetURLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetURLResponse.ProtoReflect.Descriptor instead.
 func (*GetURLResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{117}
+	return file_gateway_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *GetURLResponse) GetOk() bool {
@@ -8682,7 +8801,7 @@ type ListWorkersRequest struct {
 func (x *ListWorkersRequest) Reset() {
 	*x = ListWorkersRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[118]
+		mi := &file_gateway_proto_msgTypes[119]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8695,7 +8814,7 @@ func (x *ListWorkersRequest) String() string {
 func (*ListWorkersRequest) ProtoMessage() {}
 
 func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[118]
+	mi := &file_gateway_proto_msgTypes[119]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8708,7 +8827,7 @@ func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkersRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{118}
+	return file_gateway_proto_rawDescGZIP(), []int{119}
 }
 
 type ListWorkersResponse struct {
@@ -8724,7 +8843,7 @@ type ListWorkersResponse struct {
 func (x *ListWorkersResponse) Reset() {
 	*x = ListWorkersResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[119]
+		mi := &file_gateway_proto_msgTypes[120]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8737,7 +8856,7 @@ func (x *ListWorkersResponse) String() string {
 func (*ListWorkersResponse) ProtoMessage() {}
 
 func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[119]
+	mi := &file_gateway_proto_msgTypes[120]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8750,7 +8869,7 @@ func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkersResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{119}
+	return file_gateway_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *ListWorkersResponse) GetOk() bool {
@@ -8785,7 +8904,7 @@ type CordonWorkerRequest struct {
 func (x *CordonWorkerRequest) Reset() {
 	*x = CordonWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[120]
+		mi := &file_gateway_proto_msgTypes[121]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8798,7 +8917,7 @@ func (x *CordonWorkerRequest) String() string {
 func (*CordonWorkerRequest) ProtoMessage() {}
 
 func (x *CordonWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[120]
+	mi := &file_gateway_proto_msgTypes[121]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8811,7 +8930,7 @@ func (x *CordonWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CordonWorkerRequest.ProtoReflect.Descriptor instead.
 func (*CordonWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{120}
+	return file_gateway_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *CordonWorkerRequest) GetWorkerId() string {
@@ -8833,7 +8952,7 @@ type CordonWorkerResponse struct {
 func (x *CordonWorkerResponse) Reset() {
 	*x = CordonWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[121]
+		mi := &file_gateway_proto_msgTypes[122]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8846,7 +8965,7 @@ func (x *CordonWorkerResponse) String() string {
 func (*CordonWorkerResponse) ProtoMessage() {}
 
 func (x *CordonWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[121]
+	mi := &file_gateway_proto_msgTypes[122]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8859,7 +8978,7 @@ func (x *CordonWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CordonWorkerResponse.ProtoReflect.Descriptor instead.
 func (*CordonWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{121}
+	return file_gateway_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *CordonWorkerResponse) GetOk() bool {
@@ -8887,7 +9006,7 @@ type UncordonWorkerRequest struct {
 func (x *UncordonWorkerRequest) Reset() {
 	*x = UncordonWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[122]
+		mi := &file_gateway_proto_msgTypes[123]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8900,7 +9019,7 @@ func (x *UncordonWorkerRequest) String() string {
 func (*UncordonWorkerRequest) ProtoMessage() {}
 
 func (x *UncordonWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[122]
+	mi := &file_gateway_proto_msgTypes[123]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8913,7 +9032,7 @@ func (x *UncordonWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UncordonWorkerRequest.ProtoReflect.Descriptor instead.
 func (*UncordonWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{122}
+	return file_gateway_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *UncordonWorkerRequest) GetWorkerId() string {
@@ -8935,7 +9054,7 @@ type UncordonWorkerResponse struct {
 func (x *UncordonWorkerResponse) Reset() {
 	*x = UncordonWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[123]
+		mi := &file_gateway_proto_msgTypes[124]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8948,7 +9067,7 @@ func (x *UncordonWorkerResponse) String() string {
 func (*UncordonWorkerResponse) ProtoMessage() {}
 
 func (x *UncordonWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[123]
+	mi := &file_gateway_proto_msgTypes[124]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8961,7 +9080,7 @@ func (x *UncordonWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UncordonWorkerResponse.ProtoReflect.Descriptor instead.
 func (*UncordonWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{123}
+	return file_gateway_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *UncordonWorkerResponse) GetOk() bool {
@@ -8989,7 +9108,7 @@ type DrainWorkerRequest struct {
 func (x *DrainWorkerRequest) Reset() {
 	*x = DrainWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[124]
+		mi := &file_gateway_proto_msgTypes[125]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9002,7 +9121,7 @@ func (x *DrainWorkerRequest) String() string {
 func (*DrainWorkerRequest) ProtoMessage() {}
 
 func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[124]
+	mi := &file_gateway_proto_msgTypes[125]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9015,7 +9134,7 @@ func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainWorkerRequest.ProtoReflect.Descriptor instead.
 func (*DrainWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{124}
+	return file_gateway_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *DrainWorkerRequest) GetWorkerId() string {
@@ -9037,7 +9156,7 @@ type DrainWorkerResponse struct {
 func (x *DrainWorkerResponse) Reset() {
 	*x = DrainWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[125]
+		mi := &file_gateway_proto_msgTypes[126]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9050,7 +9169,7 @@ func (x *DrainWorkerResponse) String() string {
 func (*DrainWorkerResponse) ProtoMessage() {}
 
 func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[125]
+	mi := &file_gateway_proto_msgTypes[126]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9063,7 +9182,7 @@ func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainWorkerResponse.ProtoReflect.Descriptor instead.
 func (*DrainWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{125}
+	return file_gateway_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *DrainWorkerResponse) GetOk() bool {
@@ -9089,7 +9208,7 @@ type ExportWorkspaceConfigRequest struct {
 func (x *ExportWorkspaceConfigRequest) Reset() {
 	*x = ExportWorkspaceConfigRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[126]
+		mi := &file_gateway_proto_msgTypes[127]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9102,7 +9221,7 @@ func (x *ExportWorkspaceConfigRequest) String() string {
 func (*ExportWorkspaceConfigRequest) ProtoMessage() {}
 
 func (x *ExportWorkspaceConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[126]
+	mi := &file_gateway_proto_msgTypes[127]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9115,7 +9234,7 @@ func (x *ExportWorkspaceConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkspaceConfigRequest.ProtoReflect.Descriptor instead.
 func (*ExportWorkspaceConfigRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{126}
+	return file_gateway_proto_rawDescGZIP(), []int{127}
 }
 
 type ExportWorkspaceConfigResponse struct {
@@ -9135,7 +9254,7 @@ type ExportWorkspaceConfigResponse struct {
 func (x *ExportWorkspaceConfigResponse) Reset() {
 	*x = ExportWorkspaceConfigResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[127]
+		mi := &file_gateway_proto_msgTypes[128]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9148,7 +9267,7 @@ func (x *ExportWorkspaceConfigResponse) String() string {
 func (*ExportWorkspaceConfigResponse) ProtoMessage() {}
 
 func (x *ExportWorkspaceConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[127]
+	mi := &file_gateway_proto_msgTypes[128]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9161,7 +9280,7 @@ func (x *ExportWorkspaceConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkspaceConfigResponse.ProtoReflect.Descriptor instead.
 func (*ExportWorkspaceConfigResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{127}
+	return file_gateway_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *ExportWorkspaceConfigResponse) GetGatewayHttpHost() string {
@@ -9959,7 +10078,7 @@ var file_gateway_proto_rawDesc = []byte{
 	0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x2c, 0x0a, 0x08, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65,
 	0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
 	0x79, 0x2e, 0x4d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x52, 0x08, 0x6d, 0x61, 0x63, 0x68, 0x69,
-	0x6e, 0x65, 0x73, 0x22, 0xa0, 0x04, 0x0a, 0x14, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x42, 0x6f, 0x6f,
+	0x6e, 0x65, 0x73, 0x22, 0xe4, 0x04, 0x0a, 0x14, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x42, 0x6f, 0x6f,
 	0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x28, 0x0a, 0x10,
 	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x5f, 0x68, 0x74, 0x74, 0x70, 0x5f, 0x75, 0x72, 0x6c,
 	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x48,
@@ -9993,237 +10112,268 @@ var file_gateway_proto_rawDesc = []byte{
 	0x6d, 0x61, 0x67, 0x65, 0x5f, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x5f, 0x63, 0x61, 0x63, 0x68, 0x65,
 	0x5f, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x08, 0x52, 0x16,
 	0x69, 0x6d, 0x61, 0x67, 0x65, 0x4c, 0x6f, 0x63, 0x61, 0x6c, 0x43, 0x61, 0x63, 0x68, 0x65, 0x45,
-	0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x22, 0xba, 0x04, 0x0a, 0x10, 0x4a, 0x6f, 0x69, 0x6e, 0x41,
-	0x67, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x6a,
-	0x6f, 0x69, 0x6e, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x09, 0x6a, 0x6f, 0x69, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x2f, 0x0a, 0x13, 0x6d, 0x61,
-	0x63, 0x68, 0x69, 0x6e, 0x65, 0x5f, 0x66, 0x69, 0x6e, 0x67, 0x65, 0x72, 0x70, 0x72, 0x69, 0x6e,
-	0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x12, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65,
-	0x46, 0x69, 0x6e, 0x67, 0x65, 0x72, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x12, 0x1a, 0x0a, 0x08, 0x68,
-	0x6f, 0x73, 0x74, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x68,
-	0x6f, 0x73, 0x74, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x73, 0x18, 0x04, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x02, 0x6f, 0x73, 0x12, 0x12, 0x0a, 0x04, 0x61, 0x72, 0x63, 0x68, 0x18,
-	0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x61, 0x72, 0x63, 0x68, 0x12, 0x1b, 0x0a, 0x09, 0x63,
-	0x70, 0x75, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x08,
-	0x63, 0x70, 0x75, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x65, 0x6d, 0x6f,
-	0x72, 0x79, 0x5f, 0x6d, 0x62, 0x18, 0x07, 0x20, 0x01, 0x28, 0x04, 0x52, 0x08, 0x6d, 0x65, 0x6d,
-	0x6f, 0x72, 0x79, 0x4d, 0x62, 0x12, 0x10, 0x0a, 0x03, 0x67, 0x70, 0x75, 0x18, 0x08, 0x20, 0x03,
-	0x28, 0x09, 0x52, 0x03, 0x67, 0x70, 0x75, 0x12, 0x1b, 0x0a, 0x09, 0x67, 0x70, 0x75, 0x5f, 0x63,
-	0x6f, 0x75, 0x6e, 0x74, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x08, 0x67, 0x70, 0x75, 0x43,
-	0x6f, 0x75, 0x6e, 0x74, 0x12, 0x3a, 0x0a, 0x09, 0x70, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68,
-	0x74, 0x18, 0x0a, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
-	0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x50, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68, 0x74,
-	0x43, 0x68, 0x65, 0x63, 0x6b, 0x52, 0x09, 0x70, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68, 0x74,
-	0x12, 0x20, 0x0a, 0x0b, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x61, 0x62, 0x6c, 0x65, 0x18,
-	0x0b, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0b, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x61, 0x62,
-	0x6c, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x18, 0x0c,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x12, 0x25,
-	0x0a, 0x0e, 0x63, 0x70, 0x75, 0x5f, 0x6d, 0x69, 0x6c, 0x6c, 0x69, 0x63, 0x6f, 0x72, 0x65, 0x73,
-	0x18, 0x0d, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0d, 0x63, 0x70, 0x75, 0x4d, 0x69, 0x6c, 0x6c, 0x69,
-	0x63, 0x6f, 0x72, 0x65, 0x73, 0x12, 0x17, 0x0a, 0x07, 0x67, 0x70, 0x75, 0x5f, 0x69, 0x64, 0x73,
-	0x18, 0x0e, 0x20, 0x03, 0x28, 0x09, 0x52, 0x06, 0x67, 0x70, 0x75, 0x49, 0x64, 0x73, 0x12, 0x33,
-	0x0a, 0x16, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x73, 0x6c, 0x6f, 0x74, 0x5f, 0x70,
-	0x6f, 0x6f, 0x6c, 0x5f, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x0f, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x13,
-	0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x53, 0x6c, 0x6f, 0x74, 0x50, 0x6f, 0x6f, 0x6c, 0x53,
-	0x69, 0x7a, 0x65, 0x12, 0x3e, 0x0a, 0x1b, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72,
-	0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x63, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e,
-	0x63, 0x79, 0x18, 0x10, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x19, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69,
-	0x6e, 0x65, 0x72, 0x53, 0x74, 0x61, 0x72, 0x74, 0x43, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65,
-	0x6e, 0x63, 0x79, 0x22, 0xf9, 0x01, 0x0a, 0x11, 0x4a, 0x6f, 0x69, 0x6e, 0x41, 0x67, 0x65, 0x6e,
-	0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18,
-	0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72,
-	0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d,
-	0x73, 0x67, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f,
-	0x69, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70,
-	0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x6f, 0x6f, 0x6c, 0x5f, 0x6e, 0x61,
-	0x6d, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x6f, 0x6f, 0x6c, 0x4e, 0x61,
-	0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x5f, 0x69, 0x64,
-	0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x49,
-	0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e,
-	0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b,
-	0x65, 0x6e, 0x12, 0x3b, 0x0a, 0x09, 0x62, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x18,
-	0x07, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
-	0x41, 0x67, 0x65, 0x6e, 0x74, 0x42, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x43, 0x6f,
-	0x6e, 0x66, 0x69, 0x67, 0x52, 0x09, 0x62, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x22,
-	0x6f, 0x0a, 0x13, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x50, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68,
-	0x74, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x18, 0x0a, 0x07, 0x6d, 0x65,
-	0x73, 0x73, 0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x6d, 0x65, 0x73,
-	0x73, 0x61, 0x67, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79,
-	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79,
-	0x22, 0xb9, 0x03, 0x0a, 0x0a, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x12,
-	0x19, 0x0a, 0x08, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x07, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x49, 0x64, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f,
-	0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x0b, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a,
-	0x09, 0x70, 0x6f, 0x6f, 0x6c, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x08, 0x70, 0x6f, 0x6f, 0x6c, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61,
-	0x63, 0x68, 0x69, 0x6e, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09,
-	0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x49, 0x64, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69,
-	0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f,
-	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x6b, 0x69, 0x6e,
-	0x64, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6b, 0x69, 0x6e, 0x64, 0x12, 0x12, 0x0a,
-	0x04, 0x70, 0x6f, 0x72, 0x74, 0x18, 0x08, 0x20, 0x01, 0x28, 0x05, 0x52, 0x04, 0x70, 0x6f, 0x72,
-	0x74, 0x12, 0x1a, 0x0a, 0x08, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x18, 0x09, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x12, 0x1c, 0x0a,
-	0x09, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f, 0x72, 0x74, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x09, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f, 0x72, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x6c,
-	0x6f, 0x63, 0x61, 0x6c, 0x5f, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x18, 0x0b, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x0b, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x54, 0x61, 0x72, 0x67, 0x65, 0x74, 0x12, 0x21,
-	0x0a, 0x0c, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x5f, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x18, 0x0c,
+	0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x12, 0x42, 0x0a, 0x0c, 0x73, 0x32, 0x5f, 0x74, 0x65, 0x6c,
+	0x65, 0x6d, 0x65, 0x74, 0x72, 0x79, 0x18, 0x0e, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1f, 0x2e, 0x67,
+	0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x53, 0x32, 0x54, 0x65,
+	0x6c, 0x65, 0x6d, 0x65, 0x74, 0x72, 0x79, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52, 0x0b, 0x73,
+	0x32, 0x54, 0x65, 0x6c, 0x65, 0x6d, 0x65, 0x74, 0x72, 0x79, 0x22, 0x87, 0x02, 0x0a, 0x16, 0x41,
+	0x67, 0x65, 0x6e, 0x74, 0x53, 0x32, 0x54, 0x65, 0x6c, 0x65, 0x6d, 0x65, 0x74, 0x72, 0x79, 0x43,
+	0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x18, 0x0a, 0x07, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x07, 0x65, 0x6e, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x12,
+	0x14, 0x0a, 0x05, 0x62, 0x61, 0x73, 0x69, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05,
+	0x62, 0x61, 0x73, 0x69, 0x6e, 0x12, 0x23, 0x0a, 0x0d, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x5f,
+	0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x73, 0x74,
+	0x72, 0x65, 0x61, 0x6d, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x12, 0x1b, 0x0a, 0x09, 0x6c, 0x6f,
+	0x67, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6c,
+	0x6f, 0x67, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x2a, 0x0a, 0x11, 0x6c, 0x6f, 0x67, 0x5f, 0x73,
+	0x74, 0x72, 0x65, 0x61, 0x6d, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0f, 0x6c, 0x6f, 0x67, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x72, 0x65,
+	0x66, 0x69, 0x78, 0x12, 0x1f, 0x0a, 0x0b, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b,
+	0x65, 0x6e, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x54,
+	0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x2e, 0x0a, 0x13, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x5f, 0x73, 0x74,
+	0x72, 0x65, 0x61, 0x6d, 0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x07, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x11, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x72,
+	0x65, 0x66, 0x69, 0x78, 0x22, 0xba, 0x04, 0x0a, 0x10, 0x4a, 0x6f, 0x69, 0x6e, 0x41, 0x67, 0x65,
+	0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x6a, 0x6f, 0x69,
+	0x6e, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6a,
+	0x6f, 0x69, 0x6e, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x2f, 0x0a, 0x13, 0x6d, 0x61, 0x63, 0x68,
+	0x69, 0x6e, 0x65, 0x5f, 0x66, 0x69, 0x6e, 0x67, 0x65, 0x72, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x12, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x46, 0x69,
+	0x6e, 0x67, 0x65, 0x72, 0x70, 0x72, 0x69, 0x6e, 0x74, 0x12, 0x1a, 0x0a, 0x08, 0x68, 0x6f, 0x73,
+	0x74, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x68, 0x6f, 0x73,
+	0x74, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x73, 0x18, 0x04, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x02, 0x6f, 0x73, 0x12, 0x12, 0x0a, 0x04, 0x61, 0x72, 0x63, 0x68, 0x18, 0x05, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x04, 0x61, 0x72, 0x63, 0x68, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x70, 0x75,
+	0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x08, 0x63, 0x70,
+	0x75, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79,
+	0x5f, 0x6d, 0x62, 0x18, 0x07, 0x20, 0x01, 0x28, 0x04, 0x52, 0x08, 0x6d, 0x65, 0x6d, 0x6f, 0x72,
+	0x79, 0x4d, 0x62, 0x12, 0x10, 0x0a, 0x03, 0x67, 0x70, 0x75, 0x18, 0x08, 0x20, 0x03, 0x28, 0x09,
+	0x52, 0x03, 0x67, 0x70, 0x75, 0x12, 0x1b, 0x0a, 0x09, 0x67, 0x70, 0x75, 0x5f, 0x63, 0x6f, 0x75,
+	0x6e, 0x74, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x08, 0x67, 0x70, 0x75, 0x43, 0x6f, 0x75,
+	0x6e, 0x74, 0x12, 0x3a, 0x0a, 0x09, 0x70, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68, 0x74, 0x18,
+	0x0a, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e,
+	0x41, 0x67, 0x65, 0x6e, 0x74, 0x50, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68, 0x74, 0x43, 0x68,
+	0x65, 0x63, 0x6b, 0x52, 0x09, 0x70, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68, 0x74, 0x12, 0x20,
+	0x0a, 0x0b, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x61, 0x62, 0x6c, 0x65, 0x18, 0x0b, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x0b, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x61, 0x62, 0x6c, 0x65,
+	0x12, 0x1a, 0x0a, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x18, 0x0c, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x12, 0x25, 0x0a, 0x0e,
+	0x63, 0x70, 0x75, 0x5f, 0x6d, 0x69, 0x6c, 0x6c, 0x69, 0x63, 0x6f, 0x72, 0x65, 0x73, 0x18, 0x0d,
+	0x20, 0x01, 0x28, 0x03, 0x52, 0x0d, 0x63, 0x70, 0x75, 0x4d, 0x69, 0x6c, 0x6c, 0x69, 0x63, 0x6f,
+	0x72, 0x65, 0x73, 0x12, 0x17, 0x0a, 0x07, 0x67, 0x70, 0x75, 0x5f, 0x69, 0x64, 0x73, 0x18, 0x0e,
+	0x20, 0x03, 0x28, 0x09, 0x52, 0x06, 0x67, 0x70, 0x75, 0x49, 0x64, 0x73, 0x12, 0x33, 0x0a, 0x16,
+	0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x73, 0x6c, 0x6f, 0x74, 0x5f, 0x70, 0x6f, 0x6f,
+	0x6c, 0x5f, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x0f, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x13, 0x6e, 0x65,
+	0x74, 0x77, 0x6f, 0x72, 0x6b, 0x53, 0x6c, 0x6f, 0x74, 0x50, 0x6f, 0x6f, 0x6c, 0x53, 0x69, 0x7a,
+	0x65, 0x12, 0x3e, 0x0a, 0x1b, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x5f, 0x73,
+	0x74, 0x61, 0x72, 0x74, 0x5f, 0x63, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x63, 0x79,
+	0x18, 0x10, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x19, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65,
+	0x72, 0x53, 0x74, 0x61, 0x72, 0x74, 0x43, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x63,
+	0x79, 0x22, 0xf9, 0x01, 0x0a, 0x11, 0x4a, 0x6f, 0x69, 0x6e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d,
+	0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67,
+	0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64,
+	0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63,
+	0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x6f, 0x6f, 0x6c, 0x5f, 0x6e, 0x61, 0x6d, 0x65,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x6f, 0x6f, 0x6c, 0x4e, 0x61, 0x6d, 0x65,
+	0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x05,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65, 0x49, 0x64, 0x12,
+	0x1f, 0x0a, 0x0b, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x06,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e,
+	0x12, 0x3b, 0x0a, 0x09, 0x62, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x18, 0x07, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x67,
+	0x65, 0x6e, 0x74, 0x42, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x43, 0x6f, 0x6e, 0x66,
+	0x69, 0x67, 0x52, 0x09, 0x62, 0x6f, 0x6f, 0x74, 0x73, 0x74, 0x72, 0x61, 0x70, 0x22, 0x6f, 0x0a,
+	0x13, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x50, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67, 0x68, 0x74, 0x43,
+	0x68, 0x65, 0x63, 0x6b, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x18, 0x0a, 0x07, 0x6d, 0x65, 0x73, 0x73,
+	0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x6d, 0x65, 0x73, 0x73, 0x61,
+	0x67, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x18, 0x04,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x22, 0xb9,
+	0x03, 0x0a, 0x0a, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x12, 0x19, 0x0a,
+	0x08, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x07, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x49, 0x64, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b,
+	0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b,
+	0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x70,
+	0x6f, 0x6f, 0x6c, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08,
+	0x70, 0x6f, 0x6f, 0x6c, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61, 0x63, 0x68,
+	0x69, 0x6e, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x61,
+	0x63, 0x68, 0x69, 0x6e, 0x65, 0x49, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x77, 0x6f, 0x72, 0x6b, 0x65,
+	0x72, 0x5f, 0x69, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x49, 0x64, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65,
+	0x72, 0x5f, 0x69, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f, 0x6e, 0x74,
+	0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x6b, 0x69, 0x6e, 0x64, 0x18,
+	0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6b, 0x69, 0x6e, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x70,
+	0x6f, 0x72, 0x74, 0x18, 0x08, 0x20, 0x01, 0x28, 0x05, 0x52, 0x04, 0x70, 0x6f, 0x72, 0x74, 0x12,
+	0x1a, 0x0a, 0x08, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x18, 0x09, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x08, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x63, 0x6f, 0x6c, 0x12, 0x1c, 0x0a, 0x09, 0x74,
+	0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f, 0x72, 0x74, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09,
+	0x74, 0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f, 0x72, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x6c, 0x6f, 0x63,
+	0x61, 0x6c, 0x5f, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x0b, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x54, 0x61, 0x72, 0x67, 0x65, 0x74, 0x12, 0x21, 0x0a, 0x0c,
+	0x70, 0x72, 0x6f, 0x78, 0x79, 0x5f, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x18, 0x0c, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x54, 0x61, 0x72, 0x67, 0x65, 0x74, 0x12,
+	0x14, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05,
+	0x73, 0x74, 0x61, 0x74, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x18, 0x0e,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x12, 0x1d, 0x0a, 0x0a, 0x75,
+	0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x0f, 0x20, 0x01, 0x28, 0x03, 0x52,
+	0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x22, 0x67, 0x0a, 0x26, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x70,
+	0x6f, 0x72, 0x74, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f,
+	0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74,
+	0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f,
+	0x72, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x70,
+	0x6f, 0x72, 0x74, 0x22, 0xc8, 0x01, 0x0a, 0x27, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x41,
+	0x67, 0x65, 0x6e, 0x74, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f, 0x72, 0x74, 0x43, 0x72, 0x65,
+	0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12,
+	0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x19, 0x0a, 0x08, 0x61, 0x75, 0x74, 0x68,
+	0x5f, 0x6b, 0x65, 0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x61, 0x75, 0x74, 0x68,
+	0x4b, 0x65, 0x79, 0x12, 0x1f, 0x0a, 0x0b, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x5f, 0x75,
+	0x72, 0x6c, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f,
+	0x6c, 0x55, 0x72, 0x6c, 0x12, 0x1a, 0x0a, 0x08, 0x68, 0x6f, 0x73, 0x74, 0x6e, 0x61, 0x6d, 0x65,
+	0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x68, 0x6f, 0x73, 0x74, 0x6e, 0x61, 0x6d, 0x65,
+	0x12, 0x1c, 0x0a, 0x09, 0x65, 0x70, 0x68, 0x65, 0x6d, 0x65, 0x72, 0x61, 0x6c, 0x18, 0x06, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x09, 0x65, 0x70, 0x68, 0x65, 0x6d, 0x65, 0x72, 0x61, 0x6c, 0x22, 0x39,
+	0x0a, 0x16, 0x4c, 0x69, 0x73, 0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65,
+	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67, 0x65, 0x6e,
+	0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x61,
+	0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0x6f, 0x0a, 0x17, 0x4c, 0x69, 0x73,
+	0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08,
+	0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x2b, 0x0a,
+	0x06, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x13, 0x2e,
+	0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75,
+	0x74, 0x65, 0x52, 0x06, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x22, 0xad, 0x02, 0x0a, 0x1d, 0x55,
+	0x70, 0x64, 0x61, 0x74, 0x65, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x53,
+	0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b,
+	0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x19, 0x0a,
+	0x08, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x07, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x49, 0x64, 0x12, 0x14, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x74,
+	0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x12, 0x21,
+	0x0a, 0x0c, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x5f, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x18, 0x04,
 	0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x54, 0x61, 0x72, 0x67, 0x65,
-	0x74, 0x12, 0x14, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72,
-	0x18, 0x0e, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x12, 0x1d, 0x0a,
-	0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x0f, 0x20, 0x01, 0x28,
-	0x03, 0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x22, 0x67, 0x0a, 0x26,
-	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x72, 0x61, 0x6e,
-	0x73, 0x70, 0x6f, 0x72, 0x74, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f,
-	0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x61, 0x67, 0x65,
-	0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x72, 0x61, 0x6e, 0x73,
-	0x70, 0x6f, 0x72, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x74, 0x72, 0x61, 0x6e,
-	0x73, 0x70, 0x6f, 0x72, 0x74, 0x22, 0xc8, 0x01, 0x0a, 0x27, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
-	0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x70, 0x6f, 0x72, 0x74, 0x43,
-	0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f,
-	0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x19, 0x0a, 0x08, 0x61, 0x75,
-	0x74, 0x68, 0x5f, 0x6b, 0x65, 0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x61, 0x75,
-	0x74, 0x68, 0x4b, 0x65, 0x79, 0x12, 0x1f, 0x0a, 0x0b, 0x63, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
-	0x5f, 0x75, 0x72, 0x6c, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x63, 0x6f, 0x6e, 0x74,
-	0x72, 0x6f, 0x6c, 0x55, 0x72, 0x6c, 0x12, 0x1a, 0x0a, 0x08, 0x68, 0x6f, 0x73, 0x74, 0x6e, 0x61,
-	0x6d, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x68, 0x6f, 0x73, 0x74, 0x6e, 0x61,
-	0x6d, 0x65, 0x12, 0x1c, 0x0a, 0x09, 0x65, 0x70, 0x68, 0x65, 0x6d, 0x65, 0x72, 0x61, 0x6c, 0x18,
-	0x06, 0x20, 0x01, 0x28, 0x08, 0x52, 0x09, 0x65, 0x70, 0x68, 0x65, 0x6d, 0x65, 0x72, 0x61, 0x6c,
-	0x22, 0x39, 0x0a, 0x16, 0x4c, 0x69, 0x73, 0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75,
-	0x74, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67,
+	0x74, 0x12, 0x14, 0x0a, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x12, 0x47, 0x0a, 0x05, 0x61, 0x74, 0x74, 0x72, 0x73,
+	0x18, 0x06, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x31, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79,
+	0x2e, 0x55, 0x70, 0x64, 0x61, 0x74, 0x65, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74,
+	0x65, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x2e, 0x41,
+	0x74, 0x74, 0x72, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x05, 0x61, 0x74, 0x74, 0x72, 0x73,
+	0x1a, 0x38, 0x0a, 0x0a, 0x41, 0x74, 0x74, 0x72, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x12, 0x10,
+	0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b, 0x65, 0x79,
+	0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x22, 0x49, 0x0a, 0x1e, 0x55, 0x70,
+	0x64, 0x61, 0x74, 0x65, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x53, 0x74,
+	0x61, 0x74, 0x75, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02,
+	0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07,
+	0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65,
+	0x72, 0x72, 0x4d, 0x73, 0x67, 0x22, 0xcc, 0x03, 0x0a, 0x0f, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x57,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x6c, 0x6f, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x49, 0x64, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
+	0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x6f, 0x6f,
+	0x6c, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x6f,
+	0x6f, 0x6c, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e,
+	0x65, 0x5f, 0x69, 0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x61, 0x63, 0x68,
+	0x69, 0x6e, 0x65, 0x49, 0x64, 0x12, 0x10, 0x0a, 0x03, 0x63, 0x70, 0x75, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x03, 0x63, 0x70, 0x75, 0x12, 0x16, 0x0a, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72,
+	0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x03, 0x52, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x12,
+	0x10, 0x0a, 0x03, 0x67, 0x70, 0x75, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x67, 0x70,
+	0x75, 0x12, 0x1b, 0x0a, 0x09, 0x67, 0x70, 0x75, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x08,
+	0x20, 0x01, 0x28, 0x0d, 0x52, 0x08, 0x67, 0x70, 0x75, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x25,
+	0x0a, 0x0e, 0x67, 0x70, 0x75, 0x5f, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74,
+	0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x67, 0x70, 0x75, 0x41, 0x73, 0x73, 0x69, 0x67,
+	0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b,
+	0x5f, 0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e,
+	0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x12, 0x21, 0x0a, 0x0c,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x5f, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x18, 0x0b, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x12,
+	0x33, 0x0a, 0x16, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x73, 0x6c, 0x6f, 0x74, 0x5f,
+	0x70, 0x6f, 0x6f, 0x6c, 0x5f, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x0d, 0x52,
+	0x13, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x53, 0x6c, 0x6f, 0x74, 0x50, 0x6f, 0x6f, 0x6c,
+	0x53, 0x69, 0x7a, 0x65, 0x12, 0x3e, 0x0a, 0x1b, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65,
+	0x72, 0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x63, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65,
+	0x6e, 0x63, 0x79, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x19, 0x63, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x53, 0x74, 0x61, 0x72, 0x74, 0x43, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72,
+	0x65, 0x6e, 0x63, 0x79, 0x22, 0x35, 0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x41, 0x67,
+	0x65, 0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67,
 	0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0x6f, 0x0a, 0x17, 0x4c,
-	0x69, 0x73, 0x74, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01,
-	0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73,
-	0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12,
-	0x2b, 0x0a, 0x06, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32,
-	0x13, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52,
-	0x6f, 0x75, 0x74, 0x65, 0x52, 0x06, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x22, 0xaa, 0x01, 0x0a,
-	0x1d, 0x55, 0x70, 0x64, 0x61, 0x74, 0x65, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74,
-	0x65, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f,
-	0x0a, 0x0b, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12,
-	0x19, 0x0a, 0x08, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x07, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x49, 0x64, 0x12, 0x14, 0x0a, 0x05, 0x73, 0x74,
-	0x61, 0x74, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65,
-	0x12, 0x21, 0x0a, 0x0c, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x5f, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74,
-	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x54, 0x61, 0x72,
-	0x67, 0x65, 0x74, 0x12, 0x14, 0x0a, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x18, 0x05, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x22, 0x49, 0x0a, 0x1e, 0x55, 0x70, 0x64,
-	0x61, 0x74, 0x65, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65, 0x53, 0x74, 0x61,
-	0x74, 0x75, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f,
-	0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65,
-	0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72,
-	0x72, 0x4d, 0x73, 0x67, 0x22, 0xcc, 0x03, 0x0a, 0x0f, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x57, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x53, 0x6c, 0x6f, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x49, 0x64, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x5f,
-	0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x6f, 0x6f, 0x6c,
-	0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x6f, 0x6f,
-	0x6c, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61, 0x63, 0x68, 0x69, 0x6e, 0x65,
-	0x5f, 0x69, 0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x61, 0x63, 0x68, 0x69,
-	0x6e, 0x65, 0x49, 0x64, 0x12, 0x10, 0x0a, 0x03, 0x63, 0x70, 0x75, 0x18, 0x05, 0x20, 0x01, 0x28,
-	0x03, 0x52, 0x03, 0x63, 0x70, 0x75, 0x12, 0x16, 0x0a, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79,
-	0x18, 0x06, 0x20, 0x01, 0x28, 0x03, 0x52, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x12, 0x10,
-	0x0a, 0x03, 0x67, 0x70, 0x75, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x67, 0x70, 0x75,
-	0x12, 0x1b, 0x0a, 0x09, 0x67, 0x70, 0x75, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x08, 0x20,
-	0x01, 0x28, 0x0d, 0x52, 0x08, 0x67, 0x70, 0x75, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x25, 0x0a,
-	0x0e, 0x67, 0x70, 0x75, 0x5f, 0x61, 0x73, 0x73, 0x69, 0x67, 0x6e, 0x6d, 0x65, 0x6e, 0x74, 0x18,
-	0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x67, 0x70, 0x75, 0x41, 0x73, 0x73, 0x69, 0x67, 0x6e,
-	0x6d, 0x65, 0x6e, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f,
-	0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6e, 0x65,
-	0x74, 0x77, 0x6f, 0x72, 0x6b, 0x50, 0x72, 0x65, 0x66, 0x69, 0x78, 0x12, 0x21, 0x0a, 0x0c, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x5f, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x18, 0x0b, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x0b, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x12, 0x33,
-	0x0a, 0x16, 0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x5f, 0x73, 0x6c, 0x6f, 0x74, 0x5f, 0x70,
-	0x6f, 0x6f, 0x6c, 0x5f, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x13,
-	0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x53, 0x6c, 0x6f, 0x74, 0x50, 0x6f, 0x6f, 0x6c, 0x53,
-	0x69, 0x7a, 0x65, 0x12, 0x3e, 0x0a, 0x1b, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72,
-	0x5f, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x63, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e,
-	0x63, 0x79, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x19, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69,
-	0x6e, 0x65, 0x72, 0x53, 0x74, 0x61, 0x72, 0x74, 0x43, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65,
-	0x6e, 0x63, 0x79, 0x22, 0x35, 0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x41, 0x67, 0x65,
-	0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x61, 0x67, 0x65,
-	0x6e, 0x74, 0x5f, 0x74, 0x6f, 0x6b, 0x65, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a,
-	0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0x9b, 0x01, 0x0a, 0x13, 0x53,
-	0x74, 0x72, 0x65, 0x61, 0x6d, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02,
-	0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x2b, 0x0a, 0x06, 0x72,
-	0x6f, 0x75, 0x74, 0x65, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x13, 0x2e, 0x67, 0x61,
-	0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74, 0x65,
-	0x52, 0x06, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x12, 0x2e, 0x0a, 0x05, 0x73, 0x6c, 0x6f, 0x74,
-	0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x18, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
-	0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x6c, 0x6f,
-	0x74, 0x52, 0x05, 0x73, 0x6c, 0x6f, 0x74, 0x73, 0x22, 0xb7, 0x01, 0x0a, 0x0e, 0x41, 0x67, 0x65,
-	0x6e, 0x74, 0x4c, 0x6f, 0x67, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x73,
-	0x6f, 0x75, 0x72, 0x63, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x6f, 0x75,
-	0x72, 0x63, 0x65, 0x12, 0x1b, 0x0a, 0x09, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x5f, 0x69, 0x64,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x49, 0x64,
-	0x12, 0x14, 0x0a, 0x05, 0x6c, 0x65, 0x76, 0x65, 0x6c, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x05, 0x6c, 0x65, 0x76, 0x65, 0x6c, 0x12, 0x16, 0x0a, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d,
-	0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x12,
-	0x0a, 0x04, 0x6c, 0x69, 0x6e, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6c, 0x69,
-	0x6e, 0x65, 0x12, 0x2e, 0x0a, 0x13, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x5f,
-	0x75, 0x6e, 0x69, 0x78, 0x5f, 0x6e, 0x61, 0x6e, 0x6f, 0x18, 0x06, 0x20, 0x01, 0x28, 0x03, 0x52,
-	0x11, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x55, 0x6e, 0x69, 0x78, 0x4e, 0x61,
-	0x6e, 0x6f, 0x22, 0xf4, 0x03, 0x0a, 0x13, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x4d, 0x65, 0x74, 0x72,
-	0x69, 0x63, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x2e, 0x0a, 0x13, 0x74, 0x69,
-	0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x5f, 0x75, 0x6e, 0x69, 0x78, 0x5f, 0x6e, 0x61, 0x6e,
-	0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61,
-	0x6d, 0x70, 0x55, 0x6e, 0x69, 0x78, 0x4e, 0x61, 0x6e, 0x6f, 0x12, 0x2e, 0x0a, 0x13, 0x63, 0x70,
-	0x75, 0x5f, 0x75, 0x74, 0x69, 0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x70, 0x63,
-	0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x02, 0x52, 0x11, 0x63, 0x70, 0x75, 0x55, 0x74, 0x69, 0x6c,
-	0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x50, 0x63, 0x74, 0x12, 0x24, 0x0a, 0x0e, 0x6d, 0x65,
-	0x6d, 0x6f, 0x72, 0x79, 0x5f, 0x75, 0x73, 0x65, 0x64, 0x5f, 0x6d, 0x62, 0x18, 0x03, 0x20, 0x01,
-	0x28, 0x04, 0x52, 0x0c, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x55, 0x73, 0x65, 0x64, 0x4d, 0x62,
-	0x12, 0x26, 0x0a, 0x0f, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x5f, 0x74, 0x6f, 0x74, 0x61, 0x6c,
-	0x5f, 0x6d, 0x62, 0x18, 0x04, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0d, 0x6d, 0x65, 0x6d, 0x6f, 0x72,
-	0x79, 0x54, 0x6f, 0x74, 0x61, 0x6c, 0x4d, 0x62, 0x12, 0x34, 0x0a, 0x16, 0x6d, 0x65, 0x6d, 0x6f,
-	0x72, 0x79, 0x5f, 0x75, 0x74, 0x69, 0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x70,
-	0x63, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x02, 0x52, 0x14, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79,
-	0x55, 0x74, 0x69, 0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x50, 0x63, 0x74, 0x12, 0x20,
-	0x0a, 0x0c, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x75, 0x73, 0x65, 0x64, 0x5f, 0x6d, 0x62, 0x18, 0x06,
-	0x20, 0x01, 0x28, 0x04, 0x52, 0x0a, 0x64, 0x69, 0x73, 0x6b, 0x55, 0x73, 0x65, 0x64, 0x4d, 0x62,
-	0x12, 0x22, 0x0a, 0x0d, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x5f, 0x6d,
-	0x62, 0x18, 0x07, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0b, 0x64, 0x69, 0x73, 0x6b, 0x54, 0x6f, 0x74,
-	0x61, 0x6c, 0x4d, 0x62, 0x12, 0x24, 0x0a, 0x0e, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x75, 0x73, 0x61,
-	0x67, 0x65, 0x5f, 0x70, 0x63, 0x74, 0x18, 0x08, 0x20, 0x01, 0x28, 0x02, 0x52, 0x0c, 0x64, 0x69,
-	0x73, 0x6b, 0x55, 0x73, 0x61, 0x67, 0x65, 0x50, 0x63, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x64, 0x69,
-	0x73, 0x6b, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x64,
-	0x69, 0x73, 0x6b, 0x50, 0x61, 0x74, 0x68, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0b, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x27, 0x0a, 0x0f, 0x63, 0x6f,
-	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x0b, 0x20,
-	0x01, 0x28, 0x0d, 0x52, 0x0e, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x43, 0x6f,
-	0x75, 0x6e, 0x74, 0x12, 0x24, 0x0a, 0x0e, 0x66, 0x72, 0x65, 0x65, 0x5f, 0x67, 0x70, 0x75, 0x5f,
-	0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0c, 0x66, 0x72, 0x65,
-	0x65, 0x47, 0x70, 0x75, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x22, 0x82, 0x02, 0x0a, 0x10, 0x41, 0x67,
-	0x65, 0x6e, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x16,
-	0x0a, 0x06, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06,
-	0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x16, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x18,
-	0x0a, 0x07, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x07, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x12, 0x3a, 0x0a, 0x05, 0x61, 0x74, 0x74, 0x72,
-	0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x24, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61,
-	0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x63, 0x6f,
-	0x72, 0x64, 0x2e, 0x41, 0x74, 0x74, 0x72, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x05, 0x61,
-	0x74, 0x74, 0x72, 0x73, 0x12, 0x2e, 0x0a, 0x13, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d,
-	0x70, 0x5f, 0x75, 0x6e, 0x69, 0x78, 0x5f, 0x6e, 0x61, 0x6e, 0x6f, 0x18, 0x05, 0x20, 0x01, 0x28,
-	0x03, 0x52, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x55, 0x6e, 0x69, 0x78,
-	0x4e, 0x61, 0x6e, 0x6f, 0x1a, 0x38, 0x0a, 0x0a, 0x41, 0x74, 0x74, 0x72, 0x73, 0x45, 0x6e, 0x74,
+	0x0a, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x54, 0x6f, 0x6b, 0x65, 0x6e, 0x22, 0x9b, 0x01, 0x0a, 0x13,
+	0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52,
+	0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x65, 0x72, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x65, 0x72, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x2b, 0x0a, 0x06,
+	0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x13, 0x2e, 0x67,
+	0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x52, 0x6f, 0x75, 0x74,
+	0x65, 0x52, 0x06, 0x72, 0x6f, 0x75, 0x74, 0x65, 0x73, 0x12, 0x2e, 0x0a, 0x05, 0x73, 0x6c, 0x6f,
+	0x74, 0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x18, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x6c,
+	0x6f, 0x74, 0x52, 0x05, 0x73, 0x6c, 0x6f, 0x74, 0x73, 0x22, 0xb7, 0x01, 0x0a, 0x0e, 0x41, 0x67,
+	0x65, 0x6e, 0x74, 0x4c, 0x6f, 0x67, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x16, 0x0a, 0x06,
+	0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x6f,
+	0x75, 0x72, 0x63, 0x65, 0x12, 0x1b, 0x0a, 0x09, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x5f, 0x69,
+	0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x49,
+	0x64, 0x12, 0x14, 0x0a, 0x05, 0x6c, 0x65, 0x76, 0x65, 0x6c, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x05, 0x6c, 0x65, 0x76, 0x65, 0x6c, 0x12, 0x16, 0x0a, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61,
+	0x6d, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12,
+	0x12, 0x0a, 0x04, 0x6c, 0x69, 0x6e, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6c,
+	0x69, 0x6e, 0x65, 0x12, 0x2e, 0x0a, 0x13, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70,
+	0x5f, 0x75, 0x6e, 0x69, 0x78, 0x5f, 0x6e, 0x61, 0x6e, 0x6f, 0x18, 0x06, 0x20, 0x01, 0x28, 0x03,
+	0x52, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x55, 0x6e, 0x69, 0x78, 0x4e,
+	0x61, 0x6e, 0x6f, 0x22, 0xf4, 0x03, 0x0a, 0x13, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x4d, 0x65, 0x74,
+	0x72, 0x69, 0x63, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x2e, 0x0a, 0x13, 0x74,
+	0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x5f, 0x75, 0x6e, 0x69, 0x78, 0x5f, 0x6e, 0x61,
+	0x6e, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74,
+	0x61, 0x6d, 0x70, 0x55, 0x6e, 0x69, 0x78, 0x4e, 0x61, 0x6e, 0x6f, 0x12, 0x2e, 0x0a, 0x13, 0x63,
+	0x70, 0x75, 0x5f, 0x75, 0x74, 0x69, 0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x70,
+	0x63, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x02, 0x52, 0x11, 0x63, 0x70, 0x75, 0x55, 0x74, 0x69,
+	0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x50, 0x63, 0x74, 0x12, 0x24, 0x0a, 0x0e, 0x6d,
+	0x65, 0x6d, 0x6f, 0x72, 0x79, 0x5f, 0x75, 0x73, 0x65, 0x64, 0x5f, 0x6d, 0x62, 0x18, 0x03, 0x20,
+	0x01, 0x28, 0x04, 0x52, 0x0c, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x55, 0x73, 0x65, 0x64, 0x4d,
+	0x62, 0x12, 0x26, 0x0a, 0x0f, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x5f, 0x74, 0x6f, 0x74, 0x61,
+	0x6c, 0x5f, 0x6d, 0x62, 0x18, 0x04, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0d, 0x6d, 0x65, 0x6d, 0x6f,
+	0x72, 0x79, 0x54, 0x6f, 0x74, 0x61, 0x6c, 0x4d, 0x62, 0x12, 0x34, 0x0a, 0x16, 0x6d, 0x65, 0x6d,
+	0x6f, 0x72, 0x79, 0x5f, 0x75, 0x74, 0x69, 0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x5f,
+	0x70, 0x63, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x02, 0x52, 0x14, 0x6d, 0x65, 0x6d, 0x6f, 0x72,
+	0x79, 0x55, 0x74, 0x69, 0x6c, 0x69, 0x7a, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x50, 0x63, 0x74, 0x12,
+	0x20, 0x0a, 0x0c, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x75, 0x73, 0x65, 0x64, 0x5f, 0x6d, 0x62, 0x18,
+	0x06, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0a, 0x64, 0x69, 0x73, 0x6b, 0x55, 0x73, 0x65, 0x64, 0x4d,
+	0x62, 0x12, 0x22, 0x0a, 0x0d, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x5f,
+	0x6d, 0x62, 0x18, 0x07, 0x20, 0x01, 0x28, 0x04, 0x52, 0x0b, 0x64, 0x69, 0x73, 0x6b, 0x54, 0x6f,
+	0x74, 0x61, 0x6c, 0x4d, 0x62, 0x12, 0x24, 0x0a, 0x0e, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x75, 0x73,
+	0x61, 0x67, 0x65, 0x5f, 0x70, 0x63, 0x74, 0x18, 0x08, 0x20, 0x01, 0x28, 0x02, 0x52, 0x0c, 0x64,
+	0x69, 0x73, 0x6b, 0x55, 0x73, 0x61, 0x67, 0x65, 0x50, 0x63, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x64,
+	0x69, 0x73, 0x6b, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08,
+	0x64, 0x69, 0x73, 0x6b, 0x50, 0x61, 0x74, 0x68, 0x12, 0x21, 0x0a, 0x0c, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0b,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x27, 0x0a, 0x0f, 0x63,
+	0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x0b,
+	0x20, 0x01, 0x28, 0x0d, 0x52, 0x0e, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x43,
+	0x6f, 0x75, 0x6e, 0x74, 0x12, 0x24, 0x0a, 0x0e, 0x66, 0x72, 0x65, 0x65, 0x5f, 0x67, 0x70, 0x75,
+	0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0c, 0x66, 0x72,
+	0x65, 0x65, 0x47, 0x70, 0x75, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x22, 0xa1, 0x02, 0x0a, 0x10, 0x41,
+	0x67, 0x65, 0x6e, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12,
+	0x16, 0x0a, 0x06, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x06, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x16, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75,
+	0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12,
+	0x18, 0x0a, 0x07, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x07, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x12, 0x3a, 0x0a, 0x05, 0x61, 0x74, 0x74,
+	0x72, 0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x24, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x41, 0x67, 0x65, 0x6e, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x52, 0x65, 0x63,
+	0x6f, 0x72, 0x64, 0x2e, 0x41, 0x74, 0x74, 0x72, 0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x05,
+	0x61, 0x74, 0x74, 0x72, 0x73, 0x12, 0x2e, 0x0a, 0x13, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61,
+	0x6d, 0x70, 0x5f, 0x75, 0x6e, 0x69, 0x78, 0x5f, 0x6e, 0x61, 0x6e, 0x6f, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x11, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x55, 0x6e, 0x69,
+	0x78, 0x4e, 0x61, 0x6e, 0x6f, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x5f, 0x74,
+	0x79, 0x70, 0x65, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x65, 0x76, 0x65, 0x6e, 0x74,
+	0x54, 0x79, 0x70, 0x65, 0x1a, 0x38, 0x0a, 0x0a, 0x41, 0x74, 0x74, 0x72, 0x73, 0x45, 0x6e, 0x74,
 	0x72, 0x79, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
 	0x03, 0x6b, 0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20,
 	0x01, 0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x22, 0xd0,
@@ -10846,7 +10996,7 @@ func file_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 136)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 138)
 var file_gateway_proto_goTypes = []interface{}{
 	(SyncContainerWorkspaceOperation)(0),            // 0: gateway.SyncContainerWorkspaceOperation
 	(*AuthorizeRequest)(nil),                        // 1: gateway.AuthorizeRequest
@@ -10930,249 +11080,253 @@ var file_gateway_proto_goTypes = []interface{}{
 	(*ListPoolMachinesRequest)(nil),                 // 79: gateway.ListPoolMachinesRequest
 	(*ListPoolMachinesResponse)(nil),                // 80: gateway.ListPoolMachinesResponse
 	(*AgentBootstrapConfig)(nil),                    // 81: gateway.AgentBootstrapConfig
-	(*JoinAgentRequest)(nil),                        // 82: gateway.JoinAgentRequest
-	(*JoinAgentResponse)(nil),                       // 83: gateway.JoinAgentResponse
-	(*AgentPreflightCheck)(nil),                     // 84: gateway.AgentPreflightCheck
-	(*AgentRoute)(nil),                              // 85: gateway.AgentRoute
-	(*RequestAgentTransportCredentialRequest)(nil),  // 86: gateway.RequestAgentTransportCredentialRequest
-	(*RequestAgentTransportCredentialResponse)(nil), // 87: gateway.RequestAgentTransportCredentialResponse
-	(*ListAgentRoutesRequest)(nil),                  // 88: gateway.ListAgentRoutesRequest
-	(*ListAgentRoutesResponse)(nil),                 // 89: gateway.ListAgentRoutesResponse
-	(*UpdateAgentRouteStatusRequest)(nil),           // 90: gateway.UpdateAgentRouteStatusRequest
-	(*UpdateAgentRouteStatusResponse)(nil),          // 91: gateway.UpdateAgentRouteStatusResponse
-	(*AgentWorkerSlot)(nil),                         // 92: gateway.AgentWorkerSlot
-	(*StreamAgentRequest)(nil),                      // 93: gateway.StreamAgentRequest
-	(*StreamAgentResponse)(nil),                     // 94: gateway.StreamAgentResponse
-	(*AgentLogRecord)(nil),                          // 95: gateway.AgentLogRecord
-	(*AgentMetricSnapshot)(nil),                     // 96: gateway.AgentMetricSnapshot
-	(*AgentEventRecord)(nil),                        // 97: gateway.AgentEventRecord
-	(*AgentTelemetryRequest)(nil),                   // 98: gateway.AgentTelemetryRequest
-	(*AgentTelemetryResponse)(nil),                  // 99: gateway.AgentTelemetryResponse
-	(*Machine)(nil),                                 // 100: gateway.Machine
-	(*MachineMetrics)(nil),                          // 101: gateway.MachineMetrics
-	(*ListMachinesRequest)(nil),                     // 102: gateway.ListMachinesRequest
-	(*ListMachinesResponse)(nil),                    // 103: gateway.ListMachinesResponse
-	(*CreateMachineRequest)(nil),                    // 104: gateway.CreateMachineRequest
-	(*CreateMachineResponse)(nil),                   // 105: gateway.CreateMachineResponse
-	(*DeleteMachineRequest)(nil),                    // 106: gateway.DeleteMachineRequest
-	(*DeleteMachineResponse)(nil),                   // 107: gateway.DeleteMachineResponse
-	(*Token)(nil),                                   // 108: gateway.Token
-	(*ListTokensRequest)(nil),                       // 109: gateway.ListTokensRequest
-	(*ListTokensResponse)(nil),                      // 110: gateway.ListTokensResponse
-	(*CreateTokenRequest)(nil),                      // 111: gateway.CreateTokenRequest
-	(*CreateTokenResponse)(nil),                     // 112: gateway.CreateTokenResponse
-	(*ToggleTokenRequest)(nil),                      // 113: gateway.ToggleTokenRequest
-	(*ToggleTokenResponse)(nil),                     // 114: gateway.ToggleTokenResponse
-	(*DeleteTokenRequest)(nil),                      // 115: gateway.DeleteTokenRequest
-	(*DeleteTokenResponse)(nil),                     // 116: gateway.DeleteTokenResponse
-	(*GetURLRequest)(nil),                           // 117: gateway.GetURLRequest
-	(*GetURLResponse)(nil),                          // 118: gateway.GetURLResponse
-	(*ListWorkersRequest)(nil),                      // 119: gateway.ListWorkersRequest
-	(*ListWorkersResponse)(nil),                     // 120: gateway.ListWorkersResponse
-	(*CordonWorkerRequest)(nil),                     // 121: gateway.CordonWorkerRequest
-	(*CordonWorkerResponse)(nil),                    // 122: gateway.CordonWorkerResponse
-	(*UncordonWorkerRequest)(nil),                   // 123: gateway.UncordonWorkerRequest
-	(*UncordonWorkerResponse)(nil),                  // 124: gateway.UncordonWorkerResponse
-	(*DrainWorkerRequest)(nil),                      // 125: gateway.DrainWorkerRequest
-	(*DrainWorkerResponse)(nil),                     // 126: gateway.DrainWorkerResponse
-	(*ExportWorkspaceConfigRequest)(nil),            // 127: gateway.ExportWorkspaceConfigRequest
-	(*ExportWorkspaceConfigResponse)(nil),           // 128: gateway.ExportWorkspaceConfigResponse
-	nil,                                             // 129: gateway.CreateObjectResponse.PutHeadersEntry
-	nil,                                             // 130: gateway.ListTasksRequest.FiltersEntry
-	nil,                                             // 131: gateway.Schema.FieldsEntry
-	nil,                                             // 132: gateway.ListDeploymentsRequest.FiltersEntry
-	nil,                                             // 133: gateway.ListPoolsRequest.FiltersEntry
-	nil,                                             // 134: gateway.ListPrivatePoolsRequest.FiltersEntry
-	nil,                                             // 135: gateway.AgentEventRecord.AttrsEntry
-	nil,                                             // 136: gateway.ListMachinesResponse.GpusEntry
-	(*Container)(nil),                               // 137: types.Container
-	(*timestamppb.Timestamp)(nil),                   // 138: google.protobuf.Timestamp
-	(*MountPointConfig)(nil),                        // 139: types.MountPointConfig
-	(*PricingPolicy)(nil),                           // 140: types.PricingPolicy
-	(*WorkerPoolState)(nil),                         // 141: types.WorkerPoolState
-	(*Worker)(nil),                                  // 142: types.Worker
+	(*AgentS2TelemetryConfig)(nil),                  // 82: gateway.AgentS2TelemetryConfig
+	(*JoinAgentRequest)(nil),                        // 83: gateway.JoinAgentRequest
+	(*JoinAgentResponse)(nil),                       // 84: gateway.JoinAgentResponse
+	(*AgentPreflightCheck)(nil),                     // 85: gateway.AgentPreflightCheck
+	(*AgentRoute)(nil),                              // 86: gateway.AgentRoute
+	(*RequestAgentTransportCredentialRequest)(nil),  // 87: gateway.RequestAgentTransportCredentialRequest
+	(*RequestAgentTransportCredentialResponse)(nil), // 88: gateway.RequestAgentTransportCredentialResponse
+	(*ListAgentRoutesRequest)(nil),                  // 89: gateway.ListAgentRoutesRequest
+	(*ListAgentRoutesResponse)(nil),                 // 90: gateway.ListAgentRoutesResponse
+	(*UpdateAgentRouteStatusRequest)(nil),           // 91: gateway.UpdateAgentRouteStatusRequest
+	(*UpdateAgentRouteStatusResponse)(nil),          // 92: gateway.UpdateAgentRouteStatusResponse
+	(*AgentWorkerSlot)(nil),                         // 93: gateway.AgentWorkerSlot
+	(*StreamAgentRequest)(nil),                      // 94: gateway.StreamAgentRequest
+	(*StreamAgentResponse)(nil),                     // 95: gateway.StreamAgentResponse
+	(*AgentLogRecord)(nil),                          // 96: gateway.AgentLogRecord
+	(*AgentMetricSnapshot)(nil),                     // 97: gateway.AgentMetricSnapshot
+	(*AgentEventRecord)(nil),                        // 98: gateway.AgentEventRecord
+	(*AgentTelemetryRequest)(nil),                   // 99: gateway.AgentTelemetryRequest
+	(*AgentTelemetryResponse)(nil),                  // 100: gateway.AgentTelemetryResponse
+	(*Machine)(nil),                                 // 101: gateway.Machine
+	(*MachineMetrics)(nil),                          // 102: gateway.MachineMetrics
+	(*ListMachinesRequest)(nil),                     // 103: gateway.ListMachinesRequest
+	(*ListMachinesResponse)(nil),                    // 104: gateway.ListMachinesResponse
+	(*CreateMachineRequest)(nil),                    // 105: gateway.CreateMachineRequest
+	(*CreateMachineResponse)(nil),                   // 106: gateway.CreateMachineResponse
+	(*DeleteMachineRequest)(nil),                    // 107: gateway.DeleteMachineRequest
+	(*DeleteMachineResponse)(nil),                   // 108: gateway.DeleteMachineResponse
+	(*Token)(nil),                                   // 109: gateway.Token
+	(*ListTokensRequest)(nil),                       // 110: gateway.ListTokensRequest
+	(*ListTokensResponse)(nil),                      // 111: gateway.ListTokensResponse
+	(*CreateTokenRequest)(nil),                      // 112: gateway.CreateTokenRequest
+	(*CreateTokenResponse)(nil),                     // 113: gateway.CreateTokenResponse
+	(*ToggleTokenRequest)(nil),                      // 114: gateway.ToggleTokenRequest
+	(*ToggleTokenResponse)(nil),                     // 115: gateway.ToggleTokenResponse
+	(*DeleteTokenRequest)(nil),                      // 116: gateway.DeleteTokenRequest
+	(*DeleteTokenResponse)(nil),                     // 117: gateway.DeleteTokenResponse
+	(*GetURLRequest)(nil),                           // 118: gateway.GetURLRequest
+	(*GetURLResponse)(nil),                          // 119: gateway.GetURLResponse
+	(*ListWorkersRequest)(nil),                      // 120: gateway.ListWorkersRequest
+	(*ListWorkersResponse)(nil),                     // 121: gateway.ListWorkersResponse
+	(*CordonWorkerRequest)(nil),                     // 122: gateway.CordonWorkerRequest
+	(*CordonWorkerResponse)(nil),                    // 123: gateway.CordonWorkerResponse
+	(*UncordonWorkerRequest)(nil),                   // 124: gateway.UncordonWorkerRequest
+	(*UncordonWorkerResponse)(nil),                  // 125: gateway.UncordonWorkerResponse
+	(*DrainWorkerRequest)(nil),                      // 126: gateway.DrainWorkerRequest
+	(*DrainWorkerResponse)(nil),                     // 127: gateway.DrainWorkerResponse
+	(*ExportWorkspaceConfigRequest)(nil),            // 128: gateway.ExportWorkspaceConfigRequest
+	(*ExportWorkspaceConfigResponse)(nil),           // 129: gateway.ExportWorkspaceConfigResponse
+	nil,                                             // 130: gateway.CreateObjectResponse.PutHeadersEntry
+	nil,                                             // 131: gateway.ListTasksRequest.FiltersEntry
+	nil,                                             // 132: gateway.Schema.FieldsEntry
+	nil,                                             // 133: gateway.ListDeploymentsRequest.FiltersEntry
+	nil,                                             // 134: gateway.ListPoolsRequest.FiltersEntry
+	nil,                                             // 135: gateway.ListPrivatePoolsRequest.FiltersEntry
+	nil,                                             // 136: gateway.UpdateAgentRouteStatusRequest.AttrsEntry
+	nil,                                             // 137: gateway.AgentEventRecord.AttrsEntry
+	nil,                                             // 138: gateway.ListMachinesResponse.GpusEntry
+	(*Container)(nil),                               // 139: types.Container
+	(*timestamppb.Timestamp)(nil),                   // 140: google.protobuf.Timestamp
+	(*MountPointConfig)(nil),                        // 141: types.MountPointConfig
+	(*PricingPolicy)(nil),                           // 142: types.PricingPolicy
+	(*WorkerPoolState)(nil),                         // 143: types.WorkerPoolState
+	(*Worker)(nil),                                  // 144: types.Worker
 }
 var file_gateway_proto_depIdxs = []int32{
 	5,   // 0: gateway.HeadObjectResponse.object_metadata:type_name -> gateway.ObjectMetadata
 	5,   // 1: gateway.CreateObjectRequest.object_metadata:type_name -> gateway.ObjectMetadata
-	129, // 2: gateway.CreateObjectResponse.put_headers:type_name -> gateway.CreateObjectResponse.PutHeadersEntry
+	130, // 2: gateway.CreateObjectResponse.put_headers:type_name -> gateway.CreateObjectResponse.PutHeadersEntry
 	5,   // 3: gateway.PutObjectRequest.object_metadata:type_name -> gateway.ObjectMetadata
 	0,   // 4: gateway.SyncContainerWorkspaceRequest.op:type_name -> gateway.SyncContainerWorkspaceOperation
-	137, // 5: gateway.ListContainersResponse.containers:type_name -> types.Container
+	139, // 5: gateway.ListContainersResponse.containers:type_name -> types.Container
 	21,  // 6: gateway.ContainerStreamMessage.attach_request:type_name -> gateway.AttachToContainerRequest
 	12,  // 7: gateway.ContainerStreamMessage.sync_container_workspace:type_name -> gateway.SyncContainerWorkspaceRequest
-	130, // 8: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
-	138, // 9: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
-	138, // 10: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
-	138, // 11: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
-	138, // 12: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
+	131, // 8: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
+	140, // 9: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
+	140, // 10: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
+	140, // 11: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
+	140, // 12: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
 	29,  // 13: gateway.ListTasksResponse.tasks:type_name -> gateway.Task
-	139, // 14: gateway.Volume.config:type_name -> types.MountPointConfig
-	131, // 15: gateway.Schema.fields:type_name -> gateway.Schema.FieldsEntry
+	141, // 14: gateway.Volume.config:type_name -> types.MountPointConfig
+	132, // 15: gateway.Schema.fields:type_name -> gateway.Schema.FieldsEntry
 	37,  // 16: gateway.SchemaField.fields:type_name -> gateway.Schema
 	33,  // 17: gateway.GetOrCreateStubRequest.volumes:type_name -> gateway.Volume
 	34,  // 18: gateway.GetOrCreateStubRequest.secrets:type_name -> gateway.SecretVar
 	35,  // 19: gateway.GetOrCreateStubRequest.autoscaler:type_name -> gateway.Autoscaler
 	36,  // 20: gateway.GetOrCreateStubRequest.task_policy:type_name -> gateway.TaskPolicy
-	140, // 21: gateway.GetOrCreateStubRequest.pricing:type_name -> types.PricingPolicy
+	142, // 21: gateway.GetOrCreateStubRequest.pricing:type_name -> types.PricingPolicy
 	37,  // 22: gateway.GetOrCreateStubRequest.inputs:type_name -> gateway.Schema
 	37,  // 23: gateway.GetOrCreateStubRequest.outputs:type_name -> gateway.Schema
 	57,  // 24: gateway.GetOrCreateStubRequest.pool:type_name -> gateway.PoolConfig
-	138, // 25: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
-	138, // 26: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
-	132, // 27: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
+	140, // 25: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
+	140, // 26: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
+	133, // 27: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
 	43,  // 28: gateway.ListDeploymentsResponse.deployments:type_name -> gateway.Deployment
-	141, // 29: gateway.Pool.state:type_name -> types.WorkerPoolState
-	133, // 30: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
+	143, // 29: gateway.Pool.state:type_name -> types.WorkerPoolState
+	134, // 30: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
 	54,  // 31: gateway.ListPoolsResponse.pools:type_name -> gateway.Pool
-	138, // 32: gateway.ProviderInstance.created_at:type_name -> google.protobuf.Timestamp
-	138, // 33: gateway.ProviderInstance.expires_at:type_name -> google.protobuf.Timestamp
-	138, // 34: gateway.ProviderInstance.billing_renewal_at:type_name -> google.protobuf.Timestamp
+	140, // 32: gateway.ProviderInstance.created_at:type_name -> google.protobuf.Timestamp
+	140, // 33: gateway.ProviderInstance.expires_at:type_name -> google.protobuf.Timestamp
+	140, // 34: gateway.ProviderInstance.billing_renewal_at:type_name -> google.protobuf.Timestamp
 	57,  // 35: gateway.PrivatePool.config:type_name -> gateway.PoolConfig
 	59,  // 36: gateway.PrivatePool.reservations:type_name -> gateway.ProviderInstance
-	138, // 37: gateway.PrivatePool.created_at:type_name -> google.protobuf.Timestamp
-	138, // 38: gateway.PrivatePool.expires_at:type_name -> google.protobuf.Timestamp
+	140, // 37: gateway.PrivatePool.created_at:type_name -> google.protobuf.Timestamp
+	140, // 38: gateway.PrivatePool.expires_at:type_name -> google.protobuf.Timestamp
 	57,  // 39: gateway.ListPoolOffersRequest.pool:type_name -> gateway.PoolConfig
 	58,  // 40: gateway.ListPoolOffersResponse.offers:type_name -> gateway.PoolOffer
 	57,  // 41: gateway.LaunchPoolCapacityRequest.pool:type_name -> gateway.PoolConfig
 	60,  // 42: gateway.LaunchPoolCapacityResponse.pool:type_name -> gateway.PrivatePool
-	134, // 43: gateway.ListPrivatePoolsRequest.filters:type_name -> gateway.ListPrivatePoolsRequest.FiltersEntry
+	135, // 43: gateway.ListPrivatePoolsRequest.filters:type_name -> gateway.ListPrivatePoolsRequest.FiltersEntry
 	60,  // 44: gateway.ListPrivatePoolsResponse.pools:type_name -> gateway.PrivatePool
 	57,  // 45: gateway.CreatePoolRequest.pool:type_name -> gateway.PoolConfig
 	60,  // 46: gateway.CreatePoolResponse.pool:type_name -> gateway.PrivatePool
 	60,  // 47: gateway.ExtendPoolCapacityResponse.pool:type_name -> gateway.PrivatePool
-	138, // 48: gateway.CreatePoolJoinTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	138, // 49: gateway.GetPoolJoinCommandResponse.expires_at:type_name -> google.protobuf.Timestamp
-	100, // 50: gateway.ListPoolMachinesResponse.machines:type_name -> gateway.Machine
-	84,  // 51: gateway.JoinAgentRequest.preflight:type_name -> gateway.AgentPreflightCheck
-	81,  // 52: gateway.JoinAgentResponse.bootstrap:type_name -> gateway.AgentBootstrapConfig
-	85,  // 53: gateway.ListAgentRoutesResponse.routes:type_name -> gateway.AgentRoute
-	85,  // 54: gateway.StreamAgentResponse.routes:type_name -> gateway.AgentRoute
-	92,  // 55: gateway.StreamAgentResponse.slots:type_name -> gateway.AgentWorkerSlot
-	135, // 56: gateway.AgentEventRecord.attrs:type_name -> gateway.AgentEventRecord.AttrsEntry
-	95,  // 57: gateway.AgentTelemetryRequest.logs:type_name -> gateway.AgentLogRecord
-	96,  // 58: gateway.AgentTelemetryRequest.metrics:type_name -> gateway.AgentMetricSnapshot
-	97,  // 59: gateway.AgentTelemetryRequest.events:type_name -> gateway.AgentEventRecord
-	101, // 60: gateway.Machine.machine_metrics:type_name -> gateway.MachineMetrics
-	100, // 61: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
-	136, // 62: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
-	100, // 63: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
-	138, // 64: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
-	138, // 65: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
-	108, // 66: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
-	108, // 67: gateway.CreateTokenResponse.token:type_name -> gateway.Token
-	108, // 68: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
-	142, // 69: gateway.ListWorkersResponse.workers:type_name -> types.Worker
-	27,  // 70: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
-	38,  // 71: gateway.Schema.FieldsEntry.value:type_name -> gateway.SchemaField
-	27,  // 72: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	27,  // 73: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	27,  // 74: gateway.ListPrivatePoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	1,   // 75: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
-	3,   // 76: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
-	6,   // 77: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
-	8,   // 78: gateway.GatewayService.CreateObject:input_type -> gateway.CreateObjectRequest
-	10,  // 79: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
-	18,  // 80: gateway.GatewayService.CheckpointContainer:input_type -> gateway.CheckpointContainerRequest
-	14,  // 81: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
-	16,  // 82: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
-	20,  // 83: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
-	23,  // 84: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
-	25,  // 85: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
-	31,  // 86: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
-	28,  // 87: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
-	39,  // 88: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
-	41,  // 89: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
-	117, // 90: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
-	44,  // 91: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
-	46,  // 92: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
-	48,  // 93: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
-	50,  // 94: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
-	52,  // 95: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
-	55,  // 96: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
-	61,  // 97: gateway.GatewayService.ListPoolOffers:input_type -> gateway.ListPoolOffersRequest
-	63,  // 98: gateway.GatewayService.LaunchPoolCapacity:input_type -> gateway.LaunchPoolCapacityRequest
-	65,  // 99: gateway.GatewayService.ListPrivatePools:input_type -> gateway.ListPrivatePoolsRequest
-	67,  // 100: gateway.GatewayService.CreatePool:input_type -> gateway.CreatePoolRequest
-	69,  // 101: gateway.GatewayService.DeletePool:input_type -> gateway.DeletePoolRequest
-	71,  // 102: gateway.GatewayService.ExtendPoolCapacity:input_type -> gateway.ExtendPoolCapacityRequest
-	73,  // 103: gateway.GatewayService.CreatePoolJoinToken:input_type -> gateway.CreatePoolJoinTokenRequest
-	75,  // 104: gateway.GatewayService.RevokePoolJoinToken:input_type -> gateway.RevokePoolJoinTokenRequest
-	77,  // 105: gateway.GatewayService.GetPoolJoinCommand:input_type -> gateway.GetPoolJoinCommandRequest
-	79,  // 106: gateway.GatewayService.ListPoolMachines:input_type -> gateway.ListPoolMachinesRequest
-	82,  // 107: gateway.GatewayService.JoinAgent:input_type -> gateway.JoinAgentRequest
-	86,  // 108: gateway.GatewayService.RequestAgentTransportCredential:input_type -> gateway.RequestAgentTransportCredentialRequest
-	88,  // 109: gateway.GatewayService.ListAgentRoutes:input_type -> gateway.ListAgentRoutesRequest
-	90,  // 110: gateway.GatewayService.UpdateAgentRouteStatus:input_type -> gateway.UpdateAgentRouteStatusRequest
-	93,  // 111: gateway.GatewayService.StreamAgent:input_type -> gateway.StreamAgentRequest
-	98,  // 112: gateway.GatewayService.StreamAgentTelemetry:input_type -> gateway.AgentTelemetryRequest
-	102, // 113: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
-	104, // 114: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
-	106, // 115: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
-	109, // 116: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
-	111, // 117: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
-	113, // 118: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
-	115, // 119: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
-	119, // 120: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
-	121, // 121: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
-	123, // 122: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
-	125, // 123: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
-	127, // 124: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
-	2,   // 125: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
-	4,   // 126: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
-	7,   // 127: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
-	9,   // 128: gateway.GatewayService.CreateObject:output_type -> gateway.CreateObjectResponse
-	11,  // 129: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
-	19,  // 130: gateway.GatewayService.CheckpointContainer:output_type -> gateway.CheckpointContainerResponse
-	15,  // 131: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
-	17,  // 132: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
-	22,  // 133: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
-	24,  // 134: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
-	26,  // 135: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
-	32,  // 136: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
-	30,  // 137: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
-	40,  // 138: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
-	42,  // 139: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
-	118, // 140: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
-	45,  // 141: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
-	47,  // 142: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
-	49,  // 143: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
-	51,  // 144: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
-	53,  // 145: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
-	56,  // 146: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
-	62,  // 147: gateway.GatewayService.ListPoolOffers:output_type -> gateway.ListPoolOffersResponse
-	64,  // 148: gateway.GatewayService.LaunchPoolCapacity:output_type -> gateway.LaunchPoolCapacityResponse
-	66,  // 149: gateway.GatewayService.ListPrivatePools:output_type -> gateway.ListPrivatePoolsResponse
-	68,  // 150: gateway.GatewayService.CreatePool:output_type -> gateway.CreatePoolResponse
-	70,  // 151: gateway.GatewayService.DeletePool:output_type -> gateway.DeletePoolResponse
-	72,  // 152: gateway.GatewayService.ExtendPoolCapacity:output_type -> gateway.ExtendPoolCapacityResponse
-	74,  // 153: gateway.GatewayService.CreatePoolJoinToken:output_type -> gateway.CreatePoolJoinTokenResponse
-	76,  // 154: gateway.GatewayService.RevokePoolJoinToken:output_type -> gateway.RevokePoolJoinTokenResponse
-	78,  // 155: gateway.GatewayService.GetPoolJoinCommand:output_type -> gateway.GetPoolJoinCommandResponse
-	80,  // 156: gateway.GatewayService.ListPoolMachines:output_type -> gateway.ListPoolMachinesResponse
-	83,  // 157: gateway.GatewayService.JoinAgent:output_type -> gateway.JoinAgentResponse
-	87,  // 158: gateway.GatewayService.RequestAgentTransportCredential:output_type -> gateway.RequestAgentTransportCredentialResponse
-	89,  // 159: gateway.GatewayService.ListAgentRoutes:output_type -> gateway.ListAgentRoutesResponse
-	91,  // 160: gateway.GatewayService.UpdateAgentRouteStatus:output_type -> gateway.UpdateAgentRouteStatusResponse
-	94,  // 161: gateway.GatewayService.StreamAgent:output_type -> gateway.StreamAgentResponse
-	99,  // 162: gateway.GatewayService.StreamAgentTelemetry:output_type -> gateway.AgentTelemetryResponse
-	103, // 163: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
-	105, // 164: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
-	107, // 165: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
-	110, // 166: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
-	112, // 167: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
-	114, // 168: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
-	116, // 169: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
-	120, // 170: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
-	122, // 171: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
-	124, // 172: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
-	126, // 173: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
-	128, // 174: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
-	125, // [125:175] is the sub-list for method output_type
-	75,  // [75:125] is the sub-list for method input_type
-	75,  // [75:75] is the sub-list for extension type_name
-	75,  // [75:75] is the sub-list for extension extendee
-	0,   // [0:75] is the sub-list for field type_name
+	140, // 48: gateway.CreatePoolJoinTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	140, // 49: gateway.GetPoolJoinCommandResponse.expires_at:type_name -> google.protobuf.Timestamp
+	101, // 50: gateway.ListPoolMachinesResponse.machines:type_name -> gateway.Machine
+	82,  // 51: gateway.AgentBootstrapConfig.s2_telemetry:type_name -> gateway.AgentS2TelemetryConfig
+	85,  // 52: gateway.JoinAgentRequest.preflight:type_name -> gateway.AgentPreflightCheck
+	81,  // 53: gateway.JoinAgentResponse.bootstrap:type_name -> gateway.AgentBootstrapConfig
+	86,  // 54: gateway.ListAgentRoutesResponse.routes:type_name -> gateway.AgentRoute
+	136, // 55: gateway.UpdateAgentRouteStatusRequest.attrs:type_name -> gateway.UpdateAgentRouteStatusRequest.AttrsEntry
+	86,  // 56: gateway.StreamAgentResponse.routes:type_name -> gateway.AgentRoute
+	93,  // 57: gateway.StreamAgentResponse.slots:type_name -> gateway.AgentWorkerSlot
+	137, // 58: gateway.AgentEventRecord.attrs:type_name -> gateway.AgentEventRecord.AttrsEntry
+	96,  // 59: gateway.AgentTelemetryRequest.logs:type_name -> gateway.AgentLogRecord
+	97,  // 60: gateway.AgentTelemetryRequest.metrics:type_name -> gateway.AgentMetricSnapshot
+	98,  // 61: gateway.AgentTelemetryRequest.events:type_name -> gateway.AgentEventRecord
+	102, // 62: gateway.Machine.machine_metrics:type_name -> gateway.MachineMetrics
+	101, // 63: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
+	138, // 64: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
+	101, // 65: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
+	140, // 66: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
+	140, // 67: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
+	109, // 68: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
+	109, // 69: gateway.CreateTokenResponse.token:type_name -> gateway.Token
+	109, // 70: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
+	144, // 71: gateway.ListWorkersResponse.workers:type_name -> types.Worker
+	27,  // 72: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
+	38,  // 73: gateway.Schema.FieldsEntry.value:type_name -> gateway.SchemaField
+	27,  // 74: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	27,  // 75: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	27,  // 76: gateway.ListPrivatePoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	1,   // 77: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
+	3,   // 78: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
+	6,   // 79: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
+	8,   // 80: gateway.GatewayService.CreateObject:input_type -> gateway.CreateObjectRequest
+	10,  // 81: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
+	18,  // 82: gateway.GatewayService.CheckpointContainer:input_type -> gateway.CheckpointContainerRequest
+	14,  // 83: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
+	16,  // 84: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
+	20,  // 85: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
+	23,  // 86: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
+	25,  // 87: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
+	31,  // 88: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
+	28,  // 89: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
+	39,  // 90: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
+	41,  // 91: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
+	118, // 92: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
+	44,  // 93: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
+	46,  // 94: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
+	48,  // 95: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
+	50,  // 96: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
+	52,  // 97: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
+	55,  // 98: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
+	61,  // 99: gateway.GatewayService.ListPoolOffers:input_type -> gateway.ListPoolOffersRequest
+	63,  // 100: gateway.GatewayService.LaunchPoolCapacity:input_type -> gateway.LaunchPoolCapacityRequest
+	65,  // 101: gateway.GatewayService.ListPrivatePools:input_type -> gateway.ListPrivatePoolsRequest
+	67,  // 102: gateway.GatewayService.CreatePool:input_type -> gateway.CreatePoolRequest
+	69,  // 103: gateway.GatewayService.DeletePool:input_type -> gateway.DeletePoolRequest
+	71,  // 104: gateway.GatewayService.ExtendPoolCapacity:input_type -> gateway.ExtendPoolCapacityRequest
+	73,  // 105: gateway.GatewayService.CreatePoolJoinToken:input_type -> gateway.CreatePoolJoinTokenRequest
+	75,  // 106: gateway.GatewayService.RevokePoolJoinToken:input_type -> gateway.RevokePoolJoinTokenRequest
+	77,  // 107: gateway.GatewayService.GetPoolJoinCommand:input_type -> gateway.GetPoolJoinCommandRequest
+	79,  // 108: gateway.GatewayService.ListPoolMachines:input_type -> gateway.ListPoolMachinesRequest
+	83,  // 109: gateway.GatewayService.JoinAgent:input_type -> gateway.JoinAgentRequest
+	87,  // 110: gateway.GatewayService.RequestAgentTransportCredential:input_type -> gateway.RequestAgentTransportCredentialRequest
+	89,  // 111: gateway.GatewayService.ListAgentRoutes:input_type -> gateway.ListAgentRoutesRequest
+	91,  // 112: gateway.GatewayService.UpdateAgentRouteStatus:input_type -> gateway.UpdateAgentRouteStatusRequest
+	94,  // 113: gateway.GatewayService.StreamAgent:input_type -> gateway.StreamAgentRequest
+	99,  // 114: gateway.GatewayService.StreamAgentTelemetry:input_type -> gateway.AgentTelemetryRequest
+	103, // 115: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
+	105, // 116: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
+	107, // 117: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
+	110, // 118: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
+	112, // 119: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
+	114, // 120: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
+	116, // 121: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
+	120, // 122: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
+	122, // 123: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
+	124, // 124: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
+	126, // 125: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
+	128, // 126: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
+	2,   // 127: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
+	4,   // 128: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
+	7,   // 129: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
+	9,   // 130: gateway.GatewayService.CreateObject:output_type -> gateway.CreateObjectResponse
+	11,  // 131: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
+	19,  // 132: gateway.GatewayService.CheckpointContainer:output_type -> gateway.CheckpointContainerResponse
+	15,  // 133: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
+	17,  // 134: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
+	22,  // 135: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
+	24,  // 136: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
+	26,  // 137: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
+	32,  // 138: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
+	30,  // 139: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
+	40,  // 140: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
+	42,  // 141: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
+	119, // 142: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
+	45,  // 143: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
+	47,  // 144: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
+	49,  // 145: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
+	51,  // 146: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
+	53,  // 147: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
+	56,  // 148: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
+	62,  // 149: gateway.GatewayService.ListPoolOffers:output_type -> gateway.ListPoolOffersResponse
+	64,  // 150: gateway.GatewayService.LaunchPoolCapacity:output_type -> gateway.LaunchPoolCapacityResponse
+	66,  // 151: gateway.GatewayService.ListPrivatePools:output_type -> gateway.ListPrivatePoolsResponse
+	68,  // 152: gateway.GatewayService.CreatePool:output_type -> gateway.CreatePoolResponse
+	70,  // 153: gateway.GatewayService.DeletePool:output_type -> gateway.DeletePoolResponse
+	72,  // 154: gateway.GatewayService.ExtendPoolCapacity:output_type -> gateway.ExtendPoolCapacityResponse
+	74,  // 155: gateway.GatewayService.CreatePoolJoinToken:output_type -> gateway.CreatePoolJoinTokenResponse
+	76,  // 156: gateway.GatewayService.RevokePoolJoinToken:output_type -> gateway.RevokePoolJoinTokenResponse
+	78,  // 157: gateway.GatewayService.GetPoolJoinCommand:output_type -> gateway.GetPoolJoinCommandResponse
+	80,  // 158: gateway.GatewayService.ListPoolMachines:output_type -> gateway.ListPoolMachinesResponse
+	84,  // 159: gateway.GatewayService.JoinAgent:output_type -> gateway.JoinAgentResponse
+	88,  // 160: gateway.GatewayService.RequestAgentTransportCredential:output_type -> gateway.RequestAgentTransportCredentialResponse
+	90,  // 161: gateway.GatewayService.ListAgentRoutes:output_type -> gateway.ListAgentRoutesResponse
+	92,  // 162: gateway.GatewayService.UpdateAgentRouteStatus:output_type -> gateway.UpdateAgentRouteStatusResponse
+	95,  // 163: gateway.GatewayService.StreamAgent:output_type -> gateway.StreamAgentResponse
+	100, // 164: gateway.GatewayService.StreamAgentTelemetry:output_type -> gateway.AgentTelemetryResponse
+	104, // 165: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
+	106, // 166: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
+	108, // 167: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
+	111, // 168: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
+	113, // 169: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
+	115, // 170: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
+	117, // 171: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
+	121, // 172: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
+	123, // 173: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
+	125, // 174: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
+	127, // 175: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
+	129, // 176: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
+	127, // [127:177] is the sub-list for method output_type
+	77,  // [77:127] is the sub-list for method input_type
+	77,  // [77:77] is the sub-list for extension type_name
+	77,  // [77:77] is the sub-list for extension extendee
+	0,   // [0:77] is the sub-list for field type_name
 }
 
 func init() { file_gateway_proto_init() }
@@ -12155,7 +12309,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[81].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*JoinAgentRequest); i {
+			switch v := v.(*AgentS2TelemetryConfig); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12167,7 +12321,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[82].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*JoinAgentResponse); i {
+			switch v := v.(*JoinAgentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12179,7 +12333,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[83].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentPreflightCheck); i {
+			switch v := v.(*JoinAgentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12191,7 +12345,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[84].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentRoute); i {
+			switch v := v.(*AgentPreflightCheck); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12203,7 +12357,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[85].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RequestAgentTransportCredentialRequest); i {
+			switch v := v.(*AgentRoute); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12215,7 +12369,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[86].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RequestAgentTransportCredentialResponse); i {
+			switch v := v.(*RequestAgentTransportCredentialRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12227,7 +12381,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[87].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListAgentRoutesRequest); i {
+			switch v := v.(*RequestAgentTransportCredentialResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12239,7 +12393,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[88].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListAgentRoutesResponse); i {
+			switch v := v.(*ListAgentRoutesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12251,7 +12405,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[89].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UpdateAgentRouteStatusRequest); i {
+			switch v := v.(*ListAgentRoutesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12263,7 +12417,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[90].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UpdateAgentRouteStatusResponse); i {
+			switch v := v.(*UpdateAgentRouteStatusRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12275,7 +12429,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[91].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentWorkerSlot); i {
+			switch v := v.(*UpdateAgentRouteStatusResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12287,7 +12441,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[92].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StreamAgentRequest); i {
+			switch v := v.(*AgentWorkerSlot); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12299,7 +12453,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[93].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StreamAgentResponse); i {
+			switch v := v.(*StreamAgentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12311,7 +12465,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[94].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentLogRecord); i {
+			switch v := v.(*StreamAgentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12323,7 +12477,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[95].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentMetricSnapshot); i {
+			switch v := v.(*AgentLogRecord); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12335,7 +12489,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[96].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentEventRecord); i {
+			switch v := v.(*AgentMetricSnapshot); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12347,7 +12501,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[97].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentTelemetryRequest); i {
+			switch v := v.(*AgentEventRecord); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12359,7 +12513,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[98].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AgentTelemetryResponse); i {
+			switch v := v.(*AgentTelemetryRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12371,7 +12525,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[99].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Machine); i {
+			switch v := v.(*AgentTelemetryResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12383,7 +12537,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[100].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*MachineMetrics); i {
+			switch v := v.(*Machine); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12395,7 +12549,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[101].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListMachinesRequest); i {
+			switch v := v.(*MachineMetrics); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12407,7 +12561,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[102].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListMachinesResponse); i {
+			switch v := v.(*ListMachinesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12419,7 +12573,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[103].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateMachineRequest); i {
+			switch v := v.(*ListMachinesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12431,7 +12585,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[104].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateMachineResponse); i {
+			switch v := v.(*CreateMachineRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12443,7 +12597,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[105].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteMachineRequest); i {
+			switch v := v.(*CreateMachineResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12455,7 +12609,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[106].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteMachineResponse); i {
+			switch v := v.(*DeleteMachineRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12467,7 +12621,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[107].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Token); i {
+			switch v := v.(*DeleteMachineResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12479,7 +12633,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[108].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTokensRequest); i {
+			switch v := v.(*Token); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12491,7 +12645,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[109].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTokensResponse); i {
+			switch v := v.(*ListTokensRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12503,7 +12657,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[110].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateTokenRequest); i {
+			switch v := v.(*ListTokensResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12515,7 +12669,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[111].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateTokenResponse); i {
+			switch v := v.(*CreateTokenRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12527,7 +12681,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[112].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ToggleTokenRequest); i {
+			switch v := v.(*CreateTokenResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12539,7 +12693,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[113].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ToggleTokenResponse); i {
+			switch v := v.(*ToggleTokenRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12551,7 +12705,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[114].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteTokenRequest); i {
+			switch v := v.(*ToggleTokenResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12563,7 +12717,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[115].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteTokenResponse); i {
+			switch v := v.(*DeleteTokenRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12575,7 +12729,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[116].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetURLRequest); i {
+			switch v := v.(*DeleteTokenResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12587,7 +12741,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[117].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetURLResponse); i {
+			switch v := v.(*GetURLRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12599,7 +12753,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[118].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListWorkersRequest); i {
+			switch v := v.(*GetURLResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12611,7 +12765,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[119].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListWorkersResponse); i {
+			switch v := v.(*ListWorkersRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12623,7 +12777,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[120].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CordonWorkerRequest); i {
+			switch v := v.(*ListWorkersResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12635,7 +12789,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[121].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CordonWorkerResponse); i {
+			switch v := v.(*CordonWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12647,7 +12801,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[122].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UncordonWorkerRequest); i {
+			switch v := v.(*CordonWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12659,7 +12813,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[123].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UncordonWorkerResponse); i {
+			switch v := v.(*UncordonWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12671,7 +12825,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[124].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DrainWorkerRequest); i {
+			switch v := v.(*UncordonWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12683,7 +12837,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[125].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DrainWorkerResponse); i {
+			switch v := v.(*DrainWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12695,7 +12849,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[126].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ExportWorkspaceConfigRequest); i {
+			switch v := v.(*DrainWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -12707,6 +12861,18 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[127].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ExportWorkspaceConfigRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[128].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ExportWorkspaceConfigResponse); i {
 			case 0:
 				return &v.state
@@ -12724,14 +12890,14 @@ func file_gateway_proto_init() {
 		(*ContainerStreamMessage_SyncContainerWorkspace)(nil),
 	}
 	file_gateway_proto_msgTypes[32].OneofWrappers = []interface{}{}
-	file_gateway_proto_msgTypes[107].OneofWrappers = []interface{}{}
+	file_gateway_proto_msgTypes[108].OneofWrappers = []interface{}{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_gateway_proto_rawDesc,
 			NumEnums:      1,
-			NumMessages:   136,
+			NumMessages:   138,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -85,20 +85,6 @@ func (s *Service) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.A
 	return state, nil
 }
 
-func filterPrivatePoolsCreatedByAuth(states []*model.PoolState, authInfo *auth.AuthInfo) []*model.PoolState {
-	if len(states) == 0 {
-		return states
-	}
-
-	filtered := make([]*model.PoolState, 0, len(states))
-	for _, state := range states {
-		if computePoolCreatedByAuth(state, authInfo) {
-			filtered = append(filtered, state)
-		}
-	}
-	return filtered
-}
-
 func computePoolCreatedByAuth(state *model.PoolState, authInfo *auth.AuthInfo) bool {
 	if state == nil || state.CreatedByTokenID == "" {
 		return false

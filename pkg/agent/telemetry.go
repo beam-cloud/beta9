@@ -64,6 +64,22 @@ func (t *agentTelemetry) setStatsProvider(stats func() agentWorkerStats) {
 	}
 }
 
+func (t *agentTelemetry) event(eventType, action, status, message string, attrs map[string]string) {
+	if t == nil || action == "" {
+		return
+	}
+	t.enqueue(&pb.AgentTelemetryRequest{
+		Events: []*pb.AgentEventRecord{{
+			EventType:         eventType,
+			Action:            action,
+			Status:            status,
+			Message:           message,
+			Attrs:             attrs,
+			TimestampUnixNano: time.Now().UTC().UnixNano(),
+		}},
+	})
+}
+
 func (t *agentTelemetry) run(ctx context.Context) {
 	if t == nil || t.client == nil || t.agentToken == "" {
 		return

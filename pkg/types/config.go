@@ -75,9 +75,13 @@ type PostgresConfig struct {
 }
 
 type S2Config struct {
-	ApiKey       string `key:"apiKey" json:"api_key"`
-	Basin        string `key:"basin" json:"basin"`
-	StreamPrefix string `key:"streamPrefix" json:"stream_prefix"`
+	ApiKey            string `key:"apiKey" json:"api_key"`
+	Basin             string `key:"basin" json:"basin"`
+	StreamPrefix      string `key:"streamPrefix" json:"stream_prefix"`
+	LogApiKey         string `key:"logApiKey" json:"log_api_key"`
+	LogStreamPrefix   string `key:"logStreamPrefix" json:"log_stream_prefix"`
+	EventApiKey       string `key:"eventApiKey" json:"event_api_key"`
+	EventStreamPrefix string `key:"eventStreamPrefix" json:"event_stream_prefix"`
 }
 
 type EventsConfig struct {

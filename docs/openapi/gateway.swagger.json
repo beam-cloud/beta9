@@ -1548,6 +1548,9 @@
         },
         "imageLocalCacheEnabled": {
           "type": "boolean"
+        },
+        "s2Telemetry": {
+          "$ref": "#/definitions/gatewayAgentS2TelemetryConfig"
         }
       }
     },
@@ -1572,6 +1575,9 @@
         "timestampUnixNano": {
           "type": "string",
           "format": "int64"
+        },
+        "eventType": {
+          "type": "string"
         }
       }
     },
@@ -1717,6 +1723,32 @@
         "updatedAt": {
           "type": "string",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayAgentS2TelemetryConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "basin": {
+          "type": "string"
+        },
+        "streamPrefix": {
+          "type": "string"
+        },
+        "logToken": {
+          "type": "string"
+        },
+        "logStreamPrefix": {
+          "type": "string"
+        },
+        "eventToken": {
+          "type": "string"
+        },
+        "eventStreamPrefix": {
+          "type": "string"
         }
       }
     },
@@ -3564,6 +3596,12 @@
         },
         "error": {
           "type": "string"
+        },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

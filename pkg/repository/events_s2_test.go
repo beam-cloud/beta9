@@ -546,6 +546,32 @@ func TestS2PlatformLogsUseInternalPlatformStreams(t *testing.T) {
 	}
 }
 
+func TestScopedS2EventRepositoryRoutesOnlyWorkspacePrefixes(t *testing.T) {
+	repo := &ScopedS2EventRepository{
+		streamPrefix: "events",
+		targets: []scopedS2EventTarget{
+			{name: "logs", prefix: "events/logs/workspaces/workspace-123"},
+			{name: "events", prefix: "events/workspaces/workspace-123"},
+		},
+	}
+
+	if target := repo.targetForStream("events/logs/platform/workers/worker-123"); target != nil {
+		t.Fatalf("expected platform log stream to be outside scoped targets, got %q", target.name)
+	}
+	if target := repo.targetForStream("events/platform/cache"); target != nil {
+		t.Fatalf("expected platform event stream to be outside scoped targets, got %q", target.name)
+	}
+	if target := repo.targetForStream("events/logs/workspaces/workspace-123/stubs/stub-123"); target == nil || target.name != "logs" {
+		t.Fatalf("expected workspace log stream to use logs target, got %#v", target)
+	}
+	if target := repo.targetForStream("events/workspaces/workspace-123/stubs/stub-123"); target == nil || target.name != "events" {
+		t.Fatalf("expected workspace event stream to use events target, got %#v", target)
+	}
+	if target := repo.targetForStream("events/workspaces/workspace-1234/stubs/stub-123"); target != nil {
+		t.Fatalf("expected adjacent workspace prefix to be outside scoped targets, got %q", target.name)
+	}
+}
+
 func TestS2PlatformLogRecordsDecodeForWorkspaceLogs(t *testing.T) {
 	eventRepo := &EventClientRepo{}
 	logAt := time.Date(2026, 6, 6, 15, 0, 0, 0, time.UTC)

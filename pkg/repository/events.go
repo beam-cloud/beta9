@@ -72,6 +72,12 @@ func NewEventClientRepo(config types.AppConfig) EventRepository {
 
 	var reader eventReader
 	var streamer eventStreamer
+	if scopedS2Sink, err := NewScopedS2EventRepository(config.Database.S2); err != nil {
+		log.Warn().Err(err).Msg("scoped s2 event repository unavailable")
+	} else if scopedS2Sink != nil {
+		storageSinks = append(storageSinks, scopedS2Sink)
+	}
+
 	if s2Sink, err := NewS2EventRepository(config.Database.S2); err != nil {
 		log.Warn().Err(err).Msg("s2 event repository unavailable")
 	} else if s2Sink != nil {

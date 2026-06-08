@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -16,6 +18,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 type ImageService interface {
@@ -26,12 +29,15 @@ type ImageService interface {
 
 type ContainerImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder         *Builder
-	config          types.AppConfig
-	backendRepo     repository.BackendRepository
-	containerRepo   repository.ContainerRepository
-	keyEventChan    chan common.KeyEvent
-	keyEventManager *common.KeyEventManager
+	builder                *Builder
+	config                 types.AppConfig
+	backendRepo            repository.BackendRepository
+	containerRepo          repository.ContainerRepository
+	keyEventChan           chan common.KeyEvent
+	keyEventManager        *common.KeyEventManager
+	baseImageDigestCacheMu sync.Mutex
+	baseImageDigestCache   map[string]baseImageDigestCacheEntry
+	baseImageDigestGroup   singleflight.Group
 }
 
 type ImageServiceOpts struct {
@@ -45,6 +51,12 @@ type ImageServiceOpts struct {
 
 const buildContainerKeepAliveIntervalS int = 10
 const imageContainerTtlS int = 60
+const baseImageDigestCacheTTL = 5 * time.Minute
+
+type baseImageDigestCacheEntry struct {
+	digest    string
+	expiresAt time.Time
+}
 
 func NewContainerImageService(
 	ctx context.Context,
@@ -66,12 +78,13 @@ func NewContainerImageService(
 	}
 
 	is := ContainerImageService{
-		builder:         builder,
-		config:          opts.Config,
-		backendRepo:     opts.BackendRepo,
-		containerRepo:   opts.ContainerRepo,
-		keyEventChan:    make(chan common.KeyEvent),
-		keyEventManager: keyEventManager,
+		builder:              builder,
+		config:               opts.Config,
+		backendRepo:          opts.BackendRepo,
+		containerRepo:        opts.ContainerRepo,
+		keyEventChan:         make(chan common.KeyEvent),
+		keyEventManager:      keyEventManager,
+		baseImageDigestCache: make(map[string]baseImageDigestCacheEntry),
 	}
 
 	go is.monitorImageContainers(ctx)
@@ -194,6 +207,16 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 	var valid bool = true
 
 	if in.ImageId != nil && *in.ImageId != "" {
+		if is.registryMetadataAuthoritative() {
+			clipVersion, err := is.backendRepo.GetImageClipVersion(ctx, *in.ImageId)
+			if err == nil && clipVersion == is.config.ImageService.ClipVersion {
+				return *in.ImageId, true, true, nil, nil
+			}
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return "", false, false, nil, err
+			}
+		}
+
 		exists, err := is.builder.Exists(ctx, *in.ImageId)
 		if err != nil {
 			return "", false, false, nil, err
@@ -259,7 +282,7 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 		opts.BaseImageDigest = baseImage.Digest
 	}
 
-	is.resolveBaseImageDigest(ctx, opts)
+	is.resolveBaseImageDigest(ctx, opts, in.ExistingImageUri == "")
 
 	// Add base Python requirements to PythonPackages list
 	// These are merged with user-specified packages in the build process
@@ -290,43 +313,115 @@ func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
-	// Check registry for physical existence
-	exists, err := is.builder.Exists(ctx, imageId)
-	if err != nil {
+	if !is.registryMetadataAuthoritative() {
+		exists, err := is.builder.Exists(ctx, imageId)
+		if err != nil {
+			return "", false, false, nil, err
+		}
+
+		_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
+		if err == nil {
+			return imageId, exists, valid, opts, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return "", false, false, nil, err
+		}
+		return imageId, false, valid, opts, nil
+	}
+
+	// For deterministic image specs in remote registry mode, the image table is
+	// the authoritative cache index. BuildImage writes this record only after
+	// the archive is pushed, and registry hits without metadata are treated as
+	// misses anyway. Local registry mode still checks the file path so dev
+	// storage resets can rebuild instead of returning stale DB hits.
+	clipVersion, err := is.backendRepo.GetImageClipVersion(ctx, imageId)
+	if err == nil {
+		return imageId, clipVersion == is.config.ImageService.ClipVersion, valid, opts, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return "", false, false, nil, err
 	}
 
-	// Also check database to ensure image metadata is persisted
-	// This prevents duplicate builds when registry has the file but DB record is missing
-	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// Image not in database - needs to be built/recorded
-			exists = false
-		} else {
-			return "", false, false, nil, err
-		}
-	}
-
-	return imageId, exists, valid, opts, nil
+	return imageId, false, valid, opts, nil
 }
 
-func (is *ContainerImageService) resolveBaseImageDigest(ctx context.Context, opts *BuildOpts) {
+func (is *ContainerImageService) registryMetadataAuthoritative() bool {
+	return is.config.ImageService.RegistryStore == reg.S3ImageRegistryStore
+}
+
+func (is *ContainerImageService) resolveBaseImageDigest(ctx context.Context, opts *BuildOpts, cacheable bool) {
 	if opts == nil || opts.BaseImageDigest != "" || opts.BaseImageRegistry == "" || opts.BaseImageName == "" || opts.BaseImageTag == "" {
 		return
 	}
 
 	sourceImage := getSourceImage(opts)
-	metadata, err := is.builder.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
+	if !cacheable {
+		opts.BaseImageDigest = is.inspectBaseImageDigest(ctx, sourceImage, opts.BaseImageCreds)
+		return
+	}
+
+	if cachedDigest := is.getCachedBaseImageDigest(sourceImage); cachedDigest != "" {
+		opts.BaseImageDigest = cachedDigest
+		return
+	}
+
+	digest, _, shared := is.baseImageDigestGroup.Do(sourceImage, func() (interface{}, error) {
+		if cachedDigest := is.getCachedBaseImageDigest(sourceImage); cachedDigest != "" {
+			return cachedDigest, nil
+		}
+
+		digest := is.inspectBaseImageDigest(ctx, sourceImage, opts.BaseImageCreds)
+		if digest != "" {
+			is.setCachedBaseImageDigest(sourceImage, digest)
+		}
+		return digest, nil
+	})
+	if resolvedDigest, ok := digest.(string); ok && resolvedDigest != "" {
+		opts.BaseImageDigest = resolvedDigest
+		if shared {
+			log.Debug().Str("source_image", sourceImage).Msg("resolved base image digest from shared lookup")
+		}
+	}
+}
+
+func (is *ContainerImageService) inspectBaseImageDigest(ctx context.Context, sourceImage, creds string) string {
+	startedAt := time.Now()
+	metadata, err := is.builder.skopeoClient.Inspect(ctx, sourceImage, creds, nil)
 	if err != nil {
 		log.Warn().Err(err).Str("source_image", sourceImage).Msg("failed to resolve base image digest for image identity")
-		return
+		return ""
 	}
 	if metadata.Digest == "" {
 		log.Warn().Str("source_image", sourceImage).Msg("base image digest missing from registry inspect")
-		return
+		return ""
 	}
-	opts.BaseImageDigest = metadata.Digest
+	log.Debug().Str("source_image", sourceImage).Dur("duration", time.Since(startedAt)).Msg("resolved base image digest")
+	return metadata.Digest
+}
+
+func (is *ContainerImageService) getCachedBaseImageDigest(sourceImage string) string {
+	is.baseImageDigestCacheMu.Lock()
+	defer is.baseImageDigestCacheMu.Unlock()
+
+	entry, ok := is.baseImageDigestCache[sourceImage]
+	if !ok {
+		return ""
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(is.baseImageDigestCache, sourceImage)
+		return ""
+	}
+	return entry.digest
+}
+
+func (is *ContainerImageService) setCachedBaseImageDigest(sourceImage, digest string) {
+	is.baseImageDigestCacheMu.Lock()
+	defer is.baseImageDigestCacheMu.Unlock()
+
+	is.baseImageDigestCache[sourceImage] = baseImageDigestCacheEntry{
+		digest:    digest,
+		expiresAt: time.Now().Add(baseImageDigestCacheTTL),
+	}
 }
 
 func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
