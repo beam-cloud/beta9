@@ -161,13 +161,19 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	if req == nil {
+		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: "request is required"}, nil
+	}
 	if err := authorizeOriginCredentialWorkspace(ctx, req.WorkspaceId); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	imageArchiveStorage, imageArchiveObjectKey := s.imageArchiveStorageCredentials(req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
-		Ok:               true,
-		WorkspaceStorage: s.workspaceStorageCredentials(ctx, req.WorkspaceId),
+		Ok:                    true,
+		WorkspaceStorage:      s.workspaceStorageCredentials(ctx, req.WorkspaceId),
+		ImageArchiveStorage:   imageArchiveStorage,
+		ImageArchiveObjectKey: imageArchiveObjectKey,
 		// Short-lived registry credentials for direct OCI pulls. Private image
 		// credentials are resolved by image/workspace; build-registry credentials
 		// are vended only for the exact configured build registry host.
@@ -300,6 +306,30 @@ func (s *WorkerRepositoryService) workspaceStorageCredentials(ctx context.Contex
 	}
 }
 
+func (s *WorkerRepositoryService) imageArchiveStorageCredentials(imageID string) (*pb.CacheWorkspaceStorageCredentials, string) {
+	if s.appConfig.ImageService.RegistryStore != reg.S3ImageRegistryStore {
+		return nil, ""
+	}
+
+	st := s.appConfig.ImageService.Registries.S3
+	if st.BucketName == "" {
+		return nil, ""
+	}
+
+	objectKey := ""
+	if imageID != "" {
+		objectKey = fmt.Sprintf("%s.%s", imageID, reg.RemoteImageFileExtension)
+	}
+	return &pb.CacheWorkspaceStorageCredentials{
+		EndpointUrl:    st.Endpoint,
+		Region:         st.Region,
+		BucketName:     st.BucketName,
+		AccessKey:      st.AccessKey,
+		SecretKey:      st.SecretKey,
+		ForcePathStyle: st.ForcePathStyle,
+	}, objectKey
+}
+
 func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, registry string) string {
 	imageCfg := s.appConfig.ImageService
 	buildRegistry := imageCfg.BuildRegistry
@@ -345,16 +375,12 @@ func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, 
 		return ""
 	}
 
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceID)
-	if err != nil {
-		return ""
-	}
-	fullWorkspace, err := s.backendRepo.GetWorkspace(ctx, workspace.Id)
-	if err != nil {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx, workspaceID)
+	if err != nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
 		return ""
 	}
 
-	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, fullWorkspace, secretName)
+	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, &workspace, secretName)
 	if err != nil || secret == nil {
 		return ""
 	}

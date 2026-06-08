@@ -3155,8 +3155,10 @@ type GetCacheOriginCredentialsResponse struct {
 	ErrorMsg string `protobuf:"bytes,2,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
 	// Opaque registry credentials blob (same format as runtime image credentials).
 	// Short-lived and used in-memory by the worker only; never persisted.
-	RegistryCredentials string                            `protobuf:"bytes,3,opt,name=registry_credentials,json=registryCredentials,proto3" json:"registry_credentials,omitempty"`
-	WorkspaceStorage    *CacheWorkspaceStorageCredentials `protobuf:"bytes,4,opt,name=workspace_storage,json=workspaceStorage,proto3" json:"workspace_storage,omitempty"`
+	RegistryCredentials   string                            `protobuf:"bytes,3,opt,name=registry_credentials,json=registryCredentials,proto3" json:"registry_credentials,omitempty"`
+	WorkspaceStorage      *CacheWorkspaceStorageCredentials `protobuf:"bytes,4,opt,name=workspace_storage,json=workspaceStorage,proto3" json:"workspace_storage,omitempty"`
+	ImageArchiveStorage   *CacheWorkspaceStorageCredentials `protobuf:"bytes,5,opt,name=image_archive_storage,json=imageArchiveStorage,proto3" json:"image_archive_storage,omitempty"`
+	ImageArchiveObjectKey string                            `protobuf:"bytes,6,opt,name=image_archive_object_key,json=imageArchiveObjectKey,proto3" json:"image_archive_object_key,omitempty"`
 }
 
 func (x *GetCacheOriginCredentialsResponse) Reset() {
@@ -3217,6 +3219,20 @@ func (x *GetCacheOriginCredentialsResponse) GetWorkspaceStorage() *CacheWorkspac
 		return x.WorkspaceStorage
 	}
 	return nil
+}
+
+func (x *GetCacheOriginCredentialsResponse) GetImageArchiveStorage() *CacheWorkspaceStorageCredentials {
+	if x != nil {
+		return x.ImageArchiveStorage
+	}
+	return nil
+}
+
+func (x *GetCacheOriginCredentialsResponse) GetImageArchiveObjectKey() string {
+	if x != nil {
+		return x.ImageArchiveObjectKey
+	}
+	return ""
 }
 
 type RuntimeMountCredentialRequest struct {
@@ -6036,7 +6052,7 @@ var file_worker_repo_proto_rawDesc = []byte{
 	0x75, 0x62, 0x49, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79,
 	0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x72, 0x79,
 	0x12, 0x19, 0x0a, 0x08, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x04, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x07, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x49, 0x64, 0x22, 0xd3, 0x01, 0x0a, 0x21,
+	0x28, 0x09, 0x52, 0x07, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x49, 0x64, 0x22, 0xe3, 0x02, 0x0a, 0x21,
 	0x47, 0x65, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x4f, 0x72, 0x69, 0x67, 0x69, 0x6e, 0x43, 0x72,
 	0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
 	0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f,
@@ -6050,7 +6066,16 @@ var file_worker_repo_proto_rawDesc = []byte{
 	0x61, 0x63, 0x68, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x53, 0x74, 0x6f,
 	0x72, 0x61, 0x67, 0x65, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x73, 0x52,
 	0x10, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67,
-	0x65, 0x22, 0x5f, 0x0a, 0x1d, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x4d, 0x6f, 0x75, 0x6e,
+	0x65, 0x12, 0x55, 0x0a, 0x15, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x5f, 0x61, 0x72, 0x63, 0x68, 0x69,
+	0x76, 0x65, 0x5f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x0b,
+	0x32, 0x21, 0x2e, 0x43, 0x61, 0x63, 0x68, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63,
+	0x65, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69,
+	0x61, 0x6c, 0x73, 0x52, 0x13, 0x69, 0x6d, 0x61, 0x67, 0x65, 0x41, 0x72, 0x63, 0x68, 0x69, 0x76,
+	0x65, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x12, 0x37, 0x0a, 0x18, 0x69, 0x6d, 0x61, 0x67,
+	0x65, 0x5f, 0x61, 0x72, 0x63, 0x68, 0x69, 0x76, 0x65, 0x5f, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74,
+	0x5f, 0x6b, 0x65, 0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x15, 0x69, 0x6d, 0x61, 0x67,
+	0x65, 0x41, 0x72, 0x63, 0x68, 0x69, 0x76, 0x65, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x4b, 0x65,
+	0x79, 0x22, 0x5f, 0x0a, 0x1d, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x4d, 0x6f, 0x75, 0x6e,
 	0x74, 0x43, 0x72, 0x65, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x61, 0x6c, 0x52, 0x65, 0x71, 0x75, 0x65,
 	0x73, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x70, 0x61, 0x74, 0x68,
 	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x61, 0x74,
@@ -6682,103 +6707,104 @@ var file_worker_repo_proto_depIdxs = []int32{
 	26, // 6: ListCacheHostsResponse.hosts:type_name -> CacheCoordinatorHost
 	39, // 7: ListRecentCacheStubsResponse.stubs:type_name -> RecentCacheStub
 	50, // 8: GetCacheOriginCredentialsResponse.workspace_storage:type_name -> CacheWorkspaceStorageCredentials
-	95, // 9: RuntimeMountCredentials.config:type_name -> types.MountPointConfig
-	53, // 10: GetContainerRuntimeCredentialsRequest.mount_credentials:type_name -> RuntimeMountCredentialRequest
-	50, // 11: GetContainerRuntimeCredentialsResponse.workspace_storage:type_name -> CacheWorkspaceStorageCredentials
-	54, // 12: GetContainerRuntimeCredentialsResponse.mount_credentials:type_name -> RuntimeMountCredentials
-	63, // 13: SetCacheFsNodeRequest.metadata:type_name -> WorkerCacheFSMetadata
-	63, // 14: GetCacheFsNodeResponse.metadata:type_name -> WorkerCacheFSMetadata
-	63, // 15: GetCacheFsNodeChildrenResponse.children:type_name -> WorkerCacheFSMetadata
-	88, // 16: GetContainerIpAssignmentsResponse.assignments:type_name -> ContainerIpAssignment
-	0,  // 17: WorkerRepositoryService.GetNextContainerRequest:input_type -> GetNextContainerRequestRequest
-	2,  // 18: WorkerRepositoryService.StreamWorkerEvents:input_type -> StreamWorkerEventsRequest
-	6,  // 19: WorkerRepositoryService.SetImagePullLock:input_type -> SetImagePullLockRequest
-	8,  // 20: WorkerRepositoryService.RemoveImagePullLock:input_type -> RemoveImagePullLockRequest
-	10, // 21: WorkerRepositoryService.AddContainerToWorker:input_type -> AddContainerToWorkerRequest
-	12, // 22: WorkerRepositoryService.RemoveContainerFromWorker:input_type -> RemoveContainerFromWorkerRequest
-	14, // 23: WorkerRepositoryService.GetWorkerById:input_type -> GetWorkerByIdRequest
-	16, // 24: WorkerRepositoryService.ToggleWorkerAvailable:input_type -> ToggleWorkerAvailableRequest
-	18, // 25: WorkerRepositoryService.DisableWorker:input_type -> DisableWorkerRequest
-	20, // 26: WorkerRepositoryService.RemoveWorker:input_type -> RemoveWorkerRequest
-	22, // 27: WorkerRepositoryService.UpdateWorkerCapacity:input_type -> UpdateWorkerCapacityRequest
-	24, // 28: WorkerRepositoryService.SetWorkerKeepAlive:input_type -> SetWorkerKeepAliveRequest
-	27, // 29: WorkerRepositoryService.RegisterCacheHost:input_type -> RegisterCacheHostRequest
-	29, // 30: WorkerRepositoryService.UnregisterCacheHost:input_type -> UnregisterCacheHostRequest
-	31, // 31: WorkerRepositoryService.ListCacheHosts:input_type -> ListCacheHostsRequest
-	33, // 32: WorkerRepositoryService.SetCacheClientLock:input_type -> SetCacheClientLockRequest
-	35, // 33: WorkerRepositoryService.RemoveCacheClientLock:input_type -> RemoveCacheClientLockRequest
-	37, // 34: WorkerRepositoryService.SetCacheStoreFromContentLock:input_type -> SetCacheStoreFromContentLockRequest
-	59, // 35: WorkerRepositoryService.RemoveCacheStoreFromContentLock:input_type -> RemoveCacheStoreFromContentLockRequest
-	61, // 36: WorkerRepositoryService.RefreshCacheStoreFromContentLock:input_type -> RefreshCacheStoreFromContentLockRequest
-	40, // 37: WorkerRepositoryService.AddRecentCacheStub:input_type -> AddRecentCacheStubRequest
-	42, // 38: WorkerRepositoryService.ListRecentCacheStubs:input_type -> ListRecentCacheStubsRequest
-	44, // 39: WorkerRepositoryService.MarkCacheStubReported:input_type -> MarkCacheStubReportedRequest
-	46, // 40: WorkerRepositoryService.AcquireCacheReconcileLock:input_type -> AcquireCacheReconcileLockRequest
-	48, // 41: WorkerRepositoryService.ReleaseCacheReconcileLock:input_type -> ReleaseCacheReconcileLockRequest
-	51, // 42: WorkerRepositoryService.GetCacheOriginCredentials:input_type -> GetCacheOriginCredentialsRequest
-	55, // 43: WorkerRepositoryService.GetContainerRuntimeCredentials:input_type -> GetContainerRuntimeCredentialsRequest
-	57, // 44: WorkerRepositoryService.PruneStaleCacheCheckpoints:input_type -> PruneStaleCacheCheckpointsRequest
-	64, // 45: WorkerRepositoryService.SetCacheFsNode:input_type -> SetCacheFsNodeRequest
-	66, // 46: WorkerRepositoryService.GetCacheFsNode:input_type -> GetCacheFsNodeRequest
-	68, // 47: WorkerRepositoryService.AddCacheFsNodeChild:input_type -> AddCacheFsNodeChildRequest
-	70, // 48: WorkerRepositoryService.RemoveCacheFsNode:input_type -> RemoveCacheFsNodeRequest
-	72, // 49: WorkerRepositoryService.RemoveCacheFsNodeChild:input_type -> RemoveCacheFsNodeChildRequest
-	74, // 50: WorkerRepositoryService.GetCacheFsNodeChildren:input_type -> GetCacheFsNodeChildrenRequest
-	76, // 51: WorkerRepositoryService.SetNetworkLock:input_type -> SetNetworkLockRequest
-	78, // 52: WorkerRepositoryService.RemoveNetworkLock:input_type -> RemoveNetworkLockRequest
-	80, // 53: WorkerRepositoryService.SetContainerIp:input_type -> SetContainerIpRequest
-	82, // 54: WorkerRepositoryService.MoveContainerIp:input_type -> MoveContainerIpRequest
-	84, // 55: WorkerRepositoryService.GetContainerIp:input_type -> GetContainerIpRequest
-	86, // 56: WorkerRepositoryService.GetContainerIps:input_type -> GetContainerIpsRequest
-	89, // 57: WorkerRepositoryService.GetContainerIpAssignments:input_type -> GetContainerIpAssignmentsRequest
-	91, // 58: WorkerRepositoryService.RemoveContainerIp:input_type -> RemoveContainerIpRequest
-	1,  // 59: WorkerRepositoryService.GetNextContainerRequest:output_type -> GetNextContainerRequestResponse
-	3,  // 60: WorkerRepositoryService.StreamWorkerEvents:output_type -> WorkerEvent
-	7,  // 61: WorkerRepositoryService.SetImagePullLock:output_type -> SetImagePullLockResponse
-	9,  // 62: WorkerRepositoryService.RemoveImagePullLock:output_type -> RemoveImagePullLockResponse
-	11, // 63: WorkerRepositoryService.AddContainerToWorker:output_type -> AddContainerToWorkerResponse
-	13, // 64: WorkerRepositoryService.RemoveContainerFromWorker:output_type -> RemoveContainerFromWorkerResponse
-	15, // 65: WorkerRepositoryService.GetWorkerById:output_type -> GetWorkerByIdResponse
-	17, // 66: WorkerRepositoryService.ToggleWorkerAvailable:output_type -> ToggleWorkerAvailableResponse
-	19, // 67: WorkerRepositoryService.DisableWorker:output_type -> DisableWorkerResponse
-	21, // 68: WorkerRepositoryService.RemoveWorker:output_type -> RemoveWorkerResponse
-	23, // 69: WorkerRepositoryService.UpdateWorkerCapacity:output_type -> UpdateWorkerCapacityResponse
-	25, // 70: WorkerRepositoryService.SetWorkerKeepAlive:output_type -> SetWorkerKeepAliveResponse
-	28, // 71: WorkerRepositoryService.RegisterCacheHost:output_type -> RegisterCacheHostResponse
-	30, // 72: WorkerRepositoryService.UnregisterCacheHost:output_type -> UnregisterCacheHostResponse
-	32, // 73: WorkerRepositoryService.ListCacheHosts:output_type -> ListCacheHostsResponse
-	34, // 74: WorkerRepositoryService.SetCacheClientLock:output_type -> SetCacheClientLockResponse
-	36, // 75: WorkerRepositoryService.RemoveCacheClientLock:output_type -> RemoveCacheClientLockResponse
-	38, // 76: WorkerRepositoryService.SetCacheStoreFromContentLock:output_type -> SetCacheStoreFromContentLockResponse
-	60, // 77: WorkerRepositoryService.RemoveCacheStoreFromContentLock:output_type -> RemoveCacheStoreFromContentLockResponse
-	62, // 78: WorkerRepositoryService.RefreshCacheStoreFromContentLock:output_type -> RefreshCacheStoreFromContentLockResponse
-	41, // 79: WorkerRepositoryService.AddRecentCacheStub:output_type -> AddRecentCacheStubResponse
-	43, // 80: WorkerRepositoryService.ListRecentCacheStubs:output_type -> ListRecentCacheStubsResponse
-	45, // 81: WorkerRepositoryService.MarkCacheStubReported:output_type -> MarkCacheStubReportedResponse
-	47, // 82: WorkerRepositoryService.AcquireCacheReconcileLock:output_type -> AcquireCacheReconcileLockResponse
-	49, // 83: WorkerRepositoryService.ReleaseCacheReconcileLock:output_type -> ReleaseCacheReconcileLockResponse
-	52, // 84: WorkerRepositoryService.GetCacheOriginCredentials:output_type -> GetCacheOriginCredentialsResponse
-	56, // 85: WorkerRepositoryService.GetContainerRuntimeCredentials:output_type -> GetContainerRuntimeCredentialsResponse
-	58, // 86: WorkerRepositoryService.PruneStaleCacheCheckpoints:output_type -> PruneStaleCacheCheckpointsResponse
-	65, // 87: WorkerRepositoryService.SetCacheFsNode:output_type -> SetCacheFsNodeResponse
-	67, // 88: WorkerRepositoryService.GetCacheFsNode:output_type -> GetCacheFsNodeResponse
-	69, // 89: WorkerRepositoryService.AddCacheFsNodeChild:output_type -> AddCacheFsNodeChildResponse
-	71, // 90: WorkerRepositoryService.RemoveCacheFsNode:output_type -> RemoveCacheFsNodeResponse
-	73, // 91: WorkerRepositoryService.RemoveCacheFsNodeChild:output_type -> RemoveCacheFsNodeChildResponse
-	75, // 92: WorkerRepositoryService.GetCacheFsNodeChildren:output_type -> GetCacheFsNodeChildrenResponse
-	77, // 93: WorkerRepositoryService.SetNetworkLock:output_type -> SetNetworkLockResponse
-	79, // 94: WorkerRepositoryService.RemoveNetworkLock:output_type -> RemoveNetworkLockResponse
-	81, // 95: WorkerRepositoryService.SetContainerIp:output_type -> SetContainerIpResponse
-	83, // 96: WorkerRepositoryService.MoveContainerIp:output_type -> MoveContainerIpResponse
-	85, // 97: WorkerRepositoryService.GetContainerIp:output_type -> GetContainerIpResponse
-	87, // 98: WorkerRepositoryService.GetContainerIps:output_type -> GetContainerIpsResponse
-	90, // 99: WorkerRepositoryService.GetContainerIpAssignments:output_type -> GetContainerIpAssignmentsResponse
-	92, // 100: WorkerRepositoryService.RemoveContainerIp:output_type -> RemoveContainerIpResponse
-	59, // [59:101] is the sub-list for method output_type
-	17, // [17:59] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	50, // 9: GetCacheOriginCredentialsResponse.image_archive_storage:type_name -> CacheWorkspaceStorageCredentials
+	95, // 10: RuntimeMountCredentials.config:type_name -> types.MountPointConfig
+	53, // 11: GetContainerRuntimeCredentialsRequest.mount_credentials:type_name -> RuntimeMountCredentialRequest
+	50, // 12: GetContainerRuntimeCredentialsResponse.workspace_storage:type_name -> CacheWorkspaceStorageCredentials
+	54, // 13: GetContainerRuntimeCredentialsResponse.mount_credentials:type_name -> RuntimeMountCredentials
+	63, // 14: SetCacheFsNodeRequest.metadata:type_name -> WorkerCacheFSMetadata
+	63, // 15: GetCacheFsNodeResponse.metadata:type_name -> WorkerCacheFSMetadata
+	63, // 16: GetCacheFsNodeChildrenResponse.children:type_name -> WorkerCacheFSMetadata
+	88, // 17: GetContainerIpAssignmentsResponse.assignments:type_name -> ContainerIpAssignment
+	0,  // 18: WorkerRepositoryService.GetNextContainerRequest:input_type -> GetNextContainerRequestRequest
+	2,  // 19: WorkerRepositoryService.StreamWorkerEvents:input_type -> StreamWorkerEventsRequest
+	6,  // 20: WorkerRepositoryService.SetImagePullLock:input_type -> SetImagePullLockRequest
+	8,  // 21: WorkerRepositoryService.RemoveImagePullLock:input_type -> RemoveImagePullLockRequest
+	10, // 22: WorkerRepositoryService.AddContainerToWorker:input_type -> AddContainerToWorkerRequest
+	12, // 23: WorkerRepositoryService.RemoveContainerFromWorker:input_type -> RemoveContainerFromWorkerRequest
+	14, // 24: WorkerRepositoryService.GetWorkerById:input_type -> GetWorkerByIdRequest
+	16, // 25: WorkerRepositoryService.ToggleWorkerAvailable:input_type -> ToggleWorkerAvailableRequest
+	18, // 26: WorkerRepositoryService.DisableWorker:input_type -> DisableWorkerRequest
+	20, // 27: WorkerRepositoryService.RemoveWorker:input_type -> RemoveWorkerRequest
+	22, // 28: WorkerRepositoryService.UpdateWorkerCapacity:input_type -> UpdateWorkerCapacityRequest
+	24, // 29: WorkerRepositoryService.SetWorkerKeepAlive:input_type -> SetWorkerKeepAliveRequest
+	27, // 30: WorkerRepositoryService.RegisterCacheHost:input_type -> RegisterCacheHostRequest
+	29, // 31: WorkerRepositoryService.UnregisterCacheHost:input_type -> UnregisterCacheHostRequest
+	31, // 32: WorkerRepositoryService.ListCacheHosts:input_type -> ListCacheHostsRequest
+	33, // 33: WorkerRepositoryService.SetCacheClientLock:input_type -> SetCacheClientLockRequest
+	35, // 34: WorkerRepositoryService.RemoveCacheClientLock:input_type -> RemoveCacheClientLockRequest
+	37, // 35: WorkerRepositoryService.SetCacheStoreFromContentLock:input_type -> SetCacheStoreFromContentLockRequest
+	59, // 36: WorkerRepositoryService.RemoveCacheStoreFromContentLock:input_type -> RemoveCacheStoreFromContentLockRequest
+	61, // 37: WorkerRepositoryService.RefreshCacheStoreFromContentLock:input_type -> RefreshCacheStoreFromContentLockRequest
+	40, // 38: WorkerRepositoryService.AddRecentCacheStub:input_type -> AddRecentCacheStubRequest
+	42, // 39: WorkerRepositoryService.ListRecentCacheStubs:input_type -> ListRecentCacheStubsRequest
+	44, // 40: WorkerRepositoryService.MarkCacheStubReported:input_type -> MarkCacheStubReportedRequest
+	46, // 41: WorkerRepositoryService.AcquireCacheReconcileLock:input_type -> AcquireCacheReconcileLockRequest
+	48, // 42: WorkerRepositoryService.ReleaseCacheReconcileLock:input_type -> ReleaseCacheReconcileLockRequest
+	51, // 43: WorkerRepositoryService.GetCacheOriginCredentials:input_type -> GetCacheOriginCredentialsRequest
+	55, // 44: WorkerRepositoryService.GetContainerRuntimeCredentials:input_type -> GetContainerRuntimeCredentialsRequest
+	57, // 45: WorkerRepositoryService.PruneStaleCacheCheckpoints:input_type -> PruneStaleCacheCheckpointsRequest
+	64, // 46: WorkerRepositoryService.SetCacheFsNode:input_type -> SetCacheFsNodeRequest
+	66, // 47: WorkerRepositoryService.GetCacheFsNode:input_type -> GetCacheFsNodeRequest
+	68, // 48: WorkerRepositoryService.AddCacheFsNodeChild:input_type -> AddCacheFsNodeChildRequest
+	70, // 49: WorkerRepositoryService.RemoveCacheFsNode:input_type -> RemoveCacheFsNodeRequest
+	72, // 50: WorkerRepositoryService.RemoveCacheFsNodeChild:input_type -> RemoveCacheFsNodeChildRequest
+	74, // 51: WorkerRepositoryService.GetCacheFsNodeChildren:input_type -> GetCacheFsNodeChildrenRequest
+	76, // 52: WorkerRepositoryService.SetNetworkLock:input_type -> SetNetworkLockRequest
+	78, // 53: WorkerRepositoryService.RemoveNetworkLock:input_type -> RemoveNetworkLockRequest
+	80, // 54: WorkerRepositoryService.SetContainerIp:input_type -> SetContainerIpRequest
+	82, // 55: WorkerRepositoryService.MoveContainerIp:input_type -> MoveContainerIpRequest
+	84, // 56: WorkerRepositoryService.GetContainerIp:input_type -> GetContainerIpRequest
+	86, // 57: WorkerRepositoryService.GetContainerIps:input_type -> GetContainerIpsRequest
+	89, // 58: WorkerRepositoryService.GetContainerIpAssignments:input_type -> GetContainerIpAssignmentsRequest
+	91, // 59: WorkerRepositoryService.RemoveContainerIp:input_type -> RemoveContainerIpRequest
+	1,  // 60: WorkerRepositoryService.GetNextContainerRequest:output_type -> GetNextContainerRequestResponse
+	3,  // 61: WorkerRepositoryService.StreamWorkerEvents:output_type -> WorkerEvent
+	7,  // 62: WorkerRepositoryService.SetImagePullLock:output_type -> SetImagePullLockResponse
+	9,  // 63: WorkerRepositoryService.RemoveImagePullLock:output_type -> RemoveImagePullLockResponse
+	11, // 64: WorkerRepositoryService.AddContainerToWorker:output_type -> AddContainerToWorkerResponse
+	13, // 65: WorkerRepositoryService.RemoveContainerFromWorker:output_type -> RemoveContainerFromWorkerResponse
+	15, // 66: WorkerRepositoryService.GetWorkerById:output_type -> GetWorkerByIdResponse
+	17, // 67: WorkerRepositoryService.ToggleWorkerAvailable:output_type -> ToggleWorkerAvailableResponse
+	19, // 68: WorkerRepositoryService.DisableWorker:output_type -> DisableWorkerResponse
+	21, // 69: WorkerRepositoryService.RemoveWorker:output_type -> RemoveWorkerResponse
+	23, // 70: WorkerRepositoryService.UpdateWorkerCapacity:output_type -> UpdateWorkerCapacityResponse
+	25, // 71: WorkerRepositoryService.SetWorkerKeepAlive:output_type -> SetWorkerKeepAliveResponse
+	28, // 72: WorkerRepositoryService.RegisterCacheHost:output_type -> RegisterCacheHostResponse
+	30, // 73: WorkerRepositoryService.UnregisterCacheHost:output_type -> UnregisterCacheHostResponse
+	32, // 74: WorkerRepositoryService.ListCacheHosts:output_type -> ListCacheHostsResponse
+	34, // 75: WorkerRepositoryService.SetCacheClientLock:output_type -> SetCacheClientLockResponse
+	36, // 76: WorkerRepositoryService.RemoveCacheClientLock:output_type -> RemoveCacheClientLockResponse
+	38, // 77: WorkerRepositoryService.SetCacheStoreFromContentLock:output_type -> SetCacheStoreFromContentLockResponse
+	60, // 78: WorkerRepositoryService.RemoveCacheStoreFromContentLock:output_type -> RemoveCacheStoreFromContentLockResponse
+	62, // 79: WorkerRepositoryService.RefreshCacheStoreFromContentLock:output_type -> RefreshCacheStoreFromContentLockResponse
+	41, // 80: WorkerRepositoryService.AddRecentCacheStub:output_type -> AddRecentCacheStubResponse
+	43, // 81: WorkerRepositoryService.ListRecentCacheStubs:output_type -> ListRecentCacheStubsResponse
+	45, // 82: WorkerRepositoryService.MarkCacheStubReported:output_type -> MarkCacheStubReportedResponse
+	47, // 83: WorkerRepositoryService.AcquireCacheReconcileLock:output_type -> AcquireCacheReconcileLockResponse
+	49, // 84: WorkerRepositoryService.ReleaseCacheReconcileLock:output_type -> ReleaseCacheReconcileLockResponse
+	52, // 85: WorkerRepositoryService.GetCacheOriginCredentials:output_type -> GetCacheOriginCredentialsResponse
+	56, // 86: WorkerRepositoryService.GetContainerRuntimeCredentials:output_type -> GetContainerRuntimeCredentialsResponse
+	58, // 87: WorkerRepositoryService.PruneStaleCacheCheckpoints:output_type -> PruneStaleCacheCheckpointsResponse
+	65, // 88: WorkerRepositoryService.SetCacheFsNode:output_type -> SetCacheFsNodeResponse
+	67, // 89: WorkerRepositoryService.GetCacheFsNode:output_type -> GetCacheFsNodeResponse
+	69, // 90: WorkerRepositoryService.AddCacheFsNodeChild:output_type -> AddCacheFsNodeChildResponse
+	71, // 91: WorkerRepositoryService.RemoveCacheFsNode:output_type -> RemoveCacheFsNodeResponse
+	73, // 92: WorkerRepositoryService.RemoveCacheFsNodeChild:output_type -> RemoveCacheFsNodeChildResponse
+	75, // 93: WorkerRepositoryService.GetCacheFsNodeChildren:output_type -> GetCacheFsNodeChildrenResponse
+	77, // 94: WorkerRepositoryService.SetNetworkLock:output_type -> SetNetworkLockResponse
+	79, // 95: WorkerRepositoryService.RemoveNetworkLock:output_type -> RemoveNetworkLockResponse
+	81, // 96: WorkerRepositoryService.SetContainerIp:output_type -> SetContainerIpResponse
+	83, // 97: WorkerRepositoryService.MoveContainerIp:output_type -> MoveContainerIpResponse
+	85, // 98: WorkerRepositoryService.GetContainerIp:output_type -> GetContainerIpResponse
+	87, // 99: WorkerRepositoryService.GetContainerIps:output_type -> GetContainerIpsResponse
+	90, // 100: WorkerRepositoryService.GetContainerIpAssignments:output_type -> GetContainerIpAssignmentsResponse
+	92, // 101: WorkerRepositoryService.RemoveContainerIp:output_type -> RemoveContainerIpResponse
+	60, // [60:102] is the sub-list for method output_type
+	18, // [18:60] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_worker_repo_proto_init() }

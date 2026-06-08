@@ -1538,6 +1538,16 @@
           "items": {
             "type": "string"
           }
+        },
+        "imageRegistryStore": {
+          "type": "string"
+        },
+        "imageClipVersion": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "imageLocalCacheEnabled": {
+          "type": "boolean"
         }
       }
     },

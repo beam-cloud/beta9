@@ -68,9 +68,11 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 	}
 
 	creds := &originCredentials{
-		registryCredentials: resp.RegistryCredentials,
-		workspaceStorage:    resp.WorkspaceStorage,
-		fetchedAt:           time.Now(),
+		registryCredentials:   resp.RegistryCredentials,
+		workspaceStorage:      resp.WorkspaceStorage,
+		imageArchiveStorage:   resp.ImageArchiveStorage,
+		imageArchiveObjectKey: resp.ImageArchiveObjectKey,
+		fetchedAt:             time.Now(),
 	}
 	c.originCredsMu.Lock()
 	c.originCredsCache[key] = creds
@@ -84,4 +86,18 @@ func registryFromImageRef(imageRef string) string {
 		return ""
 	}
 	return registry
+}
+
+func imageArchiveRegistryConfig(creds *pb.CacheWorkspaceStorageCredentials) types.S3ImageRegistryConfig {
+	if creds == nil {
+		return types.S3ImageRegistryConfig{}
+	}
+	return types.S3ImageRegistryConfig{
+		BucketName:     creds.BucketName,
+		Region:         creds.Region,
+		AccessKey:      creds.AccessKey,
+		SecretKey:      creds.SecretKey,
+		Endpoint:       creds.EndpointUrl,
+		ForcePathStyle: creds.ForcePathStyle,
+	}
 }

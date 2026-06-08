@@ -32,15 +32,18 @@ type joinResponse struct {
 }
 
 type bootstrapConfig struct {
-	GatewayHTTPURL  string `json:"gatewayHttpUrl"`
-	GatewayGRPCHost string `json:"gatewayGrpcHost"`
-	GatewayGRPCPort int    `json:"gatewayGrpcPort"`
-	GatewayGRPCTLS  bool   `json:"gatewayGrpcTls"`
-	WorkspaceID     string `json:"workspaceId"`
-	PoolName        string `json:"poolName"`
-	Transport       string `json:"transport"`
-	Executor        string `json:"executor"`
-	Fallback        string `json:"fallback"`
+	GatewayHTTPURL         string `json:"gatewayHttpUrl"`
+	GatewayGRPCHost        string `json:"gatewayGrpcHost"`
+	GatewayGRPCPort        int    `json:"gatewayGrpcPort"`
+	GatewayGRPCTLS         bool   `json:"gatewayGrpcTls"`
+	WorkspaceID            string `json:"workspaceId"`
+	PoolName               string `json:"poolName"`
+	Transport              string `json:"transport"`
+	Executor               string `json:"executor"`
+	Fallback               string `json:"fallback"`
+	ImageRegistryStore     string `json:"imageRegistryStore"`
+	ImageClipVersion       uint32 `json:"imageClipVersion"`
+	ImageLocalCacheEnabled bool   `json:"imageLocalCacheEnabled"`
 }
 
 type transportCredentialResponse struct {

@@ -50,9 +50,11 @@ const (
 // fetch content from origin during reconciliation. It is held in memory only
 // and never written to disk, Redis, or S2.
 type originCredentials struct {
-	registryCredentials string
-	workspaceStorage    *pb.CacheWorkspaceStorageCredentials
-	fetchedAt           time.Time
+	registryCredentials   string
+	workspaceStorage      *pb.CacheWorkspaceStorageCredentials
+	imageArchiveStorage   *pb.CacheWorkspaceStorageCredentials
+	imageArchiveObjectKey string
+	fetchedAt             time.Time
 }
 
 // reconcileInterval is how often a cache host scans for content to reconcile.
@@ -713,7 +715,7 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 		// The v1 archive is one content-addressed object; re-fetch the whole
 		// archive from the image registry (the same source the image-load path
 		// pulls it from) and store it under its hash + cachefs path.
-		return m.materializeArchiveObject(ctx, server, item, routingKey)
+		return m.materializeArchiveObject(ctx, server, stub, item, routingKey)
 	default:
 		return types.CacheAuditStatusMiss
 	}
@@ -724,7 +726,7 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 // image-archive cache that the image-load path populates. It pulls from the same
 // source the load path uses: the S3 image registry for the S3 store, or the
 // mounted image volume for the local store. No credentials are persisted.
-func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey string) string {
+func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
 	source := &pb.CacheSource{
 		CachePath:    routingKey,
 		ExpectedHash: item.Hash,
@@ -732,6 +734,11 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 
 	if m.config.ImageService.RegistryStore == reg.S3ImageRegistryStore {
 		s3 := m.config.ImageService.Registries.S3
+		if s3.BucketName == "" || s3.AccessKey == "" || s3.SecretKey == "" {
+			if creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, ""); creds != nil && creds.imageArchiveStorage != nil {
+				s3 = imageArchiveRegistryConfig(creds.imageArchiveStorage)
+			}
+		}
 		if s3.BucketName == "" || item.Source == "" {
 			return types.CacheAuditStatusMiss
 		}
@@ -910,9 +917,11 @@ func (m *WorkerCacheManager) originCredentials(ctx context.Context, workspaceID,
 	}
 
 	creds := &originCredentials{
-		registryCredentials: resp.RegistryCredentials,
-		workspaceStorage:    resp.WorkspaceStorage,
-		fetchedAt:           time.Now(),
+		registryCredentials:   resp.RegistryCredentials,
+		workspaceStorage:      resp.WorkspaceStorage,
+		imageArchiveStorage:   resp.ImageArchiveStorage,
+		imageArchiveObjectKey: resp.ImageArchiveObjectKey,
+		fetchedAt:             time.Now(),
 	}
 	m.originCredsMu.Lock()
 	m.originCredsCache[key] = creds

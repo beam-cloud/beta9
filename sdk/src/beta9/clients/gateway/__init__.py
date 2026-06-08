@@ -689,6 +689,9 @@ class AgentBootstrapConfig(betterproto.Message):
     executor: str = betterproto.string_field(8)
     fallback: str = betterproto.string_field(9)
     disabled_services: List[str] = betterproto.string_field(10)
+    image_registry_store: str = betterproto.string_field(11)
+    image_clip_version: int = betterproto.uint32_field(12)
+    image_local_cache_enabled: bool = betterproto.bool_field(13)
 
 
 @dataclass(eq=False, repr=False)
