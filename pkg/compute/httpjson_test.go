@@ -1,4 +1,4 @@
-package httpjson
+package compute
 
 import "testing"
 
@@ -10,10 +10,10 @@ func TestNumericLookupSkipsInvalidFallbacks(t *testing.T) {
 		"float":     "3.5",
 	}
 
-	if got := Int64(data, "bad_int", "good_int"); got != 42 {
+	if got := jsonInt64(data, "bad_int", "good_int"); got != 42 {
 		t.Fatalf("Int64 fallback = %d, want 42", got)
 	}
-	if got := Float64(data, "bad_float", "float"); got != 3.5 {
+	if got := jsonFloat64(data, "bad_float", "float"); got != 3.5 {
 		t.Fatalf("Float64 fallback = %f, want 3.5", got)
 	}
 }

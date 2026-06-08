@@ -1,23 +1,21 @@
-package solver
+package compute
 
 import (
 	"math"
 	"slices"
 	"sort"
 	"time"
-
-	"github.com/beam-cloud/beta9/pkg/compute"
 )
 
 type Solver struct {
 	MaxOffers int
 }
 
-func New() *Solver {
+func NewSolver() *Solver {
 	return &Solver{MaxOffers: 32}
 }
 
-func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
+func (s *Solver) Solve(in SolveInput) SolvePlan {
 	now := in.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -25,13 +23,13 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 
 	pool := in.Demand.Pool()
 	if err := pool.Validate(); err != nil {
-		return compute.SolvePlan{Feasible: false, Reason: err.Error()}
+		return SolvePlan{Feasible: false, Reason: err.Error()}
 	}
 
 	requiredGPUs := in.Demand.TotalGPUs + in.Demand.HeadroomGPUs
 	existingGPUs, committedCost, keepActions, deleteActions := usableReservations(in.Reservations, in.Demand, now)
 	if existingGPUs >= requiredGPUs {
-		return compute.SolvePlan{
+		return SolvePlan{
 			Feasible:            true,
 			Actions:             append(keepActions, deleteActions...),
 			TotalGPUs:           existingGPUs,
@@ -53,10 +51,10 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 		candidates = candidates[:maxOffers]
 	}
 
-	leaseHours := compute.WholeHours(in.Demand.TTL)
+	leaseHours := WholeHours(in.Demand.TTL)
 	best := solveBounded(candidates, neededGPUs, leaseHours)
 	if !best.ok {
-		return compute.SolvePlan{
+		return SolvePlan{
 			Feasible:            false,
 			Reason:              "insufficient compatible capacity",
 			Actions:             append(keepActions, deleteActions...),
@@ -67,7 +65,7 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 
 	totalCommitment := committedCost + best.cost
 	if in.Demand.MaxSpendMicros > 0 && totalCommitment > in.Demand.MaxSpendMicros {
-		return compute.SolvePlan{
+		return SolvePlan{
 			Feasible:            false,
 			Reason:              "max spend would be exceeded",
 			Actions:             append(keepActions, deleteActions...),
@@ -76,7 +74,7 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 		}
 	}
 
-	actions := make([]compute.SolveAction, 0, len(keepActions)+len(best.counts)+len(deleteActions))
+	actions := make([]SolveAction, 0, len(keepActions)+len(best.counts)+len(deleteActions))
 	actions = append(actions, keepActions...)
 	var newGPUs uint32
 	for idx, count := range best.counts {
@@ -86,8 +84,8 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 		offer := candidates[idx]
 		actionCost := offer.HourlyCostMicros * int64(count) * leaseHours
 		newGPUs += offer.GPUCount * count
-		actions = append(actions, compute.SolveAction{
-			Type:       compute.ActionCreate,
+		actions = append(actions, SolveAction{
+			Type:       ActionCreate,
 			Offer:      offer,
 			Count:      count,
 			CostMicros: actionCost,
@@ -96,7 +94,7 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 	}
 	actions = append(actions, deleteActions...)
 
-	return compute.SolvePlan{
+	return SolvePlan{
 		Feasible:              true,
 		Actions:               actions,
 		TotalGPUs:             existingGPUs + newGPUs,
@@ -107,11 +105,11 @@ func (s *Solver) Solve(in compute.SolveInput) compute.SolvePlan {
 	}
 }
 
-func usableReservations(reservations []compute.Reservation, demand compute.Demand, now time.Time) (uint32, int64, []compute.SolveAction, []compute.SolveAction) {
+func usableReservations(reservations []Reservation, demand Demand, now time.Time) (uint32, int64, []SolveAction, []SolveAction) {
 	var totalGPUs uint32
 	var committedCost int64
-	keepActions := make([]compute.SolveAction, 0, len(reservations))
-	deleteActions := []compute.SolveAction{}
+	keepActions := make([]SolveAction, 0, len(reservations))
+	deleteActions := []SolveAction{}
 	leaseEnd := now.Add(demand.TTL)
 
 	for _, reservation := range reservations {
@@ -124,8 +122,8 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 
 		if reservation.Source.IsAttached() {
 			totalGPUs += reservation.GPUCount
-			keepActions = append(keepActions, compute.SolveAction{
-				Type:        compute.ActionKeep,
+			keepActions = append(keepActions, SolveAction{
+				Type:        ActionKeep,
 				Reservation: reservation,
 				Count:       1,
 				Reason:      "attached capacity has no incremental provider cost",
@@ -136,8 +134,8 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 		totalGPUs += reservation.GPUCount
 		cost := existingReservationCommitment(reservation, now, leaseEnd)
 		committedCost += cost
-		keepActions = append(keepActions, compute.SolveAction{
-			Type:        compute.ActionKeep,
+		keepActions = append(keepActions, SolveAction{
+			Type:        ActionKeep,
 			Reservation: reservation,
 			Count:       1,
 			CostMicros:  cost,
@@ -155,8 +153,8 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 		if reservationMatchesDemand(reservation, demand) {
 			continue
 		}
-		deleteActions = append(deleteActions, compute.SolveAction{
-			Type:        compute.ActionDelete,
+		deleteActions = append(deleteActions, SolveAction{
+			Type:        ActionDelete,
 			Reservation: reservation,
 			Count:       1,
 			Reason:      "reservation reached renewal boundary and is not needed",
@@ -166,7 +164,7 @@ func usableReservations(reservations []compute.Reservation, demand compute.Deman
 	return totalGPUs, committedCost, keepActions, deleteActions
 }
 
-func existingReservationCommitment(reservation compute.Reservation, now, leaseEnd time.Time) int64 {
+func existingReservationCommitment(reservation Reservation, now, leaseEnd time.Time) int64 {
 	if reservation.Source.IsAttached() {
 		return 0
 	}
@@ -181,10 +179,10 @@ func existingReservationCommitment(reservation compute.Reservation, now, leaseEn
 	if start.Before(now) {
 		start = now
 	}
-	return reservation.HourlyCostMicros * compute.WholeHours(leaseEnd.Sub(start))
+	return reservation.HourlyCostMicros * WholeHours(leaseEnd.Sub(start))
 }
 
-func reservationMatchesDemand(reservation compute.Reservation, demand compute.Demand) bool {
+func reservationMatchesDemand(reservation Reservation, demand Demand) bool {
 	if demand.Selector != "" && reservation.Selector != "" && reservation.Selector != demand.Selector {
 		return false
 	}
@@ -200,8 +198,8 @@ func reservationMatchesDemand(reservation compute.Reservation, demand compute.De
 	return true
 }
 
-func filterOffers(offers []compute.Offer, pool compute.Pool) []compute.Offer {
-	candidates := []compute.Offer{}
+func filterOffers(offers []Offer, pool Pool) []Offer {
+	candidates := []Offer{}
 	for _, offer := range offers {
 		if pool.MatchesOffer(offer) {
 			candidates = append(candidates, offer)
@@ -228,7 +226,7 @@ type boundedSolution struct {
 	counts []uint32
 }
 
-func solveBounded(offers []compute.Offer, neededGPUs uint32, leaseHours int64) boundedSolution {
+func solveBounded(offers []Offer, neededGPUs uint32, leaseHours int64) boundedSolution {
 	if neededGPUs == 0 {
 		return boundedSolution{ok: true, counts: make([]uint32, len(offers))}
 	}

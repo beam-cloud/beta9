@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
@@ -22,12 +22,12 @@ import (
 )
 
 type Client struct {
-	http httpjson.Client
+	http compute.HTTPClient
 }
 
 func NewClient(gatewayURL string) *Client {
 	return &Client{
-		http: httpjson.Client{
+		http: compute.HTTPClient{
 			BaseURL: strings.TrimRight(gatewayURL, "/"),
 			Client:  &http.Client{Timeout: 30 * time.Second},
 		},

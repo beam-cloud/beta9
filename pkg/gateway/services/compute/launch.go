@@ -9,7 +9,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
-	"github.com/beam-cloud/beta9/pkg/compute/solver"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -74,7 +73,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		reservations = existing.Reservations
 	}
 
-	plan := solver.New().Solve(model.SolveInput{
+	plan := model.NewSolver().Solve(model.SolveInput{
 		Demand: model.Demand{
 			PoolName:       pool.Name,
 			Selector:       pool.Selector,

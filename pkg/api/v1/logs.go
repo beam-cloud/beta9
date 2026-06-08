@@ -194,21 +194,25 @@ func (g *LogGroup) logQueryFromContext(ctx echo.Context) (types.LogQuery, error)
 		query.EndTime = &end
 	}
 
+	hasSeqNumParam := false
 	if raw := ctx.QueryParam("seq_num"); raw != "" {
 		seqNum, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			return types.LogQuery{}, HTTPBadRequest("Invalid sequence number")
 		}
 		query.SeqNum = &seqNum
+		hasSeqNumParam = true
 	}
 
-	if raw := ctx.Request().Header.Get("Last-Event-ID"); query.SeqNum == nil && raw != "" {
+	if raw := ctx.Request().Header.Get("Last-Event-ID"); !hasSeqNumParam && raw != "" {
 		lastSeqNum, err := strconv.ParseUint(raw, 10, 64)
 		if err != nil {
 			return types.LogQuery{}, HTTPBadRequest("Invalid last event ID")
 		}
 		nextSeqNum := lastSeqNum + 1
 		query.SeqNum = &nextSeqNum
+		query.StartTime = nil
+		query.TailOffset = nil
 	}
 
 	if raw := ctx.QueryParam("wait"); raw != "" {

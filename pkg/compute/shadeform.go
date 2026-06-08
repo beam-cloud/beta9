@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-
-	"github.com/beam-cloud/beta9/pkg/compute/httpjson"
 )
 
 const ShadeformDefaultBaseURL = "https://api.shadeform.ai/v1"
 
 type ShadeformClient struct {
-	api httpjson.Client
+	api HTTPClient
 }
 
 type ShadeformConfig struct {
@@ -29,7 +27,7 @@ func NewShadeform(config ShadeformConfig) *ShadeformClient {
 		baseURL = ShadeformDefaultBaseURL
 	}
 	return &ShadeformClient{
-		api: httpjson.Client{
+		api: HTTPClient{
 			BaseURL:    baseURL,
 			Token:      config.APIKey,
 			AuthHeader: "X-API-KEY",
@@ -57,7 +55,7 @@ func (c *ShadeformClient) ListOffers(ctx context.Context, req OfferRequest) ([]O
 		}
 		// Only on-demand VM instances are instantly launchable. Baremetal types
 		// are "request to launch" and shouldn't appear as ready-to-launch options.
-		if deploymentType := httpjson.String(item, "deployment_type"); deploymentType != "" && deploymentType != "vm" {
+		if deploymentType := jsonString(item, "deployment_type"); deploymentType != "" && deploymentType != "vm" {
 			continue
 		}
 		// Only surface offers that are ready to launch right now (available in a region).
@@ -118,7 +116,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 		return nil, err
 	}
 
-	instanceID := httpjson.String(raw, "id", "instance_id")
+	instanceID := jsonString(raw, "id", "instance_id")
 	now := time.Now()
 	return &Reservation{
 		ID:               instanceID,
@@ -172,7 +170,7 @@ func shadeformFlattenTypes(raw any) []map[string]any {
 	case []any:
 		return shadeformMapsFromArray(t)
 	case map[string]any:
-		if arr := httpjson.Array(t, "instance_types", "types", "data"); arr != nil {
+		if arr := jsonArray(t, "instance_types", "types", "data"); arr != nil {
 			return shadeformMapsFromArray(arr)
 		}
 		result := []map[string]any{}
@@ -212,37 +210,37 @@ func shadeformMapsFromArray(items []any) []map[string]any {
 func shadeformOfferFromMap(m map[string]any) Offer {
 	raw, _ := json.Marshal(m)
 	fields := shadeformOfferFields(m)
-	gpuCount := uint32(httpjson.Int64(fields, "num_gpus", "gpu_count", "gpus"))
+	gpuCount := uint32(jsonInt64(fields, "num_gpus", "gpu_count", "gpus"))
 
 	// Shadeform reports hourly_price in cents.
-	hourlyCents := httpjson.Float64(fields, "hourly_price", "price", "cost_per_hour", "hourly_cost")
+	hourlyCents := jsonFloat64(fields, "hourly_price", "price", "cost_per_hour", "hourly_cost")
 
 	// Memory is reported in GB (memory_in_gb); fall back to *_mb keys.
-	memoryMB := httpjson.Int64(fields, "memory_mb", "memory", "ram")
+	memoryMB := jsonInt64(fields, "memory_mb", "memory", "ram")
 	if memoryMB == 0 {
-		memoryMB = httpjson.Int64(fields, "memory_in_gb") * 1024
+		memoryMB = jsonInt64(fields, "memory_in_gb") * 1024
 	}
 
 	// Storage is reported in GB (storage_in_gb); fall back to *_mb keys.
-	storageMB := httpjson.Int64(fields, "storage_mb")
+	storageMB := jsonInt64(fields, "storage_mb")
 	if storageMB == 0 {
-		storageMB = httpjson.Int64(fields, "storage_in_gb", "disk_in_gb", "ephemeral_storage_in_gb") * 1024
+		storageMB = jsonInt64(fields, "storage_in_gb", "disk_in_gb", "ephemeral_storage_in_gb") * 1024
 	}
 
 	// Shadeform returns availability as an array of {region, available, ...}.
 	region, available := shadeformAvailability(m)
 
 	// Shadeform aggregates clouds; the "cloud" field is the underlying provider.
-	cloud := httpjson.String(m, "cloud", "provider")
+	cloud := jsonString(m, "cloud", "provider")
 	return Offer{
-		ID:               httpjson.String(fields, "id", "shade_instance_type", "instance_type"),
+		ID:               jsonString(fields, "id", "shade_instance_type", "instance_type"),
 		Provider:         "shadeform",
 		Cloud:            cloud,
-		InstanceType:     httpjson.String(fields, "shade_instance_type", "cloud_instance_type", "instance_type", "name", "id"),
+		InstanceType:     jsonString(fields, "shade_instance_type", "cloud_instance_type", "instance_type", "name", "id"),
 		Region:           region,
-		GPU:              httpjson.String(fields, "gpu_type", "gpu", "gpu_name"),
+		GPU:              jsonString(fields, "gpu_type", "gpu", "gpu_name"),
 		GPUCount:         gpuCount,
-		CPUMillicores:    int64(httpjson.Float64(fields, "vcpus", "cpu", "cpus") * 1000),
+		CPUMillicores:    int64(jsonFloat64(fields, "vcpus", "cpu", "cpus") * 1000),
 		MemoryMB:         memoryMB,
 		StorageMB:        storageMB,
 		HourlyCostMicros: DollarsToMicros(hourlyCents / 100),
@@ -274,7 +272,7 @@ func shadeformOfferFields(m map[string]any) map[string]any {
 func shadeformAvailability(m map[string]any) (string, uint32) {
 	arr, ok := m["availability"].([]any)
 	if !ok {
-		return httpjson.String(m, "region", "location"), uint32(httpjson.Int64(m, "available", "availability_count", "capacity"))
+		return jsonString(m, "region", "location"), uint32(jsonInt64(m, "available", "availability_count", "capacity"))
 	}
 	var available uint32
 	firstRegion := ""
@@ -284,7 +282,7 @@ func shadeformAvailability(m map[string]any) (string, uint32) {
 		if !ok {
 			continue
 		}
-		region := httpjson.String(entry, "region", "name")
+		region := jsonString(entry, "region", "name")
 		if firstRegion == "" {
 			firstRegion = region
 		}
