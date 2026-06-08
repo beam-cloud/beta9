@@ -207,12 +207,18 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 			return
 		}
 
-		if err := checkLocalTargetReady(localTarget); err != nil {
+		dialLatency, err := checkLocalTargetReady(localTarget)
+		if err != nil {
 			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
 			continue
 		}
 
-		if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateReady, p.proxyTarget, ""); err != nil {
+		attrs := map[string]string{
+			"local_target":  localTarget,
+			"proxy_target":  p.proxyTarget,
+			"local_dial_ms": fmt.Sprintf("%d", dialLatency.Milliseconds()),
+		}
+		if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateReady, p.proxyTarget, "", attrs); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -303,34 +309,44 @@ func (p *routeProxy) handleConn(conn net.Conn) {
 	if !ok || localTarget == "" {
 		return
 	}
-	if err := proxyConn(conn, reader, localTarget); err != nil {
-		p.markRouteDegraded(routeID, err)
+	if dialLatency, err := proxyConn(conn, reader, localTarget); err != nil {
+		p.markRouteDegraded(routeID, localTarget, dialLatency, err)
 		if !isLocalTargetUnavailable(err) {
 			fmt.Fprintf(p.stderr, "route %s proxy failed: %v\n", routeID, err)
 		}
 	}
 }
 
-func (p *routeProxy) markRouteDegraded(routeID string, cause error) {
+func (p *routeProxy) markRouteDegraded(routeID, localTarget string, dialLatency time.Duration, cause error) {
 	p.deleteRoute(routeID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateDegraded, p.proxyTarget, cause.Error()); err != nil && !isLocalTargetUnavailable(cause) {
+	attrs := map[string]string{
+		"local_target": localTarget,
+		"proxy_target": p.proxyTarget,
+		"reason":       cause.Error(),
+	}
+	if dialLatency > 0 {
+		attrs["local_dial_ms"] = fmt.Sprintf("%d", dialLatency.Milliseconds())
+	}
+	if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateDegraded, p.proxyTarget, cause.Error(), attrs); err != nil && !isLocalTargetUnavailable(cause) {
 		fmt.Fprintf(p.stderr, "route %s status update failed: %v\n", routeID, err)
 	}
 }
 
-func proxyConn(conn net.Conn, source io.Reader, localTarget string) error {
+func proxyConn(conn net.Conn, source io.Reader, localTarget string) (time.Duration, error) {
 	defer conn.Close()
+	start := time.Now()
 	local, err := dialLocalTarget(localTarget)
+	dialLatency := time.Since(start)
 	if err != nil {
-		return err
+		return dialLatency, err
 	}
 	defer local.Close()
 
 	copyBuffered(conn, source, local)
-	return nil
+	return dialLatency, nil
 }
 
 func copyBuffered(conn net.Conn, source io.Reader, local net.Conn) {
@@ -353,12 +369,14 @@ func copyBoth(a, b net.Conn) {
 	copyBuffered(a, a, b)
 }
 
-func checkLocalTargetReady(localTarget string) error {
+func checkLocalTargetReady(localTarget string) (time.Duration, error) {
+	start := time.Now()
 	conn, err := dialLocalTargetWithTimeout(localTarget, routeProxyReadyDialTimeout)
+	dialLatency := time.Since(start)
 	if err != nil {
-		return err
+		return dialLatency, err
 	}
-	return conn.Close()
+	return dialLatency, conn.Close()
 }
 
 func dialLocalTarget(localTarget string) (net.Conn, error) {
@@ -409,13 +427,14 @@ func closeWrite(conn net.Conn) {
 	}
 }
 
-func updateRouteStatus(ctx context.Context, client pb.GatewayServiceClient, agentToken, routeID, state, proxyTarget, errMsg string) error {
+func updateRouteStatus(ctx context.Context, client pb.GatewayServiceClient, agentToken, routeID, state, proxyTarget, errMsg string, attrs map[string]string) error {
 	res, err := client.UpdateAgentRouteStatus(ctx, &pb.UpdateAgentRouteStatusRequest{
 		AgentToken:  agentToken,
 		RouteId:     routeID,
 		State:       state,
 		ProxyTarget: proxyTarget,
 		Error:       errMsg,
+		Attrs:       attrs,
 	})
 	if err != nil {
 		return err

@@ -185,6 +185,7 @@ const (
 	EventComputeActionWorkerSlotCreated         = "worker_slot.created"
 	EventComputeActionWorkerSlotPruned          = "worker_slot.pruned"
 	EventComputeActionTransportCredentialVended = "transport.credential_vended"
+	EventComputeActionTransportSnapshot         = "transport.snapshot"
 	EventComputeActionRouteStatusUpdated        = "route.status_updated"
 )
 

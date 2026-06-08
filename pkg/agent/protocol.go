@@ -32,18 +32,32 @@ type joinResponse struct {
 }
 
 type bootstrapConfig struct {
-	GatewayHTTPURL         string `json:"gatewayHttpUrl"`
-	GatewayGRPCHost        string `json:"gatewayGrpcHost"`
-	GatewayGRPCPort        int    `json:"gatewayGrpcPort"`
-	GatewayGRPCTLS         bool   `json:"gatewayGrpcTls"`
-	WorkspaceID            string `json:"workspaceId"`
-	PoolName               string `json:"poolName"`
-	Transport              string `json:"transport"`
-	Executor               string `json:"executor"`
-	Fallback               string `json:"fallback"`
-	ImageRegistryStore     string `json:"imageRegistryStore"`
-	ImageClipVersion       uint32 `json:"imageClipVersion"`
-	ImageLocalCacheEnabled bool   `json:"imageLocalCacheEnabled"`
+	GatewayHTTPURL         string          `json:"gatewayHttpUrl"`
+	GatewayGRPCHost        string          `json:"gatewayGrpcHost"`
+	GatewayGRPCPort        int             `json:"gatewayGrpcPort"`
+	GatewayGRPCTLS         bool            `json:"gatewayGrpcTls"`
+	WorkspaceID            string          `json:"workspaceId"`
+	PoolName               string          `json:"poolName"`
+	Transport              string          `json:"transport"`
+	Executor               string          `json:"executor"`
+	Fallback               string          `json:"fallback"`
+	ImageRegistryStore     string          `json:"imageRegistryStore"`
+	ImageClipVersion       uint32          `json:"imageClipVersion"`
+	ImageLocalCacheEnabled bool            `json:"imageLocalCacheEnabled"`
+	Telemetry              telemetryConfig `json:"telemetry"`
+}
+
+type telemetryConfig struct {
+	Enabled      bool                `json:"enabled"`
+	StreamPrefix string              `json:"streamPrefix"`
+	Logs         telemetrySinkConfig `json:"logs"`
+	Events       telemetrySinkConfig `json:"events"`
+}
+
+type telemetrySinkConfig struct {
+	Destination  string `json:"destination"`
+	Credential   string `json:"credential"`
+	StreamPrefix string `json:"streamPrefix"`
 }
 
 type transportCredentialResponse struct {

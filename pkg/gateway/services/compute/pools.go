@@ -30,7 +30,6 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 	if err != nil {
 		return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	states = filterPrivatePoolsCreatedByAuth(states, authInfo)
 	if limit := int(in.Limit); limit > 0 && len(states) > limit {
 		states = states[:limit]
 	}
@@ -73,7 +72,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
-		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "pool already exists in this workspace"}, nil
 	}
 
 	now := time.Now()
@@ -186,7 +185,7 @@ func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesR
 	if workspaceID == "" {
 		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, in.PoolName)
+	state, err := s.getPrivatePoolState(ctx, workspaceID, in.PoolName)
 	if err != nil {
 		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}

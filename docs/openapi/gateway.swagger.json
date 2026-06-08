@@ -1548,6 +1548,9 @@
         },
         "imageLocalCacheEnabled": {
           "type": "boolean"
+        },
+        "telemetry": {
+          "$ref": "#/definitions/gatewayAgentTelemetryConfig"
         }
       }
     },
@@ -1572,6 +1575,9 @@
         "timestampUnixNano": {
           "type": "string",
           "format": "int64"
+        },
+        "eventType": {
+          "type": "string"
         }
       }
     },
@@ -1720,6 +1726,23 @@
         }
       }
     },
+    "gatewayAgentTelemetryConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "streamPrefix": {
+          "type": "string"
+        },
+        "logs": {
+          "$ref": "#/definitions/gatewayAgentTelemetrySinkConfig"
+        },
+        "events": {
+          "$ref": "#/definitions/gatewayAgentTelemetrySinkConfig"
+        }
+      }
+    },
     "gatewayAgentTelemetryResponse": {
       "type": "object",
       "properties": {
@@ -1727,6 +1750,20 @@
           "type": "boolean"
         },
         "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayAgentTelemetrySinkConfig": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "type": "string"
+        },
+        "credential": {
+          "type": "string"
+        },
+        "streamPrefix": {
           "type": "string"
         }
       }
@@ -3564,6 +3601,12 @@
         },
         "error": {
           "type": "string"
+        },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

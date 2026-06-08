@@ -828,6 +828,20 @@ message AgentBootstrapConfig {
   string image_registry_store = 11;
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
+  AgentTelemetryConfig telemetry = 14;
+}
+
+message AgentTelemetryConfig {
+  bool enabled = 1;
+  string stream_prefix = 2;
+  AgentTelemetrySinkConfig logs = 3;
+  AgentTelemetrySinkConfig events = 4;
+}
+
+message AgentTelemetrySinkConfig {
+  string destination = 1;
+  string credential = 2;
+  string stream_prefix = 3;
 }
 
 message JoinAgentRequest {
@@ -912,6 +926,7 @@ message UpdateAgentRouteStatusRequest {
   string state = 3;
   string proxy_target = 4;
   string error = 5;
+  map<string, string> attrs = 6;
 }
 
 message UpdateAgentRouteStatusResponse {
@@ -974,6 +989,7 @@ message AgentEventRecord {
   string message = 3;
   map<string, string> attrs = 4;
   int64 timestamp_unix_nano = 5;
+  string event_type = 6;
 }
 
 message AgentTelemetryRequest {

@@ -26,12 +26,13 @@ type ImageService interface {
 
 type ContainerImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder         *Builder
-	config          types.AppConfig
-	backendRepo     repository.BackendRepository
-	containerRepo   repository.ContainerRepository
-	keyEventChan    chan common.KeyEvent
-	keyEventManager *common.KeyEventManager
+	builder          *Builder
+	config           types.AppConfig
+	backendRepo      repository.BackendRepository
+	containerRepo    repository.ContainerRepository
+	keyEventChan     chan common.KeyEvent
+	keyEventManager  *common.KeyEventManager
+	baseImageDigests baseImageDigestCache
 }
 
 type ImageServiceOpts struct {
@@ -66,12 +67,13 @@ func NewContainerImageService(
 	}
 
 	is := ContainerImageService{
-		builder:         builder,
-		config:          opts.Config,
-		backendRepo:     opts.BackendRepo,
-		containerRepo:   opts.ContainerRepo,
-		keyEventChan:    make(chan common.KeyEvent),
-		keyEventManager: keyEventManager,
+		builder:          builder,
+		config:           opts.Config,
+		backendRepo:      opts.BackendRepo,
+		containerRepo:    opts.ContainerRepo,
+		keyEventChan:     make(chan common.KeyEvent),
+		keyEventManager:  keyEventManager,
+		baseImageDigests: newBaseImageDigestCache(),
 	}
 
 	go is.monitorImageContainers(ctx)
@@ -82,28 +84,15 @@ func NewContainerImageService(
 }
 
 func (is *ContainerImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
-	if in.ImageId != nil && *in.ImageId != "" {
-		exists, err := is.builder.Exists(ctx, *in.ImageId)
-		if err != nil {
-			return nil, err
-		}
-
-		return &pb.VerifyImageBuildResponse{
-			ImageId: *in.ImageId,
-			Exists:  exists,
-			Valid:   true,
-		}, nil
-	}
-
-	imageId, exists, validResult, _, err := is.verifyImage(ctx, in)
+	result, err := is.verifyImage(ctx, in)
 	if err != nil {
 		return nil, err
 	}
 
 	return &pb.VerifyImageBuildResponse{
-		ImageId: imageId,
-		Exists:  exists,
-		Valid:   validResult,
+		ImageId: result.imageID,
+		Exists:  result.exists,
+		Valid:   result.valid,
 	}, nil
 }
 
@@ -124,20 +113,25 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 		IgnorePython:     in.IgnorePython,
 	}
 
-	imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
+	verifyResult, err := is.verifyImage(stream.Context(), verifyReq)
 	if err != nil {
 		return err
 	}
 
-	if exists {
-		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
-		_ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
+	if verifyResult.exists {
+		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: verifyResult.imageID})
+		_ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: verifyResult.imageID})
 		return nil
 	}
 
 	clipVersion := is.config.ImageService.ClipVersion
 
 	// Set ExistingImageCreds for credential processing
+	buildOptions := verifyResult.opts
+	if buildOptions == nil {
+		return errors.New("missing image build options")
+	}
+
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
 	buildOptions.ClipVersion = clipVersion
 
@@ -145,7 +139,7 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 	if buildOptions.ExistingImageUri != "" && len(buildOptions.ExistingImageCreds) > 0 {
 		baseImageCreds, err := reg.GetRegistryTokenForImage(buildOptions.ExistingImageUri, buildOptions.ExistingImageCreds)
 		if err != nil {
-			log.Error().Err(err).Str("image_id", imageId).Msg("failed to convert credentials to skopeo format")
+			log.Error().Err(err).Str("image_id", verifyResult.imageID).Msg("failed to convert credentials to skopeo format")
 			return err
 		}
 		buildOptions.BaseImageCreds = baseImageCreds
@@ -188,145 +182,6 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 
 	log.Info().Msg("build completed successfully")
 	return nil
-}
-
-func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (string, bool, bool, *BuildOpts, error) {
-	var valid bool = true
-
-	if in.ImageId != nil && *in.ImageId != "" {
-		exists, err := is.builder.Exists(ctx, *in.ImageId)
-		if err != nil {
-			return "", false, false, nil, err
-		}
-		return *in.ImageId, exists, true, nil, nil
-	}
-
-	tag := in.PythonVersion
-	if in.PythonVersion == types.Python3.String() {
-		tag = is.config.ImageService.PythonVersion
-	}
-
-	baseImageTag, ok := is.config.ImageService.Runner.Tags[tag]
-	if !ok {
-		return "", false, false, nil, errors.Errorf("Python version not supported: %s", in.PythonVersion)
-	}
-
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	buildSecrets, err := is.retrieveBuildSecrets(ctx, in.Secrets, authInfo)
-	if err != nil {
-		return "", false, false, nil, err
-	}
-
-	opts := &BuildOpts{
-		PythonVersion:  in.PythonVersion,
-		PythonPackages: in.PythonPackages,
-		Commands:       in.Commands,
-		BuildSteps:     convertBuildSteps(in.BuildSteps),
-		EnvVars:        in.EnvVars,
-		Dockerfile:     in.Dockerfile,
-		BuildCtxObject: in.BuildCtxObject,
-		BuildSecrets:   buildSecrets,
-		Gpu:            in.Gpu,
-		ClipVersion:    is.config.ImageService.ClipVersion,
-	}
-
-	// Only set default beta9 base image if not using a custom Dockerfile
-	// Custom Dockerfiles specify their own base image in the FROM instruction
-	if in.Dockerfile == "" {
-		opts.BaseImageTag = baseImageTag
-		opts.BaseImageName = is.config.ImageService.Runner.BaseImageName
-		opts.BaseImageRegistry = is.config.ImageService.Runner.BaseImageRegistry
-	}
-
-	if in.IgnorePython {
-		opts.IgnorePython = true
-	}
-
-	// Handle custom base image (from Image.from_registry or base_image parameter)
-	// Parse and set base image fields for image ID calculation
-	// but DON'T process credentials yet (not available in VerifyImageBuildRequest)
-	if in.ExistingImageUri != "" {
-		opts.ExistingImageUri = in.ExistingImageUri
-
-		// Extract and set base image fields needed for image ID calculation
-		baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
-		if err != nil {
-			return "", false, false, nil, err
-		}
-		opts.BaseImageRegistry = baseImage.Registry
-		opts.BaseImageName = baseImage.Repo
-		opts.BaseImageTag = baseImage.Tag
-		opts.BaseImageDigest = baseImage.Digest
-	}
-
-	is.resolveBaseImageDigest(ctx, opts)
-
-	// Add base Python requirements to PythonPackages list
-	// These are merged with user-specified packages in the build process
-	if in.Dockerfile != "" {
-		opts.addPythonRequirements()
-	}
-
-	// For V2 builds, render or augment Dockerfile BEFORE calculating image ID
-	// This ensures the image ID matches what will actually be built
-	isV2 := is.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
-	if isV2 {
-		if opts.Dockerfile == "" {
-			// No custom Dockerfile: generate one from build options
-			if is.builder.hasWorkToDo(opts) {
-				opts.Dockerfile, err = is.builder.RenderV2Dockerfile(opts)
-				if err != nil {
-					return "", false, false, nil, err
-				}
-			}
-		} else if is.builder.hasWorkToDo(opts) {
-			// Custom Dockerfile with additional steps: append them
-			opts.Dockerfile = is.builder.appendToDockerfile(opts)
-		}
-	}
-
-	imageId, err := getImageID(opts)
-	if err != nil {
-		valid = false
-	}
-
-	// Check registry for physical existence
-	exists, err := is.builder.Exists(ctx, imageId)
-	if err != nil {
-		return "", false, false, nil, err
-	}
-
-	// Also check database to ensure image metadata is persisted
-	// This prevents duplicate builds when registry has the file but DB record is missing
-	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// Image not in database - needs to be built/recorded
-			exists = false
-		} else {
-			return "", false, false, nil, err
-		}
-	}
-
-	return imageId, exists, valid, opts, nil
-}
-
-func (is *ContainerImageService) resolveBaseImageDigest(ctx context.Context, opts *BuildOpts) {
-	if opts == nil || opts.BaseImageDigest != "" || opts.BaseImageRegistry == "" || opts.BaseImageName == "" || opts.BaseImageTag == "" {
-		return
-	}
-
-	sourceImage := getSourceImage(opts)
-	metadata, err := is.builder.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
-	if err != nil {
-		log.Warn().Err(err).Str("source_image", sourceImage).Msg("failed to resolve base image digest for image identity")
-		return
-	}
-	if metadata.Digest == "" {
-		log.Warn().Str("source_image", sourceImage).Msg("base image digest missing from registry inspect")
-		return
-	}
-	opts.BaseImageDigest = metadata.Digest
 }
 
 func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {

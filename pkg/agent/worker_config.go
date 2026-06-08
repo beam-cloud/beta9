@@ -14,12 +14,26 @@ type agentWorkerConfig struct {
 	ClusterName string                `json:"clusterName"`
 	DebugMode   bool                  `json:"debugMode"`
 	PrettyLogs  bool                  `json:"prettyLogs"`
+	Database    agentConfigDatabase   `json:"database"`
 	Gateway     agentConfigGateway    `json:"gateway"`
 	Storage     agentConfigStorage    `json:"storage"`
 	Image       agentConfigImage      `json:"imageService"`
 	Monitoring  agentConfigMonitoring `json:"monitoring"`
 	Worker      agentConfigWorker     `json:"worker"`
 	Cache       agentConfigCache      `json:"cache"`
+}
+
+type agentConfigDatabase struct {
+	S2 agentConfigS2 `json:"s2"`
+}
+
+type agentConfigS2 struct {
+	Basin             string `json:"basin"`
+	StreamPrefix      string `json:"streamPrefix"`
+	LogApiKey         string `json:"logApiKey"`
+	LogStreamPrefix   string `json:"logStreamPrefix"`
+	EventApiKey       string `json:"eventApiKey"`
+	EventStreamPrefix string `json:"eventStreamPrefix"`
 }
 
 type agentConfigGateway struct {
@@ -152,6 +166,16 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 		ClusterName: types.DefaultAgentName,
 		DebugMode:   false,
 		PrettyLogs:  true,
+		Database: agentConfigDatabase{
+			S2: agentConfigS2{
+				Basin:             firstNonEmpty(bootstrap.Telemetry.Events.Destination, bootstrap.Telemetry.Logs.Destination),
+				StreamPrefix:      bootstrap.Telemetry.StreamPrefix,
+				LogApiKey:         bootstrap.Telemetry.Logs.Credential,
+				LogStreamPrefix:   bootstrap.Telemetry.Logs.StreamPrefix,
+				EventApiKey:       bootstrap.Telemetry.Events.Credential,
+				EventStreamPrefix: bootstrap.Telemetry.Events.StreamPrefix,
+			},
+		},
 		Gateway: agentConfigGateway{
 			GRPC: agentConfigEndpoint{
 				ExternalHost: bootstrap.GatewayGRPCHost,

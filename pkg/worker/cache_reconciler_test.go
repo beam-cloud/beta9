@@ -523,6 +523,26 @@ func TestClipV1ArchiveRequiredContentIsSingleArchiveObject(t *testing.T) {
 	require.Equal(t, types.CacheContentKindClipV1, item.Kind)
 }
 
+func TestClipV1ArchiveRequiredContentUsesDataArchiveForRemoteRegistry(t *testing.T) {
+	var requestedPath string
+	client := &ImageClient{
+		registry: &registry.ImageRegistry{ImageFileExtension: registry.RemoteImageFileExtension},
+		archiveContentMetadata: func(_ context.Context, path string) (*cache.FSMetadata, error) {
+			requestedPath = path
+			return &cache.FSMetadata{Hash: "archive-hash", Size: 4096}, nil
+		},
+	}
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub", ImageId: "image"}
+
+	item, ok := client.clipV1ArchiveRequiredContent(context.Background(), request)
+	require.True(t, ok)
+	require.Equal(t, "/images/image.clip", requestedPath)
+	require.Equal(t, "/images/image.clip", item.RoutingKey)
+	require.Equal(t, "image.clip", item.Source)
+	require.Equal(t, "archive-hash", item.Hash)
+	require.Equal(t, types.CacheContentKindClipV1, item.Kind)
+}
+
 func TestClipV1ArchiveRequiredContentSkipsWhenUncached(t *testing.T) {
 	client := newTestV1ImageClient(nil, nil)
 	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub", ImageId: "image"}
@@ -547,8 +567,26 @@ func TestOCIRequiredContentItemsFromLayers(t *testing.T) {
 		require.Equal(t, types.CacheContentKindClipV2, item.Kind)
 		require.NotEmpty(t, item.Source)
 	}
-	require.Equal(t, "registry.example.com/team/image@sha256:layer-a", byHash["hash-a"].Source)
-	require.Equal(t, "registry.example.com/team/image@sha256:layer-b", byHash["hash-b"].Source)
+	require.Equal(t, "registry.example.com/team/image@sha256:layer-a", byHash[strings.Repeat("a", 64)].Source)
+	require.Equal(t, "registry.example.com/team/image@sha256:layer-b", byHash[strings.Repeat("b", 64)].Source)
+}
+
+func TestOCIRequiredContentItemsSkipsInvalidLayerMetadata(t *testing.T) {
+	ociInfo := &clipCommon.OCIStorageInfo{
+		RegistryURL: "https://registry.example.com",
+		Repository:  "team/image",
+		DecompressedHashByLayer: map[string]string{
+			"sha256:valid":   strings.Repeat("a", 64),
+			"sha256:invalid": "not-a-sha256",
+		},
+	}
+
+	items := ociRequiredContentItems(ociInfo)
+	require.Len(t, items, 1)
+	require.Equal(t, strings.Repeat("a", 64), items[0].Hash)
+
+	ociInfo.Repository = ""
+	require.Empty(t, ociRequiredContentItems(ociInfo))
 }
 
 func testClipV2Metadata() *clipCommon.ClipArchiveMetadata {
@@ -557,8 +595,8 @@ func testClipV2Metadata() *clipCommon.ClipArchiveMetadata {
 			RegistryURL: "https://registry.example.com",
 			Repository:  "team/image",
 			DecompressedHashByLayer: map[string]string{
-				"sha256:layer-a": "hash-a",
-				"sha256:layer-b": "hash-b",
+				"sha256:layer-a": strings.Repeat("a", 64),
+				"sha256:layer-b": strings.Repeat("b", 64),
 			},
 		},
 	}
@@ -661,6 +699,30 @@ func TestContentCachePathUsesFullClipArchiveForS3V1(t *testing.T) {
 	client.config.ImageService.RegistryStore = registry.LocalImageRegistryStore
 	client.config.ImageService.LocalCacheEnabled = true
 	require.Equal(t, "/images/cache/image.cache", client.contentCachePath(request, lazyImageArchive{}))
+}
+
+func TestEnsureV1ArchiveDataCacheUsesExistingLocalArchive(t *testing.T) {
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello"), 0644))
+
+	cacheDir := t.TempDir()
+	archivePath := filepath.Join(cacheDir, "image.clip")
+	archiver := clip.NewClipArchiver()
+	require.NoError(t, archiver.Create(clip.ClipArchiverOptions{
+		SourcePath:  src,
+		OutputFile:  archivePath,
+		ArchivePath: archivePath,
+	}))
+
+	client := &ImageClient{
+		imageCachePath: cacheDir,
+		config: types.AppConfig{
+			ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore},
+		},
+	}
+	path, ok := client.ensureV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
+	require.True(t, ok)
+	require.Equal(t, archivePath, path)
 }
 
 func TestValidateRestoredImageArchiveAcceptsClipV1WhenDefaultIsV2(t *testing.T) {

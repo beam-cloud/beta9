@@ -97,22 +97,37 @@ func (a *schedulingAttempt) provisionWorker() {
 		return
 	}
 
+	controller, delay := a.scheduler.workerProvisioningController(controllers)
+	if controller == nil {
+		a.recordBacklogWait(false, "worker_provisioning_backoff")
+		a.requeueForWorkerWaitDelay(delay, "worker_provisioning_backoff")
+		return
+	}
+
 	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "no_worker")
 
-	reservationID := a.scheduler.provisioning.addReservation(a.scheduler, a.request, controllers[0])
-	go newWorkerProvisioningAttempt(a.scheduler, a.request, controllers, reservationID).run()
+	reservationID := a.scheduler.provisioning.addReservation(a.scheduler, a.request, controller)
+	go newWorkerProvisioningAttempt(a.scheduler, a.request, controller, reservationID).run()
 	a.requeueForWorkerWait()
 }
 
 func (a *schedulingAttempt) requeueForWorkerWait() {
+	a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_capacity_wait")
+}
+
+func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reason string) {
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
 		a.fail("worker_capacity_timeout")
 		return
 	}
 
-	if err := a.scheduler.pushBacklog(a.request, provisioningWorkerRequeueDelay); err != nil {
+	if delay < requestProcessingInterval {
+		delay = requestProcessingInterval
+	}
+
+	if err := a.scheduler.pushBacklog(a.request, delay); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
-		a.fail("worker_wait_requeue_failed")
+		a.fail(reason + "_requeue_failed")
 	}
 }
 
@@ -172,15 +187,15 @@ func (a *schedulingAttempt) recordBacklogWait(success bool, reason string) {
 type workerProvisioningAttempt struct {
 	scheduler     *Scheduler
 	request       *types.ContainerRequest
-	controllers   []WorkerPoolController
+	controller    WorkerPoolController
 	reservationID string
 }
 
-func newWorkerProvisioningAttempt(scheduler *Scheduler, request *types.ContainerRequest, controllers []WorkerPoolController, reservationID string) *workerProvisioningAttempt {
+func newWorkerProvisioningAttempt(scheduler *Scheduler, request *types.ContainerRequest, controller WorkerPoolController, reservationID string) *workerProvisioningAttempt {
 	return &workerProvisioningAttempt{
 		scheduler:     scheduler,
 		request:       request,
-		controllers:   controllers,
+		controller:    controller,
 		reservationID: reservationID,
 	}
 }
@@ -193,42 +208,38 @@ func (a *workerProvisioningAttempt) run() {
 		}
 	}()
 
-	var addWorkerErr error
-	for _, controller := range a.controllers {
-		if controller == nil {
-			continue
-		}
-
-		select {
-		case <-a.scheduler.ctx.Done():
-			return
-		default:
-		}
-
-		provisionStart := time.Now()
-		newWorker, err := controller.AddWorker(
-			a.scheduler.workerCPUForControllerRequest(controller, a.request),
-			a.scheduler.workerMemoryForControllerRequest(controller, a.request),
-			a.scheduler.workerGPUCountForControllerRequest(controller, a.request),
-		)
-		a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
-			"pool_name": controller.Name(),
-		})
-		if err != nil {
-			addWorkerErr = err
-			continue
-		}
-
-		workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
-		releaseOnReturn = false
-		time.AfterFunc(provisioningReservationHandoff, func() {
-			a.scheduler.provisioning.release(a.reservationID)
-		})
+	controller := a.controller
+	if controller == nil {
 		return
 	}
 
-	a.logAddWorkerFailure(addWorkerErr)
-	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "add_worker_failed")
+	select {
+	case <-a.scheduler.ctx.Done():
+		return
+	default:
+	}
+
+	provisionStart := time.Now()
+	newWorker, err := controller.AddWorker(
+		a.scheduler.workerCPUForControllerRequest(controller, a.request),
+		a.scheduler.workerMemoryForControllerRequest(controller, a.request),
+		a.scheduler.workerGPUCountForControllerRequest(controller, a.request),
+	)
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
+		"pool_name": controller.Name(),
+	})
+	if err != nil {
+		a.scheduler.recordWorkerProvisioningFailure(controller, err)
+		a.logAddWorkerFailure(err)
+		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "add_worker_failed")
+		return
+	}
+
+	workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
+	releaseOnReturn = false
+	time.AfterFunc(provisioningReservationHandoff, func() {
+		a.scheduler.provisioning.release(a.reservationID)
+	})
 }
 
 func (a *workerProvisioningAttempt) logAddWorkerFailure(err error) {

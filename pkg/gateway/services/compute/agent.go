@@ -67,6 +67,12 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
 	}
+	bootstrap, err := s.agentBootstrapConfig(ctx, tokenState.WorkspaceID, poolState)
+	if err != nil {
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	bootstrap.Executor = agentState.Executor
+
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -97,9 +103,6 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 			"gpu_ids":        strings.Join(agentState.GPUIDs, ","),
 		},
 	})
-
-	bootstrap := s.agentBootstrapConfig(tokenState.WorkspaceID, poolState)
-	bootstrap.Executor = agentState.Executor
 
 	return &pb.JoinAgentResponse{
 		Ok:          true,
@@ -468,6 +471,16 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if previousState != route.State || previousProxyTarget != route.ProxyTarget || previousError != route.Error {
+		attrs := map[string]string{
+			"kind":     route.Kind,
+			"port":     fmt.Sprintf("%d", route.Port),
+			"protocol": route.Protocol,
+		}
+		for key, value := range in.Attrs {
+			if strings.TrimSpace(key) != "" && value != "" {
+				attrs[key] = value
+			}
+		}
 		s.emitComputeEvent(types.EventComputeRoute, types.EventComputeSchema{
 			WorkspaceID: agentState.WorkspaceID,
 			PoolName:    agentState.PoolName,
@@ -479,18 +492,18 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 			Status:      route.State,
 			Transport:   route.Transport,
 			Message:     route.Error,
-			Attrs: map[string]string{
-				"kind":     route.Kind,
-				"port":     fmt.Sprintf("%d", route.Port),
-				"protocol": route.Protocol,
-			},
+			Attrs:       attrs,
 		})
 	}
 	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
 }
 
-func (s *Service) agentBootstrapConfig(workspaceID string, poolState *model.PoolState) *pb.AgentBootstrapConfig {
+func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, poolState *model.PoolState) (*pb.AgentBootstrapConfig, error) {
 	config := normalizePoolConfig(poolState.Config)
+	telemetryConfig, err := s.scopedTelemetryConfig(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
 	return &pb.AgentBootstrapConfig{
 		GatewayHttpUrl:         s.appConfig.GatewayService.HTTP.GetExternalURL(),
 		GatewayGrpcHost:        s.appConfig.GatewayService.GRPC.ExternalHost,
@@ -504,6 +517,7 @@ func (s *Service) agentBootstrapConfig(workspaceID string, poolState *model.Pool
 		ImageRegistryStore:     s.appConfig.ImageService.RegistryStore,
 		ImageClipVersion:       s.appConfig.ImageService.ClipVersion,
 		ImageLocalCacheEnabled: s.appConfig.ImageService.LocalCacheEnabled,
+		Telemetry:              telemetryConfig,
 		DisabledServices: []string{
 			"redis",
 			"postgres",
@@ -513,7 +527,7 @@ func (s *Service) agentBootstrapConfig(workspaceID string, poolState *model.Pool
 			"configman",
 			"k3s",
 		},
-	}
+	}, nil
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {

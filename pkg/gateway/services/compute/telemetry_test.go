@@ -6,7 +6,7 @@ import (
 )
 
 func TestRedactTelemetryLogLine(t *testing.T) {
-	line := `access_key=access-value secretKey:secret-value Authorization: Bearer auth-value password="password-value" {"AZURE_CLIENT_SECRET":"azure-value","apiKey":"api-value","credentials":"credential-value"} AWS_SECRET_ACCESS_KEY=aws-value SECRET_TOKEN=token-value normal=value`
+	line := `access_key=access-value secretKey:secret-value Authorization: Bearer auth-value password="password-value" {"AZURE_CLIENT_SECRET":"azure-value","apiKey":"api-value","logApiKey":"log-token","eventApiKey":"event-token","logCredential":"log-credential","eventCredential":"event-credential","credentials":"credential-value"} AWS_SECRET_ACCESS_KEY=aws-value SECRET_TOKEN=token-value normal=value`
 	redacted := redactTelemetryLogLine(line)
 
 	for _, leaked := range []string{
@@ -16,6 +16,10 @@ func TestRedactTelemetryLogLine(t *testing.T) {
 		"password-value",
 		"azure-value",
 		"api-value",
+		"log-token",
+		"event-token",
+		"log-credential",
+		"event-credential",
 		"credential-value",
 		"aws-value",
 		"token-value",

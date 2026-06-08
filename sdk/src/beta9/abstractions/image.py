@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -8,6 +9,7 @@ from beta9.sync import FileSyncer
 
 from .. import env, terminal
 from ..abstractions.base import BaseAbstraction
+from ..abstractions.base.utils import TTLCache, env_enabled, sdk_timing
 from ..clients.image import (
     BuildImageRequest,
     BuildImageResponse,
@@ -20,12 +22,20 @@ from ..env import is_notebook_env
 from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
 
 LOCAL_PYTHON_VERSION = f"python{sys.version_info.major}.{sys.version_info.minor}"
+_DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS = 300.0
 
 
 class ImageBuildResult(NamedTuple):
     success: bool = False
     image_id: str = ""
     python_version: str = ""
+
+
+_image_build_cache = TTLCache(
+    default_ttl_seconds=_DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS,
+    ttl_env_var="BETA9_IMAGE_BUILD_CACHE_TTL_SECONDS",
+    disabled=lambda: env_enabled("BETA9_DISABLE_IMAGE_BUILD_CACHE"),
+)
 
 
 class ImageCredentialValueNotFound(Exception):
@@ -431,6 +441,36 @@ class Image(BaseAbstraction):
 
         self.build_ctx_object = result.object_id
 
+    def _cache_key(self) -> str:
+        spec = {
+            "python_packages": self.python_packages,
+            "python_version": self.python_version,
+            "commands": self.commands,
+            "build_steps": [repr(step) for step in self.build_steps],
+            "base_image": self.base_image,
+            "env_vars": self.env_vars,
+            "dockerfile": self.dockerfile,
+            "build_ctx_object": self.build_ctx_object,
+            "secrets": self.secrets,
+            "gpu": self.gpu,
+            "ignore_python": self.ignore_python,
+            "image_id": self.image_id,
+            "include_files_patterns": self.include_files_patterns,
+        }
+        return json.dumps(spec, sort_keys=True, separators=(",", ":"))
+
+    def _cached_build_result(self, cache_key: str) -> Optional[ImageBuildResult]:
+        result = _image_build_cache.get(cache_key)
+        return result if isinstance(result, ImageBuildResult) else None
+
+    def _remember_build_result(self, cache_key: str, result: ImageBuildResult) -> None:
+        if not result.success:
+            return
+
+        self.image_id = result.image_id
+        self.python_version = result.python_version
+        _image_build_cache.set(cache_key, result, aliases=(self._cache_key(),))
+
     @classmethod
     def from_registry(
         cls,
@@ -502,23 +542,24 @@ class Image(BaseAbstraction):
         )
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
-        r: VerifyImageBuildResponse = self.stub.verify_image_build(
-            VerifyImageBuildRequest(
-                python_packages=self.python_packages,
-                python_version=self.python_version,
-                commands=self.commands,
-                build_steps=self.build_steps,
-                force_rebuild=False,
-                existing_image_uri=self.base_image,
-                env_vars=self.env_vars,
-                dockerfile=self.dockerfile,
-                build_ctx_object=self.build_ctx_object,
-                secrets=self.secrets,
-                gpu=self.gpu,
-                ignore_python=self.ignore_python,
-                image_id=self.image_id,
+        with sdk_timing("image.verify_build"):
+            r: VerifyImageBuildResponse = self.stub.verify_image_build(
+                VerifyImageBuildRequest(
+                    python_packages=self.python_packages,
+                    python_version=self.python_version,
+                    commands=self.commands,
+                    build_steps=self.build_steps,
+                    force_rebuild=False,
+                    existing_image_uri=self.base_image,
+                    env_vars=self.env_vars,
+                    dockerfile=self.dockerfile,
+                    build_ctx_object=self.build_ctx_object,
+                    secrets=self.secrets,
+                    gpu=self.gpu,
+                    ignore_python=self.ignore_python,
+                    image_id=self.image_id,
+                )
             )
-        )
 
         return (
             r.exists,
@@ -530,8 +571,6 @@ class Image(BaseAbstraction):
     def build(
         self,
     ) -> ImageBuildResult:
-        terminal.header("Building image")
-
         if is_notebook_env():
             if LOCAL_PYTHON_VERSION != self.python_version:
                 terminal.warn(
@@ -546,52 +585,66 @@ class Image(BaseAbstraction):
             # Compared to a custom Dockerfile build context, which does upload all files.
             self.sync_files(cache_object_id=False)
 
+        cache_key = self._cache_key()
+        if cached_result := self._cached_build_result(cache_key):
+            terminal.header("Using cached image")
+            self.image_id = cached_result.image_id
+            self.python_version = cached_result.python_version
+            return cached_result
+
+        terminal.header("Building image")
+
         exists, exists_response = self.exists()
         if exists:
             terminal.header("Using cached image")
-            return ImageBuildResult(
+            result = ImageBuildResult(
                 success=True,
                 image_id=exists_response.image_id,
                 python_version=exists_response.python_version,
             )
+            self._remember_build_result(cache_key, result)
+            return result
 
-        with terminal.progress("Working..."):
-            last_response = BuildImageResponse(success=False)
-            for r in self.stub.build_image(
-                BuildImageRequest(
-                    python_packages=self.python_packages,
-                    python_version=self.python_version,
-                    commands=self.commands,
-                    build_steps=self.build_steps,
-                    existing_image_uri=self.base_image,
-                    existing_image_creds=self.get_credentials_from_env(),
-                    env_vars=self.env_vars,
-                    dockerfile=self.dockerfile,
-                    build_ctx_object=self.build_ctx_object,
-                    secrets=self.secrets,
-                    gpu=self.gpu,
-                    ignore_python=self.ignore_python,
-                )
-            ):
-                if r.warning:
-                    terminal.warn("WARNING: " + r.msg)
-                elif r.msg != "" and not r.done:
-                    terminal.detail(r.msg, end="")
+        with sdk_timing("image.build_stream"):
+            with terminal.progress("Working..."):
+                last_response = BuildImageResponse(success=False)
+                for r in self.stub.build_image(
+                    BuildImageRequest(
+                        python_packages=self.python_packages,
+                        python_version=self.python_version,
+                        commands=self.commands,
+                        build_steps=self.build_steps,
+                        existing_image_uri=self.base_image,
+                        existing_image_creds=self.get_credentials_from_env(),
+                        env_vars=self.env_vars,
+                        dockerfile=self.dockerfile,
+                        build_ctx_object=self.build_ctx_object,
+                        secrets=self.secrets,
+                        gpu=self.gpu,
+                        ignore_python=self.ignore_python,
+                    )
+                ):
+                    if r.warning:
+                        terminal.warn("WARNING: " + r.msg)
+                    elif r.msg != "" and not r.done:
+                        terminal.detail(r.msg, end="")
 
-                if r.done:
-                    last_response = r
-                    break
+                    if r.done:
+                        last_response = r
+                        break
 
         if not last_response.success:
             terminal.error(str(last_response.msg).rstrip(), exit=False)
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")
-        return ImageBuildResult(
+        result = ImageBuildResult(
             success=True,
             image_id=last_response.image_id,
             python_version=last_response.python_version,
         )
+        self._remember_build_result(cache_key, result)
+        return result
 
     def get_credentials_from_env(self) -> Dict[str, str]:
         if env.is_remote():
