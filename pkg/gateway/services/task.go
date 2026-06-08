@@ -19,9 +19,14 @@ import (
 )
 
 func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
+	if in == nil {
+		return &pb.StartTaskResponse{Ok: false}, nil
+	}
+
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if !auth.HasPermission(authInfo) {
+	if !canUseTaskLifecycle(authInfo) {
+		log.Warn().Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Msg("start task rejected by auth")
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
@@ -29,20 +34,29 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
+		log.Warn().Err(err).Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Msg("start task failed to load task")
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
 	}
 
 	if task == nil {
+		log.Warn().Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Msg("start task missing task")
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
 	if task.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		log.Warn().
+			Str("task_id", in.TaskId).
+			Str("container_id", in.ContainerId).
+			Str("task_workspace_id", task.Workspace.ExternalId).
+			Str("auth_workspace_id", authInfo.Workspace.ExternalId).
+			Msg("start task rejected by workspace mismatch")
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
 	if task.Status.IsCompleted() {
+		log.Warn().Str("task_id", in.TaskId).Str("container_id", in.ContainerId).Str("status", string(task.Status)).Msg("start task rejected because task is completed")
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
@@ -73,21 +87,42 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 
 	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
 	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("task_id", task.ExternalId).
+			Str("container_id", task.ContainerId).
+			Str("workspace_id", task.Workspace.ExternalId).
+			Str("workspace_name", task.Workspace.Name).
+			Str("stub_id", task.Stub.ExternalId).
+			Msg("start task failed to claim task")
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
 	}
 
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("task_id", task.ExternalId).
+			Str("container_id", task.ContainerId).
+			Str("workspace_id", task.Workspace.ExternalId).
+			Str("stub_id", task.Stub.ExternalId).
+			Msg("start task failed to update task")
+	}
 	return &pb.StartTaskResponse{
 		Ok: err == nil,
 	}, nil
 }
 
 func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
+	if in == nil {
+		return &pb.EndTaskResponse{Ok: false}, nil
+	}
+
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if !auth.HasPermission(authInfo) {
+	if !canUseTaskLifecycle(authInfo) {
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil
@@ -179,8 +214,18 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}, nil
 }
 
+func canUseTaskLifecycle(authInfo *auth.AuthInfo) bool {
+	if authInfo == nil || authInfo.Token == nil || authInfo.Workspace == nil {
+		return false
+	}
+	if authInfo.Token.TokenType == types.TokenTypeWorkspaceRestricted {
+		return true
+	}
+	return auth.HasPermission(authInfo)
+}
+
 func (gws *GatewayService) recordContainerToStartTaskPhases(ctx context.Context, task *types.TaskWithRelated, startedAt time.Time, labels map[string]string) {
-	if task == nil || task.ContainerId == "" {
+	if task == nil || task.ContainerId == "" || gws.containerRepo == nil {
 		return
 	}
 
