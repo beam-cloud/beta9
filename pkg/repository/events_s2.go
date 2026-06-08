@@ -910,7 +910,7 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	}
 
 	add(r.streamNameForEvent(eventType, metadata))
-	if metadata.ContainerID != "" && metadata.WorkspaceID != "" {
+	if shouldWriteContainerAlias(metadata) {
 		add(r.containerAliasStreamName(metadata.WorkspaceID, metadata.ContainerID))
 	}
 	if isTaskEvent(eventType) && metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "" {
@@ -995,7 +995,7 @@ func (r *S2EventRepository) logStreamNamesForEvent(metadata eventMetadata) []s2.
 	if metadata.ContainerID != "" && metadata.StubID != "" {
 		add(r.containerLogStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID))
 	}
-	if metadata.ContainerID != "" {
+	if shouldWriteContainerAlias(metadata) {
 		add(r.containerLogAliasStreamName(metadata.WorkspaceID, metadata.ContainerID))
 	}
 	if metadata.StubID != "" {
@@ -1019,6 +1019,18 @@ func (r *S2EventRepository) containerStreamName(workspaceID, stubID, containerID
 		eventStreamPart(stubID),
 		eventStreamPart(containerID),
 	))
+}
+
+func shouldWriteContainerAlias(metadata eventMetadata) bool {
+	if metadata.ContainerID == "" || metadata.WorkspaceID == "" {
+		return false
+	}
+
+	stubID, ok := common.ExtractStubIdFromStubScopedContainerId(metadata.ContainerID)
+	if !ok {
+		return true
+	}
+	return metadata.StubID == "" || metadata.StubID != stubID
 }
 
 func (r *S2EventRepository) containerAliasStreamName(workspaceID, containerID string) s2.StreamName {

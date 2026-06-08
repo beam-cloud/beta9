@@ -2,7 +2,6 @@ import inspect
 import json
 import os
 import threading
-import time
 from typing import Callable, Dict, List, Optional, Union
 
 import cloudpickle
@@ -45,6 +44,7 @@ from ...type import (
     TaskPolicy,
 )
 from ...utils import TempFile
+from .utils import sdk_timing, timed_lock
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -76,25 +76,13 @@ _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
 
 
-def _sdk_timing_enabled() -> bool:
-    return os.getenv("BETA9_SDK_TIMINGS", "").lower() in {"1", "true", "yes", "on"}
-
-
-def _sdk_timing(label: str, start_ns: int) -> None:
-    if _sdk_timing_enabled():
-        elapsed_ms = (time.monotonic_ns() - start_ns) / 1_000_000
-        terminal.detail(f"SDK timing {label}: {elapsed_ms:.1f}ms")
-
-
-def _is_stub_created_for_workspace() -> bool:
-    global _stub_created_for_workspace
-    _stub_created_for_workspace = False
+def _stub_created_for_current_workspace() -> bool:
     return _stub_created_for_workspace
 
 
-def _set_stub_created_for_workspace(value: bool) -> None:
+def _mark_stub_created_for_workspace() -> None:
     global _stub_created_for_workspace
-    _stub_created_for_workspace = value
+    _stub_created_for_workspace = True
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -467,59 +455,95 @@ class RunnerAbstraction(BaseAbstraction):
         if called_on_import():
             return False
 
-        prepare_started_ns = time.monotonic_ns()
-
         if func is not None:
             self._map_callable_to_attr(attr="handler", func=func)
 
         stub_name = f"{stub_type}/{self.handler}" if self.handler else stub_type
 
-        lock_started_ns = time.monotonic_ns()
-        with self._runtime_prepare_lock:
-            _sdk_timing("prepare_runtime.lock_wait", lock_started_ns)
-            if self.runtime_ready:
-                _sdk_timing("prepare_runtime.total", prepare_started_ns)
+        with sdk_timing("prepare_runtime.total"):
+            with timed_lock(self._runtime_prepare_lock, "prepare_runtime.lock_wait"):
+                if self.runtime_ready:
+                    return True
+
+                if not self._prepare_image():
+                    return False
+
+                if not self._sync_runtime_files(ignore_patterns):
+                    return False
+
+                if not self._prepare_volumes():
+                    return False
+
+                runtime_config = self._prepare_runtime_config()
+                if runtime_config is None:
+                    return False
+
+                if not self.stub_created:
+                    stub_request = self._stub_request(
+                        stub_type=stub_type,
+                        stub_name=stub_name,
+                        force_create_stub=force_create_stub,
+                        autoscaler_type=runtime_config["autoscaler_type"],
+                        inputs=runtime_config["inputs"],
+                        outputs=runtime_config["outputs"],
+                    )
+
+                    with sdk_timing("prepare_runtime.stub"):
+                        stub_response = self._get_or_create_stub(stub_request)
+
+                    if not self._apply_stub_response(stub_response):
+                        return False
+
+                self.runtime_ready = True
                 return True
 
-            if not self.image_available:
-                image_started_ns = time.monotonic_ns()
-                image_build_result: ImageBuildResult = self.image.build()
-                _sdk_timing("prepare_runtime.image", image_started_ns)
+    def _prepare_image(self) -> bool:
+        if self.image_available:
+            return True
 
-                if image_build_result and image_build_result.success:
-                    self.image_available = True
-                    self.image_id = image_build_result.image_id
-                    self.image.python_version = image_build_result.python_version
-                else:
-                    terminal.error("Image build failed ❌", exit=False)
+        with sdk_timing("prepare_runtime.image"):
+            image_build_result: ImageBuildResult = self.image.build()
+
+        if image_build_result and image_build_result.success:
+            self.image_available = True
+            self.image_id = image_build_result.image_id
+            self.image.python_version = image_build_result.python_version
+            return True
+
+        terminal.error("Image build failed ❌", exit=False)
+        return False
+
+    def _sync_runtime_files(self, ignore_patterns: Optional[List[str]]) -> bool:
+        if self.files_synced:
+            return True
+
+        with sdk_timing("prepare_runtime.files_sync"):
+            sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
+            self._remove_tmp_files()
+
+        if sync_result.success:
+            self.files_synced = True
+            self.object_id = sync_result.object_id
+            return True
+
+        terminal.error("File sync failed", exit=False)
+        return False
+
+    def _prepare_volumes(self) -> bool:
+        with sdk_timing("prepare_runtime.volumes"):
+            for volume in self.volumes:
+                if not volume.ready and not volume.get_or_create():
+                    terminal.error(f"Volume is not ready: {volume.name}", exit=False)
                     return False
+        return True
 
-            if not self.files_synced:
-                sync_started_ns = time.monotonic_ns()
-                sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
-                self._remove_tmp_files()
-                _sdk_timing("prepare_runtime.files_sync", sync_started_ns)
-
-                if sync_result.success:
-                    self.files_synced = True
-                    self.object_id = sync_result.object_id
-                else:
-                    terminal.error("File sync failed", exit=False)
-                    return False
-
-            volumes_started_ns = time.monotonic_ns()
-            for v in self.volumes:
-                if not v.ready and not v.get_or_create():
-                    terminal.error(f"Volume is not ready: {v.name}", exit=False)
-                    return False
-            _sdk_timing("prepare_runtime.volumes", volumes_started_ns)
-
-            config_started_ns = time.monotonic_ns()
+    def _prepare_runtime_config(self) -> Optional[Dict[str, object]]:
+        with sdk_timing("prepare_runtime.config"):
             try:
                 self.gpu = self.parse_gpu(self.gpu)
             except ValueError:
                 terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
-                return False
+                return None
 
             autoscaler_type = _AUTOSCALER_TYPES.get(type(self.autoscaler), "")
             if not autoscaler_type:
@@ -527,107 +551,112 @@ class RunnerAbstraction(BaseAbstraction):
                     f"Invalid Autoscaler class: {type(self.autoscaler).__name__}",
                     exit=False,
                 )
-                return False
+                return None
 
             if not self.app:
                 self.app = self.name or os.path.basename(os.getcwd())
 
-            inputs = None
-            if self.inputs:
-                inputs = self._schema_to_proto(self.inputs)
+            return {
+                "autoscaler_type": autoscaler_type,
+                "inputs": self._schema_to_proto(self.inputs) if self.inputs else None,
+                "outputs": self._schema_to_proto(self.outputs) if self.outputs else None,
+            }
 
-            outputs = None
-            if self.outputs:
-                outputs = self._schema_to_proto(self.outputs)
-            _sdk_timing("prepare_runtime.config", config_started_ns)
+    def _stub_request(
+        self,
+        *,
+        stub_type: str,
+        stub_name: str,
+        force_create_stub: bool,
+        autoscaler_type: str,
+        inputs: Optional[SchemaProto],
+        outputs: Optional[SchemaProto],
+    ) -> GetOrCreateStubRequest:
+        return GetOrCreateStubRequest(
+            object_id=self.object_id,
+            image_id=self.image_id,
+            stub_type=stub_type,
+            name=stub_name,
+            app_name=self.app,
+            python_version=self.image.python_version,
+            cpu=self.cpu,
+            memory=self.memory,
+            gpu=self.gpu,
+            gpu_count=self.gpu_count,
+            handler=self.handler,
+            on_start=self.on_start,
+            on_deploy=self.on_deploy.parent.handler if self.on_deploy else "",
+            on_deploy_stub_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
+            callback_url=self.callback_url,
+            keep_warm_seconds=self.keep_warm_seconds,
+            workers=self.workers,
+            max_pending_tasks=self.max_pending_tasks,
+            volumes=[v.export() for v in self.volumes],
+            secrets=self.secrets,
+            env=self.env,
+            force_create=force_create_stub,
+            authorized=self.authorized,
+            autoscaler=AutoscalerProto(
+                type=autoscaler_type,
+                max_containers=self.autoscaler.max_containers,
+                tasks_per_container=self.autoscaler.tasks_per_container,
+                min_containers=self.autoscaler.min_containers,
+            ),
+            task_policy=TaskPolicyProto(
+                max_retries=self.task_policy.max_retries,
+                timeout=self.task_policy.timeout,
+                ttl=self.task_policy.ttl,
+            ),
+            concurrent_requests=self.concurrent_requests,
+            checkpoint_enabled=self.checkpoint_enabled,
+            extra=json.dumps(self.extra),
+            entrypoint=self.entrypoint,
+            ports=self.ports,
+            pricing=PricingPolicyProto(
+                cost_per_task=self.pricing.cost_per_task,
+                cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
+                cost_model=self.pricing.cost_model,
+                max_in_flight=self.pricing.max_in_flight,
+            )
+            if self.pricing
+            else None,
+            inputs=inputs,
+            outputs=outputs,
+            docker_enabled=self.docker_enabled,
+            tcp=self.tcp,
+            block_network=self.block_network,
+            allow_list=self.allow_list,
+            pool=self.pool_config,
+        )
 
-            if not self.stub_created:
-                stub_started_ns = time.monotonic_ns()
-                stub_request = GetOrCreateStubRequest(
-                    object_id=self.object_id,
-                    image_id=self.image_id,
-                    stub_type=stub_type,
-                    name=stub_name,
-                    app_name=self.app,
-                    python_version=self.image.python_version,
-                    cpu=self.cpu,
-                    memory=self.memory,
-                    gpu=self.gpu,
-                    gpu_count=self.gpu_count,
-                    handler=self.handler,
-                    on_start=self.on_start,
-                    on_deploy=self.on_deploy.parent.handler if self.on_deploy else "",
-                    on_deploy_stub_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
-                    callback_url=self.callback_url,
-                    keep_warm_seconds=self.keep_warm_seconds,
-                    workers=self.workers,
-                    max_pending_tasks=self.max_pending_tasks,
-                    volumes=[v.export() for v in self.volumes],
-                    secrets=self.secrets,
-                    env=self.env,
-                    force_create=force_create_stub,
-                    authorized=self.authorized,
-                    autoscaler=AutoscalerProto(
-                        type=autoscaler_type,
-                        max_containers=self.autoscaler.max_containers,
-                        tasks_per_container=self.autoscaler.tasks_per_container,
-                        min_containers=self.autoscaler.min_containers,
-                    ),
-                    task_policy=TaskPolicyProto(
-                        max_retries=self.task_policy.max_retries,
-                        timeout=self.task_policy.timeout,
-                        ttl=self.task_policy.ttl,
-                    ),
-                    concurrent_requests=self.concurrent_requests,
-                    checkpoint_enabled=self.checkpoint_enabled,
-                    extra=json.dumps(self.extra),
-                    entrypoint=self.entrypoint,
-                    ports=self.ports,
-                    pricing=PricingPolicyProto(
-                        cost_per_task=self.pricing.cost_per_task,
-                        cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
-                        cost_model=self.pricing.cost_model,
-                        max_in_flight=self.pricing.max_in_flight,
-                    )
-                    if self.pricing
-                    else None,
-                    inputs=inputs,
-                    outputs=outputs,
-                    docker_enabled=self.docker_enabled,
-                    tcp=self.tcp,
-                    block_network=self.block_network,
-                    allow_list=self.allow_list,
-                    pool=self.pool_config,
+    def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
+        if _stub_created_for_current_workspace():
+            return self.gateway_stub.get_or_create_stub(stub_request)
+
+        with _stub_creation_lock:
+            if not _stub_created_for_current_workspace():
+                stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                    stub_request
                 )
-
-                if _is_stub_created_for_workspace():
-                    stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
-                        stub_request
-                    )
-                else:
-                    with _stub_creation_lock:
-                        stub_response: GetOrCreateStubResponse = (
-                            self.gateway_stub.get_or_create_stub(stub_request)
-                        )
-
-                        _set_stub_created_for_workspace(True)
-
                 if stub_response.ok:
-                    self.stub_created = True
-                    self.stub_id = stub_response.stub_id
-                    _sdk_timing("prepare_runtime.stub", stub_started_ns)
-                    if stub_response.warn_msg:
-                        terminal.warn(stub_response.warn_msg)
-                else:
-                    if err := stub_response.err_msg:
-                        terminal.error(err, exit=False)
-                    else:
-                        terminal.error("Failed to get or create stub", exit=False)
-                    return False
+                    _mark_stub_created_for_workspace()
+                return stub_response
 
-            self.runtime_ready = True
-            _sdk_timing("prepare_runtime.total", prepare_started_ns)
+        return self.gateway_stub.get_or_create_stub(stub_request)
+
+    def _apply_stub_response(self, stub_response: GetOrCreateStubResponse) -> bool:
+        if stub_response.ok:
+            self.stub_created = True
+            self.stub_id = stub_response.stub_id
+            if stub_response.warn_msg:
+                terminal.warn(stub_response.warn_msg)
             return True
+
+        if err := stub_response.err_msg:
+            terminal.error(err, exit=False)
+        else:
+            terminal.error("Failed to get or create stub", exit=False)
+        return False
 
 
 class AbstractCallableWrapper:

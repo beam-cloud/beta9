@@ -97,6 +97,32 @@ func TestResolveContainerStreamsParsesStubScopedContainerIDWithoutPrefixList(t *
 	}
 }
 
+func TestS2StubScopedContainerEventsSkipAliasStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	containerID := "sandbox-" + stubID + "-1717f4fc"
+
+	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      stubID,
+		ContainerID: containerID,
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/sandbox-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc",
+		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e",
+		"events/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
 func TestResolveContainerStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -230,6 +256,36 @@ func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 		"events/logs/workspaces/workspace-123/stubs/stub-456/containers/container-789",
 		"events/logs/workspaces/workspace-123/containers/container-789",
 		"events/logs/workspaces/workspace-123/stubs/stub-456",
+		"events/logs/workspaces/workspace-123/tasks/task-123",
+		"events/logs/workspaces/workspace-123/apps/app-123",
+		"events/logs/workspaces/workspace-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected log stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected log stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2StubScopedContainerLogsSkipAliasStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	containerID := "endpoint-" + stubID + "-1717f4fc"
+
+	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      stubID,
+		ContainerID: containerID,
+		TaskID:      "task-123",
+		AppID:       "app-123",
+	})
+
+	want := []s2.StreamName{
+		"events/logs/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/endpoint-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc",
+		"events/logs/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e",
 		"events/logs/workspaces/workspace-123/tasks/task-123",
 		"events/logs/workspaces/workspace-123/apps/app-123",
 		"events/logs/workspaces/workspace-123",
@@ -458,6 +514,36 @@ func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
 		"events/workspaces/workspace-123/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+		"events/workspaces/workspace-123/apps/app-123",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected task stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected task stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2TaskUpdateEventsSkipAliasForStubScopedContainer(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	containerID := "pod-" + stubID + "-1717f4fc"
+
+	streams := repo.streamNamesForEvent(types.EventTaskUpdated, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      stubID,
+		ContainerID: containerID,
+		TaskID:      "task-123",
+		AppID:       "app-123",
+	})
+
+	want := []s2.StreamName{
+		"events/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/pod-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc",
+		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e",
 		"events/workspaces/workspace-123",
 		"events/workspaces/workspace-123/apps/app-123",
 	}

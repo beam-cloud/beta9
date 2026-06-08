@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 from unittest.mock import MagicMock
 
+from beta9.abstractions.base import runner as runner_module
 from beta9.abstractions.base.runner import RunnerAbstraction
 from beta9.abstractions.image import ImageBuildResult
 from beta9.clients.gateway import GetOrCreateStubResponse
@@ -11,6 +12,7 @@ from beta9.sync import FileSyncResult
 
 class TestRunner(unittest.TestCase):
     def setUp(self):
+        runner_module._stub_created_for_workspace = False
         self.runner = RunnerAbstraction()
 
     def test_cpu_parsing_float_input_within_range(self):
@@ -88,3 +90,9 @@ class TestRunner(unittest.TestCase):
         self.assertEqual(self.runner.image.build.call_count, 1)
         self.assertEqual(self.runner.syncer.sync.call_count, 1)
         self.assertEqual(self.runner.gateway_stub.get_or_create_stub.call_count, 1)
+
+    def test_stub_creation_flag_is_not_reset_on_read(self):
+        runner_module._mark_stub_created_for_workspace()
+
+        self.assertTrue(runner_module._stub_created_for_current_workspace())
+        self.assertTrue(runner_module._stub_created_for_current_workspace())
