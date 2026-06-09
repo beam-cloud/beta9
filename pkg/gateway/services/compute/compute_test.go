@@ -591,6 +591,107 @@ func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
 	}
 }
 
+func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
+	var createCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/instances/types":
+			_, _ = w.Write([]byte(`{"instance_types":[{"id":"sf-a10g-1","cloud":"lambda","shade_instance_type":"A10Gx1","hourly_price":150,"deployment_type":"vm","configuration":{"gpu_type":"A10G","num_gpus":1,"vcpus":4,"memory_in_gb":16,"storage_in_gb":128},"availability":[{"region":"us-east","available":true}]}]}`))
+		case "/instances/create":
+			createCalls++
+			_, _ = w.Write([]byte(`{"id":"reservation-2"}`))
+		default:
+			t.Fatalf("unexpected shadeform path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:                 "pool-1",
+					Selector:             "pool-1",
+					CreatedByTokenID:     "token-1",
+					ReservedGPUs:         1,
+					CommittedSpendMicros: 1_500_000,
+					Reservations: []model.Reservation{
+						{
+							ID:               "reservation-1",
+							PoolName:         "pool-1",
+							Selector:         "pool-1",
+							Provider:         "shadeform",
+							OfferID:          "sf-a10g-1",
+							MachineID:        "machine-1",
+							GPU:              "A10G",
+							GPUCount:         1,
+							HourlyCostMicros: 1_500_000,
+							Source:           model.SourceCLIReservation,
+							Status:           model.ReservationActive,
+							CreatedAt:        now.Add(-time.Minute),
+							ExpiresAt:        now.Add(time.Hour),
+						},
+					},
+				},
+			},
+		},
+	}
+	service := &Service{
+		computeRepo: repo,
+		billing: &fakeManagedBilling{
+			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
+		},
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
+			},
+			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
+			Providers: types.ProviderConfig{
+				Shadeform: types.ShadeformProviderConfig{ApiKey: "shadeform-key", BaseURL: server.URL},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
+			},
+		},
+	}
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{
+			Name:      "pool-1",
+			Gpu:       []string{"A10G"},
+			Gpus:      1,
+			OfferId:   "sf-a10g-1",
+			Ttl:       "1h",
+			MaxSpend:  2,
+			Providers: []string{"shadeform"},
+			Regions:   []string{"us-east"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LaunchPoolCapacity() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
+	}
+	if createCalls != 1 {
+		t.Fatalf("shadeform create calls = %d, want 1", createCalls)
+	}
+	state := repo.pools["workspace-1"][0]
+	if got, want := len(state.Reservations), 2; got != want {
+		t.Fatalf("reservation count = %d, want %d", got, want)
+	}
+	if got, want := state.Reservations[1].ID, "reservation-2"; got != want {
+		t.Fatalf("new reservation id = %q, want %q", got, want)
+	}
+	if got, want := state.ReservedGPUs, uint32(2); got != want {
+		t.Fatalf("reserved gpus = %d, want %d", got, want)
+	}
+	if got, want := state.CommittedSpendMicros, int64(3_000_000); got != want {
+		t.Fatalf("committed spend micros = %d, want %d", got, want)
+	}
+}
+
 func TestRecordManagedUsageEmitsOpenMeterMetrics(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{

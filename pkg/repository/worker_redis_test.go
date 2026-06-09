@@ -172,6 +172,52 @@ func TestToggleWorkerAvailable(t *testing.T) {
 	assert.Equal(t, types.WorkerStatusAvailable, worker.Status)
 }
 
+func TestSetWorkerKeepAlivePromotesPendingWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:          "worker-keepalive-pending",
+		Status:      types.WorkerStatusPending,
+		TotalCpu:    1000,
+		TotalMemory: 1000,
+		FreeCpu:     1000,
+		FreeMemory:  1000,
+	}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id))
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+}
+
+func TestSetWorkerKeepAliveDoesNotPromoteDisabledWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:          "worker-keepalive-disabled",
+		Status:      types.WorkerStatusDisabled,
+		TotalCpu:    1000,
+		TotalMemory: 1000,
+		FreeCpu:     1000,
+		FreeMemory:  1000,
+	}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id))
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, types.WorkerStatusDisabled, updatedWorker.Status)
+}
+
 func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

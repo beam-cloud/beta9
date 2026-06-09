@@ -88,7 +88,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 			MinReliability: pool.MinReliability,
 		},
 		Offers:       offers,
-		Reservations: reservations,
+		Reservations: nil,
 		Now:          time.Now(),
 	})
 	if !plan.Feasible {
@@ -166,8 +166,8 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		Selector:             pool.Selector,
 		Config:               config,
 		Reservations:         newReservations,
-		ReservedGPUs:         plan.TotalGPUs,
-		CommittedSpendMicros: plan.CommittedCostMicros,
+		ReservedGPUs:         activeReservationGPUs(newReservations, now),
+		CommittedSpendMicros: existingCommittedSpendMicros(existing) + plan.CommittedCostMicros,
 		Status:               "active",
 		Source:               model.SourceCLIReservation,
 		Mode:                 config.Mode,
@@ -196,6 +196,23 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
 	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
+}
+
+func activeReservationGPUs(reservations []model.Reservation, now time.Time) uint32 {
+	var total uint32
+	for _, reservation := range reservations {
+		if reservation.ActiveAt(now) {
+			total += reservation.GPUCount
+		}
+	}
+	return total
+}
+
+func existingCommittedSpendMicros(state *model.PoolState) int64 {
+	if state == nil || state.CommittedSpendMicros < 0 {
+		return 0
+	}
+	return state.CommittedSpendMicros
 }
 
 func (s *Service) checkManagedLaunchCredit(ctx context.Context, workspaceID, poolName string, plan model.SolvePlan) (billingDecision, error) {
