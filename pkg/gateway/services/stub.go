@@ -268,7 +268,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if poolConfig != nil && poolConfig.ReservationRequired {
+	if poolConfig.RequiresReservation() {
 		res, err := gws.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
 			Pool: poolConfigToProto(poolConfig),
 		})
@@ -295,17 +295,16 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 		return nil
 	}
 	return &types.PoolConfig{
-		Name:                in.Name,
-		GPUs:                in.Gpu,
-		TotalGPUs:           in.Gpus,
-		OfferID:             in.OfferId,
-		TTL:                 in.Ttl,
-		MaxSpend:            in.MaxSpend,
-		Providers:           in.Providers,
-		Regions:             in.Regions,
-		MinReliability:      in.MinReliability,
-		ReservationRequired: in.ReservationRequired,
-		Selector:            in.Selector,
+		Name:           in.Name,
+		GPUs:           in.Gpu,
+		TotalGPUs:      in.Gpus,
+		OfferID:        in.OfferId,
+		TTL:            in.Ttl,
+		MaxSpend:       in.MaxSpend,
+		Providers:      in.Providers,
+		Regions:        in.Regions,
+		MinReliability: in.MinReliability,
+		Selector:       in.Selector,
 	}
 }
 
@@ -314,23 +313,23 @@ func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
 		return nil
 	}
 	return &pb.PoolConfig{
-		Name:                in.Name,
-		Gpu:                 in.GPUs,
-		Gpus:                in.TotalGPUs,
-		OfferId:             in.OfferID,
-		Ttl:                 in.TTL,
-		MaxSpend:            in.MaxSpend,
-		Providers:           in.Providers,
-		Regions:             in.Regions,
-		MinReliability:      in.MinReliability,
-		ReservationRequired: in.ReservationRequired,
-		Selector:            in.Selector,
+		Name:           in.Name,
+		Gpu:            in.GPUs,
+		Gpus:           in.TotalGPUs,
+		OfferId:        in.OfferID,
+		Ttl:            in.TTL,
+		MaxSpend:       in.MaxSpend,
+		Providers:      in.Providers,
+		Regions:        in.Regions,
+		MinReliability: in.MinReliability,
+		Selector:       in.Selector,
 	}
 }
 
 func configurePoolSelector(pool *types.PoolConfig, workspaceID, stubName string) {
+	requiresReservation := pool.RequiresReservation()
 	if pool.Selector != "" {
-		if pool.Name == "" && pool.ReservationRequired {
+		if pool.Name == "" && requiresReservation {
 			pool.Name = pool.Selector
 		}
 		return
@@ -340,7 +339,7 @@ func configurePoolSelector(pool *types.PoolConfig, workspaceID, stubName string)
 		return
 	}
 	pool.Selector = sanitizePoolSelector(fmt.Sprintf("private-%s-%s", workspaceID, stubName))
-	if pool.Name == "" && pool.ReservationRequired {
+	if pool.Name == "" && requiresReservation {
 		pool.Name = pool.Selector
 	}
 }

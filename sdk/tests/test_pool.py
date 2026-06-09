@@ -42,7 +42,6 @@ def test_reserved_pool_serialization_and_gpu_inheritance():
     assert fn.pool_config.providers == ["vast"]
     assert fn.pool_config.regions == ["us-east"]
     assert fn.pool_config.min_reliability == 0.9
-    assert fn.pool_config.reservation_required is True
 
 
 def test_pool_string_routes_to_manual_pool():
@@ -50,7 +49,6 @@ def test_pool_string_routes_to_manual_pool():
 
     assert fn.pool_config.name == "manual-training"
     assert fn.pool_config.selector == "manual-training"
-    assert fn.pool_config.reservation_required is False
 
 
 def test_pool_requires_budget_and_ttl_for_reservation():

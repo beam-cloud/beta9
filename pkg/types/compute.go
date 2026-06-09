@@ -65,6 +65,8 @@ type ComputeOfferRequest struct {
 
 type ComputeReservationRequest struct {
 	PoolName          string
+	MachineID         string
+	Name              string
 	Selector          string
 	Offer             ComputeOffer
 	Count             uint32
@@ -103,6 +105,7 @@ func (o ComputeOffer) CostPerGPU() float64 {
 type ComputeReservation struct {
 	ID                    string
 	PoolName              string
+	Name                  string
 	Selector              string
 	Provider              string
 	OfferID               string
@@ -169,7 +172,7 @@ type ComputePool struct {
 	Source         ComputeCapacitySource
 }
 
-func (p ComputePool) ReservationRequired() bool {
+func (p ComputePool) RequiresReservation() bool {
 	return p.TotalGPUs > 0 || p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0
 }
 
@@ -184,7 +187,7 @@ func (p ComputePool) Validate() error {
 	if err := ValidateComputePoolName(p.Name); err != nil {
 		return err
 	}
-	if p.TotalGPUs == 0 && p.ReservationRequired() {
+	if p.TotalGPUs == 0 && p.RequiresReservation() {
 		return errors.New("pool reservations require gpus > 0")
 	}
 	if p.TotalGPUs > 0 {

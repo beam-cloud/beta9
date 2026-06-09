@@ -122,12 +122,20 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 			return launchPoolError("provider_unavailable", fmt.Sprintf("vendor %q is not configured", action.Offer.Provider), billingDecision{}), nil
 		}
 		for i := uint32(0); i < action.Count; i++ {
-			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "")
+			machineSeed, err := generateComputeToken()
+			if err != nil {
+				return cleanupLaunchFailure("bootstrap_failed", err), nil
+			}
+			machineID := model.ManagedMachineID(workspaceID, pool.Name, machineSeed)
+			nodeName := model.ManagedNodeName(workspaceID, pool.Name, machineID)
+			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "", machineID)
 			if err != nil {
 				return cleanupLaunchFailure("bootstrap_failed", err), nil
 			}
 			reservation, err := vendor.CreateReservation(ctx, model.ReservationRequest{
 				PoolName:          pool.Name,
+				MachineID:         machineID,
+				Name:              nodeName,
 				Selector:          pool.Selector,
 				Offer:             action.Offer,
 				Count:             1,
@@ -143,6 +151,8 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 			if reservation == nil {
 				return cleanupLaunchFailure("provider_failure", fmt.Errorf("vendor returned empty reservation")), nil
 			}
+			reservation.MachineID = firstNonEmpty(reservation.MachineID, machineID)
+			reservation.Name = firstNonEmpty(reservation.Name, nodeName)
 			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
 			createdReservations = append(createdReservations, *reservation)
 			newReservations = append(newReservations, *reservation)

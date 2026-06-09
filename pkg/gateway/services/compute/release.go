@@ -18,6 +18,13 @@ func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.Agen
 	if err := s.releaseManagedMachineReservation(ctx, machine); err != nil {
 		return err
 	}
+	return s.removePrivateMachine(ctx, machine)
+}
+
+func (s *Service) removePrivateMachine(ctx context.Context, machine *model.AgentTokenState) error {
+	if machine == nil {
+		return nil
+	}
 	if err := s.markPrivateMachineUnschedulable(ctx, machine); err != nil {
 		return err
 	}
@@ -54,28 +61,35 @@ func (s *Service) releaseManagedMachineReservation(ctx context.Context, machine 
 	if err != nil || state == nil {
 		return err
 	}
-	reservation := managedReservationForMachine(state, machine.MachineID)
+	reservation, err := managedReservationForMachineRelease(state, machine.MachineID)
+	if err != nil {
+		return err
+	}
 	if reservation == nil {
-		if hasOpenManagedReservations(state) {
-			return fmt.Errorf("managed reservation for machine %q is not linked", machine.MachineID)
-		}
+		return nil
+	}
+	return s.releaseManagedReservation(ctx, machine.WorkspaceID, state, reservation)
+}
+
+func (s *Service) releaseManagedReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation) error {
+	if state == nil || reservation == nil || !reservation.Managed() {
 		return nil
 	}
 
 	now := time.Now().UTC()
-	changed := s.recordManagedUsage(ctx, machine.WorkspaceID, state, now)
+	changed := s.recordManagedUsage(ctx, workspaceID, state, now)
 	changed = markReservationTerminating(reservation, reconcileReasonMachineReleased, machineReleasedMessage) || changed
 	if changed {
 		// Persist terminating state before provider deletion so reconcile can retry cleanup.
 		state.UpdatedAt = now
-		if err := s.savePrivatePoolState(ctx, machine.WorkspaceID, state); err != nil {
+		if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
 			return err
 		}
 	}
 
-	if s.terminateReservation(ctx, machine.WorkspaceID, state, reservation, s.computeVendors(), reconcileReasonMachineReleased, machineReleasedMessage) {
+	if s.terminateReservation(ctx, workspaceID, state, reservation, s.computeVendors(), reconcileReasonMachineReleased, machineReleasedMessage) {
 		state.UpdatedAt = time.Now().UTC()
-		return s.savePrivatePoolState(ctx, machine.WorkspaceID, state)
+		return s.savePrivatePoolState(ctx, workspaceID, state)
 	}
 	return nil
 }
@@ -148,6 +162,52 @@ func managedReservationForMachine(state *model.PoolState, machineID string) *mod
 			continue
 		}
 		return reservation
+	}
+	return nil
+}
+
+func managedReservationForMachineRelease(state *model.PoolState, machineID string) (*model.Reservation, error) {
+	if reservation := managedReservationForMachine(state, machineID); reservation != nil {
+		return reservation, nil
+	}
+
+	var unlinked *model.Reservation
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if !reservation.Managed() || reservation.MachineID != "" || reservationClosed(reservation.Status) {
+			continue
+		}
+		if unlinked != nil {
+			return nil, fmt.Errorf("managed reservation for machine %q is ambiguous", machineID)
+		}
+		unlinked = reservation
+	}
+	if unlinked != nil {
+		attachReservationToMachine(unlinked, machineID)
+		return unlinked, nil
+	}
+
+	if hasOpenManagedReservations(state) {
+		return nil, fmt.Errorf("managed reservation for machine %q is not linked", machineID)
+	}
+	return nil, nil
+}
+
+func managedReservationForDeleteTarget(state *model.PoolState, targetID string) *model.Reservation {
+	if state == nil || targetID == "" {
+		return nil
+	}
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if !reservation.Managed() || reservationClosed(reservation.Status) {
+			continue
+		}
+		if reservation.ID == targetID ||
+			reservation.MachineID == targetID ||
+			reservation.InstanceID == targetID ||
+			reservation.Name == targetID {
+			return reservation
+		}
 	}
 	return nil
 }

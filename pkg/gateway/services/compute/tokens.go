@@ -94,11 +94,11 @@ func (s *Service) createPrivatePoolJoinCommand(ctx context.Context, poolName, tt
 		return "", "", time.Time{}, err
 	}
 
-	return s.createPrivatePoolJoinCommandForOwner(ctx, authInfo.Workspace.ExternalId, ownerTokenID, poolName, ttlValue)
+	return s.createPrivatePoolJoinCommandForOwner(ctx, authInfo.Workspace.ExternalId, ownerTokenID, poolName, ttlValue, "")
 }
 
-func (s *Service) createPrivatePoolJoinCommandForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, ttlValue string) (string, string, time.Time, error) {
-	token, expiresAt, err := s.createPrivatePoolJoinTokenForOwner(ctx, workspaceID, ownerTokenID, poolName, ttlValue)
+func (s *Service) createPrivatePoolJoinCommandForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, ttlValue, machineID string) (string, string, time.Time, error) {
+	token, expiresAt, err := s.createPrivatePoolJoinTokenForOwner(ctx, workspaceID, ownerTokenID, poolName, ttlValue, machineID)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
@@ -139,10 +139,10 @@ func (s *Service) createPrivatePoolJoinToken(ctx context.Context, poolName, ttlV
 		return "", time.Time{}, fmt.Errorf("pool not found")
 	}
 
-	return s.createPrivatePoolJoinTokenForOwner(ctx, authInfo.Workspace.ExternalId, ownerTokenID, poolName, ttlValue)
+	return s.createPrivatePoolJoinTokenForOwner(ctx, authInfo.Workspace.ExternalId, ownerTokenID, poolName, ttlValue, "")
 }
 
-func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, ttlValue string) (string, time.Time, error) {
+func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, ttlValue, machineID string) (string, time.Time, error) {
 	poolName = strings.TrimSpace(poolName)
 	if poolName == "" {
 		return "", time.Time{}, fmt.Errorf("pool name is required")
@@ -171,6 +171,7 @@ func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, worksp
 		TokenHash:        hashComputeToken(token),
 		WorkspaceID:      workspaceID,
 		PoolName:         poolName,
+		MachineID:        strings.TrimSpace(machineID),
 		CreatedByTokenID: ownerTokenID,
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(ttl),

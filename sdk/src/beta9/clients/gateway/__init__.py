@@ -491,13 +491,12 @@ class PoolConfig(betterproto.Message):
     providers: List[str] = betterproto.string_field(6)
     regions: List[str] = betterproto.string_field(7)
     min_reliability: float = betterproto.double_field(8)
-    reservation_required: bool = betterproto.bool_field(9)
-    selector: str = betterproto.string_field(10)
-    mode: str = betterproto.string_field(11)
-    transport: str = betterproto.string_field(12)
-    fallback: str = betterproto.string_field(13)
-    priority: int = betterproto.int32_field(14)
-    offer_id: str = betterproto.string_field(15)
+    selector: str = betterproto.string_field(9)
+    mode: str = betterproto.string_field(10)
+    transport: str = betterproto.string_field(11)
+    fallback: str = betterproto.string_field(12)
+    priority: int = betterproto.int32_field(13)
+    offer_id: str = betterproto.string_field(14)
 
 
 @dataclass(eq=False, repr=False)
@@ -532,6 +531,7 @@ class ProviderInstance(betterproto.Message):
     billing_renewal_at: datetime = betterproto.message_field(11)
     status_message: str = betterproto.string_field(12)
     terminating_reason: str = betterproto.string_field(13)
+    machine_id: str = betterproto.string_field(14)
 
 
 @dataclass(eq=False, repr=False)

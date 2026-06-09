@@ -14,6 +14,7 @@ var (
 	UsageMetricsPublicTaskCount                  = "public_task_count"
 	UsageMetricsManagedComputeReservationSeconds = "managed_compute_reservation_seconds"
 	UsageMetricsManagedComputeReservationCost    = "managed_compute_reservation_cost_cents"
+	UsageMetricsNodeUsage                        = "node_usage"
 )
 
 type TaskMetrics struct {

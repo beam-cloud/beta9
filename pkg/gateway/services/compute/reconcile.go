@@ -65,7 +65,7 @@ func (s *Service) ReconcileManagedCompute(ctx context.Context) error {
 
 func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) error {
 	changed := false
-	if s.poolHasManagedReservations(state, now) {
+	if s.poolNeedsManagedBilling(state, now) {
 		changed = s.reconcileBilling(ctx, workspaceID, state, now) || changed
 	}
 
@@ -91,9 +91,12 @@ func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *
 	return s.savePrivatePoolState(ctx, workspaceID, state)
 }
 
-func (s *Service) poolHasManagedReservations(state *model.PoolState, now time.Time) bool {
+func (s *Service) poolNeedsManagedBilling(state *model.PoolState, now time.Time) bool {
 	for _, reservation := range state.Reservations {
 		if reservation.Managed() && reservation.ActiveAt(now) {
+			return true
+		}
+		if _, _, ok := reservationBillingWindow(&reservation, now); ok {
 			return true
 		}
 	}
@@ -104,14 +107,15 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 	if s.billing == nil {
 		return false
 	}
+	changed := s.recordManagedUsage(ctx, workspaceID, state, now)
 	if billingCheckFresh(state, now) {
-		return s.recordManagedUsage(ctx, workspaceID, state, now)
+		return changed
 	}
 
 	decision, err := s.billing.CheckBalance(ctx, workspaceID)
 	if err != nil {
 		s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolBillingDegraded, "degraded"))
-		return false
+		return changed
 	}
 
 	for i := range state.Reservations {
@@ -122,10 +126,10 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		reason := firstNonEmpty(decision.Message, "managed compute credits exhausted")
 		s.emitCreditExhaustedEvent(workspaceID, state, decision, reason)
 		s.disablePoolMachines(ctx, workspaceID, state.Name, reconcileReasonCreditExhausted)
-		return s.terminateManagedReservations(ctx, workspaceID, state, reconcileReasonCreditExhausted, reason)
+		return s.terminateManagedReservations(ctx, workspaceID, state, reconcileReasonCreditExhausted, reason) || changed
 	}
 
-	return s.recordManagedUsage(ctx, workspaceID, state, now)
+	return changed
 }
 
 func billingCheckFresh(state *model.PoolState, now time.Time) bool {
@@ -144,22 +148,8 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || !reservation.ActiveAt(now) {
-			continue
-		}
-
-		start := reservation.BillingCursorAt
-		if start.IsZero() || start.Before(reservation.CreatedAt) {
-			start = reservation.CreatedAt
-		}
-		if start.IsZero() || !now.After(start) {
-			continue
-		}
-		end := now
-		if !reservation.ExpiresAt.IsZero() && reservation.ExpiresAt.Before(end) {
-			end = reservation.ExpiresAt
-		}
-		if !end.After(start) {
+		start, end, ok := reservationBillingWindow(reservation, now)
+		if !ok {
 			continue
 		}
 
@@ -186,12 +176,40 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 			changed = true
 			continue
 		}
-		s.recordManagedUsageMetrics(usage)
 		reservation.BillingCursorAt = end
 		reservation.LastError = ""
+		if err := s.recordManagedUsageMetrics(usage); err != nil {
+			reservation.LastError = err.Error()
+		}
 		changed = true
 	}
 	return changed
+}
+
+func reservationBillingWindow(reservation *model.Reservation, now time.Time) (time.Time, time.Time, bool) {
+	if reservation == nil || !reservation.Managed() {
+		return time.Time{}, time.Time{}, false
+	}
+	if reservation.Status == model.ReservationDeleted || reservation.Status == model.ReservationFailed {
+		return time.Time{}, time.Time{}, false
+	}
+
+	start := reservation.BillingCursorAt
+	if start.IsZero() || start.Before(reservation.CreatedAt) {
+		start = reservation.CreatedAt
+	}
+	if start.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+
+	end := now
+	if !reservation.ExpiresAt.IsZero() && reservation.ExpiresAt.Before(end) {
+		end = reservation.ExpiresAt
+	}
+	if !end.After(start) {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
 }
 
 func managedCostCents(hourlyMicros int64, duration time.Duration) float64 {
@@ -201,9 +219,9 @@ func managedCostCents(hourlyMicros int64, duration time.Duration) float64 {
 	return float64(hourlyMicros) * duration.Hours() / 10000
 }
 
-func (s *Service) recordManagedUsageMetrics(usage managedUsage) {
+func (s *Service) recordManagedUsageMetrics(usage managedUsage) error {
 	if s.usageMetricsRepo == nil {
-		return
+		return nil
 	}
 	metadata := map[string]interface{}{
 		"workspace_id":         usage.WorkspaceID,
@@ -220,8 +238,13 @@ func (s *Service) recordManagedUsageMetrics(usage managedUsage) {
 		"duration_seconds":     usage.DurationSeconds,
 		"cost_cents":           usage.CostCents,
 	}
-	_ = s.usageMetricsRepo.IncrementCounter(types.UsageMetricsManagedComputeReservationSeconds, metadata, usage.DurationSeconds)
-	_ = s.usageMetricsRepo.IncrementCounter(types.UsageMetricsManagedComputeReservationCost, metadata, usage.CostCents)
+	if err := s.usageMetricsRepo.IncrementCounter(types.UsageMetricsManagedComputeReservationSeconds, metadata, usage.DurationSeconds); err != nil {
+		return fmt.Errorf("record managed compute reservation seconds: %w", err)
+	}
+	if err := s.usageMetricsRepo.IncrementCounter(types.UsageMetricsManagedComputeReservationCost, metadata, usage.CostCents); err != nil {
+		return fmt.Errorf("record managed compute reservation cost: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, now time.Time) bool {

@@ -85,9 +85,13 @@ func (c *VastClient) CreateReservation(ctx context.Context, req ReservationReque
 	if req.Offer.ID == "" {
 		return nil, fmt.Errorf("missing Vast offer id")
 	}
+	clientID := req.Selector
+	if req.MachineID != "" {
+		clientID = req.MachineID
+	}
 	body := map[string]any{
-		"label":     req.PoolName,
-		"client_id": req.Selector,
+		"label":     ReservationNodeName(req),
+		"client_id": clientID,
 	}
 	if req.BootstrapCommand != "" {
 		body["onstart"] = req.BootstrapCommand
@@ -104,11 +108,13 @@ func (c *VastClient) CreateReservation(ctx context.Context, req ReservationReque
 	return &Reservation{
 		ID:               instanceID,
 		PoolName:         req.PoolName,
+		Name:             ReservationNodeName(req),
 		Selector:         req.Selector,
 		Provider:         c.Name(),
 		OfferID:          req.Offer.ID,
 		InstanceType:     req.Offer.InstanceType,
 		InstanceID:       instanceID,
+		MachineID:        req.MachineID,
 		GPU:              req.Offer.GPU,
 		GPUCount:         req.Offer.GPUCount,
 		CPUMillicores:    req.Offer.CPUMillicores,

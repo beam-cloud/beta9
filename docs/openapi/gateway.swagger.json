@@ -3031,9 +3031,6 @@
           "type": "number",
           "format": "double"
         },
-        "reservationRequired": {
-          "type": "boolean"
-        },
         "selector": {
           "type": "string"
         },
@@ -3202,6 +3199,9 @@
           "type": "string"
         },
         "terminatingReason": {
+          "type": "string"
+        },
+        "machineId": {
           "type": "string"
         }
       }

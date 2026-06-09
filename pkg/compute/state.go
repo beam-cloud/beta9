@@ -31,6 +31,7 @@ type JoinTokenState struct {
 	TokenHash        string    `json:"token_hash"`
 	WorkspaceID      string    `json:"workspace_id"`
 	PoolName         string    `json:"pool_name"`
+	MachineID        string    `json:"machine_id,omitempty"`
 	CreatedByTokenID string    `json:"created_by_token_id"`
 	CreatedAt        time.Time `json:"created_at"`
 	ExpiresAt        time.Time `json:"expires_at"`

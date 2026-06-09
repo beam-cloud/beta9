@@ -114,6 +114,7 @@ func providerInstanceToProto(reservation model.Reservation) *pb.ProviderInstance
 		BillingRenewalAt:  timestampOrNil(reservation.BillingRenewalAt),
 		StatusMessage:     reservation.LastStatusMessage,
 		TerminatingReason: reservation.TerminatingReason,
+		MachineId:         reservation.MachineID,
 	}
 }
 

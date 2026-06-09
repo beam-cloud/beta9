@@ -135,6 +135,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		return fmt.Errorf("agent token is no longer current")
 	}
 	agentState = current
+	previousSeen := model.AgentMachineLastSeen(agentState)
 
 	metrics := model.AgentMachineMetrics{
 		Timestamp:            timeFromUnixNano(snapshot.TimestampUnixNano),
@@ -150,21 +151,25 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		ContainerCount:       snapshot.ContainerCount,
 		FreeGPUCount:         snapshot.FreeGpuCount,
 	}
+	var poolState *model.PoolState
+	if s.computeRepo != nil {
+		poolState, _ = s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
+	}
 	agentState.Metrics = metrics
 	agentState.LastHeartbeatAt = metrics.Timestamp
 	agentState.LastDisconnectAt = time.Time{}
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return err
 	}
-	if s.scheduler != nil {
-		if poolState, err := s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
-			if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
-				return err
-			}
-		}
-	}
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)
+	s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, metrics.Timestamp)
+
+	if s.scheduler != nil && poolState != nil {
+		if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
+			return err
+		}
+	}
 
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		Timestamp:   metrics.Timestamp,
@@ -194,6 +199,90 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		},
 	})
 	return nil
+}
+
+func (s *Service) recordAgentNodeUsage(agentState *model.AgentTokenState, poolState *model.PoolState, metrics *pb.MachineMetrics, previousSeen, currentSeen time.Time) {
+	if s == nil || s.usageMetricsRepo == nil || agentState == nil {
+		return
+	}
+	seconds := nodeUsageSeconds(previousSeen, currentSeen)
+	if seconds <= 0 {
+		return
+	}
+	_ = s.usageMetricsRepo.IncrementCounter(
+		types.UsageMetricsNodeUsage,
+		agentNodeUsageMetadata(agentState, poolState, metrics, seconds),
+		seconds,
+	)
+}
+
+func nodeUsageSeconds(previousSeen, currentSeen time.Time) float64 {
+	if previousSeen.IsZero() || currentSeen.IsZero() || !currentSeen.After(previousSeen) {
+		return 0
+	}
+	duration := currentSeen.Sub(previousSeen)
+	if duration > model.AgentHeartbeatTimeout {
+		return 0
+	}
+	return duration.Seconds()
+}
+
+func agentNodeUsageMetadata(agentState *model.AgentTokenState, poolState *model.PoolState, metrics *pb.MachineMetrics, seconds float64) map[string]interface{} {
+	source := types.ComputeSourceAttached
+	poolMode := string(types.PoolModePrivate)
+	transport := ""
+	if poolState != nil {
+		if poolState.Source != "" {
+			source = poolState.Source.Canonical()
+		}
+		if poolState.Mode != "" {
+			poolMode = poolState.Mode
+		}
+		transport = poolState.Transport
+	}
+
+	nodeType := "managed"
+	if source.IsAttached() {
+		nodeType = "byo"
+	}
+
+	metadata := map[string]interface{}{
+		"workspace_id":        agentState.WorkspaceID,
+		"pool_name":           agentState.PoolName,
+		"machine_id":          agentState.MachineID,
+		"node_type":           nodeType,
+		"capacity_source":     string(source),
+		"pool_mode":           poolMode,
+		"transport":           transport,
+		"executor":            agentState.Executor,
+		"os":                  agentState.OS,
+		"arch":                agentState.Arch,
+		"hostname":            agentState.Hostname,
+		"cpu_count":           agentState.CPUCount,
+		"cpu_millicores":      agentState.CPUMillicores,
+		"memory_mb":           agentState.MemoryMB,
+		"gpu":                 strings.Join(agentState.GPUs, ","),
+		"gpu_ids":             strings.Join(agentState.GPUIDs, ","),
+		"gpu_count":           agentState.GPUCount,
+		"usage_seconds":       seconds,
+		"worker_count":        0,
+		"container_count":     0,
+		"free_gpu_count":      agentState.Metrics.FreeGPUCount,
+		"cpu_used_pct":        agentState.Metrics.CPUUtilizationPct,
+		"memory_used_pct":     agentState.Metrics.MemoryUtilizationPct,
+		"cache_used_pct":      agentState.Metrics.DiskUsagePct,
+		"cache_total_mb":      agentState.Metrics.DiskTotalMB,
+		"cache_used_mb":       agentState.Metrics.DiskUsedMB,
+		"host_memory_used_mb": agentState.Metrics.MemoryUsedMB,
+	}
+	if metrics != nil {
+		metadata["worker_count"] = metrics.WorkerCount
+		metadata["container_count"] = metrics.ContainerCount
+		metadata["free_gpu_count"] = metrics.FreeGpuCount
+		metadata["cpu_used_pct"] = metrics.CpuUtilizationPct
+		metadata["memory_used_pct"] = metrics.MemoryUtilizationPct
+	}
+	return metadata
 }
 
 func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.AgentTokenState) {
