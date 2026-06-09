@@ -458,6 +458,31 @@ func TestAgentInstallCommandDevModeRunsWithoutSudo(t *testing.T) {
 	}
 }
 
+func TestManagedComputeBillableMicros(t *testing.T) {
+	tests := []struct {
+		name       string
+		provider   int64
+		margin     float64
+		want       int64
+		wantBudget int64
+	}{
+		{name: "default margin", provider: 1_500_000, margin: 0.10, want: 1_650_000, wantBudget: 1_363_636},
+		{name: "explicit zero margin", provider: 1_500_000, margin: 0, want: 1_500_000, wantBudget: 1_500_000},
+		{name: "negative margin clamps", provider: 1_500_000, margin: -0.5, want: 1_500_000, wantBudget: 1_500_000},
+		{name: "keeps positive budgets positive", provider: 1, margin: 0.10, want: 2, wantBudget: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := billableMicros(tt.provider, tt.margin); got != tt.want {
+				t.Fatalf("billableMicros() = %d, want %d", got, tt.want)
+			}
+			if got := providerBudgetMicros(tt.provider, tt.margin); got != tt.wantBudget {
+				t.Fatalf("providerBudgetMicros() = %d, want %d", got, tt.wantBudget)
+			}
+		})
+	}
+}
+
 func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	billing := &fakeManagedBilling{
 		launchDecision: billingDecision{OK: true, AvailableCents: 3000, RequiredCents: 2500},
@@ -507,11 +532,11 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	if req.Quantity != 2 {
 		t.Fatalf("billing request quantity = %d, want 2", req.Quantity)
 	}
-	if req.EstimatedHourlyCostMicros != 3_000_000 {
-		t.Fatalf("billing request hourly micros = %d, want 3000000", req.EstimatedHourlyCostMicros)
+	if req.EstimatedHourlyCostMicros != 3_300_000 {
+		t.Fatalf("billing request hourly micros = %d, want 3300000", req.EstimatedHourlyCostMicros)
 	}
-	if req.EstimatedCommittedMicros != 42_000_000 {
-		t.Fatalf("billing request committed micros = %d, want 42000000", req.EstimatedCommittedMicros)
+	if req.EstimatedCommittedMicros != 46_200_000 {
+		t.Fatalf("billing request committed micros = %d, want 46200000", req.EstimatedCommittedMicros)
 	}
 }
 
@@ -615,7 +640,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 					Selector:             "pool-1",
 					CreatedByTokenID:     "token-1",
 					ReservedGPUs:         1,
-					CommittedSpendMicros: 1_500_000,
+					CommittedSpendMicros: 1_650_000,
 					Reservations: []model.Reservation{
 						{
 							ID:               "reservation-1",
@@ -687,7 +712,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 	if got, want := state.ReservedGPUs, uint32(2); got != want {
 		t.Fatalf("reserved gpus = %d, want %d", got, want)
 	}
-	if got, want := state.CommittedSpendMicros, int64(3_000_000); got != want {
+	if got, want := state.CommittedSpendMicros, int64(3_300_000); got != want {
 		t.Fatalf("committed spend micros = %d, want %d", got, want)
 	}
 }
@@ -743,6 +768,12 @@ func TestRecordManagedUsageEmitsOpenMeterMetrics(t *testing.T) {
 	}
 	if got, want := len(billing.usage), 1; got != want {
 		t.Fatalf("billing usage count = %d, want %d", got, want)
+	}
+	if got, want := billing.usage[0].HourlyCostMicros, int64(1_650_000); got != want {
+		t.Fatalf("billable hourly cost = %d, want %d", got, want)
+	}
+	if got, want := billing.usage[0].CostCents, 2.75; got < want-0.001 || got > want+0.001 {
+		t.Fatalf("billable cost cents = %f, want about %f", got, want)
 	}
 	if !state.Reservations[0].BillingCursorAt.Equal(now) {
 		t.Fatalf("billing cursor = %s, want %s", state.Reservations[0].BillingCursorAt, now)
@@ -1055,21 +1086,7 @@ func TestAgentNodeUsageMetadataMarksAttachedNodesAsBYO(t *testing.T) {
 func TestRecordManagedUsageAdvancesCursorWhenMetricsFailAfterBilling(t *testing.T) {
 	now := time.Now().UTC()
 	cursor := now.Add(-time.Minute)
-	state := &model.PoolState{
-		Name: "pool-1",
-		Reservations: []model.Reservation{
-			{
-				ID:               "reservation-1",
-				Provider:         "shadeform",
-				Source:           model.SourceCLIReservation,
-				Status:           model.ReservationActive,
-				CreatedAt:        now.Add(-time.Hour),
-				BillingCursorAt:  cursor,
-				ExpiresAt:        now.Add(time.Hour),
-				HourlyCostMicros: 1_500_000,
-			},
-		},
-	}
+	state := managedUsageTestState(now, cursor, now.Add(time.Hour), 1_500_000)
 	billing := &fakeManagedBilling{}
 	service := &Service{
 		billing:          billing,
@@ -1093,21 +1110,7 @@ func TestRecordManagedUsageAdvancesCursorWhenMetricsFailAfterBilling(t *testing.
 func TestRecordManagedUsageDoesNotEmitMetricsOrAdvanceCursorWhenBillingFails(t *testing.T) {
 	now := time.Now().UTC()
 	cursor := now.Add(-time.Minute)
-	state := &model.PoolState{
-		Name: "pool-1",
-		Reservations: []model.Reservation{
-			{
-				ID:               "reservation-1",
-				Provider:         "shadeform",
-				Source:           model.SourceCLIReservation,
-				Status:           model.ReservationActive,
-				CreatedAt:        now.Add(-time.Hour),
-				BillingCursorAt:  cursor,
-				ExpiresAt:        now.Add(time.Hour),
-				HourlyCostMicros: 1_500_000,
-			},
-		},
-	}
+	state := managedUsageTestState(now, cursor, now.Add(time.Hour), 1_500_000)
 	billing := &fakeManagedBilling{usageErr: errors.New("billing callback unavailable")}
 	usageRepo := &fakeUsageMetricsRepo{}
 	service := &Service{
@@ -1126,6 +1129,42 @@ func TestRecordManagedUsageDoesNotEmitMetricsOrAdvanceCursorWhenBillingFails(t *
 	}
 	if !strings.Contains(state.Reservations[0].LastError, "billing callback unavailable") {
 		t.Fatalf("last error = %q, want billing callback error", state.Reservations[0].LastError)
+	}
+}
+
+func TestRecordManagedUsageSkipsActiveSubCentWindow(t *testing.T) {
+	now := time.Now().UTC()
+	cursor := now.Add(-5 * time.Second)
+	state := managedUsageTestState(now, cursor, now.Add(time.Hour), 1_000_000)
+	billing := &fakeManagedBilling{}
+	service := &Service{billing: billing}
+
+	if service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+		t.Fatal("recordManagedUsage() reported a change for an active sub-cent window")
+	}
+	if got := len(billing.usage); got != 0 {
+		t.Fatalf("billing usage count = %d, want 0", got)
+	}
+	if !state.Reservations[0].BillingCursorAt.Equal(cursor) {
+		t.Fatalf("billing cursor advanced to %s, want %s", state.Reservations[0].BillingCursorAt, cursor)
+	}
+}
+
+func TestRecordManagedUsageBillsClosedSubCentWindow(t *testing.T) {
+	now := time.Now().UTC()
+	cursor := now.Add(-5 * time.Second)
+	state := managedUsageTestState(now, cursor, now, 1_000_000)
+	billing := &fakeManagedBilling{}
+	service := &Service{billing: billing}
+
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+		t.Fatal("recordManagedUsage() did not bill a closed sub-cent window")
+	}
+	if got := len(billing.usage); got != 1 {
+		t.Fatalf("billing usage count = %d, want 1", got)
+	}
+	if !state.Reservations[0].BillingCursorAt.Equal(now) {
+		t.Fatalf("billing cursor = %s, want %s", state.Reservations[0].BillingCursorAt, now)
 	}
 }
 
@@ -1255,6 +1294,39 @@ func TestReconcileManagedComputeChecksBalanceAfterFreshUsageTick(t *testing.T) {
 
 	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
 		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+	if got, want := billing.balanceCalls, 1; got != want {
+		t.Fatalf("balance calls = %d, want %d", got, want)
+	}
+}
+
+func TestReconcileManagedComputeChecksBalanceWhenUsageCursorIsFresh(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:                 "reservation-1",
+				Source:             model.SourceCLIReservation,
+				Status:             model.ReservationActive,
+				CreatedAt:          now.Add(-time.Hour),
+				BillingCursorAt:    now,
+				LastBillingCheckAt: now,
+				ExpiresAt:          now.Add(time.Hour),
+				HourlyCostMicros:   1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
+	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 1000}}
+	service := &Service{computeRepo: repo, billing: billing}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+	if got, want := len(billing.usage), 0; got != want {
+		t.Fatalf("managed usage records = %d, want %d", got, want)
 	}
 	if got, want := billing.balanceCalls, 1; got != want {
 		t.Fatalf("balance calls = %d, want %d", got, want)
@@ -1856,6 +1928,24 @@ func sameStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func managedUsageTestState(now, cursor, expiresAt time.Time, hourlyCostMicros int64) *model.PoolState {
+	return &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  cursor,
+				ExpiresAt:        expiresAt,
+				HourlyCostMicros: hourlyCostMicros,
+			},
+		},
+	}
 }
 
 type fakeComputeRepo struct {

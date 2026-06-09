@@ -39,7 +39,7 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		pool := privatePoolStateToProtoWithMachines(state, machines)
+		pool := s.privatePoolStateToProtoWithMachines(state, machines)
 		pool.ReadyMachineCount = s.readyAgentMachineCount(machines)
 		out = append(out, pool)
 	}
@@ -110,7 +110,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 		}
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreated, ""))
-	return &pb.CreatePoolResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
+	return &pb.CreatePoolResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
 }
 
 func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb.DeletePoolResponse, error) {
@@ -178,7 +178,7 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolExtended, ""))
-	return &pb.ExtendPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
+	return &pb.ExtendPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
 }
 
 func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesRequest) (*pb.ListPoolMachinesResponse, error) {

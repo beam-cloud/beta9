@@ -626,10 +626,24 @@ type MonitoringConfig struct {
 	ContainerCostHookConfig  ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
 }
 
-const ManagedComputeDefaultMinimumCreditCents int64 = 2500
+const (
+	ManagedComputeDefaultMinimumCreditCents int64   = 2500
+	ManagedComputeDefaultBillableMarginPct  float64 = 0.10
+)
 
 type ManagedComputeConfig struct {
-	Billing ManagedComputeBillingConfig `key:"billing" json:"billing"`
+	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
+	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
+}
+
+func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {
+	if c.BillableMarginPct == nil {
+		return ManagedComputeDefaultBillableMarginPct
+	}
+	if *c.BillableMarginPct < 0 {
+		return 0
+	}
+	return *c.BillableMarginPct
 }
 
 type ManagedComputeBillingConfig struct {

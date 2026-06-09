@@ -77,7 +77,8 @@ func (s *Service) releaseManagedReservation(ctx context.Context, workspaceID str
 	}
 
 	now := time.Now().UTC()
-	changed := s.recordManagedUsage(ctx, workspaceID, state, now)
+	changed := closeReservationBillingWindow(reservation, now)
+	changed = s.recordManagedUsage(ctx, workspaceID, state, now) || changed
 	s.revokeReservationJoinToken(ctx, reservation)
 	changed = markReservationTerminating(reservation, reconcileReasonMachineReleased, machineReleasedMessage) || changed
 	if changed {
