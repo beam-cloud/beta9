@@ -105,3 +105,22 @@ func TestAgentMachineMetricsUseScheduledCapacity(t *testing.T) {
 		t.Fatalf("container count = %d, want 2", metrics.ContainerCount)
 	}
 }
+
+func TestPrivatePoolProjectionUsesBillableReservationCost(t *testing.T) {
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				HourlyCostMicros: 1_500_000,
+			},
+		},
+	}
+
+	pool := (&Service{}).privatePoolStateToProto(state)
+	if got, want := pool.Reservations[0].HourlyCostMicros, int64(1_650_000); got != want {
+		t.Fatalf("reservation hourly cost = %d, want %d", got, want)
+	}
+}

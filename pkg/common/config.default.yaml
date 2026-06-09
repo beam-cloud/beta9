@@ -376,6 +376,7 @@ monitoring:
     serverUrl: ""
     apiKey: ""
 managedCompute:
+  billableMarginPct: 0.10
   billing:
     mode: noop
     endpoint: ""

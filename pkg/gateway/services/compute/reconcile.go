@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	reconcileStatusCheckInterval  = time.Minute
-	reconcileBillingCheckInterval = time.Minute
+	reconcileStatusCheckInterval = time.Minute
+	minManagedUsageRecordCents   = 1
 
 	reconcileReasonAgentDisconnected   = "agent_disconnected"
 	reconcileReasonCreditExhausted     = "credit_exhausted"
@@ -112,9 +112,6 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		return false
 	}
 	changed := s.recordManagedUsage(ctx, workspaceID, state, now)
-	if !changed && billingCheckFresh(state, now) {
-		return changed
-	}
 
 	decision, err := s.billing.CheckBalance(ctx, workspaceID)
 	if err != nil {
@@ -129,20 +126,13 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 	if !decision.OK {
 		reason := firstNonEmpty(decision.Message, "managed compute credits exhausted")
 		s.emitCreditExhaustedEvent(workspaceID, state, decision, reason)
+		changed = closeManagedReservationBillingWindows(state, now) || changed
+		changed = s.recordManagedUsage(ctx, workspaceID, state, now) || changed
 		s.disablePoolMachines(ctx, workspaceID, state.Name, reconcileReasonCreditExhausted)
 		return s.terminateManagedReservations(ctx, workspaceID, state, reconcileReasonCreditExhausted, reason) || changed
 	}
 
 	return changed
-}
-
-func billingCheckFresh(state *model.PoolState, now time.Time) bool {
-	for _, reservation := range state.Reservations {
-		if reservation.Managed() && reservation.ActiveAt(now) {
-			return !reservation.LastBillingCheckAt.IsZero() && now.Sub(reservation.LastBillingCheckAt) < reconcileBillingCheckInterval
-		}
-	}
-	return false
 }
 
 func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) bool {
@@ -158,6 +148,11 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 		}
 
 		duration := end.Sub(start)
+		hourlyCostMicros := s.billableMicros(reservation.HourlyCostMicros)
+		costCents := managedCostCents(hourlyCostMicros, duration)
+		if !managedUsageRecordable(reservation, now, end, costCents) {
+			continue
+		}
 		usage := managedUsage{
 			WorkspaceID:        workspaceID,
 			PoolName:           state.Name,
@@ -169,9 +164,9 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 			GPUCount:           reservation.GPUCount,
 			CPUMillicores:      reservation.CPUMillicores,
 			MemoryMB:           reservation.MemoryMB,
-			HourlyCostMicros:   reservation.HourlyCostMicros,
+			HourlyCostMicros:   hourlyCostMicros,
 			DurationSeconds:    duration.Seconds(),
-			CostCents:          managedCostCents(reservation.HourlyCostMicros, duration),
+			CostCents:          costCents,
 			StartAt:            start,
 			EndAt:              end,
 		}
@@ -188,6 +183,35 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 		changed = true
 	}
 	return changed
+}
+
+func managedUsageRecordable(reservation *model.Reservation, now, end time.Time, costCents float64) bool {
+	if costCents >= minManagedUsageRecordCents {
+		return true
+	}
+	return reservation != nil && !reservation.ExpiresAt.IsZero() && !now.Before(reservation.ExpiresAt) && end.Equal(reservation.ExpiresAt)
+}
+
+func closeManagedReservationBillingWindows(state *model.PoolState, now time.Time) bool {
+	if state == nil {
+		return false
+	}
+	changed := false
+	for i := range state.Reservations {
+		changed = closeReservationBillingWindow(&state.Reservations[i], now) || changed
+	}
+	return changed
+}
+
+func closeReservationBillingWindow(reservation *model.Reservation, now time.Time) bool {
+	if reservation == nil || !reservation.Managed() || reservation.Status != model.ReservationActive {
+		return false
+	}
+	if !reservation.ExpiresAt.IsZero() && !reservation.ExpiresAt.After(now) {
+		return false
+	}
+	reservation.ExpiresAt = now
+	return true
 }
 
 func reservationBillingWindow(reservation *model.Reservation, now time.Time) (time.Time, time.Time, bool) {
@@ -343,7 +367,7 @@ func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID 
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || !reservation.ActiveAt(time.Now()) {
+		if !reservation.Managed() || reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating {
 			continue
 		}
 		changed = s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reason, message) || changed

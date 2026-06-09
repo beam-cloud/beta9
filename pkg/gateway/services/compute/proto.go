@@ -104,7 +104,12 @@ func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
 	}
 }
 
-func providerInstanceToProto(reservation model.Reservation) *pb.ProviderInstance {
+type computeCostProjector func(int64) int64
+
+func providerInstanceToProto(reservation model.Reservation, projectCost computeCostProjector) *pb.ProviderInstance {
+	if projectCost == nil {
+		projectCost = identityCost
+	}
 	return &pb.ProviderInstance{
 		Id:                reservation.ID,
 		PoolName:          reservation.PoolName,
@@ -113,7 +118,7 @@ func providerInstanceToProto(reservation model.Reservation) *pb.ProviderInstance
 		OfferId:           reservation.OfferID,
 		Status:            string(reservation.Status),
 		GpuCount:          reservation.GPUCount,
-		HourlyCostMicros:  reservation.HourlyCostMicros,
+		HourlyCostMicros:  projectCost(reservation.HourlyCostMicros),
 		Source:            string(reservation.Source),
 		CreatedAt:         timestampOrNil(reservation.CreatedAt),
 		ExpiresAt:         timestampOrNil(reservation.ExpiresAt),
@@ -122,6 +127,10 @@ func providerInstanceToProto(reservation model.Reservation) *pb.ProviderInstance
 		TerminatingReason: reservation.TerminatingReason,
 		MachineId:         reservation.MachineID,
 	}
+}
+
+func identityCost(value int64) int64 {
+	return value
 }
 
 func agentRouteToProto(route types.BackendRoute) *pb.AgentRoute {
@@ -144,17 +153,21 @@ func agentRouteToProto(route types.BackendRoute) *pb.AgentRoute {
 	}
 }
 
-func privatePoolStateToProto(state *model.PoolState) *pb.PrivatePool {
-	return privatePoolStateToProtoWithMachines(state, nil)
+func (s *Service) privatePoolStateToProto(state *model.PoolState) *pb.PrivatePool {
+	return s.privatePoolStateToProtoWithMachines(state, nil)
 }
 
-func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState) *pb.PrivatePool {
+func (s *Service) privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState) *pb.PrivatePool {
+	return privatePoolStateToProtoWithMachines(state, machines, s.billableMicros)
+}
+
+func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState, projectCost computeCostProjector) *pb.PrivatePool {
 	if state == nil {
 		return nil
 	}
 	reservations := make([]*pb.ProviderInstance, 0, len(state.Reservations))
 	for _, reservation := range state.Reservations {
-		reservations = append(reservations, providerInstanceToProto(reservation))
+		reservations = append(reservations, providerInstanceToProto(reservation, projectCost))
 	}
 	readyMachineCount := uint32(0)
 	now := time.Now()

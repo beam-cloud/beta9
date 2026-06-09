@@ -29,7 +29,7 @@ func (s *Service) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersReque
 
 	out := make([]*pb.PoolOffer, 0, len(offers))
 	for _, offer := range offers {
-		out = append(out, poolOfferToProto(offer))
+		out = append(out, poolOfferToProto(s.billableOffer(offer)))
 	}
 	return &pb.ListPoolOffersResponse{Ok: true, Offers: out}, nil
 }
@@ -73,6 +73,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	if existing != nil {
 		reservations = existing.Reservations
 	}
+	providerMaxSpendMicros := s.providerBudgetMicros(pool.MaxSpendMicros)
 
 	plan := model.NewSolver().Solve(model.SolveInput{
 		Demand: model.Demand{
@@ -82,7 +83,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 			TotalGPUs:      pool.TotalGPUs,
 			OfferID:        pool.OfferID,
 			TTL:            pool.TTL,
-			MaxSpendMicros: pool.MaxSpendMicros,
+			MaxSpendMicros: providerMaxSpendMicros,
 			Providers:      pool.Providers,
 			Regions:        pool.Regions,
 			MinReliability: pool.MinReliability,
@@ -141,7 +142,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 				Offer:             action.Offer,
 				Count:             1,
 				TTL:               pool.TTL,
-				MaxSpendMicros:    pool.MaxSpendMicros,
+				MaxSpendMicros:    providerMaxSpendMicros,
 				Source:            model.SourceCLIReservation,
 				RegistrationToken: registrationToken,
 				BootstrapCommand:  bootstrapCommand,
@@ -167,7 +168,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		Config:               config,
 		Reservations:         newReservations,
 		ReservedGPUs:         activeReservationGPUs(newReservations, now),
-		CommittedSpendMicros: existingCommittedSpendMicros(existing) + plan.CommittedCostMicros,
+		CommittedSpendMicros: existingCommittedSpendMicros(existing) + s.billableMicros(plan.CommittedCostMicros),
 		Status:               "active",
 		Source:               model.SourceCLIReservation,
 		Mode:                 config.Mode,
@@ -195,7 +196,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
-	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: privatePoolStateToProto(state)}, nil
+	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
 }
 
 func activeReservationGPUs(reservations []model.Reservation, now time.Time) uint32 {
@@ -230,8 +231,8 @@ func (s *Service) checkManagedLaunchCredit(ctx context.Context, workspaceID, poo
 		PoolName:                  poolName,
 		RequiredCents:             s.appConfig.ManagedCompute.Billing.MinimumCreditCentsOrDefault(),
 		Quantity:                  quantity,
-		EstimatedHourlyCostMicros: managedHourlyCostMicros(plan.Actions),
-		EstimatedCommittedMicros:  plan.CommittedCostMicros,
+		EstimatedHourlyCostMicros: s.billableMicros(managedHourlyCostMicros(plan.Actions)),
+		EstimatedCommittedMicros:  s.billableMicros(plan.CommittedCostMicros),
 	})
 }
 
