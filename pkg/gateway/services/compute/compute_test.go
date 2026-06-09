@@ -771,6 +771,74 @@ func TestRecordAgentMetricsKeepsAgentAliveWhenNodeUsageMetricsFail(t *testing.T)
 	}
 }
 
+func TestRecordAgentDisconnectIgnoresFreshHeartbeat(t *testing.T) {
+	now := time.Now().UTC()
+	machine := &model.AgentTokenState{
+		TokenHash:       "agent-token-hash",
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now.Add(-5 * time.Second),
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{Id: workerID, MachineId: machine.MachineID, PoolName: machine.PoolName},
+	}
+	service := &Service{
+		computeRepo: &fakeComputeRepo{
+			machines: map[string][]*model.AgentTokenState{
+				fakeComputeKey("workspace-1", "pool-1"): {machine},
+			},
+		},
+		workerRepo: workerRepo,
+	}
+
+	service.recordAgentDisconnect(context.Background(), machine)
+
+	if !machine.LastDisconnectAt.IsZero() {
+		t.Fatalf("last disconnect = %s, want zero", machine.LastDisconnectAt)
+	}
+	if got := workerRepo.worker.Status; got == types.WorkerStatusDisabled {
+		t.Fatalf("worker status = %q, want not disabled", got)
+	}
+}
+
+func TestRecordAgentDisconnectDisablesStaleHeartbeat(t *testing.T) {
+	now := time.Now().UTC()
+	machine := &model.AgentTokenState{
+		TokenHash:       "agent-token-hash",
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now.Add(-model.AgentHeartbeatTimeout - time.Second),
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{Id: workerID, MachineId: machine.MachineID, PoolName: machine.PoolName},
+	}
+	service := &Service{
+		computeRepo: &fakeComputeRepo{
+			machines: map[string][]*model.AgentTokenState{
+				fakeComputeKey("workspace-1", "pool-1"): {machine},
+			},
+		},
+		workerRepo: workerRepo,
+	}
+
+	service.recordAgentDisconnect(context.Background(), machine)
+
+	if machine.LastDisconnectAt.IsZero() {
+		t.Fatal("last disconnect is zero, want timestamp")
+	}
+	if got, want := workerRepo.status, types.WorkerStatusDisabled; got != want {
+		t.Fatalf("worker status = %q, want %q", got, want)
+	}
+}
+
 func TestDisableMachineWorkerStopsActiveContainers(t *testing.T) {
 	machine := &model.AgentTokenState{
 		WorkspaceID: "workspace-1",

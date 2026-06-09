@@ -19,6 +19,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
+)
+
+const (
+	gatewayGRPCKeepaliveTime    = 20 * time.Second
+	gatewayGRPCKeepaliveTimeout = 10 * time.Second
 )
 
 type Client struct {
@@ -46,7 +52,15 @@ func newGatewayGRPCClient(gatewayURL, host string, port int, useTLS bool) (pb.Ga
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(creds), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, addr,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                gatewayGRPCKeepaliveTime,
+			Timeout:             gatewayGRPCKeepaliveTimeout,
+			PermitWithoutStream: true,
+		}),
+		grpc.WithBlock(),
+	)
 	if err != nil {
 		return nil, nil, err
 	}
