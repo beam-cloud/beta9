@@ -77,6 +77,12 @@ func (s *Worker) handleWorkerEvent(event *pb.WorkerEvent) {
 	if event == nil {
 		return
 	}
+	if event.Event == nil {
+		if event.EventId != types.WorkerEventHeartbeatID {
+			log.Warn().Str("event_id", event.EventId).Msg("received empty worker event")
+		}
+		return
+	}
 
 	switch e := event.Event.(type) {
 	case *pb.WorkerEvent_StopContainer:

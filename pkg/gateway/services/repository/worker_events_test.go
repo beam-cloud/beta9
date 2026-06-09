@@ -11,6 +11,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -104,6 +105,61 @@ func TestStreamWorkerEventsRejectsInvalidRequests(t *testing.T) {
 	err = service.StreamWorkerEvents(&pb.StreamWorkerEventsRequest{WorkerId: "worker-a"}, nil)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
+
+func TestStreamWorkerEventsSendsHeartbeat(t *testing.T) {
+	broker, _ := newWorkerEventBrokerForTest(t)
+	service := &WorkerRepositoryService{
+		ctx:          context.Background(),
+		workerEvents: broker,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &fakeWorkerEventStream{
+		ctx:  ctx,
+		sent: make(chan *pb.WorkerEvent, 8),
+	}
+
+	errs := make(chan error, 1)
+	go func() {
+		errs <- service.streamWorkerEvents(
+			&pb.StreamWorkerEventsRequest{WorkerId: "worker-a"},
+			stream,
+			10*time.Millisecond,
+		)
+	}()
+
+	event := receiveWorkerEvent(t, stream.sent)
+	require.Equal(t, types.WorkerEventHeartbeatID, event.EventId)
+	require.Nil(t, event.Event)
+
+	cancel()
+	select {
+	case err := <-errs:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stream to close")
+	}
+}
+
+type fakeWorkerEventStream struct {
+	ctx  context.Context
+	sent chan *pb.WorkerEvent
+}
+
+func (s *fakeWorkerEventStream) Send(event *pb.WorkerEvent) error {
+	select {
+	case s.sent <- event:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+func (s *fakeWorkerEventStream) SetHeader(metadata.MD) error  { return nil }
+func (s *fakeWorkerEventStream) SendHeader(metadata.MD) error { return nil }
+func (s *fakeWorkerEventStream) SetTrailer(metadata.MD)       {}
+func (s *fakeWorkerEventStream) Context() context.Context     { return s.ctx }
+func (s *fakeWorkerEventStream) SendMsg(any) error            { return nil }
+func (s *fakeWorkerEventStream) RecvMsg(any) error            { return nil }
 
 func receiveWorkerEvent(t *testing.T, events <-chan *pb.WorkerEvent) *pb.WorkerEvent {
 	t.Helper()

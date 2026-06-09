@@ -71,6 +71,23 @@ func TestHandleWorkerEventIgnoresUnknownContainerStop(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerEventIgnoresHeartbeat(t *testing.T) {
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		stopContainerChan:  make(chan stopContainerEvent, 1),
+	}
+
+	worker.handleWorkerEvent(&pb.WorkerEvent{
+		EventId: types.WorkerEventHeartbeatID,
+	})
+
+	select {
+	case event := <-worker.stopContainerChan:
+		t.Fatalf("unexpected stop container event: %+v", event)
+	default:
+	}
+}
+
 func TestHandleWorkerEventCancelsMatchingBuild(t *testing.T) {
 	worker := &Worker{
 		buildCancels: common.NewSafeMap[context.CancelFunc](),
