@@ -44,14 +44,20 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 	unitText := string(unit)
 	for _, want := range []string{
 		`Description=Beam Agent`,
+		`WorkingDirectory=` + filepath.Join(tmp, "state"),
 		`Environment="BEAM_AGENT_STATE_DIR=` + filepath.Join(tmp, "state") + `"`,
 		`Environment="BEAM_WORKER_IMAGE=registry.example.com/worker:latest"`,
+		`Environment="HOME=` + filepath.Join(tmp, "state") + `"`,
 		`ExecStart="` + types.DefaultAgentBinaryPath + `" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
 		`Restart=always`,
+		`Environment="XDG_CONFIG_HOME=` + filepath.Join(tmp, "state", ".config") + `"`,
 	} {
 		if !strings.Contains(unitText, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unitText)
 		}
+	}
+	if strings.Contains(unitText, `WorkingDirectory="`) {
+		t.Fatalf("WorkingDirectory must not be quoted:\n%s", unitText)
 	}
 
 	if got, want := strings.Join(runner.commands, "\n"), strings.Join([]string{
@@ -60,6 +66,18 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 		types.AgentSystemctlCommand + " restart " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
 	}, "\n"); got != want {
 		t.Fatalf("unexpected commands:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestSystemdUnitEscapesSpecifierInWorkingDirectory(t *testing.T) {
+	unit := SystemdUnit(Spec{
+		Name:       types.DefaultAgentServiceName,
+		BinaryPath: types.DefaultAgentBinaryPath,
+		StateDir:   "/var/lib/beam/%agent",
+	})
+
+	if !strings.Contains(unit, "WorkingDirectory=/var/lib/beam/%%agent\n") {
+		t.Fatalf("unit did not escape systemd specifier:\n%s", unit)
 	}
 }
 

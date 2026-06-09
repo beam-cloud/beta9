@@ -12,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -466,6 +467,73 @@ func TestRecordAgentMetricsEmitsNodeUsage(t *testing.T) {
 	}
 }
 
+func TestRecordAgentMetricsKeepsAgentAliveWhenNodeUsageMetricsFail(t *testing.T) {
+	now := time.Now().UTC()
+	machine := &model.AgentTokenState{
+		TokenHash:       "agent-token-hash",
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		CPUCount:        4,
+		CPUMillicores:   4000,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now.Add(-5 * time.Second),
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{WorkspaceID: "workspace-1", Name: "pool-1", Source: model.SourceCLIReservation},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "pool-1"): {machine},
+		},
+	}
+	service := &Service{
+		computeRepo:      repo,
+		usageMetricsRepo: &fakeUsageMetricsRepo{err: errors.New("openmeter unavailable")},
+	}
+
+	err := service.recordAgentMetrics(context.Background(), machine, &pb.AgentMetricSnapshot{
+		TimestampUnixNano: now.UnixNano(),
+		MemoryTotalMb:     8192,
+	})
+	if err != nil {
+		t.Fatalf("recordAgentMetrics() error = %v", err)
+	}
+}
+
+func TestDisableMachineWorkerStopsActiveContainers(t *testing.T) {
+	machine := &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "pool-1",
+		MachineID:   "machine-1",
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{Id: workerID, MachineId: machine.MachineID, PoolName: machine.PoolName},
+	}
+	containerRepo := &fakeContainerRepo{
+		containers: []types.ContainerState{
+			{ContainerId: "container-running", Status: types.ContainerStatusRunning},
+			{ContainerId: "container-stopping", Status: types.ContainerStatusStopping},
+		},
+	}
+	service := &Service{workerRepo: workerRepo, containerRepo: containerRepo}
+
+	if !service.disableMachineWorker(context.Background(), machine, reconcileReasonCreditExhausted) {
+		t.Fatal("disableMachineWorker() = false, want true")
+	}
+	if got, want := workerRepo.status, types.WorkerStatusDisabled; got != want {
+		t.Fatalf("worker status = %q, want %q", got, want)
+	}
+	if got, want := containerRepo.stopped, []string{"container-running"}; !sameStrings(got, want) {
+		t.Fatalf("stopped containers = %v, want %v", got, want)
+	}
+}
+
 func TestNodeUsageSecondsSkipsStaleGap(t *testing.T) {
 	now := time.Now().UTC()
 	if got := nodeUsageSeconds(now.Add(-model.AgentHeartbeatTimeout-time.Second), now); got != 0 {
@@ -670,6 +738,36 @@ func TestReconcileManagedComputeRecordsUsageBeforeBalanceCheck(t *testing.T) {
 	}
 }
 
+func TestReconcileManagedComputeChecksBalanceAfterFreshUsageTick(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:                 "reservation-1",
+				Source:             model.SourceCLIReservation,
+				Status:             model.ReservationActive,
+				CreatedAt:          now.Add(-time.Hour),
+				BillingCursorAt:    now.Add(-time.Minute),
+				LastBillingCheckAt: now.Add(-time.Second),
+				ExpiresAt:          now.Add(time.Hour),
+				HourlyCostMicros:   1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
+	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 1000}}
+	service := &Service{computeRepo: repo, billing: billing}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+	if got, want := billing.balanceCalls, 1; got != want {
+		t.Fatalf("balance calls = %d, want %d", got, want)
+	}
+}
+
 func TestReconcileManagedComputeBillsExpiredReservationBeforeTerminating(t *testing.T) {
 	now := time.Now().UTC()
 	cursor := now.Add(-10 * time.Minute)
@@ -709,6 +807,22 @@ func TestReconcileManagedComputeBillsExpiredReservationBeforeTerminating(t *test
 	}
 	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+}
+
+func TestReservationBillingWindowSkipsTerminatingReservation(t *testing.T) {
+	now := time.Now().UTC()
+	reservation := &model.Reservation{
+		ID:              "reservation-1",
+		Source:          model.SourceCLIReservation,
+		Status:          model.ReservationTerminating,
+		CreatedAt:       now.Add(-time.Hour),
+		BillingCursorAt: now.Add(-time.Minute),
+		ExpiresAt:       now.Add(time.Hour),
+	}
+
+	if _, _, ok := reservationBillingWindow(reservation, now); ok {
+		t.Fatal("terminating reservation should not have a billing window")
 	}
 }
 
@@ -759,22 +873,18 @@ func TestReconcileManagedComputeDoesNotTerminateOnBillingError(t *testing.T) {
 	}
 }
 
-func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
+func TestReconcileManagedComputeRemovesMachineForDeletedReservation(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID: "workspace-1",
 		Name:        "pool-1",
 		Reservations: []model.Reservation{
 			{
-				ID:               "reservation-1",
-				Provider:         "shadeform",
-				InstanceID:       "instance-1",
-				MachineID:        "machine-1",
-				Source:           model.SourceCLIReservation,
-				Status:           model.ReservationActive,
-				CreatedAt:        now.Add(-time.Hour),
-				ExpiresAt:        now.Add(time.Hour),
-				HourlyCostMicros: 1_000_000,
+				ID:        "reservation-1",
+				Provider:  "shadeform",
+				Source:    model.SourceCLIReservation,
+				Status:    model.ReservationDeleted,
+				MachineID: "machine-1",
 			},
 		},
 	}
@@ -788,6 +898,51 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	repo := &fakeComputeRepo{
 		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
 		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{computeRepo: repo}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
+		t.Fatalf("machine count after reconcile = %d, want 0", got)
+	}
+	if !repo.savedPool {
+		t.Fatal("ReconcileManagedCompute() did not persist closed reservation cleanup")
+	}
+}
+
+func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:                    "reservation-1",
+				Provider:              "shadeform",
+				InstanceID:            "instance-1",
+				MachineID:             "machine-1",
+				Source:                model.SourceCLIReservation,
+				Status:                model.ReservationActive,
+				CreatedAt:             now.Add(-time.Hour),
+				ExpiresAt:             now.Add(time.Hour),
+				HourlyCostMicros:      1_000_000,
+				RegistrationTokenHash: "join-token-hash",
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:      map[string][]*model.PoolState{"workspace-1": {state}},
+		machines:   map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+		joinTokens: map[string]*model.JoinTokenState{"join-token-hash": {TokenHash: "join-token-hash", ExpiresAt: now.Add(time.Hour)}},
 	}
 	billing := &fakeManagedBilling{}
 	service := &Service{computeRepo: repo, billing: billing}
@@ -820,6 +975,9 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	}
 	if got, want := len(billing.usage), 1; got != want {
 		t.Fatalf("managed usage records = %d, want %d", got, want)
+	}
+	if token := repo.joinTokens["join-token-hash"]; token == nil || !token.Revoked {
+		t.Fatal("releasePrivateMachine() did not revoke the reservation join token")
 	}
 }
 
@@ -1146,6 +1304,33 @@ func TestAssignManagedReservationToMachineUsesJoinTokenHash(t *testing.T) {
 	}
 }
 
+func TestAssignManagedReservationToMachineRejectsClosedManagedJoinToken(t *testing.T) {
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:                    "reservation-1",
+				Provider:              "shadeform",
+				Source:                model.SourceCLIReservation,
+				Status:                model.ReservationDeleted,
+				MachineID:             "machine-1",
+				RegistrationTokenHash: "join-token-hash",
+			},
+		},
+	}
+	token := &model.JoinTokenState{
+		TokenHash: "join-token-hash",
+		MachineID: "machine-1",
+	}
+	machine := &model.AgentTokenState{MachineID: "machine-1"}
+
+	err := (&Service{}).assignManagedReservationToMachine(context.Background(), state, token, machine)
+	if err == nil {
+		t.Fatal("assignManagedReservationToMachine() accepted a closed managed reservation")
+	}
+}
+
 func testAuthContext(workspaceID, tokenID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
@@ -1181,9 +1366,10 @@ func sameStrings(a, b []string) bool {
 }
 
 type fakeComputeRepo struct {
-	pools     map[string][]*model.PoolState
-	machines  map[string][]*model.AgentTokenState
-	savedPool bool
+	pools      map[string][]*model.PoolState
+	machines   map[string][]*model.AgentTokenState
+	joinTokens map[string]*model.JoinTokenState
+	savedPool  bool
 }
 
 func (r *fakeComputeRepo) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {
@@ -1243,11 +1429,18 @@ func (r *fakeComputeRepo) DeletePoolState(ctx context.Context, workspaceID, name
 }
 
 func (r *fakeComputeRepo) SaveJoinTokenState(ctx context.Context, state *model.JoinTokenState, ttl time.Duration) error {
+	if state == nil {
+		return nil
+	}
+	if r.joinTokens == nil {
+		r.joinTokens = map[string]*model.JoinTokenState{}
+	}
+	r.joinTokens[state.TokenHash] = state
 	return nil
 }
 
 func (r *fakeComputeRepo) GetJoinTokenState(ctx context.Context, tokenHash string) (*model.JoinTokenState, error) {
-	return nil, nil
+	return r.joinTokens[tokenHash], nil
 }
 
 func (r *fakeComputeRepo) SaveAgentTokenState(ctx context.Context, state *model.AgentTokenState, ttl time.Duration) error {
@@ -1403,6 +1596,45 @@ func (r *fakeUsageMetricsRepo) IncrementCounter(name string, metadata map[string
 func (r *fakeUsageMetricsRepo) SetGauge(name string, metadata map[string]interface{}, value float64) error {
 	if r.err != nil {
 		return r.err
+	}
+	return nil
+}
+
+type fakeWorkerRepo struct {
+	repository.WorkerRepository
+	worker *types.Worker
+	status types.WorkerStatus
+}
+
+func (r *fakeWorkerRepo) GetWorkerById(workerID string) (*types.Worker, error) {
+	if r.worker == nil || r.worker.Id != workerID {
+		return nil, &types.ErrWorkerNotFound{WorkerId: workerID}
+	}
+	return r.worker, nil
+}
+
+func (r *fakeWorkerRepo) UpdateWorkerStatus(workerID string, status types.WorkerStatus) error {
+	if r.worker == nil || r.worker.Id != workerID {
+		return &types.ErrWorkerNotFound{WorkerId: workerID}
+	}
+	r.worker.Status = status
+	r.status = status
+	return nil
+}
+
+type fakeContainerRepo struct {
+	repository.ContainerRepository
+	containers []types.ContainerState
+	stopped    []string
+}
+
+func (r *fakeContainerRepo) GetActiveContainersByWorkerId(string) ([]types.ContainerState, error) {
+	return append([]types.ContainerState(nil), r.containers...), nil
+}
+
+func (r *fakeContainerRepo) UpdateContainerStatus(containerID string, status types.ContainerStatus, _ int64) error {
+	if status == types.ContainerStatusStopping {
+		r.stopped = append(r.stopped, containerID)
 	}
 	return nil
 }

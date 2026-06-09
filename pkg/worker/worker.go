@@ -407,7 +407,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType)
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType, poolConfig.Mode)
 	if err != nil {
 		cancel()
 		return nil, err

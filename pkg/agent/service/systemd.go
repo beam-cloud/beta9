@@ -73,6 +73,7 @@ func (m Systemd) runner() Runner {
 
 func SystemdUnit(spec Spec) string {
 	spec, _ = spec.normalized()
+	spec.Env = systemdEnv(spec.Env, spec.StateDir)
 
 	var b strings.Builder
 	writeLines(&b,
@@ -83,7 +84,7 @@ func SystemdUnit(spec Spec) string {
 		"",
 		"[Service]",
 		"Type=simple",
-		"WorkingDirectory="+systemdQuote(spec.StateDir),
+		"WorkingDirectory="+systemdPath(spec.StateDir),
 	)
 	for _, key := range sortedEnvKeys(spec.Env) {
 		b.WriteString("Environment=" + systemdQuote(key+"="+spec.Env[key]) + "\n")
@@ -117,6 +118,20 @@ func sortedEnvKeys(env map[string]string) []string {
 	return keys
 }
 
+func systemdEnv(env map[string]string, stateDir string) map[string]string {
+	out := make(map[string]string, len(env)+2)
+	for key, value := range env {
+		out[key] = value
+	}
+	if _, ok := out[types.AgentHomeEnv]; !ok {
+		out[types.AgentHomeEnv] = stateDir
+	}
+	if _, ok := out[types.AgentXDGConfigHomeEnv]; !ok {
+		out[types.AgentXDGConfigHomeEnv] = filepath.Join(stateDir, ".config")
+	}
+	return out
+}
+
 func systemdCommand(args []string) string {
 	quoted := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -133,4 +148,8 @@ func systemdQuote(value string) string {
 		"%", "%%",
 	)
 	return `"` + replacer.Replace(value) + `"`
+}
+
+func systemdPath(value string) string {
+	return strings.ReplaceAll(value, "%", "%%")
 }

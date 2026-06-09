@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/cockroachdb/redact"
+	"github.com/rs/zerolog/log"
 )
 
 const telemetrySensitiveLogKeyPattern = `[A-Za-z0-9_.-]*(?:access[_-]?key|accesskey|api[_-]?key|apikey|secret|token|password|credentials?)[A-Za-z0-9_.-]*`
@@ -163,7 +164,14 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)
-	s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, metrics.Timestamp)
+	if err := s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, metrics.Timestamp); err != nil {
+		log.Warn().
+			Err(err).
+			Str("workspace_id", agentState.WorkspaceID).
+			Str("pool_name", agentState.PoolName).
+			Str("machine_id", agentState.MachineID).
+			Msg("failed to record node usage telemetry")
+	}
 
 	if s.scheduler != nil && poolState != nil {
 		if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
@@ -201,19 +209,22 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	return nil
 }
 
-func (s *Service) recordAgentNodeUsage(agentState *model.AgentTokenState, poolState *model.PoolState, metrics *pb.MachineMetrics, previousSeen, currentSeen time.Time) {
+func (s *Service) recordAgentNodeUsage(agentState *model.AgentTokenState, poolState *model.PoolState, metrics *pb.MachineMetrics, previousSeen, currentSeen time.Time) error {
 	if s == nil || s.usageMetricsRepo == nil || agentState == nil {
-		return
+		return nil
 	}
 	seconds := nodeUsageSeconds(previousSeen, currentSeen)
 	if seconds <= 0 {
-		return
+		return nil
 	}
-	_ = s.usageMetricsRepo.IncrementCounter(
+	if err := s.usageMetricsRepo.IncrementCounter(
 		types.UsageMetricsNodeUsage,
 		agentNodeUsageMetadata(agentState, poolState, metrics, seconds),
 		seconds,
-	)
+	); err != nil {
+		return fmt.Errorf("record node usage: %w", err)
+	}
+	return nil
 }
 
 func nodeUsageSeconds(previousSeen, currentSeen time.Time) float64 {

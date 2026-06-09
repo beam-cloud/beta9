@@ -78,6 +78,7 @@ func (s *Service) releaseManagedReservation(ctx context.Context, workspaceID str
 
 	now := time.Now().UTC()
 	changed := s.recordManagedUsage(ctx, workspaceID, state, now)
+	s.revokeReservationJoinToken(ctx, reservation)
 	changed = markReservationTerminating(reservation, reconcileReasonMachineReleased, machineReleasedMessage) || changed
 	if changed {
 		// Persist terminating state before provider deletion so reconcile can retry cleanup.
@@ -92,6 +93,22 @@ func (s *Service) releaseManagedReservation(ctx context.Context, workspaceID str
 		return s.savePrivatePoolState(ctx, workspaceID, state)
 	}
 	return nil
+}
+
+func (s *Service) revokeReservationJoinToken(ctx context.Context, reservation *model.Reservation) {
+	if s == nil || s.computeRepo == nil || reservation == nil || reservation.RegistrationTokenHash == "" {
+		return
+	}
+	token, err := s.computeRepo.GetJoinTokenState(ctx, reservation.RegistrationTokenHash)
+	if err != nil || token == nil || token.Revoked {
+		return
+	}
+	token.Revoked = true
+	ttl := time.Until(token.ExpiresAt)
+	if ttl <= 0 {
+		ttl = time.Second
+	}
+	_ = s.saveComputeJoinTokenState(ctx, token, ttl)
 }
 
 func (s *Service) removePrivateMachineWorker(machine *model.AgentTokenState) error {
@@ -120,6 +137,9 @@ func (s *Service) assignManagedReservationToMachine(ctx context.Context, state *
 	}
 	reservation := managedReservationForToken(state, token)
 	if reservation == nil {
+		if token != nil && token.MachineID != "" {
+			return fmt.Errorf("managed reservation for machine %q is not active", token.MachineID)
+		}
 		return nil
 	}
 	if reservation.MachineID != "" && reservation.MachineID != machine.MachineID {
@@ -141,7 +161,7 @@ func managedReservationForToken(state *model.PoolState, token *model.JoinTokenSt
 		if !reservation.Managed() || reservation.RegistrationTokenHash != token.TokenHash {
 			continue
 		}
-		if reservationClosed(reservation.Status) {
+		if reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating {
 			continue
 		}
 		return reservation
