@@ -415,12 +415,17 @@ func (s *Service) disableMachineWorker(ctx context.Context, machine *model.Agent
 		return false
 	}
 	if worker.Status == types.WorkerStatusDisabled {
+		if shouldStopContainersForDisabledWorker(reason) {
+			s.stopWorkerContainers(ctx, workerID, reason)
+		}
 		return false
 	}
 	if err := s.workerRepo.UpdateWorkerStatus(workerID, types.WorkerStatusDisabled); err != nil {
 		return false
 	}
-	s.stopWorkerContainers(ctx, workerID, reason)
+	if shouldStopContainersForDisabledWorker(reason) {
+		s.stopWorkerContainers(ctx, workerID, reason)
+	}
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		WorkspaceID: machine.WorkspaceID,
 		PoolName:    machine.PoolName,
@@ -431,6 +436,15 @@ func (s *Service) disableMachineWorker(ctx context.Context, machine *model.Agent
 		Message:     "machine worker disabled: " + reason,
 	})
 	return true
+}
+
+func shouldStopContainersForDisabledWorker(reason string) bool {
+	switch reason {
+	case reconcileReasonAgentDisconnected, reconcileReasonMachineDisconnected:
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Service) stopWorkerContainers(ctx context.Context, workerID, reason string) {

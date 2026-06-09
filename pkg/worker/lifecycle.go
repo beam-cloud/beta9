@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,8 +39,38 @@ const (
 	sandboxCPUQuotaApplyTimeout        = 2 * time.Second
 )
 
+const (
+	hostResolvConfPath   = "/etc/resolv.conf"
+	workerResolvConfPath = "/workspace/etc/resolv.conf"
+)
+
 type containerResourceUpdater interface {
 	UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error
+}
+
+func containerResolvConfSource(useHostResolvConf bool, hostPath string) string {
+	if useHostResolvConf && resolvConfHasUsableNameserver(hostPath) {
+		return hostPath
+	}
+	return workerResolvConfPath
+}
+
+func resolvConfHasUsableNameserver(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "nameserver" {
+			continue
+		}
+		ip := net.ParseIP(fields[1])
+		if ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
 }
 
 // handleStopContainerArgs queues a stop for a locally owned container.
@@ -748,7 +779,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
 		Type:        "none",
-		Source:      "/workspace/etc/resolv.conf",
+		Source:      containerResolvConfSource(s.config.Worker.UseHostResolvConf, hostResolvConfPath),
 		Destination: "/etc/resolv.conf",
 		Options: []string{
 			"ro",
@@ -758,10 +789,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			"noexec",
 			"nodev",
 		},
-	}
-
-	if s.config.Worker.UseHostResolvConf {
-		resolvMount.Source = "/etc/resolv.conf"
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)

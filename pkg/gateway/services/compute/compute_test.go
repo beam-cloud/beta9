@@ -800,6 +800,64 @@ func TestDisableMachineWorkerStopsActiveContainers(t *testing.T) {
 	}
 }
 
+func TestDisableMachineWorkerKeepsActiveContainersOnDisconnect(t *testing.T) {
+	machine := &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "pool-1",
+		MachineID:   "machine-1",
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{Id: workerID, MachineId: machine.MachineID, PoolName: machine.PoolName},
+	}
+	containerRepo := &fakeContainerRepo{
+		containers: []types.ContainerState{
+			{ContainerId: "container-running", Status: types.ContainerStatusRunning},
+		},
+	}
+	service := &Service{workerRepo: workerRepo, containerRepo: containerRepo}
+
+	if !service.disableMachineWorker(context.Background(), machine, reconcileReasonAgentDisconnected) {
+		t.Fatal("disableMachineWorker() = false, want true")
+	}
+	if got, want := workerRepo.status, types.WorkerStatusDisabled; got != want {
+		t.Fatalf("worker status = %q, want %q", got, want)
+	}
+	if len(containerRepo.stopped) != 0 {
+		t.Fatalf("stopped containers = %v, want none", containerRepo.stopped)
+	}
+}
+
+func TestDisableMachineWorkerStopsContainersWhenAlreadyDisabledForHardTeardown(t *testing.T) {
+	machine := &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "pool-1",
+		MachineID:   "machine-1",
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{
+			Id:        workerID,
+			MachineId: machine.MachineID,
+			PoolName:  machine.PoolName,
+			Status:    types.WorkerStatusDisabled,
+		},
+	}
+	containerRepo := &fakeContainerRepo{
+		containers: []types.ContainerState{
+			{ContainerId: "container-running", Status: types.ContainerStatusRunning},
+		},
+	}
+	service := &Service{workerRepo: workerRepo, containerRepo: containerRepo}
+
+	if service.disableMachineWorker(context.Background(), machine, reconcileReasonCreditExhausted) {
+		t.Fatal("disableMachineWorker() = true, want false for already-disabled worker")
+	}
+	if got, want := containerRepo.stopped, []string{"container-running"}; !sameStrings(got, want) {
+		t.Fatalf("stopped containers = %v, want %v", got, want)
+	}
+}
+
 func TestNodeUsageSecondsSkipsStaleGap(t *testing.T) {
 	now := time.Now().UTC()
 	if got := nodeUsageSeconds(now.Add(-model.AgentHeartbeatTimeout-time.Second), now); got != 0 {

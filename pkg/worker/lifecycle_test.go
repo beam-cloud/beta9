@@ -54,6 +54,21 @@ func TestWaitForRuntimeStartedReturnsWhenRuntimeDoneWithoutPID(t *testing.T) {
 	require.False(t, handled)
 }
 
+func TestContainerResolvConfSourceFallsBackForLoopbackHostResolver(t *testing.T) {
+	hostResolv := filepath.Join(t.TempDir(), "resolv.conf")
+	require.NoError(t, os.WriteFile(hostResolv, []byte("nameserver 127.0.0.53\noptions edns0\n"), 0o644))
+
+	require.Equal(t, workerResolvConfPath, containerResolvConfSource(true, hostResolv))
+}
+
+func TestContainerResolvConfSourceUsesHostResolverWhenReachable(t *testing.T) {
+	hostResolv := filepath.Join(t.TempDir(), "resolv.conf")
+	require.NoError(t, os.WriteFile(hostResolv, []byte("nameserver 1.1.1.1\n"), 0o644))
+
+	require.Equal(t, hostResolv, containerResolvConfSource(true, hostResolv))
+	require.Equal(t, workerResolvConfPath, containerResolvConfSource(false, hostResolv))
+}
+
 func TestStartupPortBindingsForSandboxSkipsInternalPorts(t *testing.T) {
 	request := &types.ContainerRequest{
 		Ports: []uint32{

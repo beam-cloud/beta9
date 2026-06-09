@@ -933,13 +933,23 @@ func cacheServerPortFromEnv() uint {
 }
 
 func cacheWorkerInstanceID(workerID string) string {
-	for _, env := range []string{types.WorkerPodUIDEnv, types.WorkerPodHostEnv, types.WorkerHostnameEnv} {
-		if value := os.Getenv(env); value != "" {
+	for _, env := range []string{types.WorkerPodUIDEnv, types.WorkerMachineEnv, types.WorkerPodIPEnv, types.WorkerPodHostEnv, types.WorkerHostnameEnv} {
+		if value := strings.TrimSpace(os.Getenv(env)); usableCacheWorkerInstanceID(value) {
 			return value
 		}
 	}
 
 	return workerID
+}
+
+func usableCacheWorkerInstanceID(value string) bool {
+	if value == "" {
+		return false
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		return usableCacheAdvertiseIP(ip)
+	}
+	return true
 }
 
 var cacheNameRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
