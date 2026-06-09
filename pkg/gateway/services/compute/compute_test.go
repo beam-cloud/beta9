@@ -512,7 +512,7 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 		CommittedCostMicros: 42_000_000,
 	}
 
-	decision, err := service.checkManagedLaunchCredit(context.Background(), "workspace-1", "pool-1", plan)
+	decision, err := service.checkManagedLaunchCredit(context.Background(), "workspace-1", "pool-1", plan, nil)
 	if err != nil {
 		t.Fatalf("checkManagedLaunchCredit() error = %v", err)
 	}
@@ -744,7 +744,7 @@ func TestRecordManagedUsageEmitsOpenMeterMetrics(t *testing.T) {
 	usageRepo := &fakeUsageMetricsRepo{}
 	service := &Service{billing: billing, usageMetricsRepo: usageRepo}
 
-	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now, false) {
 		t.Fatal("recordManagedUsage() did not report a state change")
 	}
 
@@ -1058,13 +1058,16 @@ func TestDisableMachineWorkerStopsContainersWhenAlreadyDisabledForHardTeardown(t
 	}
 }
 
-func TestNodeUsageSecondsSkipsStaleGap(t *testing.T) {
+func TestNodeUsageSecondsCapsStaleGap(t *testing.T) {
 	now := time.Now().UTC()
-	if got := nodeUsageSeconds(now.Add(-model.AgentHeartbeatTimeout-time.Second), now); got != 0 {
-		t.Fatalf("nodeUsageSeconds() = %f for stale gap, want 0", got)
+	if got, want := nodeUsageSeconds(now.Add(-model.AgentHeartbeatTimeout-time.Minute), now), model.AgentHeartbeatTimeout.Seconds(); got != want {
+		t.Fatalf("nodeUsageSeconds() = %f for stale gap, want capped %f", got, want)
 	}
 	if got := nodeUsageSeconds(now.Add(-5*time.Second), now); got != 5 {
 		t.Fatalf("nodeUsageSeconds() = %f, want 5", got)
+	}
+	if got := nodeUsageSeconds(time.Time{}, now); got != 0 {
+		t.Fatalf("nodeUsageSeconds() = %f for zero previous, want 0", got)
 	}
 }
 
@@ -1093,7 +1096,7 @@ func TestRecordManagedUsageAdvancesCursorWhenMetricsFailAfterBilling(t *testing.
 		usageMetricsRepo: &fakeUsageMetricsRepo{err: errors.New("openmeter unavailable")},
 	}
 
-	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now, false) {
 		t.Fatal("recordManagedUsage() did not report a state change")
 	}
 	if got, want := len(billing.usage), 1; got != want {
@@ -1118,7 +1121,7 @@ func TestRecordManagedUsageDoesNotEmitMetricsOrAdvanceCursorWhenBillingFails(t *
 		usageMetricsRepo: usageRepo,
 	}
 
-	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now, false) {
 		t.Fatal("recordManagedUsage() did not report a state change")
 	}
 	if got, want := len(usageRepo.counters), 0; got != want {
@@ -1139,7 +1142,7 @@ func TestRecordManagedUsageSkipsActiveSubCentWindow(t *testing.T) {
 	billing := &fakeManagedBilling{}
 	service := &Service{billing: billing}
 
-	if service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+	if service.recordManagedUsage(context.Background(), "workspace-1", state, now, false) {
 		t.Fatal("recordManagedUsage() reported a change for an active sub-cent window")
 	}
 	if got := len(billing.usage); got != 0 {
@@ -1157,7 +1160,7 @@ func TestRecordManagedUsageBillsClosedSubCentWindow(t *testing.T) {
 	billing := &fakeManagedBilling{}
 	service := &Service{billing: billing}
 
-	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now, false) {
 		t.Fatal("recordManagedUsage() did not bill a closed sub-cent window")
 	}
 	if got := len(billing.usage); got != 1 {
@@ -1953,6 +1956,18 @@ type fakeComputeRepo struct {
 	machines   map[string][]*model.AgentTokenState
 	joinTokens map[string]*model.JoinTokenState
 	savedPool  bool
+}
+
+func (r *fakeComputeRepo) LockPoolState(ctx context.Context, workspaceID, name string) error {
+	return nil
+}
+
+func (r *fakeComputeRepo) UnlockPoolState(ctx context.Context, workspaceID, name string) error {
+	return nil
+}
+
+func (r *fakeComputeRepo) PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error {
+	return nil
 }
 
 func (r *fakeComputeRepo) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {

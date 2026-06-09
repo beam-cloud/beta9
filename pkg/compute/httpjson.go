@@ -17,6 +17,19 @@ type HTTPClient struct {
 	Client     *http.Client
 }
 
+// HTTPStatusError distinguishes a non-2xx server rejection from a transport
+// error where the server was never reached.
+type HTTPStatusError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("%s %s failed with status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
 func (c HTTPClient) Do(ctx context.Context, method, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -59,7 +72,7 @@ func (c HTTPClient) Do(ctx context.Context, method, path string, body any, out a
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s failed with status %d: %s", method, path, resp.StatusCode, string(data))
+		return &HTTPStatusError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(data)}
 	}
 	if out == nil || len(data) == 0 {
 		return nil

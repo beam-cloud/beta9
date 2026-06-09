@@ -385,6 +385,7 @@ managedCompute:
     timeout: 5s
     reconcileInterval: 1m
     minimumCreditCents: 2500
+    failureGracePeriod: 10m
 abstractions:
   bot:
     systemPrompt: ""

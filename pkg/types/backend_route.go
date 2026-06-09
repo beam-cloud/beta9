@@ -44,6 +44,16 @@ func BackendRouteAddress(routeID string) string {
 	return fmt.Sprintf("%s://%s", BackendRouteScheme, routeID)
 }
 
+// NormalizeBackendRouteTransport canonicalizes transport names (dashes to
+// underscores) and applies the default.
+func NormalizeBackendRouteTransport(transport string) string {
+	transport = strings.TrimSpace(strings.ReplaceAll(transport, "-", "_"))
+	if transport == "" {
+		return BackendRouteTransportTSNet
+	}
+	return transport
+}
+
 func BackendRouteID(machineID, workerID, containerID, kind string, port int32) string {
 	return strings.Join([]string{machineID, workerID, containerID, kind, fmt.Sprintf("%d", port)}, ":")
 }

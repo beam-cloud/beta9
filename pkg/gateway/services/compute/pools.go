@@ -17,6 +17,7 @@ const (
 	defaultPrivateExecutor   = types.DefaultAgentWorkerContainerMode
 	defaultPrivateJoinTTL    = 30 * time.Minute
 	agentStreamRefresh       = 30 * time.Second
+	agentStreamHeartbeat     = 10 * time.Second
 	agentStreamEventCoalesce = 25 * time.Millisecond
 )
 
@@ -245,18 +246,24 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 	if poolName == "" || targetID == "" {
 		return false, nil
 	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
-	if err != nil || state == nil {
-		return false, err
-	}
-	reservation := managedReservationForDeleteTarget(state, targetID)
-	if reservation == nil {
-		return false, nil
-	}
 
-	machineID := reservation.MachineID
-	if err := s.releaseManagedReservation(ctx, workspaceID, state, reservation); err != nil {
-		return true, err
+	found := false
+	machineID := ""
+	err := s.withPoolStateLock(ctx, workspaceID, poolName, func() error {
+		state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+		if err != nil || state == nil {
+			return err
+		}
+		reservation := managedReservationForDeleteTarget(state, targetID)
+		if reservation == nil {
+			return nil
+		}
+		found = true
+		machineID = reservation.MachineID
+		return s.releaseManagedReservation(ctx, workspaceID, state, reservation)
+	})
+	if err != nil || !found {
+		return found, err
 	}
 	if machineID == "" {
 		return true, nil

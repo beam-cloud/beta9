@@ -62,6 +62,20 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
+	// Serialize against the reconciler and release paths.
+	var response *pb.LaunchPoolCapacityResponse
+	lockErr := s.withPoolStateLock(ctx, workspaceID, pool.Name, func() error {
+		var err error
+		response, err = s.launchPoolCapacityLocked(ctx, authInfo, workspaceID, ownerTokenID, config, pool, offers)
+		return err
+	})
+	if lockErr != nil {
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: lockErr.Error()}, nil
+	}
+	return response, nil
+}
+
+func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, ownerTokenID string, config *pb.PoolConfig, pool model.Pool, offers []model.Offer) (*pb.LaunchPoolCapacityResponse, error) {
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, pool.Name)
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -97,7 +111,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	}
 
 	if planRequiresManagedCreate(plan.Actions) {
-		decision, err := s.checkManagedLaunchCredit(ctx, workspaceID, pool.Name, plan)
+		decision, err := s.checkManagedLaunchCredit(ctx, workspaceID, pool.Name, plan, existing)
 		if err != nil {
 			return launchPoolError(launchErrorBillingUnavailable, err.Error(), decision), nil
 		}
@@ -216,7 +230,7 @@ func existingCommittedSpendMicros(state *model.PoolState) int64 {
 	return state.CommittedSpendMicros
 }
 
-func (s *Service) checkManagedLaunchCredit(ctx context.Context, workspaceID, poolName string, plan model.SolvePlan) (billingDecision, error) {
+func (s *Service) checkManagedLaunchCredit(ctx context.Context, workspaceID, poolName string, plan model.SolvePlan, existing *model.PoolState) (billingDecision, error) {
 	if s.billing == nil {
 		return billingDecision{}, errManagedBillingUnavailable
 	}
@@ -226,14 +240,41 @@ func (s *Service) checkManagedLaunchCredit(ctx context.Context, workspaceID, poo
 			quantity += action.Count
 		}
 	}
+	// Include outstanding commitments so back-to-back launches cannot each
+	// pass the same balance.
+	committedMicros := s.billableMicros(plan.CommittedCostMicros) + s.billableMicros(outstandingCommittedMicros(existing, time.Now().UTC()))
 	return s.billing.CheckLaunchCredit(ctx, billingCreditRequest{
 		WorkspaceID:               workspaceID,
 		PoolName:                  poolName,
 		RequiredCents:             s.appConfig.ManagedCompute.Billing.MinimumCreditCentsOrDefault(),
 		Quantity:                  quantity,
 		EstimatedHourlyCostMicros: s.billableMicros(managedHourlyCostMicros(plan.Actions)),
-		EstimatedCommittedMicros:  s.billableMicros(plan.CommittedCostMicros),
+		EstimatedCommittedMicros:  committedMicros,
 	})
+}
+
+// outstandingCommittedMicros estimates the provider cost still owed for the
+// pool's open managed reservations.
+func outstandingCommittedMicros(state *model.PoolState, now time.Time) int64 {
+	if state == nil {
+		return 0
+	}
+	var total int64
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if !reservation.Managed() || !reservation.ActiveAt(now) {
+			continue
+		}
+		if reservation.ExpiresAt.IsZero() || reservation.HourlyCostMicros <= 0 {
+			continue
+		}
+		remaining := reservation.ExpiresAt.Sub(now)
+		if remaining <= 0 {
+			continue
+		}
+		total += reservation.HourlyCostMicros * model.WholeHours(remaining)
+	}
+	return total
 }
 
 func planRequiresManagedCreate(actions []model.SolveAction) bool {

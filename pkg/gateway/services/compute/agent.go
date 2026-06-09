@@ -25,6 +25,9 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if tokenState == nil || tokenState.Revoked || time.Now().After(tokenState.ExpiresAt) {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
+	if err := s.bindJoinTokenFingerprint(ctx, tokenState, in.MachineFingerprint); err != nil {
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
 
 	poolState, err := s.getPrivatePoolState(ctx, tokenState.WorkspaceID, tokenState.PoolName)
 	if err != nil {
@@ -89,6 +92,8 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	}
 	if s.scheduler != nil {
 		if err := s.scheduler.RegisterAgentPool(tokenState.WorkspaceID, poolState); err != nil {
+			// Roll back the partially-committed join.
+			_ = s.computeRepo.DeleteAgentMachineState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
 			return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 	}
@@ -125,6 +130,30 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	}, nil
 }
 
+// bindJoinTokenFingerprint pins machine-specific join tokens to the first
+// fingerprint that uses them; pool-wide tokens stay reusable.
+func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *model.JoinTokenState, fingerprint string) error {
+	if tokenState.MachineID == "" {
+		return nil
+	}
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return nil
+	}
+	if tokenState.BoundFingerprint == "" {
+		tokenState.BoundFingerprint = fingerprint
+		ttl := time.Until(tokenState.ExpiresAt)
+		if ttl <= 0 {
+			ttl = time.Second
+		}
+		return s.saveComputeJoinTokenState(ctx, tokenState, ttl)
+	}
+	if tokenState.BoundFingerprint != fingerprint {
+		return fmt.Errorf("join token is already bound to another machine")
+	}
+	return nil
+}
+
 func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
 	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
 	if err != nil {
@@ -134,8 +163,7 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
 	}
 
-	transport := firstNonEmpty(in.Transport, types.BackendRouteTransportTSNet)
-	transport = strings.ReplaceAll(transport, "-", "_")
+	transport := types.NormalizeBackendRouteTransport(in.Transport)
 	if err := s.validateAgentTransportConfig(transport); err != nil {
 		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -157,22 +185,6 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 	}, nil
 }
 
-func (s *Service) ListAgentRoutes(ctx context.Context, in *pb.ListAgentRoutesRequest) (*pb.ListAgentRoutesResponse, error) {
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
-	if err != nil {
-		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if agentState == nil {
-		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
-	}
-
-	out, err := s.agentRoutesForMachine(ctx, agentState)
-	if err != nil {
-		return &pb.ListAgentRoutesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	return &pb.ListAgentRoutesResponse{Ok: true, Routes: out}, nil
-}
-
 func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	ctx := stream.Context()
 	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
@@ -182,10 +194,10 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 	if agentState == nil {
 		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "invalid agent token"})
 	}
+	// Record disconnect on any stream exit; recordAgentDisconnect no-ops
+	// while the heartbeat is still fresh.
 	defer func() {
-		if ctx.Err() != nil {
-			s.recordAgentDisconnect(context.Background(), agentState)
-		}
+		s.recordAgentDisconnect(context.Background(), agentState)
 	}()
 
 	sendSnapshot := func() error {
@@ -234,6 +246,11 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 	ticker := time.NewTicker(agentStreamRefresh)
 	defer ticker.Stop()
 
+	// Refresh the heartbeat from this stream too, so a brief telemetry stream
+	// outage does not mark the machine disconnected.
+	heartbeat := time.NewTicker(agentStreamHeartbeat)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -243,12 +260,35 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 			if err := sendSnapshot(); err != nil {
 				return err
 			}
+		case <-heartbeat.C:
+			if current := s.touchAgentHeartbeat(ctx, agentState); current != nil {
+				agentState = current
+			}
 		case <-ticker.C:
 			if err := sendSnapshot(); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// touchAgentHeartbeat refreshes the machine's liveness timestamp without
+// touching telemetry-reported metrics.
+func (s *Service) touchAgentHeartbeat(ctx context.Context, agentState *model.AgentTokenState) *model.AgentTokenState {
+	current, err := s.currentComputeAgentState(ctx, agentState)
+	if err != nil || current == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	if current.LastHeartbeatAt.After(now) {
+		return current
+	}
+	current.LastHeartbeatAt = now
+	current.LastDisconnectAt = time.Time{}
+	if err := s.saveComputeAgentTokenState(ctx, current); err != nil {
+		return nil
+	}
+	return current
 }
 
 func coalesceAgentStreamEvents(ctx context.Context, events <-chan common.KeyEvent) {

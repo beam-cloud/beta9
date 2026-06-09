@@ -485,6 +485,39 @@ func (cr *ContainerRedisRepository) DeleteBackendRoutesByContainerID(ctx context
 	return nil
 }
 
+// DeleteBackendRoutesByMachine removes all backend routes and index entries
+// for a machine when it is released.
+func (cr *ContainerRedisRepository) DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
+	if workspaceID == "" || poolName == "" || machineID == "" {
+		return nil
+	}
+	indexKey := common.RedisKeys.SchedulerBackendRouteMachineIndex(workspaceID, poolName, machineID)
+	routeIDs, err := cr.rdb.SMembers(ctx, indexKey).Result()
+	if err != nil {
+		return err
+	}
+	routes, err := cr.routes(ctx, routeIDs)
+	if err != nil {
+		return err
+	}
+
+	pipe := cr.rdb.Pipeline()
+	for _, routeID := range routeIDs {
+		pipe.Del(ctx, common.RedisKeys.SchedulerBackendRoute(routeID))
+	}
+	for _, route := range routes {
+		if route.ContainerID != "" {
+			pipe.SRem(ctx, common.RedisKeys.SchedulerBackendRouteIndex(route.ContainerID), route.RouteID)
+		}
+	}
+	pipe.Del(ctx, indexKey)
+	pipe.Incr(ctx, common.RedisKeys.SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	return cr.publishBackendRouteMachine(ctx, workspaceID, poolName, machineID)
+}
+
 func (cr *ContainerRedisRepository) touchBackendRouteMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
 	if workspaceID == "" || poolName == "" || machineID == "" {
 		return nil

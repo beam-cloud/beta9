@@ -20,6 +20,10 @@ const (
 	routeProxyPrefaceTimeout   = 10 * time.Second
 	routeProxyLocalDialTimeout = 2 * time.Second
 	routeProxyReadyDialTimeout = 250 * time.Millisecond
+
+	// routeProxyMaxConsecutiveFailures is how many local dials must fail in a
+	// row before the route is dropped and reported degraded.
+	routeProxyMaxConsecutiveFailures = 3
 )
 
 func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener net.Listener, proxyTarget string, workers *workerRuntimeManager, stdout, stderr io.Writer) *routeProxy {
@@ -39,6 +43,7 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		stderr:          stderr,
 		routes:          map[string]string{},
 		readinessChecks: map[string]string{},
+		failureCounts:   map[string]int{},
 	}
 }
 
@@ -55,6 +60,9 @@ type routeProxy struct {
 
 	// routeID -> local target currently being probed for readiness.
 	readinessChecks map[string]string
+
+	// routeID -> consecutive local dial failures.
+	failureCounts map[string]int
 }
 
 func (p *routeProxy) run(ctx context.Context) error {
@@ -117,8 +125,9 @@ func (p *routeProxy) watchRoutesOnce(ctx context.Context) error {
 			return err
 		}
 		if p.workers != nil {
+			// A worker reconcile failure should not tear down the route stream.
 			if err := p.workers.reconcile(ctx, msg.Slots); err != nil {
-				return err
+				fmt.Fprintf(p.stderr, "worker slot reconcile failed: %v\n", err)
 			}
 		}
 	}
@@ -161,6 +170,7 @@ func (p *routeProxy) deleteRoute(routeID string) {
 	p.mu.Lock()
 	delete(p.routes, routeID)
 	delete(p.readinessChecks, routeID)
+	delete(p.failureCounts, routeID)
 	p.mu.Unlock()
 }
 
@@ -171,6 +181,7 @@ func (p *routeProxy) deleteRoutesNotIn(seen map[string]struct{}) {
 		if _, ok := seen[routeID]; !ok {
 			delete(p.routes, routeID)
 			delete(p.readinessChecks, routeID)
+			delete(p.failureCounts, routeID)
 		}
 	}
 }
@@ -310,11 +321,40 @@ func (p *routeProxy) handleConn(conn net.Conn) {
 		return
 	}
 	if dialLatency, err := proxyConn(conn, reader, localTarget); err != nil {
-		p.markRouteDegraded(routeID, localTarget, dialLatency, err)
+		p.recordRouteFailure(routeID, localTarget, dialLatency, err)
 		if !isLocalTargetUnavailable(err) {
 			fmt.Fprintf(p.stderr, "route %s proxy failed: %v\n", routeID, err)
 		}
+	} else {
+		p.resetRouteFailures(routeID)
 	}
+}
+
+// recordRouteFailure drops the route only after several consecutive local
+// dial failures.
+func (p *routeProxy) recordRouteFailure(routeID, localTarget string, dialLatency time.Duration, cause error) {
+	p.mu.Lock()
+	if p.routes[routeID] != localTarget {
+		p.mu.Unlock()
+		return
+	}
+	if p.failureCounts == nil {
+		p.failureCounts = map[string]int{}
+	}
+	p.failureCounts[routeID]++
+	count := p.failureCounts[routeID]
+	p.mu.Unlock()
+
+	if count < routeProxyMaxConsecutiveFailures {
+		return
+	}
+	p.markRouteDegraded(routeID, localTarget, dialLatency, cause)
+}
+
+func (p *routeProxy) resetRouteFailures(routeID string) {
+	p.mu.Lock()
+	delete(p.failureCounts, routeID)
+	p.mu.Unlock()
 }
 
 func (p *routeProxy) markRouteDegraded(routeID, localTarget string, dialLatency time.Duration, cause error) {

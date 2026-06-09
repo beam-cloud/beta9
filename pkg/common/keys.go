@@ -98,6 +98,7 @@ var (
 
 var (
 	computePoolState          string = "compute:{%s}:pool:%s"
+	computePoolStateLock      string = "compute:{%s}:pool:%s:lock"
 	computePoolIndex          string = "compute:{%s}:pools"
 	computePoolWorkspaceIndex string = "compute:workspaces"
 	computeJoinToken          string = "compute:join:%s"
@@ -296,6 +297,10 @@ func (rk *redisKeys) WorkerPoolCleanerLock(poolName string) string {
 // Compute keys
 func (rk *redisKeys) ComputePoolState(workspaceID, poolName string) string {
 	return fmt.Sprintf(computePoolState, workspaceID, poolName)
+}
+
+func (rk *redisKeys) ComputePoolStateLock(workspaceID, poolName string) string {
+	return fmt.Sprintf(computePoolStateLock, workspaceID, poolName)
 }
 
 func (rk *redisKeys) ComputePoolIndex(workspaceID string) string {

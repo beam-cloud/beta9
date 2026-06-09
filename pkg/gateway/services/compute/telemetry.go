@@ -38,7 +38,9 @@ func (s *Service) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelem
 			return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: true})
 		}
 		if err != nil {
-			if agentState != nil && ctx.Err() != nil {
+			// Treat any stream failure as a potential disconnect; this no-ops
+			// while the heartbeat is still fresh.
+			if agentState != nil {
 				s.recordAgentDisconnect(context.Background(), agentState)
 			}
 			return err
@@ -233,7 +235,8 @@ func nodeUsageSeconds(previousSeen, currentSeen time.Time) float64 {
 	}
 	duration := currentSeen.Sub(previousSeen)
 	if duration > model.AgentHeartbeatTimeout {
-		return 0
+		// Cap stale gaps at the provable uptime instead of dropping them.
+		duration = model.AgentHeartbeatTimeout
 	}
 	return duration.Seconds()
 }

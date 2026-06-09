@@ -25,6 +25,9 @@ type PoolState struct {
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
 	ExpiresAt            time.Time      `json:"expires_at"`
+	// BillingDegradedSince marks when balance checks started failing;
+	// reservations terminate once the grace period is exceeded.
+	BillingDegradedSince time.Time `json:"billing_degraded_since,omitempty"`
 }
 
 type JoinTokenState struct {
@@ -36,6 +39,9 @@ type JoinTokenState struct {
 	CreatedAt        time.Time `json:"created_at"`
 	ExpiresAt        time.Time `json:"expires_at"`
 	Revoked          bool      `json:"revoked"`
+	// BoundFingerprint pins a machine-specific join token to the first
+	// machine that used it.
+	BoundFingerprint string `json:"bound_fingerprint,omitempty"`
 }
 
 type AgentTokenState struct {

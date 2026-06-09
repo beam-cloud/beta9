@@ -301,16 +301,6 @@ type ComputeSolveAction struct {
 	Reason      string
 }
 
-type ComputeLedgerEntry struct {
-	PoolName      string
-	WorkspaceID   string
-	ReservationID string
-	Source        ComputeCapacitySource
-	AmountMicros  int64
-	StartedAt     time.Time
-	EndedAt       time.Time
-}
-
 func ParseComputeTTL(value string) (time.Duration, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
