@@ -306,11 +306,15 @@ func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.A
 	}
 	agentState = current
 	lastSeen := model.AgentMachineLastSeen(agentState)
+	now := time.Now().UTC()
+	if lastSeen.IsZero() || !lastSeen.Before(now.Add(-model.AgentHeartbeatTimeout)) {
+		return
+	}
 	if !agentState.LastDisconnectAt.IsZero() && !agentState.LastDisconnectAt.Before(lastSeen) {
 		s.disableMachineWorker(ctx, agentState, reconcileReasonAgentDisconnected)
 		return
 	}
-	agentState.LastDisconnectAt = time.Now().UTC()
+	agentState.LastDisconnectAt = now
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return
 	}
