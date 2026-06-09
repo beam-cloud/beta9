@@ -173,6 +173,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	if stubConfig.RequiresGPU() {
+		if gws.computeService != nil {
+			if err := gws.computeService.ValidatePrivatePoolGPURequest(ctx, authInfo.Workspace.ExternalId, poolConfigName(poolConfig), gpus); err != nil {
+				return &pb.GetOrCreateStubResponse{
+					Ok:     false,
+					ErrMsg: err.Error(),
+				}, nil
+			}
+		}
+
 		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return &pb.GetOrCreateStubResponse{
@@ -191,9 +200,22 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}
 
 			if !hasCapacity {
+				errMsg := fmt.Sprintf("There is currently no GPU capacity for %s.", gpuList(gpus))
+				if gws.computeService != nil {
+					msg, err := gws.computeService.MissingPrivatePoolGPUWarning(ctx, authInfo.Workspace.ExternalId, gpus)
+					if err != nil {
+						return &pb.GetOrCreateStubResponse{
+							Ok:     false,
+							ErrMsg: "Failed to check private pool GPU availability.",
+						}, nil
+					}
+					if msg != "" {
+						errMsg = msg
+					}
+				}
 				return &pb.GetOrCreateStubResponse{
 					Ok:     false,
-					ErrMsg: fmt.Sprintf("There is currently no GPU capacity for %s.", in.Gpu),
+					ErrMsg: errMsg,
 				}, nil
 			}
 		}
@@ -296,7 +318,7 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 	}
 	return &types.PoolConfig{
 		Name:           in.Name,
-		GPUs:           in.Gpu,
+		GPUs:           types.NormalizeGPUStrings(in.Gpu),
 		TotalGPUs:      in.Gpus,
 		OfferID:        in.OfferId,
 		TTL:            in.Ttl,
@@ -324,6 +346,21 @@ func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
 		MinReliability: in.MinReliability,
 		Selector:       in.Selector,
 	}
+}
+
+func poolConfigName(pool *types.PoolConfig) string {
+	if pool == nil {
+		return ""
+	}
+	return pool.Name
+}
+
+func gpuList(gpus []types.GpuType) string {
+	values := types.GpuTypesToStrings(gpus)
+	if len(values) == 0 {
+		return "GPU"
+	}
+	return strings.Join(values, ", ")
 }
 
 func configurePoolSelector(pool *types.PoolConfig, workspaceID, stubName string) {

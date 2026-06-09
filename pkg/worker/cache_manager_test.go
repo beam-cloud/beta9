@@ -151,6 +151,7 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	t.Setenv(types.CacheServerOnlyEnv, "false")
 	t.Setenv(types.CacheNodeEnv, "single-node")
 	t.Setenv(types.CacheLocalityEnv, "test")
+	t.Setenv(types.WorkerCacheAdvertiseAddrEnv, "127.0.0.1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -222,6 +223,7 @@ func TestCacheServerDaemonSetMarkerLoopStopsOnClose(t *testing.T) {
 func TestWorkerCacheManagersUseSingleNodeLocalServerAndStandbyTakeover(t *testing.T) {
 	t.Setenv(types.CacheNodeEnv, "single-node")
 	t.Setenv(types.CacheLocalityEnv, "test")
+	t.Setenv(types.WorkerCacheAdvertiseAddrEnv, "127.0.0.1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -546,6 +548,16 @@ func TestCacheAdvertiseHost(t *testing.T) {
 			name:     "pod addr is an ip",
 			podAddr:  "10.0.0.5",
 			expected: "10.0.0.5",
+		},
+		{
+			name:     "loopback pod addr falls back to server discovery",
+			podAddr:  "127.0.0.1",
+			expected: "",
+		},
+		{
+			name:     "loopback pod ip falls back to server discovery",
+			podIP:    "127.0.0.1",
+			expected: "",
 		},
 		{
 			name:     "tailscale hostname falls back to pod ip",

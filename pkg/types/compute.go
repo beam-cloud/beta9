@@ -108,6 +108,7 @@ type ComputeReservation struct {
 	Name                  string
 	Selector              string
 	Provider              string
+	Cloud                 string
 	OfferID               string
 	InstanceType          string
 	InstanceID            string

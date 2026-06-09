@@ -702,6 +702,7 @@ message ProviderInstance {
   string status_message = 12;
   string terminating_reason = 13;
   string machine_id = 14;
+  string cloud = 15;
 }
 
 message PrivatePool {

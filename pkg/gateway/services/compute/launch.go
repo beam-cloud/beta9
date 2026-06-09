@@ -46,6 +46,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	config.Gpu = pool.GPUs
 	if pool.Name == "" {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool name is required"}, nil
 	}

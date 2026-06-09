@@ -29,7 +29,7 @@ from ..clients.gateway import (
     StringList,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
-from .machine_format import format_cpu, format_memory, machine_table
+from .machine_format import format_cpu, format_gpu, format_memory, machine_table
 
 
 @click.group(cls=ClickCommonGroup)
@@ -190,11 +190,11 @@ def _private_pool_compute(pool: PrivatePool) -> str:
     gpu_types = pool.config.gpu
     requested_gpus = pool.config.gpus or pool.reserved_gpus
     if gpu_types and requested_gpus > 0:
-        return f"{requested_gpus}x {', '.join(gpu_types)}"
+        return format_gpu(", ".join(gpu_types), requested_gpus)
     if gpu_types:
         return ", ".join(gpu_types)
     if pool.reserved_gpus > 0:
-        return f"{pool.reserved_gpus}x GPU"
+        return format_gpu("GPU", pool.reserved_gpus)
     return "CPU"
 
 

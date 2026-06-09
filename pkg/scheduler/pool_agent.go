@@ -325,7 +325,7 @@ func (wpc *AgentWorkerPoolController) machineCanFit(machine *compute.AgentTokenS
 		return true
 	}
 	for _, machineGPU := range machine.GPUs {
-		if strings.EqualFold(machineGPU, gpuType) {
+		if machineGPU == gpuType {
 			return true
 		}
 	}

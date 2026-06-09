@@ -686,13 +686,17 @@ func (m *WorkerCacheManager) cacheAdvertiseHost() string {
 	if addr := strings.TrimSpace(os.Getenv(types.WorkerCacheAdvertiseAddrEnv)); addr != "" {
 		return addr
 	}
-	if net.ParseIP(m.podAddr) != nil {
-		return m.podAddr
+	if ip := net.ParseIP(m.podAddr); usableCacheAdvertiseIP(ip) {
+		return ip.String()
 	}
-	if ip, err := getIPFromEnv(types.WorkerPodIPEnv); err == nil {
+	if ip, err := getIPFromEnv(types.WorkerPodIPEnv); err == nil && usableCacheAdvertiseIP(net.ParseIP(ip)) {
 		return ip
 	}
 	return ""
+}
+
+func usableCacheAdvertiseIP(ip net.IP) bool {
+	return ip != nil && !ip.IsLoopback() && !ip.IsUnspecified()
 }
 
 func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolConfig, nodeID, locality string) cache.Config {

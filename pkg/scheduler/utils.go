@@ -78,28 +78,11 @@ func ParseGPU(gpu interface{}) (uint, error) {
 }
 
 func ParseGPUType(gpu interface{}) (types.GpuType, error) {
-	switch fmt.Sprintf("%v", gpu) {
-	case string(types.GPU_A100_40):
-		return types.GPU_A100_40, nil
-	case string(types.GPU_A100_80):
-		return types.GPU_A100_80, nil
-	case string(types.GPU_A10G):
-		return types.GPU_A10G, nil
-	case string(types.GPU_L4):
-		return types.GPU_L4, nil
-	case string(types.GPU_T4):
-		return types.GPU_T4, nil
-	case string(types.GPU_H100):
-		return types.GPU_H100, nil
-	case string(types.GPU_A6000):
-		return types.GPU_A6000, nil
-	case string(types.GPU_RTX4090):
-		return types.GPU_RTX4090, nil
-	case string(types.GPU_L40S):
-		return types.GPU_L40S, nil
-	default:
+	normalized := types.NormalizeGPUType(fmt.Sprintf("%v", gpu))
+	if !types.KnownGPUType(normalized) || normalized == types.GPU_ANY {
 		return types.GpuType(""), errors.New("invalid gpu type")
 	}
+	return normalized, nil
 }
 
 func parseTmpSizeLimit(workerPoolTmpSizeLimit string, globalWorkerTmpSizeLimit string) resource.Quantity {

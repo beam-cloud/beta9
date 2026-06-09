@@ -126,6 +126,272 @@ func TestCreatePoolConflictsWithWorkspacePoolOwnedByAnotherToken(t *testing.T) {
 	}
 }
 
+func TestCreatePoolRejectsMultipleGPUTypes(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreatePool(ctx, &pb.CreatePoolRequest{
+		Pool: &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A4000", "H100"}},
+	})
+	if err != nil {
+		t.Fatalf("CreatePool() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("CreatePool() unexpectedly accepted mixed GPU types")
+	}
+	if !strings.Contains(res.ErrMsg, "private pools require one GPU type") {
+		t.Fatalf("CreatePool() error = %q, want single GPU type error", res.ErrMsg)
+	}
+}
+
+func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreatePool(ctx, &pb.CreatePoolRequest{
+		Pool: &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"NVIDIA RTX A4000"}},
+	})
+	if err != nil {
+		t.Fatalf("CreatePool() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("CreatePool() not ok: %s", res.ErrMsg)
+	}
+	if got, want := repo.pools["workspace-1"][0].Config.Gpu, []string{"A4000"}; !sameStrings(got, want) {
+		t.Fatalf("stored pool GPU = %v, want %v", got, want)
+	}
+}
+
+func TestValidatePrivatePoolGPURequestAllowsWorkloadPreferenceList(t *testing.T) {
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "gpu-pool", Config: &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A4000"}}},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	err := service.ValidatePrivatePoolGPURequest(
+		context.Background(),
+		"workspace-1",
+		"gpu-pool",
+		[]types.GpuType{types.GPU_H100, types.GPU_A4000},
+	)
+	if err != nil {
+		t.Fatalf("ValidatePrivatePoolGPURequest() error = %v", err)
+	}
+}
+
+func TestJoinAgentLocksPoolGPUTypeFromFirstMachine(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID:      "workspace-1",
+					Name:             "gpu-pool",
+					Config:           &pb.PoolConfig{Name: "gpu-pool"},
+					CreatedByTokenID: "owner-token",
+					CreatedAt:        now,
+					UpdatedAt:        now,
+				},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			hashComputeToken("join-token"): {
+				TokenHash:        hashComputeToken("join-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "gpu-pool",
+				CreatedByTokenID: "owner-token",
+				ExpiresAt:        now.Add(time.Hour),
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          "join-token",
+		MachineFingerprint: "fingerprint-1",
+		Gpu:                []string{"A4000"},
+		GpuCount:           1,
+		CpuCount:           4,
+		MemoryMb:           1024,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("JoinAgent() not ok: %s", res.ErrMsg)
+	}
+	pool := repo.pools["workspace-1"][0]
+	if got, want := pool.Config.Gpu, []string{"A4000"}; !sameStrings(got, want) {
+		t.Fatalf("pool GPU config = %v, want %v", got, want)
+	}
+}
+
+func TestJoinAgentRejectsPoolGPUMismatch(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID:      "workspace-1",
+					Name:             "gpu-pool",
+					Config:           &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A4000"}},
+					CreatedByTokenID: "owner-token",
+				},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			hashComputeToken("join-token"): {
+				TokenHash:        hashComputeToken("join-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "gpu-pool",
+				CreatedByTokenID: "owner-token",
+				ExpiresAt:        now.Add(time.Hour),
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          "join-token",
+		MachineFingerprint: "fingerprint-1",
+		Gpu:                []string{"H100"},
+		GpuCount:           1,
+		CpuCount:           4,
+		MemoryMb:           1024,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("JoinAgent() unexpectedly accepted a mismatched GPU")
+	}
+	if !strings.Contains(res.ErrMsg, `requires GPU type "A4000"`) {
+		t.Fatalf("JoinAgent() error = %q, want pool GPU mismatch", res.ErrMsg)
+	}
+}
+
+func TestJoinAgentRejectsGPUAfterCPUOnlyPoolInitialized(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID:      "workspace-1",
+					Name:             "cpu-pool",
+					Config:           &pb.PoolConfig{Name: "cpu-pool"},
+					CreatedByTokenID: "owner-token",
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "cpu-pool"): {
+				{WorkspaceID: "workspace-1", PoolName: "cpu-pool", MachineID: "cpu-machine"},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			hashComputeToken("join-token"): {
+				TokenHash:        hashComputeToken("join-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "cpu-pool",
+				CreatedByTokenID: "owner-token",
+				ExpiresAt:        now.Add(time.Hour),
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          "join-token",
+		MachineFingerprint: "fingerprint-1",
+		Gpu:                []string{"A4000"},
+		GpuCount:           1,
+		CpuCount:           4,
+		MemoryMb:           1024,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("JoinAgent() unexpectedly accepted a GPU machine after CPU-only initialization")
+	}
+	if !strings.Contains(res.ErrMsg, "initialized without GPUs") {
+		t.Fatalf("JoinAgent() error = %q, want CPU-only pool error", res.ErrMsg)
+	}
+}
+
+func TestJoinAgentRejectsMixedMachineGPUTypes(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID:      "workspace-1",
+					Name:             "gpu-pool",
+					Config:           &pb.PoolConfig{Name: "gpu-pool"},
+					CreatedByTokenID: "owner-token",
+				},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			hashComputeToken("join-token"): {
+				TokenHash:        hashComputeToken("join-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "gpu-pool",
+				CreatedByTokenID: "owner-token",
+				ExpiresAt:        now.Add(time.Hour),
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          "join-token",
+		MachineFingerprint: "fingerprint-1",
+		Gpu:                []string{"A4000", "H100"},
+		GpuCount:           2,
+		CpuCount:           4,
+		MemoryMb:           1024,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("JoinAgent() unexpectedly accepted mixed GPU types")
+	}
+	if !strings.Contains(res.ErrMsg, "mixed GPU types") {
+		t.Fatalf("JoinAgent() error = %q, want mixed GPU type error", res.ErrMsg)
+	}
+}
+
+func TestMissingPrivatePoolGPUWarning(t *testing.T) {
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "gpu-pool", Config: &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A4000"}}},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	warning, err := service.MissingPrivatePoolGPUWarning(context.Background(), "workspace-1", []types.GpuType{types.GPU_H100})
+	if err != nil {
+		t.Fatalf("MissingPrivatePoolGPUWarning() error = %v", err)
+	}
+	if !strings.Contains(warning, "GPU type H100 is not available") || !strings.Contains(warning, "A4000") {
+		t.Fatalf("warning = %q, want requested and configured GPU types", warning)
+	}
+}
+
 func TestIsLocalGatewayURL(t *testing.T) {
 	tests := []struct {
 		rawURL string

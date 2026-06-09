@@ -279,8 +279,12 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	changed := reservation.Status != current.Status ||
 		reservation.LastStatusMessage != current.LastStatusMessage ||
 		reservation.MachineID != current.MachineID ||
+		(current.Cloud != "" && reservation.Cloud != current.Cloud) ||
 		reservation.ExpiresAt != current.ExpiresAt
 	reservation.Status = current.Status
+	if current.Cloud != "" {
+		reservation.Cloud = current.Cloud
+	}
 	reservation.LastStatusMessage = current.LastStatusMessage
 	if current.MachineID != "" {
 		reservation.MachineID = current.MachineID
@@ -483,6 +487,7 @@ func computeReservationEvent(workspaceID string, state *model.PoolState, reserva
 	event.GPUCount = reservation.GPUCount
 	event.Attrs["reservation_id"] = reservation.ID
 	event.Attrs["provider"] = reservation.Provider
+	event.Attrs["cloud"] = reservation.Cloud
 	event.Attrs["instance_id"] = reservation.InstanceID
 	event.Attrs["offer_id"] = reservation.OfferID
 	event.Attrs["terminating_reason"] = reservation.TerminatingReason

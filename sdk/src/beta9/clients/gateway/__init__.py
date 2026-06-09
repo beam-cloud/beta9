@@ -532,6 +532,7 @@ class ProviderInstance(betterproto.Message):
     status_message: str = betterproto.string_field(12)
     terminating_reason: str = betterproto.string_field(13)
     machine_id: str = betterproto.string_field(14)
+    cloud: str = betterproto.string_field(15)
 
 
 @dataclass(eq=False, repr=False)

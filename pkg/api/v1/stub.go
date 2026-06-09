@@ -272,8 +272,9 @@ func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub 
 	}
 
 	if overrideConfig.Gpu != nil {
-		if _, ok := types.GPUTypesToMap(types.AllGPUTypes())[*overrideConfig.Gpu]; ok {
-			stubConfig.Runtime.Gpus = []types.GpuType{types.GpuType(*overrideConfig.Gpu)}
+		gpu := types.NormalizeGPUType(*overrideConfig.Gpu)
+		if _, ok := types.GPUTypesToMap(types.AllGPUTypes())[string(gpu)]; ok {
+			stubConfig.Runtime.Gpus = []types.GpuType{gpu}
 		} else {
 
 			return HTTPBadRequest("Invalid GPU type")

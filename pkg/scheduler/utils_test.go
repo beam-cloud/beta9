@@ -229,10 +229,16 @@ func TestParseGPUType(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "invalid gpu a100_80 (with underscore)",
+			name:    "valid gpu a100_80 alias",
 			gpuType: "A100_80",
-			wantVal: types.GpuType(""),
-			wantErr: true,
+			wantVal: types.GPU_A100_80,
+			wantErr: false,
+		},
+		{
+			name:    "valid gpu a4000 product name",
+			gpuType: "NVIDIA RTX A4000",
+			wantVal: types.GPU_A4000,
+			wantErr: false,
 		},
 		{
 			name:    "invalid gpu type 3060 (as str)",
