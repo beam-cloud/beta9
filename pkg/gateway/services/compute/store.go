@@ -13,6 +13,21 @@ func (s *Service) savePrivatePoolState(ctx context.Context, workspaceID string, 
 	return s.computeRepo.SavePoolState(ctx, workspaceID, state)
 }
 
+// withPoolStateLock serializes read-modify-write cycles on a pool's state.
+// Callers must (re)load the pool state inside fn.
+func (s *Service) withPoolStateLock(ctx context.Context, workspaceID, poolName string, fn func() error) error {
+	if s == nil || s.computeRepo == nil {
+		return fn()
+	}
+	if err := s.computeRepo.LockPoolState(ctx, workspaceID, poolName); err != nil {
+		return fmt.Errorf("acquire pool state lock for %s/%s: %w", workspaceID, poolName, err)
+	}
+	defer func() {
+		_ = s.computeRepo.UnlockPoolState(ctx, workspaceID, poolName)
+	}()
+	return fn()
+}
+
 func (s *Service) getPrivatePoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
 	return s.computeRepo.GetPoolState(ctx, workspaceID, name)
 }

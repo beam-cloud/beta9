@@ -311,9 +311,5 @@ func requestTransportCredential(ctx context.Context, client pb.GatewayServiceCli
 }
 
 func normalizeTransport(transport string) string {
-	transport = strings.TrimSpace(strings.ReplaceAll(transport, "-", "_"))
-	if transport == "" {
-		return types.BackendRouteTransportTSNet
-	}
-	return transport
+	return types.NormalizeBackendRouteTransport(transport)
 }

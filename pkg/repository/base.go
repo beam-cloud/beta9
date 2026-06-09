@@ -57,6 +57,7 @@ type ContainerRepository interface {
 	GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error)
 	ListBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) ([]types.BackendRoute, error)
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
+	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
@@ -89,6 +90,8 @@ type WorkerPoolRepository interface {
 }
 
 type ComputeRepository interface {
+	LockPoolState(ctx context.Context, workspaceID, name string) error
+	UnlockPoolState(ctx context.Context, workspaceID, name string) error
 	SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error
 	GetPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error)
 	ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error)
@@ -102,6 +105,7 @@ type ComputeRepository interface {
 	GetAgentMachineStateForWorkspace(ctx context.Context, workspaceID, machineID string) (*compute.AgentTokenState, error)
 	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error)
 	DeleteAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) error
+	PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error

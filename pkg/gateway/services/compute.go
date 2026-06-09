@@ -54,10 +54,6 @@ func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, 
 	return gws.computeService.RequestAgentTransportCredential(ctx, in)
 }
 
-func (gws *GatewayService) ListAgentRoutes(ctx context.Context, in *pb.ListAgentRoutesRequest) (*pb.ListAgentRoutesResponse, error) {
-	return gws.computeService.ListAgentRoutes(ctx, in)
-}
-
 func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	return gws.computeService.StreamAgent(in, stream)
 }

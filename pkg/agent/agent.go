@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -30,6 +31,9 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	if err != nil {
 		return err
 	}
+	if !res.Ok || res.AgentToken == "" {
+		return fmt.Errorf("join failed: %s", firstNonEmpty(res.ErrMsg, "gateway did not return an agent token"))
+	}
 	res.Bootstrap = normalizeBootstrapForAgentRuntime(opts.GatewayURL, res.Bootstrap)
 	if err := saveRuntimeState(opts.GatewayURL, res); err != nil {
 		fmt.Fprintf(opts.Stderr, "failed to save agent state: %v\n", err)
@@ -41,9 +45,6 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 		statusf(opts.Stdout, "Machine is not schedulable: %s", preflightFailureSummary(res.Preflight))
 	}
 	verbosef(opts.Stdout, "transport=%s executor=%s fallback=%s\n", res.Bootstrap.Transport, res.Bootstrap.Executor, res.Bootstrap.Fallback)
-	if !res.Ok || res.AgentToken == "" {
-		return nil
-	}
 	grpcClient, grpcConn, err := newGatewayGRPCClient(opts.GatewayURL, res.Bootstrap.GatewayGRPCHost, res.Bootstrap.GatewayGRPCPort, res.Bootstrap.GatewayGRPCTLS)
 	if err != nil {
 		return fmt.Errorf("gateway grpc client: %w", err)
@@ -105,7 +106,10 @@ func normalizeJoinOptions(opts types.AgentJoinOptions) (types.AgentJoinOptions, 
 }
 
 func resolveAgentIdentity(ctx context.Context, client *Client, opts types.AgentJoinOptions) (*joinResponse, error) {
-	savedState, _ := loadRuntimeState(opts.GatewayURL)
+	savedState, stateErr := loadRuntimeState(opts.GatewayURL)
+	if stateErr != nil {
+		fmt.Fprintf(opts.Stderr, "failed to load saved agent state: %v\n", stateErr)
+	}
 	if opts.JoinToken == "" {
 		if savedState == nil {
 			return nil, fmt.Errorf("join-token is required")
@@ -121,13 +125,20 @@ func resolveAgentIdentity(ctx context.Context, client *Client, opts types.AgentJ
 		return nil, fmt.Errorf("join failed: %s", res.ErrMsg)
 	}
 	if err != nil {
-		if savedState != nil {
+		// Fall back to the saved identity only when the gateway could not be
+		// reached; a 4xx rejection means the token was revoked or invalid.
+		if savedState != nil && !joinRejected(err) {
 			logJoinFallback(opts.Stderr, err)
 			return savedState, nil
 		}
 		return nil, fmt.Errorf("join failed: %w", err)
 	}
 	return nil, fmt.Errorf("join failed")
+}
+
+func joinRejected(err error) bool {
+	var statusErr *compute.HTTPStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode >= 400 && statusErr.StatusCode < 500
 }
 
 func logJoinFallback(stderr io.Writer, err error) {

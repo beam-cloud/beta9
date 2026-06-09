@@ -11,14 +11,30 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	redis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 type ComputeRedisRepository struct {
-	rdb *common.RedisClient
+	rdb  *common.RedisClient
+	lock *common.RedisLock
 }
 
 func NewComputeRedisRepository(rdb *common.RedisClient) ComputeRepository {
-	return &ComputeRedisRepository{rdb: rdb}
+	return &ComputeRedisRepository{rdb: rdb, lock: common.NewRedisLock(rdb)}
+}
+
+// LockPoolState serializes pool state writes across the reconciler, launch,
+// and release paths.
+func (r *ComputeRedisRepository) LockPoolState(ctx context.Context, workspaceID, name string) error {
+	return r.lock.Acquire(ctx, common.RedisKeys.ComputePoolStateLock(workspaceID, name), common.RedisLockOptions{
+		TtlS:          300,
+		Retries:       100,
+		RetryInterval: 100 * time.Millisecond,
+	})
+}
+
+func (r *ComputeRedisRepository) UnlockPoolState(ctx context.Context, workspaceID, name string) error {
+	return r.lock.Release(common.RedisKeys.ComputePoolStateLock(workspaceID, name))
 }
 
 func (r *ComputeRedisRepository) SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error {
@@ -256,6 +272,27 @@ func (r *ComputeRedisRepository) DeleteAgentMachineState(ctx context.Context, wo
 	return r.rdb.SRem(ctx, common.RedisKeys.ComputeAgentMachineIndex(workspaceID, poolName), machineID).Err()
 }
 
+// PruneAgentMachineIndex removes index entries whose machine state key no
+// longer exists.
+func (r *ComputeRedisRepository) PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error {
+	machineIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeAgentMachineIndex(workspaceID, poolName)).Result()
+	if err != nil {
+		return err
+	}
+	for _, machineID := range machineIDs {
+		exists, err := r.rdb.Exists(ctx, common.RedisKeys.ComputeAgentMachine(workspaceID, poolName, machineID)).Result()
+		if err != nil {
+			return err
+		}
+		if exists == 0 {
+			if err := r.rdb.SRem(ctx, common.RedisKeys.ComputeAgentMachineIndex(workspaceID, poolName), machineID).Err(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (r *ComputeRedisRepository) scanAgentMachineStateForWorkspace(ctx context.Context, workspaceID, machineID string) (*compute.AgentTokenState, error) {
 	pools, err := r.ListPoolStates(ctx, workspaceID, 0)
 	if err != nil {
@@ -373,7 +410,7 @@ func (r *ComputeRedisRepository) machines(ctx context.Context, keys []string) ([
 	}
 
 	states := make([]*compute.AgentTokenState, 0, len(values))
-	for _, value := range values {
+	for i, value := range values {
 		data, ok := stateBytes(value)
 		if !ok {
 			continue
@@ -381,6 +418,7 @@ func (r *ComputeRedisRepository) machines(ctx context.Context, keys []string) ([
 
 		var state compute.AgentTokenState
 		if err := json.Unmarshal(data, &state); err != nil {
+			log.Warn().Err(err).Str("key", keys[i]).Msg("skipping corrupt agent machine state")
 			continue
 		}
 		states = append(states, &state)
@@ -399,7 +437,7 @@ func (r *ComputeRedisRepository) slots(ctx context.Context, keys []string) ([]*c
 	}
 
 	states := make([]*compute.AgentWorkerSlotState, 0, len(values))
-	for _, value := range values {
+	for i, value := range values {
 		data, ok := stateBytes(value)
 		if !ok {
 			continue
@@ -407,6 +445,7 @@ func (r *ComputeRedisRepository) slots(ctx context.Context, keys []string) ([]*c
 
 		var state compute.AgentWorkerSlotState
 		if err := json.Unmarshal(data, &state); err != nil {
+			log.Warn().Err(err).Str("key", keys[i]).Msg("skipping corrupt agent worker slot state")
 			continue
 		}
 		states = append(states, &state)

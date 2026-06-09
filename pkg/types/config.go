@@ -654,6 +654,9 @@ type ManagedComputeBillingConfig struct {
 	Timeout            time.Duration `key:"timeout" json:"timeout"`
 	ReconcileInterval  time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
 	MinimumCreditCents int64         `key:"minimumCreditCents" json:"minimum_credit_cents"`
+	// FailureGracePeriod is how long balance checks may fail before managed
+	// reservations are terminated.
+	FailureGracePeriod time.Duration `key:"failureGracePeriod" json:"failure_grace_period"`
 }
 
 func (c ManagedComputeBillingConfig) MinimumCreditCentsOrDefault() int64 {
@@ -661,6 +664,13 @@ func (c ManagedComputeBillingConfig) MinimumCreditCentsOrDefault() int64 {
 		return c.MinimumCreditCents
 	}
 	return ManagedComputeDefaultMinimumCreditCents
+}
+
+func (c ManagedComputeBillingConfig) FailureGracePeriodOrDefault() time.Duration {
+	if c.FailureGracePeriod > 0 {
+		return c.FailureGracePeriod
+	}
+	return 10 * time.Minute
 }
 
 func (c ManagedComputeBillingConfig) TimeoutOrDefault() time.Duration {

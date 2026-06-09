@@ -36,7 +36,6 @@ type Demand = types.ComputeDemand
 type SolveInput = types.ComputeSolveInput
 type SolvePlan = types.ComputeSolvePlan
 type SolveAction = types.ComputeSolveAction
-type LedgerEntry = types.ComputeLedgerEntry
 
 func ValidatePoolName(name string) error {
 	return types.ValidateComputePoolName(name)

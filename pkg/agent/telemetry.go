@@ -38,9 +38,10 @@ type agentTelemetry struct {
 	ch chan *pb.AgentTelemetryRequest
 }
 
+// agentWorkerStats reports worker counts only; container counts are computed
+// gateway-side from the worker's active containers.
 type agentWorkerStats struct {
-	WorkerCount    uint32
-	ContainerCount uint32
+	WorkerCount uint32
 }
 
 func newAgentTelemetry(client pb.GatewayServiceClient, agentToken string, bootstrap bootstrapConfig, stderr io.Writer) *agentTelemetry {
@@ -322,9 +323,7 @@ func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
 		snapshot.DiskPath = usage.Path
 	}
 	if t.stats != nil {
-		stats := t.stats()
-		snapshot.WorkerCount = stats.WorkerCount
-		snapshot.ContainerCount = stats.ContainerCount
+		snapshot.WorkerCount = t.stats().WorkerCount
 	}
 	return snapshot
 }
