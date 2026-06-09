@@ -75,6 +75,10 @@ func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *
 		if !reservation.Managed() {
 			continue
 		}
+		if reservationClosed(reservation.Status) {
+			changed = s.reconcileClosedReservationMachine(ctx, workspaceID, state, reservation) || changed
+			continue
+		}
 		if reservation.Status == model.ReservationTerminating {
 			changed = s.reconcileTerminatingReservation(ctx, workspaceID, state, reservation, vendors, now) || changed
 			continue
@@ -108,7 +112,7 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		return false
 	}
 	changed := s.recordManagedUsage(ctx, workspaceID, state, now)
-	if billingCheckFresh(state, now) {
+	if !changed && billingCheckFresh(state, now) {
 		return changed
 	}
 
@@ -190,7 +194,9 @@ func reservationBillingWindow(reservation *model.Reservation, now time.Time) (ti
 	if reservation == nil || !reservation.Managed() {
 		return time.Time{}, time.Time{}, false
 	}
-	if reservation.Status == model.ReservationDeleted || reservation.Status == model.ReservationFailed {
+	if reservation.Status == model.ReservationDeleted ||
+		reservation.Status == model.ReservationFailed ||
+		reservation.Status == model.ReservationTerminating {
 		return time.Time{}, time.Time{}, false
 	}
 
@@ -296,6 +302,26 @@ func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID st
 	return s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reconcileReasonReservationExpired, "reservation ttl expired")
 }
 
+func (s *Service) reconcileClosedReservationMachine(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation) bool {
+	if reservation.MachineID == "" {
+		return false
+	}
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, state.Name, reservation.MachineID)
+	if err != nil {
+		reservation.LastError = err.Error()
+		return true
+	}
+	if machine == nil {
+		return false
+	}
+	if err := s.removePrivateMachine(ctx, machine); err != nil {
+		reservation.LastError = err.Error()
+		return true
+	}
+	reservation.LastError = ""
+	return true
+}
+
 func (s *Service) reconcileTerminatingReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, now time.Time) bool {
 	if reservation.Status != model.ReservationTerminating {
 		return false
@@ -375,7 +401,7 @@ func (s *Service) disablePoolMachines(ctx context.Context, workspaceID, poolName
 	}
 }
 
-func (s *Service) disableMachineWorker(_ context.Context, machine *model.AgentTokenState, reason string) bool {
+func (s *Service) disableMachineWorker(ctx context.Context, machine *model.AgentTokenState, reason string) bool {
 	if s.workerRepo == nil || machine == nil {
 		return false
 	}
@@ -390,6 +416,7 @@ func (s *Service) disableMachineWorker(_ context.Context, machine *model.AgentTo
 	if err := s.workerRepo.UpdateWorkerStatus(workerID, types.WorkerStatusDisabled); err != nil {
 		return false
 	}
+	s.stopWorkerContainers(ctx, workerID, reason)
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		WorkspaceID: machine.WorkspaceID,
 		PoolName:    machine.PoolName,
@@ -400,6 +427,39 @@ func (s *Service) disableMachineWorker(_ context.Context, machine *model.AgentTo
 		Message:     "machine worker disabled: " + reason,
 	})
 	return true
+}
+
+func (s *Service) stopWorkerContainers(ctx context.Context, workerID, reason string) {
+	if s.containerRepo == nil || workerID == "" {
+		return
+	}
+	containers, err := s.containerRepo.GetActiveContainersByWorkerId(workerID)
+	if err != nil {
+		log.Warn().Err(err).Str("worker_id", workerID).Msg("failed to list containers for disabled worker")
+		return
+	}
+	for _, container := range containers {
+		if container.ContainerId == "" || container.Status == types.ContainerStatusStopping {
+			continue
+		}
+		s.stopContainerForDisabledWorker(ctx, container.ContainerId, reason)
+	}
+}
+
+func (s *Service) stopContainerForDisabledWorker(_ context.Context, containerID, reason string) {
+	stopReason := types.StopContainerReasonScheduler
+	if reason == reconcileReasonMachineReleased {
+		stopReason = types.StopContainerReasonUser
+	}
+	if s.scheduler != nil {
+		if err := s.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerID, Force: true, Reason: stopReason}); err != nil {
+			log.Warn().Err(err).Str("container_id", containerID).Msg("failed to stop container on disabled worker")
+		}
+		return
+	}
+	if err := s.containerRepo.UpdateContainerStatus(containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending); err != nil {
+		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to mark container stopping on disabled worker")
+	}
 }
 
 func (s *Service) emitCreditExhaustedEvent(workspaceID string, state *model.PoolState, decision billingDecision, message string) {

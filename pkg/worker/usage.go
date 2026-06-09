@@ -18,6 +18,7 @@ type WorkerUsageMetrics struct {
 	ctx                 context.Context
 	containerCostClient *clients.ContainerCostClient
 	gpuType             string
+	poolMode            types.PoolMode
 }
 
 func NewWorkerUsageMetrics(
@@ -25,6 +26,7 @@ func NewWorkerUsageMetrics(
 	workerId string,
 	config types.MonitoringConfig,
 	gpuType string,
+	poolMode types.PoolMode,
 ) (*WorkerUsageMetrics, error) {
 	metricsRepo, err := usage.NewUsageMetricsRepository(config, string(usage.MetricsSourceWorker))
 	if err != nil {
@@ -37,6 +39,7 @@ func NewWorkerUsageMetrics(
 		ctx:                 ctx,
 		workerId:            workerId,
 		gpuType:             gpuType,
+		poolMode:            poolMode,
 		metricsRepo:         metricsRepo,
 		containerCostClient: containerCostClient,
 	}, nil
@@ -76,6 +79,9 @@ func (wm *WorkerUsageMetrics) metricsContainerCost(request *types.ContainerReque
 
 // Periodically send metrics to track container duration
 func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
+	if wm == nil || wm.poolMode == types.PoolModePrivate {
+		return
+	}
 	cursorTime := time.Now()
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()

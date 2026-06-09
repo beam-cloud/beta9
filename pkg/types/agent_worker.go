@@ -28,6 +28,8 @@ const (
 	AgentServiceDefaultPath         = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	AgentServiceLogFile             = "agent.log"
 	AgentServiceErrorLogFile        = "agent.err.log"
+	AgentHomeEnv                    = "HOME"
+	AgentXDGConfigHomeEnv           = "XDG_CONFIG_HOME"
 	AgentRegistryAddr               = "127.0.0.1:5000"
 	AgentWorkerEntrypoint           = "/usr/local/bin/worker"
 	AgentTmpSizeLimit               = "30Gi"
