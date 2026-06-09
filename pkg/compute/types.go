@@ -57,3 +57,7 @@ func MicrosToDollars(value int64) float64 {
 func WholeHours(d time.Duration) int64 {
 	return types.ComputeWholeHours(d)
 }
+
+func NormalizeGPU(value string) string {
+	return string(types.NormalizeGPUType(value))
+}

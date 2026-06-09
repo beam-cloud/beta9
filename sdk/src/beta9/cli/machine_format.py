@@ -81,11 +81,15 @@ def format_memory(memory_mb: int) -> str:
 
 
 def machine_gpu(machine: Machine) -> str:
-    if not machine.gpu:
+    return format_gpu(machine.gpu, machine.gpu_count)
+
+
+def format_gpu(gpu: str, gpu_count: int = 0) -> str:
+    if not gpu:
         return "-"
-    if machine.gpu_count == 0:
-        return machine.gpu
-    return f"{machine.gpu} x {machine.gpu_count}"
+    if gpu_count == 0:
+        return gpu
+    return f"{gpu} x {gpu_count}"
 
 
 def machine_free_gpu_count(machine: Machine) -> str:

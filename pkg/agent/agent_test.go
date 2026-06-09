@@ -652,10 +652,10 @@ func TestResolveAgentCapacitySelectsGPUIDs(t *testing.T) {
 	capacity, _, schedulable := resolveAgentCapacity(types.AgentJoinOptions{
 		GPUIDs: "GPU-a,1",
 	}, preflightResult{
-		gpus: []string{"A10G", "A10G"},
+		gpus: []string{"NVIDIA RTX A4000", "NVIDIA RTX A4000"},
 		gpuDevices: []gpuDevice{
-			{ID: "0", UUID: "GPU-a", Name: "A10G"},
-			{ID: "1", UUID: "GPU-b", Name: "A10G"},
+			{ID: "0", UUID: "GPU-a", Name: "NVIDIA RTX A4000"},
+			{ID: "1", UUID: "GPU-b", Name: "NVIDIA RTX A4000"},
 		},
 		schedulable: true,
 	})
@@ -668,6 +668,9 @@ func TestResolveAgentCapacitySelectsGPUIDs(t *testing.T) {
 	}
 	if got := strings.Join(capacity.GPUIDs, ","); got != "GPU-a,1" {
 		t.Fatalf("gpu ids = %q, want GPU-a,1", got)
+	}
+	if got := strings.Join(capacity.GPUs, ","); got != "A4000,A4000" {
+		t.Fatalf("gpus = %q, want A4000,A4000", got)
 	}
 }
 

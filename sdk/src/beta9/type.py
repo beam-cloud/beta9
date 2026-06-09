@@ -94,15 +94,33 @@ class GpuType(str, Enum):
     Any = "any"
     T4 = "T4"
     L4 = "L4"
+    L40 = "L40"
+    A10 = "A10"
     A10G = "A10G"
+    A100 = "A100"
     A100_40 = "A100-40"
     A100_80 = "A100-80"
+    A16 = "A16"
+    A30 = "A30"
+    A40 = "A40"
     H100 = "H100"
     H200 = "H200"
+    GH200 = "GH200"
     B200 = "B200"
+    B300 = "B300"
+    GAUDI2 = "GAUDI2"
+    A4000 = "A4000"
+    A5000 = "A5000"
     A6000 = "A6000"
+    RTX4000Ada = "RTX4000Ada"
     RTX4090 = "RTX4090"
+    RTX5090 = "RTX5090"
+    RTX6000 = "RTX6000"
+    RTX6000Ada = "RTX6000Ada"
+    RTXPro6000 = "RTXPro6000"
     L40S = "L40S"
+    V100 = "V100"
+    V100_32 = "V100-32"
 
 
 # Add GpuType str literals. Must copy/paste for now.
@@ -112,18 +130,95 @@ GpuTypeLiteral = Literal[
     "any",
     "T4",
     "L4",
+    "L40",
+    "A10",
     "A10G",
+    "A100",
     "A100-40",
     "A100-80",
+    "A16",
+    "A30",
+    "A40",
     "H100",
     "H200",
+    "GH200",
     "B200",
+    "B300",
+    "GAUDI2",
+    "A4000",
+    "A5000",
     "A6000",
+    "RTX4000Ada",
     "RTX4090",
+    "RTX5090",
+    "RTX6000",
+    "RTX6000Ada",
+    "RTXPro6000",
     "L40S",
+    "V100",
+    "V100-32",
 ]
 
 GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
+
+
+def normalize_gpu_type(gpu: GpuTypeAlias) -> str:
+    if isinstance(gpu, GpuType):
+        return gpu.value
+
+    value = str(gpu).strip()
+    key = "".join(ch for ch in value.upper() if ch.isalnum())
+    for word in ["NVIDIA", "GEFORCE", "TESLA", "QUADRO"]:
+        key = key.replace(word, "")
+
+    if key in ["", "0"]:
+        return ""
+    if key == "ANY":
+        return GpuType.Any.value
+    if "A100" in key and "80G" in key:
+        return GpuType.A100_80.value
+    if "A100" in key and "40G" in key:
+        return GpuType.A100_40.value
+    for alias, canonical in _GPU_ALIASES:
+        if alias in key:
+            return canonical
+    return value
+
+
+_GPU_ALIASES = [
+    ("RTXPRO6000", GpuType.RTXPro6000.value),
+    ("RTX6000ADA", GpuType.RTX6000Ada.value),
+    ("RTX4000ADA", GpuType.RTX4000Ada.value),
+    ("RTX6000", GpuType.RTX6000.value),
+    ("RTX5090", GpuType.RTX5090.value),
+    ("RTX4090", GpuType.RTX4090.value),
+    ("V10032G", GpuType.V100_32.value),
+    ("V10032", GpuType.V100_32.value),
+    ("V100", GpuType.V100.value),
+    ("GAUDI2", GpuType.GAUDI2.value),
+    ("GH200", GpuType.GH200.value),
+    ("B300", GpuType.B300.value),
+    ("B200", GpuType.B200.value),
+    ("H200", GpuType.H200.value),
+    ("H100", GpuType.H100.value),
+    ("L40S", GpuType.L40S.value),
+    ("L40", GpuType.L40.value),
+    ("L4", GpuType.L4.value),
+    ("T4", GpuType.T4.value),
+    ("A10080G", GpuType.A100_80.value),
+    ("A10080", GpuType.A100_80.value),
+    ("A10040G", GpuType.A100_40.value),
+    ("A10040", GpuType.A100_40.value),
+    ("A100", GpuType.A100.value),
+    ("A6000", GpuType.A6000.value),
+    ("A5000", GpuType.A5000.value),
+    ("A4000", GpuType.A4000.value),
+    ("A40", GpuType.A40.value),
+    ("A30", GpuType.A30.value),
+    ("A16", GpuType.A16.value),
+    ("A10G", GpuType.A10G.value),
+    ("A10", GpuType.A10.value),
+]
 
 
 @dataclass
@@ -141,10 +236,10 @@ class Pool:
         if self.gpu is None:
             return []
         if isinstance(self.gpu, list):
-            return [GpuType(g).value for g in self.gpu]
+            return [GpuType(normalize_gpu_type(g)).value for g in self.gpu]
         if self.gpu == "":
             return []
-        return [GpuType(self.gpu).value]
+        return [GpuType(normalize_gpu_type(self.gpu)).value]
 
     def _requires_reservation(self) -> bool:
         return any(

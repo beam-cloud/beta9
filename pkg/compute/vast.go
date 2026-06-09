@@ -111,6 +111,7 @@ func (c *VastClient) CreateReservation(ctx context.Context, req ReservationReque
 		Name:             ReservationNodeName(req),
 		Selector:         req.Selector,
 		Provider:         c.Name(),
+		Cloud:            reservationCloud(req.Offer.Cloud, c.Name()),
 		OfferID:          req.Offer.ID,
 		InstanceType:     req.Offer.InstanceType,
 		InstanceID:       instanceID,
@@ -138,6 +139,7 @@ func (c *VastClient) GetReservation(ctx context.Context, id string) (*Reservatio
 	return &Reservation{
 		ID:               id,
 		Provider:         c.Name(),
+		Cloud:            reservationCloud(offer.Cloud, c.Name()),
 		OfferID:          offer.ID,
 		InstanceType:     offer.InstanceType,
 		InstanceID:       id,
@@ -148,6 +150,13 @@ func (c *VastClient) GetReservation(ctx context.Context, id string) (*Reservatio
 		HourlyCostMicros: offer.HourlyCostMicros,
 		Status:           ReservationActive,
 	}, nil
+}
+
+func reservationCloud(cloud, fallback string) string {
+	if cloud != "" {
+		return cloud
+	}
+	return fallback
 }
 
 func (c *VastClient) DeleteReservation(ctx context.Context, id string) error {
@@ -167,9 +176,10 @@ func vastOfferFromMap(m map[string]any) Offer {
 	return Offer{
 		ID:               id,
 		Provider:         "vast",
+		Cloud:            "vast",
 		InstanceType:     jsonString(m, "machine_id", "instance_type", "hostname"),
 		Region:           jsonString(m, "geolocation", "region", "location"),
-		GPU:              jsonString(m, "gpu_name", "gpu", "gpu_type"),
+		GPU:              NormalizeGPU(jsonString(m, "gpu_name", "gpu", "gpu_type")),
 		GPUCount:         gpuCount,
 		CPUMillicores:    int64(jsonFloat64(m, "cpu_cores", "vcpus", "cpu") * 1000),
 		MemoryMB:         int64(jsonFloat64(m, "cpu_ram", "memory_mb", "ram") * 1024),

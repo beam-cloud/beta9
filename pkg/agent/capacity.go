@@ -36,7 +36,7 @@ func resolveAgentCapacity(opts types.AgentJoinOptions, preflight preflightResult
 		CPUCount:                  uint32(systemCPUCount()),
 		CPUMillicores:             int64(systemCPUCount()) * 1000,
 		MemoryMB:                  systemMemoryMB(),
-		GPUs:                      append([]string{}, preflight.gpus...),
+		GPUs:                      types.NormalizeGPUStrings(preflight.gpus),
 		GPUCount:                  uint32(len(preflight.gpus)),
 		NetworkSlotPoolSize:       uint32(opts.NetworkSlots),
 		ContainerStartConcurrency: uint32(opts.ContainerStartConcurrency),
@@ -86,7 +86,7 @@ func resolveAgentCapacity(opts types.AgentJoinOptions, preflight preflightResult
 		capacity.GPUs = make([]string, 0, len(selectedDevices))
 		capacity.GPUIDs = make([]string, 0, len(selectedDevices))
 		for _, device := range selectedDevices {
-			capacity.GPUs = append(capacity.GPUs, device.Name)
+			capacity.GPUs = append(capacity.GPUs, string(types.NormalizeGPUType(device.Name)))
 			capacity.GPUIDs = append(capacity.GPUIDs, device.ID)
 		}
 		capacity.GPUCount = uint32(len(selectedDevices))
@@ -253,7 +253,7 @@ func detectNvidiaGPUDevices() []gpuDevice {
 		}
 		id := strings.TrimSpace(fields[0])
 		uuid := strings.TrimSpace(fields[1])
-		name := strings.TrimSpace(fields[2])
+		name := string(types.NormalizeGPUType(fields[2]))
 		if id == "" || name == "" {
 			continue
 		}

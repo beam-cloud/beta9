@@ -42,6 +42,7 @@ from ...type import (
     PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
+    normalize_gpu_type,
 )
 from ...utils import TempFile
 from .utils import sdk_timing, timed_lock
@@ -377,16 +378,16 @@ class RunnerAbstraction(BaseAbstraction):
             raise ValueError("Invalid GPU type")
 
         if isinstance(gpu, list):
-            return ",".join([GpuType(g).value for g in gpu])
+            return ",".join([GpuType(normalize_gpu_type(g)).value for g in gpu])
         else:
-            return GpuType(gpu).value
+            return GpuType(normalize_gpu_type(gpu)).value
 
     def _gpu_values(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> List[str]:
         if gpu is None or gpu == "":
             return []
         if isinstance(gpu, list):
-            return [GpuType(g).value for g in gpu]
-        return [GpuType(gpu).value]
+            return [GpuType(normalize_gpu_type(g)).value for g in gpu]
+        return [GpuType(normalize_gpu_type(gpu)).value]
 
     def parse_pool(self, pool: Optional[Union[str, Pool]]):
         if pool is None:

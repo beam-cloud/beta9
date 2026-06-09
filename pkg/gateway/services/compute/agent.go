@@ -70,6 +70,10 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
 	}
+	if err := s.enforcePoolGPUType(ctx, poolState, agentState); err != nil {
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+
 	bootstrap, err := s.agentBootstrapConfig(ctx, tokenState.WorkspaceID, poolState)
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil

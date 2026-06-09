@@ -59,10 +59,15 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (model.Poo
 	if err != nil {
 		return model.Pool{}, err
 	}
+	gpus, err := poolGPUConfig(in.Gpu)
+	if err != nil {
+		return model.Pool{}, err
+	}
+
 	pool := model.Pool{
 		Name:           in.Name,
 		Selector:       in.Selector,
-		GPUs:           in.Gpu,
+		GPUs:           gpus,
 		TotalGPUs:      in.Gpus,
 		OfferID:        in.OfferId,
 		TTL:            ttl,
@@ -104,6 +109,7 @@ func providerInstanceToProto(reservation model.Reservation) *pb.ProviderInstance
 		Id:                reservation.ID,
 		PoolName:          reservation.PoolName,
 		Provider:          reservation.Provider,
+		Cloud:             reservation.Cloud,
 		OfferId:           reservation.OfferID,
 		Status:            string(reservation.Status),
 		GpuCount:          reservation.GPUCount,

@@ -63,9 +63,11 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 	if err := model.ValidatePoolName(config.Name); err != nil {
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if _, err := computePoolFromProto(config, false); err != nil {
+	pool, err := computePoolFromProto(config, false)
+	if err != nil {
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	config.Gpu = pool.GPUs
 
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, config.Name)
 	if err != nil {

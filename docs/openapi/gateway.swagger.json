@@ -3203,6 +3203,9 @@
         },
         "machineId": {
           "type": "string"
+        },
+        "cloud": {
+          "type": "string"
         }
       }
     },
