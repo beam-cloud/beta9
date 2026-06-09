@@ -442,10 +442,22 @@ func maxInt64(a, b int64) int64 {
 }
 
 func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string) error {
+	ctx := context.TODO()
 	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 
+	status, err := r.rdb.HGet(ctx, stateKey, "status").Result()
+	if err == redis.Nil {
+		return &types.ErrWorkerNotFound{WorkerId: workerId}
+	}
+	if err != nil {
+		return err
+	}
+	if types.WorkerStatus(status) == types.WorkerStatusPending {
+		return r.ToggleWorkerAvailable(workerId)
+	}
+
 	// Set TTL on state key
-	err := r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
+	err = r.rdb.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
 	}

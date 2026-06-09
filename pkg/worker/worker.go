@@ -923,12 +923,24 @@ func (s *Worker) keepalive() {
 	ticker := time.NewTicker(types.WorkerKeepAliveInterval)
 	defer ticker.Stop()
 
+	consecutiveFailures := 0
 	for {
 		select {
 		case <-ticker.C:
-			s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+			_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
 				WorkerId: s.workerId,
-			})
+			}))
+			if err != nil {
+				consecutiveFailures++
+				if consecutiveFailures == 1 || consecutiveFailures%20 == 0 {
+					log.Warn().Err(err).Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive failed")
+				}
+				continue
+			}
+			if consecutiveFailures > 0 {
+				log.Info().Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive recovered")
+				consecutiveFailures = 0
+			}
 		case <-s.ctx.Done():
 			return
 		}
