@@ -594,6 +594,10 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	if got := httpConfig["externalPort"]; got != float64(1994) {
 		t.Fatalf("http external port = %v, want 1994", got)
 	}
+	workerConfig := config["worker"].(map[string]any)
+	if got := workerConfig["useHostResolvConf"]; got != true {
+		t.Fatalf("useHostResolvConf = %v, want true", got)
+	}
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {

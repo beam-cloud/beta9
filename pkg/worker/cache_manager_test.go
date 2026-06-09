@@ -581,6 +581,22 @@ func TestCacheAdvertiseHost(t *testing.T) {
 	}
 }
 
+func TestCacheWorkerInstanceIDPrefersMachineAndSkipsLoopback(t *testing.T) {
+	t.Setenv(types.WorkerPodHostEnv, "127.0.0.1")
+	t.Setenv(types.WorkerPodIPEnv, "127.0.0.1")
+	t.Setenv(types.WorkerMachineEnv, "machine-a")
+	t.Setenv(types.WorkerHostnameEnv, "container-host")
+
+	require.Equal(t, "machine-a", cacheWorkerInstanceID("worker-a"))
+}
+
+func TestCacheWorkerInstanceIDUsesReachablePodIP(t *testing.T) {
+	t.Setenv(types.WorkerPodIPEnv, "10.0.0.8")
+	t.Setenv(types.WorkerPodHostEnv, "127.0.0.1")
+
+	require.Equal(t, "10.0.0.8", cacheWorkerInstanceID("worker-a"))
+}
+
 func TestBindAddr(t *testing.T) {
 	tests := []struct {
 		name string
