@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	workerEventSinkBufferSize = 128
-	workerEventRetryDelay     = 5 * time.Second
+	workerEventSinkBufferSize          = 128
+	workerEventRetryDelay              = 5 * time.Second
+	workerEventStreamHeartbeatInterval = 30 * time.Second
 )
 
 type workerEventSink struct {
@@ -201,6 +202,10 @@ func stringArg(args map[string]any, key string) (string, bool) {
 }
 
 func (s *WorkerRepositoryService) StreamWorkerEvents(req *pb.StreamWorkerEventsRequest, stream pb.WorkerRepositoryService_StreamWorkerEventsServer) error {
+	return s.streamWorkerEvents(req, stream, workerEventStreamHeartbeatInterval)
+}
+
+func (s *WorkerRepositoryService) streamWorkerEvents(req *pb.StreamWorkerEventsRequest, stream pb.WorkerRepositoryService_StreamWorkerEventsServer, heartbeatInterval time.Duration) error {
 	if req.WorkerId == "" {
 		return status.Error(codes.InvalidArgument, "worker_id is required")
 	}
@@ -211,12 +216,23 @@ func (s *WorkerRepositoryService) StreamWorkerEvents(req *pb.StreamWorkerEventsR
 	sinkID, events := s.workerEvents.register(req.WorkerId)
 	defer s.workerEvents.unregister(sinkID)
 
+	var heartbeat <-chan time.Time
+	if heartbeatInterval > 0 {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
+
 	for {
 		select {
 		case <-s.ctx.Done():
 			return s.ctx.Err()
 		case <-stream.Context().Done():
 			return stream.Context().Err()
+		case <-heartbeat:
+			if err := stream.Send(&pb.WorkerEvent{EventId: types.WorkerEventHeartbeatID}); err != nil {
+				return err
+			}
 		case event, ok := <-events:
 			if !ok {
 				return nil

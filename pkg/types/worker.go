@@ -12,6 +12,7 @@ import (
 const (
 	WorkerLifecycleStatsKey                  string        = "beta9.worker.usage.spawner.lifecycle"
 	WorkerDurationStatsKey                   string        = "beta9.worker.usage.spawner.duration"
+	WorkerEventHeartbeatID                   string        = "__heartbeat__"
 	WorkerUserCodeVolume                     string        = "/mnt/code"
 	WorkerUserOutputVolume                   string        = "/outputs"
 	WorkerContainerVolumePath                string        = "/volumes"
