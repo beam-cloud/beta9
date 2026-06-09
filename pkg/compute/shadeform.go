@@ -86,7 +86,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 		"cloud":               cloud,
 		"shade_instance_type": instanceType,
 		"shade_cloud":         true,
-		"name":                req.PoolName,
+		"name":                ReservationNodeName(req),
 	}
 	if req.Offer.Region != "" {
 		body["region"] = req.Offer.Region
@@ -121,11 +121,13 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 	return &Reservation{
 		ID:               instanceID,
 		PoolName:         req.PoolName,
+		Name:             ReservationNodeName(req),
 		Selector:         req.Selector,
 		Provider:         c.Name(),
 		OfferID:          req.Offer.ID,
 		InstanceType:     req.Offer.InstanceType,
 		InstanceID:       instanceID,
+		MachineID:        req.MachineID,
 		GPU:              req.Offer.GPU,
 		GPUCount:         req.Offer.GPUCount,
 		CPUMillicores:    req.Offer.CPUMillicores,

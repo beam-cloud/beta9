@@ -49,6 +49,8 @@ func TestCreateReservationConfiguresShadeformStartupScript(t *testing.T) {
 	client := NewShadeform(ShadeformConfig{APIKey: "test-key", BaseURL: server.URL})
 	reservation, err := client.CreateReservation(context.Background(), ReservationRequest{
 		PoolName:         "training",
+		MachineID:        "machine-123",
+		Name:             "beam-workspace-training-machine-123",
 		Selector:         "training",
 		Offer:            Offer{ID: "sf-h100-8", Provider: "shadeform", Cloud: "lambda", InstanceType: "H100x8", Region: "us-east", GPU: "H100", GPUCount: 8, HourlyCostMicros: DollarsToMicros(12.25), Labels: map[string]string{"cloud": "lambda"}},
 		TTL:              6 * time.Hour,
@@ -62,6 +64,9 @@ func TestCreateReservationConfiguresShadeformStartupScript(t *testing.T) {
 	require.Equal(t, "lambda", body["cloud"])
 	require.Equal(t, "H100x8", body["shade_instance_type"])
 	require.Equal(t, true, body["shade_cloud"])
+	require.Equal(t, "beam-workspace-training-machine-123", body["name"])
+	require.Equal(t, "machine-123", reservation.MachineID)
+	require.Equal(t, "beam-workspace-training-machine-123", reservation.Name)
 
 	launchConfig, ok := body["launch_configuration"].(map[string]any)
 	require.True(t, ok)

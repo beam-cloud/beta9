@@ -533,17 +533,29 @@ type StubConfigV1 struct {
 }
 
 type PoolConfig struct {
-	Name                string   `json:"name,omitempty"`
-	GPUs                []string `json:"gpu,omitempty"`
-	TotalGPUs           uint32   `json:"gpus,omitempty"`
-	OfferID             string   `json:"offer_id,omitempty"`
-	TTL                 string   `json:"ttl,omitempty"`
-	MaxSpend            float64  `json:"max_spend,omitempty"`
-	Providers           []string `json:"providers,omitempty"`
-	Regions             []string `json:"regions,omitempty"`
-	MinReliability      float64  `json:"min_reliability,omitempty"`
-	ReservationRequired bool     `json:"reservation_required,omitempty"`
-	Selector            string   `json:"selector,omitempty"`
+	Name           string   `json:"name,omitempty"`
+	GPUs           []string `json:"gpu,omitempty"`
+	TotalGPUs      uint32   `json:"gpus,omitempty"`
+	OfferID        string   `json:"offer_id,omitempty"`
+	TTL            string   `json:"ttl,omitempty"`
+	MaxSpend       float64  `json:"max_spend,omitempty"`
+	Providers      []string `json:"providers,omitempty"`
+	Regions        []string `json:"regions,omitempty"`
+	MinReliability float64  `json:"min_reliability,omitempty"`
+	Selector       string   `json:"selector,omitempty"`
+}
+
+func (p *PoolConfig) RequiresReservation() bool {
+	if p == nil {
+		return false
+	}
+	return p.TotalGPUs > 0 ||
+		p.OfferID != "" ||
+		p.TTL != "" ||
+		p.MaxSpend > 0 ||
+		len(p.Providers) > 0 ||
+		len(p.Regions) > 0 ||
+		p.MinReliability > 0
 }
 
 func (c *StubConfigV1) PoolSelector() string {

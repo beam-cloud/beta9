@@ -113,3 +113,29 @@ func TestNullTimeSQLAndSerialization(t *testing.T) {
 		t.Fatalf("invalid value = %v, want nil", value)
 	}
 }
+
+func TestPoolConfigRequiresReservationDerivesFromFields(t *testing.T) {
+	tests := []struct {
+		name string
+		pool *PoolConfig
+		want bool
+	}{
+		{name: "nil", pool: nil, want: false},
+		{name: "plain pool", pool: &PoolConfig{Name: "my-pool"}, want: false},
+		{name: "gpus", pool: &PoolConfig{TotalGPUs: 1}, want: true},
+		{name: "offer", pool: &PoolConfig{OfferID: "offer-1"}, want: true},
+		{name: "ttl", pool: &PoolConfig{TTL: "1h"}, want: true},
+		{name: "spend", pool: &PoolConfig{MaxSpend: 10}, want: true},
+		{name: "provider", pool: &PoolConfig{Providers: []string{"shadeform"}}, want: true},
+		{name: "region", pool: &PoolConfig{Regions: []string{"us-east"}}, want: true},
+		{name: "reliability", pool: &PoolConfig{MinReliability: 0.95}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.pool.RequiresReservation(); got != tt.want {
+				t.Fatalf("RequiresReservation() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

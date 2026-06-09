@@ -663,13 +663,12 @@ message PoolConfig {
   repeated string providers = 6;
   repeated string regions = 7;
   double min_reliability = 8;
-  bool reservation_required = 9;
-  string selector = 10;
-  string mode = 11;
-  string transport = 12;
-  string fallback = 13;
-  int32 priority = 14;
-  string offer_id = 15;
+  string selector = 9;
+  string mode = 10;
+  string transport = 11;
+  string fallback = 12;
+  int32 priority = 13;
+  string offer_id = 14;
 }
 
 message PoolOffer {
@@ -702,6 +701,7 @@ message ProviderInstance {
   google.protobuf.Timestamp billing_renewal_at = 11;
   string status_message = 12;
   string terminating_reason = 13;
+  string machine_id = 14;
 }
 
 message PrivatePool {

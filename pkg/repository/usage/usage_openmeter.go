@@ -38,17 +38,17 @@ func (o *OpenMeterUsageMetricsRepository) Init(source string) error {
 }
 
 func (o *OpenMeterUsageMetricsRepository) SetGauge(name string, data map[string]interface{}, value float64) error {
-	return o.sendEvent(name, data)
+	return o.sendEvent(name, data, value)
 }
 
 func (o *OpenMeterUsageMetricsRepository) IncrementCounter(name string, data map[string]interface{}, value float64) error {
-	return o.sendEvent(name, data)
+	return o.sendEvent(name, data, value)
 }
 
-func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string]interface{}) error {
+func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string]interface{}, value float64) error {
 	// NOTE: in openmeter, meters are really just counters with different aggregation functions so you don't need
-	// separate functions defined here (i.e. gauge, counter).
-	// Events are based directly on the data payload and "value" is unused.
+	// separate functions defined here (i.e. gauge, counter). OpenMeter meters aggregate the numeric data.value field.
+	data = eventData(data, value)
 
 	e := cloudevents.New()
 	t := time.Now()
@@ -75,4 +75,13 @@ func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string
 	}
 
 	return nil
+}
+
+func eventData(metadata map[string]interface{}, value float64) map[string]interface{} {
+	data := make(map[string]interface{}, len(metadata)+1)
+	for k, v := range metadata {
+		data[k] = v
+	}
+	data["value"] = value
+	return data
 }

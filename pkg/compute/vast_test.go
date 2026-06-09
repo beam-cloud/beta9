@@ -46,6 +46,8 @@ func TestCreateReservationConfiguresVastOnstart(t *testing.T) {
 	client := NewVast(VastConfig{APIKey: "test-key", BaseURL: server.URL})
 	reservation, err := client.CreateReservation(context.Background(), ReservationRequest{
 		PoolName:         "training",
+		MachineID:        "machine-123",
+		Name:             "beam-workspace-training-machine-123",
 		Selector:         "training",
 		Offer:            Offer{ID: "123", Provider: "vast", InstanceType: "machine-1", GPU: "H100", GPUCount: 8, HourlyCostMicros: DollarsToMicros(10.5)},
 		TTL:              6 * time.Hour,
@@ -55,7 +57,9 @@ func TestCreateReservationConfiguresVastOnstart(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "instance-123", reservation.ID)
-	require.Equal(t, "training", body["label"])
-	require.Equal(t, "training", body["client_id"])
+	require.Equal(t, "beam-workspace-training-machine-123", body["label"])
+	require.Equal(t, "machine-123", body["client_id"])
+	require.Equal(t, "machine-123", reservation.MachineID)
+	require.Equal(t, "beam-workspace-training-machine-123", reservation.Name)
 	require.Contains(t, body["onstart"], "--join-token token")
 }

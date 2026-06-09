@@ -68,9 +68,6 @@ def _pool_config(
         providers=list(provider),
         regions=list(region),
         min_reliability=min_reliability or 0,
-        reservation_required=bool(
-            gpus or ttl or max_spend or provider or region or min_reliability
-        ),
         selector=name,
         mode="private",
         transport=transport.replace("-", "_"),

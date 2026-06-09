@@ -41,7 +41,10 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	machineID := model.AgentMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
+	machineID := strings.TrimSpace(tokenState.MachineID)
+	if machineID == "" {
+		machineID = model.AgentMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
+	}
 	now := time.Now()
 	agentState := &model.AgentTokenState{
 		TokenHash:                 hashComputeToken(agentToken),

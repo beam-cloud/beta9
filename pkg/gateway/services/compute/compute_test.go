@@ -2,6 +2,10 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +248,326 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	}
 }
 
+func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
+	var createCalls int
+	var createBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/instances/types":
+			_, _ = w.Write([]byte(`{"instance_types":[{"id":"sf-a10g-1","cloud":"lambda","shade_instance_type":"A10Gx1","hourly_price":150,"deployment_type":"vm","configuration":{"gpu_type":"A10G","num_gpus":1,"vcpus":4,"memory_in_gb":16,"storage_in_gb":128},"availability":[{"region":"us-east","available":true}]}]}`))
+		case "/instances/create":
+			createCalls++
+			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
+				t.Fatalf("decode create body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"id":"reservation-1"}`))
+		default:
+			t.Fatalf("unexpected shadeform path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	repo := &fakeComputeRepo{}
+	service := &Service{
+		computeRepo: repo,
+		billing: &fakeManagedBilling{
+			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
+		},
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
+			},
+			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
+			Providers: types.ProviderConfig{
+				Shadeform: types.ShadeformProviderConfig{ApiKey: "shadeform-key", BaseURL: server.URL},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
+			},
+		},
+	}
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{
+			Name:      "pool-1",
+			Gpu:       []string{"A10G"},
+			Gpus:      1,
+			OfferId:   "sf-a10g-1",
+			Ttl:       "1h",
+			MaxSpend:  2,
+			Providers: []string{"shadeform"},
+			Regions:   []string{"us-east"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LaunchPoolCapacity() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
+	}
+	if createCalls != 1 {
+		t.Fatalf("shadeform create calls = %d, want 1", createCalls)
+	}
+	state := repo.pools["workspace-1"][0]
+	if got, want := len(state.Reservations), 1; got != want {
+		t.Fatalf("reservation count = %d, want %d", got, want)
+	}
+	reservation := state.Reservations[0]
+	if got, want := reservation.ID, "reservation-1"; got != want {
+		t.Fatalf("reservation id = %q, want %q", got, want)
+	}
+	if reservation.MachineID == "" {
+		t.Fatal("reservation missing managed machine id")
+	}
+	if !strings.Contains(createBody["name"].(string), reservation.MachineID) {
+		t.Fatalf("provider name %q does not include machine id %q", createBody["name"], reservation.MachineID)
+	}
+}
+
+func TestRecordManagedUsageEmitsOpenMeterMetrics(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				MachineID:        "machine-1",
+				GPU:              "A10G",
+				GPUCount:         1,
+				CPUMillicores:    4000,
+				MemoryMB:         16384,
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_500_000,
+			},
+		},
+	}
+	billing := &fakeManagedBilling{}
+	usageRepo := &fakeUsageMetricsRepo{}
+	service := &Service{billing: billing, usageMetricsRepo: usageRepo}
+
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+		t.Fatal("recordManagedUsage() did not report a state change")
+	}
+
+	if got, want := len(usageRepo.counters), 2; got != want {
+		t.Fatalf("usage counter count = %d, want %d", got, want)
+	}
+	if got, want := usageRepo.counters[0].name, types.UsageMetricsManagedComputeReservationSeconds; got != want {
+		t.Fatalf("usage counter[0] = %q, want %q", got, want)
+	}
+	if got, want := usageRepo.counters[0].value, float64(60); got < want-0.1 || got > want+0.1 {
+		t.Fatalf("seconds value = %f, want about %f", got, want)
+	}
+	if got, want := usageRepo.counters[1].name, types.UsageMetricsManagedComputeReservationCost; got != want {
+		t.Fatalf("usage counter[1] = %q, want %q", got, want)
+	}
+	if usageRepo.counters[1].value <= 0 {
+		t.Fatalf("cost value = %f, want positive", usageRepo.counters[1].value)
+	}
+	if got, want := usageRepo.counters[0].metadata["workspace_id"], "workspace-1"; got != want {
+		t.Fatalf("workspace metadata = %v, want %s", got, want)
+	}
+	if got, want := len(billing.usage), 1; got != want {
+		t.Fatalf("billing usage count = %d, want %d", got, want)
+	}
+	if !state.Reservations[0].BillingCursorAt.Equal(now) {
+		t.Fatalf("billing cursor = %s, want %s", state.Reservations[0].BillingCursorAt, now)
+	}
+}
+
+func TestRecordAgentMetricsEmitsNodeUsage(t *testing.T) {
+	now := time.Now().UTC()
+	previous := now.Add(-5 * time.Second)
+	machine := &model.AgentTokenState{
+		TokenHash:       "agent-token-hash",
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Hostname:        "node-1",
+		OS:              "linux",
+		Arch:            "amd64",
+		CPUCount:        4,
+		CPUMillicores:   4000,
+		MemoryMB:        8192,
+		GPUs:            []string{"A10G"},
+		GPUIDs:          []string{"0"},
+		GPUCount:        1,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: previous,
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID: "workspace-1",
+					Name:        "pool-1",
+					Source:      model.SourceCLIReservation,
+					Mode:        string(types.PoolModePrivate),
+					Transport:   string(types.BackendRouteTransportTSNet),
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "pool-1"): {machine},
+		},
+	}
+	usageRepo := &fakeUsageMetricsRepo{}
+	service := &Service{computeRepo: repo, usageMetricsRepo: usageRepo}
+
+	err := service.recordAgentMetrics(context.Background(), machine, &pb.AgentMetricSnapshot{
+		TimestampUnixNano:    now.UnixNano(),
+		CpuUtilizationPct:    25,
+		MemoryUsedMb:         2048,
+		MemoryTotalMb:        8192,
+		MemoryUtilizationPct: 25,
+		DiskUsedMb:           1024,
+		DiskTotalMb:          4096,
+		DiskUsagePct:         25,
+		WorkerCount:          1,
+		ContainerCount:       2,
+		FreeGpuCount:         1,
+	})
+	if err != nil {
+		t.Fatalf("recordAgentMetrics() error = %v", err)
+	}
+
+	if got, want := len(usageRepo.counters), 1; got != want {
+		t.Fatalf("usage counter count = %d, want %d", got, want)
+	}
+	counter := usageRepo.counters[0]
+	if got, want := counter.name, types.UsageMetricsNodeUsage; got != want {
+		t.Fatalf("usage counter = %q, want %q", got, want)
+	}
+	if got, want := counter.value, float64(5); got != want {
+		t.Fatalf("node usage value = %f, want %f", got, want)
+	}
+	if got, want := counter.metadata["workspace_id"], "workspace-1"; got != want {
+		t.Fatalf("workspace metadata = %v, want %s", got, want)
+	}
+	if got, want := counter.metadata["node_type"], "managed"; got != want {
+		t.Fatalf("node type metadata = %v, want %s", got, want)
+	}
+	if got, want := counter.metadata["capacity_source"], string(model.SourceCLIReservation); got != want {
+		t.Fatalf("capacity source metadata = %v, want %s", got, want)
+	}
+	if got, want := counter.metadata["worker_count"], int32(1); got != want {
+		t.Fatalf("worker count metadata = %v, want %d", got, want)
+	}
+	if got, want := counter.metadata["container_count"], int32(2); got != want {
+		t.Fatalf("container count metadata = %v, want %d", got, want)
+	}
+}
+
+func TestNodeUsageSecondsSkipsStaleGap(t *testing.T) {
+	now := time.Now().UTC()
+	if got := nodeUsageSeconds(now.Add(-model.AgentHeartbeatTimeout-time.Second), now); got != 0 {
+		t.Fatalf("nodeUsageSeconds() = %f for stale gap, want 0", got)
+	}
+	if got := nodeUsageSeconds(now.Add(-5*time.Second), now); got != 5 {
+		t.Fatalf("nodeUsageSeconds() = %f, want 5", got)
+	}
+}
+
+func TestAgentNodeUsageMetadataMarksAttachedNodesAsBYO(t *testing.T) {
+	metadata := agentNodeUsageMetadata(
+		&model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"},
+		&model.PoolState{Source: model.SourceAttached},
+		nil,
+		5,
+	)
+	if got, want := metadata["node_type"], "byo"; got != want {
+		t.Fatalf("node type metadata = %v, want %s", got, want)
+	}
+	if got, want := metadata["capacity_source"], string(model.SourceAttached); got != want {
+		t.Fatalf("capacity source metadata = %v, want %s", got, want)
+	}
+}
+
+func TestRecordManagedUsageAdvancesCursorWhenMetricsFailAfterBilling(t *testing.T) {
+	now := time.Now().UTC()
+	cursor := now.Add(-time.Minute)
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  cursor,
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_500_000,
+			},
+		},
+	}
+	billing := &fakeManagedBilling{}
+	service := &Service{
+		billing:          billing,
+		usageMetricsRepo: &fakeUsageMetricsRepo{err: errors.New("openmeter unavailable")},
+	}
+
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+		t.Fatal("recordManagedUsage() did not report a state change")
+	}
+	if got, want := len(billing.usage), 1; got != want {
+		t.Fatalf("billing usage count = %d, want %d", got, want)
+	}
+	if !state.Reservations[0].BillingCursorAt.Equal(now) {
+		t.Fatalf("billing cursor = %s, want %s", state.Reservations[0].BillingCursorAt, now)
+	}
+	if !strings.Contains(state.Reservations[0].LastError, "openmeter unavailable") {
+		t.Fatalf("last error = %q, want openmeter error", state.Reservations[0].LastError)
+	}
+}
+
+func TestRecordManagedUsageDoesNotEmitMetricsOrAdvanceCursorWhenBillingFails(t *testing.T) {
+	now := time.Now().UTC()
+	cursor := now.Add(-time.Minute)
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  cursor,
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_500_000,
+			},
+		},
+	}
+	billing := &fakeManagedBilling{usageErr: errors.New("billing callback unavailable")}
+	usageRepo := &fakeUsageMetricsRepo{}
+	service := &Service{
+		billing:          billing,
+		usageMetricsRepo: usageRepo,
+	}
+
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now) {
+		t.Fatal("recordManagedUsage() did not report a state change")
+	}
+	if got, want := len(usageRepo.counters), 0; got != want {
+		t.Fatalf("usage counter count = %d, want %d", got, want)
+	}
+	if !state.Reservations[0].BillingCursorAt.Equal(cursor) {
+		t.Fatalf("billing cursor advanced to %s, want %s", state.Reservations[0].BillingCursorAt, cursor)
+	}
+	if !strings.Contains(state.Reservations[0].LastError, "billing callback unavailable") {
+		t.Fatalf("last error = %q, want billing callback error", state.Reservations[0].LastError)
+	}
+}
+
 func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
@@ -307,6 +631,131 @@ func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t 
 	}
 	if machine.Schedulable {
 		t.Fatal("credit exhaustion did not mark the machine unschedulable")
+	}
+}
+
+func TestReconcileManagedComputeRecordsUsageBeforeBalanceCheck(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
+	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 1000}}
+	service := &Service{computeRepo: repo, billing: billing}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+
+	if got, want := len(billing.usage), 1; got != want {
+		t.Fatalf("managed usage records = %d, want %d", got, want)
+	}
+	if got, want := billing.balanceSawUsageCount, 1; got != want {
+		t.Fatalf("balance saw usage count = %d, want %d", got, want)
+	}
+	if !state.Reservations[0].BillingCursorAt.After(now.Add(-time.Second)) {
+		t.Fatalf("billing cursor was not advanced: %s", state.Reservations[0].BillingCursorAt)
+	}
+}
+
+func TestReconcileManagedComputeBillsExpiredReservationBeforeTerminating(t *testing.T) {
+	now := time.Now().UTC()
+	cursor := now.Add(-10 * time.Minute)
+	expiresAt := now.Add(-time.Minute)
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  cursor,
+				ExpiresAt:        expiresAt,
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
+	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 1000}}
+	service := &Service{computeRepo: repo, billing: billing}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+
+	if got, want := len(billing.usage), 1; got != want {
+		t.Fatalf("managed usage records = %d, want %d", got, want)
+	}
+	if got, want := billing.usage[0].DurationSeconds, float64(9*time.Minute/time.Second); got != want {
+		t.Fatalf("managed usage duration = %f, want %f", got, want)
+	}
+	if !state.Reservations[0].BillingCursorAt.Equal(expiresAt) {
+		t.Fatalf("billing cursor = %s, want %s", state.Reservations[0].BillingCursorAt, expiresAt)
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+}
+
+func TestReconcileManagedComputeDoesNotTerminateOnBillingError(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{
+		computeRepo: repo,
+		billing:     &fakeManagedBilling{balanceErr: errors.New("billing unavailable")},
+	}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+
+	if got, want := state.Reservations[0].Status, model.ReservationActive; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if !machine.Schedulable {
+		t.Fatal("billing error marked the machine unschedulable")
+	}
+	if state.Reservations[0].TerminatingReason != "" {
+		t.Fatalf("billing error set terminating reason = %q", state.Reservations[0].TerminatingReason)
 	}
 }
 
@@ -374,7 +823,7 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	}
 }
 
-func TestReleasePrivateMachineRequiresManagedReservationLink(t *testing.T) {
+func TestReleasePrivateMachineLinksSingleUnassignedManagedReservation(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID: "workspace-1",
@@ -404,18 +853,259 @@ func TestReleasePrivateMachineRequiresManagedReservationLink(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
+	if err := service.releasePrivateMachine(context.Background(), machine); err != nil {
+		t.Fatalf("releasePrivateMachine() error = %v", err)
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if got, want := state.Reservations[0].MachineID, "machine-1"; got != want {
+		t.Fatalf("reservation machine id = %q, want %q", got, want)
+	}
+	if machine.Schedulable {
+		t.Fatal("releasePrivateMachine() did not mark the machine unschedulable")
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
+		t.Fatalf("machine count after release = %d, want 0", got)
+	}
+}
+
+func TestReleasePrivateMachineRejectsAmbiguousUnassignedManagedReservations(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:         "reservation-1",
+				Provider:   "shadeform",
+				InstanceID: "instance-1",
+				Source:     model.SourceCLIReservation,
+				Status:     model.ReservationActive,
+				CreatedAt:  now.Add(-time.Hour),
+				ExpiresAt:  now.Add(time.Hour),
+			},
+			{
+				ID:         "reservation-2",
+				Provider:   "shadeform",
+				InstanceID: "instance-2",
+				Source:     model.SourceCLIReservation,
+				Status:     model.ReservationActive,
+				CreatedAt:  now.Add(-time.Hour),
+				ExpiresAt:  now.Add(time.Hour),
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{computeRepo: repo}
+
 	err := service.releasePrivateMachine(context.Background(), machine)
-	if err == nil || !strings.Contains(err.Error(), "managed reservation for machine \"machine-1\" is not linked") {
-		t.Fatalf("releasePrivateMachine() error = %v, want unlinked reservation error", err)
+	if err == nil || !strings.Contains(err.Error(), "managed reservation for machine \"machine-1\" is ambiguous") {
+		t.Fatalf("releasePrivateMachine() error = %v, want ambiguous reservation error", err)
 	}
 	if got, want := state.Reservations[0].Status, model.ReservationActive; got != want {
-		t.Fatalf("reservation status = %q, want %q", got, want)
+		t.Fatalf("reservation[0] status = %q, want %q", got, want)
+	}
+	if got, want := state.Reservations[1].Status, model.ReservationActive; got != want {
+		t.Fatalf("reservation[1] status = %q, want %q", got, want)
 	}
 	if !machine.Schedulable {
 		t.Fatal("failed release should not mark the machine unschedulable")
 	}
 	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 1 {
 		t.Fatalf("machine count after failed release = %d, want 1", got)
+	}
+}
+
+func TestDeletePoolMachineReleasesManagedReservationID(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID:      "workspace-1",
+		Name:             "pool-1",
+		CreatedByTokenID: "token-owner",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationPending,
+				CreatedAt:        now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {state}},
+	}
+	service := &Service{computeRepo: repo}
+
+	_, res, err := service.DeletePoolMachine(
+		testAuthContext("workspace-1", "token-owner"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "reservation-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if !repo.savedPool {
+		t.Fatal("DeletePoolMachine() did not persist the reservation transition")
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if got, want := state.Reservations[0].TerminatingReason, reconcileReasonMachineReleased; got != want {
+		t.Fatalf("terminating reason = %q, want %q", got, want)
+	}
+	if !strings.Contains(state.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
+		t.Fatalf("reservation last error = %q, want missing vendor error", state.Reservations[0].LastError)
+	}
+}
+
+func TestDeletePoolMachineReleasesManagedMachineID(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID:      "workspace-1",
+		Name:             "pool-1",
+		CreatedByTokenID: "token-owner",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				MachineID:        "machine-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationPending,
+				CreatedAt:        now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {state}},
+	}
+	service := &Service{computeRepo: repo}
+
+	_, res, err := service.DeletePoolMachine(
+		testAuthContext("workspace-1", "token-owner"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+}
+
+func TestDeletePoolMachineReleasesManagedProviderInstanceID(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID:      "workspace-1",
+		Name:             "pool-1",
+		CreatedByTokenID: "token-owner",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				MachineID:        "machine-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationPending,
+				CreatedAt:        now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {state}},
+	}
+	service := &Service{computeRepo: repo}
+
+	_, res, err := service.DeletePoolMachine(
+		testAuthContext("workspace-1", "token-owner"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "instance-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+}
+
+func TestDeletePoolMachineByReservationIDCleansLinkedMachine(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID:      "workspace-1",
+		Name:             "pool-1",
+		CreatedByTokenID: "token-owner",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				MachineID:        "machine-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{computeRepo: repo}
+
+	_, res, err := service.DeletePoolMachine(
+		testAuthContext("workspace-1", "token-owner"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "reservation-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if machine.Schedulable {
+		t.Fatal("DeletePoolMachine() did not mark linked machine unschedulable")
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
+		t.Fatalf("machine count after release = %d, want 0", got)
 	}
 }
 
@@ -658,14 +1348,16 @@ func TestManagedBillingURLMatchesInternalAPIActionRoutes(t *testing.T) {
 }
 
 type fakeManagedBilling struct {
-	launchDecision  billingDecision
-	launchErr       error
-	launchCalls     int
-	launchRequest   billingCreditRequest
-	balanceDecision billingDecision
-	balanceErr      error
-	usage           []managedUsage
-	usageErr        error
+	launchDecision       billingDecision
+	launchErr            error
+	launchCalls          int
+	launchRequest        billingCreditRequest
+	balanceDecision      billingDecision
+	balanceErr           error
+	balanceCalls         int
+	balanceSawUsageCount int
+	usage                []managedUsage
+	usageErr             error
 }
 
 func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCreditRequest) (billingDecision, error) {
@@ -675,10 +1367,42 @@ func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCre
 }
 
 func (b *fakeManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+	b.balanceCalls++
+	b.balanceSawUsageCount = len(b.usage)
 	return b.balanceDecision, b.balanceErr
 }
 
 func (b *fakeManagedBilling) RecordManagedUsage(_ context.Context, usage managedUsage) error {
 	b.usage = append(b.usage, usage)
 	return b.usageErr
+}
+
+type fakeUsageMetricsRepo struct {
+	counters []fakeUsageCounter
+	err      error
+}
+
+type fakeUsageCounter struct {
+	name     string
+	metadata map[string]interface{}
+	value    float64
+}
+
+func (r *fakeUsageMetricsRepo) Init(string) error {
+	return nil
+}
+
+func (r *fakeUsageMetricsRepo) IncrementCounter(name string, metadata map[string]interface{}, value float64) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.counters = append(r.counters, fakeUsageCounter{name: name, metadata: metadata, value: value})
+	return nil
+}
+
+func (r *fakeUsageMetricsRepo) SetGauge(name string, metadata map[string]interface{}, value float64) error {
+	if r.err != nil {
+		return r.err
+	}
+	return nil
 }

@@ -146,7 +146,7 @@ class Pool:
             return []
         return [GpuType(self.gpu).value]
 
-    def reservation_required(self) -> bool:
+    def _requires_reservation(self) -> bool:
         return any(
             [
                 self.gpus is not None,
@@ -161,7 +161,7 @@ class Pool:
     def validate(self) -> None:
         if self.gpus is not None and self.gpus <= 0:
             raise ValueError("Pool.gpus must be greater than 0")
-        if self.reservation_required():
+        if self._requires_reservation():
             if not self.gpus:
                 raise ValueError("Reserved pools require gpus")
             if not self.ttl:
@@ -185,7 +185,6 @@ class Pool:
             providers=self.providers or [],
             regions=self.regions or [],
             min_reliability=float(self.min_reliability or 0),
-            reservation_required=self.reservation_required(),
             selector=selector or name,
         )
 

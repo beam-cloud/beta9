@@ -221,6 +221,13 @@ func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineReq
 	}
 	if machine == nil {
 		if handled {
+			released, err := s.releasePrivateReservationForDelete(ctx, authInfo, workspaceID, in.PoolName, in.MachineId)
+			if err != nil {
+				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+			}
+			if released {
+				return true, &pb.DeleteMachineResponse{Ok: true}, nil
+			}
 			return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine not found"}, nil
 		}
 		return false, nil, nil
@@ -230,6 +237,33 @@ func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineReq
 		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return true, &pb.DeleteMachineResponse{Ok: true}, nil
+}
+
+func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, targetID string) (bool, error) {
+	if poolName == "" || targetID == "" {
+		return false, nil
+	}
+	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	if err != nil || state == nil {
+		return false, err
+	}
+	reservation := managedReservationForDeleteTarget(state, targetID)
+	if reservation == nil {
+		return false, nil
+	}
+
+	machineID := reservation.MachineID
+	if err := s.releaseManagedReservation(ctx, workspaceID, state, reservation); err != nil {
+		return true, err
+	}
+	if machineID == "" {
+		return true, nil
+	}
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
+	if err != nil || machine == nil {
+		return true, err
+	}
+	return true, s.removePrivateMachine(ctx, machine)
 }
 
 func (s *Service) privateMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, machineID string) (*model.AgentTokenState, bool, error) {
