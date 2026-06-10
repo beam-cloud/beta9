@@ -17,7 +17,8 @@ import (
 const cacheCoordinatorRPCTimeout = 5 * time.Second
 
 type gatewayCacheHostDirectory struct {
-	client pb.WorkerRepositoryServiceClient
+	client   pb.WorkerRepositoryServiceClient
+	poolName string
 }
 
 func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, locality string) ([]*cache.Host, error) {
@@ -29,6 +30,7 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 	defer cancel()
 
 	resp, err := handleGRPCResponse(d.client.ListCacheHosts(rpcCtx, &pb.ListCacheHostsRequest{
+		PoolName: d.poolName,
 		Locality: locality,
 	}))
 	if err != nil {

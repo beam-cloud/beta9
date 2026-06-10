@@ -2,8 +2,12 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +20,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	clip "github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/stretchr/testify/require"
@@ -322,6 +327,61 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 
 	require.Equal(t, []string{"locality-b"}, metadata.listed)
 	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
+}
+
+// The gateway no longer vends S3 archive credentials; private-pool workers
+// must materialize CLIP v1 archives through the gateway-presigned data URL.
+func TestMaterializeArchiveObjectUsesBrokeredDataURL(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	content := []byte("clip v1 archive data")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(content)
+	}))
+	defer origin.Close()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	server, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	workerRepo := &fakeImageCredentialWorkerRepo{
+		resp: &pb.GetCacheOriginCredentialsResponse{
+			Ok:                  true,
+			ImageArchiveDataUrl: origin.URL + "/image-a.clip",
+		},
+	}
+	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
+	require.NoError(t, os.MkdirAll(checkpointRoot, 0o755))
+	manager := &WorkerCacheManager{
+		ctx: ctx,
+		config: types.AppConfig{
+			ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore},
+		},
+		workerRepo:       workerRepo,
+		originCredsCache: make(map[string]*originCredentials),
+		checkpointRoot:   checkpointRoot,
+	}
+
+	stub := cache.RecentStub{WorkspaceID: "workspace-a", StubID: "stub-a"}
+	item := types.CacheRequiredContentItem{
+		Hash:      hash,
+		SizeBytes: int64(len(content)),
+		Source:    "image-a." + registry.LocalImageFileExtension,
+		Kind:      types.CacheContentKindClipV1,
+	}
+
+	status := manager.materializeArchiveObject(ctx, server, stub, item, "/images/image-a.clip")
+
+	require.Equal(t, types.CacheAuditStatusMaterialized, status)
+	require.True(t, server.HasCompleteContent(hash, int64(len(content))))
+	require.NotEmpty(t, workerRepo.requests)
+	require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
+	require.Equal(t, "workspace-a", workerRepo.requests[0].WorkspaceId)
 }
 
 func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T) {

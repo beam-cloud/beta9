@@ -17,6 +17,8 @@ import (
 
 var errCacheCoordinatorUnauthorized = errors.New("unauthorized cache coordinator request")
 
+const cacheLocalityScopeSeparator = "/"
+
 func configuredCacheCoordinatorToken(configured string) string {
 	if token := os.Getenv(types.CacheCoordinatorTokenEnv); token != "" {
 		return token
@@ -49,6 +51,66 @@ func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Co
 	return nil
 }
 
+// scopedCacheLocality isolates cache coordinator and metadata state per
+// customer workspace for private-pool workers: their locality is rewritten to
+// "<workspaceID>/<locality>" so colliding pool names across customers never
+// share cache hosts, locks, or stubs. Admin-workspace worker tokens (in-cluster
+// and external-pool workers) are exempt so they stay in the same unscoped
+// namespace as the cache-server daemonset, which authenticates with the
+// coordinator token and therefore has no workspace to scope by.
+//
+// Pool names are passed through untouched: an empty pool name simply means a
+// locality-wide lookup, which is already workspace-isolated by the scoped
+// locality, and the coordinator rejects registrations without a pool name.
+func (s *WorkerRepositoryService) scopedCacheLocality(ctx context.Context, locality string) string {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+		return locality
+	}
+	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" || locality == "" {
+		return locality
+	}
+
+	workspaceID := authInfo.Workspace.ExternalId
+	if s.isAdminWorkspaceExternalId(ctx, workspaceID) {
+		return locality
+	}
+
+	prefix := workspaceID + cacheLocalityScopeSeparator
+	if strings.HasPrefix(locality, prefix) {
+		return locality
+	}
+	return prefix + locality
+}
+
+// isAdminWorkspaceExternalId reports whether the given workspace external ID is
+// the admin workspace, resolving it once and caching the result. When the admin
+// workspace cannot be resolved this fails closed (returns false) so workspace
+// scoping is preserved.
+func (s *WorkerRepositoryService) isAdminWorkspaceExternalId(ctx context.Context, externalID string) bool {
+	if s == nil || s.backendRepo == nil || externalID == "" {
+		return false
+	}
+
+	s.adminWorkspaceMu.Lock()
+	resolved, adminID := s.adminWorkspaceResolved, s.adminWorkspaceExternalId
+	s.adminWorkspaceMu.Unlock()
+
+	if !resolved {
+		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
+		if err != nil || workspace == nil {
+			return false
+		}
+		adminID = workspace.ExternalId
+		s.adminWorkspaceMu.Lock()
+		s.adminWorkspaceResolved = true
+		s.adminWorkspaceExternalId = adminID
+		s.adminWorkspaceMu.Unlock()
+	}
+
+	return adminID != "" && adminID == externalID
+}
+
 func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb.RegisterCacheHostRequest) (*pb.RegisterCacheHostResponse, error) {
 	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -60,8 +122,10 @@ func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: "host is required"}, nil
 	}
 
+	host := cacheCoordinatorHostFromProto(req.Host)
+	host.Locality = s.scopedCacheLocality(ctx, host.Locality)
 	ttl := time.Duration(req.TtlSeconds) * time.Second
-	if err := s.cacheCoordinator.RegisterHost(ctx, cacheCoordinatorHostFromProto(req.Host), ttl); err != nil {
+	if err := s.cacheCoordinator.RegisterHost(ctx, host, ttl); err != nil {
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.RegisterCacheHostResponse{Ok: true}, nil
@@ -78,7 +142,7 @@ func (s *WorkerRepositoryService) UnregisterCacheHost(ctx context.Context, req *
 		return &pb.UnregisterCacheHostResponse{Ok: false, ErrorMsg: "request is required"}, nil
 	}
 
-	if err := s.cacheCoordinator.UnregisterHost(ctx, req.PoolName, req.Locality, req.LogicalHostId, req.RegistrationId); err != nil {
+	if err := s.cacheCoordinator.UnregisterHost(ctx, req.PoolName, s.scopedCacheLocality(ctx, req.Locality), req.LogicalHostId, req.RegistrationId); err != nil {
 		return &pb.UnregisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.UnregisterCacheHostResponse{Ok: true}, nil
@@ -95,9 +159,19 @@ func (s *WorkerRepositoryService) ListCacheHosts(ctx context.Context, req *pb.Li
 		return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: "request is required"}, nil
 	}
 
-	hosts, err := s.cacheCoordinator.ListHosts(ctx, req.PoolName, req.Locality)
+	locality := s.scopedCacheLocality(ctx, req.Locality)
+	hosts, err := s.cacheCoordinator.ListHosts(ctx, req.PoolName, locality)
 	if err != nil {
 		return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	if len(hosts) == 0 && req.PoolName != "" {
+		// Fall back to locality-wide listing so hosts registered under another
+		// pool name (e.g. the cache-server daemonset) remain discoverable when
+		// the worker's own pool has no registered cache hosts.
+		hosts, err = s.cacheCoordinator.ListHosts(ctx, "", locality)
+		if err != nil {
+			return &pb.ListCacheHostsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
 	}
 
 	resp := &pb.ListCacheHostsResponse{

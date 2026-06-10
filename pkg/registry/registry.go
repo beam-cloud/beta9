@@ -107,8 +107,23 @@ type S3Store struct {
 	config types.S3ImageRegistryConfig
 }
 
+type S3StoreOptions struct {
+	UseAmbientCredentials bool
+}
+
 func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
-	cfg, err := common.GetAWSConfig(config.AccessKey, config.SecretKey, config.Region, config.Endpoint)
+	return NewS3StoreWithOptions(config, S3StoreOptions{})
+}
+
+func NewS3StoreWithOptions(config types.S3ImageRegistryConfig, opts S3StoreOptions) (*S3Store, error) {
+	accessKey := config.AccessKey
+	secretKey := config.SecretKey
+	if opts.UseAmbientCredentials {
+		accessKey = ""
+		secretKey = ""
+	}
+
+	cfg, err := common.GetAWSConfig(accessKey, secretKey, config.Region, config.Endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +136,21 @@ func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
 		}),
 		config: config,
 	}, nil
+}
+
+func (s *S3Store) PresignGet(ctx context.Context, key string, expires time.Duration) (string, error) {
+	if expires <= 0 {
+		expires = 15 * time.Minute
+	}
+
+	req, err := s3.NewPresignClient(s.client).PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
 }
 
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {

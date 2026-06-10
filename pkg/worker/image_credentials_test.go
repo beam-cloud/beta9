@@ -2,6 +2,10 @@ package worker
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -89,6 +93,28 @@ func TestLazyMountOptionsForClipV1UsesBrokeredS3Storage(t *testing.T) {
 	require.True(t, storageInfo.ForcePathStyle)
 }
 
+// A source registry without a bucket (e.g. after a brokered URL pull, or an
+// unconfigured private-pool worker) must not override the archive's own storage
+// info with an empty S3 source that would fail every lazy data read.
+func TestLazyMountOptionsForClipV1IgnoresEmptySourceRegistry(t *testing.T) {
+	client := &ImageClient{
+		imageCachePath: "/images/cache",
+		config: types.AppConfig{
+			ImageService: types.ImageServiceConfig{RegistryStore: reg.S3ImageRegistryStore},
+		},
+	}
+	request := &types.ContainerRequest{ImageId: "image-a"}
+
+	opts := client.lazyMountOptions(context.Background(), request, lazyImageArchive{
+		path:           "/images/cache/image-a.rclip",
+		sourceRegistry: &types.S3ImageRegistryConfig{},
+		storageMode:    "s3",
+	})
+
+	require.Nil(t, opts.StorageInfo)
+	require.Nil(t, opts.Credentials.S3)
+}
+
 func TestLazyMountOptionsForClipV2UsesGatewayRegistryCredentials(t *testing.T) {
 	repo := &fakeImageCredentialWorkerRepo{
 		resp: &pb.GetCacheOriginCredentialsResponse{
@@ -124,6 +150,45 @@ func TestLazyMountOptionsForClipV2UsesGatewayRegistryCredentials(t *testing.T) {
 	require.Equal(t, "stub-id", repo.requests[0].StubId)
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
 	require.Equal(t, "registry.example.com", repo.requests[0].Registry)
+}
+
+func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		_, _ = w.Write([]byte("archive"))
+	}))
+	defer server.Close()
+
+	repo := &fakeImageCredentialWorkerRepo{
+		resp: &pb.GetCacheOriginCredentialsResponse{
+			Ok:              true,
+			ImageArchiveUrl: server.URL + "/image.rclip",
+		},
+	}
+	client := &ImageClient{
+		workerRepoClient: repo,
+		originCredsCache: make(map[string]*originCredentials),
+	}
+	path := filepath.Join(t.TempDir(), "image.rclip.tmp")
+	request := &types.ContainerRequest{
+		WorkspaceId: "workspace-id",
+		StubId:      "stub-id",
+		ImageId:     "image-a",
+	}
+
+	pulled, sourceRegistry, err := client.pullImageArchiveFromBrokeredOrigin(context.Background(), path, request)
+
+	require.NoError(t, err)
+	require.True(t, pulled)
+	// URL pulls vend no S3 credentials, so no source registry is returned;
+	// returning an empty config here would poison v1 lazy mounts.
+	require.Nil(t, sourceRegistry)
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, []byte("archive"), got)
+	require.Len(t, repo.requests, 1)
+	require.Equal(t, "workspace-id", repo.requests[0].WorkspaceId)
+	require.Equal(t, "image-a", repo.requests[0].ImageId)
 }
 
 type fakeImageCredentialWorkerRepo struct {

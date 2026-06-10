@@ -8,6 +8,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -149,6 +150,171 @@ func TestConfiguredCacheCoordinatorTokenUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestCacheCoordinatorScopesWorkerLocalityByWorkspaceAndPool(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{
+		Addrs: []string{server.Addr()},
+		Mode:  types.RedisModeSingle,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	service := &WorkerRepositoryService{
+		cacheCoordinator: cache.NewCoordinator(repository.NewCacheRedisRepository(rdb)),
+	}
+	registerCacheHost := func(ctx context.Context, logicalHostID, addr string) {
+		resp, err := service.RegisterCacheHost(ctx, &pb.RegisterCacheHostRequest{
+			Host: &pb.CacheCoordinatorHost{
+				LogicalHostId:  logicalHostID,
+				RegistrationId: "registration-" + logicalHostID,
+				PoolName:       "shared-pool",
+				Locality:       "shared-pool",
+				Addr:           addr,
+			},
+			TtlSeconds: 30,
+		})
+		require.NoError(t, err)
+		require.True(t, resp.Ok, resp.ErrorMsg)
+	}
+
+	ctxA := cacheRepositoryWorkspaceAuthContext("workspace-a")
+	ctxB := cacheRepositoryWorkspaceAuthContext("workspace-b")
+	registerCacheHost(ctxA, "host-a", "10.0.0.1:2050")
+	registerCacheHost(ctxB, "host-b", "10.0.0.2:2050")
+
+	respA, err := service.ListCacheHosts(ctxA, &pb.ListCacheHostsRequest{Locality: "shared-pool"})
+	require.NoError(t, err)
+	require.True(t, respA.Ok, respA.ErrorMsg)
+	require.Len(t, respA.Hosts, 1)
+	require.Equal(t, "host-a", respA.Hosts[0].LogicalHostId)
+	require.Equal(t, "shared-pool", respA.Hosts[0].PoolName)
+	require.Equal(t, "workspace-a/shared-pool", respA.Hosts[0].Locality)
+
+	pooledRespA, err := service.ListCacheHosts(ctxA, &pb.ListCacheHostsRequest{PoolName: "shared-pool", Locality: "shared-pool"})
+	require.NoError(t, err)
+	require.True(t, pooledRespA.Ok, pooledRespA.ErrorMsg)
+	require.Len(t, pooledRespA.Hosts, 1)
+	require.Equal(t, "host-a", pooledRespA.Hosts[0].LogicalHostId)
+
+	respB, err := service.ListCacheHosts(ctxB, &pb.ListCacheHostsRequest{Locality: "shared-pool"})
+	require.NoError(t, err)
+	require.True(t, respB.Ok, respB.ErrorMsg)
+	require.Len(t, respB.Hosts, 1)
+	require.Equal(t, "host-b", respB.Hosts[0].LogicalHostId)
+	require.Equal(t, "workspace-b/shared-pool", respB.Hosts[0].Locality)
+}
+
+type adminWorkspaceBackendRepo struct {
+	repository.BackendRepository
+	adminWorkspace *types.Workspace
+}
+
+func (r *adminWorkspaceBackendRepo) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
+	return r.adminWorkspace, nil
+}
+
+// In-cluster and external-pool workers hold admin-workspace worker tokens and
+// must share the unscoped cache namespace with the cache-server daemonset,
+// which registers via the coordinator token (no workspace). Their listings must
+// also fall back across pool names so daemonset hosts registered under a
+// different pool stay discoverable.
+func TestCacheCoordinatorAdminWorkersShareUnscopedLocalityWithDaemonSet(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{
+		Addrs: []string{server.Addr()},
+		Mode:  types.RedisModeSingle,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	service := &WorkerRepositoryService{
+		cacheCoordinator:      cache.NewCoordinator(repository.NewCacheRedisRepository(rdb)),
+		cacheCoordinatorToken: "coordinator-token",
+		backendRepo:           &adminWorkspaceBackendRepo{adminWorkspace: &types.Workspace{ExternalId: "admin-workspace"}},
+	}
+
+	// The cache-server daemonset registers with the coordinator token under its
+	// own pool name and an unscoped locality.
+	daemonCtx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer coordinator-token"))
+	registerResp, err := service.RegisterCacheHost(daemonCtx, &pb.RegisterCacheHostRequest{
+		Host: &pb.CacheCoordinatorHost{
+			LogicalHostId:  "daemonset-host",
+			RegistrationId: "registration-daemonset-host",
+			PoolName:       "cache-server",
+			Locality:       "default",
+			Addr:           "10.0.0.9:2050",
+		},
+		TtlSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.True(t, registerResp.Ok, registerResp.ErrorMsg)
+
+	// An admin-workspace worker keeps an unscoped locality and discovers the
+	// daemonset host even though it lists under a different pool name.
+	adminCtx := cacheRepositoryWorkspaceAuthContext("admin-workspace")
+	adminResp, err := service.ListCacheHosts(adminCtx, &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
+	require.NoError(t, err)
+	require.True(t, adminResp.Ok, adminResp.ErrorMsg)
+	require.Len(t, adminResp.Hosts, 1)
+	require.Equal(t, "daemonset-host", adminResp.Hosts[0].LogicalHostId)
+	require.Equal(t, "default", adminResp.Hosts[0].Locality)
+
+	// A private-pool worker in a customer workspace stays scoped and must not
+	// see the unscoped daemonset host.
+	privateResp, err := service.ListCacheHosts(cacheRepositoryWorkspaceAuthContext("workspace-a"), &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
+	require.NoError(t, err)
+	require.True(t, privateResp.Ok, privateResp.ErrorMsg)
+	require.Empty(t, privateResp.Hosts)
+}
+
+func TestCacheMetadataScopesWorkerLocalityByWorkspace(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	service := &WorkerRepositoryService{
+		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
+	}
+
+	resp, err := service.AddRecentCacheStub(cacheRepositoryWorkspaceAuthContext("workspace-a"), &pb.AddRecentCacheStubRequest{
+		Locality:    "shared-pool",
+		WorkspaceId: "workspace-a",
+		StubId:      "stub-a",
+		TtlSeconds:  3600,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+
+	resp, err = service.AddRecentCacheStub(cacheRepositoryWorkspaceAuthContext("workspace-b"), &pb.AddRecentCacheStubRequest{
+		Locality:    "shared-pool",
+		WorkspaceId: "workspace-b",
+		StubId:      "stub-b",
+		TtlSeconds:  3600,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+
+	listA, err := service.ListRecentCacheStubs(cacheRepositoryWorkspaceAuthContext("workspace-a"), &pb.ListRecentCacheStubsRequest{
+		Locality:   "shared-pool",
+		TtlSeconds: 3600,
+		Limit:      10,
+	})
+	require.NoError(t, err)
+	require.True(t, listA.Ok, listA.ErrorMsg)
+	require.Len(t, listA.Stubs, 1)
+	require.Equal(t, "workspace-a", listA.Stubs[0].WorkspaceId)
+	require.Equal(t, "stub-a", listA.Stubs[0].StubId)
+}
+
 func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T) {
 	server, err := miniredis.Run()
 	require.NoError(t, err)
@@ -276,7 +442,7 @@ func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSignin
 	require.Empty(t, resp.RegistryCredentials)
 }
 
-func TestGetCacheOriginCredentialsVendsImageArchiveStorage(t *testing.T) {
+func TestGetCacheOriginCredentialsVendsImageArchiveURL(t *testing.T) {
 	service := &WorkerRepositoryService{
 		backendRepo: &originCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
@@ -309,9 +475,12 @@ func TestGetCacheOriginCredentialsVendsImageArchiveStorage(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
-	require.NotNil(t, resp.ImageArchiveStorage)
-	require.Equal(t, "image-bucket", resp.ImageArchiveStorage.BucketName)
+	require.Nil(t, resp.ImageArchiveStorage)
 	require.Equal(t, "image-id."+reg.RemoteImageFileExtension, resp.ImageArchiveObjectKey)
+	require.Contains(t, resp.ImageArchiveUrl, "image-id."+reg.RemoteImageFileExtension)
+	require.Contains(t, resp.ImageArchiveUrl, "X-Amz-Credential=")
+	require.Contains(t, resp.ImageArchiveDataUrl, "image-id."+reg.LocalImageFileExtension)
+	require.Contains(t, resp.ImageArchiveDataUrl, "X-Amz-Credential=")
 }
 
 func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {

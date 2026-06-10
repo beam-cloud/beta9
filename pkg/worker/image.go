@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -632,7 +634,9 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		return mountOptions
 	}
 
-	if archive.sourceRegistry != nil {
+	// Only override the archive's storage info when a usable S3 source is
+	// known; an empty bucket would poison every lazy data read.
+	if archive.sourceRegistry != nil && archive.sourceRegistry.BucketName != "" {
 		mountOptions.Credentials = storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
 				AccessKey: archive.sourceRegistry.AccessKey,
@@ -692,6 +696,9 @@ func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *typ
 		sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
 	}
 	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
+		if c.downloadV1ArchiveDataFromBrokeredURL(ctx, request, targetPath, cachePath) {
+			return targetPath, true
+		}
 		return "", false
 	}
 
@@ -730,6 +737,47 @@ func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *typ
 		return "", false
 	}
 	return targetPath, true
+}
+
+// downloadV1ArchiveDataFromBrokeredURL restores the CLIP v1 data archive
+// through a gateway-presigned URL when no S3 source is available; private-pool
+// workers hold no S3 credentials. The archive lands on local disk and is then
+// seeded into the embedded cache off the hot path.
+func (c *ImageClient) downloadV1ArchiveDataFromBrokeredURL(ctx context.Context, request *types.ContainerRequest, targetPath, cachePath string) bool {
+	if !c.privateWorkerImageRequest(request) {
+		return false
+	}
+	creds := c.originCredentials(ctx, request, request.ImageId, "")
+	if creds == nil || creds.imageArchiveDataURL == "" {
+		return false
+	}
+
+	tempPath := targetPath + ".url.tmp"
+	defer os.Remove(tempPath)
+	if err := downloadImageArchiveURL(ctx, creds.imageArchiveDataURL, tempPath); err != nil {
+		log.Debug().Err(err).Str("image_id", request.ImageId).Msg("v1 image data archive brokered url fetch failed")
+		return false
+	}
+	if err := os.Rename(tempPath, targetPath); err != nil {
+		log.Debug().Err(err).Str("image_id", request.ImageId).Msg("v1 image data archive rename failed")
+		return false
+	}
+
+	go c.seedV1ArchiveDataInEmbeddedCache(targetPath, cachePath, request.ImageId)
+	log.Info().Str("image_id", request.ImageId).Msg("restored v1 image data archive from brokered URL")
+	return true
+}
+
+func (c *ImageClient) seedV1ArchiveDataInEmbeddedCache(localPath, cachePath, imageId string) {
+	if c.cacheClient == nil {
+		return
+	}
+	if _, err := c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      localPath,
+		CachePath: cachePath,
+	}, cache.StoreContentOptions{RoutingKey: cachePath, Lock: true}); err != nil {
+		log.Debug().Err(err).Str("image_id", imageId).Str("cache_path", cachePath).Msg("v1 image data archive embedded cache seed failed")
+	}
 }
 
 func (c *ImageClient) localImageArchiveReady(archivePath, imageID string) bool {
@@ -1108,10 +1156,11 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	defer os.Remove(tempPath)
 
 	if c.privateWorkerImageRequest(request) {
-		if brokeredRegistry, err := c.pullImageArchiveFromBrokeredOrigin(ctx, tempPath, request); err == nil && brokeredRegistry != nil {
+		if pulled, brokeredRegistry, err := c.pullImageArchiveFromBrokeredOrigin(ctx, tempPath, request); err == nil && pulled {
 			if err := os.Rename(tempPath, archivePath); err != nil {
 				return nil, err
 			}
+			go c.publishImageArchiveToEmbeddedCache(archivePath, imageId)
 			return brokeredRegistry, nil
 		} else if err != nil {
 			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable, falling back to configured registry")
@@ -1138,6 +1187,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	if err := os.Rename(tempPath, archivePath); err != nil {
 		return nil, err
 	}
+	go c.publishImageArchiveToEmbeddedCache(archivePath, imageId)
 
 	return &sourceRegistry, nil
 }
@@ -1150,30 +1200,110 @@ func (c *ImageClient) privateWorkerImageRequest(request *types.ContainerRequest)
 	return ok && pool.Mode == types.PoolModePrivate
 }
 
-func (c *ImageClient) pullImageArchiveFromBrokeredOrigin(ctx context.Context, archivePath string, request *types.ContainerRequest) (*types.S3ImageRegistryConfig, error) {
+// pullImageArchiveFromBrokeredOrigin pulls the image archive using
+// gateway-brokered origin access: a presigned URL when vended, or S3
+// credentials from older gateways. It reports whether the archive was pulled;
+// the returned source registry is nil for URL pulls since the worker holds no
+// S3 credentials in that mode.
+func (c *ImageClient) pullImageArchiveFromBrokeredOrigin(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, *types.S3ImageRegistryConfig, error) {
 	creds := c.originCredentials(ctx, request, request.ImageId, "")
-	if creds == nil || creds.imageArchiveStorage == nil || creds.imageArchiveObjectKey == "" {
-		return nil, nil
+	if creds == nil {
+		return false, nil, nil
+	}
+	if creds.imageArchiveURL != "" {
+		if err := downloadImageArchiveURL(ctx, creds.imageArchiveURL, archivePath); err != nil {
+			return false, nil, err
+		}
+		log.Info().Str("image_id", request.ImageId).Msg("pulled image archive from brokered URL")
+		return true, nil, nil
+	}
+
+	if creds.imageArchiveStorage == nil || creds.imageArchiveObjectKey == "" {
+		return false, nil, nil
 	}
 
 	sourceRegistry := imageArchiveRegistryConfig(creds.imageArchiveStorage)
 	if sourceRegistry.BucketName == "" {
-		return nil, nil
+		return false, nil, nil
 	}
 
 	store, err := reg.NewS3Store(sourceRegistry)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
 	if err := store.Get(ctx, creds.imageArchiveObjectKey, archivePath); err != nil {
-		return nil, err
+		return false, nil, err
 	}
 
 	log.Info().
 		Str("image_id", request.ImageId).
 		Str("object_key", creds.imageArchiveObjectKey).
 		Msg("pulled image archive from brokered origin")
-	return &sourceRegistry, nil
+	return true, &sourceRegistry, nil
+}
+
+const (
+	// imageArchiveDownloadTimeout bounds a whole-archive download so a stalled
+	// origin cannot hold the image pull flock indefinitely.
+	imageArchiveDownloadTimeout       = 30 * time.Minute
+	imageArchiveDownloadHeaderTimeout = 30 * time.Second
+)
+
+var imageArchiveHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: imageArchiveDownloadHeaderTimeout,
+	},
+}
+
+func downloadImageArchiveURL(ctx context.Context, url, path string) error {
+	ctx, cancel := context.WithTimeout(ctx, imageArchiveDownloadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := imageArchiveHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("image archive download failed: %s", resp.Status)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+	return err
+}
+
+// publishImageArchiveToEmbeddedCache best-effort seeds the pulled archive into
+// the embedded content cache so other workers in the locality can restore it
+// without re-fetching from origin. Callers run it off the container start path.
+func (c *ImageClient) publishImageArchiveToEmbeddedCache(archivePath, imageId string) {
+	if c.cacheClient == nil || archivePath == "" || imageId == "" {
+		return
+	}
+
+	cachePath := c.imageArchiveCachePath(imageId)
+	hash, err := c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      archivePath,
+		CachePath: cachePath,
+	}, cache.StoreContentOptions{RoutingKey: cachePath, Lock: true})
+	if err != nil {
+		log.Debug().Err(err).Str("image_id", imageId).Str("cache_path", cachePath).Msg("image archive embedded cache seed failed")
+		return
+	}
+
+	log.Info().Str("image_id", imageId).Str("cache_path", cachePath).Str("hash", hash).Msg("seeded image archive in embedded cache")
 }
 
 func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath string, request *types.ContainerRequest) (bool, *types.S3ImageRegistryConfig, error) {
@@ -1185,6 +1315,7 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	metadataStart := time.Now()
 	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, nil)
+		log.Info().Str("image_id", imageId).Msg("restored image archive from embedded cache")
 		return true, c.imageArchiveSourceRegistry(ctx, request), nil
 	} else if err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), false, nil)

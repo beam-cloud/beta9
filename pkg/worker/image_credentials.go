@@ -72,6 +72,8 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 		workspaceStorage:      resp.WorkspaceStorage,
 		imageArchiveStorage:   resp.ImageArchiveStorage,
 		imageArchiveObjectKey: resp.ImageArchiveObjectKey,
+		imageArchiveURL:       resp.ImageArchiveUrl,
+		imageArchiveDataURL:   resp.ImageArchiveDataUrl,
 		fetchedAt:             time.Now(),
 	}
 	c.originCredsMu.Lock()

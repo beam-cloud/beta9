@@ -153,7 +153,8 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	m.metadataStore = metadataStore
 
 	hostDirectory := &gatewayCacheHostDirectory{
-		client: m.workerRepo,
+		client:   m.workerRepo,
+		poolName: m.poolName,
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
