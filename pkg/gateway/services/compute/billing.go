@@ -54,6 +54,7 @@ type managedUsage struct {
 	PoolName           string    `json:"pool_name"`
 	ReservationID      string    `json:"reservation_id"`
 	Provider           string    `json:"provider"`
+	Cloud              string    `json:"cloud"`
 	ProviderInstanceID string    `json:"provider_instance_id"`
 	MachineID          string    `json:"machine_id"`
 	GPU                string    `json:"gpu"`
