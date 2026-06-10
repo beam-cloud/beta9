@@ -460,6 +460,10 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 // cudaCheckpointProcesses runs cuda-checkpoint on all CUDA processes inside the container
 // action should be "checkpoint" (freeze) or "restore" (unfreeze)
 func (r *Runsc) cudaCheckpointProcesses(ctx context.Context, containerID, action string, outputWriter OutputWriter) error {
+	if _, err := exec.LookPath("cuda-checkpoint"); err != nil {
+		return nil
+	}
+
 	pids, err := r.findCUDAProcesses(ctx, containerID)
 	if err != nil || len(pids) == 0 {
 		return nil // No CUDA processes, skip

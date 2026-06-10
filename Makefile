@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 tag := latest
 workerTag := latest
+workerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 runnerTag := latest
 runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 BENCH_SDK_PYTHON ?= uv run --project ./sdk --no-sync python
@@ -25,7 +26,7 @@ startup-benchmark:
 startup-benchmark-build:
 	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
 	docker push localhost:5001/beta9-gateway:$(tag)
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --platform=$(workerPlatform) --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	$(MAKE) startup-benchmark BENCH_INSTALL=1
 
@@ -78,7 +79,7 @@ gateway:
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --platform=$(workerPlatform) --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
 

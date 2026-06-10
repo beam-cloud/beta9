@@ -19,7 +19,18 @@ permissions:
 jobs:
   build_and_release_worker:
     environment: Release
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout code
@@ -47,7 +58,39 @@ jobs:
           file: ./docker/Dockerfile.worker
           push: true
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ inputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ inputs.tag }}-${{ matrix.arch }}
           target: final
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: ${{ inputs.build_args }}
+
+  publish_worker_manifest:
+    needs: build_and_release_worker
+    environment: Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        with:
+          registry-type: public
+          mask-password: 'true'
+
+      - name: Publish multi-platform image manifest
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker
+          TAG_NAME: ${{ inputs.tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG_NAME}" \
+            "${IMAGE}:${TAG_NAME}-amd64" \
+            "${IMAGE}:${TAG_NAME}-arm64"

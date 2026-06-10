@@ -152,6 +152,7 @@ FROM nvidia/cuda:12.8.0-base-ubuntu22.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
+ARG TARGETARCH
 ENV DEBIAN_FRONTEND="noninteractive"
 WORKDIR /workspace
 
@@ -163,7 +164,23 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install -y psmisc tini iproute2 iptables
 
-RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
+ARG JUICEFS_VERSION=1.3.1
+RUN <<EOT
+set -eux
+case "$TARGETARCH" in
+    amd64|arm64) ;;
+    *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;;
+esac
+
+JUICEFS_TARBALL="juicefs-${JUICEFS_VERSION}-linux-${TARGETARCH}.tar.gz"
+curl -fsSLO "https://d.juicefs.com/juicefs/releases/download/v${JUICEFS_VERSION}/${JUICEFS_TARBALL}"
+curl -fsSLO "https://d.juicefs.com/juicefs/releases/download/v${JUICEFS_VERSION}/checksums.txt"
+grep " ${JUICEFS_TARBALL}$" checksums.txt | sha256sum -c -
+tar -xzf "${JUICEFS_TARBALL}" juicefs
+mv juicefs /usr/local/bin/juicefs
+chmod +x /usr/local/bin/juicefs
+rm -f "${JUICEFS_TARBALL}" checksums.txt
+EOT
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
@@ -219,8 +236,6 @@ RUN mkdir -p /usr/lib/criu/plugins.disabled && \
     fi && \
     true
 
-ARG TARGETARCH
-
 ENV MOUNT_S3_URL_ARM64="https://s3.amazonaws.com/mountpoint-s3-release/1.8.0/arm64/mount-s3-1.8.0-arm64.tar.gz"
 ENV MOUNT_S3_URL_AMD64="https://s3.amazonaws.com/mountpoint-s3-release/1.8.0/x86_64/mount-s3-1.8.0-x86_64.tar.gz"
 
@@ -232,8 +247,19 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
     mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
     rm -rf mount-s3 $TARBALL
 
-RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
-    chmod +x /usr/local/bin/cuda-checkpoint
+RUN <<EOT
+set -eux
+case "$TARGETARCH" in
+    amd64)
+        curl -fsSL https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint
+        chmod +x /usr/local/bin/cuda-checkpoint
+        ;;
+    arm64)
+        echo "cuda-checkpoint is not available for linux/arm64; skipping optional helper"
+        ;;
+    *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;;
+esac
+EOT
 
 RUN apt-get install -y ripgrep wget
 
@@ -241,6 +267,8 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
       wget https://github.com/beam-cloud/goproc/releases/download/v0.1.5/goproc-0.1.5-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
     elif [ "$TARGETARCH" = "amd64" ]; then \
       wget https://github.com/beam-cloud/goproc/releases/download/v0.1.5/goproc-0.1.5-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+    else \
+      echo "Unsupported architecture: $TARGETARCH" && exit 1 ; \
     fi
 
 RUN apt-get remove -y curl && \

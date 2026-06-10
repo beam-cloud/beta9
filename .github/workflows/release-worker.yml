@@ -12,7 +12,18 @@ jobs:
   build_and_release_worker:
     if: startsWith(github.ref, 'refs/tags/worker-')
     environment: Release
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout code
@@ -45,10 +56,52 @@ jobs:
           file: ./docker/Dockerfile.worker
           push: true
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ steps.set-version.outputs.TAG_NAME }}
-            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:latest
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ steps.set-version.outputs.TAG_NAME }}-${{ matrix.arch }}
           target: final
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           build-args: |
             CEDANA_TOKEN=${{ secrets.CEDANA_TOKEN }}
             CEDANA_BASE_URL=${{ secrets.CEDANA_BASE_URL }}
+
+  publish_worker_manifest:
+    if: startsWith(github.ref, 'refs/tags/worker-')
+    needs: build_and_release_worker
+    environment: Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        with:
+          registry-type: public
+          mask-password: "true"
+
+      - name: Set version
+        id: set-version
+        run: |
+          echo "TAG_NAME=${GITHUB_REF_NAME#worker-}" >> $GITHUB_OUTPUT
+
+      - name: Publish multi-platform image manifests
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker
+          TAG_NAME: ${{ steps.set-version.outputs.TAG_NAME }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${TAG_NAME}" \
+            "${IMAGE}:${TAG_NAME}-amd64" \
+            "${IMAGE}:${TAG_NAME}-arm64"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${TAG_NAME}-amd64" \
+            "${IMAGE}:${TAG_NAME}-arm64"
