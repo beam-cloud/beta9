@@ -13,20 +13,6 @@ worker:
         volumeMounts:
         - mountPath: /etc/beta9
           name: config
-events:
-  callbacks:
-  - url: ""
-    format: beta9_webhook
-    headers:
-      Authorization: ""
-    eventTypes:
-    - stub.deploy
-    - stub.serve
-    - stub.run
-    - stub.clone
-    - workerpool.degraded
-    - workerpool.healthy
-    - gateway.endpoint.called
 managedCompute:
   billing:
     mode: noop

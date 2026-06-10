@@ -8,20 +8,6 @@ global:
 # -- Beta9's configuration.
 # https://github.com/beam-cloud/beta9/blob/main/pkg/common/config.default.yaml
 config:
-  events:
-    callbacks:
-    - url: ""
-      format: beta9_webhook
-      headers:
-        Authorization: ""
-      eventTypes:
-      - stub.deploy
-      - stub.serve
-      - stub.run
-      - stub.clone
-      - workerpool.degraded
-      - workerpool.healthy
-      - gateway.endpoint.called
   worker:
     imageRegistry: public.ecr.aws/n4e0e1y0
     imagePVCName: ""
