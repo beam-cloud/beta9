@@ -11,6 +11,12 @@ import (
 
 const ShadeformDefaultBaseURL = "https://api.shadeform.ai/v1"
 
+// shadeformAutoDeleteGrace pads the provider-side auto-delete threshold past
+// our own expiry. The control plane owns reservation lifetime (renewal, final
+// billing, termination); Shadeform's threshold is only a runaway backstop and
+// must never fire before our reconciler has had a chance to act.
+const shadeformAutoDeleteGrace = time.Hour
+
 type ShadeformClient struct {
 	api HTTPClient
 }
@@ -103,7 +109,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 	if req.TTL > 0 || req.MaxSpendMicros > 0 {
 		autoDelete := map[string]any{}
 		if req.TTL > 0 {
-			autoDelete["date_threshold"] = time.Now().Add(req.TTL).UTC().Format(time.RFC3339)
+			autoDelete["date_threshold"] = time.Now().Add(req.TTL + shadeformAutoDeleteGrace).UTC().Format(time.RFC3339)
 		}
 		if req.MaxSpendMicros > 0 {
 			autoDelete["spend_threshold"] = fmt.Sprintf("%.2f", MicrosToDollars(req.MaxSpendMicros))
@@ -163,6 +169,17 @@ func (c *ShadeformClient) GetReservation(ctx context.Context, id string) (*Reser
 		HourlyCostMicros: offer.HourlyCostMicros,
 		Status:           ReservationActive,
 	}, nil
+}
+
+// ExtendReservation pushes the renewed expiry to Shadeform's auto-delete
+// date threshold. spend_threshold is omitted so it stays unchanged.
+func (c *ShadeformClient) ExtendReservation(ctx context.Context, id string, expiresAt time.Time) error {
+	body := map[string]any{
+		"auto_delete": map[string]any{
+			"date_threshold": expiresAt.Add(shadeformAutoDeleteGrace).UTC().Format(time.RFC3339),
+		},
+	}
+	return c.api.Do(ctx, http.MethodPost, fmt.Sprintf("/instances/%s/update", id), body, nil)
 }
 
 func (c *ShadeformClient) DeleteReservation(ctx context.Context, id string) error {

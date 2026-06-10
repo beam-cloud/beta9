@@ -181,6 +181,56 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
 	}
 
+	changed = s.renewManagedReservations(ctx, workspaceID, state, decision, accrued+buffer, now, s.computeVendors()) || changed
+
+	return changed
+}
+
+// renewManagedReservations extends reservations nearing expiry by one hour at
+// a time while the workspace can afford it, so an instance runs until it is
+// released or credits run out - not until an arbitrary launch TTL. Renewal is
+// skipped (and the reservation expires and terminates normally) when the
+// balance cannot cover the accrued cost plus another hour.
+func (s *Service) renewManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, decision billingDecision, reservedCents float64, now time.Time, vendors map[string]model.Vendor) bool {
+	renewLead := 2 * s.appConfig.ManagedCompute.Billing.ReconcileIntervalOrDefault()
+	changed := false
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if !reservation.Managed() || !reservation.ActiveAt(now) || reservation.ExpiresAt.IsZero() {
+			continue
+		}
+		if reservation.ExpiresAt.Sub(now) > renewLead {
+			continue
+		}
+
+		hourlyCents := managedCostCents(s.billableMicros(reservation.HourlyCostMicros), time.Hour)
+		if float64(decision.AvailableCents) < reservedCents+hourlyCents {
+			continue
+		}
+
+		vendor := vendors[reservation.Provider]
+		if vendor == nil {
+			reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
+			changed = true
+			continue
+		}
+		newExpiry := reservation.ExpiresAt.Add(time.Hour)
+		if err := vendor.ExtendReservation(ctx, computeReservationInstanceID(*reservation), newExpiry); err != nil {
+			reservation.LastError = fmt.Sprintf("renewal failed: %v", err)
+			changed = true
+			continue
+		}
+		reservation.ExpiresAt = newExpiry
+		reservation.CommittedMicros += reservation.HourlyCostMicros
+		reservation.LastError = ""
+		state.CommittedSpendMicros += s.billableMicros(reservation.HourlyCostMicros)
+		if state.ExpiresAt.Before(newExpiry) {
+			state.ExpiresAt = newExpiry
+		}
+		reservedCents += hourlyCents
+		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationRenewed, string(reservation.Status)))
+		changed = true
+	}
 	return changed
 }
 
