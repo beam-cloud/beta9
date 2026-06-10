@@ -104,10 +104,12 @@ func (r *originCredentialsBackendRepo) GetSecretByNameDecrypted(ctx context.Cont
 }
 
 func TestAuthorizeCacheRepositoryRequestWithWorkerToken(t *testing.T) {
-	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		ctx := cacheRepositoryAuthContext(tokenType)
 
-	if err := (&WorkerRepositoryService{}).authorizeCacheRepositoryRequest(ctx); err != nil {
-		t.Fatalf("authorizeCacheRepositoryRequest failed: %v", err)
+		if err := (&WorkerRepositoryService{}).authorizeCacheRepositoryRequest(ctx); err != nil {
+			t.Fatalf("authorizeCacheRepositoryRequest failed for %s: %v", tokenType, err)
+		}
 	}
 }
 
@@ -207,21 +209,12 @@ func TestCacheCoordinatorScopesWorkerLocalityByWorkspaceAndPool(t *testing.T) {
 	require.Equal(t, "workspace-b/shared-pool", respB.Hosts[0].Locality)
 }
 
-type adminWorkspaceBackendRepo struct {
-	repository.BackendRepository
-	adminWorkspace *types.Workspace
-}
-
-func (r *adminWorkspaceBackendRepo) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
-	return r.adminWorkspace, nil
-}
-
-// In-cluster and external-pool workers hold admin-workspace worker tokens and
-// must share the unscoped cache namespace with the cache-server daemonset,
-// which registers via the coordinator token (no workspace). Their listings must
-// also fall back across pool names so daemonset hosts registered under a
-// different pool stay discoverable.
-func TestCacheCoordinatorAdminWorkersShareUnscopedLocalityWithDaemonSet(t *testing.T) {
+// Cluster workers (plain worker tokens) share the unscoped cache namespace
+// with the cache-server daemonset, which registers via the coordinator token.
+// Their listings must also fall back across pool names so daemonset hosts
+// registered under a different pool stay discoverable. Only private-pool
+// worker tokens (TokenTypeWorkerPrivate) are workspace-scoped.
+func TestCacheCoordinatorClusterWorkersShareUnscopedLocalityWithDaemonSet(t *testing.T) {
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	t.Cleanup(server.Close)
@@ -236,7 +229,6 @@ func TestCacheCoordinatorAdminWorkersShareUnscopedLocalityWithDaemonSet(t *testi
 	service := &WorkerRepositoryService{
 		cacheCoordinator:      cache.NewCoordinator(repository.NewCacheRedisRepository(rdb)),
 		cacheCoordinatorToken: "coordinator-token",
-		backendRepo:           &adminWorkspaceBackendRepo{adminWorkspace: &types.Workspace{ExternalId: "admin-workspace"}},
 	}
 
 	// The cache-server daemonset registers with the coordinator token under its
@@ -255,15 +247,18 @@ func TestCacheCoordinatorAdminWorkersShareUnscopedLocalityWithDaemonSet(t *testi
 	require.NoError(t, err)
 	require.True(t, registerResp.Ok, registerResp.ErrorMsg)
 
-	// An admin-workspace worker keeps an unscoped locality and discovers the
-	// daemonset host even though it lists under a different pool name.
-	adminCtx := cacheRepositoryWorkspaceAuthContext("admin-workspace")
-	adminResp, err := service.ListCacheHosts(adminCtx, &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
+	// A cluster worker keeps an unscoped locality and discovers the daemonset
+	// host even though it lists under a different pool name.
+	clusterCtx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "admin-workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker},
+	})
+	clusterResp, err := service.ListCacheHosts(clusterCtx, &pb.ListCacheHostsRequest{PoolName: "gpu-pool", Locality: "default"})
 	require.NoError(t, err)
-	require.True(t, adminResp.Ok, adminResp.ErrorMsg)
-	require.Len(t, adminResp.Hosts, 1)
-	require.Equal(t, "daemonset-host", adminResp.Hosts[0].LogicalHostId)
-	require.Equal(t, "default", adminResp.Hosts[0].Locality)
+	require.True(t, clusterResp.Ok, clusterResp.ErrorMsg)
+	require.Len(t, clusterResp.Hosts, 1)
+	require.Equal(t, "daemonset-host", clusterResp.Hosts[0].LogicalHostId)
+	require.Equal(t, "default", clusterResp.Hosts[0].Locality)
 
 	// A private-pool worker in a customer workspace stays scoped and must not
 	// see the unscoped daemonset host.
@@ -512,9 +507,11 @@ func cacheRepositoryAuthContext(tokenType string) context.Context {
 	})
 }
 
+// cacheRepositoryWorkspaceAuthContext simulates a private-pool worker token,
+// which carries the pool owner's workspace and is subject to workspace scoping.
 func cacheRepositoryWorkspaceAuthContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
-		Token:     &types.Token{TokenType: types.TokenTypeWorker},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate},
 	})
 }

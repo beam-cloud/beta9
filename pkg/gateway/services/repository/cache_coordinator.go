@@ -28,7 +28,7 @@ func configuredCacheCoordinatorToken(configured string) string {
 
 func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Context) error {
 	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil {
-		if authInfo.Token.TokenType == types.TokenTypeWorker {
+		if types.IsWorkerTokenType(authInfo.Token.TokenType) {
 			return nil
 		}
 		return errCacheCoordinatorUnauthorized
@@ -54,61 +54,27 @@ func (s *WorkerRepositoryService) authorizeCacheRepositoryRequest(ctx context.Co
 // scopedCacheLocality isolates cache coordinator and metadata state per
 // customer workspace for private-pool workers: their locality is rewritten to
 // "<workspaceID>/<locality>" so colliding pool names across customers never
-// share cache hosts, locks, or stubs. Admin-workspace worker tokens (in-cluster
-// and external-pool workers) are exempt so they stay in the same unscoped
-// namespace as the cache-server daemonset, which authenticates with the
-// coordinator token and therefore has no workspace to scope by.
+// share cache hosts, locks, or stubs. Only TokenTypeWorkerPrivate tokens
+// (minted exclusively for private-pool agent workers) are scoped; cluster
+// workers and the cache-server daemonset keep their plain locality.
 //
 // Pool names are passed through untouched: an empty pool name simply means a
 // locality-wide lookup, which is already workspace-isolated by the scoped
 // locality, and the coordinator rejects registrations without a pool name.
 func (s *WorkerRepositoryService) scopedCacheLocality(ctx context.Context, locality string) string {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
 		return locality
 	}
 	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" || locality == "" {
 		return locality
 	}
 
-	workspaceID := authInfo.Workspace.ExternalId
-	if s.isAdminWorkspaceExternalId(ctx, workspaceID) {
-		return locality
-	}
-
-	prefix := workspaceID + cacheLocalityScopeSeparator
+	prefix := authInfo.Workspace.ExternalId + cacheLocalityScopeSeparator
 	if strings.HasPrefix(locality, prefix) {
 		return locality
 	}
 	return prefix + locality
-}
-
-// isAdminWorkspaceExternalId reports whether the given workspace external ID is
-// the admin workspace, resolving it once and caching the result. When the admin
-// workspace cannot be resolved this fails closed (returns false) so workspace
-// scoping is preserved.
-func (s *WorkerRepositoryService) isAdminWorkspaceExternalId(ctx context.Context, externalID string) bool {
-	if s == nil || s.backendRepo == nil || externalID == "" {
-		return false
-	}
-
-	s.adminWorkspaceMu.Lock()
-	resolved, adminID := s.adminWorkspaceResolved, s.adminWorkspaceExternalId
-	s.adminWorkspaceMu.Unlock()
-
-	if !resolved {
-		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
-		if err != nil || workspace == nil {
-			return false
-		}
-		adminID = workspace.ExternalId
-		s.adminWorkspaceMu.Lock()
-		s.adminWorkspaceResolved = true
-		s.adminWorkspaceExternalId = adminID
-		s.adminWorkspaceMu.Unlock()
-	}
-
-	return adminID != "" && adminID == externalID
 }
 
 func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb.RegisterCacheHostRequest) (*pb.RegisterCacheHostResponse, error) {

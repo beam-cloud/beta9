@@ -410,10 +410,14 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	return slot, token, nil
 }
 
+// agentWorkerToken mints (or reuses) the worker token for a private-pool
+// worker slot. These tokens are TokenTypeWorkerPrivate: the type itself marks
+// the worker as customer compute so the gateway can scope cache and credential
+// access by workspace without inferring trust from workspace identity.
 func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
-		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorker {
+		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkerPrivate {
 			tokenHash := hashComputeToken(token.Key)
 			if existing.WorkerTokenHash == "" || existing.WorkerTokenHash == tokenHash {
 				return token.Key, token.ExternalId, tokenHash, nil
@@ -421,7 +425,7 @@ func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, existi
 		}
 	}
 
-	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorker, true)
+	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkerPrivate, true)
 	if err != nil {
 		return "", "", "", err
 	}

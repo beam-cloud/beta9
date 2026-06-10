@@ -2,7 +2,6 @@ package repository_services
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -14,18 +13,15 @@ import (
 )
 
 type WorkerRepositoryService struct {
-	ctx                      context.Context
-	cacheCoordinator         *cache.Coordinator
-	cacheCoordinatorToken    string
-	cacheMetadata            cache.CacheMetadataStore
-	workerEvents             *workerEventBroker
-	workerRepo               repository.WorkerRepository
-	containerRepo            repository.ContainerRepository
-	backendRepo              repository.BackendRepository
-	appConfig                types.AppConfig
-	adminWorkspaceMu         sync.Mutex
-	adminWorkspaceExternalId string
-	adminWorkspaceResolved   bool
+	ctx                   context.Context
+	cacheCoordinator      *cache.Coordinator
+	cacheCoordinatorToken string
+	cacheMetadata         cache.CacheMetadataStore
+	workerEvents          *workerEventBroker
+	workerRepo            repository.WorkerRepository
+	containerRepo         repository.ContainerRepository
+	backendRepo           repository.BackendRepository
+	appConfig             types.AppConfig
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 

@@ -184,9 +184,13 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}, nil
 }
 
+// authorizeOriginCredentialWorkspace restricts private-pool (customer compute)
+// worker tokens to credentials for their own workspace. Cluster workers and
+// coordinator-token callers are trusted infrastructure and serve containers
+// across workspaces, so they are not restricted.
 func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string) error {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
 		return nil
 	}
 	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
