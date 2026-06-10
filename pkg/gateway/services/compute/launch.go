@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -79,6 +80,15 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, pool.Name)
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if existing != nil {
+		// Adding capacity to an existing pool must not rewrite the pool's
+		// identity. The launch request only describes the new node(s); the
+		// region lives on the reservation, and the pool config accumulates.
+		if err := validatePoolLaunchCompatible(existing, pool); err != nil {
+			return launchPoolError("pool_gpu_mismatch", err.Error(), billingDecision{}), nil
+		}
+		config = mergePoolConfigForLaunch(existing.Config, config)
 	}
 	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}, nil
@@ -178,7 +188,7 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 	now := time.Now()
 	state := &model.PoolState{
 		Name:                 pool.Name,
-		Selector:             pool.Selector,
+		Selector:             firstNonEmpty(config.Selector, pool.Selector),
 		Config:               config,
 		Reservations:         newReservations,
 		ReservedGPUs:         activeReservationGPUs(newReservations, now),
@@ -194,9 +204,18 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 		UpdatedAt:            now,
 		ExpiresAt:            now.Add(pool.TTL),
 	}
-	if existing != nil && !existing.CreatedAt.IsZero() {
-		state.CreatedAt = existing.CreatedAt
-		state.CreatedByTokenID = existing.CreatedByTokenID
+	if existing != nil {
+		if !existing.CreatedAt.IsZero() {
+			state.CreatedAt = existing.CreatedAt
+			state.CreatedByTokenID = existing.CreatedByTokenID
+		}
+		// Adding a node never shortens the pool's life
+		if existing.ExpiresAt.After(state.ExpiresAt) {
+			state.ExpiresAt = existing.ExpiresAt
+		}
+		if !existing.BillingDegradedSince.IsZero() {
+			state.BillingDegradedSince = existing.BillingDegradedSince
+		}
 	}
 	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
 		err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
@@ -211,6 +230,51 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
 	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
+}
+
+// validatePoolLaunchCompatible rejects launches that would change the pool's
+// GPU type; a pool runs one GPU type, so a different type needs a new pool.
+func validatePoolLaunchCompatible(existing *model.PoolState, pool model.Pool) error {
+	existingConfig := normalizePoolConfig(existing.Config)
+	if existingConfig == nil || len(existingConfig.Gpu) == 0 || len(pool.GPUs) == 0 {
+		return nil
+	}
+	for _, gpu := range pool.GPUs {
+		if !slices.Contains(existingConfig.Gpu, gpu) {
+			return fmt.Errorf("pool %q runs %s GPUs; create a new pool for %s", existing.Name, strings.Join(existingConfig.Gpu, ", "), gpu)
+		}
+	}
+	return nil
+}
+
+// mergePoolConfigForLaunch combines an add-capacity request into the existing
+// pool config: identity fields (name, gpu, transport, ...) are kept, regions
+// and providers accumulate, and the budget grows by the request's budget.
+func mergePoolConfigForLaunch(existing, request *pb.PoolConfig) *pb.PoolConfig {
+	merged := normalizePoolConfig(existing)
+	if merged == nil {
+		return request
+	}
+	if request == nil {
+		return merged
+	}
+	merged.Regions = unionStrings(merged.Regions, request.Regions)
+	merged.Providers = unionStrings(merged.Providers, request.Providers)
+	merged.MaxSpend += request.MaxSpend
+	if merged.Ttl == "" {
+		merged.Ttl = request.Ttl
+	}
+	return merged
+}
+
+func unionStrings(a, b []string) []string {
+	out := append([]string(nil), a...)
+	for _, value := range b {
+		if !slices.Contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func activeReservationGPUs(reservations []model.Reservation, now time.Time) uint32 {

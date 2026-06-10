@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -131,6 +132,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 		Selector:         req.Selector,
 		Provider:         c.Name(),
 		Cloud:            req.Offer.Cloud,
+		Region:           req.Offer.Region,
 		OfferID:          req.Offer.ID,
 		InstanceType:     req.Offer.InstanceType,
 		InstanceID:       instanceID,
@@ -159,6 +161,7 @@ func (c *ShadeformClient) GetReservation(ctx context.Context, id string) (*Reser
 		ID:               id,
 		Provider:         c.Name(),
 		Cloud:            offer.Cloud,
+		Region:           offer.Region,
 		OfferID:          offer.ID,
 		InstanceType:     offer.InstanceType,
 		InstanceID:       id,
@@ -167,8 +170,27 @@ func (c *ShadeformClient) GetReservation(ctx context.Context, id string) (*Reser
 		CPUMillicores:    offer.CPUMillicores,
 		MemoryMB:         offer.MemoryMB,
 		HourlyCostMicros: offer.HourlyCostMicros,
-		Status:           ReservationActive,
+		Status:           shadeformReservationStatus(jsonString(raw, "status")),
+		// e.g. "Running startup script..." while the node boots
+		LastStatusMessage: jsonString(raw, "status_details"),
 	}, nil
+}
+
+// shadeformReservationStatus maps Shadeform instance statuses onto our
+// reservation lifecycle so a booting node is reported as pending instead of
+// being unconditionally marked active.
+func shadeformReservationStatus(status string) ReservationStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "pending", "creating", "provisioning", "initializing", "starting":
+		return ReservationPending
+	case "deleted", "terminated":
+		return ReservationDeleted
+	case "failed", "error":
+		return ReservationFailed
+	default:
+		// "active" and unknown statuses keep the previous behavior
+		return ReservationActive
+	}
 }
 
 // ExtendReservation pushes the renewed expiry to Shadeform's auto-delete
