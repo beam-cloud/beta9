@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -156,30 +157,74 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 	if workspaceID == "" {
 		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, in.Name)
-	if err != nil {
-		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if state == nil {
-		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}, nil
-	}
-	if in.Ttl != "" {
-		state.Config.Ttl = in.Ttl
-		ttl, err := model.ParseTTL(in.Ttl)
+
+	var response *pb.ExtendPoolCapacityResponse
+	lockErr := s.withPoolStateLock(ctx, workspaceID, in.Name, func() error {
+		state, err := s.getOwnedPrivatePoolState(ctx, authInfo, in.Name)
 		if err != nil {
-			return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
+			return nil
 		}
-		state.ExpiresAt = time.Now().Add(ttl)
+		if state == nil {
+			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}
+			return nil
+		}
+		if in.Ttl != "" {
+			state.Config.Ttl = in.Ttl
+			ttl, err := model.ParseTTL(in.Ttl)
+			if err != nil {
+				response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
+				return nil
+			}
+			state.ExpiresAt = time.Now().Add(ttl)
+			s.extendManagedReservations(ctx, state, state.ExpiresAt)
+		}
+		if in.MaxSpend > 0 {
+			state.Config.MaxSpend = in.MaxSpend
+		}
+		state.UpdatedAt = time.Now()
+		if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
+			return nil
+		}
+		s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolExtended, ""))
+		response = &pb.ExtendPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}
+		return nil
+	})
+	if lockErr != nil {
+		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: lockErr.Error()}, nil
 	}
-	if in.MaxSpend > 0 {
-		state.Config.MaxSpend = in.MaxSpend
+	return response, nil
+}
+
+// extendManagedReservations pushes a new expiry to the pool's open managed
+// reservations and their provider-side auto-delete thresholds, so extending a
+// pool actually extends the instances backing it.
+func (s *Service) extendManagedReservations(ctx context.Context, state *model.PoolState, expiresAt time.Time) {
+	vendors := s.computeVendors()
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if !reservation.Managed() || reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating {
+			continue
+		}
+		if !reservation.ExpiresAt.IsZero() && !expiresAt.After(reservation.ExpiresAt) {
+			continue
+		}
+		vendor := vendors[reservation.Provider]
+		if vendor == nil {
+			reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
+			continue
+		}
+		if err := vendor.ExtendReservation(ctx, computeReservationInstanceID(*reservation), expiresAt); err != nil {
+			reservation.LastError = fmt.Sprintf("extension failed: %v", err)
+			continue
+		}
+		additional := expiresAt.Sub(reservation.ExpiresAt)
+		reservation.ExpiresAt = expiresAt
+		reservation.CommittedMicros += reservation.HourlyCostMicros * model.WholeHours(additional)
+		reservation.LastError = ""
+		state.CommittedSpendMicros += s.billableMicros(reservation.HourlyCostMicros * model.WholeHours(additional))
 	}
-	state.UpdatedAt = time.Now()
-	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
-		return &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolExtended, ""))
-	return &pb.ExtendPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
 }
 
 func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesRequest) (*pb.ListPoolMachinesResponse, error) {

@@ -159,6 +159,12 @@ func reservationCloud(cloud, fallback string) string {
 	return fallback
 }
 
+// ExtendReservation is a no-op: Vast has no provider-side auto-delete
+// threshold; reservation lifetime is enforced by our reconciler only.
+func (c *VastClient) ExtendReservation(ctx context.Context, id string, expiresAt time.Time) error {
+	return nil
+}
+
 func (c *VastClient) DeleteReservation(ctx context.Context, id string) error {
 	return c.api.Do(ctx, http.MethodDelete, fmt.Sprintf("/instances/%s/", id), nil, nil)
 }

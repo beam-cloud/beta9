@@ -780,6 +780,130 @@ func TestRecordManagedUsageEmitsOpenMeterMetrics(t *testing.T) {
 	}
 }
 
+type fakeVendor struct {
+	extended map[string]time.Time
+}
+
+func (v *fakeVendor) Name() string { return "shadeform" }
+func (v *fakeVendor) ListOffers(context.Context, model.OfferRequest) ([]model.Offer, error) {
+	return nil, nil
+}
+func (v *fakeVendor) CreateReservation(context.Context, model.ReservationRequest) (*model.Reservation, error) {
+	return nil, nil
+}
+func (v *fakeVendor) GetReservation(context.Context, string) (*model.Reservation, error) {
+	return nil, nil
+}
+func (v *fakeVendor) ExtendReservation(_ context.Context, id string, expiresAt time.Time) error {
+	if v.extended == nil {
+		v.extended = map[string]time.Time{}
+	}
+	v.extended[id] = expiresAt
+	return nil
+}
+func (v *fakeVendor) DeleteReservation(context.Context, string) error { return nil }
+
+func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Minute)
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        expiresAt,
+				HourlyCostMicros: 1_500_000,
+				CommittedMicros:  1_500_000,
+			},
+		},
+	}
+	vendor := &fakeVendor{}
+	service := &Service{}
+
+	// Plenty of balance: renew for another hour
+	decision := billingDecision{OK: true, AvailableCents: 10_000}
+	if !service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now, map[string]model.Vendor{"shadeform": vendor}) {
+		t.Fatal("renewManagedReservations() did not report a state change")
+	}
+	if got, want := state.Reservations[0].ExpiresAt, expiresAt.Add(time.Hour); !got.Equal(want) {
+		t.Fatalf("expires at = %s, want %s", got, want)
+	}
+	if got, want := state.Reservations[0].CommittedMicros, int64(3_000_000); got != want {
+		t.Fatalf("committed micros = %d, want %d", got, want)
+	}
+	if got, want := state.CommittedSpendMicros, int64(1_650_000); got != want {
+		t.Fatalf("pool committed spend = %d, want %d", got, want)
+	}
+	if got, want := vendor.extended["instance-1"], expiresAt.Add(time.Hour); !got.Equal(want) {
+		t.Fatalf("vendor extended to %s, want %s", got, want)
+	}
+}
+
+func TestRenewManagedReservationsSkipsWhenBalanceInsufficient(t *testing.T) {
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Minute)
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        expiresAt,
+				HourlyCostMicros: 1_500_000,
+			},
+		},
+	}
+	vendor := &fakeVendor{}
+	service := &Service{}
+
+	// 16.5 cents/hr billable but only 10 cents headroom: do not renew
+	decision := billingDecision{OK: true, AvailableCents: 15}
+	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now, map[string]model.Vendor{"shadeform": vendor}) {
+		t.Fatal("renewManagedReservations() renewed without sufficient balance")
+	}
+	if !state.Reservations[0].ExpiresAt.Equal(expiresAt) {
+		t.Fatal("reservation expiry should be unchanged")
+	}
+	if len(vendor.extended) != 0 {
+		t.Fatal("vendor should not have been called")
+	}
+}
+
+func TestRenewManagedReservationsIgnoresDistantExpiry(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		Name: "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				InstanceID:       "instance-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now,
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_500_000,
+			},
+		},
+	}
+	vendor := &fakeVendor{}
+	service := &Service{}
+
+	decision := billingDecision{OK: true, AvailableCents: 10_000}
+	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 0, now, map[string]model.Vendor{"shadeform": vendor}) {
+		t.Fatal("renewManagedReservations() should not renew a reservation far from expiry")
+	}
+}
+
 func TestRecordAgentMetricsEmitsNodeUsage(t *testing.T) {
 	now := time.Now().UTC()
 	previous := now.Add(-5 * time.Second)

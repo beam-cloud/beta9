@@ -50,6 +50,10 @@ type ComputeVendor interface {
 	ListOffers(ctx context.Context, req ComputeOfferRequest) ([]ComputeOffer, error)
 	CreateReservation(ctx context.Context, req ComputeReservationRequest) (*ComputeReservation, error)
 	GetReservation(ctx context.Context, id string) (*ComputeReservation, error)
+	// ExtendReservation pushes a new expiry to any provider-side auto-delete
+	// threshold so the provider cannot kill an instance our control plane
+	// still considers alive. Vendors without provider-side thresholds no-op.
+	ExtendReservation(ctx context.Context, id string, expiresAt time.Time) error
 	DeleteReservation(ctx context.Context, id string) error
 }
 
