@@ -100,7 +100,7 @@ func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsReq
 
 func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
 		return 0, fmt.Errorf("worker token is required")
 	}
 	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {

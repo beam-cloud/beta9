@@ -369,6 +369,11 @@ message GetCacheOriginCredentialsResponse {
   CacheWorkspaceStorageCredentials workspace_storage = 4;
   CacheWorkspaceStorageCredentials image_archive_storage = 5;
   string image_archive_object_key = 6;
+  string image_archive_url = 7;
+  // Presigned URL for the CLIP v1 data archive ("<image_id>.clip"), used by
+  // private-pool workers that have no S3 credentials to lazily restore or
+  // reconcile v1 archive data.
+  string image_archive_data_url = 8;
 }
 
 message RuntimeMountCredentialRequest {

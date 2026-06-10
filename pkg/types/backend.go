@@ -220,13 +220,25 @@ func getUintOrDefault(value *uint) uint {
 }
 
 const (
-	TokenTypeClusterAdmin        string = "admin"
-	TokenTypeWorkspacePrimary    string = "workspace_primary"
-	TokenTypeWorkspace           string = "workspace"
-	TokenTypeWorker              string = "worker"
+	TokenTypeClusterAdmin     string = "admin"
+	TokenTypeWorkspacePrimary string = "workspace_primary"
+	TokenTypeWorkspace        string = "workspace"
+	TokenTypeWorker           string = "worker"
+	// TokenTypeWorkerPrivate is a worker token minted for private-pool (agent)
+	// compute running on customer machines. It carries the pool owner's
+	// workspace and marks the worker as untrusted customer compute, so the
+	// gateway scopes its cache namespace and credential access by workspace.
+	TokenTypeWorkerPrivate       string = "worker_private"
 	TokenTypeMachine             string = "machine"
 	TokenTypeWorkspaceRestricted string = "workspace_restricted"
 )
+
+// IsWorkerTokenType reports whether the token type belongs to a worker
+// process: cluster workers (in-cluster and external pools) or private-pool
+// agent workers.
+func IsWorkerTokenType(tokenType string) bool {
+	return tokenType == TokenTypeWorker || tokenType == TokenTypeWorkerPrivate
+}
 
 type Token struct {
 	Id                     uint       `db:"id" json:"id" serializer:"id,source:external_id"`

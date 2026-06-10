@@ -54,6 +54,8 @@ type originCredentials struct {
 	workspaceStorage      *pb.CacheWorkspaceStorageCredentials
 	imageArchiveStorage   *pb.CacheWorkspaceStorageCredentials
 	imageArchiveObjectKey string
+	imageArchiveURL       string
+	imageArchiveDataURL   string
 	fetchedAt             time.Time
 }
 
@@ -735,8 +737,13 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 	if m.config.ImageService.RegistryStore == reg.S3ImageRegistryStore {
 		s3 := m.config.ImageService.Registries.S3
 		if s3.BucketName == "" || s3.AccessKey == "" || s3.SecretKey == "" {
-			if creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, ""); creds != nil && creds.imageArchiveStorage != nil {
+			creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", imageIDFromArchiveSource(item.Source))
+			if creds != nil && creds.imageArchiveStorage != nil {
 				s3 = imageArchiveRegistryConfig(creds.imageArchiveStorage)
+			} else if creds != nil && creds.imageArchiveDataURL != "" {
+				// No S3 credentials are vended to private-pool workers; fetch
+				// the archive through the gateway-presigned URL instead.
+				return m.materializeArchiveObjectFromURL(ctx, server, item, routingKey, creds.imageArchiveDataURL)
 			}
 		}
 		if s3.BucketName == "" || item.Source == "" {
@@ -761,6 +768,49 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 	}
 	log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive fetch failed")
 	return types.CacheAuditStatusOriginFailure
+}
+
+// materializeArchiveObjectFromURL downloads the CLIP v1 data archive through a
+// gateway-presigned URL into a temp file on the cache disk and stores it on the
+// local cache server under its content hash + cachefs path. Used by
+// private-pool workers, which hold no S3 credentials.
+func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
+	tmp, err := os.CreateTemp(filepath.Dir(m.checkpointRoot), "archive-origin-*.tmp")
+	if err != nil {
+		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation failed to create archive temp file")
+		return types.CacheAuditStatusOriginFailure
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
+
+	if err := downloadImageArchiveURL(ctx, url, tmpPath); err != nil {
+		log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url fetch failed")
+		return types.CacheAuditStatusOriginFailure
+	}
+
+	resp, err := server.StoreContentFromSource(ctx, &pb.CacheStoreContentFromSourceRequest{
+		Source: &pb.CacheSource{
+			Path:         tmpPath,
+			CachePath:    routingKey,
+			ExpectedHash: item.Hash,
+		},
+	})
+	if err == nil && resp != nil && resp.Ok {
+		return types.CacheAuditStatusMaterialized
+	}
+	log.Debug().Err(err).Str("hash", item.Hash).Str("routing_key", routingKey).Msg("cache reconciliation image archive url store failed")
+	return types.CacheAuditStatusOriginFailure
+}
+
+// imageIDFromArchiveSource derives the image ID from a CLIP v1 required-content
+// source descriptor (the data archive object key, "<imageId>.clip").
+func imageIDFromArchiveSource(source string) string {
+	base := filepath.Base(source)
+	if !strings.HasSuffix(base, "."+reg.LocalImageFileExtension) {
+		return ""
+	}
+	return strings.TrimSuffix(base, "."+reg.LocalImageFileExtension)
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
@@ -814,7 +864,7 @@ func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, item 
 // hash. Credentials ride only in the in-flight store request; they are not
 // persisted on the worker.
 func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem) string {
-	creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "")
+	creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", "")
 	if creds == nil || creds.workspaceStorage == nil {
 		log.Debug().Str("hash", item.Hash).Str("workspace_id", stub.WorkspaceID).Msg("cache reconciliation has no workspace storage credentials")
 		return types.CacheAuditStatusOriginFailure
@@ -858,7 +908,7 @@ func (m *WorkerCacheManager) materializeOCILayer(ctx context.Context, server *ca
 	}
 
 	authOption := remote.WithAuthFromKeychain(authn.DefaultKeychain)
-	if creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, ref.Context().RegistryStr()); creds != nil && creds.registryCredentials != "" {
+	if creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, ref.Context().RegistryStr(), ""); creds != nil && creds.registryCredentials != "" {
 		if authenticator := registryAuthenticator(ctx, ref, creds.registryCredentials); authenticator != nil {
 			authOption = remote.WithAuth(authenticator)
 		}
@@ -895,15 +945,16 @@ func (m *WorkerCacheManager) materializeOCILayer(ctx context.Context, server *ca
 // caches them in memory only. Credentials are never written to disk, Redis, or
 // S2, keeping the worker trustless: it holds no long-lived registry or workspace
 // storage secrets.
-func (m *WorkerCacheManager) originCredentials(ctx context.Context, workspaceID, stubID, registry string) *originCredentials {
+func (m *WorkerCacheManager) originCredentials(ctx context.Context, workspaceID, stubID, registry, imageID string) *originCredentials {
 	if m.workerRepo == nil || workspaceID == "" || stubID == "" {
 		return nil
 	}
 
-	// The registry is part of the key: registry credentials are registry-scoped,
-	// so callers requesting different registries (or none, for volume fetches)
+	// The registry and image are part of the key: registry credentials are
+	// registry-scoped and presigned archive URLs are image-scoped, so callers
+	// requesting different registries or images (or none, for volume fetches)
 	// must not reuse each other's cached auth.
-	key := workspaceID + "\x00" + stubID + "\x00" + registry
+	key := workspaceID + "\x00" + stubID + "\x00" + registry + "\x00" + imageID
 	m.originCredsMu.Lock()
 	if cached, ok := m.originCredsCache[key]; ok && time.Since(cached.fetchedAt) < originCredentialsTTL {
 		m.originCredsMu.Unlock()
@@ -915,6 +966,7 @@ func (m *WorkerCacheManager) originCredentials(ctx context.Context, workspaceID,
 		WorkspaceId: workspaceID,
 		StubId:      stubID,
 		Registry:    registry,
+		ImageId:     imageID,
 	}))
 	if err != nil {
 		log.Debug().Err(err).Str("workspace_id", workspaceID).Str("stub_id", stubID).Msg("cache reconciliation failed to fetch origin credentials")
@@ -926,6 +978,8 @@ func (m *WorkerCacheManager) originCredentials(ctx context.Context, workspaceID,
 		workspaceStorage:      resp.WorkspaceStorage,
 		imageArchiveStorage:   resp.ImageArchiveStorage,
 		imageArchiveObjectKey: resp.ImageArchiveObjectKey,
+		imageArchiveURL:       resp.ImageArchiveUrl,
+		imageArchiveDataURL:   resp.ImageArchiveDataUrl,
 		fetchedAt:             time.Now(),
 	}
 	m.originCredsMu.Lock()

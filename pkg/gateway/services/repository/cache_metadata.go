@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 func (s *WorkerRepositoryService) SetCacheClientLock(ctx context.Context, req *pb.SetCacheClientLockRequest) (*pb.SetCacheClientLockResponse, error) {
@@ -47,7 +49,7 @@ func (s *WorkerRepositoryService) SetCacheStoreFromContentLock(ctx context.Conte
 	if s.cacheMetadata == nil {
 		return &pb.SetCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
-	if err := s.cacheMetadata.SetStoreFromContentLock(ctx, req.Locality, req.SourcePath); err != nil {
+	if err := s.cacheMetadata.SetStoreFromContentLock(ctx, s.scopedCacheLocality(ctx, req.Locality), req.SourcePath); err != nil {
 		return &pb.SetCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.SetCacheStoreFromContentLockResponse{Ok: true}, nil
@@ -60,7 +62,7 @@ func (s *WorkerRepositoryService) RemoveCacheStoreFromContentLock(ctx context.Co
 	if s.cacheMetadata == nil {
 		return &pb.RemoveCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
-	if err := s.cacheMetadata.RemoveStoreFromContentLock(ctx, req.Locality, req.SourcePath); err != nil {
+	if err := s.cacheMetadata.RemoveStoreFromContentLock(ctx, s.scopedCacheLocality(ctx, req.Locality), req.SourcePath); err != nil {
 		return &pb.RemoveCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.RemoveCacheStoreFromContentLockResponse{Ok: true}, nil
@@ -73,7 +75,7 @@ func (s *WorkerRepositoryService) RefreshCacheStoreFromContentLock(ctx context.C
 	if s.cacheMetadata == nil {
 		return &pb.RefreshCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: cache.ErrCoordinatorUnavailable.Error()}, nil
 	}
-	if err := s.cacheMetadata.RefreshStoreFromContentLock(ctx, req.Locality, req.SourcePath); err != nil {
+	if err := s.cacheMetadata.RefreshStoreFromContentLock(ctx, s.scopedCacheLocality(ctx, req.Locality), req.SourcePath); err != nil {
 		return &pb.RefreshCacheStoreFromContentLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.RefreshCacheStoreFromContentLockResponse{Ok: true}, nil
@@ -96,7 +98,7 @@ func (s *WorkerRepositoryService) AddRecentCacheStub(ctx context.Context, req *p
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	if err := s.cacheMetadata.AddRecentStub(ctx, req.Locality, req.WorkspaceId, req.StubId, time.Duration(req.TtlSeconds)*time.Second); err != nil {
+	if err := s.cacheMetadata.AddRecentStub(ctx, s.scopedCacheLocality(ctx, req.Locality), req.WorkspaceId, req.StubId, time.Duration(req.TtlSeconds)*time.Second); err != nil {
 		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.AddRecentCacheStubResponse{Ok: true}, nil
@@ -106,7 +108,7 @@ func (s *WorkerRepositoryService) ListRecentCacheStubs(ctx context.Context, req 
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.ListRecentCacheStubsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	stubs, err := s.cacheMetadata.ListRecentStubs(ctx, req.Locality, time.Duration(req.TtlSeconds)*time.Second, int(req.Limit))
+	stubs, err := s.cacheMetadata.ListRecentStubs(ctx, s.scopedCacheLocality(ctx, req.Locality), time.Duration(req.TtlSeconds)*time.Second, int(req.Limit))
 	if err != nil {
 		return &pb.ListRecentCacheStubsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -125,7 +127,7 @@ func (s *WorkerRepositoryService) MarkCacheStubReported(ctx context.Context, req
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.MarkCacheStubReportedResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	claimed, err := s.cacheMetadata.MarkStubReported(ctx, req.Locality, req.StubId, time.Duration(req.TtlSeconds)*time.Second)
+	claimed, err := s.cacheMetadata.MarkStubReported(ctx, s.scopedCacheLocality(ctx, req.Locality), req.StubId, time.Duration(req.TtlSeconds)*time.Second)
 	if err != nil {
 		return &pb.MarkCacheStubReportedResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -136,7 +138,7 @@ func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context,
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	acquired, err := s.cacheMetadata.AcquireReconcileLock(ctx, req.Locality, req.LogicalHost, req.Hash, int(req.TtlSeconds))
+	acquired, err := s.cacheMetadata.AcquireReconcileLock(ctx, s.scopedCacheLocality(ctx, req.Locality), req.LogicalHost, req.Hash, int(req.TtlSeconds))
 	if err != nil {
 		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -147,7 +149,7 @@ func (s *WorkerRepositoryService) ReleaseCacheReconcileLock(ctx context.Context,
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.ReleaseCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	if err := s.cacheMetadata.ReleaseReconcileLock(ctx, req.Locality, req.LogicalHost, req.Hash); err != nil {
+	if err := s.cacheMetadata.ReleaseReconcileLock(ctx, s.scopedCacheLocality(ctx, req.Locality), req.LogicalHost, req.Hash); err != nil {
 		return &pb.ReleaseCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.ReleaseCacheReconcileLockResponse{Ok: true}, nil
@@ -168,12 +170,13 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	imageArchiveStorage, imageArchiveObjectKey := s.imageArchiveStorageCredentials(req.ImageId)
+	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
 		Ok:                    true,
 		WorkspaceStorage:      s.workspaceStorageCredentials(ctx, req.WorkspaceId),
-		ImageArchiveStorage:   imageArchiveStorage,
 		ImageArchiveObjectKey: imageArchiveObjectKey,
+		ImageArchiveUrl:       imageArchiveURL,
+		ImageArchiveDataUrl:   imageArchiveDataURL,
 		// Short-lived registry credentials for direct OCI pulls. Private image
 		// credentials are resolved by image/workspace; build-registry credentials
 		// are vended only for the exact configured build registry host.
@@ -181,9 +184,13 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}, nil
 }
 
+// authorizeOriginCredentialWorkspace restricts private-pool (customer compute)
+// worker tokens to credentials for their own workspace. Cluster workers and
+// coordinator-token callers are trusted infrastructure and serve containers
+// across workspaces, so they are not restricted.
 func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string) error {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
 		return nil
 	}
 	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
@@ -306,28 +313,63 @@ func (s *WorkerRepositoryService) workspaceStorageCredentials(ctx context.Contex
 	}
 }
 
-func (s *WorkerRepositoryService) imageArchiveStorageCredentials(imageID string) (*pb.CacheWorkspaceStorageCredentials, string) {
+const imageArchivePresignExpiry = 15 * time.Minute
+
+// imageArchiveCredentials returns the image archive object key plus presigned
+// GET URLs for the remote (.rclip) archive and the v1 data (.clip) archive, so
+// private-pool workers can pull and reconcile image archives without holding
+// S3 credentials.
+func (s *WorkerRepositoryService) imageArchiveCredentials(ctx context.Context, imageID string) (string, string, string) {
 	if s.appConfig.ImageService.RegistryStore != reg.S3ImageRegistryStore {
-		return nil, ""
+		return "", "", ""
 	}
 
 	st := s.appConfig.ImageService.Registries.S3
-	if st.BucketName == "" {
-		return nil, ""
+	if st.BucketName == "" || imageID == "" {
+		return "", "", ""
 	}
 
-	objectKey := ""
-	if imageID != "" {
-		objectKey = fmt.Sprintf("%s.%s", imageID, reg.RemoteImageFileExtension)
+	objectKey := fmt.Sprintf("%s.%s", imageID, reg.RemoteImageFileExtension)
+	dataObjectKey := fmt.Sprintf("%s.%s", imageID, reg.LocalImageFileExtension)
+
+	store, err := s.imageArchivePresignStore(ctx, st, objectKey)
+	if err != nil {
+		log.Warn().Err(err).Str("image_id", imageID).Msg("failed to build image archive presign store")
+		return objectKey, "", ""
 	}
-	return &pb.CacheWorkspaceStorageCredentials{
-		EndpointUrl:    st.Endpoint,
-		Region:         st.Region,
-		BucketName:     st.BucketName,
-		AccessKey:      st.AccessKey,
-		SecretKey:      st.SecretKey,
-		ForcePathStyle: st.ForcePathStyle,
-	}, objectKey
+
+	url, err := store.PresignGet(ctx, objectKey, imageArchivePresignExpiry)
+	if err != nil {
+		log.Warn().Err(err).Str("image_id", imageID).Str("object_key", objectKey).Msg("failed to presign image archive")
+		return objectKey, "", ""
+	}
+	dataURL, err := store.PresignGet(ctx, dataObjectKey, imageArchivePresignExpiry)
+	if err != nil {
+		log.Warn().Err(err).Str("image_id", imageID).Str("object_key", dataObjectKey).Msg("failed to presign image data archive")
+		dataURL = ""
+	}
+	return objectKey, url, dataURL
+}
+
+// imageArchivePresignStore returns the S3 store used to presign image archive
+// URLs. Presigning is a local operation that succeeds even when the signer has
+// no bucket access, so ambient (role-based) credentials are only trusted after
+// a probe request against the bucket; otherwise the configured static keys are
+// used.
+func (s *WorkerRepositoryService) imageArchivePresignStore(ctx context.Context, st types.S3ImageRegistryConfig, probeKey string) (*reg.S3Store, error) {
+	if imageArchiveAmbientCredentialsAvailable() {
+		store, err := reg.NewS3StoreWithOptions(st, reg.S3StoreOptions{UseAmbientCredentials: true})
+		if err == nil {
+			if _, probeErr := store.Exists(ctx, probeKey); probeErr == nil {
+				return store, nil
+			}
+		}
+	}
+	return reg.NewS3Store(st)
+}
+
+func imageArchiveAmbientCredentialsAvailable() bool {
+	return os.Getenv("AWS_ROLE_ARN") != "" || os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE") != ""
 }
 
 func (s *WorkerRepositoryService) buildRegistryCredentials(ctx context.Context, registry string) string {
