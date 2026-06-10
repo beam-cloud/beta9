@@ -3206,6 +3206,9 @@
         },
         "cloud": {
           "type": "string"
+        },
+        "region": {
+          "type": "string"
         }
       }
     },

@@ -780,6 +780,54 @@ func TestRecordManagedUsageEmitsOpenMeterMetrics(t *testing.T) {
 	}
 }
 
+func TestMergePoolConfigForLaunchPreservesPoolIdentity(t *testing.T) {
+	existing := &pb.PoolConfig{
+		Name:     "A4000-pool",
+		Gpu:      []string{"A4000"},
+		Ttl:      "1h",
+		MaxSpend: 0.18,
+		Regions:  []string{"oslo-norway-1"},
+		OfferId:  "A4000",
+	}
+	request := &pb.PoolConfig{
+		Name:     "A4000-pool",
+		Gpu:      []string{"A4000"},
+		Ttl:      "1h",
+		MaxSpend: 0.79,
+		Regions:  []string{"newyork-usa-1"},
+		OfferId:  "A4000",
+	}
+
+	merged := mergePoolConfigForLaunch(existing, request)
+
+	if got, want := merged.Regions, []string{"oslo-norway-1", "newyork-usa-1"}; !sameStrings(got, want) {
+		t.Fatalf("merged regions = %v, want %v", got, want)
+	}
+	if got, want := merged.MaxSpend, 0.97; got < want-0.001 || got > want+0.001 {
+		t.Fatalf("merged max spend = %f, want %f", got, want)
+	}
+	if got, want := merged.Gpu, []string{"A4000"}; !sameStrings(got, want) {
+		t.Fatalf("merged gpu = %v, want %v", got, want)
+	}
+	if merged.Ttl != "1h" {
+		t.Fatalf("merged ttl = %q, want 1h", merged.Ttl)
+	}
+}
+
+func TestValidatePoolLaunchCompatibleRejectsGPUMismatch(t *testing.T) {
+	existing := &model.PoolState{
+		Name:   "A4000-pool",
+		Config: &pb.PoolConfig{Name: "A4000-pool", Gpu: []string{"A4000"}},
+	}
+
+	if err := validatePoolLaunchCompatible(existing, model.Pool{GPUs: []string{"A4000"}}); err != nil {
+		t.Fatalf("same GPU should be compatible, got %v", err)
+	}
+	if err := validatePoolLaunchCompatible(existing, model.Pool{GPUs: []string{"A6000"}}); err == nil {
+		t.Fatal("different GPU should be rejected")
+	}
+}
+
 type fakeVendor struct {
 	extended map[string]time.Time
 }

@@ -115,6 +115,7 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		PoolName:          reservation.PoolName,
 		Provider:          reservation.Provider,
 		Cloud:             reservation.Cloud,
+		Region:            reservation.Region,
 		OfferId:           reservation.OfferID,
 		Status:            string(reservation.Status),
 		GpuCount:          reservation.GPUCount,

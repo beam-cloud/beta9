@@ -90,6 +90,29 @@ func TestCreateReservationConfiguresShadeformStartupScript(t *testing.T) {
 	require.True(t, threshold.After(time.Now().Add(6*time.Hour+30*time.Minute)))
 }
 
+func TestGetReservationMapsShadeformStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/instances/reservation-123/info", r.URL.Path)
+		_, _ = w.Write([]byte(`{"id":"reservation-123","status":"pending","status_details":"Running startup script...","cloud":"paperspace","configuration":{"gpu_type":"A4000","num_gpus":1,"vcpus":8,"memory_in_gb":45}}`))
+	}))
+	defer server.Close()
+
+	client := NewShadeform(ShadeformConfig{APIKey: "test-key", BaseURL: server.URL})
+	reservation, err := client.GetReservation(context.Background(), "reservation-123")
+
+	require.NoError(t, err)
+	require.Equal(t, ReservationPending, reservation.Status)
+	require.Equal(t, "Running startup script...", reservation.LastStatusMessage)
+}
+
+func TestShadeformReservationStatusMapping(t *testing.T) {
+	require.Equal(t, ReservationPending, shadeformReservationStatus("Creating"))
+	require.Equal(t, ReservationActive, shadeformReservationStatus("active"))
+	require.Equal(t, ReservationDeleted, shadeformReservationStatus("deleted"))
+	require.Equal(t, ReservationFailed, shadeformReservationStatus("failed"))
+	require.Equal(t, ReservationActive, shadeformReservationStatus("something-new"))
+}
+
 func TestExtendReservationUpdatesShadeformAutoDelete(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -453,10 +453,14 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		reservation.LastStatusMessage != current.LastStatusMessage ||
 		reservation.MachineID != current.MachineID ||
 		(current.Cloud != "" && reservation.Cloud != current.Cloud) ||
+		(current.Region != "" && reservation.Region != current.Region) ||
 		reservation.ExpiresAt != current.ExpiresAt
 	reservation.Status = current.Status
 	if current.Cloud != "" {
 		reservation.Cloud = current.Cloud
+	}
+	if current.Region != "" {
+		reservation.Region = current.Region
 	}
 	reservation.LastStatusMessage = current.LastStatusMessage
 	if current.MachineID != "" {
