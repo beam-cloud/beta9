@@ -1805,44 +1805,23 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Process progress updates in goroutine
+	// Process progress updates in goroutine. Layers index concurrently, so
+	// "starting" events arrive in bursts; only completions (which are ordered)
+	// are surfaced to the user.
 	go func() {
 		defer wg.Done()
 		for progress := range progressChan {
-			percent := float64(progress.LayerIndex) / float64(progress.TotalLayers) * 100
+			log.Debug().
+				Str("container_id", request.ContainerId).
+				Str("stage", progress.Stage).
+				Int("layer", progress.LayerIndex).
+				Int("total", progress.TotalLayers).
+				Int("files", progress.FilesIndexed).
+				Msg("image index progress")
 
-			switch progress.Stage {
-			case "starting":
-				log.Info().
-					Str("container_id", request.ContainerId).
-					Int("layer", progress.LayerIndex).
-					Int("total", progress.TotalLayers).
-					Msgf("Indexing layer %d/%d (%.0f%%)", progress.LayerIndex, progress.TotalLayers, percent)
-
-				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
-					progress.LayerIndex, progress.TotalLayers, percent))
-
-			case "completed":
-				log.Info().
-					Str("container_id", request.ContainerId).
-					Int("layer", progress.LayerIndex).
-					Int("total", progress.TotalLayers).
-					Int("files", progress.FilesIndexed).
-					Msgf("Completed layer %d/%d (%.0f%%, %d files indexed)", progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed)
-
-				outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
-					progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
-
-			default:
-				log.Info().
-					Str("container_id", request.ContainerId).
-					Str("stage", progress.Stage).
-					Int("layer", progress.LayerIndex).
-					Int("total", progress.TotalLayers).
-					Msgf("Index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
-
-				outputLogger.Info(fmt.Sprintf("Index progress [%s]: layer %d/%d\n",
-					progress.Stage, progress.LayerIndex, progress.TotalLayers))
+			if progress.Stage == "completed" {
+				outputLogger.Info(fmt.Sprintf("Indexed layer %d/%d (%d files)\n",
+					progress.LayerIndex, progress.TotalLayers, progress.FilesIndexed))
 			}
 		}
 	}()
@@ -1856,6 +1835,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		CredProvider:    c.getCredentialProviderForImage(ctx, request.ImageId, request),
 		ContentCache:    newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build"),
 		ContentCacheDir: filepath.Dir(outputPath),
+		LayerIndexCache: newImageLayerIndexCache(c.cacheClient),
 	})
 
 	// Close channel and wait for all progress messages to be logged

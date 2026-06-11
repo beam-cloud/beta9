@@ -616,19 +616,19 @@ func TestBindAddr(t *testing.T) {
 			expected:       ":2050",
 		},
 		{
-			name:           "embedded host-network without explicit port is ephemeral",
+			name:           "embedded host-network binds default fixed port",
 			hostNetwork:    "true",
 			cacheServer:    "false",
 			normalizedPort: 2050,
-			expected:       ":0",
+			expected:       ":2050",
 		},
 		{
-			name:           "embedded host-network ignores config port",
+			name:           "embedded host-network honors config port",
 			hostNetwork:    "true",
 			cacheServer:    "false",
 			configPort:     9000,
 			normalizedPort: 9000,
-			expected:       ":0",
+			expected:       ":9000",
 		},
 		{
 			name:           "embedded host-network honors CACHE_SERVER_PORT env",
@@ -672,4 +672,41 @@ func TestBindAddr(t *testing.T) {
 			require.Equal(t, tc.expected, m.bindAddr(cacheConfig))
 		})
 	}
+}
+
+func TestCacheBindAddrInUse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, listener.Close()) })
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+
+	second, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("expected duplicate listener bind to fail")
+	}
+	require.True(t, cacheBindAddrInUse(err))
+
+	t.Setenv(types.CacheHostNetworkEnv, "true")
+	t.Setenv(types.CacheServerOnlyEnv, "false")
+	require.True(t, (&WorkerCacheManager{}).allowEphemeralCachePortFallback(cache.Config{
+		Global: cache.GlobalConfig{ServerPort: cacheDefaultServerPort},
+	}, err))
+
+	require.False(t, (&WorkerCacheManager{}).allowEphemeralCachePortFallback(cache.Config{
+		Global: cache.GlobalConfig{ServerPort: 9000},
+	}, err))
+
+	t.Setenv(types.CacheServerPortEnv, "2050")
+	require.False(t, (&WorkerCacheManager{}).allowEphemeralCachePortFallback(cache.Config{
+		Global: cache.GlobalConfig{ServerPort: cacheDefaultServerPort},
+	}, err))
+	t.Setenv(types.CacheServerPortEnv, "")
+
+	t.Setenv(types.CacheServerOnlyEnv, "true")
+	require.False(t, (&WorkerCacheManager{}).allowEphemeralCachePortFallback(cache.Config{
+		Global: cache.GlobalConfig{ServerPort: cacheDefaultServerPort},
+	}, err))
 }

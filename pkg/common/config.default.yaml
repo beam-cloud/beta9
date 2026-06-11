@@ -294,7 +294,7 @@ cache:
     hostWatchIntervalSeconds: 5
   global:
     defaultLocality: default
-    serverPort: 2049
+    serverPort: 2050
     discoveryIntervalS: 5
     discoveryJitterS: 3
     maxDiscoveryConcurrency: 8

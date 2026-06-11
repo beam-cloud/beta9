@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,118 @@ const (
 	imageContentCacheResultStoredOrPresent    = "stored_or_present"
 	imageContentCacheResultSkippedUnavailable = "skipped_unavailable"
 )
+
+const layerIndexCacheMaxArtifactSize = 256 * 1024 * 1024
+
+// imageLayerIndexCache caches per-layer index artifacts (tiny metadata blobs
+// keyed by layer digest) in two tiers:
+//
+//   - worker-local disk, so repeat builds on the same worker skip re-indexing
+//     without any network round trip
+//   - the embedded content cache (the same mechanism used to seed and restore
+//     image archives across workers), so any worker in the locality can reuse
+//     artifacts produced elsewhere
+//
+// The layer bytes themselves are cached separately in the content cache keyed
+// by layer digest, so even a full artifact miss never re-pulls a layer the
+// cluster has already seen.
+type imageLayerIndexCache struct {
+	client *cache.Client
+	disk   clipStorage.LayerIndexCache
+}
+
+func newImageLayerIndexCache(client *cache.Client) clipStorage.LayerIndexCache {
+	var disk clipStorage.LayerIndexCache
+	if diskCache, err := clipStorage.NewDiskLayerIndexCache(filepath.Join(getImageCachePath(), "layer-index")); err != nil {
+		log.Warn().Err(err).Msg("failed to initialize local layer index cache")
+	} else {
+		disk = diskCache
+	}
+
+	if client == nil && disk == nil {
+		return nil
+	}
+	return &imageLayerIndexCache{client: client, disk: disk}
+}
+
+// layerIndexCachePath maps a clip layer-index cache key (e.g.
+// "clip-layer-index/v1/cp2/sha256_<digest>") to an embedded cache path.
+func layerIndexCachePath(key string) string {
+	return "/" + key
+}
+
+func (c *imageLayerIndexCache) GetLayerIndex(ctx context.Context, key string) ([]byte, error) {
+	if c.disk != nil {
+		if data, err := c.disk.GetLayerIndex(ctx, key); err == nil && data != nil {
+			return data, nil
+		}
+	}
+
+	if c.client == nil {
+		return nil, nil
+	}
+
+	cachePath := layerIndexCachePath(key)
+	metadata, err := c.client.CacheFSMetadata(ctx, cachePath)
+	if err != nil {
+		if isEmbeddedImageCacheMiss(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if metadata == nil || metadata.Hash == "" || metadata.Size == 0 {
+		return nil, nil
+	}
+	if metadata.Size > layerIndexCacheMaxArtifactSize {
+		return nil, fmt.Errorf("layer index artifact too large: %d bytes", metadata.Size)
+	}
+
+	data := make([]byte, metadata.Size)
+	read, err := c.client.ReadContentInto(ctx, metadata.Hash, 0, data, cache.ClientOptions{RoutingKey: cachePath})
+	if err != nil {
+		if isEmbeddedImageCacheMiss(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if read != int64(metadata.Size) {
+		return nil, fmt.Errorf("short layer index artifact read: expected %d bytes, got %d", metadata.Size, read)
+	}
+
+	// Seed the local disk tier so subsequent builds on this worker skip the
+	// network read
+	if c.disk != nil {
+		if err := c.disk.PutLayerIndex(ctx, key, data); err != nil {
+			log.Debug().Err(err).Str("key", key).Msg("failed to seed local layer index cache")
+		}
+	}
+	return data, nil
+}
+
+func (c *imageLayerIndexCache) PutLayerIndex(ctx context.Context, key string, data []byte) error {
+	if c.disk != nil {
+		if err := c.disk.PutLayerIndex(ctx, key, data); err != nil {
+			log.Debug().Err(err).Str("key", key).Msg("failed to store layer index artifact on local disk")
+		}
+	}
+
+	if c.client == nil {
+		return nil
+	}
+
+	cachePath := layerIndexCachePath(key)
+	if _, err := c.client.StoreContentAtPath(data, cachePath, cache.StoreContentOptions{
+		RoutingKey: cachePath,
+		Lock:       true,
+	}); err != nil {
+		return err
+	}
+
+	log.Debug().Str("key", key).Int("bytes", len(data)).Msg("seeded layer index artifact in embedded cache")
+	return nil
+}
+
+var _ clipStorage.LayerIndexCache = (*imageLayerIndexCache)(nil)
 
 type imageContentCache struct {
 	client  *cache.Client
@@ -269,6 +382,55 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 	// whether the store can be skipped.
 	return false, nil
 }
+
+// ContentExistsWithSize performs a size-aware completeness check on the
+// selected cache host. Unlike ContentExists, a positive response guarantees
+// the cached content is complete, so callers (e.g. CLIP's build-time layer
+// warm) can safely skip re-spooling and re-storing the layer.
+func (c *imageContentCache) ContentExistsWithSize(hash string, size int64, opts struct{ RoutingKey string }) (exists bool, err error) {
+	if c == nil || c.client == nil {
+		return false, cache.ErrClientNotFound
+	}
+	if size <= 0 {
+		return false, nil
+	}
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = hash
+	}
+
+	started := time.Now()
+	c.existsRequests.Add(1)
+	defer func() {
+		elapsed := time.Since(started)
+		if err != nil {
+			c.existsErrors.Add(1)
+			log.Warn().
+				Err(err).
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Int64("size", size).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache exists-with-size result")
+		} else if exists {
+			c.existsHits.Add(1)
+			log.Debug().
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Int64("size", size).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache exists-with-size hit")
+		}
+		c.maybeLogSummary()
+	}()
+
+	return c.client.IsCachedOnSelectedHost(hash, opts.RoutingKey, size)
+}
+
+var _ clipStorage.ContentCacheExistsWithSize = (*imageContentCache)(nil)
 
 func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (views []clipStorage.ClientLocalPageFileView, err error) {
 	if c == nil || c.client == nil {
