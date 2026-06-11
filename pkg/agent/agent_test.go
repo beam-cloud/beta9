@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -791,6 +792,40 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 	if got := cacheFS["enabled"]; got != true {
 		t.Fatalf("cachefs enabled = %v, want true", got)
+	}
+}
+
+// The worker image embeds config.default.yaml, which contains placeholder
+// registry credentials (e.g. accessKey "test"). The agent-generated config must
+// explicitly clear them so private workers never send placeholder credentials
+// to real object storage.
+func TestWriteWorkerConfigClearsDefaultRegistryCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	slot := &pb.AgentWorkerSlot{
+		PoolName:  "private-dev",
+		MachineId: "machine-a",
+	}
+	if err := writeWorkerConfig(path, bootstrapConfig{}, slot); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load the config exactly like the worker process does: embedded defaults
+	// overlaid with the agent-written CONFIG_PATH file.
+	t.Setenv("CONFIG_PATH", path)
+	t.Setenv(types.WorkerMinimalConfigEnv, "true")
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := configManager.GetConfig()
+
+	s3 := config.ImageService.Registries.S3
+	if s3.BucketName != "" || s3.AccessKey != "" || s3.SecretKey != "" || s3.Endpoint != "" || s3.Region != "" {
+		t.Fatalf("placeholder S3 registry credentials leaked into agent worker config: %+v", s3)
+	}
+	docker := config.ImageService.Registries.Docker
+	if docker.Username != "" || docker.Password != "" {
+		t.Fatalf("placeholder docker registry credentials leaked into agent worker config: %+v", docker)
 	}
 }
 

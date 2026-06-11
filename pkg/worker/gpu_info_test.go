@@ -191,6 +191,48 @@ func TestAvailableGPUDevicesSingleGPUUUID(t *testing.T) {
 	assert.Equal(t, []int{7}, devices)
 }
 
+func TestAvailableGPUDevicesMatchesByIndex(t *testing.T) {
+	cleanup := withMockDevices(eightGPUOutput, true)
+	defer cleanup()
+
+	// Agent GPU assignments may be device indices instead of UUIDs.
+	client := &NvidiaInfoClient{visibleDevices: "3,4"}
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Equal(t, []int{3, 4}, devices)
+}
+
+func TestResolveVisibleDevicesPrefersWorkerGPUDevices(t *testing.T) {
+	t.Setenv(types.WorkerPodUIDEnv, "")
+	t.Setenv(types.WorkerGPUDevicesEnv, "all")
+	// The NVIDIA container toolkit rewrites NVIDIA_VISIBLE_DEVICES to "void"
+	// inside the container after injecting devices.
+	t.Setenv(types.NvidiaVisibleDevicesEnv, "void")
+
+	assert.Equal(t, "all", resolveVisibleDevices())
+}
+
+func TestResolveVisibleDevicesVoidMapsToAllForAgentWorkers(t *testing.T) {
+	t.Setenv(types.WorkerPodUIDEnv, "")
+	t.Setenv(types.WorkerGPUDevicesEnv, "")
+	t.Setenv(types.NvidiaVisibleDevicesEnv, "void")
+	t.Setenv(types.WorkerPersistentEnv, "true")
+	t.Setenv(types.WorkerMachineEnv, "machine-a")
+
+	assert.Equal(t, "all", resolveVisibleDevices())
+}
+
+func TestResolveVisibleDevicesVoidStaysVoidForClusterWorkers(t *testing.T) {
+	t.Setenv(types.WorkerPodUIDEnv, "")
+	t.Setenv(types.WorkerGPUDevicesEnv, "")
+	t.Setenv(types.NvidiaVisibleDevicesEnv, "void")
+	t.Setenv(types.WorkerPersistentEnv, "")
+	t.Setenv(types.WorkerMachineEnv, "")
+
+	assert.Equal(t, "void", resolveVisibleDevices())
+}
+
 func writeCheckpointFile(t *testing.T, dir string, entries []podDeviceEntry) string {
 	t.Helper()
 	checkpoint := kubeletCheckpoint{}

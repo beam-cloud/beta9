@@ -41,26 +41,43 @@ type podDeviceEntry struct {
 	DeviceIDs    map[string][]string `json:"DeviceIDs"`
 }
 
-// resolveVisibleDevices determines which GPU is assigned to this worker pod.
-//
-// The nvidia/cuda base image sets ENV NVIDIA_VISIBLE_DEVICES=void which the
-// container runtime processes AFTER PID 1 starts, so os.Getenv always returns
-// "void". The authoritative GPU assignment lives in the kubelet device plugin
-// checkpoint file, which maps pod UIDs to allocated GPU UUIDs.
+// resolveVisibleDevices returns this worker's GPU assignment: "all" or a
+// comma-separated list of UUIDs/indices. NVIDIA_VISIBLE_DEVICES is a request
+// mechanism, not introspection (base images and the container toolkit both
+// rewrite it to "void"), so the orchestrator's allocation record wins.
 var resolveVisibleDevices = func() string {
+	// k8s/k3s: the device-plugin checkpoint, keyed by pod UID.
+	if devices := kubeletAssignedDevices(); devices != "" {
+		return devices
+	}
+	// docker: the assignment passed explicitly by the agent.
+	if devices := strings.TrimSpace(os.Getenv(types.WorkerGPUDevicesEnv)); devices != "" {
+		return devices
+	}
+
+	devices := os.Getenv(types.NvidiaVisibleDevicesEnv)
+	if devices == "void" && agentManagedWorker() {
+		// Older agents only set NVIDIA_VISIBLE_DEVICES; the machine is
+		// dedicated, so every device injected into the container is ours.
+		return "all"
+	}
+	return devices
+}
+
+func kubeletAssignedDevices() string {
 	podUID := os.Getenv(types.WorkerPodUIDEnv)
 	if podUID == "" {
-		return os.Getenv(types.NvidiaVisibleDevicesEnv)
+		return ""
 	}
 
 	data, err := os.ReadFile(defaultDeviceCheckpointPath)
 	if err != nil {
-		return os.Getenv(types.NvidiaVisibleDevicesEnv)
+		return ""
 	}
 
 	var checkpoint kubeletCheckpoint
 	if err := json.Unmarshal(data, &checkpoint); err != nil {
-		return os.Getenv(types.NvidiaVisibleDevicesEnv)
+		return ""
 	}
 
 	var allUUIDs []string
@@ -72,26 +89,23 @@ var resolveVisibleDevices = func() string {
 			allUUIDs = append(allUUIDs, uuids...)
 		}
 	}
-	if len(allUUIDs) > 0 {
-		return strings.Join(allUUIDs, ",")
-	}
+	return strings.Join(allUUIDs, ",")
+}
 
-	return os.Getenv(types.NvidiaVisibleDevicesEnv)
+// agentManagedWorker reports whether a private-pool agent started this worker
+// on a machine dedicated to it.
+func agentManagedWorker() bool {
+	persistent, _ := strconv.ParseBool(os.Getenv(types.WorkerPersistentEnv))
+	return persistent && os.Getenv(types.WorkerMachineEnv) != ""
 }
 
 func (c *NvidiaInfoClient) hexToPaddedString(hexStr string) (string, error) {
-	// Remove the "0x" prefix if it exists
 	hexStr = strings.TrimPrefix(hexStr, "0x")
-
-	// Parse the hexadecimal string to an integer
 	value, err := strconv.ParseUint(hexStr, 16, 16)
 	if err != nil {
 		return "", err
 	}
-
-	// Format the integer as a zero-padded string with 4 digits
-	paddedStr := fmt.Sprintf("%04x", value)
-	return paddedStr, nil
+	return fmt.Sprintf("%04x", value), nil
 }
 
 var queryDevices = func() ([]byte, error) {
@@ -110,6 +124,24 @@ var checkGPUExists = func(busId string) (bool, error) {
 	}
 
 	return false, err
+}
+
+// deviceVisible reports whether a GPU matches the assignment spec: "all", or a
+// comma-separated list of UUIDs and/or indices.
+func deviceVisible(visibleDevices, uuid, index string) bool {
+	if visibleDevices == "all" {
+		return true
+	}
+	for _, token := range strings.Split(visibleDevices, ",") {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if token == uuid || token == index {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
@@ -137,7 +169,7 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		}
 
 		uuid := strings.TrimSpace(parts[3])
-		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" {
+		if !deviceVisible(visibleDevices, uuid, strings.TrimSpace(parts[2])) {
 			continue
 		}
 

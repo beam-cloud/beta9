@@ -105,6 +105,9 @@ const (
 	WorkerMemoryEnv             = "MEMORY_LIMIT"
 	WorkerGPUEnv                = "GPU_TYPE"
 	WorkerGPUCountEnv           = "GPU_COUNT"
+	// The agent's GPU assignment ("all" or a device list); unlike
+	// NVIDIA_VISIBLE_DEVICES it survives container toolkit rewrites.
+	WorkerGPUDevicesEnv         = "WORKER_GPU_DEVICES"
 	WorkerPodHostEnv            = "POD_HOSTNAME"
 	WorkerPodIPEnv              = "POD_IP"
 	WorkerPodUIDEnv             = "POD_UID"
