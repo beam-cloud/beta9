@@ -33,6 +33,7 @@ func TestNormalizeGPUType(t *testing.T) {
 		"V100x8":                GPU_V100,
 		"RTX A4000":             GPU_A4000,
 		"NVIDIA RTX A4000":      GPU_A4000,
+		"NVIDIA A16-16Q":        GPU_A16,
 		"NVIDIA A100 80GB PCI":  GPU_A100_80,
 		"A100-SXM4-40GB":        GPU_A100_40,
 		"GeForce RTX 4090":      GPU_RTX4090,

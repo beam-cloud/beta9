@@ -1,9 +1,11 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +50,147 @@ func (c *GPUInfoClientForTest) AvailableGPUDevices() ([]int, error) {
 
 func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats, error) {
 	return GPUMemoryUsageStats{}, nil
+}
+
+func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
+	originalPaths := nvidiaCDIConfigPaths
+	originalGenerate := runNvidiaCTKCDIGenerate
+	originalConfigure := configureNvidiaCDICache
+	originalResolvable := nvidiaCDIDeviceResolvable
+	t.Cleanup(func() {
+		nvidiaCDIConfigPaths = originalPaths
+		runNvidiaCTKCDIGenerate = originalGenerate
+		configureNvidiaCDICache = originalConfigure
+		nvidiaCDIDeviceResolvable = originalResolvable
+	})
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "beam", "cdi", "nvidia.yaml")
+	secondPath := filepath.Join(dir, "run", "cdi", "nvidia.yaml")
+	nvidiaCDIConfigPaths = []string{firstPath, secondPath}
+
+	calls := []string{}
+	configureCalls := []string{}
+	runNvidiaCTKCDIGenerate = func(outputPath string) ([]byte, error) {
+		calls = append(calls, outputPath)
+		if outputPath == firstPath {
+			return []byte("first path failed"), errors.New("exit status 1")
+		}
+		if err := os.WriteFile(outputPath, []byte("cdi"), 0644); err != nil {
+			return nil, err
+		}
+		return []byte("ok"), nil
+	}
+	configureNvidiaCDICache = func(specPath string) error {
+		configureCalls = append(configureCalls, specPath)
+		return nil
+	}
+	nvidiaCDIDeviceResolvable = func() bool {
+		return true
+	}
+
+	if err := ensureNvidiaCDIConfig(); err != nil {
+		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("nvidia-ctk calls = %v, want both paths", calls)
+	}
+	if _, err := os.Stat(secondPath); err != nil {
+		t.Fatalf("fallback cdi config was not written: %v", err)
+	}
+	if len(configureCalls) != 1 || configureCalls[0] != secondPath {
+		t.Fatalf("configure calls = %v, want only fallback path", configureCalls)
+	}
+}
+
+func TestEnsureNvidiaCDIConfigUsesBeamRuntimeDir(t *testing.T) {
+	originalPaths := nvidiaCDIConfigPaths
+	originalGenerate := runNvidiaCTKCDIGenerate
+	originalConfigure := configureNvidiaCDICache
+	originalResolvable := nvidiaCDIDeviceResolvable
+	t.Cleanup(func() {
+		nvidiaCDIConfigPaths = originalPaths
+		runNvidiaCTKCDIGenerate = originalGenerate
+		configureNvidiaCDICache = originalConfigure
+		nvidiaCDIDeviceResolvable = originalResolvable
+	})
+
+	dir := t.TempDir()
+	beamPath := filepath.Join(dir, "beam", "cdi", "nvidia.yaml")
+	standardPath := filepath.Join(dir, "run", "cdi", "nvidia.yaml")
+	nvidiaCDIConfigPaths = []string{beamPath, standardPath}
+
+	calls := []string{}
+	configureCalls := []string{}
+	runNvidiaCTKCDIGenerate = func(outputPath string) ([]byte, error) {
+		calls = append(calls, outputPath)
+		if err := os.WriteFile(outputPath, []byte("cdi"), 0644); err != nil {
+			return nil, err
+		}
+		return []byte("ok"), nil
+	}
+	configureNvidiaCDICache = func(specPath string) error {
+		configureCalls = append(configureCalls, specPath)
+		return nil
+	}
+	nvidiaCDIDeviceResolvable = func() bool {
+		return true
+	}
+
+	if err := ensureNvidiaCDIConfig(); err != nil {
+		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
+	}
+	if len(calls) != 1 || calls[0] != beamPath {
+		t.Fatalf("nvidia-ctk calls = %v, want only Beam runtime path", calls)
+	}
+	if len(configureCalls) != 1 || configureCalls[0] != beamPath {
+		t.Fatalf("configure calls = %v, want only Beam runtime path", configureCalls)
+	}
+	if _, err := os.Stat(standardPath); !os.IsNotExist(err) {
+		t.Fatalf("standard CDI path should be untouched, stat err = %v", err)
+	}
+}
+
+func TestEnsureNvidiaCDIConfigFallsBackWhenGeneratedDeviceIsUnresolvable(t *testing.T) {
+	originalPaths := nvidiaCDIConfigPaths
+	originalGenerate := runNvidiaCTKCDIGenerate
+	originalConfigure := configureNvidiaCDICache
+	originalResolvable := nvidiaCDIDeviceResolvable
+	t.Cleanup(func() {
+		nvidiaCDIConfigPaths = originalPaths
+		runNvidiaCTKCDIGenerate = originalGenerate
+		configureNvidiaCDICache = originalConfigure
+		nvidiaCDIDeviceResolvable = originalResolvable
+	})
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "beam", "cdi", "nvidia.yaml")
+	secondPath := filepath.Join(dir, "run", "cdi", "nvidia.yaml")
+	nvidiaCDIConfigPaths = []string{firstPath, secondPath}
+
+	calls := []string{}
+	runNvidiaCTKCDIGenerate = func(outputPath string) ([]byte, error) {
+		calls = append(calls, outputPath)
+		if err := os.WriteFile(outputPath, []byte("cdi"), 0644); err != nil {
+			return nil, err
+		}
+		return []byte("ok"), nil
+	}
+	resolveCalls := 0
+	configureNvidiaCDICache = func(specPath string) error {
+		return nil
+	}
+	nvidiaCDIDeviceResolvable = func() bool {
+		resolveCalls++
+		return resolveCalls > 1
+	}
+
+	if err := ensureNvidiaCDIConfig(); err != nil {
+		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("nvidia-ctk calls = %v, want retry after unresolvable generated spec", calls)
+	}
 }
 
 func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
