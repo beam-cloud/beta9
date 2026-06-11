@@ -82,15 +82,19 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 	if cloud == "" {
 		cloud = req.Offer.Cloud
 	}
-	if cloud == "" {
-		cloud = req.Offer.Provider
+	// Shadeform's create API requires a cloud, so fall back to the aggregator
+	// name for the request only; the reservation's recorded cloud must stay
+	// the underlying vendor (or empty until reconciliation fills it in).
+	requestCloud := cloud
+	if requestCloud == "" {
+		requestCloud = req.Offer.Provider
 	}
 	instanceType := req.Offer.InstanceType
 	if instanceType == "" {
 		instanceType = req.Offer.ID
 	}
 	body := map[string]any{
-		"cloud":               cloud,
+		"cloud":               requestCloud,
 		"shade_instance_type": instanceType,
 		"shade_cloud":         true,
 		"name":                ReservationNodeName(req),
@@ -131,7 +135,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 		Name:             ReservationNodeName(req),
 		Selector:         req.Selector,
 		Provider:         c.Name(),
-		Cloud:            req.Offer.Cloud,
+		Cloud:            cloud,
 		Region:           req.Offer.Region,
 		OfferID:          req.Offer.ID,
 		InstanceType:     req.Offer.InstanceType,

@@ -308,9 +308,6 @@ COPY ./sdk/src/beta9 /workspace/sdk
 COPY --from=uv /root/.local/bin/uv /usr/local/bin/uv
 COPY --from=dropbear /usr/local/bin/dropbear /usr/local/bin/dropbear
 
-VOLUME "/usr/lib/x86_64-linux-gnu"
-VOLUME "/usr/lib/aarch64-linux-gnu"
-
 RUN mkdir -p /etc/criu
 RUN touch /etc/criu/default.conf
 # add the following options to the default.conf file on new lines
