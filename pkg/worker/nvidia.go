@@ -4,24 +4,40 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
+	"tags.cncf.io/container-device-interface/pkg/cdi"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"gvisor.dev/gvisor/pkg/sync"
 )
 
-const nvidiaDeviceKindPrefix string = "nvidia.com/gpu"
+const (
+	nvidiaDeviceKindPrefix string = "nvidia.com/gpu"
+	nvidiaFirstDevice      string = nvidiaDeviceKindPrefix + "=0"
+)
 
 var (
 	defaultContainerCudaVersion string   = "12.4"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
+	// Keep generated CDI specs isolated from provider or host-managed CDI specs.
+	nvidiaCDIConfigPaths    []string = []string{"/var/run/beam/cdi/nvidia.yaml", "/var/run/cdi/nvidia.yaml", "/etc/cdi/nvidia.yaml"}
+	runNvidiaCTKCDIGenerate          = func(outputPath string) ([]byte, error) {
+		return exec.Command("nvidia-ctk", "cdi", "generate", "--output", outputPath).CombinedOutput()
+	}
+	configureNvidiaCDICache = func(specPath string) error {
+		return cdi.Configure(cdi.WithSpecDirs(filepath.Dir(specPath)))
+	}
+	nvidiaCDIDeviceResolvable = func() bool {
+		return cdi.GetDefaultCache().GetDevice(nvidiaFirstDevice) != nil
+	}
 )
 
 type GPUManager interface {
@@ -43,8 +59,7 @@ type ContainerNvidiaManager struct {
 
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
-		err := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml").Run()
-		if err != nil {
+		if err := ensureNvidiaCDIConfig(); err != nil {
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
 	}
@@ -60,6 +75,47 @@ func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 		infoClient:             &NvidiaInfoClient{visibleDevices: visibleDevices},
 		resolvedVisibleDevices: visibleDevices,
 	}
+}
+
+func ensureNvidiaCDIConfig() error {
+	failures := make([]string, 0, len(nvidiaCDIConfigPaths))
+	for _, path := range nvidiaCDIConfigPaths {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: create dir: %v", path, err))
+			continue
+		}
+
+		output, err := runNvidiaCTKCDIGenerate(path)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %s", path, nvidiaCDICommandError(output, err)))
+			continue
+		}
+
+		if err := configureNvidiaCDICache(path); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: configure cache: %v", path, err))
+			continue
+		}
+		if !nvidiaCDIDeviceResolvable() {
+			failures = append(failures, fmt.Sprintf("%s: %s is not resolvable after generation", path, nvidiaFirstDevice))
+			continue
+		}
+
+		log.Info().
+			Str("path", path).
+			Str("spec_dir", filepath.Dir(path)).
+			Msg("generated NVIDIA CDI config")
+		return nil
+	}
+
+	return fmt.Errorf("%s", strings.Join(failures, "; "))
+}
+
+func nvidiaCDICommandError(output []byte, err error) string {
+	msg := strings.TrimSpace(string(output))
+	if msg == "" {
+		return err.Error()
+	}
+	return fmt.Sprintf("%v: %s", err, msg)
 }
 
 type AssignedGpuDevices struct {
