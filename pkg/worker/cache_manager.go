@@ -362,7 +362,15 @@ func (m *WorkerCacheManager) createEmbeddedServer(cacheConfig cache.Config, host
 		return nil, "", err
 	}
 
-	advertisedAddr, err := server.Serve(m.bindAddr(cacheConfig), m.cacheAdvertiseHost())
+	bindAddr := m.bindAddr(cacheConfig)
+	advertisedAddr, err := server.Serve(bindAddr, m.cacheAdvertiseHost())
+	if err != nil && m.allowEphemeralCachePortFallback(cacheConfig, err) {
+		log.Warn().
+			Err(err).
+			Str("bind_addr", bindAddr).
+			Msg("embedded cache default port unavailable, falling back to ephemeral port")
+		advertisedAddr, err = server.Serve(":0", m.cacheAdvertiseHost())
+	}
 	if err != nil {
 		_ = server.Close()
 		return nil, "", err
@@ -666,15 +674,19 @@ func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
 		port = cacheDefaultServerPort
 	}
 
-	// Host-network embedded workers default to an ephemeral port to avoid
-	// collisions when many share a node. The advertised address carries the real
-	// port. The one-per-node cache-server daemonset binds the fixed port, and an
-	// operator can force a fixed embedded-worker port with CACHE_SERVER_PORT.
-	if cacheHostNetwork(m.config) && !cacheServerOnlyMode() && cacheServerPortFromEnv() == 0 {
-		return ":0"
-	}
-
 	return fmt.Sprintf(":%d", port)
+}
+
+func (m *WorkerCacheManager) allowEphemeralCachePortFallback(cacheConfig cache.Config, err error) bool {
+	return cacheHostNetwork(m.config) &&
+		!cacheServerOnlyMode() &&
+		cacheServerPortFromEnv() == 0 &&
+		cacheConfig.Global.ServerPort == cacheDefaultServerPort &&
+		cacheBindAddrInUse(err)
+}
+
+func cacheBindAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE)
 }
 
 // cacheAdvertiseHost returns the address other cache clients should use to reach
