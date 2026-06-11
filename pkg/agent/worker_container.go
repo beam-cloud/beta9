@@ -106,10 +106,12 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	for key, value := range agentGatewayEnv(bootstrap) {
 		env[key] = value
 	}
-	if slot.GpuCount > 0 && slot.GpuAssignment != "" {
-		env[types.NvidiaVisibleDevicesEnv] = slot.GpuAssignment
-	} else if slot.GpuCount > 0 {
-		env[types.NvidiaVisibleDevicesEnv] = types.NvidiaVisibleDevicesAll
+	// WORKER_GPU_DEVICES is the durable copy of the assignment; the container
+	// toolkit rewrites NVIDIA_VISIBLE_DEVICES to "void" after device injection.
+	if slot.GpuCount > 0 {
+		assignment := firstNonEmpty(slot.GpuAssignment, types.NvidiaVisibleDevicesAll)
+		env[types.NvidiaVisibleDevicesEnv] = assignment
+		env[types.WorkerGPUDevicesEnv] = assignment
 	}
 	envKeys := make([]string, 0, len(env))
 	for key := range env {

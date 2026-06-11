@@ -64,6 +64,30 @@ type agentConfigImage struct {
 	LocalCacheEnabled bool   `json:"localCacheEnabled"`
 	RegistryStore     string `json:"registryStore"`
 	ClipVersion       uint32 `json:"clipVersion"`
+	// Registries is always serialized with zero values to explicitly clear the
+	// placeholder registry credentials baked into the worker image's embedded
+	// default config (config.default.yaml). Private workers never hold static
+	// registry credentials; they use gateway-brokered origins instead.
+	Registries agentConfigImageRegistries `json:"registries"`
+}
+
+type agentConfigImageRegistries struct {
+	Docker agentConfigDockerRegistry `json:"docker"`
+	S3     agentConfigS3Registry     `json:"s3"`
+}
+
+type agentConfigDockerRegistry struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type agentConfigS3Registry struct {
+	BucketName     string `json:"bucketName"`
+	Region         string `json:"region"`
+	AccessKey      string `json:"accessKey"`
+	SecretKey      string `json:"secretKey"`
+	Endpoint       string `json:"endpoint"`
+	ForcePathStyle bool   `json:"forcePathStyle"`
 }
 
 type agentConfigMonitoring struct {
