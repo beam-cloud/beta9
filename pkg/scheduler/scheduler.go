@@ -977,6 +977,16 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 
 	baseDelay := 1 * time.Second
 	maxDelay := 5 * time.Second
+
+	// Clamp the exponent before computing the power. Without this, large
+	// retry counts (which can reach ~120) overflow time.Duration's int64
+	// when converted from math.Pow, wrapping around to 0 or negative values
+	// that silently slip past the maxDelay clamp below.
+	const maxExponent = 32
+	if retryCount > maxExponent {
+		return maxDelay
+	}
+
 	delay := time.Duration(math.Pow(2, float64(retryCount))) * baseDelay
 	if delay > maxDelay {
 		delay = maxDelay
