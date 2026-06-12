@@ -58,7 +58,9 @@ const (
 	cacheDefaultReconcileRecentStubTTLS = cache.DefaultReconcileRecentStubTTLS
 	cacheDefaultReconcileLockTTLS       = 300
 	cacheDefaultReconcileMaxStubsCycle  = 256
+	cacheDefaultReconcileMaxItemsCycle  = 32
 	cacheDefaultVolumeReportMinBytes    = 128 * 1024 * 1024
+	cacheReconcileSuccessBackoff        = time.Hour
 )
 
 type WorkerCacheManager struct {
@@ -84,6 +86,8 @@ type WorkerCacheManager struct {
 	originCredsCache      map[string]*originCredentials
 	reconcileFailuresMu   sync.Mutex
 	reconcileFailures     map[string]time.Time
+	reconcileSuccessesMu  sync.Mutex
+	reconcileSuccesses    map[string]time.Time
 	reconcileNow          chan struct{}
 	client                *cache.Client
 	server                *cache.Server
@@ -121,6 +125,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		accelerator:        cacheAccelerator(poolConfig),
 		originCredsCache:   make(map[string]*originCredentials),
 		reconcileFailures:  make(map[string]time.Time),
+		reconcileSuccesses: make(map[string]time.Time),
 		reconcileNow:       make(chan struct{}, 1),
 	}
 }

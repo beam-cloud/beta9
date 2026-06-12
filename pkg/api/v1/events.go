@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -24,6 +26,8 @@ type EventGroup struct {
 	containerRepo repository.ContainerRepository
 	eventRepo     repository.EventRepository
 }
+
+const containerEventsBatchReadConcurrency = 24
 
 type ContainerEventsBatchRequest struct {
 	ContainerIDs         []string                     `json:"container_ids"`
@@ -528,47 +532,7 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 	authInfo := authInfoFromContext(cc)
 	workspaceID = requestedEventWorkspaceID(ctx, authInfo)
 
-	items := make([]ContainerEventSummary, 0, len(targets))
-	for _, target := range targets {
-		if target.TaskID != "" {
-			task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), target.TaskID)
-			if err != nil || task == nil || !hasWorkspaceTaskAccess(task, authInfo, workspaceID) || task.ContainerId == "" {
-				items = append(items, ContainerEventSummary{TaskID: target.TaskID, ContainerID: target.ContainerID, StubID: target.StubID, Error: "task not found"})
-				continue
-			}
-
-			events, err := g.loadContainerEvents(ctx, task.ContainerId, types.EventQuery{
-				Limit:       req.Limit,
-				WorkspaceID: task.Workspace.ExternalId,
-				StubID:      task.Stub.ExternalId,
-				TaskID:      task.ExternalId,
-				EventTypes:  eventQueryTypes(req.EventTypes),
-			})
-			if err != nil {
-				items = append(items, ContainerEventSummary{ContainerID: task.ContainerId, TaskID: target.TaskID, Error: err.Error()})
-				continue
-			}
-			summary := summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents)
-			summary.TaskID = task.ExternalId
-			if summary.ContainerID == "" {
-				summary.ContainerID = task.ContainerId
-			}
-			items = append(items, summary)
-			continue
-		}
-
-		events, err := g.loadContainerEvents(ctx, target.ContainerID, types.EventQuery{
-			Limit:       req.Limit,
-			WorkspaceID: workspaceID,
-			StubID:      target.StubID,
-			EventTypes:  eventQueryTypes(req.EventTypes),
-		})
-		if err != nil {
-			items = append(items, ContainerEventSummary{ContainerID: target.ContainerID, StubID: target.StubID, Error: err.Error()})
-			continue
-		}
-		items = append(items, summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents))
-	}
+	items := g.loadContainerEventsBatch(ctx.Request().Context(), authInfo, workspaceID, targets, req)
 
 	return ctx.JSON(http.StatusOK, summarizeContainerEventsBatch(
 		items,
@@ -576,6 +540,86 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 		requiredLifecycleIDs(req.RequiredLifecycleIDs),
 		requiredMetricKeys(req.RequiredMetrics),
 	))
+}
+
+func (g *EventGroup) loadContainerEventsBatch(
+	ctx context.Context,
+	authInfo *auth.AuthInfo,
+	workspaceID string,
+	targets []ContainerEventsBatchTarget,
+	req ContainerEventsBatchRequest,
+) []ContainerEventSummary {
+	items := make([]ContainerEventSummary, len(targets))
+	sem := make(chan struct{}, containerEventsBatchReadConcurrency)
+	var wg sync.WaitGroup
+
+	for i, target := range targets {
+		wg.Add(1)
+		go func(i int, target ContainerEventsBatchTarget) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				items[i] = ContainerEventSummary{
+					ContainerID: target.ContainerID,
+					TaskID:      target.TaskID,
+					StubID:      target.StubID,
+					Error:       ctx.Err().Error(),
+				}
+				return
+			}
+
+			items[i] = g.loadContainerEventsBatchTarget(ctx, authInfo, workspaceID, target, req)
+		}(i, target)
+	}
+
+	wg.Wait()
+	return items
+}
+
+func (g *EventGroup) loadContainerEventsBatchTarget(
+	ctx context.Context,
+	authInfo *auth.AuthInfo,
+	workspaceID string,
+	target ContainerEventsBatchTarget,
+	req ContainerEventsBatchRequest,
+) ContainerEventSummary {
+	if target.TaskID != "" {
+		task, err := g.backendRepo.GetTaskWithRelated(ctx, target.TaskID)
+		if err != nil || task == nil || !hasWorkspaceTaskAccess(task, authInfo, workspaceID) || task.ContainerId == "" {
+			return ContainerEventSummary{TaskID: target.TaskID, ContainerID: target.ContainerID, StubID: target.StubID, Error: "task not found"}
+		}
+
+		events, err := g.loadContainerEventsForAuth(ctx, authInfo, workspaceID, task.ContainerId, types.EventQuery{
+			Limit:       req.Limit,
+			WorkspaceID: task.Workspace.ExternalId,
+			StubID:      task.Stub.ExternalId,
+			TaskID:      task.ExternalId,
+			EventTypes:  eventQueryTypes(req.EventTypes),
+		})
+		if err != nil {
+			return ContainerEventSummary{ContainerID: task.ContainerId, TaskID: target.TaskID, Error: err.Error()}
+		}
+
+		summary := summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents)
+		summary.TaskID = task.ExternalId
+		if summary.ContainerID == "" {
+			summary.ContainerID = task.ContainerId
+		}
+		return summary
+	}
+
+	events, err := g.loadContainerEventsForAuth(ctx, authInfo, workspaceID, target.ContainerID, types.EventQuery{
+		Limit:       req.Limit,
+		WorkspaceID: workspaceID,
+		StubID:      target.StubID,
+		EventTypes:  eventQueryTypes(req.EventTypes),
+	})
+	if err != nil {
+		return ContainerEventSummary{ContainerID: target.ContainerID, StubID: target.StubID, Error: err.Error()}
+	}
+	return summarizeContainerEvents(events, req.TopLifecycle, req.IncludeEvents)
 }
 
 func normalizeContainerEventsBatchTargets(req ContainerEventsBatchRequest) []ContainerEventsBatchTarget {
@@ -650,16 +694,26 @@ func (g *EventGroup) loadContainerEvents(ctx echo.Context, containerID string, q
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	authInfo := authInfoFromContext(cc)
 	routeWorkspaceID := requestedEventWorkspaceID(ctx, authInfo)
+	return g.loadContainerEventsForAuth(ctx.Request().Context(), authInfo, routeWorkspaceID, containerID, query)
+}
+
+func (g *EventGroup) loadContainerEventsForAuth(
+	ctx context.Context,
+	authInfo *auth.AuthInfo,
+	routeWorkspaceID string,
+	containerID string,
+	query types.EventQuery,
+) (*types.ContainerEventsResponse, error) {
 	if g.eventRepo == nil {
 		return nil, HTTPInternalServerError("Event repository is unavailable")
 	}
 
-	query, state, err := g.authorizeContainerEventQuery(ctx, containerID, query)
+	query, state, err := g.authorizeContainerEventQueryForAuth(authInfo, routeWorkspaceID, containerID, query)
 	if err != nil {
 		return nil, err
 	}
 
-	events, err := g.eventRepo.GetContainerEvents(ctx.Request().Context(), containerID, query)
+	events, err := g.eventRepo.GetContainerEvents(ctx, containerID, query)
 	if err != nil {
 		if errors.Is(err, repository.ErrEventReadUnsupported) {
 			return nil, NewHTTPError(http.StatusServiceUnavailable, "Event reads are not configured")
@@ -695,7 +749,10 @@ func (g *EventGroup) authorizeContainerEventQuery(ctx echo.Context, containerID 
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	authInfo := authInfoFromContext(cc)
 	routeWorkspaceID := requestedEventWorkspaceID(ctx, authInfo)
+	return g.authorizeContainerEventQueryForAuth(authInfo, routeWorkspaceID, containerID, query)
+}
 
+func (g *EventGroup) authorizeContainerEventQueryForAuth(authInfo *auth.AuthInfo, routeWorkspaceID string, containerID string, query types.EventQuery) (types.EventQuery, *types.ContainerState, error) {
 	state, stateErr := g.containerRepo.GetContainerState(containerID)
 	if stateErr == nil && state != nil {
 		if !eventWorkspaceAccessAllowed(authInfo, routeWorkspaceID, state.WorkspaceId) {

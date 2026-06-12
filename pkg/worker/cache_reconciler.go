@@ -89,6 +89,14 @@ func (m *WorkerCacheManager) reconcileLockTTLSeconds() int {
 	return seconds
 }
 
+func (m *WorkerCacheManager) reconcileMaxItemsPerCycle() int {
+	items := m.config.Cache.Reconciliation.MaxItemsPerCycle
+	if items <= 0 {
+		items = cacheDefaultReconcileMaxItemsCycle
+	}
+	return items
+}
+
 // cacheContentReporter coalesces required-content reports per (stub, kind) and
 // flushes them to S2 as bounded events, while keeping a fast-moving recent-stub
 // index in Redis. It is created only when reconciliation is enabled; when nil,
@@ -424,6 +432,7 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	}
 
 	m.pruneReconcileFailures()
+	m.pruneReconcileSuccesses()
 
 	maxStubs := m.config.Cache.Reconciliation.MaxStubsPerCycle
 	if maxStubs <= 0 {
@@ -439,23 +448,27 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	}
 
 	activeCheckpointIDs := map[string]struct{}{}
+	budget := newReconcileBudget(m.reconcileMaxItemsPerCycle())
 	for _, stub := range stubs {
 		select {
 		case <-m.ctx.Done():
 			return
 		default:
 		}
-		for _, checkpointID := range m.reconcileStub(server, localHostID, stub) {
+		for _, checkpointID := range m.reconcileStub(server, localHostID, stub, budget) {
 			activeCheckpointIDs[checkpointID] = struct{}{}
 		}
+		if budget.exhausted() {
+			break
+		}
 	}
-	if len(stubs) < maxStubs {
+	if len(stubs) < maxStubs && !budget.exhausted() {
 		m.pruneLocalCheckpoints(activeCheckpointIDs)
 		m.pruneStaleCacheCheckpoints()
 	}
 }
 
-func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID string, stub cache.RecentStub) []string {
+func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID string, stub cache.RecentStub, budget *reconcileBudget) []string {
 	items, err := m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
 	if err != nil {
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
@@ -493,6 +506,9 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		if m.requiredContentComplete(server, item, routingKey) {
 			continue
 		}
+		if m.reconcileRecentlySucceeded(item.Hash, routingKey) {
+			continue
+		}
 
 		// Back off items that recently failed to materialize (e.g. an
 		// unresolvable origin source) so they are not retried and re-logged
@@ -500,10 +516,39 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		if m.reconcileBackingOff(item.Hash, routingKey, stub.LastSeen) {
 			continue
 		}
+		if !budget.take() {
+			return checkpointIDs
+		}
 
 		m.materializeOwnedItem(server, localHostID, stub, item, routingKey)
 	}
 	return checkpointIDs
+}
+
+type reconcileBudget struct {
+	remaining int
+	limited   bool
+	empty     bool
+}
+
+func newReconcileBudget(limit int) *reconcileBudget {
+	return &reconcileBudget{remaining: limit, limited: limit > 0}
+}
+
+func (b *reconcileBudget) take() bool {
+	if b == nil || !b.limited {
+		return true
+	}
+	if b.remaining <= 0 {
+		b.empty = true
+		return false
+	}
+	b.remaining--
+	return true
+}
+
+func (b *reconcileBudget) exhausted() bool {
+	return b != nil && b.empty
 }
 
 func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) {
@@ -539,6 +584,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	switch {
 	case status == types.CacheAuditStatusMaterialized:
 		m.clearReconcileFailure(item.Hash, routingKey)
+		m.recordReconcileSuccess(item.Hash, routingKey)
 		m.reconcileLogFields(log.Info(), localHostID, stub, item).
 			Str("status", status).Dur("duration", elapsed).
 			Msg("cache content reconciled")
@@ -577,7 +623,7 @@ func reconcileStatusIsFailure(status string) bool {
 // should be skipped until the backoff window elapses. Expired entries are pruned
 // so the map only tracks currently-failing items.
 func (m *WorkerCacheManager) reconcileBackingOff(hash, routingKey string, stubLastSeen time.Time) bool {
-	key := hash + "\x00" + routingKey
+	key := reconcileItemKey(hash, routingKey)
 	m.reconcileFailuresMu.Lock()
 	defer m.reconcileFailuresMu.Unlock()
 
@@ -610,17 +656,60 @@ func reconcileStubSeenAfterFailure(stubLastSeen, failedAt time.Time) bool {
 }
 
 func (m *WorkerCacheManager) recordReconcileFailure(hash, routingKey string) {
-	key := hash + "\x00" + routingKey
+	key := reconcileItemKey(hash, routingKey)
 	m.reconcileFailuresMu.Lock()
+	if m.reconcileFailures == nil {
+		m.reconcileFailures = make(map[string]time.Time)
+	}
 	m.reconcileFailures[key] = time.Now()
 	m.reconcileFailuresMu.Unlock()
 }
 
 func (m *WorkerCacheManager) clearReconcileFailure(hash, routingKey string) {
-	key := hash + "\x00" + routingKey
+	key := reconcileItemKey(hash, routingKey)
 	m.reconcileFailuresMu.Lock()
 	delete(m.reconcileFailures, key)
 	m.reconcileFailuresMu.Unlock()
+}
+
+func (m *WorkerCacheManager) reconcileRecentlySucceeded(hash, routingKey string) bool {
+	key := reconcileItemKey(hash, routingKey)
+	m.reconcileSuccessesMu.Lock()
+	defer m.reconcileSuccessesMu.Unlock()
+
+	succeededAt, ok := m.reconcileSuccesses[key]
+	if !ok {
+		return false
+	}
+	if time.Since(succeededAt) < cacheReconcileSuccessBackoff {
+		return true
+	}
+	delete(m.reconcileSuccesses, key)
+	return false
+}
+
+func (m *WorkerCacheManager) recordReconcileSuccess(hash, routingKey string) {
+	key := reconcileItemKey(hash, routingKey)
+	m.reconcileSuccessesMu.Lock()
+	if m.reconcileSuccesses == nil {
+		m.reconcileSuccesses = make(map[string]time.Time)
+	}
+	m.reconcileSuccesses[key] = time.Now()
+	m.reconcileSuccessesMu.Unlock()
+}
+
+func (m *WorkerCacheManager) pruneReconcileSuccesses() {
+	m.reconcileSuccessesMu.Lock()
+	defer m.reconcileSuccessesMu.Unlock()
+	for key, succeededAt := range m.reconcileSuccesses {
+		if time.Since(succeededAt) >= cacheReconcileSuccessBackoff {
+			delete(m.reconcileSuccesses, key)
+		}
+	}
+}
+
+func reconcileItemKey(hash, routingKey string) string {
+	return hash + "\x00" + routingKey
 }
 
 // pruneReconcileFailures drops expired backoff entries so the map stays bounded

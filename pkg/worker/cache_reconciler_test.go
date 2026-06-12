@@ -280,6 +280,30 @@ func TestReconcileBackoffIsBypassedBySecondPrecisionStubSighting(t *testing.T) {
 	require.Empty(t, manager.reconcileFailures)
 }
 
+func TestReconcileSuccessBackoffSkipsRecentMaterialization(t *testing.T) {
+	manager := &WorkerCacheManager{}
+
+	manager.recordReconcileSuccess("hash", "route")
+	require.True(t, manager.reconcileRecentlySucceeded("hash", "route"))
+
+	manager.reconcileSuccesses[reconcileItemKey("hash", "route")] = time.Now().Add(-cacheReconcileSuccessBackoff - time.Second)
+	require.False(t, manager.reconcileRecentlySucceeded("hash", "route"))
+	require.Empty(t, manager.reconcileSuccesses)
+}
+
+func TestReconcileBudgetCapsMaterializationAttempts(t *testing.T) {
+	budget := newReconcileBudget(1)
+
+	require.True(t, budget.take())
+	require.False(t, budget.exhausted())
+	require.False(t, budget.take())
+	require.True(t, budget.exhausted())
+
+	var unlimited *reconcileBudget
+	require.True(t, unlimited.take())
+	require.False(t, unlimited.exhausted())
+}
+
 func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -327,6 +351,64 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 
 	require.Equal(t, []string{"locality-b"}, metadata.listed)
 	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
+}
+
+func TestReconcileStubSkipsRecentlyMaterializedMissingContent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Client.NTopHosts = 1
+
+	localServer, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	localAddr, err := localServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
+
+	localHost := localServer.Host()
+	require.NotNil(t, localHost)
+	localHost.Addr = localAddr
+	localHost.PrivateAddr = localAddr
+
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	client, err := cache.NewClientWithHostDirectory(ctx, clientCfg, cache.NewMockCacheMetadataStore(), testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{localHost}, nil
+	}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	routingKey := "route"
+	require.Eventually(t, func() bool {
+		primary, err := client.PrimaryReadHost(routingKey)
+		return err == nil && primary != nil && primary.HostId == localHost.HostId
+	}, 3*time.Second, 20*time.Millisecond)
+
+	hash := strings.Repeat("a", 64)
+	fake := &fakeEventRepo{items: []types.CacheRequiredContentItem{{
+		Kind:       types.CacheContentKindClipV1,
+		Hash:       hash,
+		RoutingKey: routingKey,
+		SizeBytes:  1,
+		Source:     "image.clip",
+	}}}
+	manager := &WorkerCacheManager{
+		ctx:                ctx,
+		locality:           "test",
+		metadataStore:      cache.NewMockCacheMetadataStore(),
+		eventRepo:          fake,
+		client:             client,
+		checkpointRoot:     t.TempDir(),
+		reconcileFailures:  make(map[string]time.Time),
+		reconcileSuccesses: map[string]time.Time{reconcileItemKey(hash, routingKey): time.Now()},
+	}
+
+	checkpointIDs := manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"}, nil)
+
+	require.Empty(t, checkpointIDs)
+	require.Empty(t, fake.cacheEvents)
+	require.False(t, localServer.HasCompleteContent(hash, 1))
 }
 
 // The gateway no longer vends S3 archive credentials; private-pool workers
@@ -500,7 +582,7 @@ func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
 		reconcileFailures: make(map[string]time.Time),
 	}
 
-	checkpointIDs := manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"})
+	checkpointIDs := manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"}, nil)
 
 	require.Equal(t, []string{"checkpoint-a"}, checkpointIDs)
 	require.Len(t, fake.cacheEvents, 1)
@@ -513,7 +595,7 @@ func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
 	fake.items[0].Accelerator = "T4"
 	fake.mu.Unlock()
 
-	checkpointIDs = manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"})
+	checkpointIDs = manager.reconcileStub(localServer, localHost.HostId, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"}, nil)
 	require.Empty(t, checkpointIDs)
 	require.Empty(t, fake.cacheEvents)
 }
