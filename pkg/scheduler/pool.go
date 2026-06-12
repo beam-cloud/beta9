@@ -105,6 +105,17 @@ func workerCacheEnabled(config types.AppConfig, poolConfig types.WorkerPoolConfi
 	return config.Cache.Disk.Enabled
 }
 
+// workerImagesHostPath returns the host path backing the worker's /images
+// volume (clip decompressed-layer disk cache, layer index artifacts, and
+// image mounts). Pools can override it to place the cache on a different
+// host disk; the in-pod mount path stays /images.
+func workerImagesHostPath(poolConfig types.WorkerPoolConfig) string {
+	if poolConfig.ImagesPath != "" {
+		return poolConfig.ImagesPath
+	}
+	return defaultImagesPath
+}
+
 func workerCacheHostPath(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {
 	if poolConfig.Cache.Disk.HostPath != "" {
 		return poolConfig.Cache.Disk.HostPath

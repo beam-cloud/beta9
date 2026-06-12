@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1798,6 +1799,62 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 	return nil
 }
 
+// formatImageBytes renders a byte count for user-facing build output.
+func formatImageBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2f GiB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%d KiB", n/1024)
+	}
+}
+
+type activeOutputWriter struct {
+	logger       *slog.Logger
+	lastOutputNS *atomic.Int64
+}
+
+func newActiveOutputWriter(logger *slog.Logger) *activeOutputWriter {
+	w := &activeOutputWriter{logger: logger, lastOutputNS: &atomic.Int64{}}
+	w.lastOutputNS.Store(time.Now().UnixNano())
+	return w
+}
+
+func (w *activeOutputWriter) Write(p []byte) (int, error) {
+	w.lastOutputNS.Store(time.Now().UnixNano())
+	w.logger.Info(string(p))
+	return len(p), nil
+}
+
+const buildOutputHeartbeatInterval = 15 * time.Second
+
+// startSilentOutputHeartbeat emits a user-facing heartbeat only when the
+// wrapped command has produced no output for a while. This keeps noisy phases
+// like pip downloads readable while making silent buildah commit/push phases
+// understandable.
+func startSilentOutputHeartbeat(ctx context.Context, outputLogger *slog.Logger, started time.Time, writer *activeOutputWriter, message string) func() {
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(buildOutputHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				lastOutput := time.Unix(0, writer.lastOutputNS.Load())
+				if time.Since(lastOutput) < buildOutputHeartbeatInterval {
+					continue
+				}
+				outputLogger.Info(fmt.Sprintf("%s (%ds elapsed)\n", message, int(time.Since(started).Seconds())))
+			}
+		}
+	}()
+	return cancel
+}
+
 func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64) error {
 	outputLogger.Info("Indexing image...\n")
 	progressChan := make(chan clip.OCIIndexProgress, 100)
@@ -1806,22 +1863,50 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	wg.Add(1)
 
 	// Process progress updates in goroutine. Layers index concurrently, so
-	// "starting" events arrive in bursts; only completions (which are ordered)
-	// are surfaced to the user.
+	// "starting" events arrive in bursts; per-layer byte progress and
+	// completions (with their source) are surfaced to the user as they happen.
 	go func() {
 		defer wg.Done()
+		cachedLayers := 0
+		var cachedBytes int64
 		for progress := range progressChan {
 			log.Debug().
 				Str("container_id", request.ContainerId).
 				Str("stage", progress.Stage).
+				Str("source", progress.Source).
 				Int("layer", progress.LayerIndex).
 				Int("total", progress.TotalLayers).
-				Int("files", progress.FilesIndexed).
+				Int64("bytes", progress.BytesProcessed).
 				Msg("image index progress")
 
-			if progress.Stage == "completed" {
-				outputLogger.Info(fmt.Sprintf("Indexed layer %d/%d (%d files)\n",
-					progress.LayerIndex, progress.TotalLayers, progress.FilesIndexed))
+			switch progress.Stage {
+			case "progress":
+				if progress.BytesProcessed < 256*1024*1024 {
+					continue
+				}
+				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d... %s processed\n",
+					progress.LayerIndex, progress.TotalLayers, formatImageBytes(progress.BytesProcessed)))
+			case "completed":
+				if progress.Source == clip.LayerSourceIndexCache || progress.Source == clip.LayerSourceContentCache {
+					cachedLayers++
+					cachedBytes += progress.BytesProcessed
+					continue
+				}
+
+				var detail string
+				if progress.BytesProcessed > 0 {
+					detail = formatImageBytes(progress.BytesProcessed)
+				} else {
+					detail = "done"
+				}
+				outputLogger.Info(fmt.Sprintf("Indexed layer %d/%d (%s)\n", progress.LayerIndex, progress.TotalLayers, detail))
+			}
+		}
+		if cachedLayers > 0 {
+			if cachedBytes > 0 {
+				outputLogger.Info(fmt.Sprintf("Indexed %d cached layers (%s)\n", cachedLayers, formatImageBytes(cachedBytes)))
+			} else {
+				outputLogger.Info(fmt.Sprintf("Indexed %d cached layers\n", cachedLayers))
 			}
 		}
 	}()
@@ -1976,11 +2061,17 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
 		cmd := exec.CommandContext(ctx, "buildah", budArgs...)
 		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-		if err = cmd.Run(); err != nil {
+		buildOutput := newActiveOutputWriter(outputLogger)
+		cmd.Stdout = buildOutput
+		cmd.Stderr = buildOutput
+		buildStart := time.Now()
+		stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, buildStart, buildOutput, "Still building image...")
+		err = cmd.Run()
+		stopHeartbeat()
+		if err != nil {
 			return err
 		}
+		outputLogger.Info(fmt.Sprintf("Image built in %.1fs\n", time.Since(buildStart).Seconds()))
 
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
@@ -2006,11 +2097,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
 		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-		if err = cmd.Run(); err != nil {
+		pushOutput := newActiveOutputWriter(outputLogger)
+		cmd.Stdout = pushOutput
+		cmd.Stderr = pushOutput
+
+		// buildah push emits no progress for large blobs, so surface a
+		// heartbeat to the user while it runs
+		pushStart := time.Now()
+		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushOutput, "Still pushing image...")
+		err = cmd.Run()
+		stopHeartbeat()
+		if err != nil {
 			return err
 		}
+		outputLogger.Info(fmt.Sprintf("Image pushed in %.1fs\n", time.Since(pushStart).Seconds()))
 
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
 		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
