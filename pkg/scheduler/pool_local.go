@@ -345,7 +345,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		}
 	} else {
 		volumeSource.HostPath = &corev1.HostPathVolumeSource{
-			Path: defaultImagesPath,
+			Path: workerImagesHostPath(wpc.workerPoolConfig),
 			Type: &hostPathType,
 		}
 	}
