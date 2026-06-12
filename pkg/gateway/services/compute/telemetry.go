@@ -139,6 +139,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 	agentState = current
 	previousSeen := model.AgentMachineLastSeen(agentState)
+	now := time.Now().UTC()
 
 	metrics := model.AgentMachineMetrics{
 		Timestamp:            timeFromUnixNano(snapshot.TimestampUnixNano),
@@ -159,14 +160,20 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		poolState, _ = s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
 	}
 	agentState.Metrics = metrics
-	agentState.LastHeartbeatAt = metrics.Timestamp
+	// Liveness is always tracked on the gateway clock: agent-supplied
+	// timestamps can be skewed or stale (buffered telemetry after a
+	// reconnect), which would oscillate the machine across the heartbeat
+	// timeout and flicker its status. Never move the heartbeat backwards.
+	if now.After(agentState.LastHeartbeatAt) {
+		agentState.LastHeartbeatAt = now
+	}
 	agentState.LastDisconnectAt = time.Time{}
 	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
 		return err
 	}
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)
-	if err := s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, metrics.Timestamp); err != nil {
+	if err := s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, now); err != nil {
 		log.Warn().
 			Err(err).
 			Str("workspace_id", agentState.WorkspaceID).
@@ -182,12 +189,12 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
-		Timestamp:   metrics.Timestamp,
+		Timestamp:   now,
 		WorkspaceID: agentState.WorkspaceID,
 		PoolName:    agentState.PoolName,
 		MachineID:   agentState.MachineID,
 		Action:      types.EventComputeActionMachineHeartbeat,
-		Status:      string(agentMachineStatus(agentState, worker, metrics.Timestamp)),
+		Status:      string(agentMachineStatus(agentState, worker, now)),
 		CPUCount:    agentState.CPUCount,
 		MemoryMB:    firstNonZeroUint64(metrics.MemoryTotalMB, agentState.MemoryMB),
 		GPUCount:    agentState.GPUCount,
@@ -333,9 +340,17 @@ func (s *Service) recordAgentDisconnect(ctx context.Context, agentState *model.A
 	})
 }
 
+// timeFromUnixNano converts an agent-supplied timestamp, clamping future
+// values to the gateway clock so skewed agent clocks cannot produce events
+// "from the future".
 func timeFromUnixNano(value int64) time.Time {
+	now := time.Now().UTC()
 	if value <= 0 {
-		return time.Now().UTC()
+		return now
 	}
-	return time.Unix(0, value).UTC()
+	timestamp := time.Unix(0, value).UTC()
+	if timestamp.After(now) {
+		return now
+	}
+	return timestamp
 }

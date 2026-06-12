@@ -2603,6 +2603,21 @@ func (c *Client) PrimaryReadHost(routingKey string) (*Host, error) {
 	return nil, ErrHostNotFound
 }
 
+// RankedReadHosts returns the HRW-ranked hosts for routingKey, including
+// hosts whose endpoints are currently unavailable. Callers that make
+// placement decisions (e.g. proactive reconciliation) need the full ranking
+// so they can apply their own liveness policy; reads should keep using
+// PrimaryReadHost, which prefers reachable hosts.
+func (c *Client) RankedReadHosts(routingKey string) []*Host {
+	if routingKey == "" {
+		return nil
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hasher.GetN(c.readReplicaHostCount(), routingKey)
+}
+
 // MaterializeFromReplica streams the content for (hash, routingKey) from a
 // reachable peer that already holds it into the given local server's store. It
 // returns true when the content is complete locally afterward. size must be

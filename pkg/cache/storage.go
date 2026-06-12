@@ -56,6 +56,8 @@ type Store struct {
 	pageLocks               [pageLockStripeCount]sync.RWMutex
 	closing                 atomic.Bool
 	diskUsagePctBits        atomic.Uint64
+	accessTouchMu           sync.Mutex
+	accessTouches           map[string]time.Time
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -74,6 +76,7 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 		memoryCacheEnabled: config.Server.MaxCachePct > 0,
 		mu:                 sync.Mutex{},
 		metrics:            initMetrics(ctx, config.Metrics, currentHost, locality),
+		accessTouches:      make(map[string]time.Time),
 	}
 
 	Logger.Infof("Disk cache directory located at: '%s'", cas.diskCacheDir)
@@ -1021,6 +1024,10 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err
 			throughputMBps := (float64(dstOffset) / (1024 * 1024)) / (float64(time.Since(start).Microseconds()) / 1e6)
 			cas.metrics.ReadThroughputMBps.Update(throughputMBps)
 		}
+		// Record read recency so LRU eviction prefers newer content
+		if read > 0 {
+			cas.touchContentAccess(hash)
+		}
 		if elapsed := time.Since(start); elapsed > time.Second || (err != nil && !errors.Is(err, ErrContentNotFound)) {
 			Logger.Warnf("cache store read-at result: hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
 		}
@@ -1422,6 +1429,16 @@ func (cas *Store) monitorDiskCacheUsage() {
 
 			Logger.Debugf("Memory Cache Usage: %dMB / %dMB (%.2f%%)", availableMemoryMb, totalMemoryMb, float64(availableMemoryMb)/float64(totalMemoryMb)*100)
 			Logger.Debugf("Disk Cache Usage: %dMB / %dMB (%.2f%%)", currentUsage, totalDiskSpace, usagePercentage*100)
+
+			// Evict least-recently-read content when above the eviction
+			// watermark, then refresh usage so the write gate below reflects
+			// the post-eviction state
+			if cas.maybeEvictDiskCache(usagePercentage, totalDiskSpace) {
+				if _, _, refreshedPct, err := cas.GetDiskCacheMetrics(); err == nil {
+					usagePercentage = refreshedPct
+					cas.setCachedDiskUsagePct(usagePercentage)
+				}
+			}
 
 			// Update internal state for disk usage exceeded
 			cas.mu.Lock()

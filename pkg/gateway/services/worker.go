@@ -38,6 +38,7 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 		}, nil
 	}
 
+	workers = gws.filterControlPlaneWorkers(workers)
 	sortWorkers(workers)
 
 	pbWorkers := make([]*pb.Worker, len(workers))
@@ -78,6 +79,29 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 		Ok:      true,
 		Workers: pbWorkers,
 	}, nil
+}
+
+// filterControlPlaneWorkers drops workers belonging to workspace private
+// pools. Pool names are not namespaced by workspace, so listing every
+// workspace's private-pool agent workers produces duplicate-looking rows
+// that are not actionable for cluster operators; those machines are managed
+// through the workspace-scoped compute APIs instead.
+func (gws *GatewayService) filterControlPlaneWorkers(workers []*types.Worker) []*types.Worker {
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		poolConfig, ok := gws.appConfig.Worker.Pools[worker.PoolName]
+		if !ok || poolConfig.Mode == types.PoolModePrivate {
+			continue
+		}
+		// Agent (private pool) workers always set RequiresPoolSelector; if the
+		// config pool of the same name does not, this worker belongs to a
+		// private pool whose name collides with a control-plane pool.
+		if worker.RequiresPoolSelector && !poolConfig.RequiresPoolSelector {
+			continue
+		}
+		filtered = append(filtered, worker)
+	}
+	return filtered
 }
 
 func sortWorkers(w []*types.Worker) {

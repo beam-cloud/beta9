@@ -81,13 +81,18 @@ func TestCreateReservationConfiguresShadeformStartupScript(t *testing.T) {
 
 	autoDelete, ok := body["auto_delete"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "80.00", autoDelete["spend_threshold"])
 
-	// The provider-side threshold must be a backstop past the TTL, not the
-	// enforcer of it; the control plane owns reservation lifetime.
+	// No spend_threshold: reservations renew hourly past the launch budget,
+	// and Shadeform would otherwise kill the node once the initial budget's
+	// worth of spend accrues. Spend enforcement lives in our reconciler.
+	_, hasSpend := autoDelete["spend_threshold"]
+	require.False(t, hasSpend)
+
+	// The provider-side threshold must be a generous backstop past the TTL,
+	// not the enforcer of it; the control plane owns reservation lifetime.
 	threshold, err := time.Parse(time.RFC3339, autoDelete["date_threshold"].(string))
 	require.NoError(t, err)
-	require.True(t, threshold.After(time.Now().Add(6*time.Hour+30*time.Minute)))
+	require.True(t, threshold.After(time.Now().Add(6*time.Hour+shadeformAutoDeleteGrace-time.Minute)))
 }
 
 func TestGetReservationMapsShadeformStatus(t *testing.T) {
@@ -132,7 +137,8 @@ func TestExtendReservationUpdatesShadeformAutoDelete(t *testing.T) {
 	threshold, err := time.Parse(time.RFC3339, autoDelete["date_threshold"].(string))
 	require.NoError(t, err)
 	require.True(t, threshold.Equal(expiresAt.Add(shadeformAutoDeleteGrace)))
-	// spend_threshold is omitted so the existing value stays unchanged
+	// spend_threshold is never set on Shadeform instances; spend enforcement
+	// lives in the control-plane reconciler.
 	_, hasSpend := autoDelete["spend_threshold"]
 	require.False(t, hasSpend)
 }

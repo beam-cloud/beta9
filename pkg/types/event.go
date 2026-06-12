@@ -763,21 +763,24 @@ type EventPlatformLogSchema struct {
 }
 
 type EventQuery struct {
-	Limit       uint64     `json:"limit,omitempty"`
-	WorkspaceID string     `json:"workspace_id,omitempty"`
-	StubID      string     `json:"stub_id,omitempty"`
-	AppID       string     `json:"app_id,omitempty"`
-	TaskID      string     `json:"task_id,omitempty"`
-	ContainerID string     `json:"container_id,omitempty"`
-	EventTypes  []string   `json:"event_types,omitempty"`
-	StartTime   *time.Time `json:"start_time,omitempty"`
-	EndTime     *time.Time `json:"end_time,omitempty"`
-	SeqNum      *uint64    `json:"seq_num,omitempty"`
-	Timestamp   *uint64    `json:"timestamp,omitempty"`
-	TailOffset  *int64     `json:"tail_offset,omitempty"`
-	Until       *uint64    `json:"until,omitempty"`
-	WaitSeconds *int32     `json:"wait,omitempty"`
-	Clamp       *bool      `json:"clamp,omitempty"`
+	Limit       uint64   `json:"limit,omitempty"`
+	WorkspaceID string   `json:"workspace_id,omitempty"`
+	StubID      string   `json:"stub_id,omitempty"`
+	AppID       string   `json:"app_id,omitempty"`
+	TaskID      string   `json:"task_id,omitempty"`
+	ContainerID string   `json:"container_id,omitempty"`
+	EventTypes  []string `json:"event_types,omitempty"`
+	// ExcludeActions drops records whose payload "action" field matches; used
+	// to keep dense actions (e.g. machine.heartbeat) from consuming the limit.
+	ExcludeActions []string   `json:"exclude_actions,omitempty"`
+	StartTime      *time.Time `json:"start_time,omitempty"`
+	EndTime        *time.Time `json:"end_time,omitempty"`
+	SeqNum         *uint64    `json:"seq_num,omitempty"`
+	Timestamp      *uint64    `json:"timestamp,omitempty"`
+	TailOffset     *int64     `json:"tail_offset,omitempty"`
+	Until          *uint64    `json:"until,omitempty"`
+	WaitSeconds    *int32     `json:"wait,omitempty"`
+	Clamp          *bool      `json:"clamp,omitempty"`
 }
 
 type LogQuery struct {

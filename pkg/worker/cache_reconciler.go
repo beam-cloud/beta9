@@ -9,6 +9,10 @@ package worker
 //   - WorkerCacheManager reconcile loop: on the node that currently hosts the
 //     cache server, materializes content the local host owns (HRW), except
 //     checkpoints which materialize on every matching accelerator in locality.
+//     Ownership has hysteresis: an owner that is briefly endpoint-less (e.g. a
+//     rolling deploy) keeps its keys; only after a grace period do its keys
+//     fail over to the next-ranked live host. Materialization also pauses
+//     while local disk usage is above the reconciliation watermark.
 //
 // The worker is trustless: all coordinator state (recent stubs, locks) is
 // brokered through the gateway, and all origin credentials are fetched from the
@@ -95,6 +99,16 @@ func (m *WorkerCacheManager) reconcileMaxItemsPerCycle() int {
 		items = cacheDefaultReconcileMaxItemsCycle
 	}
 	return items
+}
+
+// reconcileMaxDiskUsagePct is the local disk usage fraction above which
+// proactive materialization pauses.
+func (m *WorkerCacheManager) reconcileMaxDiskUsagePct() float64 {
+	pct := m.config.Cache.Reconciliation.MaxDiskUsagePct
+	if pct <= 0 || pct > 1 {
+		pct = cacheDefaultReconcileMaxDiskUsagePct
+	}
+	return pct
 }
 
 // cacheContentReporter coalesces required-content reports per (stub, kind) and
@@ -431,6 +445,10 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
+	if m.reconcileGatedByDiskUsage(server, localHostID) {
+		return
+	}
+
 	m.pruneReconcileFailures()
 	m.pruneReconcileSuccesses()
 
@@ -495,12 +513,8 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 			if item.CheckpointID != "" {
 				checkpointIDs = append(checkpointIDs, item.CheckpointID)
 			}
-		} else {
-			// Materialize only on the host a read would actually resolve to.
-			primary, err := m.client.PrimaryReadHost(routingKey)
-			if err != nil || primary == nil || primary.HostId != localHostID {
-				continue
-			}
+		} else if !m.localHostOwnsForReconcile(localHostID, routingKey) {
+			continue
 		}
 
 		if m.requiredContentComplete(server, item, routingKey) {
@@ -523,6 +537,89 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		m.materializeOwnedItem(server, localHostID, stub, item, routingKey)
 	}
 	return checkpointIDs
+}
+
+// reconcileGatedByDiskUsage pauses proactive materialization while local disk
+// usage is above the reconciliation watermark, so reconciliation can never
+// push a node into kubelet DiskPressure territory. Demand-driven reads are
+// unaffected. Transitions are logged once, not every cycle.
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string) bool {
+	usage := server.UsagePct()
+	if usage > m.reconcileMaxDiskUsagePct() {
+		if m.reconcilePausedAt.IsZero() {
+			m.reconcilePausedAt = time.Now()
+			log.Warn().
+				Str("locality", m.locality).
+				Str("logical_host", localHostID).
+				Float64("disk_usage_pct", usage).
+				Float64("max_disk_usage_pct", m.reconcileMaxDiskUsagePct()).
+				Msg("cache reconciliation paused: disk usage above watermark")
+		}
+		return true
+	}
+
+	if !m.reconcilePausedAt.IsZero() {
+		log.Info().
+			Str("locality", m.locality).
+			Str("logical_host", localHostID).
+			Dur("paused_for", time.Since(m.reconcilePausedAt)).
+			Msg("cache reconciliation resumed: disk usage back below watermark")
+		m.reconcilePausedAt = time.Time{}
+	}
+	return false
+}
+
+// localHostOwnsForReconcile reports whether this host should proactively
+// materialize the given key. The HRW owner keeps its keys while it is live or
+// only briefly endpoint-less (e.g. a rolling deploy: its on-disk content
+// survives the restart, and duplicating its entire key range onto peers is
+// what causes post-deploy materialization storms). Once the owner has been
+// endpoint-less past the grace period, ownership for reconciliation purposes
+// falls through to the next-ranked live host, preserving self-healing when a
+// node is really gone. Hosts that stay gone also age out of the ring itself.
+func (m *WorkerCacheManager) localHostOwnsForReconcile(localHostID, routingKey string) bool {
+	now := time.Now()
+	for _, host := range m.client.RankedReadHosts(routingKey) {
+		switch {
+		case host == nil:
+			continue
+		case host.HasEndpoint():
+			m.ownerSeenLive(host.HostId, now)
+			return host.HostId == localHostID
+		case now.Sub(m.ownerLastLiveAt(host.HostId, now)) < cacheReconcileOwnerGracePeriod:
+			// The owner is endpoint-less but within grace: nobody takes over
+			// its keys yet
+			return host.HostId == localHostID
+		}
+		// Owner endpoint-less past grace: fall through to the next-ranked host
+	}
+	return false
+}
+
+func (m *WorkerCacheManager) ownerSeenLive(hostID string, now time.Time) {
+	m.ownerLastLiveMu.Lock()
+	defer m.ownerLastLiveMu.Unlock()
+	if m.ownerLastLive == nil {
+		m.ownerLastLive = make(map[string]time.Time)
+	}
+	m.ownerLastLive[hostID] = now
+}
+
+// ownerLastLiveAt returns when hostID was last observed with a live endpoint.
+// A host seen for the first time while endpoint-less starts its grace window
+// now, so a freshly-restarted process doesn't immediately treat peers that
+// were down before it started as permanently gone.
+func (m *WorkerCacheManager) ownerLastLiveAt(hostID string, now time.Time) time.Time {
+	m.ownerLastLiveMu.Lock()
+	defer m.ownerLastLiveMu.Unlock()
+	if m.ownerLastLive == nil {
+		m.ownerLastLive = make(map[string]time.Time)
+	}
+	if lastLive, ok := m.ownerLastLive[hostID]; ok {
+		return lastLive
+	}
+	m.ownerLastLive[hostID] = now
+	return now
 }
 
 type reconcileBudget struct {

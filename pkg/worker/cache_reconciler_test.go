@@ -353,6 +353,84 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
 }
 
+func TestLocalHostOwnsForReconcileKeepsOwnershipThroughBriefEndpointLoss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Client.NTopHosts = 2
+
+	localServer, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	localAddr, err := localServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
+
+	localHost := localServer.Host()
+	require.NotNil(t, localHost)
+	localHost.Addr = localAddr
+	localHost.PrivateAddr = localAddr
+
+	// A peer that is registered in the ring but currently has no live endpoint
+	// (e.g. its pod is mid-restart during a rolling deploy).
+	peerHost := &cache.Host{
+		HostId:      "peer-host",
+		PoolName:    localHost.PoolName,
+		Locality:    "test",
+		NodeID:      "node-peer",
+		CachePathID: "path-peer",
+	}
+	require.False(t, peerHost.HasEndpoint())
+
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	client, err := cache.NewClientWithHostDirectory(ctx, clientCfg, cache.NewMockCacheMetadataStore(), testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{localHost, peerHost}, nil
+	}), "test")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	require.Eventually(t, func() bool {
+		return len(client.RankedReadHosts("probe")) == 2
+	}, 3*time.Second, 20*time.Millisecond)
+
+	manager := &WorkerCacheManager{
+		ctx:           ctx,
+		locality:      "test",
+		client:        client,
+		ownerLastLive: make(map[string]time.Time),
+	}
+
+	// Find one key owned by the down peer and one owned by the live local host
+	peerKey, localKey := "", ""
+	for i := 0; i < 256 && (peerKey == "" || localKey == ""); i++ {
+		key := fmt.Sprintf("key-%d", i)
+		ranked := client.RankedReadHosts(key)
+		require.Len(t, ranked, 2)
+		if ranked[0].HostId == peerHost.HostId && peerKey == "" {
+			peerKey = key
+		}
+		if ranked[0].HostId == localHost.HostId && localKey == "" {
+			localKey = key
+		}
+	}
+	require.NotEmpty(t, peerKey)
+	require.NotEmpty(t, localKey)
+
+	// Keys owned by the live local host always reconcile locally
+	require.True(t, manager.localHostOwnsForReconcile(localHost.HostId, localKey))
+
+	// Keys owned by the briefly endpoint-less peer must NOT fail over within
+	// the grace window: its on-disk content survives the restart, and taking
+	// over would duplicate its entire key range.
+	require.False(t, manager.localHostOwnsForReconcile(localHost.HostId, peerKey))
+
+	// Once the peer has been endpoint-less past the grace period, its keys
+	// fail over to the next-ranked live host so the system still self-heals.
+	manager.ownerLastLive[peerHost.HostId] = time.Now().Add(-cacheReconcileOwnerGracePeriod - time.Minute)
+	require.True(t, manager.localHostOwnsForReconcile(localHost.HostId, peerKey))
+}
+
 func TestReconcileStubSkipsRecentlyMaterializedMissingContent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

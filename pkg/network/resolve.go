@@ -14,7 +14,16 @@ import (
 func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tailscale *Tailscale, tsConfig types.TailscaleConfig) (net.Conn, error) {
 	var conn net.Conn = nil
 
-	if tsConfig.Enabled && strings.Contains(host, tsConfig.HostName) {
+	if tsConfig.Enabled && tailscale != nil && strings.Contains(host, tsConfig.HostName) {
+		// Confirm the peer is in our netmap first; dialing an unknown MagicDNS
+		// name silently falls back to the system resolver and fails with a
+		// misleading NXDOMAIN.
+		if peerHost := tailnetHostFromAddr(host); peerHost != "" {
+			if err := tailscale.WaitForPeer(ctx, peerHost, timeout); err != nil {
+				return nil, err
+			}
+		}
+
 		conn, err := tailscale.DialContextTimeout(ctx, "tcp", host, timeout)
 		if err != nil {
 			return nil, err

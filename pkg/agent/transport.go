@@ -208,7 +208,14 @@ func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) 
 	attrs["backend_state"] = status.BackendState
 	attrs["full_snapshot"] = strconv.FormatBool(full)
 	attrs["health_count"] = strconv.Itoa(len(status.Health))
-	attrs["peer_count"] = strconv.Itoa(len(status.Peer))
+	if health := joinAttrValues(status.Health); health != "" {
+		attrs["health"] = health
+	}
+	// Peer data is only present on full snapshots (StatusWithoutPeers always
+	// reports zero peers, which reads as a false outage).
+	if full {
+		attrs["peer_count"] = strconv.Itoa(len(status.Peer))
+	}
 	if status.Self != nil {
 		attrs["self_dns"] = strings.TrimSuffix(status.Self.DNSName, ".")
 		attrs["self_online"] = strconv.FormatBool(status.Self.Online)
@@ -284,6 +291,17 @@ func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) 
 		attrs["relay_regions"] = strings.Join(regions, ",")
 	}
 	return attrs
+}
+
+// joinAttrValues joins messages into a single event attribute value, capped
+// so oversized tailscale health strings can't bloat telemetry events.
+func joinAttrValues(values []string) string {
+	const maxAttrLen = 240
+	joined := strings.Join(values, "; ")
+	if len(joined) > maxAttrLen {
+		joined = joined[:maxAttrLen-3] + "..."
+	}
+	return joined
 }
 
 func agentTSNetLogf(stderr io.Writer) func(string, ...any) {

@@ -64,6 +64,9 @@ type eventMetadata struct {
 	ServiceName string
 	InstanceID  string
 	PoolName    string
+	// Action is the payload-level action (e.g. machine.heartbeat); used for
+	// stream routing decisions, not persisted as a cloud event extension.
+	Action string
 }
 
 func NewEventClientRepo(config types.AppConfig) EventRepository {
@@ -1115,6 +1118,7 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 			MachineID:   d.MachineID,
 			RouteID:     d.RouteID,
 			PoolName:    d.PoolName,
+			Action:      d.Action,
 		}
 	case types.EventStubCacheRequiredContentSchema:
 		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}

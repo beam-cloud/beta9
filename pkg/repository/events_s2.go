@@ -466,6 +466,24 @@ func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.Eve
 		}
 	}
 
+	// The dense compute stream may be empty for workspaces whose events
+	// predate it; fall back to scanning the full workspace stream.
+	if len(response.Events) == 0 && query.WorkspaceID != "" && allComputeEventTypes(query.EventTypes) {
+		workspaceStream := r.workspaceStreamName(query.WorkspaceID)
+		alreadyRead := false
+		for _, streamName := range response.Streams {
+			if streamName == string(workspaceStream) {
+				alreadyRead = true
+				break
+			}
+		}
+		if !alreadyRead {
+			if err := r.readEventHistoryStream(ctx, workspaceStream, query, limit, response); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	sortContainerEventRecords(response.Events)
 	return response, nil
 }
@@ -652,6 +670,10 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamName s2.StreamName, query types.EventQuery, limit uint64, response *types.EventHistoryResponse) error {
 	response.Streams = append(response.Streams, string(streamName))
 
+	if eventHistoryQueryReadsFromTail(query) {
+		return r.readEventHistoryStreamFromTail(ctx, streamName, query, limit, response)
+	}
+
 	var nextSeqNum *uint64
 	if query.SeqNum != nil {
 		seq := *query.SeqNum
@@ -721,6 +743,77 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		startTimestamp = nil
 		if len(batch.Records) < int(count) {
 			return nil
+		}
+	}
+	return nil
+}
+
+// eventHistoryQueryReadsFromTail reports whether a history query has no
+// explicit start/end selector, in which case callers want the most recent
+// events rather than the oldest records in the stream.
+func eventHistoryQueryReadsFromTail(query types.EventQuery) bool {
+	return query.SeqNum == nil &&
+		query.StartTime == nil &&
+		query.Timestamp == nil &&
+		query.EndTime == nil &&
+		query.Until == nil
+}
+
+// readEventHistoryStreamFromTail scans the stream newest-first so a limited
+// history read returns the latest matching events instead of the first
+// records ever written to the stream.
+func (r *S2EventRepository) readEventHistoryStreamFromTail(ctx context.Context, streamName s2.StreamName, query types.EventQuery, limit uint64, response *types.EventHistoryResponse) error {
+	tail, err := r.basin.Stream(streamName).CheckTail(ctx)
+	if err != nil {
+		if isS2ReadEmpty(err) {
+			return nil
+		}
+		return fmt.Errorf("check tail for event history s2 stream %q: %w", streamName, err)
+	}
+	if tail.Tail.SeqNum == 0 {
+		return nil
+	}
+
+	chunkSize := uint64(s2EventHistoryReadLimit)
+	if chunkSize == 0 {
+		chunkSize = 1000
+	}
+	scanLimit := uint64(s2EventAggregateScanLimit)
+	if limit > scanLimit {
+		scanLimit = limit
+	}
+
+	var recordsScanned uint64
+	var scannedFromTail uint64
+	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
+		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
+		tailOffsetValue := int64(tailOffset)
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
+			TailOffset: &tailOffsetValue,
+			Count:      &count,
+		})
+		if err != nil {
+			if isS2ReadEmpty(err) {
+				return nil
+			}
+			return fmt.Errorf("read event history from s2 stream %q: %w", streamName, err)
+		}
+		if len(batch.Records) == 0 {
+			return nil
+		}
+		recordsScanned += uint64(len(batch.Records))
+		scannedFromTail = tailOffset
+
+		for i := len(batch.Records) - 1; i >= 0; i-- {
+			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, &types.ContainerEventsResponse{})
+			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
+				continue
+			}
+			augmentContainerEventResponse(&types.ContainerEventsResponse{}, &eventRecord)
+			response.Events = append(response.Events, eventRecord)
+			if uint64(len(response.Events)) >= limit {
+				break
+			}
 		}
 	}
 	return nil
@@ -948,6 +1041,9 @@ func eventRecordMatchesQuery(record types.ContainerEventRecord, query types.Even
 	if query.WorkspaceID != "" && record.WorkspaceID != query.WorkspaceID {
 		return false
 	}
+	if len(query.ExcludeActions) > 0 && eventRecordActionExcluded(record, query.ExcludeActions) {
+		return false
+	}
 	if query.StubID != "" && record.StubID != query.StubID {
 		return false
 	}
@@ -971,6 +1067,26 @@ func eventRecordMatchesQuery(record types.ContainerEventRecord, query types.Even
 		return false
 	}
 	return true
+}
+
+// eventRecordActionExcluded reports whether the record's payload "action"
+// field matches one of the excluded actions.
+func eventRecordActionExcluded(record types.ContainerEventRecord, excludeActions []string) bool {
+	if len(record.Data) == 0 {
+		return false
+	}
+	var payload struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(record.Data, &payload); err != nil || payload.Action == "" {
+		return false
+	}
+	for _, action := range excludeActions {
+		if strings.TrimSpace(action) == payload.Action {
+			return true
+		}
+	}
+	return false
 }
 
 func s2TimestampMillisToNanos(timestamp uint64) uint64 {
@@ -1099,9 +1215,13 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	}
 	if isComputeEvent(eventType) && metadata.WorkspaceID != "" {
 		// Workspace stream powers the live workspace SSE; the compute stream keeps
-		// a dense history for fast compute-only history queries.
+		// a dense history for fast compute-only history queries. Heartbeats fire
+		// every few seconds per machine and would drown out lifecycle events in
+		// the history stream, so they only go to the live workspace stream.
 		add(r.workspaceStreamName(metadata.WorkspaceID))
-		add(r.workspaceComputeStreamName(metadata.WorkspaceID))
+		if metadata.Action != types.EventComputeActionMachineHeartbeat {
+			add(r.workspaceComputeStreamName(metadata.WorkspaceID))
+		}
 	}
 	if isTaskEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))

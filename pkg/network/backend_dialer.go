@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -24,6 +25,9 @@ type BackendDialer struct {
 	tsConfig  types.TailscaleConfig
 	resolver  BackendRouteResolver
 	timeout   time.Duration
+
+	// tsnetDial overrides the tsnet dial in tests.
+	tsnetDial func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error)
 }
 
 func NewBackendDialer(tailscale *Tailscale, tsConfig types.TailscaleConfig, resolver BackendRouteResolver, timeout time.Duration) *BackendDialer {
@@ -74,14 +78,77 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 		if d.tailscale == nil {
 			return nil, fmt.Errorf("tailscale dialer is unavailable for backend route %s", routeID)
 		}
-		conn, err := d.tailscale.DialContextTimeout(ctx, "tcp", route.ProxyTarget, remaining)
-		if err != nil {
-			return nil, err
-		}
-		return writeBackendRoutePreface(conn, routeID)
+		return d.dialTSNetRoute(ctx, route, routeID, deadline)
 	default:
 		return nil, fmt.Errorf("unsupported backend route transport %q", route.Transport)
 	}
+}
+
+// dialTSNetRoute connects to the agent's tsnet proxy target. It first
+// confirms the agent peer is visible in this node's netmap (a MagicDNS dial
+// for an unknown peer silently falls back to the system resolver and fails
+// with a misleading NXDOMAIN), then dials, retrying transient failures until
+// the dial budget is exhausted so single blips never surface to callers.
+func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
+	host := tailnetHostFromAddr(route.ProxyTarget)
+	var lastErr error
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return nil, fmt.Errorf("backend route %s dial timed out: %w", routeID, lastErr)
+			}
+			return nil, fmt.Errorf("backend route %s dial timed out", routeID)
+		}
+
+		if host != "" {
+			// Leave headroom for the dial itself: a peer that appears at the
+			// very end of the budget still needs time to handshake.
+			waitBudget := remaining - tsnetDialReserve(remaining)
+			if err := d.tailscale.WaitForPeer(ctx, host, waitBudget); err != nil {
+				return nil, fmt.Errorf("backend route %s: %w", routeID, err)
+			}
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				continue
+			}
+		}
+
+		conn, err := d.dialTSNetTarget(ctx, route.ProxyTarget, remaining)
+		if err == nil {
+			return writeBackendRoutePreface(conn, routeID)
+		}
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backendRouteReadyPollInterval):
+		}
+	}
+}
+
+func (d *BackendDialer) dialTSNetTarget(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+	if d.tsnetDial != nil {
+		return d.tsnetDial(ctx, addr, timeout)
+	}
+	return d.tailscale.DialContextTimeout(ctx, "tcp", addr, timeout)
+}
+
+// tsnetDialReserve is how much of the remaining dial budget is held back for
+// the connect itself when waiting for the peer to appear in the netmap.
+func tsnetDialReserve(remaining time.Duration) time.Duration {
+	reserve := remaining / 3
+	if reserve > 2*time.Second {
+		reserve = 2 * time.Second
+	}
+	if reserve < 100*time.Millisecond {
+		reserve = 100 * time.Millisecond
+	}
+	if reserve > remaining {
+		reserve = remaining
+	}
+	return reserve
 }
 
 // resolveReadyRoute returns the backend route once it is ready to accept
@@ -130,4 +197,17 @@ func writeBackendRoutePreface(conn net.Conn, routeID string) (net.Conn, error) {
 		return nil, err
 	}
 	return conn, nil
+}
+
+// tailnetHostFromAddr extracts the bare host from a "host:port" proxy target.
+func tailnetHostFromAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return strings.TrimSuffix(host, ".")
 }
