@@ -253,14 +253,13 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 
 	matchesNewestFirst := make([]types.LogRecord, 0, targetMatches)
 	recordsScanned := uint64(0)
+	scannedFromTail := uint64(0)
 	exhausted := false
-	for tailOffset := int64(chunkSize); tailOffset <= int64(tail.Tail.SeqNum) && recordsScanned < s2LogPageScanLimit; tailOffset += int64(chunkSize) {
-		if tailOffset > int64(tail.Tail.SeqNum) {
-			tailOffset = int64(tail.Tail.SeqNum)
-		}
-		count := chunkSize
+	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < s2LogPageScanLimit {
+		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
+		tailOffsetValue := int64(tailOffset)
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			TailOffset: &tailOffset,
+			TailOffset: &tailOffsetValue,
 			Count:      &count,
 		})
 		if err != nil {
@@ -273,6 +272,7 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 			break
 		}
 		recordsScanned += uint64(len(batch.Records))
+		scannedFromTail = tailOffset
 
 		for i := len(batch.Records) - 1; i >= 0; i-- {
 			logRecord, ok := logRecordFromS2(batch.Records[i])
@@ -284,7 +284,7 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 				break
 			}
 		}
-		exhausted = uint64(len(batch.Records)) < chunkSize || tailOffset == int64(tail.Tail.SeqNum)
+		exhausted = uint64(len(batch.Records)) < count || scannedFromTail == tail.Tail.SeqNum
 		if len(matchesNewestFirst) >= targetMatches || exhausted {
 			break
 		}
@@ -306,6 +306,18 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		filteredTotal = targetMatches + 1
 	}
 	return filteredTotal, logs, nil
+}
+
+// nextTailReadWindow returns the next tail offset and record count for scanning
+// a stream backwards from the tail in chunkSize windows. The count is clamped to
+// the unscanned remainder so the final (oldest) window does not re-read records
+// that earlier windows already covered.
+func nextTailReadWindow(scannedFromTail, tailSeqNum, chunkSize uint64) (uint64, uint64) {
+	tailOffset := tailSeqNum
+	if chunkSize != 0 && scannedFromTail+chunkSize < tailSeqNum {
+		tailOffset = scannedFromTail + chunkSize
+	}
+	return tailOffset, tailOffset - scannedFromTail
 }
 
 func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
@@ -339,19 +351,26 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 	if eventRecord.Type != types.EventContainerLog {
 		return types.LogRecord{}, false
 	}
+	var entry types.EventContainerLogSchema
+	if err := json.Unmarshal(eventRecord.Data, &entry); err != nil || entry.Line == "" {
+		return types.LogRecord{}, false
+	}
+	if !entry.Timestamp.IsZero() {
+		timestamp = entry.Timestamp
+	}
 	return types.LogRecord{
 		SeqNum:      eventRecord.SeqNum,
 		StoredAtNs:  eventRecord.StoredAtNs,
 		Timestamp:   timestamp,
-		Message:     eventRecord.Line,
-		Stream:      eventRecord.Stream,
-		ContainerID: eventRecord.ContainerID,
-		StubID:      eventRecord.StubID,
-		StubType:    eventRecord.StubType,
-		TaskID:      eventRecord.TaskID,
-		WorkspaceID: eventRecord.WorkspaceID,
-		AppID:       eventRecord.AppID,
-		WorkerID:    eventRecord.WorkerID,
+		Message:     entry.Line,
+		Stream:      entry.Stream,
+		ContainerID: firstNonEmpty(entry.ContainerID, eventRecord.ContainerID),
+		StubID:      firstNonEmpty(entry.StubID, eventRecord.StubID),
+		StubType:    entry.StubType,
+		TaskID:      firstNonEmpty(entry.TaskID, eventRecord.TaskID),
+		WorkspaceID: firstNonEmpty(entry.WorkspaceID, eventRecord.WorkspaceID),
+		AppID:       firstNonEmpty(entry.AppID, eventRecord.AppID),
+		WorkerID:    firstNonEmpty(entry.WorkerID, eventRecord.WorkerID),
 	}, true
 }
 

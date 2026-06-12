@@ -463,6 +463,24 @@ func TestResolveLogStreamsUsesAliasForUnscopedContainerIDWithoutPrefixList(t *te
 	}
 }
 
+func TestNextTailReadWindow(t *testing.T) {
+	// Streams shorter than the chunk size must still be read in full.
+	if offset, count := nextTailReadWindow(0, 2, 100); offset != 2 || count != 2 {
+		t.Fatalf("unexpected short stream window: got offset=%d count=%d want offset=2 count=2", offset, count)
+	}
+	if offset, count := nextTailReadWindow(0, 250, 100); offset != 100 || count != 100 {
+		t.Fatalf("unexpected first window: got offset=%d count=%d want offset=100 count=100", offset, count)
+	}
+	// The final (oldest) window must clamp count so already scanned records
+	// are not re-read and returned as duplicates.
+	if offset, count := nextTailReadWindow(200, 250, 100); offset != 250 || count != 50 {
+		t.Fatalf("unexpected final window: got offset=%d count=%d want offset=250 count=50", offset, count)
+	}
+	if offset, count := nextTailReadWindow(0, 250, 0); offset != 250 || count != 250 {
+		t.Fatalf("unexpected zero chunk window: got offset=%d count=%d want offset=250 count=250", offset, count)
+	}
+}
+
 func TestS2ContainerLogRecordUsesLogTimestamp(t *testing.T) {
 	logAt := time.Date(2026, 5, 28, 12, 30, 0, 123000000, time.UTC)
 	eventRepo := &EventClientRepo{}
@@ -491,6 +509,55 @@ func TestS2ContainerLogRecordUsesLogTimestamp(t *testing.T) {
 	}
 	if got, want := *record.Timestamp, uint64(logAt.UnixMilli()); got != want {
 		t.Fatalf("unexpected s2 timestamp: got %d want %d", got, want)
+	}
+}
+
+func TestLogRecordFromS2ExtractsLineFromEventData(t *testing.T) {
+	logAt := time.Date(2026, 6, 12, 21, 38, 7, 0, time.UTC)
+	eventRepo := &EventClientRepo{}
+	event, err := eventRepo.createEventObject(types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		Timestamp:   logAt,
+		ContainerID: "container-789",
+		StubID:      "stub-456",
+		StubType:    "asgi",
+		TaskID:      "task-123",
+		WorkspaceID: "workspace-123",
+		AppID:       "app-123",
+		WorkerID:    "worker-1",
+		Stream:      "stdout",
+		Line:        "Starting gunicorn 22.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logRecord, ok := logRecordFromS2(s2.SequencedRecord{SeqNum: 7, Timestamp: uint64(logAt.UnixMilli()), Body: body})
+	if !ok {
+		t.Fatal("expected container log record to be accepted")
+	}
+	if got, want := logRecord.Message, "Starting gunicorn 22.0.0"; got != want {
+		t.Fatalf("unexpected log message: got %q want %q", got, want)
+	}
+	if got, want := logRecord.Stream, "stdout"; got != want {
+		t.Fatalf("unexpected log stream: got %q want %q", got, want)
+	}
+	if got, want := logRecord.ContainerID, "container-789"; got != want {
+		t.Fatalf("unexpected container id: got %q want %q", got, want)
+	}
+	if got, want := logRecord.TaskID, "task-123"; got != want {
+		t.Fatalf("unexpected task id: got %q want %q", got, want)
+	}
+	if !logRecord.Timestamp.Equal(logAt) {
+		t.Fatalf("unexpected timestamp: got %s want %s", logRecord.Timestamp, logAt)
+	}
+
+	// Records without a log line (e.g. malformed or non-log events) are skipped.
+	if _, ok := logRecordFromS2(s2.SequencedRecord{Body: []byte(`{"type":"container.log","data":{}}`)}); ok {
+		t.Fatal("expected record without a line to be rejected")
 	}
 }
 

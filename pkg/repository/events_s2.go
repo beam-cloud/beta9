@@ -616,12 +616,8 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 	var recordsScanned uint64
 	var scannedFromTail uint64
 	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
-		tailOffset := scannedFromTail + chunkSize
-		if tailOffset > tail.Tail.SeqNum {
-			tailOffset = tail.Tail.SeqNum
-		}
+		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
 		tailOffsetValue := int64(tailOffset)
-		count := chunkSize
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
 			TailOffset: &tailOffsetValue,
 			Count:      &count,
@@ -712,6 +708,7 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
 				continue
 			}
+			augmentContainerEventResponse(&types.ContainerEventsResponse{}, &eventRecord)
 			response.Events = append(response.Events, eventRecord)
 			if uint64(len(response.Events)) >= limit {
 				break
@@ -752,6 +749,7 @@ func (s *s2EventStream) Next() bool {
 			if !ok || !eventRecordMatchesQuery(eventRecord, s.query) {
 				continue
 			}
+			augmentContainerEventResponse(s.response, &eventRecord)
 			s.current = eventRecord
 			return true
 		}
