@@ -53,16 +53,6 @@ type container struct {
 	inFlightRequests int
 }
 
-type backendReadinessSnapshot struct {
-	Total       int       `json:"total_containers"`
-	Ready       int       `json:"ready_containers"`
-	Running     int       `json:"running_containers"`
-	Pending     int       `json:"pending_containers"`
-	Stopping    int       `json:"stopping_containers"`
-	Other       int       `json:"other_containers"`
-	LastUpdated time.Time `json:"last_updated"`
-}
-
 type backendTransportKey struct {
 	address string
 	timeout time.Duration
@@ -82,8 +72,6 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[*request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
-	backendReadiness        backendReadinessSnapshot
-	backendReadinessLock    sync.RWMutex
 	maxTokens               int
 	isASGI                  bool
 	keyEventManager         *common.KeyEventManager
@@ -201,7 +189,9 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 		case <-waitTimer.C:
 			req.abandoned.Store(true)
 			rb.cancelInFlightTask(req.task, types.TaskExpired)
-			ctx.JSON(http.StatusGatewayTimeout, rb.backendUnavailableResponse())
+			ctx.JSON(http.StatusGatewayTimeout, map[string]interface{}{
+				"error": "Timed out waiting for a backend container",
+			})
 			return nil
 		case <-done:
 			return nil
@@ -286,23 +276,9 @@ func (rb *RequestBuffer) discoverContainers() {
 
 			var wg sync.WaitGroup
 			availableContainersChan := make(chan container, len(containerStates))
-			readiness := backendReadinessSnapshot{
-				Total:       len(containerStates),
-				LastUpdated: time.Now().UTC(),
-			}
 
 			for _, containerState := range containerStates {
 				wg.Add(1)
-				switch containerState.Status {
-				case types.ContainerStatusRunning:
-					readiness.Running++
-				case types.ContainerStatusPending:
-					readiness.Pending++
-				case types.ContainerStatusStopping:
-					readiness.Stopping++
-				default:
-					readiness.Other++
-				}
 
 				go func(cs types.ContainerState) {
 					defer wg.Done()
@@ -344,7 +320,6 @@ func (rb *RequestBuffer) discoverContainers() {
 			for c := range availableContainersChan {
 				availableContainers = append(availableContainers, c)
 			}
-			readiness.Ready = len(availableContainers)
 
 			// Sort availableContainers by # of in-flight requests (ascending)
 			sort.Slice(availableContainers, func(i, j int) bool {
@@ -354,33 +329,10 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainersLock.Lock()
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
-			rb.setBackendReadiness(readiness)
 			rb.pruneBackendTransports(availableContainers)
 
 			time.Sleep(readyCheckInterval)
 		}
-	}
-}
-
-func (rb *RequestBuffer) setBackendReadiness(snapshot backendReadinessSnapshot) {
-	rb.backendReadinessLock.Lock()
-	rb.backendReadiness = snapshot
-	rb.backendReadinessLock.Unlock()
-}
-
-func (rb *RequestBuffer) backendUnavailableResponse() map[string]interface{} {
-	rb.backendReadinessLock.RLock()
-	snapshot := rb.backendReadiness
-	rb.backendReadinessLock.RUnlock()
-
-	message := "No backend containers available"
-	if snapshot.Total > 0 {
-		message = "Backend containers are still starting"
-	}
-
-	return map[string]interface{}{
-		"error":   message,
-		"backend": snapshot,
 	}
 }
 
