@@ -61,7 +61,7 @@ func TestScopedTelemetryConfigUsesWorkspaceWriteOnlyPrefixes(t *testing.T) {
 		t.Fatalf("expected two issued tokens, got %d", len(issuer.args))
 	}
 
-	wantOps := []string{s2.OperationAppend, s2.OperationCreateStream}
+	wantOps := []string{s2.OperationAppend}
 	for _, args := range issuer.args {
 		if args.Scope.Basins == nil || args.Scope.Basins.Exact == nil || *args.Scope.Basins.Exact != "events-basin" {
 			t.Fatalf("unexpected basin scope: %#v", args.Scope.Basins)

@@ -797,6 +797,49 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 	return nil
 }
 
+func (c *ContainerRedisRepository) CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+	if quota == nil {
+		return nil
+	}
+
+	if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
+		return err
+	}
+
+	reason, err := c.checkContainerConcurrencyLimit(quota, request)
+	if errors.Is(err, errConcurrencyCounterRepairing) {
+		if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
+			return err
+		}
+		reason, err = c.checkContainerConcurrencyLimit(quota, request)
+	}
+	if err == nil {
+		return nil
+	}
+
+	var throttled *types.ThrottledByConcurrencyLimitError
+	if !errors.As(err, &throttled) {
+		return err
+	}
+
+	repaired, repairErr := c.repairWorkspaceConcurrencyCounterAfterThrottle(request.WorkspaceId)
+	if repairErr != nil {
+		return repairErr
+	}
+	if repaired {
+		reason, err = c.checkContainerConcurrencyLimit(quota, request)
+	}
+	if err != nil && reason != "" {
+		var finalThrottle *types.ThrottledByConcurrencyLimitError
+		if !errors.As(err, &finalThrottle) {
+			return err
+		}
+		metrics.RecordConcurrencyLimitThrottle(reason, request)
+	}
+
+	return err
+}
+
 func (c *ContainerRedisRepository) reserveContainerConcurrency(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
 		return err
@@ -835,6 +878,47 @@ func (c *ContainerRedisRepository) reserveContainerConcurrency(quota *types.Conc
 	}
 
 	return err
+}
+
+func (c *ContainerRedisRepository) checkContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) (string, error) {
+	ctx := context.TODO()
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId)
+
+	initialized, err := c.rdb.HGet(ctx, usageKey, "initialized").Result()
+	if err != nil && err != redis.Nil {
+		return "", err
+	}
+	if err == redis.Nil || initialized != concurrencyCounterInitialized {
+		return "repairing", errConcurrencyCounterRepairing
+	}
+
+	usedGpuCount, err := c.workspaceConcurrencyUsageValue(ctx, usageKey, "gpu_count")
+	if err != nil {
+		return "", err
+	}
+
+	usedCpu, err := c.workspaceConcurrencyUsageValue(ctx, usageKey, "cpu")
+	if err != nil {
+		return "", err
+	}
+
+	if usedGpuCount+int64(request.GpuCount) > int64(quota.GPULimit) {
+		return "gpu", &types.ThrottledByConcurrencyLimitError{Reason: "gpu quota exceeded"}
+	}
+
+	if usedCpu+request.Cpu > int64(quota.CPUMillicoreLimit) {
+		return "cpu", &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
+	}
+
+	return "", nil
+}
+
+func (c *ContainerRedisRepository) workspaceConcurrencyUsageValue(ctx context.Context, usageKey, field string) (int64, error) {
+	value, err := c.rdb.HGet(ctx, usageKey, field).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return value, err
 }
 
 func (c *ContainerRedisRepository) ensureWorkspaceConcurrencyCounter(workspaceId string) error {

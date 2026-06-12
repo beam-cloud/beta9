@@ -20,6 +20,7 @@ const (
 	defaultS2LogReadLimit = 100
 	maxS2LogReadLimit     = 1000
 	s2MetricsReadLimit    = 1000
+	s2LogPageScanLimit    = 50000
 )
 
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
@@ -240,30 +241,71 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		return total, []types.LogRecord{}, nil
 	}
 
-	tailOffset := int64((query.Page + 1) * limit)
-	if tailOffset > int64(tail.Tail.SeqNum) {
-		tailOffset = int64(tail.Tail.SeqNum)
+	targetMatches := int((query.Page + 1) * limit)
+	skipMatches := int(query.Page * limit)
+	chunkSize := limit
+	if chunkSize < defaultS2LogReadLimit {
+		chunkSize = defaultS2LogReadLimit
 	}
-	batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-		TailOffset: &tailOffset,
-		Count:      &limit,
-	})
-	if err != nil {
-		if isS2ReadEmpty(err) {
-			return total, []types.LogRecord{}, nil
-		}
-		return 0, nil, fmt.Errorf("read logs from s2 stream %q: %w", streamName, err)
+	if chunkSize > maxS2LogReadLimit {
+		chunkSize = maxS2LogReadLimit
 	}
 
-	logs := make([]types.LogRecord, 0, len(batch.Records))
-	for _, record := range batch.Records {
-		logRecord, ok := logRecordFromS2(record)
-		if !ok || !logRecordMatchesQuery(logRecord, query) {
-			continue
+	matchesNewestFirst := make([]types.LogRecord, 0, targetMatches)
+	recordsScanned := uint64(0)
+	exhausted := false
+	for tailOffset := int64(chunkSize); tailOffset <= int64(tail.Tail.SeqNum) && recordsScanned < s2LogPageScanLimit; tailOffset += int64(chunkSize) {
+		if tailOffset > int64(tail.Tail.SeqNum) {
+			tailOffset = int64(tail.Tail.SeqNum)
 		}
-		logs = append(logs, logRecord)
+		count := chunkSize
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
+			TailOffset: &tailOffset,
+			Count:      &count,
+		})
+		if err != nil {
+			if isS2ReadEmpty(err) {
+				break
+			}
+			return 0, nil, fmt.Errorf("read logs from s2 stream %q: %w", streamName, err)
+		}
+		if len(batch.Records) == 0 {
+			break
+		}
+		recordsScanned += uint64(len(batch.Records))
+
+		for i := len(batch.Records) - 1; i >= 0; i-- {
+			logRecord, ok := logRecordFromS2(batch.Records[i])
+			if !ok || !logRecordMatchesQuery(logRecord, query) {
+				continue
+			}
+			matchesNewestFirst = append(matchesNewestFirst, logRecord)
+			if len(matchesNewestFirst) >= targetMatches {
+				break
+			}
+		}
+		exhausted = uint64(len(batch.Records)) < chunkSize || tailOffset == int64(tail.Tail.SeqNum)
+		if len(matchesNewestFirst) >= targetMatches || exhausted {
+			break
+		}
 	}
-	return total, logs, nil
+
+	if skipMatches >= len(matchesNewestFirst) {
+		return len(matchesNewestFirst), []types.LogRecord{}, nil
+	}
+	end := targetMatches
+	if end > len(matchesNewestFirst) {
+		end = len(matchesNewestFirst)
+	}
+	logs := append([]types.LogRecord(nil), matchesNewestFirst[skipMatches:end]...)
+	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
+		logs[i], logs[j] = logs[j], logs[i]
+	}
+	filteredTotal := len(matchesNewestFirst)
+	if !exhausted && len(matchesNewestFirst) >= targetMatches {
+		filteredTotal = targetMatches + 1
+	}
+	return filteredTotal, logs, nil
 }
 
 func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {

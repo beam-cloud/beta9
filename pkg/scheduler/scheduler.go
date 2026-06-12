@@ -288,6 +288,15 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 	return quota, nil
 }
 
+func (s *Scheduler) CheckConcurrencyLimit(request *types.ContainerRequest) error {
+	quota, err := s.getConcurrencyLimit(request)
+	if err != nil {
+		return err
+	}
+
+	return s.containerRepo.CheckContainerConcurrencyLimit(quota, request)
+}
+
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
 	reason := types.NormalizeEventReason(string(stopArgs.Reason))

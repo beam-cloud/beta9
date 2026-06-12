@@ -56,6 +56,10 @@ func (i *podInstance) startContainers(containersToRun int) error {
 	}
 
 	for c := 0; c < containersToRun; c++ {
+		if err := i.CheckConcurrencyLimit(); err != nil {
+			return err
+		}
+
 		containerId := i.genContainerId()
 		mounts, err := abstractions.ConfigureContainerRequestMounts(
 			containerId,

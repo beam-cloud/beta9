@@ -142,6 +142,76 @@ func TestSetContainerStateWithConcurrencyLimitAllowsOnlyQuotaUnderParallelLoad(t
 	}
 }
 
+func TestCheckContainerConcurrencyLimitRejectsWithoutReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-check-first", "test-workspace", 100)
+	secondRequest := testContainerRequest("sandbox-test-stub-check-second", "test-workspace", 1)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.CheckContainerConcurrencyLimit(quota, secondRequest)
+	var throttled *types.ThrottledByConcurrencyLimitError
+	if !errors.As(err, &throttled) {
+		t.Fatalf("expected preflight to throttle second request, got %v", err)
+	}
+
+	if _, err := repo.GetContainerState(secondRequest.ContainerId); err == nil {
+		t.Fatal("expected preflight not to create container state")
+	}
+
+	reservationExists, err := rdb.Exists(
+		context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservation(secondRequest.WorkspaceId, secondRequest.ContainerId),
+	).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reservationExists != 0 {
+		t.Fatal("expected preflight not to create a concurrency reservation")
+	}
+}
+
+func TestCheckContainerConcurrencyLimitDoesNotReserveCapacity(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-check-capacity-first", "test-workspace", 40)
+	secondRequest := testContainerRequest("sandbox-test-stub-check-capacity-second", "test-workspace", 60)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.CheckContainerConcurrencyLimit(quota, secondRequest); err != nil {
+		t.Fatalf("expected preflight to allow second request, got %v", err)
+	}
+
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
+	usedCPU, err := rdb.HGet(context.Background(), usageKey, "cpu").Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedCPU != firstRequest.Cpu {
+		t.Fatalf("expected preflight not to reserve CPU, got %d", usedCPU)
+	}
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+		t.Fatalf("expected authoritative reservation to admit second request, got %v", err)
+	}
+}
+
 func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

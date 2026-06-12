@@ -167,7 +167,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	if unresolvedEndpointCandidates > 0 && verifiedEndpoints == 0 {
 		Logger.Warnf("cache host discovery found %d endpoint candidates across %d unresolved hosts for locality %s, but none verified reachable (last_error=%v)", unresolvedEndpointCandidates, unresolvedHosts, d.locality, lastVerifyErr)
 	} else if unresolvedCandidates > 0 && unresolvedEndpointCandidates == 0 {
-		Logger.Warnf("cache host discovery found %d unresolved logical hosts for locality %s, but none had an active endpoint", unresolvedHosts, d.locality)
+		Logger.Debugf("cache host discovery found %d unresolved logical hosts for locality %s, but none had an active endpoint", unresolvedHosts, d.locality)
 	}
 	return selectedHosts, nil
 }

@@ -26,18 +26,22 @@ const (
 	// will page through. Required content is coalesced to a small number of events
 	// per stub, so this is far above realistic sizes; it exists only to guarantee
 	// the read terminates even if the stream is continuously appended.
-	maxStubCacheReadRecords = 200000
-	s2EventHistoryReadLimit = uint64(1000)
-	s2EventQueueSize        = 16384
-	s2EventBatchSize        = 256
-	s2EventWriteTimeout     = 5 * time.Second
-	s2EventEnqueueTimeout   = 250 * time.Millisecond
-	s2EventFlushInterval    = 100 * time.Millisecond
-	s2StreamResumeDelay     = time.Second
-	s2ScopedWriteWarnEvery  = time.Minute
+	maxStubCacheReadRecords   = 200000
+	s2EventHistoryReadLimit   = uint64(1000)
+	s2EventQueueSize          = 16384
+	s2EventBatchSize          = 256
+	s2EventWriteTimeout       = 5 * time.Second
+	s2EventEnqueueTimeout     = 250 * time.Millisecond
+	s2EventFlushInterval      = 100 * time.Millisecond
+	s2StreamResumeDelay       = time.Second
+	s2ScopedWriteWarnEvery    = time.Minute
+	s2EventAggregateScanLimit = 50000
 )
 
-var lastScopedS2WriteWarning atomic.Int64
+var (
+	lastS2WriteWarning       atomic.Int64
+	lastScopedS2WriteWarning atomic.Int64
+)
 
 type S2EventRepository struct {
 	basin              *s2.BasinClient
@@ -197,16 +201,24 @@ func (r *ScopedS2EventRepository) runWriter() {
 }
 
 func warnScopedS2WriteFailure(err error, eventCount int) {
+	warnS2WriteFailureWith(&lastScopedS2WriteWarning, err, eventCount, "failed to append scoped event batch to s2")
+}
+
+func warnS2WriteFailure(err error, eventCount int) {
+	warnS2WriteFailureWith(&lastS2WriteWarning, err, eventCount, "failed to append event batch to s2")
+}
+
+func warnS2WriteFailureWith(lastWarning *atomic.Int64, err error, eventCount int, message string) {
 	now := time.Now()
-	last := lastScopedS2WriteWarning.Load()
+	last := lastWarning.Load()
 	if last != 0 && now.Sub(time.Unix(0, last)) < s2ScopedWriteWarnEvery {
 		return
 	}
-	if !lastScopedS2WriteWarning.CompareAndSwap(last, now.UnixNano()) {
+	if !lastWarning.CompareAndSwap(last, now.UnixNano()) {
 		return
 	}
 
-	log.Warn().Err(err).Int("event_count", eventCount).Msg("failed to append scoped event batch to s2")
+	log.Warn().Err(err).Int("event_count", eventCount).Msg(message)
 }
 
 func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) error {
@@ -302,7 +314,7 @@ func (r *S2EventRepository) runWriter() {
 			return
 		}
 		if err := r.appendEventBatch(batch); err != nil {
-			log.Debug().Err(err).Int("event_count", len(batch)).Msg("failed to append event batch to s2")
+			warnS2WriteFailure(err, len(batch))
 		}
 		batch = batch[:0]
 	}
@@ -390,6 +402,7 @@ func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID 
 	if limit == 0 {
 		limit = defaultS2EventReadLimit
 	}
+	query.ContainerID = containerID
 
 	streams, err := r.resolveContainerStreams(ctx, containerID, query)
 	if err != nil {
@@ -462,6 +475,7 @@ func (r *S2EventRepository) StreamContainerEvents(ctx context.Context, container
 		return nil, fmt.Errorf("workspace id and stub id are required to stream container events")
 	}
 
+	query.ContainerID = containerID
 	streamName := r.containerStreamName(query.WorkspaceID, query.StubID, containerID)
 	return r.streamEvents(ctx, streamName, containerID, query)
 }
@@ -480,8 +494,7 @@ func (r *S2EventRepository) StreamTaskEvents(ctx context.Context, query types.Ev
 		return nil, fmt.Errorf("task id is required to stream task events")
 	}
 
-	streamName := r.taskStreamName(query.TaskID)
-	return r.streamEvents(ctx, streamName, "", query)
+	return r.streamEvents(ctx, r.taskStreamName(query.TaskID), "", query)
 }
 
 func (r *S2EventRepository) StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
@@ -578,25 +591,64 @@ func allComputeEventTypes(eventTypes []string) bool {
 }
 
 func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName s2.StreamName, limit uint64, query types.EventQuery, response *types.ContainerEventsResponse) error {
-	seqNum := uint64(0)
-	batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-		SeqNum: &seqNum,
-		Count:  &limit,
-	})
+	response.Streams = append(response.Streams, string(streamName))
+
+	tail, err := r.basin.Stream(streamName).CheckTail(ctx)
 	if err != nil {
 		if isS2ReadEmpty(err) {
 			return nil
 		}
-		return fmt.Errorf("read container events from s2 stream %q: %w", streamName, err)
+		return fmt.Errorf("check tail for container events s2 stream %q: %w", streamName, err)
+	}
+	if tail.Tail.SeqNum == 0 {
+		return nil
 	}
 
-	response.Streams = append(response.Streams, string(streamName))
-	for _, record := range batch.Records {
-		eventRecord, ok := containerEventRecordFromS2(record, query, response)
-		if !ok {
-			continue
+	chunkSize := uint64(s2EventHistoryReadLimit)
+	if chunkSize == 0 {
+		chunkSize = 1000
+	}
+	scanLimit := uint64(s2EventAggregateScanLimit)
+	if limit > scanLimit {
+		scanLimit = limit
+	}
+
+	var recordsScanned uint64
+	var scannedFromTail uint64
+	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < scanLimit && uint64(len(response.Events)) < limit {
+		tailOffset := scannedFromTail + chunkSize
+		if tailOffset > tail.Tail.SeqNum {
+			tailOffset = tail.Tail.SeqNum
 		}
-		response.Events = append(response.Events, eventRecord)
+		tailOffsetValue := int64(tailOffset)
+		count := chunkSize
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
+			TailOffset: &tailOffsetValue,
+			Count:      &count,
+		})
+		if err != nil {
+			if isS2ReadEmpty(err) {
+				return nil
+			}
+			return fmt.Errorf("read container events from s2 stream %q: %w", streamName, err)
+		}
+		if len(batch.Records) == 0 {
+			return nil
+		}
+		recordsScanned += uint64(len(batch.Records))
+		scannedFromTail = tailOffset
+
+		for i := len(batch.Records) - 1; i >= 0; i-- {
+			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, response)
+			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
+				continue
+			}
+			augmentContainerEventResponse(response, &eventRecord)
+			response.Events = append(response.Events, eventRecord)
+			if uint64(len(response.Events)) >= limit {
+				break
+			}
+		}
 	}
 	return nil
 }
@@ -697,7 +749,7 @@ func (s *s2EventStream) Next() bool {
 			record := s.session.Record()
 			s.setNextSeqNum(record.SeqNum + 1)
 			eventRecord, ok := containerEventRecordFromS2(record, s.query, s.response)
-			if !ok {
+			if !ok || !eventRecordMatchesQuery(eventRecord, s.query) {
 				continue
 			}
 			s.current = eventRecord
@@ -847,7 +899,6 @@ func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuer
 	if !eventQueryAllowsType(query, eventRecord.Type) {
 		return types.ContainerEventRecord{}, false
 	}
-	augmentContainerEventResponse(response, &eventRecord)
 	if eventRecord.ContainerID == "" {
 		eventRecord.ContainerID = envelope.ContainerID
 	}
@@ -1166,7 +1217,7 @@ func (r *S2EventRepository) containerAliasStreamName(workspaceID, containerID st
 }
 
 func (r *S2EventRepository) taskStreamName(taskID string) s2.StreamName {
-	return s2.StreamName(fmt.Sprintf("%s/tasks/%s", r.streamPrefix, taskID))
+	return s2.StreamName(fmt.Sprintf("%s/tasks/%s", r.streamPrefix, eventStreamPart(taskID)))
 }
 
 func (r *S2EventRepository) workerStreamName(workerID string) s2.StreamName {

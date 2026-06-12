@@ -964,9 +964,6 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 
 	Logger.Debugf("StoreFromContent[OK] - [%s]", hash)
 
-	// HOTFIX: Manually trigger garbage collection
-	go runtime.GC()
-
 	return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: hash}, nil
 }
 

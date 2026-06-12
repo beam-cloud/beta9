@@ -263,6 +263,30 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	return err
 }
 
+func (i *AutoscaledInstance) CheckConcurrencyLimit() error {
+	if i.Scheduler == nil || i.StubConfig == nil || i.Workspace == nil {
+		return nil
+	}
+
+	gpuCount := i.StubConfig.Runtime.GpuCount
+	if i.StubConfig.RequiresGPU() && gpuCount == 0 {
+		gpuCount = 1
+	}
+
+	request := &types.ContainerRequest{
+		Cpu:         i.StubConfig.Runtime.Cpu,
+		GpuCount:    uint32(gpuCount),
+		WorkspaceId: i.Workspace.ExternalId,
+		Workspace:   *i.Workspace,
+	}
+	if i.Stub != nil {
+		request.StubId = i.Stub.ExternalId
+		request.Stub = *i.Stub
+	}
+
+	return i.Scheduler.CheckConcurrencyLimit(request)
+}
+
 // Sync updates any persistent state that can be changed on the instance.
 // If a stub has a deployment associated with it, we update the IsActive field.
 func (i *AutoscaledInstance) Sync() error {
