@@ -14,9 +14,10 @@ const ShadeformDefaultBaseURL = "https://api.shadeform.ai/v1"
 
 // shadeformAutoDeleteGrace pads the provider-side auto-delete threshold past
 // our own expiry. The control plane owns reservation lifetime (renewal, final
-// billing, termination); Shadeform's threshold is only a runaway backstop and
-// must never fire before our reconciler has had a chance to act.
-const shadeformAutoDeleteGrace = time.Hour
+// billing, termination, credit exhaustion); Shadeform's threshold is only a
+// runaway backstop in case the reconciler dies, and must never fire before
+// our reconciler has had a chance to act. Renewals keep pushing it forward.
+const shadeformAutoDeleteGrace = 7 * 24 * time.Hour
 
 type ShadeformClient struct {
 	api HTTPClient
@@ -111,15 +112,15 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 			},
 		}
 	}
-	if req.TTL > 0 || req.MaxSpendMicros > 0 {
-		autoDelete := map[string]any{}
-		if req.TTL > 0 {
-			autoDelete["date_threshold"] = time.Now().Add(req.TTL + shadeformAutoDeleteGrace).UTC().Format(time.RFC3339)
+	if req.TTL > 0 {
+		// Only a date backstop is sent. A spend_threshold is deliberately
+		// omitted: reservations renew hourly past the launch TTL, so a spend
+		// cap derived from the launch budget would kill long-running nodes
+		// (Shadeform never raises it). Spend enforcement happens in our
+		// reconciler via workspace credit checks.
+		body["auto_delete"] = map[string]any{
+			"date_threshold": time.Now().Add(req.TTL + shadeformAutoDeleteGrace).UTC().Format(time.RFC3339),
 		}
-		if req.MaxSpendMicros > 0 {
-			autoDelete["spend_threshold"] = fmt.Sprintf("%.2f", MicrosToDollars(req.MaxSpendMicros))
-		}
-		body["auto_delete"] = autoDelete
 	}
 
 	var raw map[string]any
@@ -198,7 +199,8 @@ func shadeformReservationStatus(status string) ReservationStatus {
 }
 
 // ExtendReservation pushes the renewed expiry to Shadeform's auto-delete
-// date threshold. spend_threshold is omitted so it stays unchanged.
+// date threshold, keeping the runaway backstop ahead of the reservation's
+// control-plane expiry. No spend_threshold is ever set on the instance.
 func (c *ShadeformClient) ExtendReservation(ctx context.Context, id string, expiresAt time.Time) error {
 	body := map[string]any{
 		"auto_delete": map[string]any{

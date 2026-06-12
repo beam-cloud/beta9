@@ -42,6 +42,11 @@ type ReconciliationConfig struct {
 	MaxItemsPerCycle      int   `key:"maxItemsPerCycle" json:"max_items_per_cycle"`
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
+	// MaxDiskUsagePct pauses proactive materialization on a host whose disk
+	// usage exceeds this fraction (0-1). Proactive cache fill must stop well
+	// before the kubelet's DiskPressure thresholds; demand-driven reads are
+	// unaffected.
+	MaxDiskUsagePct float64 `key:"maxDiskUsagePct" json:"max_disk_usage_pct"`
 }
 
 type DiskConfig struct {
@@ -103,8 +108,13 @@ func (c *GlobalConfig) GetLocality() string {
 }
 
 type ServerConfig struct {
-	DiskCacheDir                 string                    `key:"diskCacheDir" json:"disk_cache_dir"`
-	DiskCacheMaxUsagePct         float64                   `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
+	DiskCacheDir         string  `key:"diskCacheDir" json:"disk_cache_dir"`
+	DiskCacheMaxUsagePct float64 `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
+	// DiskCacheEvictWatermarkPct is the filesystem usage fraction (0-1) above
+	// which the store evicts least-recently-accessed content until usage
+	// falls back below the watermark. It must sit below the kubelet's
+	// DiskPressure thresholds so the node never reaches them. Defaults to 0.85.
+	DiskCacheEvictWatermarkPct   float64                   `key:"diskCacheEvictWatermarkPct" json:"disk_cache_evict_watermark_pct"`
 	ObjectTtlS                   int                       `key:"objectTtlS" json:"object_ttl_s"`
 	MaxCachePct                  int64                     `key:"maxCachePct" json:"max_cache_pct"`
 	PageSizeBytes                int64                     `key:"pageSizeBytes" json:"page_size_bytes"`

@@ -59,8 +59,18 @@ const (
 	cacheDefaultReconcileLockTTLS       = 300
 	cacheDefaultReconcileMaxStubsCycle  = 256
 	cacheDefaultReconcileMaxItemsCycle  = 32
-	cacheDefaultVolumeReportMinBytes    = 128 * 1024 * 1024
-	cacheReconcileSuccessBackoff        = time.Hour
+	// cacheDefaultReconcileMaxDiskUsagePct pauses proactive materialization
+	// before node-level DiskPressure thresholds can be reached.
+	cacheDefaultReconcileMaxDiskUsagePct = 0.75
+	// cacheReconcileOwnerGracePeriod is how long a key's HRW owner may be
+	// endpoint-less (rolling deploy, pod cycle) before its keys fail over to
+	// the next-ranked host for proactive materialization. Short blips keep
+	// ownership stable so an entire key range isn't duplicated onto peers;
+	// hosts that disappear for good also age out of the ring itself via the
+	// coordinator TTL.
+	cacheReconcileOwnerGracePeriod   = 10 * time.Minute
+	cacheDefaultVolumeReportMinBytes = 128 * 1024 * 1024
+	cacheReconcileSuccessBackoff     = time.Hour
 )
 
 type WorkerCacheManager struct {
@@ -88,6 +98,9 @@ type WorkerCacheManager struct {
 	reconcileFailures     map[string]time.Time
 	reconcileSuccessesMu  sync.Mutex
 	reconcileSuccesses    map[string]time.Time
+	ownerLastLiveMu       sync.Mutex
+	ownerLastLive         map[string]time.Time
+	reconcilePausedAt     time.Time
 	reconcileNow          chan struct{}
 	client                *cache.Client
 	server                *cache.Server
@@ -126,6 +139,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		originCredsCache:   make(map[string]*originCredentials),
 		reconcileFailures:  make(map[string]time.Time),
 		reconcileSuccesses: make(map[string]time.Time),
+		ownerLastLive:      make(map[string]time.Time),
 		reconcileNow:       make(chan struct{}, 1),
 	}
 }

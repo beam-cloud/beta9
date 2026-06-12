@@ -1017,8 +1017,10 @@ func TestRecordAgentMetricsEmitsNodeUsage(t *testing.T) {
 	if got, want := counter.name, types.UsageMetricsNodeUsage; got != want {
 		t.Fatalf("usage counter = %q, want %q", got, want)
 	}
-	if got, want := counter.value, float64(5); got != want {
-		t.Fatalf("node usage value = %f, want %f", got, want)
+	// Usage seconds are measured on the gateway clock, so allow a small delta
+	// between the test's reference time and the call's time.Now().
+	if got, want := counter.value, float64(5); got < want || got > want+1 {
+		t.Fatalf("node usage value = %f, want ~%f", got, want)
 	}
 	if got, want := counter.metadata["workspace_id"], "workspace-1"; got != want {
 		t.Fatalf("workspace metadata = %v, want %s", got, want)

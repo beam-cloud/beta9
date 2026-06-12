@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,6 +132,116 @@ func TestBackendDialerFailsFastForNonTransientStates(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > time.Second {
 			t.Fatalf("dial took %s, want fail-fast", elapsed)
 		}
+	}
+}
+
+// tsnetRouteResolver always returns a ready tsnet route.
+type tsnetRouteResolver struct {
+	proxyTarget string
+}
+
+func (f *tsnetRouteResolver) GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error) {
+	return &types.BackendRoute{
+		RouteID:     routeID,
+		State:       types.BackendRouteStateReady,
+		Transport:   types.BackendRouteTransportTSNet,
+		ProxyTarget: f.proxyTarget,
+	}, nil
+}
+
+func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
+	withFastRoutePolling(t)
+	withFastPeerPolling(t)
+
+	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
+	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-machine.tailnet.ts.net:29443"}
+
+	var attempts atomic.Int32
+	serverSide := make(chan net.Conn, 1)
+	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 2*time.Second)
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		if attempts.Add(1) < 3 {
+			return nil, context.DeadlineExceeded
+		}
+		client, server := net.Pipe()
+		serverSide <- server
+		return client, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		conn, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+		if conn != nil {
+			defer conn.Close()
+		}
+		done <- err
+	}()
+
+	// The preface is written synchronously on the pipe; consume it.
+	var server net.Conn
+	select {
+	case server = <-serverSide:
+	case err := <-done:
+		t.Fatalf("dial finished early: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("dial never reached a successful attempt")
+	}
+	buf := make([]byte, 64)
+	n, err := server.Read(buf)
+	if err != nil {
+		t.Fatalf("read preface: %v", err)
+	}
+	if got := string(buf[:n]); !strings.HasPrefix(got, BackendRoutePreface+"route-ts") {
+		t.Fatalf("preface = %q, want prefix %q", got, BackendRoutePreface+"route-ts")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("dial attempts = %d, want 3 (two transient failures retried)", got)
+	}
+}
+
+func TestBackendDialerTSNetFailsClearlyWhenPeerMissing(t *testing.T) {
+	withFastRoutePolling(t)
+	withFastPeerPolling(t)
+
+	ts := testTailscale(t, statusWithPeers("some-other-agent"))
+	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-missing.tailnet.ts.net:29443"}
+
+	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 300*time.Millisecond)
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		t.Fatal("dial must not be attempted when the peer is missing from the netmap")
+		return nil, nil
+	}
+
+	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+	if err == nil {
+		t.Fatal("dial succeeded, want netmap visibility error")
+	}
+	if !strings.Contains(err.Error(), "netmap") {
+		t.Fatalf("dial error = %v, want mention of netmap", err)
+	}
+}
+
+func TestBackendDialerTSNetExhaustsBudgetWithLastError(t *testing.T) {
+	withFastRoutePolling(t)
+	withFastPeerPolling(t)
+
+	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
+	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-machine.tailnet.ts.net:29443"}
+
+	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 200*time.Millisecond)
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+	if err == nil {
+		t.Fatal("dial succeeded, want timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("dial error = %v, want timeout wrapping the last dial error", err)
 	}
 }
 

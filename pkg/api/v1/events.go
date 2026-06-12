@@ -825,13 +825,14 @@ func eventHistoryQueryFromContext(ctx echo.Context, authInfo *auth.AuthInfo) (ty
 		return types.EventQuery{}, HTTPBadRequest("Invalid event limit")
 	}
 	query := types.EventQuery{
-		Limit:       limit,
-		WorkspaceID: requestedEventWorkspaceID(ctx, authInfo),
-		StubID:      ctx.QueryParam("stub_id"),
-		AppID:       ctx.QueryParam("app_id"),
-		TaskID:      ctx.QueryParam("task_id"),
-		ContainerID: ctx.QueryParam("container_id"),
-		EventTypes:  eventQueryTypesFromParam(ctx.QueryParam("event_types")),
+		Limit:          limit,
+		WorkspaceID:    requestedEventWorkspaceID(ctx, authInfo),
+		StubID:         ctx.QueryParam("stub_id"),
+		AppID:          ctx.QueryParam("app_id"),
+		TaskID:         ctx.QueryParam("task_id"),
+		ContainerID:    ctx.QueryParam("container_id"),
+		EventTypes:     eventQueryTypesFromParam(ctx.QueryParam("event_types")),
+		ExcludeActions: eventQueryTypesFromParam(ctx.QueryParam("exclude_actions")),
 	}
 
 	if raw := ctx.QueryParam("start_time"); raw != "" {

@@ -113,7 +113,11 @@ type PreflightCheckState struct {
 	Severity string `json:"severity"`
 }
 
-const AgentHeartbeatTimeout = 30 * time.Second
+// AgentHeartbeatTimeout is how long a machine stays "connected" after its
+// last heartbeat. Heartbeats arrive every ~5s (telemetry) and ~10s
+// (StreamAgent), so 60s tolerates brief dual-stream reconnects without
+// disabling the machine's worker and flickering its status.
+const AgentHeartbeatTimeout = 60 * time.Second
 
 func AgentMachineStatus(state *AgentTokenState, now time.Time) string {
 	if AgentMachineConnected(state, now) {
