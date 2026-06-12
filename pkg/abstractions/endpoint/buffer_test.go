@@ -98,7 +98,7 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	if err := stdjson.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["error"] != "Timed out waiting for a container" {
+	if body["error"] != "Timed out waiting for a backend container" {
 		t.Fatalf("error = %q, want timeout message", body["error"])
 	}
 }
