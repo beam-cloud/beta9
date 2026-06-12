@@ -190,7 +190,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 			req.abandoned.Store(true)
 			rb.cancelInFlightTask(req.task, types.TaskExpired)
 			ctx.JSON(http.StatusGatewayTimeout, map[string]interface{}{
-				"error": "No backend containers available",
+				"error": "Timed out waiting for a backend container",
 			})
 			return nil
 		case <-done:

@@ -21,6 +21,8 @@ from b9bench.cache_suite import Kube, find_redis_pod, redis_cli, run
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAYER_PATH = "/opt/b9bench/layer.bin"
 SHA_PATH = "/opt/b9bench/layer.sha256"
+PREFIX_SHA_PATH = "/opt/b9bench/layer.prefix.sha256"
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def utc_now() -> str:
@@ -43,8 +45,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beta9-config", default=os.getenv("BENCH_CONFIG", "~/.beta9/config.ini"))
     parser.add_argument("--output", default="/tmp/beta9-clip-layer-cache.json")
     parser.add_argument("--size-mib", type=int, default=128)
+    parser.add_argument(
+        "--read-bytes",
+        type=int,
+        default=0,
+        help="Read only the first N bytes of the layer file. 0 reads and verifies the full file.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=1200)
     parser.add_argument("--read-timeout-seconds", type=float, default=240)
+    parser.add_argument(
+        "--post-read-settle-seconds",
+        type=float,
+        default=0,
+        help="Wait after each read before collecting worker logs. Useful for asynchronous layer warm proof.",
+    )
     parser.add_argument("--cache-pool-name", default=os.getenv("BENCH_CACHE_POOL_NAME", "default"))
     parser.add_argument("--cache-locality", default=os.getenv("BENCH_CACHE_LOCALITY", "default"))
     parser.add_argument("--reset-workers-between", dest="reset_workers_between", action="store_true")
@@ -66,15 +80,18 @@ def configure_sdk(args: argparse.Namespace) -> None:
         sys.path.insert(0, str(REPO_ROOT / "sdk" / "src"))
 
 
-def deterministic_layer_command(size_mib: int, probe_id: str) -> str:
+def deterministic_layer_command(size_mib: int, probe_id: str, prefix_bytes: int) -> str:
     size = size_mib * 1024 * 1024
+    prefix_bytes = max(0, min(prefix_bytes, size))
     return f"""mkdir -p /opt/b9bench && python3 - <<'PY'
 import hashlib
 
 size = {size}
+prefix_bytes = {prefix_bytes}
 probe_id = {probe_id!r}
 path = {LAYER_PATH!r}
 sha_path = {SHA_PATH!r}
+prefix_sha_path = {PREFIX_SHA_PATH!r}
 
 def block(counter):
     seed = f"b9bench-clip-layer:{{probe_id}}:{{counter}}".encode()
@@ -86,7 +103,9 @@ def block(counter):
     return bytes(chunk[:1024 * 1024])
 
 digest = hashlib.sha256()
+prefix_digest = hashlib.sha256()
 remaining = size
+prefix_remaining = prefix_bytes
 counter = 0
 with open(path, "wb") as handle:
     while remaining:
@@ -94,14 +113,21 @@ with open(path, "wb") as handle:
         data = data[: min(len(data), remaining)]
         handle.write(data)
         digest.update(data)
+        if prefix_remaining:
+            prefix_data = data[: min(len(data), prefix_remaining)]
+            prefix_digest.update(prefix_data)
+            prefix_remaining -= len(prefix_data)
         remaining -= len(data)
         counter += 1
 with open(sha_path, "w") as handle:
     handle.write(digest.hexdigest() + "\\n")
+with open(prefix_sha_path, "w") as handle:
+    handle.write(prefix_digest.hexdigest() + "\\n")
 PY"""
 
 
-READ_CODE = r"""
+def read_code(read_bytes: int, probe_id: str) -> str:
+    return """
 import hashlib
 import json
 import os
@@ -109,35 +135,64 @@ import time
 
 path = "/opt/b9bench/layer.bin"
 sha_path = "/opt/b9bench/layer.sha256"
-expected = open(sha_path, "r", encoding="utf-8").read().strip()
+read_bytes = __READ_BYTES__
+probe_id = __PROBE_ID__
+
+def block(counter):
+    seed = f"b9bench-clip-layer:{probe_id}:{counter}".encode()
+    chunk = bytearray()
+    nonce = 0
+    while len(chunk) < 1024 * 1024:
+        chunk.extend(hashlib.sha256(seed + b":" + str(nonce).encode()).digest())
+        nonce += 1
+    return bytes(chunk[:1024 * 1024])
+
 digest = hashlib.sha256()
 size = os.path.getsize(path)
+target = min(read_bytes, size) if read_bytes else size
+if read_bytes:
+    expected_digest = hashlib.sha256()
+    expected_remaining = target
+    expected_counter = 0
+    while expected_remaining:
+        data = block(expected_counter)
+        data = data[: min(len(data), expected_remaining)]
+        expected_digest.update(data)
+        expected_remaining -= len(data)
+        expected_counter += 1
+    expected = expected_digest.hexdigest()
+else:
+    expected = open(sha_path, "r", encoding="utf-8").read().strip()
+remaining = target
 started = time.perf_counter()
 with open(path, "rb", buffering=0) as handle:
-    while True:
-        chunk = handle.read(8 * 1024 * 1024)
+    while remaining:
+        chunk = handle.read(min(8 * 1024 * 1024, remaining))
         if not chunk:
             break
         digest.update(chunk)
+        remaining -= len(chunk)
 duration = time.perf_counter() - started
 actual = digest.hexdigest()
 print(json.dumps({
     "ok": actual == expected,
     "path": path,
     "size": size,
+    "bytesRead": target - remaining,
+    "readMode": "prefix" if read_bytes else "full",
     "durationSeconds": duration,
-    "mbps": (size / 1024 / 1024) / duration if duration else 0,
+    "mbps": ((target - remaining) / 1024 / 1024) / duration if duration else 0,
     "expectedSha256": expected,
     "actualSha256": actual,
 }))
-"""
+""".replace("__READ_BYTES__", str(max(0, read_bytes))).replace("__PROBE_ID__", repr(probe_id))
 
 
 def build_probe_image(args: argparse.Namespace, probe_id: str):
     from beta9 import Image
 
     image = Image(python_version="python3.12")
-    image.add_commands([deterministic_layer_command(args.size_mib, probe_id)])
+    image.add_commands([deterministic_layer_command(args.size_mib, probe_id, args.read_bytes)])
     result = image.build()
     if not result.success:
         raise RuntimeError("failed to build CLIP layer probe image")
@@ -193,8 +248,8 @@ def wait_instance_running(instance, timeout_seconds: float) -> None:
     raise TimeoutError(f"timed out waiting for sandbox RUNNING container={container_id}; last={last}")
 
 
-def read_layer(instance, timeout_seconds: float) -> dict[str, Any]:
-    process = instance.process.exec("python3", "-c", READ_CODE, cwd="/")
+def read_layer(instance, timeout_seconds: float, read_bytes: int, probe_id: str) -> dict[str, Any]:
+    process = instance.process.exec("python3", "-c", read_code(read_bytes, probe_id), cwd="/")
     exit_code = process.wait(timeout=timeout_seconds)
     stdout = process.stdout.read()
     stderr = process.stderr.read()
@@ -267,19 +322,33 @@ def collect_worker_logs(
 
 
 def summarize_logs(lines: list[str], image_id: str) -> dict[str, Any]:
-    relevant = [line for line in lines if image_id in line or "clip image content cache" in line or "content cache" in line or "oci cache" in line or "layer decompressed" in line]
-    decompressed_hashes = sorted(set(re.findall(r'"decompressed_hash":"([^"]+)"|decompressed_hash=([0-9a-f]{16,})', "\n".join(relevant))))
+    relevant = [
+        line
+        for line in lines
+        if image_id in line
+        or "clip image content cache" in line
+        or "content cache" in line
+        or "oci cache" in line
+        or "background layer warm" in line
+        or "layer decompressed" in line
+        or "checkpoint-based" in line
+    ]
+    plain_relevant = [ANSI_RE.sub("", line) for line in relevant]
+    decompressed_hashes = sorted(set(re.findall(r'"decompressed_hash":"([^"]+)"|decompressed_hash=([0-9a-f]{16,})', "\n".join(plain_relevant))))
     flat_hashes = sorted({item for pair in decompressed_hashes for item in pair if item})
     return {
         "lineCount": len(relevant),
         "ociCacheMisses": count_contains(relevant, "oci cache miss"),
         "layerDecompressed": count_contains(relevant, "layer decompressed and cached"),
+        "layerWarmFailures": count_contains(relevant, "background layer warm failed"),
         "contentCacheHits": count_contains(relevant, "content cache hit"),
         "contentCacheMisses": count_contains(relevant, "content cache miss"),
         "contentCacheReadErrors": count_contains(relevant, "clip image content cache read result"),
         "contentCacheStoreResults": count_contains(relevant, "clip image content cache store result"),
         "alreadyPresent": count_contains(relevant, "decompressed layer already present in content cache"),
         "diskCacheHits": count_contains(relevant, "disk cache hit"),
+        "checkpointSuccesses": count_contains(relevant, "checkpoint-based decompression served exact range"),
+        "checkpointFailures": count_contains(relevant, "checkpoint-based decompression failed"),
         "decompressedHashes": flat_hashes,
         "sample": relevant[-40:],
     }
@@ -744,6 +813,7 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     artifact_dir = output.parent
     probe_id = args.probe_id or f"{int(time.time())}-{os.getpid()}"
+    args.probe_id = probe_id
     kube = Kube(SimpleNamespace(namespace=args.namespace))
 
     validation_failures: list[str] = []
@@ -752,6 +822,7 @@ def main() -> int:
         "startedAt": utc_now(),
         "probeId": probe_id,
         "sizeMiB": args.size_mib,
+        "readBytes": args.read_bytes,
         "resetWorkersBetween": args.reset_workers_between,
         "iterations": [],
         "validationFailures": validation_failures,
@@ -836,10 +907,12 @@ def run_iteration(
     worker = worker_for_container(kube, instance.container_id)
     started = time.perf_counter()
     try:
-        read = read_layer(instance, args.read_timeout_seconds)
+        read = read_layer(instance, args.read_timeout_seconds, args.read_bytes, args.probe_id or "")
     finally:
         terminate(instance)
     duration_ms = (time.perf_counter() - started) * 1000
+    if args.post_read_settle_seconds > 0:
+        time.sleep(args.post_read_settle_seconds)
     logs_path = artifact_dir / f"clip-layer-{name}.worker.log"
     worker_name = worker.get("name", "") if worker else ""
     lines = collect_worker_logs(kube, since_time, logs_path, [worker_name])
@@ -861,12 +934,40 @@ def validate_report(report: dict[str, Any], failures: list[str]) -> None:
         failures.append("expected cold and second read iterations")
         return
     cold, after = iterations[0], iterations[1]
+    prefix_mode = int(report.get("readBytes") or 0) > 0
+    expected_size = int(report.get("sizeMiB", 0)) * 1024 * 1024
+    expected_read_bytes = min(int(report.get("readBytes") or 0), expected_size)
+
     for item in iterations:
         read = item.get("read") or {}
+        logs = item.get("logSummary") or {}
         if not read.get("ok"):
             failures.append(f"{item.get('name')} SHA verification failed")
-        if int(read.get("size") or 0) != int(report.get("sizeMiB", 0)) * 1024 * 1024:
+        if int(read.get("size") or 0) != expected_size:
             failures.append(f"{item.get('name')} read size mismatch")
+        if prefix_mode and int(read.get("bytesRead") or 0) != expected_read_bytes:
+            failures.append(f"{item.get('name')} prefix read size mismatch")
+        if logs.get("layerWarmFailures", 0) > 0:
+            failures.append(f"{item.get('name')} background layer warm failed")
+
+    cold_logs = cold.get("logSummary") or {}
+    after_logs = after.get("logSummary") or {}
+    if prefix_mode:
+        for item, logs in ((cold, cold_logs), (after, after_logs)):
+            if logs.get("checkpointFailures", 0) > 0:
+                failures.append(f"{item.get('name')} prefix read checkpoint path failed")
+        if cold_logs.get("contentCacheHits", 0) <= 0 and cold_logs.get("checkpointSuccesses", 0) <= 0:
+            failures.append("cold prefix read did not prove content-cache or checkpoint-range serving")
+        if not cold.get("embeddedCachePageProof", {}).get("ok"):
+            failures.append("cold prefix iteration did not materialize embedded cache pages")
+        if not after.get("embeddedCachePageProof", {}).get("ok"):
+            failures.append(f"{after.get('name')} prefix iteration could not find embedded cache pages")
+        if not cold.get("hrwRoutingProof", {}).get("ok"):
+            failures.append("cold prefix iteration did not materialize pages on HRW-selected cache hosts")
+        if not after.get("hrwRoutingProof", {}).get("ok"):
+            failures.append(f"{after.get('name')} prefix iteration did not find pages on HRW-selected cache hosts")
+        return
+
     if not cold.get("embeddedCachePageProof", {}).get("ok"):
         failures.append("cold iteration did not materialize embedded cache pages")
     if not after.get("embeddedCachePageProof", {}).get("ok"):
@@ -876,8 +977,6 @@ def validate_report(report: dict[str, Any], failures: list[str]) -> None:
     if not after.get("hrwRoutingProof", {}).get("ok"):
         failures.append(f"{after.get('name')} iteration did not find pages on HRW-selected cache hosts")
 
-    cold_logs = cold.get("logSummary") or {}
-    after_logs = after.get("logSummary") or {}
     if not report.get("decompressedHashes"):
         failures.append("could not extract OCI decompressed layer hashes from clip archive")
     if report.get("preSecondClipDiskCachePresence", {}).get("present"):

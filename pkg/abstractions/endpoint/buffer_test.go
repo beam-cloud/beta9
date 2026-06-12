@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -91,5 +92,13 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	}
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusGatewayTimeout)
+	}
+
+	var body map[string]interface{}
+	if err := stdjson.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "Timed out waiting for a backend container" {
+		t.Fatalf("error = %q, want timeout message", body["error"])
 	}
 }
