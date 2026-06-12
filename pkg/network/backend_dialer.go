@@ -92,25 +92,16 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
 	var lastErr error
-	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			if lastErr != nil {
-				return nil, fmt.Errorf("backend route %s dial timed out: %w", routeID, lastErr)
-			}
-			return nil, fmt.Errorf("backend route %s dial timed out", routeID)
-		}
 
+	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
 		if host != "" {
 			// Leave headroom for the dial itself: a peer that appears at the
 			// very end of the budget still needs time to handshake.
-			waitBudget := remaining - tsnetDialReserve(remaining)
-			if err := d.tailscale.WaitForPeer(ctx, host, waitBudget); err != nil {
+			if err := d.tailscale.WaitForPeer(ctx, host, remaining-tsnetDialReserve(remaining)); err != nil {
 				return nil, fmt.Errorf("backend route %s: %w", routeID, err)
 			}
-			remaining = time.Until(deadline)
-			if remaining <= 0 {
-				continue
+			if remaining = time.Until(deadline); remaining <= 0 {
+				break
 			}
 		}
 
@@ -126,6 +117,11 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 		case <-time.After(backendRouteReadyPollInterval):
 		}
 	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("backend route %s dial timed out: %w", routeID, lastErr)
+	}
+	return nil, fmt.Errorf("backend route %s dial timed out", routeID)
 }
 
 func (d *BackendDialer) dialTSNetTarget(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
@@ -136,19 +132,10 @@ func (d *BackendDialer) dialTSNetTarget(ctx context.Context, addr string, timeou
 }
 
 // tsnetDialReserve is how much of the remaining dial budget is held back for
-// the connect itself when waiting for the peer to appear in the netmap.
+// the connect itself while waiting for the peer to appear in the netmap:
+// a third of the budget, clamped to [100ms, 2s], never more than remains.
 func tsnetDialReserve(remaining time.Duration) time.Duration {
-	reserve := remaining / 3
-	if reserve > 2*time.Second {
-		reserve = 2 * time.Second
-	}
-	if reserve < 100*time.Millisecond {
-		reserve = 100 * time.Millisecond
-	}
-	if reserve > remaining {
-		reserve = remaining
-	}
-	return reserve
+	return min(max(remaining/3, 100*time.Millisecond), 2*time.Second, remaining)
 }
 
 // resolveReadyRoute returns the backend route once it is ready to accept

@@ -59,22 +59,62 @@ var (
 	tailnetPeerPollInterval    = 500 * time.Millisecond
 )
 
+// staleNetmapDetector tracks terminal peer-lookup misses and decides when the
+// tsnet server should be recycled.
+type staleNetmapDetector struct {
+	mu          sync.Mutex
+	misses      int
+	firstMissAt time.Time
+	lastRestart time.Time
+}
+
+func (d *staleNetmapDetector) seen() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.misses = 0
+	d.firstMissAt = time.Time{}
+}
+
+// missed records a failed peer lookup and reports whether the caller should
+// recycle the tsnet server now.
+func (d *staleNetmapDetector) missed(now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.firstMissAt.IsZero() {
+		d.firstMissAt = now
+	}
+	d.misses++
+
+	if d.misses < staleNetmapMissThreshold {
+		return false
+	}
+	if now.Sub(d.firstMissAt) < staleNetmapMissWindow {
+		return false
+	}
+	if !d.lastRestart.IsZero() && now.Sub(d.lastRestart) < staleNetmapRestartCooldown {
+		return false
+	}
+
+	d.lastRestart = now
+	d.misses = 0
+	d.firstMissAt = time.Time{}
+	return true
+}
+
 type Tailscale struct {
-	server        *tsnet.Server
+	mu          sync.Mutex // guards server, initialized, served
+	server      *tsnet.Server
+	initialized bool // server has been brought up
+	served      bool // server owns listeners; never recycle it
+
 	cfg           TailscaleConfig
 	debug         bool
-	initialized   bool
-	served        bool
-	mu            sync.Mutex
 	tailscaleRepo repository.TailscaleRepository
+	staleNetmap   staleNetmapDetector
 
 	// statusFunc overrides netmap status lookups in tests.
 	statusFunc func(ctx context.Context) (*ipnstate.Status, error)
-
-	missMu      sync.Mutex
-	missCount   int
-	firstMissAt time.Time
-	lastRestart time.Time
 }
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
@@ -85,16 +125,13 @@ func (t *Tailscale) logF(format string, v ...interface{}) {
 
 // NewTailscale creates a new Tailscale instance using tsnet
 func newTailscale(cfg TailscaleConfig, tailscaleRepo repository.TailscaleRepository) *Tailscale {
-	ts := &Tailscale{
+	t := &Tailscale{
 		cfg:           cfg,
 		debug:         cfg.Debug,
-		initialized:   false,
-		mu:            sync.Mutex{},
 		tailscaleRepo: tailscaleRepo,
 	}
-
-	ts.server = ts.buildServer()
-	return ts
+	t.server = t.buildServer()
+	return t
 }
 
 func (t *Tailscale) buildServer() *tsnet.Server {
@@ -191,25 +228,28 @@ func (t *Tailscale) WaitForPeer(ctx context.Context, host string, timeout time.D
 	for {
 		found, err := t.peerInNetmap(ctx, host)
 		if err == nil && found {
-			t.notePeerSeen()
+			t.staleNetmap.seen()
 			return nil
 		}
 		lastErr = err
 
 		if time.Now().Add(tailnetPeerPollInterval).After(deadline) {
-			t.notePeerMiss(host)
-			if lastErr != nil {
-				return fmt.Errorf("tailnet status unavailable while resolving peer %q: %w", host, lastErr)
-			}
-			return fmt.Errorf("tailnet peer %q is not visible in this node's netmap (peer is offline or the tailnet control connection is stale)", host)
+			break
 		}
-
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(tailnetPeerPollInterval):
 		}
 	}
+
+	if t.staleNetmap.missed(time.Now()) {
+		t.recycleServer(host)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("tailnet status unavailable while resolving peer %q: %w", host, lastErr)
+	}
+	return fmt.Errorf("tailnet peer %q is not visible in this node's netmap (peer is offline or the tailnet control connection is stale)", host)
 }
 
 func (t *Tailscale) peerInNetmap(ctx context.Context, host string) (bool, error) {
@@ -257,54 +297,23 @@ func tailnetPeerMatchesHost(hostName, dnsName, target string) bool {
 	return target == hostName || target == dnsName || strings.HasPrefix(dnsName, target+".")
 }
 
-func (t *Tailscale) notePeerSeen() {
-	t.missMu.Lock()
-	defer t.missMu.Unlock()
-	t.missCount = 0
-	t.firstMissAt = time.Time{}
-}
-
-func (t *Tailscale) notePeerMiss(host string) {
-	t.missMu.Lock()
-	now := time.Now()
-	if t.firstMissAt.IsZero() {
-		t.firstMissAt = now
-	}
-	t.missCount++
-	shouldRestart := t.missCount >= staleNetmapMissThreshold &&
-		now.Sub(t.firstMissAt) >= staleNetmapMissWindow &&
-		(t.lastRestart.IsZero() || now.Sub(t.lastRestart) >= staleNetmapRestartCooldown)
-	if shouldRestart {
-		t.lastRestart = now
-		t.missCount = 0
-		t.firstMissAt = time.Time{}
-	}
-	t.missMu.Unlock()
-
-	if shouldRestart {
-		t.restartServer(host)
-	}
-}
-
-// restartServer recycles the tsnet server to force a fresh control connection
+// recycleServer replaces the tsnet server to force a fresh control connection
 // and netmap. It is only safe for dial-only nodes; nodes serving listeners
 // would drop them.
-func (t *Tailscale) restartServer(host string) {
+func (t *Tailscale) recycleServer(missingPeer string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.served {
 		log.Warn().
-			Str("missing_peer", host).
+			Str("missing_peer", missingPeer).
 			Msg("tailnet netmap appears stale but this node serves tsnet listeners; skipping tsnet restart")
 		return
 	}
 
 	log.Warn().
-		Str("missing_peer", host).
+		Str("missing_peer", missingPeer).
 		Msg("recycling tsnet server after repeated netmap misses; tailnet control connection may be stale")
-	if t.server != nil {
-		_ = t.server.Close()
-	}
+	_ = t.server.Close()
 	t.server = t.buildServer()
 	t.initialized = false
 }

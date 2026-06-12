@@ -47,8 +47,8 @@ func TestWaitForPeerFindsPeerByDNSName(t *testing.T) {
 	if err := ts.WaitForPeer(context.Background(), "beam-agent-machine.tailnet.ts.net", 100*time.Millisecond); err != nil {
 		t.Fatalf("WaitForPeer() error = %v, want nil", err)
 	}
-	if ts.missCount != 0 {
-		t.Fatalf("missCount = %d, want 0", ts.missCount)
+	if ts.staleNetmap.misses != 0 {
+		t.Fatalf("missCount = %d, want 0", ts.staleNetmap.misses)
 	}
 }
 
@@ -62,8 +62,8 @@ func TestWaitForPeerSkipsIPLiterals(t *testing.T) {
 			t.Fatalf("WaitForPeer(%q) error = %v, want nil for IP literal", host, err)
 		}
 	}
-	if ts.missCount != 0 {
-		t.Fatalf("missCount = %d, want 0 (IP literals must not count as misses)", ts.missCount)
+	if ts.staleNetmap.misses != 0 {
+		t.Fatalf("missCount = %d, want 0 (IP literals must not count as misses)", ts.staleNetmap.misses)
 	}
 }
 
@@ -89,22 +89,22 @@ func TestWaitForPeerMissingPeerReturnsClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "netmap") {
 		t.Fatalf("WaitForPeer() error = %v, want mention of netmap", err)
 	}
-	if ts.missCount != 1 {
-		t.Fatalf("missCount = %d, want 1", ts.missCount)
+	if ts.staleNetmap.misses != 1 {
+		t.Fatalf("missCount = %d, want 1", ts.staleNetmap.misses)
 	}
 }
 
 func TestWaitForPeerSuccessResetsMissCount(t *testing.T) {
 	withFastPeerPolling(t)
 	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
-	ts.missCount = 2
-	ts.firstMissAt = time.Now().Add(-time.Minute)
+	ts.staleNetmap.misses = 2
+	ts.staleNetmap.firstMissAt = time.Now().Add(-time.Minute)
 
 	if err := ts.WaitForPeer(context.Background(), "beam-agent-machine", 50*time.Millisecond); err != nil {
 		t.Fatalf("WaitForPeer() error = %v, want nil", err)
 	}
-	if ts.missCount != 0 || !ts.firstMissAt.IsZero() {
-		t.Fatalf("miss state = (%d, %v), want reset", ts.missCount, ts.firstMissAt)
+	if ts.staleNetmap.misses != 0 || !ts.staleNetmap.firstMissAt.IsZero() {
+		t.Fatalf("miss state = (%d, %v), want reset", ts.staleNetmap.misses, ts.staleNetmap.firstMissAt)
 	}
 }
 

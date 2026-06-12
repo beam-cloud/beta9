@@ -15,6 +15,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
+	"tailscale.com/types/key"
 )
 
 const (
@@ -231,54 +232,58 @@ func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) 
 		attrs["tailscale_ips"] = strings.Join(ips, ",")
 	}
 
-	if !full {
-		return attrs
+	if full {
+		addPeerStatsAttrs(attrs, status.Peer)
 	}
+	return attrs
+}
 
-	onlinePeers := 0
-	directPeers := 0
-	relayPeers := 0
-	activePeers := 0
-	recentHandshakePeers := 0
+// addPeerStatsAttrs summarizes per-peer connectivity (online, direct vs relay,
+// handshake freshness) into event attributes.
+func addPeerStatsAttrs(attrs map[string]string, peers map[key.NodePublic]*ipnstate.PeerStatus) {
+	online := 0
+	direct := 0
+	relayed := 0
+	active := 0
+	recentHandshakes := 0
 	newestHandshakeAge := time.Duration(0)
 	relayRegions := map[string]struct{}{}
 	now := time.Now()
-	for _, peer := range status.Peer {
+
+	for _, peer := range peers {
 		if peer == nil {
 			continue
 		}
 		if peer.Online {
-			onlinePeers++
+			online++
+		}
+		if peer.Active {
+			active++
 		}
 		if peer.CurAddr != "" {
-			directPeers++
+			direct++
 		} else if peer.Relay != "" {
-			relayPeers++
+			relayed++
 		}
 		if peer.Relay != "" {
 			relayRegions[peer.Relay] = struct{}{}
 		}
-		if peer.Active {
-			activePeers++
-		}
 		if !peer.LastHandshake.IsZero() {
-			age := now.Sub(peer.LastHandshake)
-			if age < 0 {
-				age = 0
-			}
+			age := max(now.Sub(peer.LastHandshake), 0)
 			if age <= 2*time.Minute {
-				recentHandshakePeers++
+				recentHandshakes++
 			}
 			if newestHandshakeAge == 0 || age < newestHandshakeAge {
 				newestHandshakeAge = age
 			}
 		}
 	}
-	attrs["online_peer_count"] = strconv.Itoa(onlinePeers)
-	attrs["direct_peer_count"] = strconv.Itoa(directPeers)
-	attrs["relay_peer_count"] = strconv.Itoa(relayPeers)
-	attrs["active_peer_count"] = strconv.Itoa(activePeers)
-	attrs["recent_handshake_peer_count"] = strconv.Itoa(recentHandshakePeers)
+
+	attrs["online_peer_count"] = strconv.Itoa(online)
+	attrs["direct_peer_count"] = strconv.Itoa(direct)
+	attrs["relay_peer_count"] = strconv.Itoa(relayed)
+	attrs["active_peer_count"] = strconv.Itoa(active)
+	attrs["recent_handshake_peer_count"] = strconv.Itoa(recentHandshakes)
 	if newestHandshakeAge > 0 {
 		attrs["newest_handshake_age_ms"] = strconv.FormatInt(newestHandshakeAge.Milliseconds(), 10)
 	}
@@ -290,7 +295,6 @@ func tsnetSnapshotAttrs(status *ipnstate.Status, proxyTarget string, full bool) 
 		sort.Strings(regions)
 		attrs["relay_regions"] = strings.Join(regions, ",")
 	}
-	return attrs
 }
 
 // joinAttrValues joins messages into a single event attribute value, capped
