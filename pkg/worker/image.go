@@ -632,6 +632,7 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 
 	if archive.usesOCIStorage() {
 		mountOptions.RegistryCredProvider = c.getCredentialProviderForImage(ctx, request.ImageId, request)
+		mountOptions.UseCheckpoints = true
 		return mountOptions
 	}
 
@@ -1811,6 +1812,75 @@ func formatImageBytes(n int64) string {
 	}
 }
 
+const imageIndexProgressBucketBytes int64 = 256 * 1024 * 1024
+
+func imageIndexProgressKey(progress clip.OCIIndexProgress) string {
+	if progress.LayerDigest != "" {
+		return progress.LayerDigest
+	}
+	return fmt.Sprintf("%d", progress.LayerIndex)
+}
+
+func shouldLogImageIndexProgress(progress clip.OCIIndexProgress, buckets map[string]int64) bool {
+	key := imageIndexProgressKey(progress)
+	if progress.CompressedBytesTotal > 0 && progress.CompressedBytesProcessed > 0 {
+		bucket := progress.CompressedBytesProcessed * 10 / progress.CompressedBytesTotal
+		if bucket > 10 {
+			bucket = 10
+		}
+		if bucket <= buckets[key] {
+			return false
+		}
+		buckets[key] = bucket
+		return true
+	}
+
+	bucket := progress.BytesProcessed / imageIndexProgressBucketBytes
+	if bucket == 0 || bucket <= buckets[key] {
+		return false
+	}
+	buckets[key] = bucket
+	return true
+}
+
+func formatImageIndexProgress(progress clip.OCIIndexProgress) string {
+	prefix := fmt.Sprintf("Indexing layer %d/%d", progress.LayerIndex, progress.TotalLayers)
+	if progress.CompressedBytesTotal > 0 && progress.CompressedBytesProcessed > 0 {
+		percent := progress.CompressedBytesProcessed * 100 / progress.CompressedBytesTotal
+		if percent > 100 {
+			percent = 100
+		}
+		return fmt.Sprintf("%s... %d%% (%s/%s read, %s indexed)",
+			prefix, percent,
+			formatImageBytes(progress.CompressedBytesProcessed),
+			formatImageBytes(progress.CompressedBytesTotal),
+			formatImageBytes(progress.BytesProcessed))
+	}
+	if progress.BytesProcessed > 0 {
+		return fmt.Sprintf("%s... %s indexed", prefix, formatImageBytes(progress.BytesProcessed))
+	}
+	return prefix + "..."
+}
+
+func formatImageIndexCompleted(progress clip.OCIIndexProgress) string {
+	indexedBytes := progress.BytesTotal
+	if indexedBytes == 0 {
+		indexedBytes = progress.BytesProcessed
+	}
+
+	if progress.CompressedBytesTotal > 0 && indexedBytes > 0 {
+		return fmt.Sprintf("Indexed layer %d/%d (100%%, %s read, %s indexed)",
+			progress.LayerIndex, progress.TotalLayers,
+			formatImageBytes(progress.CompressedBytesTotal),
+			formatImageBytes(indexedBytes))
+	}
+	if indexedBytes > 0 {
+		return fmt.Sprintf("Indexed layer %d/%d (%s indexed)",
+			progress.LayerIndex, progress.TotalLayers, formatImageBytes(indexedBytes))
+	}
+	return fmt.Sprintf("Indexed layer %d/%d", progress.LayerIndex, progress.TotalLayers)
+}
+
 type activeOutputWriter struct {
 	logger       *slog.Logger
 	lastOutputNS *atomic.Int64
@@ -1869,6 +1939,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		defer wg.Done()
 		cachedLayers := 0
 		var cachedBytes int64
+		progressBuckets := map[string]int64{}
 		for progress := range progressChan {
 			log.Debug().
 				Str("container_id", request.ContainerId).
@@ -1877,29 +1948,24 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 				Int("layer", progress.LayerIndex).
 				Int("total", progress.TotalLayers).
 				Int64("bytes", progress.BytesProcessed).
+				Int64("bytes_total", progress.BytesTotal).
+				Int64("compressed_bytes", progress.CompressedBytesProcessed).
+				Int64("compressed_bytes_total", progress.CompressedBytesTotal).
 				Msg("image index progress")
 
 			switch progress.Stage {
 			case "progress":
-				if progress.BytesProcessed < 256*1024*1024 {
+				if !shouldLogImageIndexProgress(progress, progressBuckets) {
 					continue
 				}
-				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d... %s processed\n",
-					progress.LayerIndex, progress.TotalLayers, formatImageBytes(progress.BytesProcessed)))
+				outputLogger.Info(formatImageIndexProgress(progress) + "\n")
 			case "completed":
 				if progress.Source == clip.LayerSourceIndexCache || progress.Source == clip.LayerSourceContentCache {
 					cachedLayers++
 					cachedBytes += progress.BytesProcessed
 					continue
 				}
-
-				var detail string
-				if progress.BytesProcessed > 0 {
-					detail = formatImageBytes(progress.BytesProcessed)
-				} else {
-					detail = "done"
-				}
-				outputLogger.Info(fmt.Sprintf("Indexed layer %d/%d (%s)\n", progress.LayerIndex, progress.TotalLayers, detail))
+				outputLogger.Info(formatImageIndexCompleted(progress) + "\n")
 			}
 		}
 		if cachedLayers > 0 {
@@ -1978,15 +2044,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
-	f, err := os.Create(tempDockerFile)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintf(f, *request.BuildOptions.Dockerfile)
-	f.Close()
-
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
@@ -2002,29 +2059,49 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		sourceImage = *request.BuildOptions.SourceImage
 	}
 
+	dockerfile := *request.BuildOptions.Dockerfile
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
 
-		// buildah pull the base image so bud doesn't attempt HTTPS
-		pullArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "pull"}
-		if insecure {
-			pullArgs = append(pullArgs, "--tls-verify=false")
+		cachedBaseRef, cachedBase, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
+		if cacheErr != nil {
+			log.Debug().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
 		}
+		if cachedBase {
+			dockerfile = strings.ReplaceAll(dockerfile, sourceImage, cachedBaseRef)
+			outputLogger.Info("Using cached base image layers\n")
+		} else {
+			// buildah pull the base image so bud doesn't attempt HTTPS
+			pullArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "pull"}
+			if insecure {
+				pullArgs = append(pullArgs, "--tls-verify=false")
+			}
 
-		// Add credentials if provided
-		if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
-			pullArgs = append(pullArgs, authArgs...)
-		}
+			// Add credentials if provided
+			if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+				pullArgs = append(pullArgs, authArgs...)
+			}
 
-		pullArgs = append(pullArgs, "docker://"+sourceImage)
-		cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-		if err := cmd.Run(); err != nil {
-			return err
+			pullArgs = append(pullArgs, "docker://"+sourceImage)
+			cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
+			cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
+			cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+			cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+			if err := cmd.Run(); err != nil {
+				return err
+			}
+			go c.seedBaseImageBlobsFromRegistry(request, sourceImage)
 		}
 	}
+
+	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
+	f, err := os.Create(tempDockerFile)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprint(f, dockerfile)
+	f.Close()
 
 	budArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "bud"}
 	if insecure {

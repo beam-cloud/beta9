@@ -19,6 +19,8 @@ const (
 	imageContentCacheSlowRead    = 250 * time.Millisecond
 	imageContentCacheSlowStore   = 500 * time.Millisecond
 	imageContentCacheSummary     = 5 * time.Second
+	imageContentCacheStoreWait   = 500 * time.Millisecond
+	imageContentCacheStorePoll   = 100 * time.Millisecond
 )
 
 const (
@@ -224,6 +226,10 @@ func newImageContentCache(client *cache.Client, imageID string, kind string, obs
 		observer = observers[0]
 	}
 	return &imageContentCache{client: client, imageID: imageID, kind: cacheKind, observe: observer}
+}
+
+func imageLayerContentCachePath(hash string) string {
+	return fmt.Sprintf("/clip/layers/%s", hash)
 }
 
 func (c *imageContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
@@ -595,18 +601,19 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 	started := time.Now()
 	var cacheTrace cache.OperationTrace
 	c.storeRequests.Add(1)
-	if c.skipRuntimeStoreWhenUnavailable(hash, opts.RoutingKey) {
+	if c.bestEffortRuntimeStore() && !c.waitForSelectedStoreHost(hash, opts.RoutingKey, imageContentCacheStoreWait) {
+		err = fmt.Errorf("%w: selected cache host unavailable for image content store", cache.ErrSelectedHostUnavailable)
 		c.finishStore(imageContentCacheStoreTrace{
 			operation:  imageContentCacheOperationStoreLocalPath,
-			result:     imageContentCacheResultSkippedUnavailable,
 			hash:       hash,
 			actualHash: hash,
 			routingKey: opts.RoutingKey,
 			path:       path,
 			bytes:      fileSize(path),
 			startedAt:  started,
+			err:        err,
 		})
-		return hash, nil
+		return "", err
 	}
 
 	var traceErr error
@@ -629,17 +636,11 @@ func (c *imageContentCache) StoreContentFromLocalPath(path string, hash string, 
 
 	actualHash, cacheTrace, err = c.client.StoreContentFromLocalFileWithTrace(cache.LocalContentSource{
 		Path:      path,
-		CachePath: path,
+		CachePath: imageLayerContentCachePath(hash),
 	}, cache.StoreContentOptions{
 		RoutingKey: opts.RoutingKey,
 		Lock:       true,
 	})
-	if err != nil && c.bestEffortRuntimeStore() && cache.IsStoreHostUnavailable(err) {
-		traceErr = err
-		cacheTrace.Result = imageContentCacheResultSkippedUnavailable
-		actualHash = hash
-		err = nil
-	}
 	return actualHash, err
 }
 
@@ -765,6 +766,34 @@ func (c *imageContentCache) bestEffortRuntimeStore() bool {
 
 func (c *imageContentCache) skipRuntimeStoreWhenUnavailable(hash string, routingKey string) bool {
 	return c.bestEffortRuntimeStore() && !c.client.SelectedStoreHostAvailable(hash, routingKey)
+}
+
+func (c *imageContentCache) waitForSelectedStoreHost(hash string, routingKey string, timeout time.Duration) bool {
+	if c == nil || c.client == nil {
+		return false
+	}
+	if c.client.SelectedStoreHostAvailable(hash, routingKey) {
+		return true
+	}
+	if timeout <= 0 {
+		return false
+	}
+
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(imageContentCacheStorePoll)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline.C:
+			return c.client.SelectedStoreHostAvailable(hash, routingKey)
+		case <-ticker.C:
+			if c.client.SelectedStoreHostAvailable(hash, routingKey) {
+				return true
+			}
+		}
+	}
 }
 
 func imageContentCacheErrorString(err error) string {

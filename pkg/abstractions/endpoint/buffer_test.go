@@ -2,6 +2,7 @@ package endpoint
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -91,5 +92,56 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	}
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusGatewayTimeout)
+	}
+
+	var body map[string]interface{}
+	if err := stdjson.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "No backend containers available" {
+		t.Fatalf("error = %q, want no backend message", body["error"])
+	}
+}
+
+func TestForwardRequestTimeoutReportsStartingBackends(t *testing.T) {
+	e := echo.New()
+	httpReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(httpReq, rec)
+
+	rb := &RequestBuffer{
+		ctx:                 context.Background(),
+		buffer:              abstractions.NewRingBuffer[*request](1),
+		availableContainers: []container{},
+		stubConfig: &types.StubConfigV1{
+			TaskPolicy: types.TaskPolicy{Timeout: 1},
+		},
+		backendReadiness: backendReadinessSnapshot{
+			Total:       2,
+			Running:     1,
+			Pending:     1,
+			LastUpdated: time.Now().UTC(),
+		},
+	}
+
+	if err := rb.ForwardRequest(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusGatewayTimeout)
+	}
+
+	var body struct {
+		Error   string                   `json:"error"`
+		Backend backendReadinessSnapshot `json:"backend"`
+	}
+	if err := stdjson.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "Backend containers are still starting" {
+		t.Fatalf("error = %q, want starting backend message", body.Error)
+	}
+	if body.Backend.Total != 2 || body.Backend.Running != 1 || body.Backend.Pending != 1 {
+		t.Fatalf("backend = %+v, want total/running/pending counts", body.Backend)
 	}
 }
