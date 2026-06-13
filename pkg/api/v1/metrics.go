@@ -122,6 +122,7 @@ func (g *MetricsGroup) GetWorkspaceMetricTimeseries(ctx echo.Context) error {
 
 	response, err := g.eventRepo.GetWorkspaceMetricsTimeseries(ctx.Request().Context(), types.EventQuery{
 		WorkspaceID: workspaceID,
+		StubType:    ctx.QueryParam("stub_type"),
 		EventTypes:  []string{types.EventContainerMetrics},
 	}, start.UTC(), end.UTC(), interval)
 	if err != nil {
