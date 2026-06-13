@@ -695,6 +695,7 @@ type SandboxRow struct {
 	ContainerId     string    `json:"container_id,omitempty"`
 	TimeToStartedMs *int64    `json:"time_to_started_ms,omitempty"`
 	LifetimeMs      *int64    `json:"lifetime_ms,omitempty"`
+	StartedAtMs     *int64    `json:"started_at_ms,omitempty"`
 }
 
 type SandboxListResponse struct {
@@ -848,6 +849,9 @@ func (g *StubGroup) buildSandboxRow(ctx context.Context, workspaceID string, stu
 		}
 
 		if active.Status == types.ContainerStatusRunning && active.StartedAt > 0 {
+			startedAtMs := active.StartedAt * 1000
+			row.StartedAtMs = &startedAtMs
+
 			lifetime := (time.Now().Unix() - active.StartedAt) * 1000
 			if lifetime >= 0 {
 				row.LifetimeMs = &lifetime
