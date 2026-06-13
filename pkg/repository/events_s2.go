@@ -448,6 +448,13 @@ func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.Eve
 		limit = defaultS2EventReadLimit
 	}
 
+	// Task history reads come from the multiplexed stub task stream, which
+	// also carries task log records; keep them out of event history unless
+	// the caller explicitly asked for them.
+	if query.TaskID != "" && len(query.EventTypes) == 0 {
+		query.ExcludeEventTypes = append(query.ExcludeEventTypes, types.EventContainerLog)
+	}
+
 	streams, err := r.resolveEventHistoryStreams(ctx, query)
 	if err != nil {
 		return nil, err
@@ -470,15 +477,19 @@ func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.Eve
 	// predate it; fall back to scanning the full workspace stream.
 	if len(response.Events) == 0 && query.WorkspaceID != "" && allComputeEventTypes(query.EventTypes) {
 		workspaceStream := r.workspaceStreamName(query.WorkspaceID)
-		alreadyRead := false
-		for _, streamName := range response.Streams {
-			if streamName == string(workspaceStream) {
-				alreadyRead = true
-				break
+		if !responseReadStream(response.Streams, workspaceStream) {
+			if err := r.readEventHistoryStream(ctx, workspaceStream, query, limit, response); err != nil {
+				return nil, err
 			}
 		}
-		if !alreadyRead {
-			if err := r.readEventHistoryStream(ctx, workspaceStream, query, limit, response); err != nil {
+	}
+
+	// Tasks that predate the multiplexed stub task stream only have records
+	// in the legacy per-task stream.
+	if len(response.Events) == 0 && query.TaskID != "" {
+		legacyStream := r.legacyTaskStreamName(query.TaskID)
+		if !responseReadStream(response.Streams, legacyStream) {
+			if err := r.readEventHistoryStream(ctx, legacyStream, query, limit, response); err != nil {
 				return nil, err
 			}
 		}
@@ -486,6 +497,26 @@ func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.Eve
 
 	sortContainerEventRecords(response.Events)
 	return response, nil
+}
+
+func responseReadStream(streams []string, streamName s2.StreamName) bool {
+	for _, stream := range streams {
+		if stream == string(streamName) {
+			return true
+		}
+	}
+	return false
+}
+
+// streamHasRecords reports whether the stream exists and holds at least one
+// record. It is used to detect tasks whose records still live in legacy
+// per-task streams.
+func (r *S2EventRepository) streamHasRecords(ctx context.Context, streamName s2.StreamName) bool {
+	tail, err := r.basin.Stream(streamName).CheckTail(ctx)
+	if err != nil {
+		return false
+	}
+	return tail.Tail.SeqNum > 0
 }
 
 func (r *S2EventRepository) StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error) {
@@ -512,7 +543,22 @@ func (r *S2EventRepository) StreamTaskEvents(ctx context.Context, query types.Ev
 		return nil, fmt.Errorf("task id is required to stream task events")
 	}
 
-	return r.streamEvents(ctx, r.taskStreamName(query.TaskID), "", query)
+	// Task records are multiplexed into the per-stub task stream and
+	// demultiplexed by the task_id record header. Log records share the
+	// stream, so exclude them unless the caller explicitly asked for them.
+	if len(query.EventTypes) == 0 {
+		query.ExcludeEventTypes = append(query.ExcludeEventTypes, types.EventContainerLog)
+	}
+
+	streamName := r.stubTaskStreamName(query.WorkspaceID, query.StubID)
+	if query.WorkspaceID == "" || query.StubID == "" {
+		streamName = r.legacyTaskStreamName(query.TaskID)
+	} else if r.streamHasRecords(ctx, r.legacyTaskStreamName(query.TaskID)) {
+		// Tasks that predate the multiplexed stub task stream have their
+		// records in the legacy per-task stream.
+		streamName = r.legacyTaskStreamName(query.TaskID)
+	}
+	return r.streamEvents(ctx, streamName, "", query)
 }
 
 func (r *S2EventRepository) StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
@@ -579,8 +625,10 @@ func (r *S2EventRepository) resolveEventHistoryStreams(ctx context.Context, quer
 	switch {
 	case query.ContainerID != "" && query.WorkspaceID != "":
 		return r.resolveContainerStreams(ctx, query.ContainerID, query)
+	case query.TaskID != "" && query.WorkspaceID != "" && query.StubID != "":
+		return addKnown(r.stubTaskStreamName(query.WorkspaceID, query.StubID))
 	case query.TaskID != "":
-		return addKnown(r.taskStreamName(query.TaskID))
+		return addKnown(r.legacyTaskStreamName(query.TaskID))
 	case query.AppID != "" && query.WorkspaceID != "":
 		return addKnown(r.appStreamName(query.WorkspaceID, query.AppID))
 	case query.StubID != "" && query.WorkspaceID != "":
@@ -653,6 +701,9 @@ func (r *S2EventRepository) readContainerStream(ctx context.Context, streamName 
 		scannedFromTail = tailOffset
 
 		for i := len(batch.Records) - 1; i >= 0; i-- {
+			if eventRecordHeadersSkip(batch.Records[i], query) {
+				continue
+			}
 			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, response)
 			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
 				continue
@@ -726,6 +777,9 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		}
 
 		for _, record := range batch.Records {
+			if eventRecordHeadersSkip(record, query) {
+				continue
+			}
 			eventRecord, ok := containerEventRecordFromS2(record, query, &types.ContainerEventsResponse{})
 			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
 				continue
@@ -805,6 +859,9 @@ func (r *S2EventRepository) readEventHistoryStreamFromTail(ctx context.Context, 
 		scannedFromTail = tailOffset
 
 		for i := len(batch.Records) - 1; i >= 0; i-- {
+			if eventRecordHeadersSkip(batch.Records[i], query) {
+				continue
+			}
 			eventRecord, ok := containerEventRecordFromS2(batch.Records[i], query, &types.ContainerEventsResponse{})
 			if !ok || !eventRecordMatchesQuery(eventRecord, query) {
 				continue
@@ -838,6 +895,9 @@ func (s *s2EventStream) Next() bool {
 		for s.session.Next() {
 			record := s.session.Record()
 			s.setNextSeqNum(record.SeqNum + 1)
+			if eventRecordHeadersSkip(record, s.query) {
+				continue
+			}
 			eventRecord, ok := containerEventRecordFromS2(record, s.query, s.response)
 			if !ok || !eventRecordMatchesQuery(eventRecord, s.query) {
 				continue
@@ -952,6 +1012,62 @@ func sleepWithContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
+// s2RecordHeader returns the value of the named record header, if present.
+func s2RecordHeader(record s2.SequencedRecord, name string) (string, bool) {
+	for _, header := range record.Headers {
+		if string(header.Name) == name {
+			return string(header.Value), true
+		}
+	}
+	return "", false
+}
+
+// eventRecordHeadersSkip reports whether a record can be rejected for the
+// query from its headers alone, without unmarshaling the JSON body. This is
+// how individual tasks are demultiplexed cheaply out of the shared per-stub
+// task stream. A record missing a header falls through to body-based
+// filtering, so legacy records written without headers are still handled.
+func eventRecordHeadersSkip(record s2.SequencedRecord, query types.EventQuery) bool {
+	if eventType, ok := s2RecordHeader(record, "type"); ok && !eventQueryAllowsType(query, eventType) {
+		return true
+	}
+	if query.TaskID != "" {
+		if taskID, ok := s2RecordHeader(record, "task_id"); ok && taskID != query.TaskID {
+			return true
+		}
+	}
+	if query.ContainerID != "" {
+		if containerID, ok := s2RecordHeader(record, "container_id"); ok && containerID != query.ContainerID {
+			return true
+		}
+	}
+	if query.StubID != "" {
+		if stubID, ok := s2RecordHeader(record, "stub_id"); ok && stubID != query.StubID {
+			return true
+		}
+	}
+	return false
+}
+
+// logRecordHeadersSkip is the log-query analog of eventRecordHeadersSkip.
+func logRecordHeadersSkip(record s2.SequencedRecord, query types.LogQuery) bool {
+	if eventType, ok := s2RecordHeader(record, "type"); ok &&
+		eventType != types.EventContainerLog && eventType != types.EventPlatformLog {
+		return true
+	}
+	if query.TaskID != "" {
+		if taskID, ok := s2RecordHeader(record, "task_id"); ok && taskID != query.TaskID {
+			return true
+		}
+	}
+	if query.ContainerID != "" {
+		if containerID, ok := s2RecordHeader(record, "container_id"); ok && containerID != query.ContainerID {
+			return true
+		}
+	}
+	return false
+}
+
 func containerEventRecordFromS2(record s2.SequencedRecord, query types.EventQuery, response *types.ContainerEventsResponse) (types.ContainerEventRecord, bool) {
 	eventRecord := types.ContainerEventRecord{
 		SeqNum:     record.SeqNum,
@@ -1022,15 +1138,22 @@ func countOption(limit uint64) *uint64 {
 }
 
 func eventQueryAllowsType(query types.EventQuery, eventType string) bool {
+	if eventTypeMatchesAny(query.ExcludeEventTypes, eventType) {
+		return false
+	}
 	if len(query.EventTypes) == 0 {
 		return true
 	}
-	for _, allowed := range query.EventTypes {
-		allowed = strings.TrimSpace(allowed)
-		if allowed == eventType {
+	return eventTypeMatchesAny(query.EventTypes, eventType)
+}
+
+func eventTypeMatchesAny(patterns []string, eventType string) bool {
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == eventType {
 			return true
 		}
-		if strings.HasSuffix(allowed, "*") && strings.HasPrefix(eventType, strings.TrimSuffix(allowed, "*")) {
+		if strings.HasSuffix(pattern, "*") && strings.HasPrefix(eventType, strings.TrimSuffix(pattern, "*")) {
 			return true
 		}
 	}
@@ -1134,13 +1257,13 @@ func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventM
 
 	switch {
 	case isTaskEvent(eventType) && metadata.TaskID != "":
-		return r.taskStreamName(metadata.TaskID)
+		return r.taskEventStreamName(metadata)
 	case metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "":
 		return r.containerStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID)
 	case strings.HasPrefix(eventType, "container.") && metadata.ContainerID != "":
 		return ""
 	case metadata.TaskID != "":
-		return r.taskStreamName(metadata.TaskID)
+		return r.taskEventStreamName(metadata)
 	case isComputeEvent(eventType) && metadata.WorkspaceID != "":
 		return r.workspaceStreamName(metadata.WorkspaceID)
 	case metadata.WorkerID != "":
@@ -1254,8 +1377,10 @@ func (r *S2EventRepository) primaryLogStreamName(metadata eventMetadata) s2.Stre
 	switch {
 	case metadata.ContainerID != "" && metadata.WorkspaceID != "" && metadata.StubID != "":
 		return r.containerLogStreamName(metadata.WorkspaceID, metadata.StubID, metadata.ContainerID)
+	case metadata.TaskID != "" && metadata.WorkspaceID != "" && metadata.StubID != "":
+		return r.stubTaskStreamName(metadata.WorkspaceID, metadata.StubID)
 	case metadata.TaskID != "" && metadata.WorkspaceID != "":
-		return r.taskLogStreamName(metadata.WorkspaceID, metadata.TaskID)
+		return r.workspaceLogStreamName(metadata.WorkspaceID)
 	case metadata.StubID != "" && metadata.WorkspaceID != "":
 		return r.stubLogStreamName(metadata.WorkspaceID, metadata.StubID)
 	case metadata.AppID != "" && metadata.WorkspaceID != "":
@@ -1293,8 +1418,11 @@ func (r *S2EventRepository) logStreamNamesForEvent(metadata eventMetadata) []s2.
 	if metadata.StubID != "" {
 		add(r.stubLogStreamName(metadata.WorkspaceID, metadata.StubID))
 	}
-	if metadata.TaskID != "" {
-		add(r.taskLogStreamName(metadata.WorkspaceID, metadata.TaskID))
+	// Task-attributed logs are multiplexed into the per-stub task stream
+	// (demultiplexed on read via the task_id record header) instead of a
+	// per-task stream, so stream creation does not scale with task count.
+	if metadata.TaskID != "" && metadata.StubID != "" {
+		add(r.stubTaskStreamName(metadata.WorkspaceID, metadata.StubID))
 	}
 	if metadata.AppID != "" {
 		add(r.appLogStreamName(metadata.WorkspaceID, metadata.AppID))
@@ -1334,7 +1462,29 @@ func (r *S2EventRepository) containerAliasStreamName(workspaceID, containerID st
 	))
 }
 
-func (r *S2EventRepository) taskStreamName(taskID string) s2.StreamName {
+// stubTaskStreamName is the multiplexed per-stub stream carrying all task
+// records (lifecycle events and task-attributed logs) for every task of a
+// stub. Individual tasks are demultiplexed on read via the task_id and type
+// record headers, so stream count scales with stubs instead of tasks.
+func (r *S2EventRepository) stubTaskStreamName(workspaceID, stubID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/stubs/%s/tasks", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
+}
+
+// taskEventStreamName routes a task-scoped event to the multiplexed stub task
+// stream, falling back to the workspace stream when stub metadata is missing.
+func (r *S2EventRepository) taskEventStreamName(metadata eventMetadata) s2.StreamName {
+	if metadata.WorkspaceID != "" && metadata.StubID != "" {
+		return r.stubTaskStreamName(metadata.WorkspaceID, metadata.StubID)
+	}
+	if metadata.WorkspaceID != "" {
+		return r.workspaceStreamName(metadata.WorkspaceID)
+	}
+	return ""
+}
+
+// legacyTaskStreamName is the retired per-task event stream; it is only used
+// as a read fallback for tasks that predate the multiplexed stub task stream.
+func (r *S2EventRepository) legacyTaskStreamName(taskID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/tasks/%s", r.streamPrefix, eventStreamPart(taskID)))
 }
 
@@ -1499,7 +1649,9 @@ func (r *S2EventRepository) stubLogStreamName(workspaceID, stubID string) s2.Str
 	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s/stubs/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(stubID)))
 }
 
-func (r *S2EventRepository) taskLogStreamName(workspaceID, taskID string) s2.StreamName {
+// legacyTaskLogStreamName is the retired per-task log stream; it is only used
+// as a read fallback for tasks that predate the multiplexed stub task stream.
+func (r *S2EventRepository) legacyTaskLogStreamName(workspaceID, taskID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s/tasks/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(taskID)))
 }
 

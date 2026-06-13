@@ -53,6 +53,21 @@ func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (
 		response.Logs = append(response.Logs, logs...)
 	}
 
+	// Tasks that predate the multiplexed stub task stream only have log
+	// records in the legacy per-task log stream.
+	if response.TotalExpected == 0 && query.TaskID != "" && query.WorkspaceID != "" {
+		legacyStream := r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID)
+		if !responseReadStream(response.Streams, legacyStream) {
+			total, logs, err := r.readLogStreamPage(ctx, legacyStream, query, limit)
+			if err != nil {
+				return nil, err
+			}
+			response.TotalExpected += total
+			response.Streams = append(response.Streams, string(legacyStream))
+			response.Logs = append(response.Logs, logs...)
+		}
+	}
+
 	sort.SliceStable(response.Logs, func(i, j int) bool {
 		if response.Logs[i].Timestamp.Equal(response.Logs[j].Timestamp) {
 			return response.Logs[i].SeqNum < response.Logs[j].SeqNum
@@ -76,16 +91,25 @@ func (r *S2EventRepository) StreamLogs(ctx context.Context, query types.LogQuery
 		return nil, fmt.Errorf("no log stream target")
 	}
 
+	streamName := streams[0]
+	// Tasks that predate the multiplexed stub task stream only have log
+	// records in the legacy per-task log stream.
+	if query.TaskID != "" && query.WorkspaceID != "" && query.StubID != "" {
+		if legacyStream := r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID); r.streamHasRecords(ctx, legacyStream) {
+			streamName = legacyStream
+		}
+	}
+
 	opts := s2LogReadOptions(query)
-	session, err := r.basin.Stream(streams[0]).ReadSession(ctx, opts)
+	session, err := r.basin.Stream(streamName).ReadSession(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("stream logs from s2 stream %q: %w", streams[0], err)
+		return nil, fmt.Errorf("stream logs from s2 stream %q: %w", streamName, err)
 	}
 
 	return &s2LogEventStream{
 		ctx:        ctx,
 		basin:      r.basin,
-		streamName: streams[0],
+		streamName: streamName,
 		session:    session,
 		query:      query,
 	}, nil
@@ -195,8 +219,12 @@ func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.Stream
 	switch {
 	case query.MachineID != "":
 		return addKnownMany(r.machineLogStreams(query)...)
+	case query.TaskID != "" && query.WorkspaceID != "" && query.StubID != "":
+		// Task logs are multiplexed into the per-stub task stream and
+		// demultiplexed by the task_id record header.
+		return addKnown(r.stubTaskStreamName(query.WorkspaceID, query.StubID))
 	case query.TaskID != "" && query.WorkspaceID != "":
-		return addKnown(r.taskLogStreamName(query.WorkspaceID, query.TaskID))
+		return addKnown(r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID))
 	case query.ContainerID != "" && query.WorkspaceID != "" && query.StubID != "":
 		return addKnown(r.containerLogStreamName(query.WorkspaceID, query.StubID, query.ContainerID))
 	case query.ContainerID != "" && query.WorkspaceID != "":
@@ -275,6 +303,9 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		scannedFromTail = tailOffset
 
 		for i := len(batch.Records) - 1; i >= 0; i-- {
+			if logRecordHeadersSkip(batch.Records[i], query) {
+				continue
+			}
 			logRecord, ok := logRecordFromS2(batch.Records[i])
 			if !ok || !logRecordMatchesQuery(logRecord, query) {
 				continue
@@ -419,6 +450,9 @@ func (s *s2LogEventStream) Next() bool {
 		for s.session.Next() {
 			record := s.session.Record()
 			s.setNextSeqNum(record.SeqNum + 1)
+			if logRecordHeadersSkip(record, s.query) {
+				continue
+			}
 			logRecord, ok := logRecordFromS2(record)
 			if !ok || !logRecordMatchesQuery(logRecord, s.query) {
 				continue

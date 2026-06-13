@@ -298,7 +298,7 @@ func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
 		"events/logs/workspaces/workspace-123/stubs/stub-456/containers/container-789",
 		"events/logs/workspaces/workspace-123/containers/container-789",
 		"events/logs/workspaces/workspace-123/stubs/stub-456",
-		"events/logs/workspaces/workspace-123/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/stub-456/tasks",
 		"events/logs/workspaces/workspace-123/apps/app-123",
 		"events/logs/workspaces/workspace-123",
 	}
@@ -328,7 +328,7 @@ func TestS2StubScopedContainerLogsSkipAliasStream(t *testing.T) {
 	want := []s2.StreamName{
 		"events/logs/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/endpoint-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc",
 		"events/logs/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e",
-		"events/logs/workspaces/workspace-123/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/tasks",
 		"events/logs/workspaces/workspace-123/apps/app-123",
 		"events/logs/workspaces/workspace-123",
 	}
@@ -342,7 +342,25 @@ func TestS2StubScopedContainerLogsSkipAliasStream(t *testing.T) {
 	}
 }
 
-func TestResolveLogStreamsUsesKnownStreamsWithoutExistenceList(t *testing.T) {
+func TestResolveLogStreamsUsesMultiplexedStubTaskStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveLogStreams(types.LogQuery{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		TaskID:      "task-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/tasks"}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected task log streams: got %q want %q", streams, want)
+	}
+}
+
+func TestResolveLogStreamsFallsBackToLegacyTaskStreamWithoutStub(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
@@ -354,13 +372,8 @@ func TestResolveLogStreamsUsesKnownStreamsWithoutExistenceList(t *testing.T) {
 	}
 
 	want := []s2.StreamName{"events/logs/workspaces/workspace-123/tasks/task-123"}
-	if len(streams) != len(want) {
-		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
-	}
-	for i := range want {
-		if streams[i] != want[i] {
-			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
-		}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected task log streams: got %q want %q", streams, want)
 	}
 }
 
@@ -592,7 +605,7 @@ func TestS2TaskEventsUseWorkspaceAndAppAggregateStreams(t *testing.T) {
 	})
 
 	want := []s2.StreamName{
-		"events/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/stub-456/tasks",
 		"events/workspaces/workspace-123/stubs/stub-456",
 		"events/workspaces/workspace-123",
 		"events/workspaces/workspace-123/apps/app-123",
@@ -619,7 +632,7 @@ func TestS2TaskUpdateEventsUseTaskStreamWhenContainerScoped(t *testing.T) {
 	})
 
 	want := []s2.StreamName{
-		"events/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/stub-456/tasks",
 		"events/workspaces/workspace-123/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456/containers/container-789",
 		"events/workspaces/workspace-123/stubs/stub-456",
@@ -650,7 +663,7 @@ func TestS2TaskUpdateEventsSkipAliasForStubScopedContainer(t *testing.T) {
 	})
 
 	want := []s2.StreamName{
-		"events/tasks/task-123",
+		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/tasks",
 		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e/containers/pod-5e3e31ff-aef4-40b6-a98d-439268a9832e-1717f4fc",
 		"events/workspaces/workspace-123/stubs/5e3e31ff-aef4-40b6-a98d-439268a9832e",
 		"events/workspaces/workspace-123",
@@ -663,6 +676,148 @@ func TestS2TaskUpdateEventsSkipAliasForStubScopedContainer(t *testing.T) {
 		if streams[i] != want[i] {
 			t.Fatalf("unexpected task stream at %d: got %q want %q", i, streams[i], want[i])
 		}
+	}
+}
+
+func TestS2TaskEventsWithoutStubFallBackToWorkspaceStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{
+		WorkspaceID: "workspace-123",
+		TaskID:      "task-123",
+	})
+
+	want := []s2.StreamName{"events/workspaces/workspace-123"}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected task stream fallback: got %q want %q", streams, want)
+	}
+}
+
+func TestResolveEventHistoryStreamsUsesStubTaskStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams, err := repo.resolveEventHistoryStreams(context.Background(), types.EventQuery{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		TaskID:      "task-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []s2.StreamName{"events/workspaces/workspace-123/stubs/stub-456/tasks"}
+	if !reflect.DeepEqual(streams, want) {
+		t.Fatalf("unexpected task history streams: got %q want %q", streams, want)
+	}
+
+	legacyStreams, err := repo.resolveEventHistoryStreams(context.Background(), types.EventQuery{
+		TaskID: "task-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLegacy := []s2.StreamName{"events/tasks/task-123"}
+	if !reflect.DeepEqual(legacyStreams, wantLegacy) {
+		t.Fatalf("unexpected legacy task history streams: got %q want %q", legacyStreams, wantLegacy)
+	}
+}
+
+func sequencedRecordForEvent(t *testing.T, eventType string, schemaVersion string, schema interface{}) s2.SequencedRecord {
+	t.Helper()
+	eventRepo := &EventClientRepo{}
+	event, err := eventRepo.createEventObject(eventType, schemaVersion, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &S2EventRepository{streamPrefix: "events"}
+	record, _, err := repo.appendRecordForEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s2.SequencedRecord{
+		Headers: record.Headers,
+		Body:    record.Body,
+	}
+}
+
+func TestEventRecordHeadersSkipDemultiplexesByTaskHeader(t *testing.T) {
+	recordA := sequencedRecordForEvent(t, types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+		TaskID:      "task-a",
+		Line:        "from task a",
+	})
+	recordB := sequencedRecordForEvent(t, types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-790",
+		TaskID:      "task-b",
+		Line:        "from task b",
+	})
+
+	query := types.EventQuery{TaskID: "task-a"}
+	if eventRecordHeadersSkip(recordA, query) {
+		t.Fatal("expected task-a record to pass the header pre-filter")
+	}
+	if !eventRecordHeadersSkip(recordB, query) {
+		t.Fatal("expected task-b record to be skipped on header inspection alone")
+	}
+
+	// Legacy records without headers must fall through to body filtering.
+	if eventRecordHeadersSkip(s2.SequencedRecord{Body: recordB.Body}, query) {
+		t.Fatal("expected headerless record to fall through to body filtering")
+	}
+}
+
+func TestEventRecordHeadersSkipFiltersByTypeHeader(t *testing.T) {
+	logRecord := sequencedRecordForEvent(t, types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		TaskID:      "task-a",
+		Line:        "noise",
+	})
+
+	excludeLogs := types.EventQuery{TaskID: "task-a", ExcludeEventTypes: []string{types.EventContainerLog}}
+	if !eventRecordHeadersSkip(logRecord, excludeLogs) {
+		t.Fatal("expected excluded log record to be skipped via type header")
+	}
+
+	onlyTaskEvents := types.EventQuery{TaskID: "task-a", EventTypes: []string{"task.*"}}
+	if !eventRecordHeadersSkip(logRecord, onlyTaskEvents) {
+		t.Fatal("expected log record to be skipped when only task.* types are requested")
+	}
+
+	allowLogs := types.EventQuery{TaskID: "task-a", EventTypes: []string{types.EventContainerLog}}
+	if eventRecordHeadersSkip(logRecord, allowLogs) {
+		t.Fatal("expected log record to pass when container.log is explicitly requested")
+	}
+}
+
+func TestLogRecordHeadersSkipDemultiplexesByTaskHeader(t *testing.T) {
+	logRecord := sequencedRecordForEvent(t, types.EventContainerLog, types.EventContainerLogSchemaVersion, types.EventContainerLogSchema{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		TaskID:      "task-a",
+		Line:        "hello",
+	})
+	taskEventRecord := sequencedRecordForEvent(t, types.EventTaskUpdated, types.EventTaskSchemaVersion, types.EventTaskSchema{
+		ID:          "task-a",
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+	})
+
+	query := types.LogQuery{TaskID: "task-a"}
+	if logRecordHeadersSkip(logRecord, query) {
+		t.Fatal("expected matching task log record to pass the header pre-filter")
+	}
+	if !logRecordHeadersSkip(taskEventRecord, query) {
+		t.Fatal("expected non-log record in the multiplexed stream to be skipped via type header")
+	}
+	if !logRecordHeadersSkip(logRecord, types.LogQuery{TaskID: "task-b"}) {
+		t.Fatal("expected other task's log record to be skipped via task_id header")
+	}
+	if logRecordHeadersSkip(s2.SequencedRecord{Body: logRecord.Body}, query) {
+		t.Fatal("expected headerless record to fall through to body filtering")
 	}
 }
 

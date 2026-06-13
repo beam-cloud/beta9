@@ -770,6 +770,10 @@ type EventQuery struct {
 	TaskID      string   `json:"task_id,omitempty"`
 	ContainerID string   `json:"container_id,omitempty"`
 	EventTypes  []string `json:"event_types,omitempty"`
+	// ExcludeEventTypes drops records of the given event types (wildcards
+	// supported); used so task reads from the multiplexed stub task stream do
+	// not return log records unless explicitly requested.
+	ExcludeEventTypes []string `json:"exclude_event_types,omitempty"`
 	// ExcludeActions drops records whose payload "action" field matches; used
 	// to keep dense actions (e.g. machine.heartbeat) from consuming the limit.
 	ExcludeActions []string   `json:"exclude_actions,omitempty"`
