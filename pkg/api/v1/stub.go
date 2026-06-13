@@ -41,8 +41,9 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, conta
 		eventRepo:     eventRepo,
 	}
 
-	g.GET("/:workspaceId/sandboxes", auth.WithWorkspaceAuth(group.ListSandboxes))             // Lists sandboxes (enriched with live container state) for a workspace
-	g.GET("/:workspaceId/sandboxes/stats", auth.WithWorkspaceAuth(group.GetSandboxStats))     // Aggregated sandbox stats for the sandboxes dashboard
+	g.GET("/:workspaceId/sandboxes", auth.WithWorkspaceAuth(group.ListSandboxes))                       // Lists sandboxes (enriched with live container state) for a workspace
+	g.GET("/:workspaceId/sandboxes/stats", auth.WithWorkspaceAuth(group.GetSandboxStats))               // Aggregated sandbox stats for the sandboxes dashboard
+	g.GET("/:workspaceId/sandboxes/:stubId/timeline", auth.WithWorkspaceAuth(group.GetSandboxTimeline)) // Startup/lifecycle timeline for a single sandbox
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))              // Allows workspace admins to list stubs specific to their workspace
 	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))                // Allows workspace admins to retrieve a specific stub
 	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                     // Allows cluster admins to list all stubs
@@ -808,6 +809,135 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		StatusCounts:   statusCounts,
 		CreatedBuckets: buildCreatedBuckets(stubs),
 	})
+}
+
+type SandboxTimeline struct {
+	ContainerId  string     `json:"container_id,omitempty"`
+	Status       string     `json:"status"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ScheduledAt  *time.Time `json:"scheduled_at,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	SchedulingMs *int64     `json:"scheduling_ms,omitempty"`
+	StartupMs    *int64     `json:"startup_ms,omitempty"`
+	RuntimeMs    *int64     `json:"runtime_ms,omitempty"`
+}
+
+// GetSandboxTimeline returns a Created -> Scheduled -> Started -> Ended timeline
+// for a single sandbox, derived from S2 container lifecycle/scheduling events.
+func (g *StubGroup) GetSandboxTimeline(ctx echo.Context) error {
+	workspaceID := ctx.Param("workspaceId")
+	stubID := ctx.Param("stubId")
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve sandbox")
+	}
+	if stub == nil || stub.Workspace.ExternalId != workspaceID {
+		return HTTPNotFound()
+	}
+
+	timeline := SandboxTimeline{CreatedAt: stub.CreatedAt.Time, Status: SandboxStatusStopped}
+
+	var activeContainers []types.ContainerState
+	if g.containerRepo != nil {
+		activeContainers, _ = g.containerRepo.GetActiveContainersByStubId(stubID)
+	}
+	active := mostRelevantContainer(activeContainers)
+
+	containerID := ""
+	if active != nil {
+		containerID = active.ContainerId
+		timeline.Status = string(active.Status)
+		if active.StartedAt > 0 {
+			startedAt := time.Unix(active.StartedAt, 0).UTC()
+			timeline.StartedAt = &startedAt
+		}
+	} else {
+		status, _, terminalContainerID := g.deriveTerminalSandbox(ctx.Request().Context(), workspaceID, stubID)
+		timeline.Status = status
+		containerID = terminalContainerID
+	}
+	timeline.ContainerId = containerID
+
+	if containerID != "" && g.eventRepo != nil {
+		if resp, err := g.eventRepo.GetContainerEvents(ctx.Request().Context(), containerID, types.EventQuery{
+			WorkspaceID: workspaceID,
+			StubID:      stubID,
+		}); err == nil && resp != nil {
+			applyContainerTimeline(&timeline, resp)
+		}
+	}
+
+	// Compute runtime once we know when the sandbox started.
+	if timeline.StartedAt != nil {
+		end := timeline.EndedAt
+		if end == nil && isActiveSandboxStatus(timeline.Status) {
+			now := time.Now().UTC()
+			end = &now
+		}
+		if end != nil {
+			runtime := end.Sub(*timeline.StartedAt).Milliseconds()
+			if runtime >= 0 {
+				timeline.RuntimeMs = &runtime
+			}
+		}
+	}
+
+	return ctx.JSON(http.StatusOK, timeline)
+}
+
+func applyContainerTimeline(timeline *SandboxTimeline, resp *types.ContainerEventsResponse) {
+	created := timeline.CreatedAt
+
+	if scheduling, ok := resp.Summary["scheduler_queue_to_worker_receive_ms"]; ok && scheduling >= 0 {
+		value := scheduling
+		timeline.SchedulingMs = &value
+		scheduledAt := created.Add(time.Duration(scheduling) * time.Millisecond)
+		timeline.ScheduledAt = &scheduledAt
+	}
+
+	if total, ok := resp.Summary["container_request_to_running_ms"]; ok && total > 0 {
+		// Prefer the event-derived start only when the live container state did
+		// not already give us an authoritative started timestamp.
+		if timeline.StartedAt == nil {
+			startedAt := created.Add(time.Duration(total) * time.Millisecond)
+			timeline.StartedAt = &startedAt
+		}
+		if timeline.SchedulingMs != nil {
+			startup := total - *timeline.SchedulingMs
+			if startup >= 0 {
+				timeline.StartupMs = &startup
+			}
+		}
+	}
+
+	// The terminal timestamp is the latest observed event for the container.
+	if !isActiveSandboxStatus(timeline.Status) {
+		var latest time.Time
+		for _, event := range resp.Events {
+			candidate := event.Timestamp
+			if candidate.IsZero() {
+				candidate = event.EndTime
+			}
+			if candidate.After(latest) {
+				latest = candidate
+			}
+		}
+		if !latest.IsZero() {
+			endedAt := latest.UTC()
+			timeline.EndedAt = &endedAt
+		}
+	}
+}
+
+func isActiveSandboxStatus(status string) bool {
+	switch status {
+	case SandboxStatusRunning, SandboxStatusPending, SandboxStatusStopping:
+		return true
+	default:
+		return false
+	}
 }
 
 func (g *StubGroup) activeContainersByStub(workspaceID string) map[string][]types.ContainerState {
