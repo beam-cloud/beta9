@@ -715,9 +715,9 @@ type SandboxStatsResponse struct {
 	CreatedBuckets []SandboxCreatedBucket `json:"created_buckets"`
 }
 
-// ListSandboxes returns a cursor-paginated list of sandboxes for the workspace,
-// enriched with live status, GPU, time-to-started, and lifetime. The list is
-// workspace-scoped (not app-scoped) so SDK-created sandboxes always appear.
+// ListSandboxes returns a cursor-paginated list of sandboxes enriched with live
+// status, GPU, time-to-started, and lifetime. It is scoped to the app when an
+// app_id is provided, otherwise it lists all sandboxes in the workspace.
 func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 	workspaceID := ctx.Param("workspaceId")
 
@@ -754,6 +754,7 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 	stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), types.StubFilter{
 		WorkspaceID: workspaceID,
 		StubTypes:   types.StringSlice{types.StubTypeSandbox},
+		AppId:       ctx.QueryParam("app_id"),
 	})
 	if err != nil {
 		return HTTPInternalServerError("Failed to list sandboxes")
