@@ -357,6 +357,16 @@ func (g *EventGroup) StreamTaskEvents(ctx echo.Context) error {
 	query.WorkspaceID = task.Workspace.ExternalId
 	query.AppID = task.App.ExternalId
 
+	// Task records live in a stream shared by all of the stub's tasks. When
+	// the client did not pick a start position, replay from just before the
+	// task's creation instead of the beginning of the shared stream. The
+	// buffer absorbs clock skew between the database and event producers;
+	// records from other tasks are filtered out by task_id.
+	if query.SeqNum == nil && query.Timestamp == nil && query.TailOffset == nil && !task.CreatedAt.IsZero() {
+		timestamp := uint64(task.CreatedAt.UTC().Add(-time.Minute).UnixMilli())
+		query.Timestamp = &timestamp
+	}
+
 	stream, err := g.eventRepo.StreamTaskEvents(ctx.Request().Context(), query)
 	if err != nil {
 		if errors.Is(err, repository.ErrEventReadUnsupported) {
