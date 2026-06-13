@@ -11,7 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
+func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 	tmp := t.TempDir()
 	runner := &fakeRunner{}
 	manager := Systemd{
@@ -63,7 +63,7 @@ func TestSystemdInstallWritesUnitAndRestartsService(t *testing.T) {
 	if got, want := strings.Join(runner.commands, "\n"), strings.Join([]string{
 		types.AgentSystemctlCommand + " daemon-reload",
 		types.AgentSystemctlCommand + " enable " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
-		types.AgentSystemctlCommand + " restart " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
+		types.AgentSystemctlCommand + " start " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
 	}, "\n"); got != want {
 		t.Fatalf("unexpected commands:\ngot:\n%s\nwant:\n%s", got, want)
 	}

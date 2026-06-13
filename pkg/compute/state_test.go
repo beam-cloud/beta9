@@ -28,15 +28,28 @@ func TestAgentWorkerSlotStateDoesNotSerializeWorkerToken(t *testing.T) {
 	}
 }
 
-func TestAgentMachineConnectedRejectsFutureHeartbeat(t *testing.T) {
+func TestAgentMachineConnectedAllowsSmallFutureHeartbeatSkew(t *testing.T) {
 	now := time.Now().UTC()
 	state := &AgentTokenState{
 		Schedulable:     true,
 		LastJoinAt:      now.Add(-time.Minute),
-		LastHeartbeatAt: now.Add(time.Minute),
+		LastHeartbeatAt: now.Add(agentHeartbeatFutureTolerance - time.Millisecond),
+	}
+
+	if !AgentMachineConnected(state, now) {
+		t.Fatal("small future heartbeat skew was treated as disconnected")
+	}
+}
+
+func TestAgentMachineConnectedRejectsDistantFutureHeartbeat(t *testing.T) {
+	now := time.Now().UTC()
+	state := &AgentTokenState{
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now.Add(agentHeartbeatFutureTolerance + time.Second),
 	}
 
 	if AgentMachineConnected(state, now) {
-		t.Fatal("future heartbeat was treated as connected")
+		t.Fatal("distant future heartbeat was treated as connected")
 	}
 }

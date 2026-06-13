@@ -98,6 +98,45 @@ func TestPrivatePoolReadsAreWorkspaceScoped(t *testing.T) {
 	}
 }
 
+func TestListPrivatePoolsReadyMachineCountUsesAgentConnection(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "viewer-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "private-pool", Status: "active"},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "private-pool"): {
+				{
+					WorkspaceID:     "workspace-1",
+					PoolName:        "private-pool",
+					MachineID:       "machine-1",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Minute),
+					LastHeartbeatAt: now,
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	pools, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !pools.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", pools.ErrMsg)
+	}
+	if got, want := len(pools.Pools), 1; got != want {
+		t.Fatalf("pool count = %d, want %d", got, want)
+	}
+	if got, want := pools.Pools[0].ReadyMachineCount, uint32(1); got != want {
+		t.Fatalf("ready machine count = %d, want %d", got, want)
+	}
+}
+
 func TestCreatePoolConflictsWithWorkspacePoolOwnedByAnotherToken(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
@@ -1119,7 +1158,7 @@ func TestRecordAgentDisconnectDisablesStaleHeartbeat(t *testing.T) {
 		PoolName:        "pool-1",
 		MachineID:       "machine-1",
 		Schedulable:     true,
-		LastJoinAt:      now.Add(-time.Minute),
+		LastJoinAt:      now.Add(-model.AgentHeartbeatTimeout - 2*time.Second),
 		LastHeartbeatAt: now.Add(-model.AgentHeartbeatTimeout - time.Second),
 	}
 	workerID := model.AgentMachineWorkerID(machine.MachineID)
@@ -1612,6 +1651,113 @@ func TestReconcileManagedComputeDoesNotTerminateOnBillingError(t *testing.T) {
 	}
 	if state.Reservations[0].TerminatingReason != "" {
 		t.Fatalf("billing error set terminating reason = %q", state.Reservations[0].TerminatingReason)
+	}
+}
+
+func TestReconcileManagedComputeKeepsSameSecondHeartbeatConnected(t *testing.T) {
+	reconcileAt := time.Date(2026, 6, 13, 17, 19, 47, 700*int(time.Millisecond), time.UTC)
+	heartbeatAt := reconcileAt.Truncate(time.Second).Add(650 * time.Millisecond)
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastJoinAt:      reconcileAt.Add(-time.Minute),
+		LastHeartbeatAt: heartbeatAt,
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{
+			Id:        workerID,
+			Status:    types.WorkerStatusAvailable,
+			MachineId: machine.MachineID,
+			PoolName:  machine.PoolName,
+		},
+	}
+	service := &Service{
+		computeRepo: &fakeComputeRepo{
+			pools: map[string][]*model.PoolState{"workspace-1": {state}},
+			machines: map[string][]*model.AgentTokenState{
+				fakeComputeKey("workspace-1", "pool-1"): {machine},
+			},
+		},
+		workerRepo: workerRepo,
+	}
+
+	if err := service.reconcileManagedComputeAt(context.Background(), reconcileAt); err != nil {
+		t.Fatalf("reconcileManagedComputeAt() error = %v", err)
+	}
+	if got, want := workerRepo.worker.Status, types.WorkerStatusAvailable; got != want {
+		t.Fatalf("worker status = %q, want %q", got, want)
+	}
+	if got := workerRepo.status; got != "" {
+		t.Fatalf("worker status update = %q, want none", got)
+	}
+}
+
+func TestReconcileManagedComputeUsesFreshTimePerPool(t *testing.T) {
+	firstPoolTime := time.Date(2026, 6, 13, 17, 19, 47, 0, time.UTC)
+	secondPoolTime := firstPoolTime.Add(70 * time.Second)
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "live-pool",
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "live-pool",
+		MachineID:       "machine-1",
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastJoinAt:      firstPoolTime.Add(-time.Minute),
+		LastHeartbeatAt: secondPoolTime.Add(-5 * time.Second),
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{
+		worker: &types.Worker{
+			Id:        workerID,
+			Status:    types.WorkerStatusAvailable,
+			MachineId: machine.MachineID,
+			PoolName:  machine.PoolName,
+		},
+	}
+	service := &Service{
+		computeRepo: &fakeComputeRepo{
+			pools: map[string][]*model.PoolState{
+				"workspace-1": {
+					{WorkspaceID: "workspace-1", Name: "slow-pool"},
+					state,
+				},
+			},
+			machines: map[string][]*model.AgentTokenState{
+				fakeComputeKey("workspace-1", "live-pool"): {machine},
+			},
+		},
+		workerRepo: workerRepo,
+	}
+	clockCalls := 0
+
+	if err := service.reconcileManagedComputeWithClock(context.Background(), func() time.Time {
+		clockCalls++
+		if clockCalls == 1 {
+			return firstPoolTime
+		}
+		return secondPoolTime
+	}); err != nil {
+		t.Fatalf("reconcileManagedComputeWithClock() error = %v", err)
+	}
+	if got, want := workerRepo.worker.Status, types.WorkerStatusAvailable; got != want {
+		t.Fatalf("worker status = %q, want %q", got, want)
+	}
+	if got := workerRepo.status; got != "" {
+		t.Fatalf("worker status update = %q, want none", got)
+	}
+	if got, want := clockCalls, 2; got != want {
+		t.Fatalf("clock calls = %d, want %d", got, want)
 	}
 }
 

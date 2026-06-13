@@ -41,6 +41,18 @@ func (s *Service) runReconciler(ctx context.Context) {
 }
 
 func (s *Service) ReconcileManagedCompute(ctx context.Context) error {
+	return s.reconcileManagedComputeWithClock(ctx, func() time.Time {
+		return time.Now().UTC()
+	})
+}
+
+func (s *Service) reconcileManagedComputeAt(ctx context.Context, now time.Time) error {
+	return s.reconcileManagedComputeWithClock(ctx, func() time.Time {
+		return now
+	})
+}
+
+func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc func() time.Time) error {
 	if s == nil || s.computeRepo == nil {
 		return nil
 	}
@@ -48,11 +60,13 @@ func (s *Service) ReconcileManagedCompute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Second-aligned windows keep retried usage reports deduplicable.
-	now := time.Now().UTC().Truncate(time.Second)
 	for _, state := range states {
 		if state == nil || state.WorkspaceID == "" || state.Name == "" {
 			continue
+		}
+		now := time.Now().UTC()
+		if nowFunc != nil {
+			now = nowFunc().UTC()
 		}
 		if err := s.reconcilePoolLocked(ctx, state.WorkspaceID, state.Name, now); err != nil {
 			log.Warn().
@@ -79,8 +93,12 @@ func (s *Service) reconcilePoolLocked(ctx context.Context, workspaceID, poolName
 
 func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) error {
 	changed := false
-	if s.poolNeedsManagedBilling(state, now) {
-		changed = s.reconcileBilling(ctx, workspaceID, state, now) || changed
+	// Second-aligned billing windows keep retried usage reports deduplicable,
+	// but liveness checks below need the exact timestamp. A same-second
+	// heartbeat can otherwise look like it came from the future.
+	billingNow := now.Truncate(time.Second)
+	if s.poolNeedsManagedBilling(state, billingNow) {
+		changed = s.reconcileBilling(ctx, workspaceID, state, billingNow) || changed
 	}
 
 	vendors := s.computeVendors()

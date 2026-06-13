@@ -55,7 +55,7 @@ func (m Systemd) Install(ctx context.Context, spec Spec) error {
 	for _, args := range [][]string{
 		{"daemon-reload"},
 		{"enable", spec.Name + types.AgentServiceUnitExtension},
-		{"restart", spec.Name + types.AgentServiceUnitExtension},
+		{"start", spec.Name + types.AgentServiceUnitExtension},
 	} {
 		if err := runner.Run(ctx, types.AgentSystemctlCommand, args...); err != nil {
 			return fmt.Errorf("%s %s: %w", types.AgentSystemctlCommand, strings.Join(args, " "), err)

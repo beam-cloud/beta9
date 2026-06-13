@@ -119,6 +119,10 @@ type PreflightCheckState struct {
 // disabling the machine's worker and flickering its status.
 const AgentHeartbeatTimeout = 60 * time.Second
 
+// agentHeartbeatFutureTolerance allows small clock differences between
+// gateway pods writing heartbeats and gateway pods evaluating liveness.
+const agentHeartbeatFutureTolerance = 5 * time.Second
+
 func AgentMachineStatus(state *AgentTokenState, now time.Time) string {
 	if AgentMachineConnected(state, now) {
 		return types.AgentMachineStatusSchedulable
@@ -144,7 +148,7 @@ func AgentMachineConnected(state *AgentTokenState, now time.Time) bool {
 		now = time.Now()
 	}
 	if lastSeen.After(now) {
-		return false
+		return lastSeen.Sub(now) <= agentHeartbeatFutureTolerance
 	}
 	return now.Sub(lastSeen) <= AgentHeartbeatTimeout
 }
