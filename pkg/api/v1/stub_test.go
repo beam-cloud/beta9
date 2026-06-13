@@ -39,6 +39,7 @@ func NewStubGroupForTest() *StubGroup {
 	return NewStubGroup(
 		e.Group("/stubs"),
 		backendRepo,
+		nil,
 		repository.NewEventClientRepo(config),
 		config,
 	)
@@ -63,6 +64,7 @@ func NewStubGroupWithMockForTest() (*StubGroup, sqlmock.Sqlmock, *echo.Echo) {
 	stubGroup := NewStubGroup(
 		e.Group("/stubs"),
 		backendRepo,
+		nil,
 		repository.NewEventClientRepo(config),
 		config,
 	)

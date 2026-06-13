@@ -121,7 +121,7 @@ func (r *S2EventRepository) GetStubMetricsTimeseries(ctx context.Context, query 
 		return response, nil
 	}
 
-	return r.getMetricsTimeseries(ctx, r.stubStreamName(query.WorkspaceID, query.StubID), start, end, interval)
+	return r.getMetricsTimeseries(ctx, r.stubStreamName(query.WorkspaceID, query.StubID), start, end, interval, query.StubType)
 }
 
 func (r *S2EventRepository) GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error) {
@@ -130,10 +130,10 @@ func (r *S2EventRepository) GetWorkspaceMetricsTimeseries(ctx context.Context, q
 		return response, nil
 	}
 
-	return r.getMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, end, interval)
+	return r.getMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, end, interval, query.StubType)
 }
 
-func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error) {
+func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string, stubTypeFilter string) (*types.MetricsTimeseriesResponse, error) {
 	response := &types.MetricsTimeseriesResponse{}
 	buckets := map[int64]*metricsBucketAccumulator{}
 	seqNum := uint64(0)
@@ -164,6 +164,9 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 		for _, record := range batch.Records {
 			metrics, eventTime, ok := containerMetricsFromS2(record)
 			if !ok {
+				continue
+			}
+			if stubTypeFilter != "" && types.StubType(metrics.StubType).Kind() != stubTypeFilter {
 				continue
 			}
 			if eventTime.Before(start) || !eventTime.Before(end) {

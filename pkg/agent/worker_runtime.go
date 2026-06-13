@@ -21,8 +21,8 @@ type workerRuntimeManager struct {
 	mu          sync.Mutex
 	supervisors map[string]*workerRuntimeSupervisor
 	noticeOnce  sync.Once
-	stdout      io.Writer
-	stderr      io.Writer
+	statusOut   io.Writer
+	statusErr   io.Writer
 	telemetry   *agentTelemetry
 }
 
@@ -36,20 +36,25 @@ type workerContainerRuntime struct {
 	opts      types.AgentJoinOptions
 	stdout    io.Writer
 	stderr    io.Writer
+	statusOut io.Writer
+	statusErr io.Writer
 	telemetry *agentTelemetry
 	imageMu   sync.Mutex
 	images    map[string]string
 }
 
-func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts types.AgentJoinOptions, stdout, stderr, agentLogs io.Writer, telemetry *agentTelemetry) *workerRuntimeManager {
+func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts types.AgentJoinOptions, stdout, stderr, statusOut, statusErr io.Writer, telemetry *agentTelemetry) *workerRuntimeManager {
 	if stdout == nil {
 		stdout = io.Discard
 	}
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	if agentLogs == nil {
-		agentLogs = stderr
+	if statusOut == nil {
+		statusOut = stdout
+	}
+	if statusErr == nil {
+		statusErr = stderr
 	}
 	return &workerRuntimeManager{
 		executor: bootstrap.Executor,
@@ -58,11 +63,13 @@ func newWorkerRuntimeManager(bootstrap bootstrapConfig, opts types.AgentJoinOpti
 			opts:      opts,
 			stdout:    stdout,
 			stderr:    stderr,
+			statusOut: statusOut,
+			statusErr: statusErr,
 			telemetry: telemetry,
 			images:    map[string]string{},
 		},
-		stdout:      stdout,
-		stderr:      agentLogs,
+		statusOut:   statusOut,
+		statusErr:   statusErr,
 		telemetry:   telemetry,
 		supervisors: map[string]*workerRuntimeSupervisor{},
 	}
@@ -76,7 +83,7 @@ func (m *workerRuntimeManager) reconcile(ctx context.Context, slots []*pb.AgentW
 	if m.executor != types.DefaultAgentWorkerContainerMode {
 		if len(slots) > 0 {
 			m.noticeOnce.Do(func() {
-				fmt.Fprintf(m.stderr, "agent executor %q does not start worker containers; desired slots are ignored\n", m.executor)
+				fmt.Fprintf(m.statusErr, "agent executor %q does not start worker containers; desired slots are ignored\n", m.executor)
 			})
 		}
 		m.stopAll()
@@ -119,7 +126,7 @@ func (m *workerRuntimeManager) ensureSlot(ctx context.Context, slot *pb.AgentWor
 
 	slotCtx, cancel := context.WithCancel(ctx)
 	m.supervisors[slot.WorkerId] = &workerRuntimeSupervisor{slot: cloneAgentWorkerSlot(slot), cancel: cancel}
-	statusf(m.stdout, "Preparing worker %q", slot.WorkerId)
+	statusf(m.statusOut, "Preparing worker %q", slot.WorkerId)
 	go m.superviseSlot(slotCtx, slot)
 }
 
@@ -133,7 +140,7 @@ func (m *workerRuntimeManager) superviseSlot(ctx context.Context, slot *pb.Agent
 		if err == nil {
 			err = fmt.Errorf("worker exited")
 		}
-		fmt.Fprintf(m.stderr, "worker slot %s exited: %v\n", slot.WorkerId, err)
+		fmt.Fprintf(m.statusErr, "worker slot %s exited: %v\n", slot.WorkerId, err)
 
 		select {
 		case <-ctx.Done():
@@ -180,14 +187,14 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	}
 
 	if err := removeOtherManagedWorkerContainers(name, slot); err != nil {
-		fmt.Fprintf(r.stderr, "failed to clean stale worker containers: %v\n", err)
+		fmt.Fprintf(r.statusErr, "failed to clean stale worker containers: %v\n", err)
 	}
 	if err := removeManagedWorkerContainer(name, slot); err != nil {
 		return err
 	}
 	defer func() {
 		if err := removeManagedWorkerContainer(name, slot); err != nil {
-			fmt.Fprintf(r.stderr, "failed to remove worker container %s: %v\n", name, err)
+			fmt.Fprintf(r.statusErr, "failed to remove worker container %s: %v\n", name, err)
 		}
 	}()
 
@@ -211,7 +218,7 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	)
 
 	done := make(chan error, 1)
-	statusf(r.stdout, "Starting worker %q", slot.WorkerId)
+	statusf(r.statusOut, "Starting worker %q", slot.WorkerId)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -237,12 +244,12 @@ func (r *workerContainerRuntime) pullImage(ctx context.Context, image string) (s
 	}
 	r.imageMu.Unlock()
 
-	statusf(r.stdout, "Pulling worker image %q", image)
-	imageID, err := pullDockerImage(ctx, image, r.stdout)
+	statusf(r.statusOut, "Pulling worker image %q", image)
+	imageID, err := pullDockerImage(ctx, image, r.statusOut)
 	if err != nil {
 		return "", err
 	}
-	statusf(r.stdout, "Worker image ready")
+	statusf(r.statusOut, "Worker image ready")
 
 	r.imageMu.Lock()
 	r.images[key] = imageID

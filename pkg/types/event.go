@@ -766,6 +766,7 @@ type EventQuery struct {
 	Limit       uint64   `json:"limit,omitempty"`
 	WorkspaceID string   `json:"workspace_id,omitempty"`
 	StubID      string   `json:"stub_id,omitempty"`
+	StubType    string   `json:"stub_type,omitempty"`
 	AppID       string   `json:"app_id,omitempty"`
 	TaskID      string   `json:"task_id,omitempty"`
 	ContainerID string   `json:"container_id,omitempty"`

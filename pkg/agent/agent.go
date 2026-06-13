@@ -39,12 +39,6 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 		fmt.Fprintf(opts.Stderr, "failed to save agent state: %v\n", err)
 	}
 
-	statusf(opts.Stdout, "Connected to pool %q", res.PoolName)
-	statusf(opts.Stdout, "Registered machine %q", res.MachineID)
-	if !res.Schedulable && len(res.Preflight) > 0 {
-		statusf(opts.Stdout, "Machine is not schedulable: %s", preflightFailureSummary(res.Preflight))
-	}
-	verbosef(opts.Stdout, "transport=%s executor=%s fallback=%s\n", res.Bootstrap.Transport, res.Bootstrap.Executor, res.Bootstrap.Fallback)
 	grpcClient, grpcConn, err := newGatewayGRPCClient(opts.GatewayURL, res.Bootstrap.GatewayGRPCHost, res.Bootstrap.GatewayGRPCPort, res.Bootstrap.GatewayGRPCTLS)
 	if err != nil {
 		return fmt.Errorf("gateway grpc client: %w", err)
@@ -53,24 +47,33 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 
 	telemetry := newAgentTelemetry(grpcClient, res.AgentToken, res.Bootstrap, opts.Stderr)
 	go telemetry.run(ctx)
-	agentLogs := telemetry.teeLogWriter(opts.Stderr, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStderr)
-	defer agentLogs.Close()
+	agentStdout := telemetry.teeLogWriter(opts.Stdout, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStdout)
+	defer agentStdout.Close()
+	agentStderr := telemetry.teeLogWriter(opts.Stderr, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStderr)
+	defer agentStderr.Close()
 
-	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr, agentLogs, telemetry)
+	statusf(agentStdout, "Connected to pool %q", res.PoolName)
+	statusf(agentStdout, "Registered machine %q", res.MachineID)
+	if !res.Schedulable && len(res.Preflight) > 0 {
+		statusf(agentStdout, "Machine is not schedulable: %s", preflightFailureSummary(res.Preflight))
+	}
+	verbosef(agentStdout, "transport=%s executor=%s fallback=%s\n", res.Bootstrap.Transport, res.Bootstrap.Executor, res.Bootstrap.Fallback)
+
+	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr, agentStdout, agentStderr, telemetry)
 	telemetry.setStatsProvider(workers.stats)
 	defer workers.stopAll()
 
-	registryForwarder, err := startLocalRegistryForwarder(ctx, agentLogs)
+	registryForwarder, err := startLocalRegistryForwarder(ctx, agentStderr)
 	if err != nil {
-		fmt.Fprintf(agentLogs, "local registry forwarder disabled: %v\n", err)
+		fmt.Fprintf(agentStderr, "local registry forwarder disabled: %v\n", err)
 	} else if registryForwarder != nil {
 		defer registryForwarder.Close()
 	}
 
 	transport := normalizeTransport(firstNonEmpty(opts.TransportOverride, res.Bootstrap.Transport))
-	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, workers, telemetry, opts.Stdout, agentLogs); err != nil {
+	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, workers, telemetry, agentStdout, agentStderr); err != nil {
 		if agentInterrupted(ctx, err) {
-			statusf(opts.Stdout, "Disconnecting machine %q", res.MachineID)
+			statusf(agentStdout, "Disconnecting machine %q", res.MachineID)
 			return ErrInterrupted
 		}
 		return fmt.Errorf("route proxy stopped: %w", err)

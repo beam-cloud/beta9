@@ -42,7 +42,6 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 		pool := s.privatePoolStateToProtoWithMachines(state, machines)
-		pool.ReadyMachineCount = s.readyAgentMachineCount(machines)
 		out = append(out, pool)
 	}
 	return &pb.ListPrivatePoolsResponse{Ok: true, Pools: out}, nil
@@ -341,15 +340,4 @@ func (s *Service) privateMachineForDelete(ctx context.Context, authInfo *auth.Au
 		return nil, true, err
 	}
 	return machine, true, nil
-}
-
-func (s *Service) readyAgentMachineCount(machines []*model.AgentTokenState) uint32 {
-	ready := uint32(0)
-	now := time.Now()
-	for _, machine := range machines {
-		if agentMachineStatus(machine, s.agentMachineStatusWorker(machine), now) == types.MachineStatusAvailable {
-			ready++
-		}
-	}
-	return ready
 }
