@@ -18,7 +18,6 @@ from beta9.clients.gateway import (
     PoolConfig,
     PoolOffer,
     PrivatePool,
-    ProviderInstance,
 )
 from beta9.config import ConfigContext
 
@@ -154,23 +153,19 @@ def test_pool_launch_command_is_not_exposed():
     assert "create" in management.commands
 
 
-def test_private_pool_compute_summarizes_gpu_nodes_and_gpu_count():
+def test_private_pool_compute_summarizes_gpu_nodes():
     pool = PrivatePool(
         config=PoolConfig(gpu=["H100"], nodes=2),
         reserved_nodes=2,
-        reservations=[
-            ProviderInstance(gpu_count=8, node_count=1),
-            ProviderInstance(gpu_count=8, node_count=1),
-        ],
     )
 
-    assert _private_pool_compute(pool) == "2 GPU nodes, H100 x 16"
+    assert _private_pool_compute(pool) == "2 nodes (H100)"
 
 
 def test_private_pool_compute_summarizes_cpu_nodes():
     pool = PrivatePool(config=PoolConfig(nodes=3), reserved_nodes=3)
 
-    assert _private_pool_compute(pool) == "3 CPU nodes"
+    assert _private_pool_compute(pool) == "3 nodes (CPU)"
 
 
 def test_pool_offers_accepts_cpu_only_request(monkeypatch):

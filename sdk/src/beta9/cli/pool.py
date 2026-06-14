@@ -190,17 +190,12 @@ def _pool_status(status: str) -> str:
 def _private_pool_compute(pool: PrivatePool) -> str:
     gpu_types = pool.config.gpu
     node_count = _private_pool_node_count(pool)
-    gpu_count = _private_pool_gpu_count(pool)
 
-    if gpu_types and node_count > 0:
-        node_label = _node_label(node_count, "GPU")
-        if gpu_count > 0:
-            return f"{node_label}, {format_gpu(', '.join(gpu_types), gpu_count)}"
-        return f"{node_label} ({', '.join(gpu_types)})"
-    if gpu_types:
-        return ", ".join(gpu_types)
     if node_count > 0:
-        return _node_label(node_count, "CPU")
+        node_type = ", ".join(gpu_types) if gpu_types else "CPU"
+        return f"{_node_label(node_count)} ({node_type})"
+    if gpu_types:
+        return f"nodes ({', '.join(gpu_types)})"
     return "CPU"
 
 
@@ -211,20 +206,12 @@ def _private_pool_node_count(pool: PrivatePool) -> int:
     return sum(_reservation_node_count(reservation) for reservation in pool.reservations)
 
 
-def _private_pool_gpu_count(pool: PrivatePool) -> int:
-    total = 0
-    for reservation in pool.reservations:
-        if reservation.gpu_count > 0:
-            total += reservation.gpu_count * _reservation_node_count(reservation)
-    return total
-
-
 def _reservation_node_count(reservation: Any) -> int:
     return reservation.node_count or 1
 
 
-def _node_label(count: int, kind: str) -> str:
-    return f"{count} {kind} node{'s' if count != 1 else ''}"
+def _node_label(count: int) -> str:
+    return f"{count} node{'s' if count != 1 else ''}"
 
 
 def _control_plane_pool_details(pool: ControlPlanePool) -> str:
