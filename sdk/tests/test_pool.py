@@ -1,5 +1,4 @@
 import pytest
-from click.testing import CliRunner
 
 from beta9 import Pool
 from beta9.abstractions.function import Function
@@ -12,11 +11,9 @@ from beta9.cli.pool import (
     management,
 )
 from beta9.clients.gateway import (
-    ListPoolOffersResponse,
     ListPoolsResponse,
     ListPrivatePoolsResponse,
     PoolConfig,
-    PoolOffer,
     PrivatePool,
 )
 from beta9.config import ConfigContext
@@ -149,6 +146,7 @@ def test_pool_list_ignores_denied_control_plane_scope_for_default_view():
 
 def test_pool_launch_command_is_not_exposed():
     assert "launch" not in management.commands
+    assert "offers" not in management.commands
     assert "join" in management.commands
     assert "create" in management.commands
 
@@ -166,53 +164,6 @@ def test_private_pool_compute_summarizes_cpu_nodes():
     pool = PrivatePool(config=PoolConfig(nodes=3), reserved_nodes=3)
 
     assert _private_pool_compute(pool) == "3 nodes (CPU)"
-
-
-def test_pool_offers_accepts_cpu_only_request(monkeypatch):
-    requests = []
-
-    class Gateway:
-        def list_pool_offers(self, req):
-            requests.append(req)
-            return ListPoolOffersResponse(
-                ok=True,
-                offers=[
-                    PoolOffer(
-                        provider="hetzner",
-                        cloud="hetzner",
-                        region="ash",
-                        display_name="CPX31",
-                        node_count=1,
-                        cpu_millicores=4000,
-                        memory_mb=8192,
-                        available=1,
-                    )
-                ],
-            )
-
-    class FakeServiceClient:
-        def __init__(self, _config):
-            self.gateway = Gateway()
-            self.channel = object()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return False
-
-    monkeypatch.setattr("beta9.cli.extraclick.get_config_context", lambda _name: ConfigContext())
-    monkeypatch.setattr("beta9.cli.extraclick.ServiceClient", FakeServiceClient)
-
-    result = CliRunner().invoke(
-        management,
-        ["offers", "--provider", "hetzner", "--cpu", "--format", "json"],
-    )
-
-    assert result.exit_code == 0
-    assert requests[0].pool.nodes == 0
-    assert requests[0].pool.providers == ["hetzner"]
-    assert '"provider": "hetzner"' in result.output
 
 
 def test_pool_join_treats_sigint_exit_as_clean_stop():

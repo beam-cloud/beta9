@@ -19,7 +19,6 @@ from ..clients.gateway import (
     DeletePoolRequest,
     ExtendPoolCapacityRequest,
     GetPoolJoinCommandRequest,
-    ListPoolOffersRequest,
     Machine,
     ListPoolMachinesRequest,
     ListPoolsRequest,
@@ -30,7 +29,7 @@ from ..clients.gateway import (
     StringList,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
-from .machine_format import format_cpu, format_gpu, format_memory, machine_table
+from .machine_format import format_cpu, format_memory, machine_table
 
 
 @click.group(cls=ClickCommonGroup)
@@ -374,89 +373,6 @@ def create(
     if not res.ok:
         return terminal.error(res.err_msg)
     terminal.success(f"Created private pool '{res.pool.name}'")
-
-
-@management.command(name="offers", help="List managed private pool capacity offers.")
-@click.option("--provider", "provider", multiple=True, help="Provider filter, for example hetzner.")
-@click.option("--region", "region", multiple=True, help="Region filter.")
-@click.option("--cpu", is_flag=True, help="Show CPU offers only.")
-@click.option("--gpu", "gpu", multiple=True, help="GPU type to match.")
-@click.option("--nodes", type=click.IntRange(0), default=0, help="Node count to match.")
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
-@extraclick.pass_service_client
-def offers(
-    service: ServiceClient,
-    provider: Tuple[str, ...],
-    region: Tuple[str, ...],
-    cpu: bool,
-    gpu: Tuple[str, ...],
-    nodes: int,
-    format: str,
-):
-    if cpu and gpu:
-        return terminal.error("--cpu cannot be combined with --gpu.")
-
-    res = service.gateway.list_pool_offers(
-        ListPoolOffersRequest(
-            pool=_pool_config(
-                name="",
-                gpu=gpu,
-                nodes=nodes,
-                provider=provider,
-                region=region,
-            )
-        )
-    )
-    if not res.ok:
-        return terminal.error(res.err_msg)
-    offers = [
-        offer
-        for offer in res.offers
-        if not cpu or (offer.gpu_count == 0 and (offer.node_count > 0 or offer.cpu_millicores > 0))
-    ]
-
-    if format == "json":
-        terminal.print_json(
-            {"offers": [offer.to_dict(casing=Casing.SNAKE) for offer in offers]}  # type: ignore
-        )
-        return
-
-    table = Table(
-        Column("Provider"),
-        Column("Region"),
-        Column("Offer"),
-        Column("Category"),
-        Column("Compute"),
-        Column("Available", justify="right"),
-        Column("Cost/hr", justify="right"),
-        box=box.SIMPLE,
-    )
-    for offer in offers:
-        region_name = offer.region_display_name or offer.region
-        display_name = offer.display_name or offer.instance_type or offer.id
-        if offer.gpu_count:
-            compute = format_gpu(offer.gpu or "GPU", offer.gpu_count)
-        else:
-            parts = []
-            if offer.node_count:
-                parts.append(f"{offer.node_count} node")
-            if offer.cpu_millicores:
-                parts.append(format_cpu(offer.cpu_millicores))
-            if offer.memory_mb:
-                parts.append(format_memory(offer.memory_mb))
-            compute = "/".join(parts) if parts else "CPU"
-        table.add_row(
-            offer.provider,
-            region_name,
-            display_name,
-            offer.category or "-",
-            compute,
-            str(offer.available),
-            f"${offer.hourly_cost_micros / 1_000_000:.4f}",
-        )
-    table.add_section()
-    table.add_row(f"[bold]{len(offers)} items")
-    terminal.print(table)
 
 
 @management.command(name="private", help="List private compute pools.", hidden=True)
