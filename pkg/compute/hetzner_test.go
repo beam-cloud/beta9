@@ -91,7 +91,7 @@ func TestHetznerListOffersUsesBearerTokenAndFiltersCPUServerTypes(t *testing.T) 
 		ServerTypeCategories: map[string]string{"cpx31": "shared"},
 	})
 
-	offers, err := client.ListOffers(context.Background(), OfferRequest{TotalMachines: 3})
+	offers, err := client.ListOffers(context.Background(), OfferRequest{Nodes: 3})
 
 	require.NoError(t, err)
 	require.Len(t, offers, 1)
@@ -99,7 +99,7 @@ func TestHetznerListOffersUsesBearerTokenAndFiltersCPUServerTypes(t *testing.T) 
 	require.Equal(t, "hetzner", offers[0].Provider)
 	require.Equal(t, "hetzner", offers[0].Cloud)
 	require.Equal(t, "ash", offers[0].Region)
-	require.Equal(t, uint32(1), offers[0].MachineCount)
+	require.Equal(t, uint32(1), offers[0].NodeCount)
 	require.Equal(t, uint32(0), offers[0].GPUCount)
 	require.Equal(t, int64(4000), offers[0].CPUMillicores)
 	require.Equal(t, int64(8192), offers[0].MemoryMB)
@@ -157,7 +157,7 @@ func TestHetznerCreateGetDeleteReservation(t *testing.T) {
 		MachineID:        "machine-1",
 		Name:             "beam-workspace-cpu-pool-machine-1",
 		Selector:         "cpu-pool",
-		Offer:            Offer{ID: "cpx31", Provider: "hetzner", InstanceType: "cpx31", Region: "ash", MachineCount: 1, CPUMillicores: 4000, MemoryMB: 8192, StorageMB: 163840, HourlyCostMicros: DollarsToMicros(0.0312), Labels: map[string]string{"network_zone": "us-east"}},
+		Offer:            Offer{ID: "cpx31", Provider: "hetzner", InstanceType: "cpx31", Region: "ash", NodeCount: 1, CPUMillicores: 4000, MemoryMB: 8192, StorageMB: 163840, HourlyCostMicros: DollarsToMicros(0.0312), Labels: map[string]string{"network_zone": "us-east"}},
 		TTL:              2 * time.Hour,
 		Source:           SourceCLIReservation,
 		BootstrapCommand: "beam-agent join --token token",
@@ -166,7 +166,7 @@ func TestHetznerCreateGetDeleteReservation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "42", reservation.ID)
 	require.Equal(t, ReservationPending, reservation.Status)
-	require.Equal(t, uint32(1), reservation.MachineCount)
+	require.Equal(t, uint32(1), reservation.NodeCount)
 	require.Equal(t, int64(4000), reservation.CPUMillicores)
 	require.Equal(t, int64(8192), reservation.MemoryMB)
 	require.Equal(t, int64(163840), reservation.StorageMB)
@@ -220,7 +220,7 @@ func TestHetznerCreateReservationRequiresPrivateNetworkSubnetInNetworkZone(t *te
 		MachineID: "machine-1",
 		Name:      "beam-workspace-cpu-pool-machine-1",
 		Selector:  "cpu-pool",
-		Offer:     Offer{ID: "cpx31", Provider: "hetzner", InstanceType: "cpx31", Region: "ash", MachineCount: 1, HourlyCostMicros: DollarsToMicros(0.0312)},
+		Offer:     Offer{ID: "cpx31", Provider: "hetzner", InstanceType: "cpx31", Region: "ash", NodeCount: 1, HourlyCostMicros: DollarsToMicros(0.0312)},
 		TTL:       2 * time.Hour,
 		Source:    SourceCLIReservation,
 	})

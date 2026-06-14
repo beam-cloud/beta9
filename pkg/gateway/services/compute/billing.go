@@ -59,7 +59,7 @@ type managedUsage struct {
 	MachineID          string    `json:"machine_id"`
 	GPU                string    `json:"gpu"`
 	GPUCount           uint32    `json:"gpu_count"`
-	MachineCount       uint32    `json:"machine_count"`
+	NodeCount          uint32    `json:"node_count"`
 	CPUMillicores      int64     `json:"cpu_millicores"`
 	MemoryMB           int64     `json:"memory_mb"`
 	StorageMB          int64     `json:"storage_mb"`

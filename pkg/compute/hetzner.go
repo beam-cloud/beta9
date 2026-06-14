@@ -137,7 +137,7 @@ func (c *HetznerClient) ListOffers(ctx context.Context, req OfferRequest) ([]Off
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
-	if req.TotalGPUs > 0 || len(req.GPUs) > 0 {
+	if len(req.GPUs) > 0 {
 		return nil, nil
 	}
 
@@ -187,7 +187,7 @@ func (c *HetznerClient) ListOffers(ctx context.Context, req OfferRequest) ([]Off
 				Region:            location.Name,
 				GPU:               "",
 				GPUCount:          0,
-				MachineCount:      1,
+				NodeCount:         1,
 				CPUMillicores:     int64(serverType.Cores * 1000),
 				MemoryMB:          int64(serverType.MemoryGB * 1024),
 				StorageMB:         int64(serverType.DiskGB * 1024),
@@ -269,7 +269,7 @@ func (c *HetznerClient) CreateReservation(ctx context.Context, req ReservationRe
 		MachineID:        req.MachineID,
 		GPU:              "",
 		GPUCount:         0,
-		MachineCount:     firstNonZeroUint32(req.Offer.MachineCount, 1),
+		NodeCount:        firstNonZeroUint32(req.Offer.NodeCount, 1),
 		CPUMillicores:    firstNonZeroInt64(server.CPUMillicores, req.Offer.CPUMillicores),
 		MemoryMB:         firstNonZeroInt64(server.MemoryMB, req.Offer.MemoryMB),
 		StorageMB:        firstNonZeroInt64(server.StorageMB, req.Offer.StorageMB),
@@ -303,7 +303,7 @@ func (c *HetznerClient) GetReservation(ctx context.Context, id string) (*Reserva
 		OfferID:       server.ServerTypeID,
 		InstanceType:  server.ServerTypeName,
 		InstanceID:    firstHetznerString(server.ID, id),
-		MachineCount:  1,
+		NodeCount:     1,
 		CPUMillicores: server.CPUMillicores,
 		MemoryMB:      server.MemoryMB,
 		StorageMB:     server.StorageMB,
@@ -664,8 +664,8 @@ func hetznerReservationStatus(status string) ReservationStatus {
 }
 
 func hetznerAvailableForRequest(req OfferRequest) uint32 {
-	if req.TotalMachines > 0 {
-		return maxUint32(req.TotalMachines, 1)
+	if req.Nodes > 0 {
+		return maxUint32(req.Nodes, 1)
 	}
 	return hetznerDefaultAvailable
 }

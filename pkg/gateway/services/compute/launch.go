@@ -43,11 +43,12 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 	config := normalizePoolConfig(in.Pool)
-	pool, err := computePoolFromProto(config, in.MachineCount, true)
+	pool, err := computePoolFromProto(config, in.Nodes, true)
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	config.Gpu = pool.GPUs
+	config.Nodes = pool.Nodes
 	if pool.Name == "" {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool name is required"}, nil
 	}
@@ -104,8 +105,7 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 			PoolName:       pool.Name,
 			Selector:       pool.Selector,
 			GPUs:           pool.GPUs,
-			TotalGPUs:      pool.TotalGPUs,
-			TotalMachines:  pool.TotalMachines,
+			Nodes:          pool.Nodes,
 			OfferID:        pool.OfferID,
 			TTL:            pool.TTL,
 			MaxSpendMicros: providerMaxSpendMicros,
@@ -192,8 +192,7 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 		Selector:             firstNonEmpty(config.Selector, pool.Selector),
 		Config:               config,
 		Reservations:         newReservations,
-		ReservedGPUs:         activeReservationGPUs(newReservations, now),
-		ReservedCapacity:     activeReservationCapacity(newReservations, now),
+		ReservedNodes:        activeReservationNodes(newReservations, now),
 		CommittedSpendMicros: existingCommittedSpendMicros(existing) + s.billableMicros(plan.CommittedCostMicros),
 		Status:               "active",
 		Source:               model.SourceCLIReservation,
@@ -241,11 +240,11 @@ func validatePoolLaunchCompatible(existing *model.PoolState, pool model.Pool) er
 	if existingConfig == nil {
 		return nil
 	}
-	if existing.ReservedCapacity > 0 && existing.ReservedGPUs == 0 && (pool.TotalGPUs > 0 || len(pool.GPUs) > 0) {
-		return fmt.Errorf("pool %q is configured for CPU machines; create a separate pool for GPUs", existing.Name)
+	if existing.ReservedNodes > 0 && existingPoolIsCPUOnly(existing) && len(pool.GPUs) > 0 {
+		return fmt.Errorf("pool %q is configured for CPU nodes; create a separate pool for GPU nodes", existing.Name)
 	}
-	if (existing.ReservedGPUs > 0 || existingConfig.Gpus > 0 || len(existingConfig.Gpu) > 0) && pool.TotalMachines > 0 {
-		return fmt.Errorf("pool %q is configured for GPUs; create a separate pool for CPU machines", existing.Name)
+	if existingPoolHasGPU(existing) && pool.Nodes > 0 && len(pool.GPUs) == 0 {
+		return fmt.Errorf("pool %q is configured for GPU nodes; create a separate pool for CPU nodes", existing.Name)
 	}
 	if len(existingConfig.Gpu) == 0 || len(pool.GPUs) == 0 {
 		return nil
@@ -256,6 +255,26 @@ func validatePoolLaunchCompatible(existing *model.PoolState, pool model.Pool) er
 		}
 	}
 	return nil
+}
+
+func existingPoolHasGPU(existing *model.PoolState) bool {
+	if existing == nil {
+		return false
+	}
+	config := normalizePoolConfig(existing.Config)
+	if config != nil && len(config.Gpu) > 0 {
+		return true
+	}
+	for _, reservation := range existing.Reservations {
+		if reservation.GPUCount > 0 || reservation.GPU != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func existingPoolIsCPUOnly(existing *model.PoolState) bool {
+	return existing != nil && existing.ReservedNodes > 0 && !existingPoolHasGPU(existing)
 }
 
 // mergePoolConfigForLaunch combines an add-capacity request into the existing
@@ -272,7 +291,7 @@ func mergePoolConfigForLaunch(existing, request *pb.PoolConfig) *pb.PoolConfig {
 	merged.Regions = unionStrings(merged.Regions, request.Regions)
 	merged.Providers = unionStrings(merged.Providers, request.Providers)
 	merged.MaxSpend += request.MaxSpend
-	merged.Gpus += request.Gpus
+	merged.Nodes += request.Nodes
 	if merged.Ttl == "" {
 		merged.Ttl = request.Ttl
 	}
@@ -289,24 +308,12 @@ func unionStrings(a, b []string) []string {
 	return out
 }
 
-func activeReservationGPUs(reservations []model.Reservation, now time.Time) uint32 {
+func activeReservationNodes(reservations []model.Reservation, now time.Time) uint32 {
 	var total uint32
 	for _, reservation := range reservations {
 		if reservation.ActiveAt(now) {
-			total += reservation.GPUCount
-		}
-	}
-	return total
-}
-
-func activeReservationCapacity(reservations []model.Reservation, now time.Time) uint32 {
-	var total uint32
-	for _, reservation := range reservations {
-		if reservation.ActiveAt(now) {
-			if reservation.GPUCount > 0 {
-				total += reservation.GPUCount
-			} else if reservation.MachineCount > 0 {
-				total += reservation.MachineCount
+			if reservation.NodeCount > 0 {
+				total += reservation.NodeCount
 			} else {
 				total++
 			}
@@ -484,8 +491,7 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]mod
 
 	request := model.OfferRequest{
 		GPUs:           pool.GPUs,
-		TotalGPUs:      pool.TotalGPUs,
-		TotalMachines:  pool.TotalMachines,
+		Nodes:          pool.Nodes,
 		OfferID:        pool.OfferID,
 		Providers:      pool.Providers,
 		Regions:        pool.Regions,
@@ -508,10 +514,7 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]mod
 }
 
 func offerCostForPool(offer model.Offer, pool model.Pool) float64 {
-	if pool.TotalMachines > 0 {
-		return offer.CostPerMachine()
-	}
-	return offer.CostPerGPU()
+	return offer.CostPerNode()
 }
 
 func orderedComputeVendorNames(vendors map[string]model.Vendor, providers []string) []string {

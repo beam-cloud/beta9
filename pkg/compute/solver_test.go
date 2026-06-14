@@ -7,12 +7,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSolveTenOneGPUWorkers(t *testing.T) {
+func TestSolveGPUNodeCount(t *testing.T) {
 	plan := NewSolver().Solve(SolveInput{
 		Demand: Demand{
 			PoolName:       "training",
 			GPUs:           []string{"H100"},
-			TotalGPUs:      10,
+			Nodes:          2,
 			TTL:            6 * time.Hour,
 			MaxSpendMicros: DollarsToMicros(100),
 		},
@@ -23,17 +23,20 @@ func TestSolveTenOneGPUWorkers(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(10), plan.TotalCapacity)
-	require.Equal(t, DollarsToMicros(72), plan.IncrementalCostMicros)
-	require.Len(t, plan.Actions, 2)
+	require.Equal(t, uint32(2), plan.TotalCapacity)
+	require.Equal(t, DollarsToMicros(24), plan.IncrementalCostMicros)
+	require.Len(t, plan.Actions, 1)
+	require.Equal(t, "1xh100", plan.Actions[0].Offer.ID)
+	require.Equal(t, uint32(2), plan.Actions[0].Count)
 }
 
-func TestSolveOneEightGPUContainer(t *testing.T) {
+func TestSolveSpecificMultiGPUNodeOffer(t *testing.T) {
 	plan := NewSolver().Solve(SolveInput{
 		Demand: Demand{
 			PoolName:       "single-node",
 			GPUs:           []string{"H100"},
-			TotalGPUs:      8,
+			Nodes:          1,
+			OfferID:        "8xh100",
 			TTL:            time.Hour,
 			MaxSpendMicros: DollarsToMicros(20),
 		},
@@ -44,7 +47,7 @@ func TestSolveOneEightGPUContainer(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(8), plan.TotalCapacity)
+	require.Equal(t, uint32(1), plan.TotalCapacity)
 	require.Equal(t, DollarsToMicros(10), plan.IncrementalCostMicros)
 	require.Equal(t, "8xh100", plan.Actions[0].Offer.ID)
 }
@@ -54,7 +57,7 @@ func TestAttachedCapacityIsFreeAndPreferred(t *testing.T) {
 		Demand: Demand{
 			PoolName:       "attached",
 			GPUs:           []string{"A100-80"},
-			TotalGPUs:      4,
+			Nodes:          1,
 			TTL:            time.Hour,
 			MaxSpendMicros: DollarsToMicros(1),
 		},
@@ -67,18 +70,18 @@ func TestAttachedCapacityIsFreeAndPreferred(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(4), plan.ExistingCapacity)
+	require.Equal(t, uint32(1), plan.ExistingCapacity)
 	require.Zero(t, plan.IncrementalCostMicros)
 	require.Equal(t, ActionKeep, plan.Actions[0].Type)
 }
 
-func TestSolveCPUMachinesUsesMachineCount(t *testing.T) {
+func TestSolveCPUUsesNodeCount(t *testing.T) {
 	now := time.Now()
 	plan := NewSolver().Solve(SolveInput{
 		Now: now,
 		Demand: Demand{
 			PoolName:       "cpu-pool",
-			TotalMachines:  3,
+			Nodes:          3,
 			TTL:            2 * time.Hour,
 			MaxSpendMicros: DollarsToMicros(10),
 			Providers:      []string{"hetzner"},
@@ -88,7 +91,7 @@ func TestSolveCPUMachinesUsesMachineCount(t *testing.T) {
 				ID:               "existing-node",
 				PoolName:         "cpu-pool",
 				Provider:         "hetzner",
-				MachineCount:     1,
+				NodeCount:        1,
 				HourlyCostMicros: DollarsToMicros(1),
 				Source:           SourceCLIReservation,
 				Status:           ReservationActive,
@@ -96,7 +99,7 @@ func TestSolveCPUMachinesUsesMachineCount(t *testing.T) {
 			},
 		},
 		Offers: []Offer{
-			{ID: "cpx31", Provider: "hetzner", MachineCount: 1, CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: DollarsToMicros(1.5), Available: 5},
+			{ID: "cpx31", Provider: "hetzner", NodeCount: 1, CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: DollarsToMicros(1.5), Available: 5},
 			{ID: "gpu", Provider: "hetzner", GPU: "A10G", GPUCount: 1, HourlyCostMicros: DollarsToMicros(1), Available: 5},
 		},
 	})
@@ -118,7 +121,7 @@ func TestWholeHourSpendCap(t *testing.T) {
 		Demand: Demand{
 			PoolName:       "hourly",
 			GPUs:           []string{"L40S"},
-			TotalGPUs:      1,
+			Nodes:          1,
 			TTL:            61 * time.Minute,
 			MaxSpendMicros: DollarsToMicros(5),
 		},
@@ -138,7 +141,7 @@ func TestExistingReservationIsSunkUntilRenewal(t *testing.T) {
 		Demand: Demand{
 			PoolName:       "renewal",
 			GPUs:           []string{"H100"},
-			TotalGPUs:      2,
+			Nodes:          2,
 			TTL:            time.Hour,
 			MaxSpendMicros: DollarsToMicros(4),
 		},

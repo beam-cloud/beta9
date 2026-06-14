@@ -12,19 +12,16 @@ import (
 )
 
 type schedulingAttempt struct {
-	scheduler         *Scheduler
-	request           *types.ContainerRequest
-	workers           []*types.Worker
-	fallbackFromPool  string
-	terminalOnFailure bool
+	scheduler *Scheduler
+	request   *types.ContainerRequest
+	workers   []*types.Worker
 }
 
 func newSchedulingAttempt(scheduler *Scheduler, request *types.ContainerRequest, workers []*types.Worker) *schedulingAttempt {
 	return &schedulingAttempt{
-		scheduler:         scheduler,
-		request:           request,
-		workers:           workers,
-		terminalOnFailure: true,
+		scheduler: scheduler,
+		request:   request,
+		workers:   workers,
 	}
 }
 
@@ -45,15 +42,7 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 		return
 	}
 
-	handled, capacityMiss := a.provisionSelectedPrivatePool()
-	if handled {
-		return
-	}
-	if capacityMiss {
-		if a.tryPrivatePoolFallback() {
-			return
-		}
-		a.requeueForWorkerWait()
+	if a.tryPrivatePoolFallback() {
 		return
 	}
 
@@ -63,9 +52,9 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 	selectionStart := time.Now()
 	worker, err := a.scheduler.selectWorkerFromWorkers(a.workers, a.request)
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, a.lifecycleAttrs(map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
-	}))
+	})
 	if err != nil || worker == nil {
 		return false
 	}
@@ -90,9 +79,9 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 	reservationStart := time.Now()
 	reserved := a.scheduler.provisioning.reserveCapacity(a.scheduler, a.workers, a.request)
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerReservation, reservationStart, time.Now(), reserved, a.lifecycleAttrs(map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerReservation, reservationStart, time.Now(), reserved, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
-	}))
+	})
 	if !reserved {
 		return false
 	}
@@ -102,77 +91,28 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 	return true
 }
 
-func (a *schedulingAttempt) provisionWorker() bool {
-	controllers, err := a.scheduler.getControllers(a.request)
-	if err != nil {
-		event := log.Error()
-		if !a.terminalOnFailure {
-			event = log.Debug()
-		}
-		requestLog(event, a.request).
-			Err(err).
-			Msg("no controller found for request")
-		if a.terminalOnFailure {
-			a.fail("no_controller")
-		}
-		return false
-	}
-
-	controller, delay := a.scheduler.workerProvisioningController(controllers)
-	if controller == nil {
-		if a.terminalOnFailure || a.fallbackFromPool != "" {
-			a.recordBacklogWait(false, "worker_provisioning_backoff")
-			a.requeueForWorkerWaitDelay(delay, "worker_provisioning_backoff")
-			return true
-		}
-		return false
-	}
-
-	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "no_worker")
-
-	reservationID := a.scheduler.provisioning.addReservation(a.scheduler, a.request, controller)
-	go newWorkerProvisioningAttempt(a.scheduler, a.request, controller, reservationID, a.fallbackFromPool).run()
-	a.requeueForWorkerWait()
-	return true
-}
-
-func (a *schedulingAttempt) provisionSelectedPrivatePool() (bool, bool) {
-	if _, ok := a.selectedPrivatePoolName(); !ok {
-		return false, false
-	}
-
+func (a *schedulingAttempt) provisionWorker() {
 	controllers, err := a.scheduler.getControllers(a.request)
 	if err != nil {
 		requestLog(log.Error(), a.request).
 			Err(err).
 			Msg("no controller found for request")
 		a.fail("no_controller")
-		return true, false
+		return
 	}
 
 	controller, delay := a.scheduler.workerProvisioningController(controllers)
 	if controller == nil {
 		a.recordBacklogWait(false, "worker_provisioning_backoff")
 		a.requeueForWorkerWaitDelay(delay, "worker_provisioning_backoff")
-		return true, false
+		return
 	}
 
 	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "no_worker")
 
 	reservationID := a.scheduler.provisioning.addReservation(a.scheduler, a.request, controller)
-	err = newWorkerProvisioningAttempt(a.scheduler, a.request, controller, reservationID).runResult()
-	if err == nil {
-		a.requeueForWorkerWait()
-		return true, false
-	}
-
-	var capacityErr *AgentPoolCapacityError
-	if errors.As(err, &capacityErr) {
-		return false, true
-	}
-
+	go newWorkerProvisioningAttempt(a.scheduler, a.request, controller, reservationID).run()
 	a.requeueForWorkerWait()
-	return true, false
 }
 
 func (a *schedulingAttempt) requeueForWorkerWait() {
@@ -242,95 +182,29 @@ func (a *schedulingAttempt) recordBacklogWait(success bool, reason string) {
 		return
 	}
 
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerBacklogWait, a.request.Timestamp, time.Now(), success, a.lifecycleAttrs(map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerBacklogWait, a.request.Timestamp, time.Now(), success, map[string]string{
 		"reason":      reason,
 		"retry_count": fmt.Sprintf("%d", a.request.RetryCount),
-	}))
-}
-
-func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
-	fallbackRequest, poolName, ok := a.privatePoolFallbackRequest()
-	if !ok {
-		return false
-	}
-
-	fallback := newSchedulingAttempt(a.scheduler, fallbackRequest, a.workers)
-	fallback.fallbackFromPool = poolName
-	fallback.terminalOnFailure = false
-
-	if fallback.scheduleOnAvailableWorker() {
-		return true
-	}
-	if fallback.reservePendingWorkerCapacity() {
-		return true
-	}
-	return fallback.provisionWorker()
-}
-
-func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerRequest, string, bool) {
-	poolName, ok := a.selectedPrivatePoolName()
-	if !ok {
-		return nil, "", false
-	}
-
-	fallback := a.request.Clone()
-	if fallback == nil {
-		return nil, "", false
-	}
-	fallback.PoolSelector = ""
-	return fallback, poolName, true
-}
-
-func (a *schedulingAttempt) selectedPrivatePoolName() (string, bool) {
-	if a == nil || a.scheduler == nil || a.request == nil || a.request.PoolSelector == "" || a.scheduler.workerPoolManager == nil {
-		return "", false
-	}
-
-	poolName := a.request.PoolSelector
-	pool, ok := a.scheduler.workerPoolManager.GetPool(poolName)
-	if !ok || pool.Config.Mode != types.PoolModePrivate {
-		return "", false
-	}
-	return poolName, true
-}
-
-func (a *schedulingAttempt) lifecycleAttrs(attrs map[string]string) map[string]string {
-	if attrs == nil {
-		attrs = map[string]string{}
-	}
-	if a.fallbackFromPool != "" {
-		attrs["fallback_from_pool"] = a.fallbackFromPool
-	}
-	return attrs
+	})
 }
 
 type workerProvisioningAttempt struct {
-	scheduler        *Scheduler
-	request          *types.ContainerRequest
-	controller       WorkerPoolController
-	reservationID    string
-	fallbackFromPool string
+	scheduler     *Scheduler
+	request       *types.ContainerRequest
+	controller    WorkerPoolController
+	reservationID string
 }
 
-func newWorkerProvisioningAttempt(scheduler *Scheduler, request *types.ContainerRequest, controller WorkerPoolController, reservationID string, fallbackFromPool ...string) *workerProvisioningAttempt {
-	fromPool := ""
-	if len(fallbackFromPool) > 0 {
-		fromPool = fallbackFromPool[0]
-	}
+func newWorkerProvisioningAttempt(scheduler *Scheduler, request *types.ContainerRequest, controller WorkerPoolController, reservationID string) *workerProvisioningAttempt {
 	return &workerProvisioningAttempt{
-		scheduler:        scheduler,
-		request:          request,
-		controller:       controller,
-		reservationID:    reservationID,
-		fallbackFromPool: fromPool,
+		scheduler:     scheduler,
+		request:       request,
+		controller:    controller,
+		reservationID: reservationID,
 	}
 }
 
 func (a *workerProvisioningAttempt) run() {
-	_ = a.runResult()
-}
-
-func (a *workerProvisioningAttempt) runResult() error {
 	releaseOnReturn := true
 	defer func() {
 		if releaseOnReturn {
@@ -340,12 +214,12 @@ func (a *workerProvisioningAttempt) runResult() error {
 
 	controller := a.controller
 	if controller == nil {
-		return nil
+		return
 	}
 
 	select {
 	case <-a.scheduler.ctx.Done():
-		return nil
+		return
 	default:
 	}
 
@@ -355,18 +229,14 @@ func (a *workerProvisioningAttempt) runResult() error {
 		a.scheduler.workerMemoryForControllerRequest(controller, a.request),
 		a.scheduler.workerGPUCountForControllerRequest(controller, a.request),
 	)
-	attrs := map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
 		"pool_name": controller.Name(),
-	}
-	if a.fallbackFromPool != "" {
-		attrs["fallback_from_pool"] = a.fallbackFromPool
-	}
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, attrs)
+	})
 	if err != nil {
 		a.scheduler.recordWorkerProvisioningFailure(controller, err)
 		a.logAddWorkerFailure(err)
 		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "add_worker_failed")
-		return err
+		return
 	}
 
 	workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
@@ -374,7 +244,6 @@ func (a *workerProvisioningAttempt) runResult() error {
 	time.AfterFunc(provisioningReservationHandoff, func() {
 		a.scheduler.provisioning.release(a.reservationID)
 	})
-	return nil
 }
 
 func (a *workerProvisioningAttempt) logAddWorkerFailure(err error) {

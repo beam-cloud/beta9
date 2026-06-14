@@ -217,7 +217,7 @@ type EventComputeSchema struct {
 	CPUCount     uint32            `json:"cpu_count,omitempty"`
 	MemoryMB     uint64            `json:"memory_mb,omitempty"`
 	GPUCount     uint32            `json:"gpu_count,omitempty"`
-	Capacity     uint32            `json:"capacity,omitempty"`
+	NodeCount    uint32            `json:"node_count,omitempty"`
 	MachineCount uint32            `json:"machine_count,omitempty"`
 	GPUs         []string          `json:"gpus,omitempty"`
 	Schedulable  *bool             `json:"schedulable,omitempty"`

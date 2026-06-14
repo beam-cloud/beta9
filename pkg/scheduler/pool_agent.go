@@ -195,6 +195,11 @@ func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCoun
 	return wpc.ensureMachineWorker(machine)
 }
 
+func (wpc *AgentWorkerPoolController) HasWorkerCapacity(cpu int64, memory int64, gpuCount uint32) (bool, error) {
+	machine, err := wpc.findMachineForRequest(cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
+	return machine != nil, err
+}
+
 func (wpc *AgentWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineID string) (*types.Worker, error) {
 	machine, err := wpc.findMachine(func(machine *compute.AgentTokenState) bool {
 		return machine.MachineID == machineID && wpc.machineCanFit(machine, cpu, memory, gpuType, gpuCount)

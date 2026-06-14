@@ -547,7 +547,7 @@ type StubConfigV1 struct {
 type PoolConfig struct {
 	Name           string   `json:"name,omitempty"`
 	GPUs           []string `json:"gpu,omitempty"`
-	TotalGPUs      uint32   `json:"gpus,omitempty"`
+	Nodes          uint32   `json:"nodes,omitempty"`
 	OfferID        string   `json:"offer_id,omitempty"`
 	TTL            string   `json:"ttl,omitempty"`
 	MaxSpend       float64  `json:"max_spend,omitempty"`
@@ -561,7 +561,7 @@ func (p *PoolConfig) RequiresReservation() bool {
 	if p == nil {
 		return false
 	}
-	return p.TotalGPUs > 0 ||
+	return p.Nodes > 0 ||
 		p.OfferID != "" ||
 		p.TTL != "" ||
 		p.MaxSpend > 0 ||

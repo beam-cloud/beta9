@@ -95,8 +95,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 	}
 	if existing != nil {
 		state.Reservations = existing.Reservations
-		state.ReservedGPUs = existing.ReservedGPUs
-		state.ReservedCapacity = existing.ReservedCapacity
+		state.ReservedNodes = existing.ReservedNodes
 		state.CommittedSpendMicros = existing.CommittedSpendMicros
 		state.Source = existing.Source
 		state.CreatedByTokenID = existing.CreatedByTokenID

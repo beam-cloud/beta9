@@ -38,7 +38,7 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	return &out
 }
 
-func computePoolFromProto(in *pb.PoolConfig, machineCount uint32, requireReservation bool) (model.Pool, error) {
+func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservation bool) (model.Pool, error) {
 	if in == nil {
 		return model.Pool{}, fmt.Errorf("pool config is required")
 	}
@@ -68,20 +68,13 @@ func computePoolFromProto(in *pb.PoolConfig, machineCount uint32, requireReserva
 		Name:           in.Name,
 		Selector:       in.Selector,
 		GPUs:           gpus,
-		TotalGPUs:      in.Gpus,
-		TotalMachines:  machineCount,
+		Nodes:          firstNonZeroUint32(nodeCount, in.Nodes),
 		OfferID:        in.OfferId,
 		TTL:            ttl,
 		MaxSpendMicros: model.DollarsToMicros(in.MaxSpend),
 		Providers:      in.Providers,
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
-	}
-	if pool.TotalGPUs > 0 && pool.TotalMachines > 0 {
-		return model.Pool{}, fmt.Errorf("pool reservations require either gpus or machines, not both")
-	}
-	if pool.TotalMachines > 0 && len(pool.GPUs) > 0 {
-		return model.Pool{}, fmt.Errorf("CPU machine reservations cannot include GPU filters")
 	}
 	if requireReservation {
 		if err := pool.Validate(); err != nil {
@@ -102,7 +95,7 @@ func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
 		Region:            offer.Region,
 		Gpu:               offer.GPU,
 		GpuCount:          offer.GPUCount,
-		MachineCount:      offer.MachineCount,
+		NodeCount:         offer.NodeCount,
 		CpuMillicores:     offer.CPUMillicores,
 		MemoryMb:          offer.MemoryMB,
 		StorageMb:         offer.StorageMB,
@@ -140,7 +133,7 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		StatusMessage:     reservation.LastStatusMessage,
 		TerminatingReason: reservation.TerminatingReason,
 		MachineId:         reservation.MachineID,
-		MachineCount:      reservation.MachineCount,
+		NodeCount:         reservation.NodeCount,
 		InstanceType:      reservation.InstanceType,
 		CpuMillicores:     reservation.CPUMillicores,
 		MemoryMb:          reservation.MemoryMB,
@@ -201,7 +194,6 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		Selector:             state.Selector,
 		Config:               config,
 		Reservations:         reservations,
-		ReservedGpus:         state.ReservedGPUs,
 		CommittedSpendMicros: state.CommittedSpendMicros,
 		Status:               state.Status,
 		Source:               string(state.Source.Canonical()),
@@ -209,7 +201,7 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		ExpiresAt:            timestampOrNil(state.ExpiresAt),
 		MachineCount:         uint32(len(machines)),
 		ReadyMachineCount:    readyMachineCount,
-		ReservedCapacity:     state.ReservedCapacity,
+		ReservedNodes:        state.ReservedNodes,
 	}
 }
 
@@ -372,6 +364,15 @@ func maxInt64(a, b int64) int64 {
 }
 
 func firstNonZeroUint64(values ...uint64) uint64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroUint32(values ...uint32) uint32 {
 	for _, value := range values {
 		if value != 0 {
 			return value

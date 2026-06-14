@@ -166,40 +166,31 @@ func usableReservations(reservations []Reservation, demand Demand, now time.Time
 }
 
 func requiredDemandCapacity(demand Demand) uint32 {
-	if demand.TotalMachines > 0 {
-		return demand.TotalMachines
-	}
-	return demand.TotalGPUs + demand.HeadroomGPUs
+	return demand.Nodes
 }
 
 func demandOfferCapacity(demand Demand) func(Offer) uint32 {
-	if demand.TotalMachines > 0 {
-		return machineOfferCapacity
-	}
-	return func(offer Offer) uint32 { return offer.GPUCount }
+	return nodeOfferCapacity
 }
 
-func machineOfferCapacity(offer Offer) uint32 {
-	if offer.MachineCount > 0 {
-		return offer.MachineCount
+func nodeOfferCapacity(offer Offer) uint32 {
+	if offer.NodeCount > 0 {
+		return offer.NodeCount
 	}
-	if offer.GPUCount == 0 && offer.CPUMillicores > 0 {
+	if offer.GPUCount > 0 || offer.CPUMillicores > 0 {
 		return 1
 	}
 	return 0
 }
 
 func reservationCapacity(reservation Reservation, demand Demand) uint32 {
-	if demand.TotalMachines > 0 {
-		if reservation.MachineCount > 0 {
-			return reservation.MachineCount
-		}
-		if reservation.GPUCount == 0 {
-			return 1
-		}
-		return 0
+	if reservation.NodeCount > 0 {
+		return reservation.NodeCount
 	}
-	return reservation.GPUCount
+	if reservation.GPUCount > 0 || reservation.CPUMillicores > 0 {
+		return 1
+	}
+	return 0
 }
 
 func existingReservationCommitment(reservation Reservation, now, leaseEnd time.Time) int64 {
@@ -228,9 +219,6 @@ func reservationMatchesDemand(reservation Reservation, demand Demand) bool {
 		return false
 	}
 	if len(demand.GPUs) > 0 && !slices.Contains(demand.GPUs, reservation.GPU) {
-		return false
-	}
-	if demand.TotalMachines > 0 && reservation.GPUCount > 0 {
 		return false
 	}
 	if len(demand.Providers) > 0 && !slices.Contains(demand.Providers, reservation.Provider) {
@@ -263,10 +251,7 @@ func filterOffers(offers []Offer, pool Pool) []Offer {
 }
 
 func offerSortCost(offer Offer, pool Pool) float64 {
-	if pool.TotalMachines > 0 {
-		return offer.CostPerMachine()
-	}
-	return offer.CostPerGPU()
+	return offer.CostPerNode()
 }
 
 type boundedSolution struct {

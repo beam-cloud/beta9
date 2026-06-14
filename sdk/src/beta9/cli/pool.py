@@ -50,7 +50,7 @@ def management():
 def _pool_config(
     name: str,
     gpu: Tuple[str, ...] = (),
-    gpus: int = 0,
+    nodes: int = 0,
     ttl: str = "",
     max_spend: float = 0,
     provider: Tuple[str, ...] = (),
@@ -63,7 +63,7 @@ def _pool_config(
     return PoolConfig(
         name=name,
         gpu=list(gpu),
-        gpus=gpus or 0,
+        nodes=nodes or 0,
         ttl=ttl or "",
         max_spend=max_spend or 0,
         providers=list(provider),
@@ -189,16 +189,42 @@ def _pool_status(status: str) -> str:
 
 def _private_pool_compute(pool: PrivatePool) -> str:
     gpu_types = pool.config.gpu
-    requested_gpus = pool.config.gpus or pool.reserved_gpus
-    if gpu_types and requested_gpus > 0:
-        return format_gpu(", ".join(gpu_types), requested_gpus)
+    node_count = _private_pool_node_count(pool)
+    gpu_count = _private_pool_gpu_count(pool)
+
+    if gpu_types and node_count > 0:
+        node_label = _node_label(node_count, "GPU")
+        if gpu_count > 0:
+            return f"{node_label}, {format_gpu(', '.join(gpu_types), gpu_count)}"
+        return f"{node_label} ({', '.join(gpu_types)})"
     if gpu_types:
         return ", ".join(gpu_types)
-    if pool.reserved_gpus > 0:
-        return format_gpu("GPU", pool.reserved_gpus)
-    if pool.reserved_capacity > 0:
-        return f"{pool.reserved_capacity} CPU machine{'s' if pool.reserved_capacity != 1 else ''}"
+    if node_count > 0:
+        return _node_label(node_count, "CPU")
     return "CPU"
+
+
+def _private_pool_node_count(pool: PrivatePool) -> int:
+    configured = pool.config.nodes or pool.reserved_nodes
+    if configured > 0:
+        return configured
+    return sum(_reservation_node_count(reservation) for reservation in pool.reservations)
+
+
+def _private_pool_gpu_count(pool: PrivatePool) -> int:
+    total = 0
+    for reservation in pool.reservations:
+        if reservation.gpu_count > 0:
+            total += reservation.gpu_count * _reservation_node_count(reservation)
+    return total
+
+
+def _reservation_node_count(reservation: Any) -> int:
+    return reservation.node_count or 1
+
+
+def _node_label(count: int, kind: str) -> str:
+    return f"{count} {kind} node{'s' if count != 1 else ''}"
 
 
 def _control_plane_pool_details(pool: ControlPlanePool) -> str:
@@ -322,10 +348,10 @@ def list_pools(
 @click.option("--mode", type=click.Choice(("private",)), default="private", show_default=True)
 @click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
 @click.option(
-    "--gpus",
+    "--nodes",
     type=click.IntRange(0),
     default=0,
-    help="Optional desired pool GPU capacity.",
+    help="Optional desired node count.",
 )
 @click.option("--priority", type=int, default=1000, show_default=True)
 @click.option(
@@ -340,7 +366,7 @@ def create(
     name: str,
     mode: str,
     gpu: Tuple[str, ...],
-    gpus: int,
+    nodes: int,
     priority: int,
     transport: str,
 ):
@@ -352,7 +378,7 @@ def create(
             pool=_pool_config(
                 name=name,
                 gpu=gpu,
-                gpus=gpus,
+                nodes=nodes,
                 priority=priority,
                 transport=transport,
             )
@@ -368,7 +394,7 @@ def create(
 @click.option("--region", "region", multiple=True, help="Region filter.")
 @click.option("--cpu", is_flag=True, help="Show CPU offers only.")
 @click.option("--gpu", "gpu", multiple=True, help="GPU type to match.")
-@click.option("--gpus", type=click.IntRange(0), default=0, help="GPU count to match.")
+@click.option("--nodes", type=click.IntRange(0), default=0, help="Node count to match.")
 @click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
 @extraclick.pass_service_client
 def offers(
@@ -377,18 +403,18 @@ def offers(
     region: Tuple[str, ...],
     cpu: bool,
     gpu: Tuple[str, ...],
-    gpus: int,
+    nodes: int,
     format: str,
 ):
-    if cpu and (gpu or gpus):
-        return terminal.error("--cpu cannot be combined with --gpu or --gpus.")
+    if cpu and gpu:
+        return terminal.error("--cpu cannot be combined with --gpu.")
 
     res = service.gateway.list_pool_offers(
         ListPoolOffersRequest(
             pool=_pool_config(
                 name="",
                 gpu=gpu,
-                gpus=gpus,
+                nodes=nodes,
                 provider=provider,
                 region=region,
             )
@@ -399,7 +425,7 @@ def offers(
     offers = [
         offer
         for offer in res.offers
-        if not cpu or (offer.gpu_count == 0 and (offer.machine_count > 0 or offer.cpu_millicores > 0))
+        if not cpu or (offer.gpu_count == 0 and (offer.node_count > 0 or offer.cpu_millicores > 0))
     ]
 
     if format == "json":
@@ -425,8 +451,8 @@ def offers(
             compute = format_gpu(offer.gpu or "GPU", offer.gpu_count)
         else:
             parts = []
-            if offer.machine_count:
-                parts.append(f"{offer.machine_count} machine")
+            if offer.node_count:
+                parts.append(f"{offer.node_count} node")
             if offer.cpu_millicores:
                 parts.append(format_cpu(offer.cpu_millicores))
             if offer.memory_mb:
@@ -567,12 +593,6 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 @click.argument("name")
 @click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
 @click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
-@click.option(
-    "--gpus",
-    type=click.IntRange(0),
-    default=0,
-    help="Optional desired pool GPU capacity.",
-)
 @click.option("--priority", type=int, default=1000, show_default=True)
 @click.option(
     "--transport",
@@ -624,7 +644,6 @@ def join(
     name: str,
     ttl: str,
     gpu: Tuple[str, ...],
-    gpus: int,
     priority: int,
     transport: str,
     agent_bin: str,
@@ -653,7 +672,6 @@ def join(
             pool=_pool_config(
                 name=name,
                 gpu=gpu,
-                gpus=gpus,
                 priority=priority,
                 transport=transport,
             )

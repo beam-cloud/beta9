@@ -193,17 +193,20 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
+	privateController := &capacityCheckingWorkerPoolControllerForTest{
+		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
+			ctx:              context.Background(),
+			name:             "private-cpu",
+			config:           scheduler.config,
+			workerRepo:       scheduler.workerRepo,
+			requiresSelector: true,
+		},
+		hasCapacity: false,
+	}
 	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
 		RequiresPoolSelector: true,
-	}, &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "private-cpu",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		addWorkerErr:     &AgentPoolCapacityError{PoolName: "private-cpu"},
-		requiresSelector: true,
-	})
+	}, privateController)
 
 	privateWorker := &types.Worker{
 		Id:                   "private-worker",
@@ -241,6 +244,7 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	privateAfter, err := scheduler.workerRepo.GetWorkerById(privateWorker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(100), privateAfter.FreeCpu)
+	assert.Equal(t, 0, privateController.AddWorkerCallCount())
 }
 
 func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T) {
@@ -249,14 +253,17 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 	scheduler.workerPoolManager = NewWorkerPoolManager(false)
 
 	started := make(chan struct{}, 1)
-	privateController := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "private-cpu",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		addWorkerStarted: started,
-		addWorkerErr:     types.NewProviderNotImplemented(),
-		requiresSelector: true,
+	privateController := &capacityCheckingWorkerPoolControllerForTest{
+		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
+			ctx:              context.Background(),
+			name:             "private-cpu",
+			config:           scheduler.config,
+			workerRepo:       scheduler.workerRepo,
+			addWorkerStarted: started,
+			addWorkerErr:     types.NewProviderNotImplemented(),
+			requiresSelector: true,
+		},
+		hasCapacity: false,
 	}
 	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
@@ -283,4 +290,14 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 	assert.Nil(t, err)
 	assert.Equal(t, request.ContainerId, requeued.ContainerId)
 	assert.Equal(t, "private-cpu", requeued.PoolSelector)
+}
+
+type capacityCheckingWorkerPoolControllerForTest struct {
+	*LocalWorkerPoolControllerForTest
+	hasCapacity bool
+	capacityErr error
+}
+
+func (wpc *capacityCheckingWorkerPoolControllerForTest) HasWorkerCapacity(cpu int64, memory int64, gpuCount uint32) (bool, error) {
+	return wpc.hasCapacity, wpc.capacityErr
 }

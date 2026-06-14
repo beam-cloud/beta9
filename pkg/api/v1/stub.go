@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 
@@ -44,15 +43,15 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, conta
 	g.GET("/:workspaceId/sandboxes", auth.WithWorkspaceAuth(group.ListSandboxes))                       // Lists sandboxes (enriched with live container state) for a workspace
 	g.GET("/:workspaceId/sandboxes/stats", auth.WithWorkspaceAuth(group.GetSandboxStats))               // Aggregated sandbox stats for the sandboxes dashboard
 	g.GET("/:workspaceId/sandboxes/:stubId/timeline", auth.WithWorkspaceAuth(group.GetSandboxTimeline)) // Startup/lifecycle timeline for a single sandbox
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))              // Allows workspace admins to list stubs specific to their workspace
-	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))                // Allows workspace admins to retrieve a specific stub
-	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                     // Allows cluster admins to list all stubs
-	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))                  // Allows workspace admins to get the URL of a stub
-	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL))    // Allows workspace admins to get the URL of a stub by deployment Id
-	g.PATCH("/:workspaceId/:stubId/config", auth.WithStrictWorkspaceAuth(group.UpdateConfig)) // Allows workspace admins to update the config of a stub
-	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                            // Allows users to clone a public stub
-	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                        // Allows users to get the URL of a stub
-	g.GET("/:stubId/config", group.GetConfig)                                                 // Allows users to get the config of a stub
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))                        // Allows workspace admins to list stubs specific to their workspace
+	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))                          // Allows workspace admins to retrieve a specific stub
+	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                               // Allows cluster admins to list all stubs
+	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))                            // Allows workspace admins to get the URL of a stub
+	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL))              // Allows workspace admins to get the URL of a stub by deployment Id
+	g.PATCH("/:workspaceId/:stubId/config", auth.WithStrictWorkspaceAuth(group.UpdateConfig))           // Allows workspace admins to update the config of a stub
+	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                                      // Allows users to clone a public stub
+	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                                  // Allows users to get the URL of a stub
+	g.GET("/:stubId/config", group.GetConfig)                                                           // Allows users to get the config of a stub
 
 	return group
 }
@@ -807,7 +806,7 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		TotalCreated:   total,
 		RatePerSecond:  ratePerSecond,
 		StatusCounts:   statusCounts,
-		CreatedBuckets: buildCreatedBuckets(stubs),
+		CreatedBuckets: buildCreatedBuckets(stubs, ctx.QueryParam("chart_range")),
 	})
 }
 
@@ -988,6 +987,7 @@ func (g *StubGroup) buildSandboxRow(ctx context.Context, workspaceID string, stu
 			}
 		}
 
+		g.enrichSandboxTimingFromEvents(ctx, workspaceID, stub.ExternalId, &row)
 		return row
 	}
 
@@ -996,6 +996,25 @@ func (g *StubGroup) buildSandboxRow(ctx context.Context, workspaceID string, stu
 	row.TimeToStartedMs = timeToStarted
 	row.ContainerId = containerID
 	return row
+}
+
+func (g *StubGroup) enrichSandboxTimingFromEvents(ctx context.Context, workspaceID, stubID string, row *SandboxRow) {
+	if g.eventRepo == nil || row.ContainerId == "" {
+		return
+	}
+
+	resp, err := g.eventRepo.GetContainerEvents(ctx, row.ContainerId, types.EventQuery{
+		WorkspaceID: workspaceID,
+		StubID:      stubID,
+	})
+	if err != nil || resp == nil {
+		return
+	}
+
+	if v, ok := resp.Summary["container_request_to_running_ms"]; ok && v > 0 {
+		value := v
+		row.TimeToStartedMs = &value
+	}
 }
 
 // deriveTerminalSandbox performs a best-effort lookup against the event store to
@@ -1087,61 +1106,56 @@ func mostRelevantContainer(containers []types.ContainerState) *types.ContainerSt
 	return best
 }
 
-// buildCreatedBuckets groups sandbox creation timestamps into evenly spaced
-// buckets spanning the observed time range, suitable for the "Sandboxes created"
-// chart.
-func buildCreatedBuckets(stubs []types.StubWithRelated) []SandboxCreatedBucket {
-	if len(stubs) == 0 {
-		return []SandboxCreatedBucket{}
+type sandboxChartRange struct {
+	start      time.Time
+	bucketSize time.Duration
+	count      int
+}
+
+func sandboxCreatedChartRange(value string, now time.Time) sandboxChartRange {
+	now = now.UTC()
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "last_week", "week", "7d":
+		end := now.Truncate(24 * time.Hour).Add(24 * time.Hour)
+		return sandboxChartRange{start: end.Add(-7 * 24 * time.Hour), bucketSize: 24 * time.Hour, count: 7}
+	case "last_day", "day", "24h":
+		end := now.Truncate(time.Hour).Add(time.Hour)
+		return sandboxChartRange{start: end.Add(-24 * time.Hour), bucketSize: time.Hour, count: 24}
+	case "last_hour", "hour", "1h", "":
+		fallthrough
+	default:
+		end := now.Truncate(time.Minute).Add(time.Minute)
+		return sandboxChartRange{start: end.Add(-60 * time.Minute), bucketSize: time.Minute, count: 60}
+	}
+}
+
+// buildCreatedBuckets groups sandbox creation timestamps into fixed time buckets
+// for the selected range. Fixed buckets keep the x-axis stable: creating more
+// sandboxes in the same interval makes the existing bar taller rather than
+// adding new bars.
+func buildCreatedBuckets(stubs []types.StubWithRelated, rangeValue string) []SandboxCreatedBucket {
+	return buildCreatedBucketsAt(stubs, rangeValue, time.Now())
+}
+
+func buildCreatedBucketsAt(stubs []types.StubWithRelated, rangeValue string, now time.Time) []SandboxCreatedBucket {
+	r := sandboxCreatedChartRange(rangeValue, now)
+	buckets := make([]SandboxCreatedBucket, r.count)
+	for i := range buckets {
+		buckets[i] = SandboxCreatedBucket{Timestamp: r.start.Add(time.Duration(i) * r.bucketSize)}
 	}
 
-	times := make([]time.Time, 0, len(stubs))
-	var earliest, latest time.Time
+	end := r.start.Add(time.Duration(r.count) * r.bucketSize)
 	for i := range stubs {
-		t := stubs[i].CreatedAt.Time
-		if t.IsZero() {
+		t := stubs[i].CreatedAt.Time.UTC()
+		if t.Before(r.start) || !t.Before(end) {
 			continue
 		}
-		times = append(times, t)
-		if earliest.IsZero() || t.Before(earliest) {
-			earliest = t
-		}
-		if latest.IsZero() || t.After(latest) {
-			latest = t
+
+		idx := int(t.Sub(r.start) / r.bucketSize)
+		if idx >= 0 && idx < len(buckets) {
+			buckets[idx].Count++
 		}
 	}
 
-	if len(times) == 0 {
-		return []SandboxCreatedBucket{}
-	}
-
-	const bucketCount = 48
-	span := latest.Sub(earliest)
-	if span <= 0 {
-		return []SandboxCreatedBucket{{Timestamp: earliest, Count: len(times)}}
-	}
-
-	bucketSize := span / time.Duration(bucketCount)
-	if bucketSize <= 0 {
-		bucketSize = time.Minute
-	}
-
-	buckets := make([]SandboxCreatedBucket, bucketCount)
-	for i := range buckets {
-		buckets[i] = SandboxCreatedBucket{Timestamp: earliest.Add(time.Duration(i) * bucketSize)}
-	}
-
-	for _, t := range times {
-		idx := int(t.Sub(earliest) / bucketSize)
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= bucketCount {
-			idx = bucketCount - 1
-		}
-		buckets[idx].Count++
-	}
-
-	sort.SliceStable(buckets, func(i, j int) bool { return buckets[i].Timestamp.Before(buckets[j].Timestamp) })
 	return buckets
 }

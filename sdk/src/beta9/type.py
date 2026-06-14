@@ -225,7 +225,7 @@ _GPU_ALIASES = [
 class Pool:
     name: Optional[str] = None
     gpu: Optional[Union[GpuTypeAlias, List[GpuTypeAlias]]] = None
-    gpus: Optional[int] = None
+    nodes: Optional[int] = None
     ttl: Optional[str] = None
     max_spend: Optional[float] = None
     providers: Optional[List[str]] = None
@@ -244,7 +244,7 @@ class Pool:
     def _requires_reservation(self) -> bool:
         return any(
             [
-                self.gpus is not None,
+                self.nodes is not None,
                 self.ttl is not None,
                 self.max_spend is not None,
                 bool(self.providers),
@@ -254,11 +254,11 @@ class Pool:
         )
 
     def validate(self) -> None:
-        if self.gpus is not None and self.gpus <= 0:
-            raise ValueError("Pool.gpus must be greater than 0")
+        if self.nodes is not None and self.nodes <= 0:
+            raise ValueError("Pool.nodes must be greater than 0")
         if self._requires_reservation():
-            if not self.gpus:
-                raise ValueError("Reserved pools require gpus")
+            if not self.nodes:
+                raise ValueError("Reserved pools require nodes")
             if not self.ttl:
                 raise ValueError("Reserved pools require ttl")
             if not self.max_spend or self.max_spend <= 0:
@@ -274,7 +274,7 @@ class Pool:
         return PoolConfig(
             name=name,
             gpu=self.gpu_values(),
-            gpus=self.gpus or 0,
+            nodes=self.nodes or 0,
             ttl=self.ttl or "",
             max_spend=float(self.max_spend or 0),
             providers=self.providers or [],

@@ -2569,7 +2569,7 @@
         "pool": {
           "$ref": "#/definitions/gatewayPoolConfig"
         },
-        "machineCount": {
+        "nodes": {
           "type": "integer",
           "format": "int64"
         }
@@ -3008,7 +3008,7 @@
             "type": "string"
           }
         },
-        "gpus": {
+        "nodes": {
           "type": "integer",
           "format": "int64"
         },
@@ -3105,7 +3105,7 @@
         "cloud": {
           "type": "string"
         },
-        "machineCount": {
+        "nodeCount": {
           "type": "integer",
           "format": "int64"
         },
@@ -3147,10 +3147,6 @@
             "$ref": "#/definitions/gatewayProviderInstance"
           }
         },
-        "reservedGpus": {
-          "type": "integer",
-          "format": "int64"
-        },
         "committedSpendMicros": {
           "type": "string",
           "format": "int64"
@@ -3177,7 +3173,7 @@
           "type": "integer",
           "format": "int64"
         },
-        "reservedCapacity": {
+        "reservedNodes": {
           "type": "integer",
           "format": "int64"
         }
@@ -3239,7 +3235,7 @@
         "region": {
           "type": "string"
         },
-        "machineCount": {
+        "nodeCount": {
           "type": "integer",
           "format": "int64"
         },
