@@ -131,6 +131,9 @@ class Sandbox(Pod):
             List of ports to expose from the sandbox. When specified, these ports will be accessible
             via public URLs upon sandbox creation. Default is an empty list. You can also dynamically
             expose ports at runtime using `instance.expose_port(port)`.
+        pool (Optional[Union[str, Pool]]):
+            The private pool to run the sandbox on. Pass a pool name to select an existing private
+            pool, or a Pool object to request managed pool capacity.
 
     Example:
         ```python
@@ -140,6 +143,7 @@ class Sandbox(Pod):
         sandbox = Sandbox(
             cpu=2.0,
             memory="2Gi",
+            pool="my-private-pool",
             keep_warm_seconds=1800  # 30 minutes
         )
 

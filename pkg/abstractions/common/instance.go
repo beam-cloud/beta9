@@ -14,7 +14,11 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-const IgnoreScalingEventInterval = 10 * time.Second
+const (
+	IgnoreScalingEventInterval      = 10 * time.Second
+	containerEventChannelBufferSize = 1024
+	scaleEventChannelBufferSize     = 1
+)
 
 type IAutoscaledInstance interface {
 	ConsumeScaleResult(*AutoscalerResult)
@@ -123,8 +127,8 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		EventRepo:                cfg.EventRepo,
 		UsageMetricsRepo:         cfg.UsageMetricsRepo,
 		Containers:               make(map[string]bool),
-		ContainerEventChan:       make(chan types.ContainerEvent, 1),
-		ScaleEventChan:           make(chan int, 1),
+		ContainerEventChan:       make(chan types.ContainerEvent, containerEventChannelBufferSize),
+		ScaleEventChan:           make(chan int, scaleEventChannelBufferSize),
 		StartContainersFunc:      cfg.StartContainersFunc,
 		StopContainersFunc:       cfg.StopContainersFunc,
 		FailedContainerThreshold: failedContainerThreshold,
@@ -170,11 +174,44 @@ func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 		minContainers = 0
 	}
 
-	i.ScaleEventChan <- max(result.DesiredContainers, minContainers)
+	i.sendLatestScaleEvent(max(result.DesiredContainers, minContainers))
 }
 
 func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
-	i.ContainerEventChan <- event
+	select {
+	case i.ContainerEventChan <- event:
+	case <-i.Ctx.Done():
+	default:
+		go i.sendContainerEvent(event)
+	}
+}
+
+func (i *AutoscaledInstance) sendLatestScaleEvent(desiredContainers int) {
+	select {
+	case i.ScaleEventChan <- desiredContainers:
+		return
+	case <-i.Ctx.Done():
+		return
+	default:
+	}
+
+	select {
+	case <-i.ScaleEventChan:
+	default:
+	}
+
+	select {
+	case i.ScaleEventChan <- desiredContainers:
+	case <-i.Ctx.Done():
+	default:
+	}
+}
+
+func (i *AutoscaledInstance) sendContainerEvent(event types.ContainerEvent) {
+	select {
+	case i.ContainerEventChan <- event:
+	case <-i.Ctx.Done():
+	}
 }
 
 func (i *AutoscaledInstance) Monitor() error {

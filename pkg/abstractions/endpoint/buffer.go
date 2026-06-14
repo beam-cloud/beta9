@@ -3,7 +3,6 @@ package endpoint
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -31,7 +29,6 @@ import (
 const (
 	readyCheckInterval             time.Duration = 500 * time.Millisecond
 	connectToHostTimeout           time.Duration = 2 * time.Second
-	requestProcessingInterval      time.Duration = time.Millisecond * 100
 	httpConnectionTimeout          time.Duration = 2 * time.Second
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
 	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
@@ -72,10 +69,13 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[*request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
+	containerRequests       map[string]int
+	containerRequestsLock   sync.Mutex
 	maxTokens               int
 	isASGI                  bool
 	keyEventManager         *common.KeyEventManager
 	keyEventChan            chan common.KeyEvent
+	workReady               chan struct{}
 }
 
 func NewRequestBuffer(
@@ -100,6 +100,7 @@ func NewRequestBuffer(
 		buffer:                  abstractions.NewRingBuffer[*request](size),
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
+		containerRequests:       map[string]int{},
 		containerRepo:           containerRepo,
 		keyEventManager:         keyEventManager,
 		keyEventChan:            make(chan common.KeyEvent),
@@ -108,6 +109,7 @@ func NewRequestBuffer(
 		tsConfig:                tsConfig,
 		maxTokens:               int(stubConfig.Workers),
 		isASGI:                  isASGI,
+		workReady:               make(chan struct{}, 1),
 	}
 
 	if stubConfig.ConcurrentRequests > 1 && isASGI {
@@ -137,7 +139,9 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 			case common.KeyOperationExpired:
 				if parts := strings.Split(event.Key, ":"); len(parts) >= 2 {
 					taskId, containerId := parts[len(parts)-2], parts[len(parts)-1]
-					rb.releaseRequestToken(containerId, taskId)
+					if err := rb.releaseRequestToken(containerId, taskId); err == nil {
+						rb.signalWork()
+					}
 				}
 			}
 		case <-rb.ctx.Done():
@@ -162,6 +166,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 		metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
 	}
 	rb.recordBufferOccupancy()
+	rb.signalWork()
 
 	waitTimer := time.NewTimer(rb.requestQueueTimeout())
 	defer waitTimer.Stop()
@@ -211,29 +216,125 @@ func (rb *RequestBuffer) processRequests() {
 		select {
 		case <-rb.ctx.Done():
 			return
-		default:
-			if len(rb.availableContainers) == 0 {
-				time.Sleep(requestProcessingInterval)
-				continue
-			}
+		case <-rb.workReady:
+			for {
+				req, ok := rb.buffer.Pop()
+				if !ok {
+					break
+				}
+				rb.recordBufferOccupancy()
 
-			req, ok := rb.buffer.Pop()
-			if !ok {
-				time.Sleep(requestProcessingInterval)
-				continue
-			}
-			rb.recordBufferOccupancy()
+				if req.abandoned.Load() {
+					continue
+				}
 
-			if req.abandoned.Load() {
-				continue
-			}
+				if req.ctx.Request().Context().Err() != nil {
+					rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+					continue
+				}
 
-			if req.ctx.Request().Context().Err() != nil {
-				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
-				continue
-			}
+				c, ok := rb.reserveContainer()
+				if !ok {
+					rb.requeueRequest(req)
+					break
+				}
 
-			go rb.handleRequest(req)
+				go rb.handleRequest(req, c)
+			}
+		}
+	}
+}
+
+func (rb *RequestBuffer) signalWork() {
+	if rb.workReady == nil {
+		return
+	}
+	select {
+	case rb.workReady <- struct{}{}:
+	default:
+	}
+}
+
+func (rb *RequestBuffer) availableContainerSnapshot() []container {
+	rb.availableContainersLock.RLock()
+	defer rb.availableContainersLock.RUnlock()
+
+	containers := make([]container, len(rb.availableContainers))
+	copy(containers, rb.availableContainers)
+	return containers
+}
+
+func (rb *RequestBuffer) reserveContainer() (container, bool) {
+	containers := rb.availableContainerSnapshot()
+	if len(containers) == 0 {
+		return container{}, false
+	}
+
+	rb.containerRequestsLock.Lock()
+	defer rb.containerRequestsLock.Unlock()
+
+	if rb.containerRequests == nil {
+		rb.containerRequests = map[string]int{}
+	}
+
+	maxTokens := rb.maxTokens
+	if maxTokens <= 0 {
+		maxTokens = 1
+	}
+
+	var selected container
+	selectedLoad := 0
+	selectedSet := false
+	for _, c := range containers {
+		load := rb.containerRequests[c.id]
+		if load >= maxTokens {
+			continue
+		}
+		if !selectedSet || load < selectedLoad {
+			selected = c
+			selectedLoad = load
+			selectedSet = true
+		}
+	}
+
+	if !selectedSet {
+		metrics.RecordProxyTokenDenial("endpoint", rb.workspaceName(), rb.stubId)
+		return container{}, false
+	}
+
+	rb.containerRequests[selected.id] = selectedLoad + 1
+	selected.inFlightRequests = selectedLoad + 1
+	return selected, true
+}
+
+func (rb *RequestBuffer) requeueRequest(req *request) {
+	if rb.buffer.Push(req, true) {
+		metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
+	}
+	rb.recordBufferOccupancy()
+}
+
+func (rb *RequestBuffer) containerRequestCount(containerId string) int {
+	rb.containerRequestsLock.Lock()
+	defer rb.containerRequestsLock.Unlock()
+
+	if rb.containerRequests == nil {
+		return 0
+	}
+	return rb.containerRequests[containerId]
+}
+
+func (rb *RequestBuffer) pruneContainerRequestCounts(containers []container) {
+	active := make(map[string]struct{}, len(containers))
+	for _, c := range containers {
+		active[c.id] = struct{}{}
+	}
+
+	rb.containerRequestsLock.Lock()
+	defer rb.containerRequestsLock.Unlock()
+	for containerId, count := range rb.containerRequests {
+		if _, ok := active[containerId]; !ok && count <= 0 {
+			delete(rb.containerRequests, containerId)
 		}
 	}
 }
@@ -256,7 +357,6 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	defer httpClient.CloseIdleConnections()
 
 	ready := resp.StatusCode == http.StatusOK
 	metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", ready, time.Since(start))
@@ -291,20 +391,11 @@ func (rb *RequestBuffer) discoverContainers() {
 						return
 					}
 
-					availableTokens, err := rb.requestTokens(cs.ContainerId)
-					if err != nil {
-						return
-					}
-
-					// Let's say we have 5 workers available, and there are three tokens left in this bucket
-					// that means we currently have 5-3 -> 2 requests in flight
-					inFlightRequests := rb.maxTokens - availableTokens
-
 					if rb.checkAddressIsReady(containerAddress) {
 						availableContainersChan <- container{
 							id:               cs.ContainerId,
 							address:          containerAddress,
-							inFlightRequests: inFlightRequests,
+							inFlightRequests: rb.containerRequestCount(cs.ContainerId),
 						}
 
 						return
@@ -329,77 +420,30 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainersLock.Lock()
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
+			rb.pruneContainerRequestCounts(availableContainers)
 			rb.pruneBackendTransports(availableContainers)
+			rb.signalWork()
 
 			time.Sleep(readyCheckInterval)
 		}
 	}
 }
 
-func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
-	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
-
-	val, err := rb.rdb.Get(rb.ctx, tokenKey).Int()
-	if err != nil && err != redis.Nil {
-		return 0, err
-	} else if err == redis.Nil {
-		created, err := rb.rdb.SetNX(rb.ctx, tokenKey, rb.maxTokens, 0).Result()
-		if err != nil {
-			return 0, err
-		}
-
-		if created {
-			return rb.maxTokens, nil
-		}
-
-		tokens, err := rb.rdb.Get(rb.ctx, tokenKey).Int()
-		if err != nil {
-			return 0, err
-		}
-
-		return tokens, nil
-	}
-
-	return val, nil
-}
-
-func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
-	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
-	tokenCount, err := rb.rdb.Decr(rb.ctx, tokenKey).Result()
-	if err != nil {
-		return err
-	}
-
-	// If the token count is negative, we exceeded our threshold of
-	// available request tokens, just reverse the operation
-	if tokenCount < 0 {
-		rb.rdb.Incr(rb.ctx, tokenKey)
-		metrics.RecordProxyTokenDenial("endpoint", rb.workspaceName(), rb.stubId)
-		return errors.New("too many in-flight requests")
-	}
-
-	err = rb.rdb.Expire(rb.ctx, tokenKey, time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
-	tokenKey := Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId)
-
-	err := rb.rdb.Incr(rb.ctx, tokenKey).Err()
-	if err != nil {
-		return err
+	rb.containerRequestsLock.Lock()
+	if rb.containerRequests != nil {
+		if rb.containerRequests[containerId] <= 1 {
+			delete(rb.containerRequests, containerId)
+		} else {
+			rb.containerRequests[containerId]--
+		}
 	}
+	rb.containerRequestsLock.Unlock()
 
-	err = rb.rdb.Expire(rb.ctx, tokenKey, time.Duration(rb.stubConfig.TaskPolicy.Timeout)*time.Second).Err()
-	if err != nil {
-		return err
+	if rb.rdb != nil && rb.workspace != nil && taskId != "" {
+		go rb.rdb.Del(context.Background(), Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId))
 	}
-
-	return rb.rdb.Del(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId)).Err()
+	return nil
 }
 
 func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *http.Client {
@@ -421,8 +465,10 @@ func (rb *RequestBuffer) backendTransport(address string, timeout time.Duration)
 	}
 
 	transport := &http.Transport{
-		MaxIdleConnsPerHost: max(2, rb.maxTokens),
+		MaxIdleConns:        1024,
+		MaxIdleConnsPerHost: max(32, rb.maxTokens*2),
 		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  true,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			dialAddress := addr
 			if _, isRoute := types.ParseBackendRouteAddress(address); isRoute {
@@ -474,37 +520,17 @@ func (rb *RequestBuffer) pruneBackendTransports(containers []container) {
 	})
 }
 
-func (rb *RequestBuffer) handleRequest(req *request) {
+func (rb *RequestBuffer) handleRequest(req *request, c container) {
+	defer rb.afterRequest(req, c.id)
+
 	if req.abandoned.Load() {
 		return
 	}
 
-	rb.availableContainersLock.RLock()
-
-	if len(rb.availableContainers) == 0 {
-		if rb.buffer.Push(req, true) {
-			metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
-		}
-		rb.recordBufferOccupancy()
-		rb.availableContainersLock.RUnlock()
+	if req.ctx.Request().Context().Err() != nil {
+		rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 		return
 	}
-
-	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
-	// Basically least-connections load balancing
-	c := rb.availableContainers[0]
-
-	rb.availableContainersLock.RUnlock()
-
-	err := rb.acquireRequestToken(c.id)
-	if err != nil {
-		if rb.buffer.Push(req, true) {
-			metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
-		}
-		rb.recordBufferOccupancy()
-		return
-	}
-	defer rb.afterRequest(req, c.id)
 
 	close(req.started)
 	protocol := "http"
@@ -648,28 +674,27 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		streamingSupported = false
 	}
 
-	// Send response to client in chunks
-	buf := make([]byte, 4096)
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			req.ctx.Response().Writer.Write(buf[:n])
-
-			if streamingSupported {
-				flusher.Flush()
-			}
-		}
-
-		if err != nil {
-			if err != io.EOF && err != context.Canceled {
-				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-					"error": "Internal server error",
-				})
-			}
-
-			break
-		}
+	if streamingSupported && shouldFlushProxyResponse(resp) {
+		_, err = abstractions.CopyWithProxyBufferFlush(req.ctx.Response().Writer, resp.Body, flusher.Flush)
+	} else {
+		_, err = abstractions.CopyWithProxyBuffer(req.ctx.Response().Writer, resp.Body)
 	}
+	if err != nil && err != io.EOF && err != context.Canceled {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+	}
+}
+
+func shouldFlushProxyResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if resp.ContentLength < 0 {
+		return true
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	return strings.Contains(contentType, "text/event-stream") || strings.Contains(contentType, "stream")
 }
 
 func backendHTTPURL(scheme, address, subPath, rawQuery string) string {
@@ -719,14 +744,14 @@ func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 		close(req.done)
 	}()
 
+	defer rb.signalWork()
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
 
-	// Set keep warm lock
-	if rb.stubConfig.KeepWarmSeconds == 0 {
+	if rb.rdb == nil || rb.workspace == nil || rb.stubConfig.KeepWarmSeconds == 0 {
 		return
 	}
 
-	rb.rdb.SetEx(
+	go rb.rdb.SetEx(
 		context.Background(),
 		Keys.endpointKeepWarmLock(rb.workspace.Name, rb.stubId, containerId),
 		1,
@@ -776,7 +801,7 @@ func forwardWSConn(src net.Conn, dst net.Conn) {
 		dst.Close()
 	}()
 
-	_, err := io.Copy(src, dst)
+	_, err := abstractions.CopyWithProxyBuffer(src, dst)
 	if err != nil {
 		return
 	}
