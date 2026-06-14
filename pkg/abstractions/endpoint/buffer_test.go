@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -100,5 +102,117 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	}
 	if body["error"] != "Timed out waiting for a backend container" {
 		t.Fatalf("error = %q, want timeout message", body["error"])
+	}
+}
+
+func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
+	server, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := echo.New()
+	httpReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	rec := httptest.NewRecorder()
+	reqCtx := e.NewContext(httpReq, rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rb := &RequestBuffer{
+		ctx:                 ctx,
+		rdb:                 rdb,
+		workspace:           &types.Workspace{Name: "workspace"},
+		stubId:              "stub",
+		stubConfig:          &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
+		buffer:              abstractions.NewRingBuffer[*request](1),
+		availableContainers: []container{},
+		httpClient:          &http.Client{},
+		workReady:           make(chan struct{}, 1),
+	}
+	req := &request{
+		ctx:     reqCtx,
+		task:    &EndpointTask{msg: &types.TaskMessage{TaskId: "task"}},
+		done:    make(chan struct{}),
+		started: make(chan struct{}),
+	}
+	if rb.buffer.Push(req, false) {
+		t.Fatal("unexpected overwrite")
+	}
+
+	go rb.processRequests()
+	rb.signalWork()
+
+	time.Sleep(10 * time.Millisecond)
+	if rb.buffer.Len() != 1 {
+		t.Fatalf("buffer length = %d, want queued request while no backends are available", rb.buffer.Len())
+	}
+
+	rb.availableContainersLock.Lock()
+	rb.availableContainers = []container{{id: "container-1", address: "127.0.0.1:8000"}}
+	rb.availableContainersLock.Unlock()
+	if err := rdb.Set(ctx, Keys.endpointRequestTokens("workspace", "stub", "container-1"), 1, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	rb.signalWork()
+
+	waitForCondition(t, 50*time.Millisecond, func() bool {
+		return rb.buffer.Len() == 0
+	})
+}
+
+func TestReserveContainerSkipsSaturatedReplica(t *testing.T) {
+	rb := &RequestBuffer{
+		ctx:       context.Background(),
+		workspace: &types.Workspace{Name: "workspace"},
+		stubId:    "stub",
+		stubConfig: &types.StubConfigV1{
+			TaskPolicy: types.TaskPolicy{Timeout: 30},
+		},
+		maxTokens: 1,
+		containerRequests: map[string]int{
+			"full": 1,
+		},
+		availableContainers: []container{
+			{id: "full", address: "127.0.0.1:8001"},
+			{id: "open", address: "127.0.0.1:8002"},
+		},
+	}
+
+	c, ok := rb.reserveContainer()
+	if !ok {
+		t.Fatal("expected available container")
+	}
+	if c.id != "open" {
+		t.Fatalf("container id = %q, want open", c.id)
+	}
+
+	if got := rb.containerRequestCount("full"); got != 1 {
+		t.Fatalf("full replica local reservations = %d, want 1", got)
+	}
+	if got := rb.containerRequestCount("open"); got != 1 {
+		t.Fatalf("open replica local reservations = %d, want 1", got)
+	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if !fn() {
+		t.Fatalf("condition not met within %s", timeout)
 	}
 }

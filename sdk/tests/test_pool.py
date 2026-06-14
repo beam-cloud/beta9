@@ -2,6 +2,7 @@ import pytest
 
 from beta9 import Pool
 from beta9.abstractions.function import Function
+from beta9.abstractions.sandbox import Sandbox
 from beta9.cli.pool import (
     _agent_join_interrupted,
     _append_join_args,
@@ -50,6 +51,34 @@ def test_pool_string_routes_to_manual_pool():
 
     assert fn.pool_config.name == "manual-training"
     assert fn.pool_config.selector == "manual-training"
+
+
+def test_sandbox_pool_string_routes_to_manual_pool():
+    sandbox = Sandbox(pool="sandbox-cpu")
+
+    assert sandbox.pool_config.name == "sandbox-cpu"
+    assert sandbox.pool_config.selector == "sandbox-cpu"
+
+
+def test_sandbox_pool_config_serializes_managed_capacity_request():
+    sandbox = Sandbox(
+        pool=Pool(
+            name="sandbox-managed",
+            nodes=1,
+            ttl="1h",
+            max_spend=1,
+            providers=["hetzner"],
+            regions=["ash"],
+        )
+    )
+
+    assert sandbox.pool_config.name == "sandbox-managed"
+    assert sandbox.pool_config.selector == "sandbox-managed"
+    assert sandbox.pool_config.nodes == 1
+    assert sandbox.pool_config.ttl == "1h"
+    assert sandbox.pool_config.max_spend == 1
+    assert sandbox.pool_config.providers == ["hetzner"]
+    assert sandbox.pool_config.regions == ["ash"]
 
 
 def test_pool_requires_budget_and_ttl_for_reservation():
