@@ -534,6 +534,7 @@ type ProviderConfig struct {
 	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
 	Vast       VastProviderConfig       `key:"vast" json:"vast"`
 	Shadeform  ShadeformProviderConfig  `key:"shadeform" json:"shadeform"`
+	Hetzner    HetznerProviderConfig    `key:"hetzner" json:"hetzner"`
 }
 
 type VastProviderConfig struct {
@@ -544,6 +545,34 @@ type VastProviderConfig struct {
 type ShadeformProviderConfig struct {
 	ApiKey  string `key:"apiKey" json:"api_key"`
 	BaseURL string `key:"baseURL" json:"base_url"`
+}
+
+type HetznerProviderConfig struct {
+	ApiToken             string                         `key:"apiToken" json:"api_token"`
+	BaseURL              string                         `key:"baseURL" json:"base_url"`
+	Image                string                         `key:"image" json:"image"`
+	ImageByRegion        map[string]string              `key:"imageByRegion" json:"image_by_region"`
+	SSHKeys              []string                       `key:"sshKeys" json:"ssh_keys"`
+	SSHKeysByRegion      map[string][]string            `key:"sshKeysByRegion" json:"ssh_keys_by_region"`
+	PrivateNetwork       HetznerPrivateNetworkConfig    `key:"privateNetwork" json:"private_network"`
+	ServerTypePrices     map[string]float64             `key:"serverTypePrices" json:"server_type_prices"`
+	ServerTypeCategories map[string]string              `key:"serverTypeCategories" json:"server_type_categories"`
+	RegionMetadata       map[string]HetznerRegionConfig `key:"regionMetadata" json:"region_metadata"`
+	DefaultRegions       []string                       `key:"defaultRegions" json:"default_regions"`
+}
+
+type HetznerPrivateNetworkConfig struct {
+	ID            int64             `key:"id" json:"id"`
+	Name          string            `key:"name" json:"name"`
+	RegionIDs     map[string]int64  `key:"regionIds" json:"region_ids"`
+	RegionNames   map[string]string `key:"regionNames" json:"region_names"`
+	RequireSubnet *bool             `key:"requireSubnet" json:"require_subnet"`
+}
+
+type HetznerRegionConfig struct {
+	DisplayName string  `key:"displayName" json:"display_name"`
+	Latitude    float64 `key:"latitude" json:"latitude"`
+	Longitude   float64 `key:"longitude" json:"longitude"`
 }
 
 type AgentConfig struct {

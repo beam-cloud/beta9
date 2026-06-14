@@ -101,6 +101,7 @@ type LocalWorkerPoolControllerForTest struct {
 	addWorkerStarted chan struct{}
 	unblockAddWorker chan struct{}
 	addWorkerErr     error
+	requiresSelector bool
 	addWorkerMu      sync.Mutex
 	addWorkerCalls   int
 }
@@ -122,7 +123,7 @@ func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
-	return false
+	return wpc.requiresSelector
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {

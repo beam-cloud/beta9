@@ -69,12 +69,19 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (model.Poo
 		Selector:       in.Selector,
 		GPUs:           gpus,
 		TotalGPUs:      in.Gpus,
+		TotalNodes:     in.Nodes,
 		OfferID:        in.OfferId,
 		TTL:            ttl,
 		MaxSpendMicros: model.DollarsToMicros(in.MaxSpend),
 		Providers:      in.Providers,
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
+	}
+	if pool.TotalGPUs > 0 && pool.TotalNodes > 0 {
+		return model.Pool{}, fmt.Errorf("pool reservations require either gpus or nodes, not both")
+	}
+	if pool.TotalNodes > 0 && len(pool.GPUs) > 0 {
+		return model.Pool{}, fmt.Errorf("CPU node reservations cannot include GPU filters")
 	}
 	if requireReservation {
 		if err := pool.Validate(); err != nil {
@@ -88,19 +95,25 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (model.Poo
 
 func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
 	return &pb.PoolOffer{
-		Id:               offer.ID,
-		Provider:         offer.Provider,
-		Cloud:            offer.Cloud,
-		InstanceType:     offer.InstanceType,
-		Region:           offer.Region,
-		Gpu:              offer.GPU,
-		GpuCount:         offer.GPUCount,
-		CpuMillicores:    offer.CPUMillicores,
-		MemoryMb:         offer.MemoryMB,
-		StorageMb:        offer.StorageMB,
-		HourlyCostMicros: offer.HourlyCostMicros,
-		Reliability:      offer.Reliability,
-		Available:        offer.Available,
+		Id:                offer.ID,
+		Provider:          offer.Provider,
+		Cloud:             offer.Cloud,
+		InstanceType:      offer.InstanceType,
+		Region:            offer.Region,
+		Gpu:               offer.GPU,
+		GpuCount:          offer.GPUCount,
+		NodeCount:         offer.NodeCount,
+		CpuMillicores:     offer.CPUMillicores,
+		MemoryMb:          offer.MemoryMB,
+		StorageMb:         offer.StorageMB,
+		HourlyCostMicros:  offer.HourlyCostMicros,
+		Reliability:       offer.Reliability,
+		Available:         offer.Available,
+		DisplayName:       offer.DisplayName,
+		Category:          offer.Category,
+		RegionDisplayName: offer.RegionDisplayName,
+		Latitude:          offer.Latitude,
+		Longitude:         offer.Longitude,
 	}
 }
 
@@ -127,6 +140,11 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		StatusMessage:     reservation.LastStatusMessage,
 		TerminatingReason: reservation.TerminatingReason,
 		MachineId:         reservation.MachineID,
+		NodeCount:         reservation.NodeCount,
+		InstanceType:      reservation.InstanceType,
+		CpuMillicores:     reservation.CPUMillicores,
+		MemoryMb:          reservation.MemoryMB,
+		StorageMb:         reservation.StorageMB,
 	}
 }
 
@@ -191,6 +209,7 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		ExpiresAt:            timestampOrNil(state.ExpiresAt),
 		MachineCount:         uint32(len(machines)),
 		ReadyMachineCount:    readyMachineCount,
+		ReservedNodes:        state.ReservedNodes,
 	}
 }
 

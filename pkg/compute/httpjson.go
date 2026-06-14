@@ -92,6 +92,10 @@ func jsonFloat64(m map[string]any, keys ...string) float64 {
 	return jsonLookup(m, keys, jsonFloat64Value)
 }
 
+func jsonBool(m map[string]any, keys ...string) bool {
+	return jsonLookup(m, keys, jsonBoolValue)
+}
+
 func jsonArray(data map[string]any, keys ...string) []any {
 	return jsonLookup(data, keys, jsonArrayValue)
 }
@@ -151,6 +155,21 @@ func jsonFloat64Value(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func jsonBoolValue(value any) (bool, bool) {
+	switch t := value.(type) {
+	case bool:
+		return t, true
+	case string:
+		switch t {
+		case "true", "TRUE", "True":
+			return true, true
+		case "false", "FALSE", "False":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 func jsonArrayValue(value any) ([]any, bool) {

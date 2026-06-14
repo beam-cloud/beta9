@@ -3049,6 +3049,10 @@
         },
         "offerId": {
           "type": "string"
+        },
+        "nodes": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -3100,6 +3104,27 @@
         },
         "cloud": {
           "type": "string"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "regionDisplayName": {
+          "type": "string"
+        },
+        "latitude": {
+          "type": "number",
+          "format": "double"
+        },
+        "longitude": {
+          "type": "number",
+          "format": "double"
         }
       }
     },
@@ -3149,6 +3174,10 @@
           "format": "int64"
         },
         "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservedNodes": {
           "type": "integer",
           "format": "int64"
         }
@@ -3209,6 +3238,25 @@
         },
         "region": {
           "type": "string"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "cpuMillicores": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memoryMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "storageMb": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },

@@ -72,6 +72,48 @@ func TestAttachedCapacityIsFreeAndPreferred(t *testing.T) {
 	require.Equal(t, ActionKeep, plan.Actions[0].Type)
 }
 
+func TestSolveCPUNodesUsesNodeCount(t *testing.T) {
+	now := time.Now()
+	plan := NewSolver().Solve(SolveInput{
+		Now: now,
+		Demand: Demand{
+			PoolName:       "cpu-pool",
+			TotalNodes:     3,
+			TTL:            2 * time.Hour,
+			MaxSpendMicros: DollarsToMicros(10),
+			Providers:      []string{"hetzner"},
+		},
+		Reservations: []Reservation{
+			{
+				ID:               "existing-node",
+				PoolName:         "cpu-pool",
+				Provider:         "hetzner",
+				NodeCount:        1,
+				HourlyCostMicros: DollarsToMicros(1),
+				Source:           SourceCLIReservation,
+				Status:           ReservationActive,
+				ExpiresAt:        now.Add(time.Hour),
+			},
+		},
+		Offers: []Offer{
+			{ID: "cpx31", Provider: "hetzner", NodeCount: 1, CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: DollarsToMicros(1.5), Available: 5},
+			{ID: "gpu", Provider: "hetzner", GPU: "A10G", GPUCount: 1, HourlyCostMicros: DollarsToMicros(1), Available: 5},
+		},
+	})
+
+	require.True(t, plan.Feasible, plan.Reason)
+	require.Equal(t, uint32(3), plan.TotalNodes)
+	require.Equal(t, uint32(1), plan.ExistingNodes)
+	require.Equal(t, uint32(2), plan.NewNodes)
+	require.Equal(t, uint32(0), plan.TotalGPUs)
+	require.Equal(t, DollarsToMicros(6), plan.IncrementalCostMicros)
+	require.Len(t, plan.Actions, 2)
+	require.Equal(t, ActionKeep, plan.Actions[0].Type)
+	require.Equal(t, ActionCreate, plan.Actions[1].Type)
+	require.Equal(t, "cpx31", plan.Actions[1].Offer.ID)
+	require.Equal(t, uint32(2), plan.Actions[1].Count)
+}
+
 func TestWholeHourSpendCap(t *testing.T) {
 	plan := NewSolver().Solve(SolveInput{
 		Demand: Demand{

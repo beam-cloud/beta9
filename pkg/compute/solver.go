@@ -26,19 +26,21 @@ func (s *Solver) Solve(in SolveInput) SolvePlan {
 		return SolvePlan{Feasible: false, Reason: err.Error()}
 	}
 
-	requiredGPUs := in.Demand.TotalGPUs + in.Demand.HeadroomGPUs
-	existingGPUs, committedCost, keepActions, deleteActions := usableReservations(in.Reservations, in.Demand, now)
-	if existingGPUs >= requiredGPUs {
+	requiredUnits := requiredDemandUnits(in.Demand)
+	existingUnits, committedCost, keepActions, deleteActions := usableReservations(in.Reservations, in.Demand, now)
+	if existingUnits >= requiredUnits {
 		return SolvePlan{
 			Feasible:            true,
 			Actions:             append(keepActions, deleteActions...),
-			TotalGPUs:           existingGPUs,
-			ExistingGPUs:        existingGPUs,
+			TotalGPUs:           gpuPlanValue(in.Demand, existingUnits),
+			ExistingGPUs:        gpuPlanValue(in.Demand, existingUnits),
+			TotalNodes:          nodePlanValue(in.Demand, existingUnits),
+			ExistingNodes:       nodePlanValue(in.Demand, existingUnits),
 			CommittedCostMicros: committedCost,
 		}
 	}
 
-	neededGPUs := requiredGPUs - existingGPUs
+	neededUnits := requiredUnits - existingUnits
 	candidates := filterOffers(in.Offers, pool)
 	maxOffers := s.MaxOffers
 	if in.MaxOffers > 0 {
@@ -52,13 +54,14 @@ func (s *Solver) Solve(in SolveInput) SolvePlan {
 	}
 
 	leaseHours := WholeHours(in.Demand.TTL)
-	best := solveBounded(candidates, neededGPUs, leaseHours)
+	best := solveBounded(candidates, neededUnits, leaseHours, demandOfferUnits(in.Demand))
 	if !best.ok {
 		return SolvePlan{
 			Feasible:            false,
 			Reason:              "insufficient compatible capacity",
 			Actions:             append(keepActions, deleteActions...),
-			ExistingGPUs:        existingGPUs,
+			ExistingGPUs:        gpuPlanValue(in.Demand, existingUnits),
+			ExistingNodes:       nodePlanValue(in.Demand, existingUnits),
 			CommittedCostMicros: committedCost,
 		}
 	}
@@ -69,21 +72,22 @@ func (s *Solver) Solve(in SolveInput) SolvePlan {
 			Feasible:            false,
 			Reason:              "max spend would be exceeded",
 			Actions:             append(keepActions, deleteActions...),
-			ExistingGPUs:        existingGPUs,
+			ExistingGPUs:        gpuPlanValue(in.Demand, existingUnits),
+			ExistingNodes:       nodePlanValue(in.Demand, existingUnits),
 			CommittedCostMicros: committedCost,
 		}
 	}
 
 	actions := make([]SolveAction, 0, len(keepActions)+len(best.counts)+len(deleteActions))
 	actions = append(actions, keepActions...)
-	var newGPUs uint32
+	var newUnits uint32
 	for idx, count := range best.counts {
 		if count == 0 {
 			continue
 		}
 		offer := candidates[idx]
 		actionCost := offer.HourlyCostMicros * int64(count) * leaseHours
-		newGPUs += offer.GPUCount * count
+		newUnits += demandOfferUnits(in.Demand)(offer) * count
 		actions = append(actions, SolveAction{
 			Type:       ActionCreate,
 			Offer:      offer,
@@ -97,16 +101,19 @@ func (s *Solver) Solve(in SolveInput) SolvePlan {
 	return SolvePlan{
 		Feasible:              true,
 		Actions:               actions,
-		TotalGPUs:             existingGPUs + newGPUs,
-		ExistingGPUs:          existingGPUs,
-		NewGPUs:               newGPUs,
+		TotalGPUs:             gpuPlanValue(in.Demand, existingUnits+newUnits),
+		ExistingGPUs:          gpuPlanValue(in.Demand, existingUnits),
+		NewGPUs:               gpuPlanValue(in.Demand, newUnits),
+		TotalNodes:            nodePlanValue(in.Demand, existingUnits+newUnits),
+		ExistingNodes:         nodePlanValue(in.Demand, existingUnits),
+		NewNodes:              nodePlanValue(in.Demand, newUnits),
 		IncrementalCostMicros: best.cost,
 		CommittedCostMicros:   totalCommitment,
 	}
 }
 
 func usableReservations(reservations []Reservation, demand Demand, now time.Time) (uint32, int64, []SolveAction, []SolveAction) {
-	var totalGPUs uint32
+	var totalUnits uint32
 	var committedCost int64
 	keepActions := make([]SolveAction, 0, len(reservations))
 	deleteActions := []SolveAction{}
@@ -120,8 +127,9 @@ func usableReservations(reservations []Reservation, demand Demand, now time.Time
 			continue
 		}
 
+		units := reservationUnits(reservation, demand)
 		if reservation.Source.IsAttached() {
-			totalGPUs += reservation.GPUCount
+			totalUnits += units
 			keepActions = append(keepActions, SolveAction{
 				Type:        ActionKeep,
 				Reservation: reservation,
@@ -131,7 +139,7 @@ func usableReservations(reservations []Reservation, demand Demand, now time.Time
 			continue
 		}
 
-		totalGPUs += reservation.GPUCount
+		totalUnits += units
 		cost := existingReservationCommitment(reservation, now, leaseEnd)
 		committedCost += cost
 		keepActions = append(keepActions, SolveAction{
@@ -161,7 +169,48 @@ func usableReservations(reservations []Reservation, demand Demand, now time.Time
 		})
 	}
 
-	return totalGPUs, committedCost, keepActions, deleteActions
+	return totalUnits, committedCost, keepActions, deleteActions
+}
+
+func requiredDemandUnits(demand Demand) uint32 {
+	if demand.TotalNodes > 0 {
+		return demand.TotalNodes
+	}
+	return demand.TotalGPUs + demand.HeadroomGPUs
+}
+
+func demandOfferUnits(demand Demand) func(Offer) uint32 {
+	if demand.TotalNodes > 0 {
+		return func(offer Offer) uint32 { return offer.NodeCount }
+	}
+	return func(offer Offer) uint32 { return offer.GPUCount }
+}
+
+func reservationUnits(reservation Reservation, demand Demand) uint32 {
+	if demand.TotalNodes > 0 {
+		if reservation.NodeCount > 0 {
+			return reservation.NodeCount
+		}
+		if reservation.GPUCount == 0 {
+			return 1
+		}
+		return 0
+	}
+	return reservation.GPUCount
+}
+
+func gpuPlanValue(demand Demand, units uint32) uint32 {
+	if demand.TotalNodes > 0 {
+		return 0
+	}
+	return units
+}
+
+func nodePlanValue(demand Demand, units uint32) uint32 {
+	if demand.TotalNodes == 0 {
+		return 0
+	}
+	return units
 }
 
 func existingReservationCommitment(reservation Reservation, now, leaseEnd time.Time) int64 {
@@ -192,6 +241,9 @@ func reservationMatchesDemand(reservation Reservation, demand Demand) bool {
 	if len(demand.GPUs) > 0 && !slices.Contains(demand.GPUs, reservation.GPU) {
 		return false
 	}
+	if demand.TotalNodes > 0 && reservation.GPUCount > 0 {
+		return false
+	}
 	if len(demand.Providers) > 0 && !slices.Contains(demand.Providers, reservation.Provider) {
 		return false
 	}
@@ -208,15 +260,24 @@ func filterOffers(offers []Offer, pool Pool) []Offer {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i]
 		right := candidates[j]
-		if left.CostPerGPU() == right.CostPerGPU() {
+		leftCost := offerSortCost(left, pool)
+		rightCost := offerSortCost(right, pool)
+		if leftCost == rightCost {
 			if left.Reliability == right.Reliability {
 				return left.HourlyCostMicros < right.HourlyCostMicros
 			}
 			return left.Reliability > right.Reliability
 		}
-		return left.CostPerGPU() < right.CostPerGPU()
+		return leftCost < rightCost
 	})
 	return candidates
+}
+
+func offerSortCost(offer Offer, pool Pool) float64 {
+	if pool.TotalNodes > 0 {
+		return offer.CostPerNode()
+	}
+	return offer.CostPerGPU()
 }
 
 type boundedSolution struct {
@@ -226,25 +287,26 @@ type boundedSolution struct {
 	counts []uint32
 }
 
-func solveBounded(offers []Offer, neededGPUs uint32, leaseHours int64) boundedSolution {
-	if neededGPUs == 0 {
+func solveBounded(offers []Offer, neededUnits uint32, leaseHours int64, offerUnits func(Offer) uint32) boundedSolution {
+	if neededUnits == 0 {
 		return boundedSolution{ok: true, counts: make([]uint32, len(offers))}
 	}
 	if leaseHours <= 0 {
 		leaseHours = 1
 	}
 
-	var maxGPU uint32
+	var maxUnits uint32
 	for _, offer := range offers {
-		if offer.GPUCount > maxGPU {
-			maxGPU = offer.GPUCount
+		units := offerUnits(offer)
+		if units > maxUnits {
+			maxUnits = units
 		}
 	}
-	if maxGPU == 0 {
+	if maxUnits == 0 {
 		return boundedSolution{}
 	}
 
-	limit := int(neededGPUs + maxGPU)
+	limit := int(neededUnits + maxUnits)
 	const unreachable = int64(math.MaxInt64 / 4)
 	costs := make([]int64, limit+1)
 	counts := make([][]uint32, limit+1)
@@ -256,7 +318,8 @@ func solveBounded(offers []Offer, neededGPUs uint32, leaseHours int64) boundedSo
 	costs[0] = 0
 
 	for idx, offer := range offers {
-		if offer.GPUCount == 0 || offer.Available == 0 {
+		units := offerUnits(offer)
+		if units == 0 || offer.Available == 0 {
 			continue
 		}
 		machineCost := offer.HourlyCostMicros * leaseHours
@@ -267,20 +330,20 @@ func solveBounded(offers []Offer, neededGPUs uint32, leaseHours int64) boundedSo
 				nextCounts[i] = slices.Clone(counts[i])
 			}
 			nextGPUs := slices.Clone(gpus)
-			for gpu := 0; gpu <= limit; gpu++ {
-				if costs[gpu] == unreachable {
+			for usedUnits := 0; usedUnits <= limit; usedUnits++ {
+				if costs[usedUnits] == unreachable {
 					continue
 				}
-				nextGPU := gpu + int(offer.GPUCount)
-				if nextGPU > limit {
-					nextGPU = limit
+				nextUnit := usedUnits + int(units)
+				if nextUnit > limit {
+					nextUnit = limit
 				}
-				nextCost := costs[gpu] + machineCost
-				if nextCost < nextCosts[nextGPU] {
-					nextCosts[nextGPU] = nextCost
-					nextCounts[nextGPU] = slices.Clone(counts[gpu])
-					nextCounts[nextGPU][idx]++
-					nextGPUs[nextGPU] = uint32(nextGPU)
+				nextCost := costs[usedUnits] + machineCost
+				if nextCost < nextCosts[nextUnit] {
+					nextCosts[nextUnit] = nextCost
+					nextCounts[nextUnit] = slices.Clone(counts[usedUnits])
+					nextCounts[nextUnit][idx]++
+					nextGPUs[nextUnit] = uint32(nextUnit)
 				}
 			}
 			costs = nextCosts
@@ -291,10 +354,10 @@ func solveBounded(offers []Offer, neededGPUs uint32, leaseHours int64) boundedSo
 
 	bestGPU := -1
 	bestCost := unreachable
-	for gpu := int(neededGPUs); gpu <= limit; gpu++ {
-		if costs[gpu] < bestCost {
-			bestCost = costs[gpu]
-			bestGPU = gpu
+	for units := int(neededUnits); units <= limit; units++ {
+		if costs[units] < bestCost {
+			bestCost = costs[units]
+			bestGPU = units
 		}
 	}
 	if bestGPU == -1 {

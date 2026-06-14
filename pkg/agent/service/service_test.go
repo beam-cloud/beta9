@@ -49,7 +49,10 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		`Environment="BEAM_WORKER_IMAGE=registry.example.com/worker:latest"`,
 		`Environment="HOME=` + filepath.Join(tmp, "state") + `"`,
 		`ExecStart="` + types.DefaultAgentBinaryPath + `" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
-		`Restart=always`,
+		`StartLimitIntervalSec=300`,
+		`StartLimitBurst=5`,
+		`Restart=on-failure`,
+		`RestartSec=30`,
 		`Environment="XDG_CONFIG_HOME=` + filepath.Join(tmp, "state", ".config") + `"`,
 	} {
 		if !strings.Contains(unitText, want) {
