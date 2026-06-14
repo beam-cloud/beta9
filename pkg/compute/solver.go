@@ -52,7 +52,7 @@ func (s *Solver) Solve(in SolveInput) SolvePlan {
 	}
 
 	leaseHours := WholeHours(in.Demand.TTL)
-	best := solveBounded(candidates, neededCapacity, leaseHours, demandOfferCapacity(in.Demand))
+	best := solveBounded(candidates, neededCapacity, leaseHours, nodeOfferCapacity)
 	if !best.ok {
 		return SolvePlan{
 			Feasible:            false,
@@ -83,7 +83,7 @@ func (s *Solver) Solve(in SolveInput) SolvePlan {
 		}
 		offer := candidates[idx]
 		actionCost := offer.HourlyCostMicros * int64(count) * leaseHours
-		newCapacity += demandOfferCapacity(in.Demand)(offer) * count
+		newCapacity += nodeOfferCapacity(offer) * count
 		actions = append(actions, SolveAction{
 			Type:       ActionCreate,
 			Offer:      offer,
@@ -120,7 +120,7 @@ func usableReservations(reservations []Reservation, demand Demand, now time.Time
 			continue
 		}
 
-		capacity := reservationCapacity(reservation, demand)
+		capacity := reservationCapacity(reservation)
 		if reservation.Source.IsAttached() {
 			totalCapacity += capacity
 			keepActions = append(keepActions, SolveAction{
@@ -169,10 +169,6 @@ func requiredDemandCapacity(demand Demand) uint32 {
 	return demand.Nodes
 }
 
-func demandOfferCapacity(demand Demand) func(Offer) uint32 {
-	return nodeOfferCapacity
-}
-
 func nodeOfferCapacity(offer Offer) uint32 {
 	if offer.NodeCount > 0 {
 		return offer.NodeCount
@@ -183,7 +179,7 @@ func nodeOfferCapacity(offer Offer) uint32 {
 	return 0
 }
 
-func reservationCapacity(reservation Reservation, demand Demand) uint32 {
+func reservationCapacity(reservation Reservation) uint32 {
 	if reservation.NodeCount > 0 {
 		return reservation.NodeCount
 	}
@@ -237,8 +233,8 @@ func filterOffers(offers []Offer, pool Pool) []Offer {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i]
 		right := candidates[j]
-		leftCost := offerSortCost(left, pool)
-		rightCost := offerSortCost(right, pool)
+		leftCost := offerSortCost(left)
+		rightCost := offerSortCost(right)
 		if leftCost == rightCost {
 			if left.Reliability == right.Reliability {
 				return left.HourlyCostMicros < right.HourlyCostMicros
@@ -250,7 +246,7 @@ func filterOffers(offers []Offer, pool Pool) []Offer {
 	return candidates
 }
 
-func offerSortCost(offer Offer, pool Pool) float64 {
+func offerSortCost(offer Offer) float64 {
 	return offer.CostPerNode()
 }
 

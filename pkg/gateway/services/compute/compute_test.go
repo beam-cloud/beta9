@@ -361,7 +361,7 @@ func TestJoinAgentRejectsGPUAfterCPUOnlyPoolInitialized(t *testing.T) {
 		t.Fatalf("JoinAgent() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("JoinAgent() unexpectedly accepted a GPU machine after CPU-only initialization")
+		t.Fatal("JoinAgent() unexpectedly accepted a machine with GPU attributes after CPU-only initialization")
 	}
 	if !strings.Contains(res.ErrMsg, "initialized without GPUs") {
 		t.Fatalf("JoinAgent() error = %q, want CPU-only pool error", res.ErrMsg)

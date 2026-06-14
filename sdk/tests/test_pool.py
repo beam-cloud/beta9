@@ -153,7 +153,7 @@ def test_pool_launch_command_is_not_exposed():
     assert "create" in management.commands
 
 
-def test_private_pool_compute_summarizes_gpu_nodes():
+def test_private_pool_compute_summarizes_nodes_with_gpu_attributes():
     pool = PrivatePool(
         config=PoolConfig(gpu=["H100"], nodes=2),
         reserved_nodes=2,

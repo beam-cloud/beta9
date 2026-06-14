@@ -233,25 +233,25 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
 }
 
-// validatePoolLaunchCompatible rejects launches that would change the pool's
-// GPU type; a pool runs one GPU type, so a different type needs a new pool.
+// validatePoolLaunchCompatible rejects launches that would change the node
+// hardware profile; a pool should not mix CPU-only and GPU-attributed nodes.
 func validatePoolLaunchCompatible(existing *model.PoolState, pool model.Pool) error {
 	existingConfig := normalizePoolConfig(existing.Config)
 	if existingConfig == nil {
 		return nil
 	}
 	if existing.ReservedNodes > 0 && existingPoolIsCPUOnly(existing) && len(pool.GPUs) > 0 {
-		return fmt.Errorf("pool %q is configured for CPU nodes; create a separate pool for GPU nodes", existing.Name)
+		return fmt.Errorf("pool %q is configured for CPU-only nodes; create a separate pool for nodes with GPU attributes", existing.Name)
 	}
 	if existingPoolHasGPU(existing) && pool.Nodes > 0 && len(pool.GPUs) == 0 {
-		return fmt.Errorf("pool %q is configured for GPU nodes; create a separate pool for CPU nodes", existing.Name)
+		return fmt.Errorf("pool %q is configured for nodes with GPU attributes; create a separate pool for CPU-only nodes", existing.Name)
 	}
 	if len(existingConfig.Gpu) == 0 || len(pool.GPUs) == 0 {
 		return nil
 	}
 	for _, gpu := range pool.GPUs {
 		if !slices.Contains(existingConfig.Gpu, gpu) {
-			return fmt.Errorf("pool %q runs %s GPUs; create a new pool for %s", existing.Name, strings.Join(existingConfig.Gpu, ", "), gpu)
+			return fmt.Errorf("pool %q is configured for %s node attributes; create a new pool for %s", existing.Name, strings.Join(existingConfig.Gpu, ", "), gpu)
 		}
 	}
 	return nil
