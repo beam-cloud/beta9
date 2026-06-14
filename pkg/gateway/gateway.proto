@@ -657,7 +657,7 @@ message ListPoolsResponse {
 message PoolConfig {
   string name = 1;
   repeated string gpu = 2;
-  uint32 gpus = 3;
+  uint32 nodes = 3;
   string ttl = 4;
   double max_spend = 5;
   repeated string providers = 6;
@@ -685,6 +685,12 @@ message PoolOffer {
   uint32 available = 11;
   int64 storage_mb = 12;
   string cloud = 13;
+  uint32 node_count = 14;
+  string display_name = 15;
+  string category = 16;
+  string region_display_name = 17;
+  double latitude = 18;
+  double longitude = 19;
 }
 
 message ProviderInstance {
@@ -704,6 +710,11 @@ message ProviderInstance {
   string machine_id = 14;
   string cloud = 15;
   string region = 16;
+  uint32 node_count = 17;
+  string instance_type = 18;
+  int64 cpu_millicores = 19;
+  int64 memory_mb = 20;
+  int64 storage_mb = 21;
 }
 
 message PrivatePool {
@@ -711,7 +722,6 @@ message PrivatePool {
   string selector = 2;
   PoolConfig config = 3;
   repeated ProviderInstance reservations = 4;
-  uint32 reserved_gpus = 5;
   int64 committed_spend_micros = 6;
   string status = 7;
   string source = 8;
@@ -719,6 +729,7 @@ message PrivatePool {
   google.protobuf.Timestamp expires_at = 10;
   uint32 machine_count = 11;
   uint32 ready_machine_count = 12;
+  uint32 reserved_nodes = 13;
 }
 
 message ListPoolOffersRequest { PoolConfig pool = 1; }
@@ -729,7 +740,10 @@ message ListPoolOffersResponse {
   repeated PoolOffer offers = 3;
 }
 
-message LaunchPoolCapacityRequest { PoolConfig pool = 1; }
+message LaunchPoolCapacityRequest {
+  PoolConfig pool = 1;
+  uint32 nodes = 2;
+}
 
 message LaunchPoolCapacityResponse {
   bool ok = 1;

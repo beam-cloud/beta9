@@ -2568,6 +2568,10 @@
       "properties": {
         "pool": {
           "$ref": "#/definitions/gatewayPoolConfig"
+        },
+        "nodes": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -3004,7 +3008,7 @@
             "type": "string"
           }
         },
-        "gpus": {
+        "nodes": {
           "type": "integer",
           "format": "int64"
         },
@@ -3100,6 +3104,27 @@
         },
         "cloud": {
           "type": "string"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "regionDisplayName": {
+          "type": "string"
+        },
+        "latitude": {
+          "type": "number",
+          "format": "double"
+        },
+        "longitude": {
+          "type": "number",
+          "format": "double"
         }
       }
     },
@@ -3121,10 +3146,6 @@
             "type": "object",
             "$ref": "#/definitions/gatewayProviderInstance"
           }
-        },
-        "reservedGpus": {
-          "type": "integer",
-          "format": "int64"
         },
         "committedSpendMicros": {
           "type": "string",
@@ -3149,6 +3170,10 @@
           "format": "int64"
         },
         "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservedNodes": {
           "type": "integer",
           "format": "int64"
         }
@@ -3209,6 +3234,25 @@
         },
         "region": {
           "type": "string"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "cpuMillicores": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memoryMb": {
+          "type": "string",
+          "format": "int64"
+        },
+        "storageMb": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },

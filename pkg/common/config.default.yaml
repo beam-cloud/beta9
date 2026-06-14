@@ -351,6 +351,25 @@ providers:
     # If you want workers nodes to land in your default vpc, you can omit subnetId
     subnetId:
     ami: ami-052c704a7f82c38b1
+  hetzner:
+    apiToken:
+    baseURL: https://api.hetzner.cloud/v1
+    image: ubuntu-24.04
+    imageByRegion: {}
+    sshKeys: []
+    sshKeysByRegion: {}
+    privateNetwork:
+      id: 0
+      name:
+      regionIds: {}
+      regionNames: {}
+      requireSubnet: true
+    serverTypePrices: {}
+    serverTypeCategories: {}
+    regionMetadata: {}
+    defaultRegions:
+    - ash
+    - hil
 tailscale:
   controlUrl:
   user: beta9

@@ -29,7 +29,7 @@ from ..clients.gateway import (
     StringList,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
-from .machine_format import format_cpu, format_gpu, format_memory, machine_table
+from .machine_format import format_cpu, format_memory, machine_table
 
 
 @click.group(cls=ClickCommonGroup)
@@ -49,7 +49,7 @@ def management():
 def _pool_config(
     name: str,
     gpu: Tuple[str, ...] = (),
-    gpus: int = 0,
+    nodes: int = 0,
     ttl: str = "",
     max_spend: float = 0,
     provider: Tuple[str, ...] = (),
@@ -62,7 +62,7 @@ def _pool_config(
     return PoolConfig(
         name=name,
         gpu=list(gpu),
-        gpus=gpus or 0,
+        nodes=nodes or 0,
         ttl=ttl or "",
         max_spend=max_spend or 0,
         providers=list(provider),
@@ -188,14 +188,29 @@ def _pool_status(status: str) -> str:
 
 def _private_pool_compute(pool: PrivatePool) -> str:
     gpu_types = pool.config.gpu
-    requested_gpus = pool.config.gpus or pool.reserved_gpus
-    if gpu_types and requested_gpus > 0:
-        return format_gpu(", ".join(gpu_types), requested_gpus)
+    node_count = _private_pool_node_count(pool)
+
+    if node_count > 0:
+        node_type = ", ".join(gpu_types) if gpu_types else "CPU"
+        return f"{_node_label(node_count)} ({node_type})"
     if gpu_types:
-        return ", ".join(gpu_types)
-    if pool.reserved_gpus > 0:
-        return format_gpu("GPU", pool.reserved_gpus)
+        return f"nodes ({', '.join(gpu_types)})"
     return "CPU"
+
+
+def _private_pool_node_count(pool: PrivatePool) -> int:
+    configured = pool.config.nodes or pool.reserved_nodes
+    if configured > 0:
+        return configured
+    return sum(_reservation_node_count(reservation) for reservation in pool.reservations)
+
+
+def _reservation_node_count(reservation: Any) -> int:
+    return reservation.node_count or 1
+
+
+def _node_label(count: int) -> str:
+    return f"{count} node{'s' if count != 1 else ''}"
 
 
 def _control_plane_pool_details(pool: ControlPlanePool) -> str:
@@ -319,10 +334,10 @@ def list_pools(
 @click.option("--mode", type=click.Choice(("private",)), default="private", show_default=True)
 @click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
 @click.option(
-    "--gpus",
+    "--nodes",
     type=click.IntRange(0),
     default=0,
-    help="Optional desired pool GPU capacity.",
+    help="Optional desired node count.",
 )
 @click.option("--priority", type=int, default=1000, show_default=True)
 @click.option(
@@ -337,7 +352,7 @@ def create(
     name: str,
     mode: str,
     gpu: Tuple[str, ...],
-    gpus: int,
+    nodes: int,
     priority: int,
     transport: str,
 ):
@@ -349,7 +364,7 @@ def create(
             pool=_pool_config(
                 name=name,
                 gpu=gpu,
-                gpus=gpus,
+                nodes=nodes,
                 priority=priority,
                 transport=transport,
             )
@@ -481,12 +496,6 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 @click.argument("name")
 @click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
 @click.option("--gpu", "gpu", multiple=True, help="GPU type accepted by this private pool.")
-@click.option(
-    "--gpus",
-    type=click.IntRange(0),
-    default=0,
-    help="Optional desired pool GPU capacity.",
-)
 @click.option("--priority", type=int, default=1000, show_default=True)
 @click.option(
     "--transport",
@@ -538,7 +547,6 @@ def join(
     name: str,
     ttl: str,
     gpu: Tuple[str, ...],
-    gpus: int,
     priority: int,
     transport: str,
     agent_bin: str,
@@ -567,7 +575,6 @@ def join(
             pool=_pool_config(
                 name=name,
                 gpu=gpu,
-                gpus=gpus,
                 priority=priority,
                 transport=transport,
             )

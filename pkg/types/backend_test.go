@@ -122,7 +122,7 @@ func TestPoolConfigRequiresReservationDerivesFromFields(t *testing.T) {
 	}{
 		{name: "nil", pool: nil, want: false},
 		{name: "plain pool", pool: &PoolConfig{Name: "my-pool"}, want: false},
-		{name: "gpus", pool: &PoolConfig{TotalGPUs: 1}, want: true},
+		{name: "nodes", pool: &PoolConfig{Nodes: 1}, want: true},
 		{name: "offer", pool: &PoolConfig{OfferID: "offer-1"}, want: true},
 		{name: "ttl", pool: &PoolConfig{TTL: "1h"}, want: true},
 		{name: "spend", pool: &PoolConfig{MaxSpend: 10}, want: true},

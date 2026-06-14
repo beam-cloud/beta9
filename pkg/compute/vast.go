@@ -73,7 +73,7 @@ func (c *VastClient) ListOffers(ctx context.Context, req OfferRequest) ([]Offer,
 		if offer.ID == "" || offer.GPUCount == 0 {
 			continue
 		}
-		if req.TotalGPUs > 0 && offer.Available == 0 {
+		if req.Nodes > 0 && offer.Available == 0 {
 			offer.Available = 1
 		}
 		offers = append(offers, offer)
@@ -119,6 +119,7 @@ func (c *VastClient) CreateReservation(ctx context.Context, req ReservationReque
 		MachineID:        req.MachineID,
 		GPU:              req.Offer.GPU,
 		GPUCount:         req.Offer.GPUCount,
+		NodeCount:        firstNonZeroUint32(req.Offer.NodeCount, 1),
 		CPUMillicores:    req.Offer.CPUMillicores,
 		MemoryMB:         req.Offer.MemoryMB,
 		HourlyCostMicros: req.Offer.HourlyCostMicros,
@@ -147,6 +148,7 @@ func (c *VastClient) GetReservation(ctx context.Context, id string) (*Reservatio
 		InstanceID:       id,
 		GPU:              offer.GPU,
 		GPUCount:         offer.GPUCount,
+		NodeCount:        firstNonZeroUint32(offer.NodeCount, 1),
 		CPUMillicores:    offer.CPUMillicores,
 		MemoryMB:         offer.MemoryMB,
 		HourlyCostMicros: offer.HourlyCostMicros,
@@ -189,6 +191,7 @@ func vastOfferFromMap(m map[string]any) Offer {
 		Region:           jsonString(m, "geolocation", "region", "location"),
 		GPU:              NormalizeGPU(jsonString(m, "gpu_name", "gpu", "gpu_type")),
 		GPUCount:         gpuCount,
+		NodeCount:        1,
 		CPUMillicores:    int64(jsonFloat64(m, "cpu_cores", "vcpus", "cpu") * 1000),
 		MemoryMB:         int64(jsonFloat64(m, "cpu_ram", "memory_mb", "ram") * 1024),
 		HourlyCostMicros: DollarsToMicros(hourlyCost),

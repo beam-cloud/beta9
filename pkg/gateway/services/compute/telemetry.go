@@ -20,6 +20,7 @@ const telemetrySensitiveLogKeyPattern = `[A-Za-z0-9_.-]*(?:access[_-]?key|access
 var (
 	telemetryAuthorizationPattern     = regexp.MustCompile(`(?i)(["']?authorization["']?\s*[:=]\s*)("?)(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]+)("?)`)
 	telemetryBearerTokenPattern       = regexp.MustCompile(`(?i)\b(bearer)(\s+)([A-Za-z0-9._~+/=-]+)`)
+	telemetrySensitivePhrasePattern   = regexp.MustCompile(`(?i)\b(api\s*key|auth\s*key|token)(\s+)([A-Za-z0-9._~+/=-]+)`)
 	telemetrySensitiveKeyValuePattern = regexp.MustCompile(`(?i)(["']?` + telemetrySensitiveLogKeyPattern + `["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,}\]]+)`)
 	telemetryRedactedValue            = redact.Sprintf("%s", redact.Unsafe("redacted")).Redact().StripMarkers()
 )
@@ -101,6 +102,7 @@ func (s *Service) recordAgentLogs(agentState *model.AgentTokenState, logs []*pb.
 func redactTelemetryLogLine(line string) string {
 	line = telemetryAuthorizationPattern.ReplaceAllString(line, "${1}${2}${3}${4}"+telemetryRedactedValue+"${6}")
 	line = telemetryBearerTokenPattern.ReplaceAllString(line, "${1}${2}"+telemetryRedactedValue)
+	line = telemetrySensitivePhrasePattern.ReplaceAllString(line, "${1}${2}"+telemetryRedactedValue)
 	return telemetrySensitiveKeyValuePattern.ReplaceAllString(line, "${1}"+telemetryRedactedValue)
 }
 

@@ -64,33 +64,34 @@ func TestTerminalStatusFromContainerEvents(t *testing.T) {
 }
 
 func TestBuildCreatedBuckets(t *testing.T) {
-	if got := buildCreatedBuckets(nil); len(got) != 0 {
-		t.Fatalf("expected empty buckets for no stubs, got %d", len(got))
+	now := time.Date(2026, 1, 1, 12, 30, 0, 0, time.UTC)
+	if got := buildCreatedBucketsAt(nil, "last_hour", now); len(got) != 60 {
+		t.Fatalf("expected fixed 60 buckets for no stubs, got %d", len(got))
 	}
 
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	base := now.Add(-30 * time.Minute)
 	stubs := []types.StubWithRelated{
 		{Stub: types.Stub{CreatedAt: types.Time{Time: base}}},
-		{Stub: types.Stub{CreatedAt: types.Time{Time: base.Add(1 * time.Hour)}}},
-		{Stub: types.Stub{CreatedAt: types.Time{Time: base.Add(2 * time.Hour)}}},
+		{Stub: types.Stub{CreatedAt: types.Time{Time: base.Add(10 * time.Second)}}},
+		{Stub: types.Stub{CreatedAt: types.Time{Time: base.Add(30 * time.Minute)}}},
+		{Stub: types.Stub{CreatedAt: types.Time{Time: now.Add(-2 * time.Hour)}}},
 	}
 
-	buckets := buildCreatedBuckets(stubs)
-	if len(buckets) == 0 {
-		t.Fatalf("expected non-empty buckets")
+	buckets := buildCreatedBucketsAt(stubs, "last_hour", now)
+	if len(buckets) != 60 {
+		t.Fatalf("expected 60 fixed buckets, got %d", len(buckets))
 	}
 
 	total := 0
 	for _, bucket := range buckets {
 		total += bucket.Count
 	}
-	if total != len(stubs) {
-		t.Errorf("expected bucket counts to sum to %d, got %d", len(stubs), total)
+	if total != 3 {
+		t.Errorf("expected in-range bucket counts to sum to 3, got %d", total)
 	}
 
-	// Single timestamp should collapse to one bucket.
-	single := buildCreatedBuckets([]types.StubWithRelated{{Stub: types.Stub{CreatedAt: types.Time{Time: base}}}})
-	if len(single) != 1 || single[0].Count != 1 {
-		t.Errorf("expected single bucket with count 1, got %+v", single)
+	week := buildCreatedBucketsAt(stubs, "last_week", now)
+	if len(week) != 7 {
+		t.Errorf("expected last_week to return 7 day buckets, got %d", len(week))
 	}
 }

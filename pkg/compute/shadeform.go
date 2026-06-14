@@ -115,7 +115,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 	if req.TTL > 0 {
 		// Only a date backstop is sent. A spend_threshold is deliberately
 		// omitted: reservations renew hourly past the launch TTL, so a spend
-		// cap derived from the launch budget would kill long-running nodes
+		// cap derived from the launch budget would kill long-running machines
 		// (Shadeform never raises it). Spend enforcement happens in our
 		// reconciler via workspace credit checks.
 		body["auto_delete"] = map[string]any{
@@ -144,6 +144,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 		MachineID:        req.MachineID,
 		GPU:              req.Offer.GPU,
 		GPUCount:         req.Offer.GPUCount,
+		NodeCount:        firstNonZeroUint32(req.Offer.NodeCount, 1),
 		CPUMillicores:    req.Offer.CPUMillicores,
 		MemoryMB:         req.Offer.MemoryMB,
 		HourlyCostMicros: req.Offer.HourlyCostMicros,
@@ -172,6 +173,7 @@ func (c *ShadeformClient) GetReservation(ctx context.Context, id string) (*Reser
 		InstanceID:       id,
 		GPU:              offer.GPU,
 		GPUCount:         offer.GPUCount,
+		NodeCount:        firstNonZeroUint32(offer.NodeCount, 1),
 		CPUMillicores:    offer.CPUMillicores,
 		MemoryMB:         offer.MemoryMB,
 		HourlyCostMicros: offer.HourlyCostMicros,
@@ -289,6 +291,7 @@ func shadeformOfferFromMap(m map[string]any) Offer {
 		Region:           region,
 		GPU:              NormalizeGPU(jsonString(fields, "gpu_type", "gpu", "gpu_name")),
 		GPUCount:         gpuCount,
+		NodeCount:        1,
 		CPUMillicores:    int64(jsonFloat64(fields, "vcpus", "cpu", "cpus") * 1000),
 		MemoryMB:         memoryMB,
 		StorageMB:        storageMB,

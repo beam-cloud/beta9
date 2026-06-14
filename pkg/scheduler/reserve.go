@@ -42,6 +42,10 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 		return
 	}
 
+	if a.tryPrivatePoolFallback() {
+		return
+	}
+
 	a.provisionWorker()
 }
 

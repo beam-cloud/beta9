@@ -6,6 +6,7 @@ from beta9.cli.pool import (
     _agent_join_interrupted,
     _append_join_args,
     _get_pool_renderable,
+    _private_pool_compute,
     _join_transport,
     management,
 )
@@ -23,7 +24,7 @@ def test_reserved_pool_serialization_and_gpu_inheritance():
         pool=Pool(
             name="training-h100",
             gpu=["H100", "H200"],
-            gpus=10,
+            nodes=10,
             ttl="6h",
             max_spend=80,
             providers=["vast"],
@@ -36,7 +37,7 @@ def test_reserved_pool_serialization_and_gpu_inheritance():
     assert fn.gpu == ["H100", "H200"]
     assert fn.pool_config.name == "training-h100"
     assert fn.pool_config.gpu == ["H100", "H200"]
-    assert fn.pool_config.gpus == 10
+    assert fn.pool_config.nodes == 10
     assert fn.pool_config.ttl == "6h"
     assert fn.pool_config.max_spend == 80
     assert fn.pool_config.providers == ["vast"]
@@ -53,15 +54,15 @@ def test_pool_string_routes_to_manual_pool():
 
 def test_pool_requires_budget_and_ttl_for_reservation():
     with pytest.raises(ValueError):
-        Function(pool=Pool(gpu="H100", gpus=10, max_spend=80))
+        Function(pool=Pool(gpu="H100", nodes=10, max_spend=80))
 
     with pytest.raises(ValueError):
-        Function(pool=Pool(gpu="H100", gpus=10, ttl="6h"))
+        Function(pool=Pool(gpu="H100", nodes=10, ttl="6h"))
 
 
 def test_function_gpu_must_be_compatible_with_pool_gpu():
     with pytest.raises(ValueError):
-        Function(gpu="L4", pool=Pool(gpu="H100", gpus=1, ttl="1h", max_spend=10))
+        Function(gpu="L4", pool=Pool(gpu="H100", nodes=1, ttl="1h", max_spend=10))
 
 
 def test_pool_join_transport_auto_uses_tsnet_for_local_gateway():
@@ -145,8 +146,24 @@ def test_pool_list_ignores_denied_control_plane_scope_for_default_view():
 
 def test_pool_launch_command_is_not_exposed():
     assert "launch" not in management.commands
+    assert "offers" not in management.commands
     assert "join" in management.commands
     assert "create" in management.commands
+
+
+def test_private_pool_compute_summarizes_nodes_with_gpu_attributes():
+    pool = PrivatePool(
+        config=PoolConfig(gpu=["H100"], nodes=2),
+        reserved_nodes=2,
+    )
+
+    assert _private_pool_compute(pool) == "2 nodes (H100)"
+
+
+def test_private_pool_compute_summarizes_cpu_nodes():
+    pool = PrivatePool(config=PoolConfig(nodes=3), reserved_nodes=3)
+
+    assert _private_pool_compute(pool) == "3 nodes (CPU)"
 
 
 def test_pool_join_treats_sigint_exit_as_clean_stop():

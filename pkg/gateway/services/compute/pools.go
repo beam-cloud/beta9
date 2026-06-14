@@ -64,7 +64,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 	if err := model.ValidatePoolName(config.Name); err != nil {
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	pool, err := computePoolFromProto(config, false)
+	pool, err := computePoolFromProto(config, 0, false)
 	if err != nil {
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -95,7 +95,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 	}
 	if existing != nil {
 		state.Reservations = existing.Reservations
-		state.ReservedGPUs = existing.ReservedGPUs
+		state.ReservedNodes = existing.ReservedNodes
 		state.CommittedSpendMicros = existing.CommittedSpendMicros
 		state.Source = existing.Source
 		state.CreatedByTokenID = existing.CreatedByTokenID

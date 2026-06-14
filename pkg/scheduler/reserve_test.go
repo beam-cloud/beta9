@@ -188,3 +188,116 @@ func TestWorkerProvisioningBackoffDoesNotBlockExistingPoolCapacity(t *testing.T)
 	assert.NotNil(t, queued)
 	assert.Equal(t, scheduleRequest.ContainerId, queued.ContainerId)
 }
+
+func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	privateController := &capacityCheckingWorkerPoolControllerForTest{
+		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
+			ctx:              context.Background(),
+			name:             "private-cpu",
+			config:           scheduler.config,
+			workerRepo:       scheduler.workerRepo,
+			requiresSelector: true,
+		},
+		hasCapacity: false,
+	}
+	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
+		Mode:                 types.PoolModePrivate,
+		RequiresPoolSelector: true,
+	}, privateController)
+
+	privateWorker := &types.Worker{
+		Id:                   "private-worker",
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              100,
+		FreeMemory:           2000,
+		PoolName:             "private-cpu",
+		RequiresPoolSelector: true,
+	}
+	regularWorker := &types.Worker{
+		Id:         "regular-worker",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		PoolName:   "beta9-cpu",
+	}
+	assert.Nil(t, scheduler.workerRepo.AddWorker(privateWorker))
+	assert.Nil(t, scheduler.workerRepo.AddWorker(regularWorker))
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "private-cpu",
+		Timestamp:    time.Now(),
+	}
+	newSchedulingAttempt(scheduler, request, []*types.Worker{privateWorker, regularWorker}).run()
+
+	queued, err := scheduler.workerRepo.GetNextContainerRequest(regularWorker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queued)
+	assert.Equal(t, request.ContainerId, queued.ContainerId)
+	assert.Equal(t, "", queued.PoolSelector)
+
+	privateAfter, err := scheduler.workerRepo.GetWorkerById(privateWorker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(100), privateAfter.FreeCpu)
+	assert.Equal(t, 0, privateController.AddWorkerCallCount())
+}
+
+func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+
+	started := make(chan struct{}, 1)
+	privateController := &capacityCheckingWorkerPoolControllerForTest{
+		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
+			ctx:              context.Background(),
+			name:             "private-cpu",
+			config:           scheduler.config,
+			workerRepo:       scheduler.workerRepo,
+			addWorkerStarted: started,
+			addWorkerErr:     types.NewProviderNotImplemented(),
+			requiresSelector: true,
+		},
+		hasCapacity: false,
+	}
+	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
+		Mode:                 types.PoolModePrivate,
+		RequiresPoolSelector: true,
+	}, privateController)
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "private-cpu",
+		Timestamp:    time.Now(),
+	}
+	newSchedulingAttempt(scheduler, request, nil).run()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected private provisioning attempt")
+	}
+
+	time.Sleep(provisioningWorkerRequeueDelay + requestProcessingInterval)
+	requeued, err := scheduler.requestBacklog.Pop()
+	assert.Nil(t, err)
+	assert.Equal(t, request.ContainerId, requeued.ContainerId)
+	assert.Equal(t, "private-cpu", requeued.PoolSelector)
+}
+
+type capacityCheckingWorkerPoolControllerForTest struct {
+	*LocalWorkerPoolControllerForTest
+	hasCapacity bool
+	capacityErr error
+}
+
+func (wpc *capacityCheckingWorkerPoolControllerForTest) HasWorkerCapacity(cpu int64, memory int64, gpuCount uint32) (bool, error) {
+	return wpc.hasCapacity, wpc.capacityErr
+}

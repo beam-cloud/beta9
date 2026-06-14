@@ -319,7 +319,7 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 	return &types.PoolConfig{
 		Name:           in.Name,
 		GPUs:           types.NormalizeGPUStrings(in.Gpu),
-		TotalGPUs:      in.Gpus,
+		Nodes:          in.Nodes,
 		OfferID:        in.OfferId,
 		TTL:            in.Ttl,
 		MaxSpend:       in.MaxSpend,
@@ -337,7 +337,7 @@ func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
 	return &pb.PoolConfig{
 		Name:           in.Name,
 		Gpu:            in.GPUs,
-		Gpus:           in.TotalGPUs,
+		Nodes:          in.Nodes,
 		OfferId:        in.OfferID,
 		Ttl:            in.TTL,
 		MaxSpend:       in.MaxSpend,

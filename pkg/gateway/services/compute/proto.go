@@ -38,7 +38,7 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	return &out
 }
 
-func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (model.Pool, error) {
+func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservation bool) (model.Pool, error) {
 	if in == nil {
 		return model.Pool{}, fmt.Errorf("pool config is required")
 	}
@@ -68,7 +68,7 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (model.Poo
 		Name:           in.Name,
 		Selector:       in.Selector,
 		GPUs:           gpus,
-		TotalGPUs:      in.Gpus,
+		Nodes:          firstNonZeroUint32(nodeCount, in.Nodes),
 		OfferID:        in.OfferId,
 		TTL:            ttl,
 		MaxSpendMicros: model.DollarsToMicros(in.MaxSpend),
@@ -88,19 +88,25 @@ func computePoolFromProto(in *pb.PoolConfig, requireReservation bool) (model.Poo
 
 func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
 	return &pb.PoolOffer{
-		Id:               offer.ID,
-		Provider:         offer.Provider,
-		Cloud:            offer.Cloud,
-		InstanceType:     offer.InstanceType,
-		Region:           offer.Region,
-		Gpu:              offer.GPU,
-		GpuCount:         offer.GPUCount,
-		CpuMillicores:    offer.CPUMillicores,
-		MemoryMb:         offer.MemoryMB,
-		StorageMb:        offer.StorageMB,
-		HourlyCostMicros: offer.HourlyCostMicros,
-		Reliability:      offer.Reliability,
-		Available:        offer.Available,
+		Id:                offer.ID,
+		Provider:          offer.Provider,
+		Cloud:             offer.Cloud,
+		InstanceType:      offer.InstanceType,
+		Region:            offer.Region,
+		Gpu:               offer.GPU,
+		GpuCount:          offer.GPUCount,
+		NodeCount:         offer.NodeCount,
+		CpuMillicores:     offer.CPUMillicores,
+		MemoryMb:          offer.MemoryMB,
+		StorageMb:         offer.StorageMB,
+		HourlyCostMicros:  offer.HourlyCostMicros,
+		Reliability:       offer.Reliability,
+		Available:         offer.Available,
+		DisplayName:       offer.DisplayName,
+		Category:          offer.Category,
+		RegionDisplayName: offer.RegionDisplayName,
+		Latitude:          offer.Latitude,
+		Longitude:         offer.Longitude,
 	}
 }
 
@@ -127,6 +133,11 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		StatusMessage:     reservation.LastStatusMessage,
 		TerminatingReason: reservation.TerminatingReason,
 		MachineId:         reservation.MachineID,
+		NodeCount:         reservation.NodeCount,
+		InstanceType:      reservation.InstanceType,
+		CpuMillicores:     reservation.CPUMillicores,
+		MemoryMb:          reservation.MemoryMB,
+		StorageMb:         reservation.StorageMB,
 	}
 }
 
@@ -183,7 +194,6 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		Selector:             state.Selector,
 		Config:               config,
 		Reservations:         reservations,
-		ReservedGpus:         state.ReservedGPUs,
 		CommittedSpendMicros: state.CommittedSpendMicros,
 		Status:               state.Status,
 		Source:               string(state.Source.Canonical()),
@@ -191,6 +201,7 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		ExpiresAt:            timestampOrNil(state.ExpiresAt),
 		MachineCount:         uint32(len(machines)),
 		ReadyMachineCount:    readyMachineCount,
+		ReservedNodes:        state.ReservedNodes,
 	}
 }
 
@@ -353,6 +364,15 @@ func maxInt64(a, b int64) int64 {
 }
 
 func firstNonZeroUint64(values ...uint64) uint64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroUint32(values ...uint32) uint32 {
 	for _, value := range values {
 		if value != 0 {
 			return value

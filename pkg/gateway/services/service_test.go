@@ -15,7 +15,7 @@ func TestNewGatewayServiceRequiresComputeRepoOrRedis(t *testing.T) {
 
 func TestConfigurePoolSelectorNamesReservedPool(t *testing.T) {
 	pool := poolConfigFromProto(&pb.PoolConfig{
-		Gpus:      1,
+		Nodes:     1,
 		Ttl:       "1h",
 		MaxSpend:  2,
 		Providers: []string{"shadeform"},

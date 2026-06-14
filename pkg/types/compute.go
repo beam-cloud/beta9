@@ -59,7 +59,7 @@ type ComputeVendor interface {
 
 type ComputeOfferRequest struct {
 	GPUs            []string
-	TotalGPUs       uint32
+	Nodes           uint32
 	OfferID         string
 	Providers       []string
 	Regions         []string
@@ -82,28 +82,38 @@ type ComputeReservationRequest struct {
 }
 
 type ComputeOffer struct {
-	ID               string
-	Provider         string // aggregator/vendor (e.g. "shadeform"), used for pool filtering
-	Cloud            string // underlying cloud the vendor sources from (e.g. "imwt")
-	InstanceType     string
-	Region           string
-	GPU              string
-	GPUCount         uint32
-	CPUMillicores    int64
-	MemoryMB         int64
-	StorageMB        int64
-	HourlyCostMicros int64
-	Reliability      float64
-	Available        uint32
-	Labels           map[string]string
-	Raw              []byte
+	ID                string
+	Provider          string // aggregator/vendor (e.g. "shadeform"), used for pool filtering
+	Cloud             string // underlying cloud the vendor sources from (e.g. "imwt")
+	InstanceType      string
+	Region            string
+	GPU               string
+	GPUCount          uint32
+	NodeCount         uint32
+	CPUMillicores     int64
+	MemoryMB          int64
+	StorageMB         int64
+	HourlyCostMicros  int64
+	Reliability       float64
+	Available         uint32
+	DisplayName       string
+	Category          string
+	RegionDisplayName string
+	Latitude          float64
+	Longitude         float64
+	Labels            map[string]string
+	Raw               []byte
 }
 
-func (o ComputeOffer) CostPerGPU() float64 {
-	if o.GPUCount == 0 {
+func (o ComputeOffer) CostPerNode() float64 {
+	nodeCount := o.NodeCount
+	if nodeCount == 0 && (o.GPUCount > 0 || o.CPUMillicores > 0) {
+		nodeCount = 1
+	}
+	if nodeCount == 0 {
 		return math.Inf(1)
 	}
-	return float64(o.HourlyCostMicros) / float64(o.GPUCount)
+	return float64(o.HourlyCostMicros) / float64(nodeCount)
 }
 
 type ComputeReservation struct {
@@ -120,8 +130,10 @@ type ComputeReservation struct {
 	MachineID             string
 	GPU                   string
 	GPUCount              uint32
+	NodeCount             uint32
 	CPUMillicores         int64
 	MemoryMB              int64
+	StorageMB             int64
 	HourlyCostMicros      int64
 	CommittedMicros       int64
 	Source                ComputeCapacitySource
@@ -157,8 +169,10 @@ func (r ComputeReservation) Offer() ComputeOffer {
 		InstanceType:     r.InstanceType,
 		GPU:              r.GPU,
 		GPUCount:         r.GPUCount,
+		NodeCount:        r.NodeCount,
 		CPUMillicores:    r.CPUMillicores,
 		MemoryMB:         r.MemoryMB,
+		StorageMB:        r.StorageMB,
 		HourlyCostMicros: r.HourlyCostMicros,
 		Available:        1,
 	}
@@ -168,7 +182,7 @@ type ComputePool struct {
 	Name           string
 	Selector       string
 	GPUs           []string
-	TotalGPUs      uint32
+	Nodes          uint32
 	OfferID        string
 	TTL            time.Duration
 	MaxSpendMicros int64
@@ -179,7 +193,7 @@ type ComputePool struct {
 }
 
 func (p ComputePool) RequiresReservation() bool {
-	return p.TotalGPUs > 0 || p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0
+	return p.Nodes > 0 || p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0
 }
 
 func ValidateComputePoolName(name string) error {
@@ -193,10 +207,10 @@ func (p ComputePool) Validate() error {
 	if err := ValidateComputePoolName(p.Name); err != nil {
 		return err
 	}
-	if p.TotalGPUs == 0 && p.RequiresReservation() {
-		return errors.New("pool reservations require gpus > 0")
+	if p.Nodes == 0 && p.RequiresReservation() {
+		return errors.New("pool reservations require nodes > 0")
 	}
-	if p.TotalGPUs > 0 {
+	if p.Nodes > 0 {
 		if p.TTL <= 0 {
 			return errors.New("pool reservations require ttl")
 		}
@@ -226,7 +240,13 @@ func (p ComputePool) MatchesOffer(offer ComputeOffer) bool {
 	if p.MinReliability > 0 && offer.Reliability > 0 && offer.Reliability < p.MinReliability {
 		return false
 	}
-	return offer.GPUCount > 0 && offer.Available > 0
+	if len(p.GPUs) > 0 {
+		return offer.GPUCount > 0 && offer.Available > 0
+	}
+	if p.Nodes > 0 {
+		return offer.Available > 0 && offer.GPUCount == 0 && (offer.NodeCount > 0 || offer.CPUMillicores > 0)
+	}
+	return offer.Available > 0 && (offer.GPUCount > 0 || offer.NodeCount > 0 || offer.CPUMillicores > 0)
 }
 
 func (p ComputePool) NormalizedSelector(workspaceID, stubID string) string {
@@ -251,7 +271,7 @@ type ComputeDemand struct {
 	PoolName       string
 	Selector       string
 	GPUs           []string
-	TotalGPUs      uint32
+	Nodes          uint32
 	OfferID        string
 	CPUMillicores  int64
 	MemoryMB       int64
@@ -260,7 +280,6 @@ type ComputeDemand struct {
 	Providers      []string
 	Regions        []string
 	MinReliability float64
-	HeadroomGPUs   uint32
 }
 
 func (d ComputeDemand) Pool() ComputePool {
@@ -268,7 +287,7 @@ func (d ComputeDemand) Pool() ComputePool {
 		Name:           d.PoolName,
 		Selector:       d.Selector,
 		GPUs:           d.GPUs,
-		TotalGPUs:      d.TotalGPUs + d.HeadroomGPUs,
+		Nodes:          d.Nodes,
 		OfferID:        d.OfferID,
 		TTL:            d.TTL,
 		MaxSpendMicros: d.MaxSpendMicros,
@@ -290,9 +309,9 @@ type ComputeSolvePlan struct {
 	Feasible              bool
 	Reason                string
 	Actions               []ComputeSolveAction
-	TotalGPUs             uint32
-	ExistingGPUs          uint32
-	NewGPUs               uint32
+	TotalCapacity         uint32
+	ExistingCapacity      uint32
+	NewCapacity           uint32
 	IncrementalCostMicros int64
 	CommittedCostMicros   int64
 }

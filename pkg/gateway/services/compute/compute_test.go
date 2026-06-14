@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -360,7 +361,7 @@ func TestJoinAgentRejectsGPUAfterCPUOnlyPoolInitialized(t *testing.T) {
 		t.Fatalf("JoinAgent() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("JoinAgent() unexpectedly accepted a GPU machine after CPU-only initialization")
+		t.Fatal("JoinAgent() unexpectedly accepted a machine with GPU attributes after CPU-only initialization")
 	}
 	if !strings.Contains(res.ErrMsg, "initialized without GPUs") {
 		t.Fatalf("JoinAgent() error = %q, want CPU-only pool error", res.ErrMsg)
@@ -579,6 +580,85 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	}
 }
 
+func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/locations":
+			_, _ = w.Write([]byte(`{
+				"locations": [{"id":1,"name":"ash","description":"Ashburn, VA","country":"US","city":"Ashburn","latitude":39.0438,"longitude":-77.4874,"network_zone":"us-east"}],
+				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
+			}`))
+		case "/server_types":
+			_, _ = w.Write([]byte(`{
+				"server_types": [{
+					"id":45,
+					"name":"cpx31",
+					"description":"CPX31",
+					"cores":4,
+					"memory":8,
+					"disk":160,
+					"deprecated":false,
+					"category":"Shared vCPU",
+					"cpu_type":"shared",
+					"storage_type":"local",
+					"architecture":"x86",
+					"locations":[{"id":1,"name":"ash","available":true,"deprecation":null}],
+					"prices":[{"location":"ash","price_hourly":{"net":"0.0312","gross":"0.0248"}}]
+				}],
+				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
+			}`))
+		default:
+			t.Fatalf("unexpected Hetzner path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := &Service{
+		appConfig: types.AppConfig{
+			Providers: types.ProviderConfig{
+				Hetzner: types.HetznerProviderConfig{
+					ApiToken:             "hetzner-token",
+					BaseURL:              server.URL,
+					ServerTypeCategories: map[string]string{"cpx31": "shared"},
+					RegionMetadata: map[string]types.HetznerRegionConfig{
+						"ash": {DisplayName: "Ashburn", Latitude: 39.0438, Longitude: -77.4874},
+					},
+				},
+			},
+		},
+	}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
+		Pool: &pb.PoolConfig{Providers: []string{"hetzner"}},
+	})
+	if err != nil {
+		t.Fatalf("ListPoolOffers() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPoolOffers() not ok: %s", res.ErrMsg)
+	}
+	if got, want := len(res.Offers), 1; got != want {
+		t.Fatalf("offers = %d, want %d", got, want)
+	}
+
+	offer := res.Offers[0]
+	if offer.Provider != "hetzner" || offer.Cloud != "hetzner" {
+		t.Fatalf("offer provider/cloud = %s/%s, want hetzner/hetzner", offer.Provider, offer.Cloud)
+	}
+	if offer.NodeCount != 1 || offer.GpuCount != 0 {
+		t.Fatalf("offer node/gpu count = %d/%d, want 1/0", offer.NodeCount, offer.GpuCount)
+	}
+	if offer.CpuMillicores != 4000 || offer.MemoryMb != 8192 || offer.StorageMb != 163840 {
+		t.Fatalf("offer resources = %d/%d/%d", offer.CpuMillicores, offer.MemoryMb, offer.StorageMb)
+	}
+	if offer.DisplayName != "CPX31" || offer.Category != "shared" || offer.RegionDisplayName != "Ashburn" {
+		t.Fatalf("offer display fields = %q/%q/%q", offer.DisplayName, offer.Category, offer.RegionDisplayName)
+	}
+	if offer.Latitude != 39.0438 || offer.Longitude != -77.4874 {
+		t.Fatalf("offer coordinates = %f/%f", offer.Latitude, offer.Longitude)
+	}
+}
+
 func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
 	var createCalls int
 	var createBody map[string]any
@@ -622,7 +702,7 @@ func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
 		Pool: &pb.PoolConfig{
 			Name:      "pool-1",
 			Gpu:       []string{"A10G"},
-			Gpus:      1,
+			Nodes:     1,
 			OfferId:   "sf-a10g-1",
 			Ttl:       "1h",
 			MaxSpend:  2,
@@ -655,6 +735,122 @@ func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
 	}
 }
 
+func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
+	var createCalls int
+	var createBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/locations":
+			_, _ = w.Write([]byte(`{
+				"locations": [{"id":1,"name":"ash","description":"Ashburn","network_zone":"us-east"}],
+				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
+			}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/server_types":
+			_, _ = w.Write([]byte(`{
+				"server_types": [{
+					"id":45,
+					"name":"cpx31",
+					"description":"CPX31",
+					"cores":4,
+					"memory":8,
+					"disk":160,
+					"deprecated":false,
+					"category":"Shared vCPU",
+					"cpu_type":"shared",
+					"storage_type":"local",
+					"architecture":"x86",
+					"locations":[{"id":1,"name":"ash","available":true,"deprecation":null}],
+					"prices":[{"location":"ash","price_hourly":{"net":"0.0312","gross":"0.0248"}}]
+				}],
+				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
+			}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/networks":
+			_, _ = w.Write([]byte(`{
+				"networks": [{"id":456,"name":"beam-workers","subnets":[{"type":"cloud","ip_range":"10.42.0.0/24","network_zone":"us-east"}]}],
+				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
+			}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/servers":
+			createCalls++
+			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
+				t.Fatalf("decode create body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"server":{"id":42,"status":"initializing","location":{"name":"ash"},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
+		default:
+			t.Fatalf("unexpected Hetzner request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	repo := &fakeComputeRepo{}
+	service := &Service{
+		computeRepo: repo,
+		billing: &fakeManagedBilling{
+			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
+		},
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
+			},
+			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
+			Providers: types.ProviderConfig{
+				Hetzner: types.HetznerProviderConfig{
+					ApiToken: "hetzner-token",
+					BaseURL:  server.URL,
+					Image:    "ubuntu-24.04",
+					PrivateNetwork: types.HetznerPrivateNetworkConfig{
+						Name: "beam-workers",
+					},
+				},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
+			},
+		},
+	}
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Nodes: 1,
+		Pool: &pb.PoolConfig{
+			Name:      "cpu-pool",
+			OfferId:   "cpx31",
+			Ttl:       "1h",
+			MaxSpend:  1,
+			Providers: []string{"hetzner"},
+			Regions:   []string{"ash"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("LaunchPoolCapacity() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
+	}
+	if createCalls != 1 {
+		t.Fatalf("Hetzner create calls = %d, want 1", createCalls)
+	}
+	if createBody["server_type"] != "cpx31" || createBody["image"] != "ubuntu-24.04" || createBody["location"] != "ash" {
+		t.Fatalf("unexpected Hetzner create body: %#v", createBody)
+	}
+	if got := createBody["networks"]; fmt.Sprint(got) != "[456]" {
+		t.Fatalf("Hetzner networks = %#v, want [456]", got)
+	}
+
+	state := repo.pools["workspace-1"][0]
+	if got, want := state.ReservedNodes, uint32(1); got != want {
+		t.Fatalf("reserved nodes = %d, want %d", got, want)
+	}
+	if got, want := len(state.Reservations), 1; got != want {
+		t.Fatalf("reservation count = %d, want %d", got, want)
+	}
+	reservation := state.Reservations[0]
+	if reservation.Provider != "hetzner" || reservation.NodeCount != 1 || reservation.GPUCount != 0 {
+		t.Fatalf("reservation provider/node/gpu = %s/%d/%d", reservation.Provider, reservation.NodeCount, reservation.GPUCount)
+	}
+	if state.Config.Nodes != 1 {
+		t.Fatalf("pool config nodes = %d, want 1", state.Config.Nodes)
+	}
+}
+
 func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 	var createCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -678,7 +874,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 					Name:                 "pool-1",
 					Selector:             "pool-1",
 					CreatedByTokenID:     "token-1",
-					ReservedGPUs:         1,
+					ReservedNodes:        1,
 					CommittedSpendMicros: 1_650_000,
 					Reservations: []model.Reservation{
 						{
@@ -724,7 +920,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 		Pool: &pb.PoolConfig{
 			Name:      "pool-1",
 			Gpu:       []string{"A10G"},
-			Gpus:      1,
+			Nodes:     1,
 			OfferId:   "sf-a10g-1",
 			Ttl:       "1h",
 			MaxSpend:  2,
@@ -748,8 +944,8 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 	if got, want := state.Reservations[1].ID, "reservation-2"; got != want {
 		t.Fatalf("new reservation id = %q, want %q", got, want)
 	}
-	if got, want := state.ReservedGPUs, uint32(2); got != want {
-		t.Fatalf("reserved gpus = %d, want %d", got, want)
+	if got, want := state.ReservedNodes, uint32(2); got != want {
+		t.Fatalf("reserved nodes = %d, want %d", got, want)
 	}
 	if got, want := state.CommittedSpendMicros, int64(3_300_000); got != want {
 		t.Fatalf("committed spend micros = %d, want %d", got, want)
