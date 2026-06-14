@@ -580,7 +580,7 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	}
 }
 
-func TestListPoolOffersReturnsHetznerCPUNodes(t *testing.T) {
+func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/locations":
@@ -629,7 +629,7 @@ func TestListPoolOffersReturnsHetznerCPUNodes(t *testing.T) {
 	}
 
 	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
-		Pool: &pb.PoolConfig{Nodes: 1},
+		Pool: &pb.PoolConfig{Providers: []string{"hetzner"}},
 	})
 	if err != nil {
 		t.Fatalf("ListPoolOffers() error = %v", err)
@@ -645,8 +645,8 @@ func TestListPoolOffersReturnsHetznerCPUNodes(t *testing.T) {
 	if offer.Provider != "hetzner" || offer.Cloud != "hetzner" {
 		t.Fatalf("offer provider/cloud = %s/%s, want hetzner/hetzner", offer.Provider, offer.Cloud)
 	}
-	if offer.NodeCount != 1 || offer.GpuCount != 0 {
-		t.Fatalf("offer node/gpu count = %d/%d, want 1/0", offer.NodeCount, offer.GpuCount)
+	if offer.MachineCount != 1 || offer.GpuCount != 0 {
+		t.Fatalf("offer machine/gpu count = %d/%d, want 1/0", offer.MachineCount, offer.GpuCount)
 	}
 	if offer.CpuMillicores != 4000 || offer.MemoryMb != 8192 || offer.StorageMb != 163840 {
 		t.Fatalf("offer resources = %d/%d/%d", offer.CpuMillicores, offer.MemoryMb, offer.StorageMb)
@@ -809,9 +809,9 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 	}
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		MachineCount: 1,
 		Pool: &pb.PoolConfig{
 			Name:      "cpu-pool",
-			Nodes:     1,
 			OfferId:   "cpx31",
 			Ttl:       "1h",
 			MaxSpend:  1,
@@ -836,8 +836,8 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 	}
 
 	state := repo.pools["workspace-1"][0]
-	if got, want := state.ReservedNodes, uint32(1); got != want {
-		t.Fatalf("reserved nodes = %d, want %d", got, want)
+	if got, want := state.ReservedCapacity, uint32(1); got != want {
+		t.Fatalf("reserved capacity = %d, want %d", got, want)
 	}
 	if got, want := state.ReservedGPUs, uint32(0); got != want {
 		t.Fatalf("reserved gpus = %d, want %d", got, want)
@@ -846,11 +846,11 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 		t.Fatalf("reservation count = %d, want %d", got, want)
 	}
 	reservation := state.Reservations[0]
-	if reservation.Provider != "hetzner" || reservation.NodeCount != 1 || reservation.GPUCount != 0 {
-		t.Fatalf("reservation provider/node/gpu = %s/%d/%d", reservation.Provider, reservation.NodeCount, reservation.GPUCount)
+	if reservation.Provider != "hetzner" || reservation.MachineCount != 1 || reservation.GPUCount != 0 {
+		t.Fatalf("reservation provider/machine/gpu = %s/%d/%d", reservation.Provider, reservation.MachineCount, reservation.GPUCount)
 	}
-	if state.Config.Nodes != 1 || state.Config.Gpus != 0 {
-		t.Fatalf("pool config nodes/gpus = %d/%d, want 1/0", state.Config.Nodes, state.Config.Gpus)
+	if state.Config.Gpus != 0 {
+		t.Fatalf("pool config gpus = %d, want 0", state.Config.Gpus)
 	}
 }
 

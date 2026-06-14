@@ -23,7 +23,7 @@ func TestSolveTenOneGPUWorkers(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(10), plan.TotalGPUs)
+	require.Equal(t, uint32(10), plan.TotalCapacity)
 	require.Equal(t, DollarsToMicros(72), plan.IncrementalCostMicros)
 	require.Len(t, plan.Actions, 2)
 }
@@ -44,7 +44,7 @@ func TestSolveOneEightGPUContainer(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(8), plan.TotalGPUs)
+	require.Equal(t, uint32(8), plan.TotalCapacity)
 	require.Equal(t, DollarsToMicros(10), plan.IncrementalCostMicros)
 	require.Equal(t, "8xh100", plan.Actions[0].Offer.ID)
 }
@@ -67,18 +67,18 @@ func TestAttachedCapacityIsFreeAndPreferred(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(4), plan.ExistingGPUs)
+	require.Equal(t, uint32(4), plan.ExistingCapacity)
 	require.Zero(t, plan.IncrementalCostMicros)
 	require.Equal(t, ActionKeep, plan.Actions[0].Type)
 }
 
-func TestSolveCPUNodesUsesNodeCount(t *testing.T) {
+func TestSolveCPUMachinesUsesMachineCount(t *testing.T) {
 	now := time.Now()
 	plan := NewSolver().Solve(SolveInput{
 		Now: now,
 		Demand: Demand{
 			PoolName:       "cpu-pool",
-			TotalNodes:     3,
+			TotalMachines:  3,
 			TTL:            2 * time.Hour,
 			MaxSpendMicros: DollarsToMicros(10),
 			Providers:      []string{"hetzner"},
@@ -88,7 +88,7 @@ func TestSolveCPUNodesUsesNodeCount(t *testing.T) {
 				ID:               "existing-node",
 				PoolName:         "cpu-pool",
 				Provider:         "hetzner",
-				NodeCount:        1,
+				MachineCount:     1,
 				HourlyCostMicros: DollarsToMicros(1),
 				Source:           SourceCLIReservation,
 				Status:           ReservationActive,
@@ -96,16 +96,15 @@ func TestSolveCPUNodesUsesNodeCount(t *testing.T) {
 			},
 		},
 		Offers: []Offer{
-			{ID: "cpx31", Provider: "hetzner", NodeCount: 1, CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: DollarsToMicros(1.5), Available: 5},
+			{ID: "cpx31", Provider: "hetzner", MachineCount: 1, CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: DollarsToMicros(1.5), Available: 5},
 			{ID: "gpu", Provider: "hetzner", GPU: "A10G", GPUCount: 1, HourlyCostMicros: DollarsToMicros(1), Available: 5},
 		},
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(3), plan.TotalNodes)
-	require.Equal(t, uint32(1), plan.ExistingNodes)
-	require.Equal(t, uint32(2), plan.NewNodes)
-	require.Equal(t, uint32(0), plan.TotalGPUs)
+	require.Equal(t, uint32(3), plan.TotalCapacity)
+	require.Equal(t, uint32(1), plan.ExistingCapacity)
+	require.Equal(t, uint32(2), plan.NewCapacity)
 	require.Equal(t, DollarsToMicros(6), plan.IncrementalCostMicros)
 	require.Len(t, plan.Actions, 2)
 	require.Equal(t, ActionKeep, plan.Actions[0].Type)
@@ -163,6 +162,6 @@ func TestExistingReservationIsSunkUntilRenewal(t *testing.T) {
 	})
 
 	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(1), plan.ExistingGPUs)
+	require.Equal(t, uint32(1), plan.ExistingCapacity)
 	require.Equal(t, DollarsToMicros(4), plan.IncrementalCostMicros)
 }

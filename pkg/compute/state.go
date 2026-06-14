@@ -14,7 +14,7 @@ type PoolState struct {
 	Config               *pb.PoolConfig `json:"config"`
 	Reservations         []Reservation  `json:"reservations"`
 	ReservedGPUs         uint32         `json:"reserved_gpus"`
-	ReservedNodes        uint32         `json:"reserved_nodes"`
+	ReservedCapacity     uint32         `json:"reserved_capacity"`
 	CommittedSpendMicros int64          `json:"committed_spend_micros"`
 	Status               string         `json:"status"`
 	Source               CapacitySource `json:"source"`

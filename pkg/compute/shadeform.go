@@ -115,7 +115,7 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 	if req.TTL > 0 {
 		// Only a date backstop is sent. A spend_threshold is deliberately
 		// omitted: reservations renew hourly past the launch TTL, so a spend
-		// cap derived from the launch budget would kill long-running nodes
+		// cap derived from the launch budget would kill long-running machines
 		// (Shadeform never raises it). Spend enforcement happens in our
 		// reconciler via workspace credit checks.
 		body["auto_delete"] = map[string]any{

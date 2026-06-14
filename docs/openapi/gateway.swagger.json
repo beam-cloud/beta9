@@ -2568,6 +2568,10 @@
       "properties": {
         "pool": {
           "$ref": "#/definitions/gatewayPoolConfig"
+        },
+        "machineCount": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -3049,10 +3053,6 @@
         },
         "offerId": {
           "type": "string"
-        },
-        "nodes": {
-          "type": "integer",
-          "format": "int64"
         }
       }
     },
@@ -3105,7 +3105,7 @@
         "cloud": {
           "type": "string"
         },
-        "nodeCount": {
+        "machineCount": {
           "type": "integer",
           "format": "int64"
         },
@@ -3177,7 +3177,7 @@
           "type": "integer",
           "format": "int64"
         },
-        "reservedNodes": {
+        "reservedCapacity": {
           "type": "integer",
           "format": "int64"
         }
@@ -3239,7 +3239,7 @@
         "region": {
           "type": "string"
         },
-        "nodeCount": {
+        "machineCount": {
           "type": "integer",
           "format": "int64"
         },

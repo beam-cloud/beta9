@@ -514,6 +514,12 @@ class PoolOffer(betterproto.Message):
     available: int = betterproto.uint32_field(11)
     storage_mb: int = betterproto.int64_field(12)
     cloud: str = betterproto.string_field(13)
+    machine_count: int = betterproto.uint32_field(14)
+    display_name: str = betterproto.string_field(15)
+    category: str = betterproto.string_field(16)
+    region_display_name: str = betterproto.string_field(17)
+    latitude: float = betterproto.double_field(18)
+    longitude: float = betterproto.double_field(19)
 
 
 @dataclass(eq=False, repr=False)
@@ -534,6 +540,11 @@ class ProviderInstance(betterproto.Message):
     machine_id: str = betterproto.string_field(14)
     cloud: str = betterproto.string_field(15)
     region: str = betterproto.string_field(16)
+    machine_count: int = betterproto.uint32_field(17)
+    instance_type: str = betterproto.string_field(18)
+    cpu_millicores: int = betterproto.int64_field(19)
+    memory_mb: int = betterproto.int64_field(20)
+    storage_mb: int = betterproto.int64_field(21)
 
 
 @dataclass(eq=False, repr=False)
@@ -550,6 +561,7 @@ class PrivatePool(betterproto.Message):
     expires_at: datetime = betterproto.message_field(10)
     machine_count: int = betterproto.uint32_field(11)
     ready_machine_count: int = betterproto.uint32_field(12)
+    reserved_capacity: int = betterproto.uint32_field(13)
 
 
 @dataclass(eq=False, repr=False)
@@ -567,6 +579,7 @@ class ListPoolOffersResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class LaunchPoolCapacityRequest(betterproto.Message):
     pool: "PoolConfig" = betterproto.message_field(1)
+    machine_count: int = betterproto.uint32_field(2)
 
 
 @dataclass(eq=False, repr=False)

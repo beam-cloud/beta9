@@ -34,7 +34,7 @@ func computePoolEvent(workspaceID string, state *model.PoolState, action, status
 		Fallback:    state.Fallback,
 		Source:      string(state.Source),
 		GPUCount:    state.ReservedGPUs,
-		NodeCount:   state.ReservedNodes,
+		Capacity:    state.ReservedCapacity,
 		Attrs: map[string]string{
 			"selector":               state.Selector,
 			"mode":                   state.Mode,
