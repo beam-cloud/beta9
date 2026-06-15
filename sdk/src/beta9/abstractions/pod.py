@@ -1,4 +1,5 @@
 import os
+import shlex
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -209,7 +210,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             ignore_patterns = ["**"]
 
         if not is_custom_image and self.entrypoint:
-            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && {' '.join(self.entrypoint)}"]
+            self.entrypoint = self._wrap_user_code_entrypoint(self.entrypoint)
 
         if not self.prepare_runtime(
             stub_type=POD_RUN_STUB_TYPE, force_create_stub=True, ignore_patterns=ignore_patterns
@@ -295,7 +296,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             ignore_patterns = ["**"]
 
         if not is_custom_image and self.entrypoint:
-            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && {' '.join(self.entrypoint)}"]
+            self.entrypoint = self._wrap_user_code_entrypoint(self.entrypoint)
 
         if context is not None:
             self.config_context = context
@@ -382,6 +383,10 @@ app = Pod(
         return (
             self.image.base_image != "" or self.image.dockerfile != "" or self.image.image_id != ""
         )
+
+    @staticmethod
+    def _wrap_user_code_entrypoint(entrypoint: List[str]) -> List[str]:
+        return ["sh", "-c", f"cd {USER_CODE_DIR} && {shlex.join(entrypoint)}"]
 
     def cleanup_deployment_artifacts(self):
         """

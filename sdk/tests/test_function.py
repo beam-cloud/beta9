@@ -5,6 +5,7 @@ import cloudpickle
 
 from beta9 import Image
 from beta9.abstractions.function import Function
+from beta9.cli.extraclick import handle_config_override
 from beta9.clients.function import FunctionInvokeResponse
 
 
@@ -22,6 +23,28 @@ class TestTaskQueue(TestCase):
         self.assertEqual(queue.image.python_version, "python3.8")
         self.assertEqual(queue.cpu, 1000)
         self.assertEqual(queue.memory, 128)
+        self.assertEqual(queue.keep_warm_seconds, 0)
+
+    def test_keep_warm_override_is_ignored_for_functions(self):
+        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
+        def test_func():
+            return 1
+
+        self.assertTrue(
+            handle_config_override(
+                test_func,
+                {
+                    "keep_warm_seconds": 120,
+                    "min_replicas": 1,
+                    "max_replicas": 2,
+                    "always_on": True,
+                },
+            )
+        )
+
+        self.assertEqual(test_func.parent.keep_warm_seconds, 0)
+        self.assertFalse(hasattr(test_func.parent, "min_replicas"))
+        self.assertFalse(hasattr(test_func.parent, "max_replicas"))
 
     def test_run_local(self):
         @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))

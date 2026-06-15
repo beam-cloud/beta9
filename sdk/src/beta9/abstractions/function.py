@@ -84,7 +84,7 @@ class Function(RunnerAbstraction):
         ```python
         from beta9 import function, Image
 
-        @function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+        @function(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]))
         def transcribe(filename: str):
             print(filename)
             return "some_result"
@@ -142,6 +142,7 @@ class Function(RunnerAbstraction):
             inputs=inputs,
             outputs=outputs,
             pool=pool,
+            keep_warm_seconds=0,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

@@ -19,6 +19,19 @@ class TestService(TestCase):
         self.assertEqual(service.ports, [3000])
         self.assertIn("PORT=3000", service.env)
 
+    def test_command_string_is_quoted_when_wrapped_for_user_code(self):
+        service = Service(command="python server.py", port=8080, name="quoted-command")
+
+        with mock.patch.object(service, "prepare_runtime", return_value=False):
+            response, ok = service.deploy()
+
+        self.assertFalse(ok)
+        self.assertEqual(response, {})
+        self.assertEqual(
+            service.entrypoint,
+            ["sh", "-c", "cd /mnt/code && sh -lc 'python server.py'"],
+        )
+
     def test_service_respects_explicit_port_env(self):
         service = Service(command="npm run start", port=3000, env={"PORT": "9000"})
 

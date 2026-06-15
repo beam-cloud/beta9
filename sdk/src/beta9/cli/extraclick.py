@@ -362,7 +362,7 @@ def override_config_options(func: click.Command):
     f = click.option(
         "--keep-warm-seconds",
         type=click.INT,
-        help="Seconds to keep an idle service warm. Use 0 for scale-to-zero and -1 to keep one container running.",
+        help="Seconds to retain idle containers. Use 0 for immediate scale-to-zero; -1 keeps idle containers warm indefinitely where supported.",
         required=False,
     )(f)
     f = click.option(
