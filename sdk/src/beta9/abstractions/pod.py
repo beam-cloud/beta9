@@ -100,7 +100,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         keep_warm_seconds (int):
-            The number of seconds to keep the container up the last request. -1 means never scale down to zero.
+            The number of seconds to keep an idle container warm. Use 0 to scale to zero as soon
+            as the container is idle, and -1 to keep it running until it exits or is stopped.
             Default is 600 seconds (10 minutes).
         authorized (bool):
             If false, allows the pod to be accessed without an auth token.
@@ -198,7 +199,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         if entrypoint:
             self.entrypoint = entrypoint
 
-        is_custom_image = self.image.base_image != "" or self.image.dockerfile != ""
+        is_custom_image = self._uses_custom_image_entrypoint()
 
         if not self.entrypoint and not is_custom_image:
             terminal.error("You must specify an entrypoint.")
@@ -233,6 +234,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
             if self.keep_warm_seconds < 0:
                 terminal.header("This container has no timeout, it will run until it completes.")
+            elif self.keep_warm_seconds == 0:
+                terminal.header("This container will stop as soon as it is idle.")
             else:
                 terminal.header(
                     f"This container will timeout after {self.keep_warm_seconds} seconds."
@@ -281,7 +284,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
 
-        is_custom_image = self.image.base_image != "" or self.image.dockerfile != ""
+        is_custom_image = self._uses_custom_image_entrypoint()
 
         if not self.entrypoint and not is_custom_image:
             terminal.error("You must specify an entrypoint.")
@@ -310,6 +313,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         )
 
         self.deployment_id = deploy_response.deployment_id
+        invoke_url = deploy_response.invoke_url
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
             if invocation_details_func:
@@ -318,12 +322,14 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 )
 
             elif len(self.ports) > 0:
-                self.print_invocation_snippet()
+                url_res = self.print_invocation_snippet()
+                if url_res and getattr(url_res, "ok", False):
+                    invoke_url = url_res.url.replace("<PORT>", str(self.ports[0]))
 
         return {
             "deployment_id": deploy_response.deployment_id,
             "deployment_name": self.name,
-            "invoke_url": deploy_response.invoke_url,
+            "invoke_url": invoke_url,
             "version": deploy_response.version,
         }, deploy_response.ok
 
@@ -371,6 +377,11 @@ app = Pod(
 
         with open(f"pod-{self._id}.py", "w") as f:
             f.write(content)
+
+    def _uses_custom_image_entrypoint(self) -> bool:
+        return (
+            self.image.base_image != "" or self.image.dockerfile != "" or self.image.image_id != ""
+        )
 
     def cleanup_deployment_artifacts(self):
         """

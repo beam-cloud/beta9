@@ -645,6 +645,7 @@ func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *
 	spec := specs.Spec{
 		Process: &specs.Process{
 			Env: []string{},
+			Cwd: "/",
 		},
 	}
 
@@ -663,6 +664,9 @@ func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *
 		spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
 	} else if len(clipMeta.Cmd) > 0 {
 		spec.Process.Args = clipMeta.Cmd
+	}
+	if spec.Process.Cwd == "" {
+		spec.Process.Cwd = "/"
 	}
 
 	return &spec

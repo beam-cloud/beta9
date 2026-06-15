@@ -309,13 +309,14 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		ports = stubConfig.Ports
 	}
 
-	ttl := time.Duration(stubConfig.KeepWarmSeconds) * time.Second
-	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId)
-	if ttl <= 0 {
-		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
-	} else {
-		s.rdb.SetEx(context.Background(), key, 1, ttl)
-	}
+	setPodKeepWarmLock(
+		context.Background(),
+		s.rdb,
+		authInfo.Workspace.Name,
+		stub.ExternalId,
+		containerId,
+		stubConfig.KeepWarmSeconds,
+	)
 
 	if imageId == nil {
 		imageId = &stubConfig.Runtime.ImageId

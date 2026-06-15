@@ -133,6 +133,38 @@ func TestCreateOverlayKeepsDefaultPathForNormalWorkers(t *testing.T) {
 	require.Equal(t, baseConfigPath, overlay.OverlayPath())
 }
 
+func TestSetupBuildahDirsUsesPersistentLayerCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(types.AgentBuildCacheDirEnv, cacheDir)
+
+	graphroot, runroot, tmpdir, cleanupGraphroot := (&ImageClient{}).setupBuildahDirs()
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	require.False(t, cleanupGraphroot)
+	require.Equal(t, filepath.Join(cacheDir, "buildah", "storage"), graphroot)
+	require.DirExists(t, graphroot)
+	require.DirExists(t, runroot)
+	require.DirExists(t, tmpdir)
+}
+
+func TestSetupBuildahDirsFallsBackWhenLayerCacheUnavailable(t *testing.T) {
+	cacheFile := filepath.Join(t.TempDir(), "cache-file")
+	require.NoError(t, os.WriteFile(cacheFile, []byte("not a dir"), 0o600))
+	t.Setenv(types.AgentBuildCacheDirEnv, cacheFile)
+
+	graphroot, runroot, tmpdir, cleanupGraphroot := (&ImageClient{}).setupBuildahDirs()
+	defer os.RemoveAll(graphroot)
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	require.True(t, cleanupGraphroot)
+	require.DirExists(t, graphroot)
+	require.DirExists(t, runroot)
+	require.DirExists(t, tmpdir)
+	require.NotContains(t, graphroot, cacheFile)
+}
+
 func TestGetContainerEnvironmentUsesGatewayConfigFallback(t *testing.T) {
 	worker := &Worker{
 		podAddr: "127.0.0.1",
@@ -1072,6 +1104,18 @@ func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
 	got, ok := imageClient.GetCLIPImageMetadata(imageId)
 	require.True(t, ok)
 	assert.Equal(t, imageMetadata, got)
+}
+
+func TestBuildSpecFromCLIPMetadataDefaultsCwd(t *testing.T) {
+	worker := &Worker{}
+
+	spec := worker.buildSpecFromCLIPMetadata(&clipCommon.ImageMetadata{
+		Cmd: []string{"python", "-m", "http.server", "8000"},
+	})
+
+	require.NotNil(t, spec.Process)
+	assert.Equal(t, "/", spec.Process.Cwd)
+	assert.Equal(t, []string{"python", "-m", "http.server", "8000"}, spec.Process.Args)
 }
 
 func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {

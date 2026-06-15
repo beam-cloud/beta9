@@ -430,6 +430,9 @@ func (s *ContainerRuntimeServer) writeInitialSpecFromImage(ctx context.Context, 
 		}
 	}
 	// If no CLIP metadata, use base spec as-is (designed for v1 images)
+	if spec.Process.Cwd == "" {
+		spec.Process.Cwd = "/"
+	}
 
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {

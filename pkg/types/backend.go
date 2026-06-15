@@ -518,7 +518,7 @@ type StubConfigV1 struct {
 	OnDeploy           string          `json:"on_deploy"`
 	OnDeployStubId     string          `json:"on_deploy_stub_id"`
 	PythonVersion      string          `json:"python_version"`
-	KeepWarmSeconds    uint            `json:"keep_warm_seconds"`
+	KeepWarmSeconds    int             `json:"keep_warm_seconds"`
 	MaxPendingTasks    uint            `json:"max_pending_tasks"`
 	CallbackUrl        string          `json:"callback_url"`
 	TaskPolicy         TaskPolicy      `json:"task_policy"`

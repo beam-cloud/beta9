@@ -95,13 +95,14 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			return err
 		}
 
-		ttl := time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second
-		key := Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, runRequest.ContainerId)
-		if ttl <= 0 {
-			i.Rdb.Set(context.Background(), key, 1, 0)
-		} else {
-			i.Rdb.SetEx(context.Background(), key, 1, ttl)
-		}
+		setPodKeepWarmLock(
+			context.Background(),
+			i.Rdb,
+			i.Workspace.Name,
+			i.Stub.ExternalId,
+			runRequest.ContainerId,
+			i.StubConfig.KeepWarmSeconds,
+		)
 
 		err = i.Scheduler.Run(runRequest)
 		if err != nil {

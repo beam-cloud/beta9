@@ -237,7 +237,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				log.Info().Str("instance_name", i.Name).Int("initial_count", initialContainerCount).Int("current_count", len(i.Containers)).Msg("scaled")
+				i.logScaleEvent(initialContainerCount, len(i.Containers))
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -258,6 +258,27 @@ func (i *AutoscaledInstance) Monitor() error {
 
 		}
 	}
+}
+
+func (i *AutoscaledInstance) logScaleEvent(initialTrackedCount, currentTrackedCount int) {
+	event := log.Info().
+		Str("instance_name", i.Name).
+		Int("initial_tracked_count", initialTrackedCount).
+		Int("current_tracked_count", currentTrackedCount)
+
+	state, err := i.State()
+	if err != nil {
+		event.Err(err).Msg("scaled")
+		return
+	}
+
+	event.
+		Int("running_count", state.RunningContainers).
+		Int("pending_count", state.PendingContainers).
+		Int("stopping_count", state.StoppingContainers).
+		Int("failed_count", len(state.FailedContainers)).
+		Int("active_count", state.RunningContainers+state.PendingContainers).
+		Msg("scaled")
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {

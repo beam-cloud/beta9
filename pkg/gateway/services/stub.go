@@ -46,16 +46,22 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.MinContainers = uint(in.Autoscaler.MinContainers)
 	}
 
-	// By default, pod deployments are scaled to 1 container
-	if in.StubType == types.StubTypePodDeployment {
-		autoscaler.MaxContainers = 1
+	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
 
-		// If we keep warm is set, allow scaling down to 0 containers
-		if in.KeepWarmSeconds > 0 {
-			autoscaler.MinContainers = 0
-		} else {
-			in.KeepWarmSeconds = 0
-			autoscaler.MinContainers = 1
+	// Pod keep-warm semantics:
+	//   -1: keep one container running until the deployment is stopped
+	//    0: scale to zero as soon as there are no active connections
+	//   >0: keep idle containers warm for that many seconds, then scale to zero
+	if in.StubType == types.StubTypePodDeployment {
+		if err := configurePodDeploymentAutoscaler(
+			autoscaler,
+			keepWarmSeconds,
+			gws.appConfig.GatewayService.StubLimits.MaxReplicas,
+		); err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: err.Error(),
+			}, nil
 		}
 	}
 
@@ -144,7 +150,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		CallbackUrl:        in.CallbackUrl,
 		PythonVersion:      in.PythonVersion,
 		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
-		KeepWarmSeconds:    uint(in.KeepWarmSeconds),
+		KeepWarmSeconds:    keepWarmSeconds,
 		Workers:            uint(in.Workers),
 		ConcurrentRequests: uint(in.ConcurrentRequests),
 		MaxPendingTasks:    uint(in.MaxPendingTasks),
@@ -310,6 +316,48 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		StubId:  stub.ExternalId,
 		WarnMsg: warning,
 	}, nil
+}
+
+func normalizeKeepWarmSeconds(raw float32, stubType types.StubType) int {
+	seconds := int(raw)
+	if seconds > 0 && seconds < 10 {
+		return 10
+	}
+
+	if seconds < 0 && !stubTypeSupportsInfiniteKeepWarm(stubType) {
+		return 0
+	}
+
+	return seconds
+}
+
+func stubTypeSupportsInfiniteKeepWarm(stubType types.StubType) bool {
+	switch string(stubType) {
+	case types.StubTypePodDeployment, types.StubTypePodRun, types.StubTypeSandbox:
+		return true
+	default:
+		return false
+	}
+}
+
+func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeconds int, maxReplicas uint64) error {
+	if autoscaler.MaxContainers == 0 {
+		autoscaler.MaxContainers = 1
+	}
+
+	if keepWarmSeconds < 0 && autoscaler.MinContainers == 0 {
+		autoscaler.MinContainers = 1
+	}
+
+	if autoscaler.MinContainers > autoscaler.MaxContainers {
+		return fmt.Errorf("min replicas must be less than or equal to max replicas")
+	}
+
+	if maxReplicas > 0 && uint64(autoscaler.MaxContainers) > maxReplicas {
+		return fmt.Errorf("max replicas must be %d or less", maxReplicas)
+	}
+
+	return nil
 }
 
 func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {

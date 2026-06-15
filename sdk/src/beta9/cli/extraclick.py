@@ -215,8 +215,10 @@ def pass_service_client(func: Callable):
 
         with ServiceClient(config) as client:
             base_abstraction.set_channel(client.channel)
-
-            return func(client, *args, **kwargs)
+            try:
+                return func(client, *args, **kwargs)
+            finally:
+                base_abstraction.unset_channel()
 
     return decorator
 
@@ -321,9 +323,17 @@ def override_config_options(func: click.Command):
         help="The ports to expose inside the container (e.g. --ports 8000,8001).",
     )(f)
     f = click.option(
+        "--port",
+        type=click.INT,
+        multiple=True,
+        help="Expose a single container port. Can be provided multiple times.",
+    )(f)
+    f = click.option(
         "--entrypoint",
+        "--command",
+        "entrypoint",
         type=ShlexParser(),
-        help="The entrypoint for the container - only used if a handler is not provided.",
+        help="The command for the container - only used if a handler is not provided.",
     )(f)
     f = click.option(
         "--dockerfile",
@@ -344,10 +354,35 @@ def override_config_options(func: click.Command):
         help="Environment variables to pass to the container (e.g. --env VAR1=value --env VAR2=value).",
     )(f)
     f = click.option(
+        "--pool",
+        type=click.STRING,
+        help="Run the container on a private pool (e.g. --pool web-cpu).",
+        required=False,
+    )(f)
+    f = click.option(
         "--keep-warm-seconds",
         type=click.INT,
-        help="The number of seconds to keep the container up after the last request (e.g. --keep-warm-seconds 600).",
+        help="Seconds to keep an idle service warm. Use 0 for scale-to-zero and -1 to keep one container running.",
         required=False,
+    )(f)
+    f = click.option(
+        "--min-replicas",
+        "--min-containers",
+        type=click.IntRange(min=0),
+        help="Minimum service replicas to keep running.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--max-replicas",
+        "--max-containers",
+        type=click.IntRange(min=1),
+        help="Maximum service replicas to run.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--always-on/--scale-to-zero",
+        default=None,
+        help="Keep at least one service replica running, or explicitly allow scale-to-zero.",
     )(f)
     f = click.option(
         "--tcp",
@@ -377,11 +412,30 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
         for key, value in kwargs.items():
             current_key = key
             if value is not None and key in init_kwargs:
-                if isinstance(value, tuple):
+                if isinstance(value, (list, tuple)):
                     value = list(value)
 
                     if len(value) == 0:
                         continue
+
+                if key == "env":
+                    existing_env = env_vars_to_dict(getattr(config_class_instance, "env", []))
+                    existing_env.update(env_vars_to_dict(value))
+                    setattr(
+                        config_class_instance,
+                        "env",
+                        [f"{k}={v}" for k, v in existing_env.items()],
+                    )
+                    continue
+
+                if key == "pool" and hasattr(config_class_instance, "parse_pool"):
+                    setattr(config_class_instance, "pool", value)
+                    setattr(
+                        config_class_instance,
+                        "pool_config",
+                        config_class_instance.parse_pool(value),
+                    )
+                    continue
 
                 if hasattr(config_class_instance, f"{PARSE_CONFIG_PREFIX}{key}"):
                     value = config_class_instance.__getattribute__(f"{PARSE_CONFIG_PREFIX}{key}")(
@@ -390,6 +444,14 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
 
                 setattr(config_class_instance, key, value)
 
+        replica_args = {
+            key: kwargs[key]
+            for key in ("min_replicas", "max_replicas", "always_on")
+            if kwargs.get(key) is not None
+        }
+        if replica_args and hasattr(config_class_instance, "configure_replicas"):
+            config_class_instance.configure_replicas(**replica_args)
+
         if kwargs.get("dockerfile") is not None:
             config_class_instance.image = kwargs["dockerfile"]
 
@@ -397,3 +459,18 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
     except BaseException as e:
         terminal.error(f"Invalid CLI argument ==> {current_key}: {e}", exit=False)
         return False
+
+
+def env_vars_to_dict(value) -> Dict[str, str]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+
+    env: Dict[str, str] = {}
+    for item in value:
+        key, sep, raw_value = str(item).partition("=")
+        if not sep or not key:
+            raise ValueError("env must be in KEY=value format")
+        env[key] = raw_value
+    return env

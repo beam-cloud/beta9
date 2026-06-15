@@ -147,6 +147,13 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 		}, nil
 	}
 
+	if maxReplicas := gws.appConfig.GatewayService.StubLimits.MaxReplicas; maxReplicas > 0 && uint64(in.Containers) > maxReplicas {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("replicas must be %d or less", maxReplicas),
+		}, nil
+	}
+
 	// Scale deployment
 	if err := gws.scaleDeployment(ctx, *deploymentWithRelated, uint(in.Containers)); err != nil {
 		return &pb.ScaleDeploymentResponse{
@@ -299,13 +306,16 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 		return err
 	}
 
-	stubConfig.Autoscaler.MaxContainers = containers
-
-	if stubConfig.KeepWarmSeconds > 0 {
-		stubConfig.Autoscaler.MinContainers = 0
-	} else {
-		stubConfig.Autoscaler.MinContainers = containers
+	if stubConfig.Autoscaler == nil {
+		stubConfig.Autoscaler = &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			TasksPerContainer: 1,
+			MaxContainers:     1,
+			MinContainers:     0,
+		}
 	}
+	stubConfig.Autoscaler.MaxContainers = containers
+	stubConfig.Autoscaler.MinContainers = containers
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {

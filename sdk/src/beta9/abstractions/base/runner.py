@@ -221,16 +221,19 @@ class RunnerAbstraction(BaseAbstraction):
         if not res.ok:
             return terminal.error("Failed to get invocation URL", exit=False)
 
-        if "<PORT>" in res.url or self.tcp:
+        if self.ports or "<PORT>" in res.url or self.tcp:
             terminal.header("Exposed endpoints\n")
 
             if self.tcp:
                 res.url = res.url.replace("http://", "").replace("https://", "")
                 res.url += ":443"
 
-            for port in self.ports:
+            for port in self.ports or [""]:
                 url_text = res.url.replace("<PORT>", str(port))
-                terminal.print(f"\tPort {port}: ", end="")
+                if port:
+                    terminal.print(f"\tPort {port}: ", end="")
+                else:
+                    terminal.print("\t", end="")
                 terminal.url(url_text)
 
             terminal.print("")
