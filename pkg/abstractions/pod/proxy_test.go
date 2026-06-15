@@ -192,6 +192,133 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 }
 
+func TestTotalConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	pb1 := newPodProxyConnectionTestBuffer(rdb)
+	pb2 := newPodProxyConnectionTestBuffer(rdb)
+
+	if _, err := pb1.incrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pb2.incrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+
+	key := Keys.podTotalConnections("workspace", "stub")
+	if got := redisInt64(t, rdb, key); got != 2 {
+		t.Fatalf("total connections = %d, want aggregate count from both proxy buffers", got)
+	}
+
+	if err := pb1.decrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("total connections after first decrement = %d, want 1", got)
+	}
+
+	if err := pb1.decrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("total connections after duplicate first-buffer decrement = %d, want other buffer count preserved", got)
+	}
+
+	if err := pb2.decrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 0 {
+		t.Fatalf("total connections after second decrement = %d, want 0", got)
+	}
+
+	if err := pb2.decrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 0 {
+		t.Fatalf("total connections after extra decrement = %d, want capped zero", got)
+	}
+}
+
+func TestContainerConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	pb1 := newPodProxyConnectionTestBuffer(rdb)
+	pb2 := newPodProxyConnectionTestBuffer(rdb)
+
+	if err := pb1.incrementContainerConnections("container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pb2.incrementContainerConnections("container-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	key := Keys.podContainerConnections("workspace", "stub", "container-1")
+	if got := redisInt64(t, rdb, key); got != 2 {
+		t.Fatalf("container connections = %d, want aggregate count from both proxy buffers", got)
+	}
+
+	if err := pb1.decrementContainerConnections("container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("container connections after first decrement = %d, want 1", got)
+	}
+	if got := pb1.containerConnectionCount("container-1"); got != 0 {
+		t.Fatalf("first buffer local container connections = %d, want 0", got)
+	}
+	if got := pb2.containerConnectionCount("container-1"); got != 1 {
+		t.Fatalf("second buffer local container connections = %d, want 1", got)
+	}
+
+	if err := pb1.decrementContainerConnections("container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("container connections after duplicate first-buffer decrement = %d, want other buffer count preserved", got)
+	}
+
+	if err := pb2.decrementContainerConnections("container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 0 {
+		t.Fatalf("container connections after second decrement = %d, want 0", got)
+	}
+}
+
+func newPodProxyTestRedis(t *testing.T) *common.RedisClient {
+	t.Helper()
+
+	server, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rdb
+}
+
+func newPodProxyConnectionTestBuffer(rdb *common.RedisClient) *PodProxyBuffer {
+	return &PodProxyBuffer{
+		ctx:        context.Background(),
+		rdb:        rdb,
+		workspace:  &types.Workspace{Name: "workspace"},
+		stubId:     "stub",
+		stubConfig: &types.StubConfigV1{},
+	}
+}
+
+func redisInt64(t *testing.T, rdb *common.RedisClient, key string) int64 {
+	t.Helper()
+
+	got, err := rdb.Get(context.Background(), key).Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 

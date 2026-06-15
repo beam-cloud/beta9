@@ -34,6 +34,20 @@ const (
 	connectionReadTimeout         time.Duration = time.Minute * 5
 	containerAvailableTimeout     time.Duration = time.Second * 2
 	connectionSyncBufferSize      int           = 1024
+	decrementConnectionScript     string        = `
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+if current <= 0 then
+  redis.call("SET", KEYS[1], 0, "EX", ARGV[1])
+  return 0
+end
+local next = redis.call("DECR", KEYS[1])
+if next < 0 then
+  redis.call("SET", KEYS[1], 0, "EX", ARGV[1])
+  return 0
+end
+redis.call("EXPIRE", KEYS[1], ARGV[1])
+return next
+`
 )
 
 type container struct {
@@ -120,7 +134,9 @@ func NewPodProxyBuffer(ctx context.Context,
 func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	ctx.Set("stubId", pb.stubId)
 
-	pb.incrementTotalConnections()
+	if _, err := pb.incrementTotalConnections(); err != nil {
+		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+	}
 	defer pb.decrementTotalConnections()
 
 	done := make(chan struct{})
@@ -149,7 +165,10 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 }
 
 func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
-	pb.incrementTotalConnections()
+	if _, err := pb.incrementTotalConnections(); err != nil {
+		tc.Conn.Close()
+		return err
+	}
 	defer pb.decrementTotalConnections()
 
 	done := make(chan struct{})
@@ -658,49 +677,79 @@ func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool 
 }
 
 func (pb *PodProxyBuffer) incrementTotalConnections() (int64, error) {
+	if key, ok := pb.totalConnectionsKey(); ok {
+		if err := pb.incrementRedisConnectionKey(key); err != nil {
+			return pb.totalConnections.Load(), err
+		}
+	}
+
 	val := pb.totalConnections.Add(1)
-	pb.enqueueConnectionSync("", false)
 	return val, nil
 }
 
 func (pb *PodProxyBuffer) decrementTotalConnections() error {
+	decremented := false
 	for {
 		current := pb.totalConnections.Load()
 		if current <= 0 {
 			break
 		}
 		if pb.totalConnections.CompareAndSwap(current, current-1) {
+			decremented = true
 			break
 		}
 	}
-	pb.enqueueConnectionSync("", false)
+
+	if decremented {
+		if key, ok := pb.totalConnectionsKey(); ok {
+			return pb.decrementRedisConnectionKey(key)
+		}
+	}
+
 	return nil
 }
 
 func (pb *PodProxyBuffer) incrementContainerConnections(containerId string) error {
+	if key, ok := pb.containerConnectionsKey(containerId); ok {
+		if err := pb.incrementRedisConnectionKey(key); err != nil {
+			return err
+		}
+	}
+
 	pb.containerConnectionsLock.Lock()
 	if pb.containerConnections == nil {
 		pb.containerConnections = map[string]int{}
 	}
 	pb.containerConnections[containerId]++
 	pb.containerConnectionsLock.Unlock()
-	pb.enqueueConnectionSync(containerId, false)
+
 	return nil
 }
 
 func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) error {
 	defer pb.signalWork()
 
+	decremented := false
 	pb.containerConnectionsLock.Lock()
-	if pb.containerConnections != nil {
-		if pb.containerConnections[containerId] <= 1 {
+	if pb.containerConnections != nil && pb.containerConnections[containerId] > 0 {
+		if pb.containerConnections[containerId] == 1 {
 			delete(pb.containerConnections, containerId)
 		} else {
 			pb.containerConnections[containerId]--
 		}
+		decremented = true
 	}
 	pb.containerConnectionsLock.Unlock()
+
+	if !decremented {
+		return nil
+	}
+
 	pb.enqueueConnectionSync(containerId, true)
+	if key, ok := pb.containerConnectionsKey(containerId); ok {
+		return pb.decrementRedisConnectionKey(key)
+	}
+
 	return nil
 }
 
@@ -764,23 +813,56 @@ func (pb *PodProxyBuffer) applyConnectionSync(update podConnectionSync) {
 		return
 	}
 
+	if update.containerID == "" || !update.keepWarm || pb.stubConfig == nil || pb.stubConfig.KeepWarmSeconds <= 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pb.rdb.SetEx(
+		ctx,
+		Keys.podKeepWarmLock(pb.workspace.Name, pb.stubId, update.containerID),
+		1,
+		time.Duration(pb.stubConfig.KeepWarmSeconds)*time.Second,
+	)
+}
+
+func (pb *PodProxyBuffer) totalConnectionsKey() (string, bool) {
+	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" {
+		return "", false
+	}
+	return Keys.podTotalConnections(pb.workspace.Name, pb.stubId), true
+}
+
+func (pb *PodProxyBuffer) containerConnectionsKey(containerID string) (string, bool) {
+	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" || containerID == "" {
+		return "", false
+	}
+	return Keys.podContainerConnections(pb.workspace.Name, pb.stubId, containerID), true
+}
+
+func (pb *PodProxyBuffer) incrementRedisConnectionKey(key string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	pipe := pb.rdb.Pipeline()
-	pipe.SetEx(ctx, Keys.podTotalConnections(pb.workspace.Name, pb.stubId), pb.totalConnectionCount(), podContainerConnectionTimeout)
-	if update.containerID != "" {
-		pipe.SetEx(ctx, Keys.podContainerConnections(pb.workspace.Name, pb.stubId, update.containerID), pb.containerConnectionCount(update.containerID), podContainerConnectionTimeout)
-		if update.keepWarm && pb.stubConfig != nil && pb.stubConfig.KeepWarmSeconds > 0 {
-			pipe.SetEx(
-				ctx,
-				Keys.podKeepWarmLock(pb.workspace.Name, pb.stubId, update.containerID),
-				1,
-				time.Duration(pb.stubConfig.KeepWarmSeconds)*time.Second,
-			)
-		}
-	}
-	_, _ = pipe.Exec(ctx)
+	pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, podContainerConnectionTimeout)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (pb *PodProxyBuffer) decrementRedisConnectionKey(key string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	return pb.rdb.Eval(
+		ctx,
+		decrementConnectionScript,
+		[]string{key},
+		int(podContainerConnectionTimeout/time.Second),
+	).Err()
 }
 
 func (pb *PodProxyBuffer) workspaceName() string {

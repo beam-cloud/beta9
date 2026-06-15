@@ -201,6 +201,120 @@ func TestReserveContainerSkipsSaturatedReplica(t *testing.T) {
 	}
 }
 
+func TestReserveContainerUsesSharedRequestTokensAcrossBuffers(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	rb1 := newEndpointRequestTokenTestBuffer(rdb, 1)
+	rb2 := newEndpointRequestTokenTestBuffer(rdb, 1)
+
+	if _, ok := rb1.reserveContainer(); !ok {
+		t.Fatal("expected first buffer to reserve the shared request token")
+	}
+	if _, ok := rb2.reserveContainer(); ok {
+		t.Fatal("expected second buffer to be denied after shared request token was consumed")
+	}
+
+	key := Keys.endpointRequestTokens("workspace", "stub", "container-1")
+	if got := redisInt64(t, rdb, key); got != 0 {
+		t.Fatalf("request tokens = %d, want 0 after first reservation", got)
+	}
+
+	if err := rb1.releaseRequestToken("container-1", "task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("request tokens after release = %d, want 1", got)
+	}
+
+	if _, ok := rb2.reserveContainer(); !ok {
+		t.Fatal("expected second buffer to reserve after token release")
+	}
+}
+
+func TestReleaseRequestTokenIsIdempotentAcrossBuffers(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	rb1 := newEndpointRequestTokenTestBuffer(rdb, 2)
+	rb2 := newEndpointRequestTokenTestBuffer(rdb, 2)
+
+	if _, ok := rb1.reserveContainer(); !ok {
+		t.Fatal("expected first buffer to reserve")
+	}
+	if _, ok := rb2.reserveContainer(); !ok {
+		t.Fatal("expected second buffer to reserve")
+	}
+
+	key := Keys.endpointRequestTokens("workspace", "stub", "container-1")
+	if got := redisInt64(t, rdb, key); got != 0 {
+		t.Fatalf("request tokens = %d, want 0 after both reservations", got)
+	}
+
+	if err := rb1.releaseRequestToken("container-1", "task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("request tokens after first release = %d, want 1", got)
+	}
+	if got := rb1.containerRequestCount("container-1"); got != 0 {
+		t.Fatalf("first buffer local requests = %d, want 0", got)
+	}
+	if got := rb2.containerRequestCount("container-1"); got != 1 {
+		t.Fatalf("second buffer local requests = %d, want 1", got)
+	}
+
+	if err := rb1.releaseRequestToken("container-1", "task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 1 {
+		t.Fatalf("request tokens after duplicate release = %d, want other buffer token preserved", got)
+	}
+
+	if err := rb2.releaseRequestToken("container-1", "task-2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := redisInt64(t, rdb, key); got != 2 {
+		t.Fatalf("request tokens after second release = %d, want full bucket", got)
+	}
+}
+
+func newEndpointBufferTestRedis(t *testing.T) *common.RedisClient {
+	t.Helper()
+
+	server, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rdb
+}
+
+func newEndpointRequestTokenTestBuffer(rdb *common.RedisClient, maxTokens int) *RequestBuffer {
+	return &RequestBuffer{
+		ctx:        context.Background(),
+		rdb:        rdb,
+		workspace:  &types.Workspace{Name: "workspace"},
+		stubId:     "stub",
+		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
+		maxTokens:  maxTokens,
+		availableContainers: []container{
+			{id: "container-1", address: "127.0.0.1:8001"},
+		},
+	}
+}
+
+func redisInt64(t *testing.T, rdb *common.RedisClient, key string) int64 {
+	t.Helper()
+
+	got, err := rdb.Get(context.Background(), key).Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 

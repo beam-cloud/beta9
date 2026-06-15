@@ -1,8 +1,13 @@
 package pod
 
 import (
+	"context"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -65,6 +70,48 @@ func TestDesiredPodDeploymentContainersAppliesGlobalReplicaLimit(t *testing.T) {
 
 	if got != 3 {
 		t.Fatalf("desired containers = %d, want 3", got)
+	}
+}
+
+func TestPodAutoscalerSampleUsesSharedConnectionAggregate(t *testing.T) {
+	server, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	workspace := &types.Workspace{Name: "workspace"}
+	stub := &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub"}}
+	buffer := &PodProxyBuffer{}
+	buffer.totalConnections.Store(1)
+
+	if err := rdb.Set(ctx, Keys.podTotalConnections(workspace.Name, stub.ExternalId), 2, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{
+			Ctx:           ctx,
+			Rdb:           rdb,
+			Workspace:     workspace,
+			Stub:          stub,
+			ContainerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
+		},
+		buffer: buffer,
+	}
+
+	sample, err := podAutoscalerSampleFunc(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.TotalConnections != 2 {
+		t.Fatalf("total connections = %d, want shared Redis aggregate", sample.TotalConnections)
 	}
 }
 

@@ -315,6 +315,7 @@ var (
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
 	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
+	endpointRequestRelease   string = "endpoint:%s:%s:request_release:%s:%s"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -331,4 +332,8 @@ func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) 
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
 	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
+}
+
+func (k *keys) endpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
+	return fmt.Sprintf(endpointRequestRelease, workspaceName, stubId, taskId, containerId)
 }

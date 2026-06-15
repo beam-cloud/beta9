@@ -22,15 +22,15 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 
 	currentContainers = state.PendingContainers + state.RunningContainers
 	var totalConnections int64
-	if i.buffer != nil {
-		totalConnections = i.buffer.totalConnectionCount()
-	} else {
+	if i.Rdb != nil && i.Workspace != nil && i.Stub != nil {
 		totalConnections, err = i.Rdb.Get(i.Ctx, Keys.podTotalConnections(i.Workspace.Name, i.Stub.ExternalId)).Int64()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		} else if err == redis.Nil {
 			totalConnections = 0
 		}
+	} else if i.buffer != nil {
+		totalConnections = i.buffer.totalConnectionCount()
 	}
 
 	sample := &podAutoscalerSample{
