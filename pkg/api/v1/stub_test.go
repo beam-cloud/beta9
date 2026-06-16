@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,20 @@ import (
 	"github.com/labstack/echo/v4"
 	"k8s.io/utils/ptr"
 )
+
+type sandboxRowsEventRepo struct {
+	repository.EventRepository
+	history    *types.EventHistoryResponse
+	containers map[string]*types.ContainerEventsResponse
+}
+
+func (r *sandboxRowsEventRepo) GetEventHistory(context.Context, types.EventQuery) (*types.EventHistoryResponse, error) {
+	return r.history, nil
+}
+
+func (r *sandboxRowsEventRepo) GetContainerEvents(_ context.Context, containerID string, _ types.EventQuery) (*types.ContainerEventsResponse, error) {
+	return r.containers[containerID], nil
+}
 
 func NewStubGroupForTest() *StubGroup {
 	backendRepo, _ := repository.NewBackendPostgresRepositoryForTest()
@@ -76,6 +91,113 @@ func generateDefaultStubWithConfig() *types.Stub {
 	return &types.Stub{
 		Name:   "Test Stub",
 		Config: `{"runtime":{"cpu":1000,"gpu":"","gpu_count":0,"memory":1000,"image_id":"","gpus":[]},"handler":"","on_start":"","on_deploy":"","on_deploy_stub_id":"","python_version":"python3","keep_warm_seconds":600,"max_pending_tasks":100,"callback_url":"","task_policy":{"max_retries":3,"timeout":3600,"expires":"0001-01-01T00:00:00Z","ttl":0},"workers":1,"concurrent_requests":1,"authorized":false,"volumes":null,"autoscaler":{"type":"queue_depth","max_containers":1,"tasks_per_container":1,"min_containers":0},"extra":{},"checkpoint_enabled":false,"work_dir":"","entry_point":["sleep 100"],"ports":[]}`,
+	}
+}
+
+func TestBuildSandboxRowsReturnsOneRowPerRecentContainer(t *testing.T) {
+	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "sandbox-stub",
+		Name:       "sandbox",
+		CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+	}}
+
+	containerEvents := func(containerID string, startedAt time.Time) *types.ContainerEventsResponse {
+		endedAt := startedAt.Add(250 * time.Millisecond)
+		return &types.ContainerEventsResponse{
+			ContainerID: containerID,
+			WorkspaceID: "workspace",
+			StubID:      "sandbox-stub",
+			Summary: map[string]int64{
+				"container_request_to_running_ms": 44,
+			},
+			Events: []types.ContainerEventRecord{
+				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: containerID, WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: startedAt},
+				{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: containerID, WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: endedAt},
+			},
+		}
+	}
+
+	group := &StubGroup{eventRepo: &sandboxRowsEventRepo{
+		history: &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
+			{ContainerID: "sandbox-stub-11111111", Timestamp: base.Add(1 * time.Second)},
+			{ContainerID: "sandbox-stub-22222222", Timestamp: base.Add(2 * time.Second)},
+			{ContainerID: "sandbox-stub-33333333", Timestamp: base.Add(3 * time.Second)},
+		}},
+		containers: map[string]*types.ContainerEventsResponse{
+			"sandbox-stub-11111111": containerEvents("sandbox-stub-11111111", base.Add(1*time.Second)),
+			"sandbox-stub-22222222": containerEvents("sandbox-stub-22222222", base.Add(2*time.Second)),
+			"sandbox-stub-33333333": containerEvents("sandbox-stub-33333333", base.Add(3*time.Second)),
+		},
+	}}
+
+	rows := group.buildSandboxRows(context.Background(), "workspace", stub, nil)
+	if got, want := len(rows), 3; got != want {
+		t.Fatalf("expected %d sandbox rows, got %d", want, got)
+	}
+
+	expectedContainerIDs := []string{"sandbox-stub-33333333", "sandbox-stub-22222222", "sandbox-stub-11111111"}
+	for i, expectedContainerID := range expectedContainerIDs {
+		row := rows[i]
+		if row.Id != expectedContainerID {
+			t.Fatalf("row %d id = %q, want container id %q", i, row.Id, expectedContainerID)
+		}
+		if row.StubId != "sandbox-stub" {
+			t.Fatalf("row %d stub_id = %q, want stub id", i, row.StubId)
+		}
+		if row.ContainerId != expectedContainerID {
+			t.Fatalf("row %d container_id = %q, want %q", i, row.ContainerId, expectedContainerID)
+		}
+		if row.Status != SandboxStatusStopped {
+			t.Fatalf("row %d status = %q, want %q", i, row.Status, SandboxStatusStopped)
+		}
+		if row.TimeToStartedMs == nil || *row.TimeToStartedMs != 44 {
+			t.Fatalf("row %d time_to_started_ms = %v, want 44", i, row.TimeToStartedMs)
+		}
+	}
+}
+
+func TestBuildSandboxRowsReturnsEveryActiveContainer(t *testing.T) {
+	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "sandbox-stub",
+		Name:       "sandbox",
+		CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+	}}
+
+	group := &StubGroup{}
+	rows := group.buildSandboxRows(context.Background(), "workspace", stub, []types.ContainerState{
+		{
+			ContainerId: "sandbox-stub-11111111",
+			StubId:      "sandbox-stub",
+			Status:      types.ContainerStatusRunning,
+			ScheduledAt: base.Add(1 * time.Second).Unix(),
+			StartedAt:   base.Add(2 * time.Second).Unix(),
+		},
+		{
+			ContainerId: "sandbox-stub-22222222",
+			StubId:      "sandbox-stub",
+			Status:      types.ContainerStatusPending,
+			ScheduledAt: base.Add(3 * time.Second).Unix(),
+		},
+	})
+	if got, want := len(rows), 2; got != want {
+		t.Fatalf("expected %d sandbox rows, got %d", want, got)
+	}
+	if rows[0].ContainerId != "sandbox-stub-22222222" || rows[1].ContainerId != "sandbox-stub-11111111" {
+		t.Fatalf("unexpected container ordering: %#v", rows)
+	}
+	if rows[0].Id != rows[0].ContainerId || rows[1].Id != rows[1].ContainerId {
+		t.Fatalf("expected active sandbox ids to match container ids: %#v", rows)
+	}
+	if rows[0].StubId != "sandbox-stub" || rows[1].StubId != "sandbox-stub" {
+		t.Fatalf("expected active sandbox stub ids to be preserved: %#v", rows)
+	}
+	if rows[0].Status != SandboxStatusPending {
+		t.Fatalf("pending row status = %q, want %q", rows[0].Status, SandboxStatusPending)
+	}
+	if rows[1].Status != SandboxStatusRunning {
+		t.Fatalf("running row status = %q, want %q", rows[1].Status, SandboxStatusRunning)
 	}
 }
 
