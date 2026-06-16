@@ -310,30 +310,22 @@ var Keys = &keys{}
 
 type keys struct{}
 
-var (
-	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
-	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
-	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
-	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
-	endpointRequestRelease   string = "endpoint:%s:%s:request_release:%s:%s"
-)
-
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointKeepWarmLock, workspaceName, stubId, containerId)
+	return common.RedisKeys.EndpointKeepWarmLock(workspaceName, stubId, containerId)
 }
 
 func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
+	return common.RedisKeys.EndpointInstanceLock(workspaceName, stubId)
 }
 
 func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
+	return common.RedisKeys.EndpointRequestTokens(workspaceName, stubId, containerId)
 }
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
-	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
+	return common.RedisKeys.EndpointRequestHeartbeat(workspaceName, stubId, taskId, containerId)
 }
 
 func (k *keys) endpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
-	return fmt.Sprintf(endpointRequestRelease, workspaceName, stubId, taskId, containerId)
+	return common.RedisKeys.EndpointRequestRelease(workspaceName, stubId, taskId, containerId)
 }

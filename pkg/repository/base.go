@@ -77,6 +77,12 @@ type ContainerRepository interface {
 	DeleteStubState(stubId string) error
 	SetBuildContainerTTL(containerId string, ttl time.Duration) error
 	HasBuildContainerTTL(containerId string) bool
+	GetEndpointRequestTokens(ctx context.Context, workspaceName, stubId, containerId string, maxTokens int, ttl time.Duration) (int, error)
+	AcquireEndpointRequestToken(ctx context.Context, workspaceName, stubId, containerId string, maxTokens int, ttl time.Duration) (bool, error)
+	ReleaseEndpointRequestToken(ctx context.Context, workspaceName, stubId, containerId, taskId string, maxTokens int, ttl time.Duration) error
+	RefreshEndpointRequestTokenTTL(ctx context.Context, workspaceName, stubId, containerId string, ttl time.Duration) error
+	SetEndpointRequestHeartbeat(ctx context.Context, workspaceName, stubId, taskId, containerId string, ttl time.Duration) error
+	EndpointRequestHeartbeatExists(ctx context.Context, workspaceName, stubId, taskId, containerId string) (bool, error)
 }
 
 type WorkerPoolRepository interface {

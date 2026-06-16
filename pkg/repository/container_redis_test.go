@@ -750,6 +750,103 @@ func TestGetWorkerAddressReturnsScheduleFailureWhenRequestFailed(t *testing.T) {
 	}
 }
 
+func TestEndpointRequestTokensCapConcurrentAcquireAcrossRepositories(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo1 := NewContainerRedisRepositoryForTest(rdb)
+	repo2 := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	const maxTokens = 5
+	const attempts = 25
+
+	var acquired atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		repo := repo1
+		if i%2 == 1 {
+			repo = repo2
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := repo.AcquireEndpointRequestToken(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+			if err != nil {
+				t.Errorf("acquire endpoint request token: %v", err)
+				return
+			}
+			if ok {
+				acquired.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := acquired.Load(); got != maxTokens {
+		t.Fatalf("acquired tokens = %d, want %d", got, maxTokens)
+	}
+
+	tokens, err := repo1.GetEndpointRequestTokens(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 0 {
+		t.Fatalf("remaining tokens = %d, want 0", tokens)
+	}
+}
+
+func TestEndpointRequestTokenReleaseIsIdempotentAcrossRepositories(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo1 := NewContainerRedisRepositoryForTest(rdb)
+	repo2 := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	const maxTokens = 2
+
+	for _, repo := range []ContainerRepository{repo1, repo2} {
+		ok, err := repo.AcquireEndpointRequestToken(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("expected request token acquire")
+		}
+	}
+
+	if err := repo1.ReleaseEndpointRequestToken(ctx, "workspace", "stub", "container-1", "task-1", maxTokens, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo1.ReleaseEndpointRequestToken(ctx, "workspace", "stub", "container-1", "task-1", maxTokens, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	tokens, err := repo1.GetEndpointRequestTokens(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 1 {
+		t.Fatalf("tokens after duplicate release = %d, want 1", tokens)
+	}
+
+	if err := repo2.ReleaseEndpointRequestToken(ctx, "workspace", "stub", "container-1", "task-2", maxTokens, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	tokens, err = repo1.GetEndpointRequestTokens(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != maxTokens {
+		t.Fatalf("tokens after second release = %d, want %d", tokens, maxTokens)
+	}
+}
+
 func testContainerRequest(containerId, workspaceId string, cpu int64) *types.ContainerRequest {
 	return &types.ContainerRequest{
 		ContainerId: containerId,

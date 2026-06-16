@@ -17,7 +17,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -35,40 +34,6 @@ const (
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
 	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
 	backendConnectTimeout          time.Duration = 10 * time.Second
-	endpointAcquireTokenScript     string        = `
-local max_tokens = tonumber(ARGV[1])
-local ttl_seconds = tonumber(ARGV[2])
-local current = redis.call("GET", KEYS[1])
-if current == false then
-  current = max_tokens
-else
-  current = tonumber(current)
-end
-if current <= 0 then
-  redis.call("SET", KEYS[1], current, "EX", ttl_seconds)
-  return -1
-end
-local next = current - 1
-redis.call("SET", KEYS[1], next, "EX", ttl_seconds)
-return next
-`
-	endpointReleaseTokenScript string = `
-local max_tokens = tonumber(ARGV[1])
-local ttl_seconds = tonumber(ARGV[2])
-local current = redis.call("GET", KEYS[1])
-if current == false then
-  current = max_tokens
-else
-  current = tonumber(current)
-end
-if current >= max_tokens then
-  redis.call("SET", KEYS[1], max_tokens, "EX", ttl_seconds)
-  return max_tokens
-end
-local next = current + 1
-redis.call("SET", KEYS[1], next, "EX", ttl_seconds)
-return next
-`
 )
 
 type request struct {
@@ -335,6 +300,9 @@ func (rb *RequestBuffer) reserveContainer() (container, bool) {
 		return container{}, false
 	}
 
+	// Containers are sorted by in-flight requests, so this is least-connections
+	// load balancing. If a replica's shared token bucket is already full, try
+	// the next least-loaded replica.
 	for _, c := range containers {
 		if rb.containerRequestCount(c.id) >= rb.effectiveMaxTokens() {
 			continue
@@ -466,11 +434,15 @@ func (rb *RequestBuffer) discoverContainers() {
 						return
 					}
 
+					// If a replica has five tokens and three are still available,
+					// then two requests are currently in flight for that replica.
+					inFlightRequests := rb.effectiveMaxTokens() - availableTokens
+
 					if rb.checkAddressIsReady(containerAddress) {
 						availableContainersChan <- container{
 							id:               cs.ContainerId,
 							address:          containerAddress,
-							inFlightRequests: rb.effectiveMaxTokens() - availableTokens,
+							inFlightRequests: inFlightRequests,
 						}
 
 						return
@@ -506,61 +478,43 @@ func (rb *RequestBuffer) discoverContainers() {
 
 func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 	maxTokens := rb.effectiveMaxTokens()
-	key, ok := rb.requestTokensKey(containerId)
-	if !ok {
+	if rb.containerRepo == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
 		return maxTokens - rb.containerRequestCount(containerId), nil
 	}
 
-	val, err := rb.rdb.Get(rb.ctx, key).Int()
-	if err != nil && err != redis.Nil {
-		return 0, err
-	}
-	if err == redis.Nil {
-		created, err := rb.rdb.SetNX(rb.ctx, key, maxTokens, rb.requestTokenTTL()).Result()
-		if err != nil {
-			return 0, err
-		}
-		if created {
-			return maxTokens, nil
-		}
-
-		val, err = rb.rdb.Get(rb.ctx, key).Int()
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	if val > maxTokens {
-		val = maxTokens
-		go rb.rdb.SetEx(context.Background(), key, maxTokens, rb.requestTokenTTL())
-	}
-	if val < 0 {
-		return 0, nil
-	}
-	return val, nil
+	return rb.containerRepo.GetEndpointRequestTokens(
+		rb.ctx,
+		rb.workspace.Name,
+		rb.stubId,
+		containerId,
+		maxTokens,
+		rb.requestTokenTTL(),
+	)
 }
 
 func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
-	key, ok := rb.requestTokensKey(containerId)
-	if !ok {
+	if rb.containerRepo == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	result, err := rb.rdb.Eval(
+	acquired, err := rb.containerRepo.AcquireEndpointRequestToken(
 		ctx,
-		endpointAcquireTokenScript,
-		[]string{key},
+		rb.workspace.Name,
+		rb.stubId,
+		containerId,
 		rb.effectiveMaxTokens(),
-		int(rb.requestTokenTTL()/time.Second),
-	).Int64()
+		rb.requestTokenTTL(),
+	)
 	if err != nil {
 		return err
 	}
 
-	if result < 0 {
+	// If no token was acquired, this replica has reached its request
+	// concurrency threshold and the request should wait for another backend.
+	if !acquired {
 		metrics.RecordProxyTokenDenial("endpoint", rb.workspaceName(), rb.stubId)
 		return errors.New("too many in-flight requests")
 	}
@@ -571,46 +525,22 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 	rb.decrementLocalContainerRequests(containerId)
 
-	key, ok := rb.requestTokensKey(containerId)
-	if !ok {
+	if rb.containerRepo == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
 		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if taskId != "" {
-		releaseKey := Keys.endpointRequestRelease(rb.workspace.Name, rb.stubId, taskId, containerId)
-		created, err := rb.rdb.SetNX(ctx, releaseKey, 1, rb.requestTokenTTL()).Result()
-		if err != nil {
-			return err
-		}
-		if !created {
-			return nil
-		}
-	}
-
-	if err := rb.rdb.Eval(
+	return rb.containerRepo.ReleaseEndpointRequestToken(
 		ctx,
-		endpointReleaseTokenScript,
-		[]string{key},
+		rb.workspace.Name,
+		rb.stubId,
+		containerId,
+		taskId,
 		rb.effectiveMaxTokens(),
-		int(rb.requestTokenTTL()/time.Second),
-	).Err(); err != nil {
-		return err
-	}
-
-	if taskId != "" {
-		return rb.rdb.Del(ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId)).Err()
-	}
-	return nil
-}
-
-func (rb *RequestBuffer) requestTokensKey(containerId string) (string, bool) {
-	if rb.rdb == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
-		return "", false
-	}
-	return Keys.endpointRequestTokens(rb.workspace.Name, rb.stubId, containerId), true
+		rb.requestTokenTTL(),
+	)
 }
 
 func (rb *RequestBuffer) effectiveMaxTokens() int {
@@ -901,7 +831,7 @@ func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask, reason types.Tas
 }
 
 func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
-	if rb.rdb == nil || rb.workspace == nil || req == nil || req.task == nil || req.task.msg == nil {
+	if rb.containerRepo == nil || rb.workspace == nil || req == nil || req.task == nil || req.task.msg == nil {
 		return
 	}
 
@@ -914,7 +844,7 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 		return
 	default:
 	}
-	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatKeepAlive)
+	_ = rb.containerRepo.SetEndpointRequestHeartbeat(rb.ctx, rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId, endpointRequestHeartbeatKeepAlive)
 	rb.refreshRequestTokenTTL(containerId)
 	for {
 		select {
@@ -925,22 +855,21 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 		case <-req.done:
 			return
 		case <-ticker.C:
-			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatKeepAlive)
+			_ = rb.containerRepo.SetEndpointRequestHeartbeat(rb.ctx, rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId, endpointRequestHeartbeatKeepAlive)
 			rb.refreshRequestTokenTTL(containerId)
 		}
 	}
 }
 
 func (rb *RequestBuffer) refreshRequestTokenTTL(containerId string) {
-	key, ok := rb.requestTokensKey(containerId)
-	if !ok {
+	if rb.containerRepo == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	_ = rb.rdb.Expire(ctx, key, rb.requestTokenTTL()).Err()
+	_ = rb.containerRepo.RefreshEndpointRequestTokenTTL(ctx, rb.workspace.Name, rb.stubId, containerId, rb.requestTokenTTL())
 }
 
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {

@@ -11,6 +11,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -128,6 +129,7 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 	rb := &RequestBuffer{
 		ctx:                 ctx,
 		rdb:                 rdb,
+		containerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		workspace:           &types.Workspace{Name: "workspace"},
 		stubId:              "stub",
 		stubConfig:          &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
@@ -346,12 +348,13 @@ func newEndpointBufferTestRedis(t *testing.T) *common.RedisClient {
 
 func newEndpointRequestTokenTestBuffer(rdb *common.RedisClient, maxTokens int) *RequestBuffer {
 	return &RequestBuffer{
-		ctx:        context.Background(),
-		rdb:        rdb,
-		workspace:  &types.Workspace{Name: "workspace"},
-		stubId:     "stub",
-		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
-		maxTokens:  maxTokens,
+		ctx:           context.Background(),
+		rdb:           rdb,
+		containerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
+		stubConfig:    &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
+		maxTokens:     maxTokens,
 		availableContainers: []container{
 			{id: "container-1", address: "127.0.0.1:8001"},
 		},

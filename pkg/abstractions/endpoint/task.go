@@ -104,13 +104,12 @@ func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	heartbeatKey := Keys.endpointRequestHeartbeat(t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId, task.ContainerId)
-	exists, err := t.es.rdb.Exists(ctx, heartbeatKey).Result()
+	exists, err := t.es.containerRepo.EndpointRequestHeartbeatExists(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId, task.ContainerId)
 	if err != nil {
-		return false, fmt.Errorf("failed to retrieve endpoint heartbeat key <%v>: %w", heartbeatKey, err)
+		return false, fmt.Errorf("failed to retrieve endpoint heartbeat: %w", err)
 	}
 
-	return exists > 0, nil
+	return exists, nil
 }
 
 func (t *EndpointTask) Metadata() types.TaskMetadata {

@@ -71,6 +71,15 @@ var (
 )
 
 var (
+	endpointPrefix           string = "endpoint"
+	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
+	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
+	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
+	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
+	endpointRequestRelease   string = "endpoint:%s:%s:request_release:%s:%s"
+)
+
+var (
 	workspacePrefix string = "workspace"
 
 	workspaceVolumePathDownloadToken          string = "workspace:volume_path_download_token:%s"
@@ -378,6 +387,31 @@ func (rk *redisKeys) TaskPhase(workspaceName, taskId, phase string) string {
 
 func (rk *redisKeys) TaskPhaseLabels(workspaceName, taskId string) string {
 	return fmt.Sprintf(taskPhaseLabels, workspaceName, taskId)
+}
+
+// Endpoint keys
+func (rk *redisKeys) EndpointPrefix() string {
+	return endpointPrefix
+}
+
+func (rk *redisKeys) EndpointKeepWarmLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointKeepWarmLock, workspaceName, stubId, containerId)
+}
+
+func (rk *redisKeys) EndpointInstanceLock(workspaceName, stubId string) string {
+	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
+}
+
+func (rk *redisKeys) EndpointRequestTokens(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
+}
+
+func (rk *redisKeys) EndpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
+	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
+}
+
+func (rk *redisKeys) EndpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
+	return fmt.Sprintf(endpointRequestRelease, workspaceName, stubId, taskId, containerId)
 }
 
 // Workspace keys
