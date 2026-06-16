@@ -163,9 +163,16 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 	}
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
+	ctx := context.TODO()
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-	err = cr.rdb.HSet(
-		context.TODO(), stateKey,
+	stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
+	workspaceIndexKey := common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId)
+
+	// Commit state and indexes together so stop/list callers cannot miss a
+	// newly-created container between the hash write and index writes.
+	pipe := cr.rdb.TxPipeline()
+	pipe.HSet(
+		ctx, stateKey,
 		"container_id", containerId,
 		"status", string(state.Status),
 		"scheduled_at", state.ScheduledAt,
@@ -175,28 +182,12 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 		"gpu_count", state.GpuCount,
 		"cpu", state.Cpu,
 		"memory", state.Memory,
-	).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set container state <%v>: %w", stateKey, err)
-	}
-
-	err = cr.rdb.Expire(context.TODO(), stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
-	}
-
-	// Add container state key to index (by stub id)
-	indexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
-	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add container state key to index <%v>: %w", indexKey, err)
-	}
-
-	// Add container state key to index (by workspace id)
-	indexKey = common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId)
-	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add container state key to workspace index <%v>: %w", indexKey, err)
+	)
+	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	pipe.SAdd(ctx, stubIndexKey, stateKey)
+	pipe.SAdd(ctx, workspaceIndexKey, stateKey)
+	if _, err = pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set container state and indexes <%v>: %w", stateKey, err)
 	}
 
 	return nil

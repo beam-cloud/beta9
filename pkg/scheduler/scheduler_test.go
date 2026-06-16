@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -2236,8 +2237,9 @@ func TestSelectBuildWorker(t *testing.T) {
 
 type BackendRepoConcurrencyLimitsForTest struct {
 	repo.BackendRepository
-	GPUConcurrencyLimit uint32
-	CPUConcurrencyLimit uint32
+	GPUConcurrencyLimit   uint32
+	CPUConcurrencyLimit   uint32
+	ActiveDeploymentStubs map[string]bool
 }
 
 func (b *BackendRepoConcurrencyLimitsForTest) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
@@ -2245,6 +2247,91 @@ func (b *BackendRepoConcurrencyLimitsForTest) GetConcurrencyLimitByWorkspaceId(c
 		GPULimit:          b.GPUConcurrencyLimit,
 		CPUMillicoreLimit: b.CPUConcurrencyLimit,
 	}, nil
+}
+
+func (b *BackendRepoConcurrencyLimitsForTest) ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	if b.ActiveDeploymentStubs == nil || filters.Active == nil || !*filters.Active || len(filters.StubIds) == 0 {
+		return b.BackendRepository.ListDeploymentsWithRelated(ctx, filters)
+	}
+
+	deployments := make([]types.DeploymentWithRelated, 0, len(filters.StubIds))
+	for _, stubId := range filters.StubIds {
+		if !b.ActiveDeploymentStubs[stubId] {
+			continue
+		}
+
+		stubType := types.StubType(types.StubTypePodDeployment)
+		if len(filters.StubType) > 0 {
+			stubType = types.StubType(filters.StubType[0])
+		}
+		deployments = append(deployments, types.DeploymentWithRelated{
+			Deployment: types.Deployment{Active: true},
+			Stub:       types.Stub{ExternalId: stubId, Type: stubType},
+		})
+	}
+
+	return deployments, nil
+}
+
+func TestRunRejectsInactiveDeploymentBeforeContainerState(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	backend := scheduler.backendRepo.(*BackendRepoConcurrencyLimitsForTest)
+	backend.ActiveDeploymentStubs = map[string]bool{}
+
+	request := testDeploymentContainerRequest("inactive-stub")
+	err = scheduler.Run(request)
+	if err == nil {
+		t.Fatal("expected inactive deployment request to be rejected")
+	}
+
+	if _, err := scheduler.containerRepo.GetContainerState(request.ContainerId); err == nil {
+		t.Fatal("inactive deployment request should not create container state")
+	}
+}
+
+func TestRunAllowsActiveDeployment(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	backend := scheduler.backendRepo.(*BackendRepoConcurrencyLimitsForTest)
+	backend.ActiveDeploymentStubs = map[string]bool{"active-stub": true}
+
+	request := testDeploymentContainerRequest("active-stub")
+	if err := scheduler.Run(request); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := scheduler.containerRepo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.StubId != request.StubId {
+		t.Fatalf("container state stub id = %q, want %q", state.StubId, request.StubId)
+	}
+}
+
+func testDeploymentContainerRequest(stubId string) *types.ContainerRequest {
+	workspace := types.Workspace{
+		Id:         42,
+		ExternalId: "test-workspace",
+		Name:       "test-workspace",
+	}
+	return &types.ContainerRequest{
+		ContainerId: fmt.Sprintf("pod-%s-%s", stubId, uuid.New().String()[:8]),
+		StubId:      stubId,
+		WorkspaceId: workspace.ExternalId,
+		Workspace:   workspace,
+		Cpu:         100,
+		Memory:      128,
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{
+				ExternalId: stubId,
+				Type:       types.StubType(types.StubTypePodDeployment),
+			},
+		},
+	}
 }
 
 func TestConcurrencyLimit(t *testing.T) {

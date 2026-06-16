@@ -63,6 +63,60 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 	}
 }
 
+func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	state := &types.ContainerState{
+		ContainerId: "pod-test-stub-indexed",
+		StubId:      "test-stub",
+		WorkspaceId: "test-workspace",
+		Status:      types.ContainerStatusPending,
+		ScheduledAt: time.Now().Unix(),
+		Cpu:         100,
+		Memory:      128,
+	}
+
+	if err := repo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+
+	stateKey := common.RedisKeys.SchedulerContainerState(state.ContainerId)
+	stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
+	workspaceIndexKey := common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId)
+
+	if ok, err := rdb.SIsMember(context.Background(), stubIndexKey, stateKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("expected state key to be present in stub index")
+	}
+
+	if ok, err := rdb.SIsMember(context.Background(), workspaceIndexKey, stateKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("expected state key to be present in workspace index")
+	}
+
+	byStub, err := repo.GetActiveContainersByStubId(state.StubId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byStub) != 1 || byStub[0].ContainerId != state.ContainerId {
+		t.Fatalf("expected stub index to return container %q, got %+v", state.ContainerId, byStub)
+	}
+
+	byWorkspace, err := repo.GetActiveContainersByWorkspaceId(state.WorkspaceId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byWorkspace) != 1 || byWorkspace[0].ContainerId != state.ContainerId {
+		t.Fatalf("expected workspace index to return container %q, got %+v", state.ContainerId, byWorkspace)
+	}
+}
+
 func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
