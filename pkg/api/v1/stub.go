@@ -1008,6 +1008,10 @@ func (g *StubGroup) buildSandboxStatsRows(ctx context.Context, workspaceID, appI
 		stubsByID[stubs[i].ExternalId] = &stubs[i]
 	}
 
+	summaries := g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID, stubs)
+	summariesByContainerID := indexSandboxContainerSummaries(summaries)
+	now := time.Now().UTC()
+
 	rows := make([]SandboxRow, 0, len(stubs))
 	rowByContainerID := map[string]struct{}{}
 	rowByStubID := map[string]struct{}{}
@@ -1020,13 +1024,17 @@ func (g *StubGroup) buildSandboxStatsRows(ctx context.Context, workspaceID, appI
 			if container.ContainerId == "" {
 				continue
 			}
-			rows = append(rows, g.buildActiveSandboxRow(ctx, workspaceID, stub, container))
+			row := g.buildActiveSandboxRow(ctx, workspaceID, stub, container)
+			if summary, ok := summariesByContainerID[container.ContainerId]; ok {
+				applySandboxSummaryToActiveRow(&row, summary, now)
+			}
+			rows = append(rows, row)
 			rowByContainerID[container.ContainerId] = struct{}{}
 			rowByStubID[stubID] = struct{}{}
 		}
 	}
 
-	for _, summary := range g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID, stubs) {
+	for _, summary := range summaries {
 		if _, ok := rowByContainerID[summary.ContainerID]; ok {
 			continue
 		}
@@ -1060,6 +1068,7 @@ func (g *StubGroup) buildSandboxStatsRows(ctx context.Context, workspaceID, appI
 func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, stub *types.StubWithRelated, containers []types.ContainerState, maxRows int) []SandboxRow {
 	rows := make([]SandboxRow, 0, len(containers)+1)
 	activeContainerIDs := make(map[string]struct{}, len(containers))
+	activeRowsNeedSummary := false
 
 	for i := range containers {
 		if maxRows > 0 && len(rows) >= maxRows {
@@ -1069,15 +1078,39 @@ func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, st
 			continue
 		}
 		activeContainerIDs[containers[i].ContainerId] = struct{}{}
+		if sandboxContainerStateNeedsSummary(containers[i]) {
+			activeRowsNeedSummary = true
+		}
 		rows = append(rows, g.buildActiveSandboxRow(ctx, workspaceID, stub, containers[i]))
 	}
 
-	if maxRows <= 0 || len(rows) < maxRows {
+	if activeRowsNeedSummary || maxRows <= 0 || len(rows) < maxRows {
 		remaining := 0
 		if maxRows > 0 {
 			remaining = maxRows - len(rows)
 		}
-		for _, summary := range g.recentSandboxContainerSummaries(ctx, workspaceID, stub.ExternalId, remaining) {
+
+		summaryLimit := remaining
+		if activeRowsNeedSummary && maxRows > 0 {
+			summaryLimit = maxRows
+			if len(activeContainerIDs) > summaryLimit {
+				summaryLimit = len(activeContainerIDs)
+			}
+		}
+
+		summaries := g.recentSandboxContainerSummaries(ctx, workspaceID, stub.ExternalId, summaryLimit)
+		summariesByContainerID := indexSandboxContainerSummaries(summaries)
+		now := time.Now().UTC()
+		for i := range rows {
+			if rows[i].ContainerId == "" {
+				continue
+			}
+			if summary, ok := summariesByContainerID[rows[i].ContainerId]; ok {
+				applySandboxSummaryToActiveRow(&rows[i], summary, now)
+			}
+		}
+
+		for _, summary := range summaries {
 			if _, ok := activeContainerIDs[summary.ContainerID]; ok {
 				continue
 			}
@@ -1121,7 +1154,7 @@ func (g *StubGroup) buildActiveSandboxRow(ctx context.Context, workspaceID strin
 		row.TimeToStartedMs = &tts
 	}
 
-	if container.Status == types.ContainerStatusRunning && container.StartedAt > 0 {
+	if isActiveSandboxStatus(row.Status) && container.StartedAt > 0 {
 		startedAtMs := container.StartedAt * 1000
 		row.StartedAtMs = &startedAtMs
 
@@ -1163,6 +1196,70 @@ func (g *StubGroup) buildTerminalSandboxRowFromSummary(stub *types.StubWithRelat
 		row.CreatedAt = summary.CreatedAt
 	}
 	return row
+}
+
+func indexSandboxContainerSummaries(summaries []sandboxContainerSummary) map[string]sandboxContainerSummary {
+	byContainerID := make(map[string]sandboxContainerSummary, len(summaries))
+	for _, summary := range summaries {
+		if summary.ContainerID == "" {
+			continue
+		}
+		byContainerID[summary.ContainerID] = summary
+	}
+	return byContainerID
+}
+
+func sandboxContainerStateNeedsSummary(container types.ContainerState) bool {
+	if container.ContainerId == "" {
+		return false
+	}
+	if container.ScheduledAt <= 0 {
+		return true
+	}
+	if isActiveSandboxStatus(string(container.Status)) && container.StartedAt <= 0 {
+		return true
+	}
+	return container.StartedAt > 0 && container.ScheduledAt > 0 && container.StartedAt < container.ScheduledAt
+}
+
+func applySandboxSummaryToActiveRow(row *SandboxRow, summary sandboxContainerSummary, now time.Time) {
+	if row == nil {
+		return
+	}
+	if !summary.CreatedAt.IsZero() {
+		row.CreatedAt = summary.CreatedAt
+	}
+	if row.TimeToStartedMs == nil && summary.TimeToStartedMs != nil {
+		row.TimeToStartedMs = summary.TimeToStartedMs
+	}
+	if row.StartedAtMs == nil && summary.StartedAtMs != nil {
+		row.StartedAtMs = summary.StartedAtMs
+	}
+
+	var startedAt *time.Time
+	if summary.StartedAt != nil {
+		startedAt = summary.StartedAt
+	} else if row.StartedAtMs != nil {
+		t := time.UnixMilli(*row.StartedAtMs).UTC()
+		startedAt = &t
+	}
+
+	if row.TimeToStartedMs == nil && startedAt != nil && !row.CreatedAt.IsZero() {
+		timeToStarted := startedAt.Sub(row.CreatedAt).Milliseconds()
+		if timeToStarted >= 0 {
+			row.TimeToStartedMs = &timeToStarted
+		}
+	}
+
+	if row.LifetimeMs == nil && isActiveSandboxStatus(row.Status) && startedAt != nil {
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+		lifetime := now.Sub(*startedAt).Milliseconds()
+		if lifetime >= 0 {
+			row.LifetimeMs = &lifetime
+		}
+	}
 }
 
 func (g *StubGroup) buildFallbackSandboxRow(ctx context.Context, workspaceID string, stub *types.StubWithRelated) SandboxRow {
