@@ -693,6 +693,7 @@ const (
 	maxSandboxListLimit          = 200
 	sandboxContainerHistoryLimit = 500
 	sandboxHistoryEventsPerRow   = 32
+	sandboxStatsHistoryLimit     = 5000
 )
 
 type SandboxRow struct {
@@ -796,10 +797,7 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 
 	containersByStub := g.activeContainersByStub(workspaceID)
 
-	sandboxRows := make([]SandboxRow, 0, len(stubs))
-	for i := range stubs {
-		sandboxRows = append(sandboxRows, g.buildSandboxRows(ctx.Request().Context(), workspaceID, &stubs[i], containersByStub[stubs[i].ExternalId], 0)...)
-	}
+	sandboxRows := g.buildSandboxStatsRows(ctx.Request().Context(), workspaceID, ctx.QueryParam("app_id"), stubs, containersByStub)
 
 	statusCounts := map[string]int{
 		SandboxStatusRunning:  0,
@@ -1004,6 +1002,61 @@ func (g *StubGroup) activeContainersByStub(workspaceID string) map[string][]type
 	return byStub
 }
 
+func (g *StubGroup) buildSandboxStatsRows(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated, containersByStub map[string][]types.ContainerState) []SandboxRow {
+	stubsByID := make(map[string]*types.StubWithRelated, len(stubs))
+	for i := range stubs {
+		stubsByID[stubs[i].ExternalId] = &stubs[i]
+	}
+
+	rows := make([]SandboxRow, 0, len(stubs))
+	rowByContainerID := map[string]struct{}{}
+	rowByStubID := map[string]struct{}{}
+	for stubID, containers := range containersByStub {
+		stub, ok := stubsByID[stubID]
+		if !ok {
+			continue
+		}
+		for _, container := range containers {
+			if container.ContainerId == "" {
+				continue
+			}
+			rows = append(rows, g.buildActiveSandboxRow(ctx, workspaceID, stub, container))
+			rowByContainerID[container.ContainerId] = struct{}{}
+			rowByStubID[stubID] = struct{}{}
+		}
+	}
+
+	for _, summary := range g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID) {
+		if _, ok := rowByContainerID[summary.ContainerID]; ok {
+			continue
+		}
+		stubID := summary.StubID
+		if stubID == "" {
+			continue
+		}
+		stub, ok := stubsByID[stubID]
+		if !ok {
+			continue
+		}
+		rows = append(rows, g.buildTerminalSandboxRowFromSummary(stub, summary))
+		rowByContainerID[summary.ContainerID] = struct{}{}
+		rowByStubID[stubID] = struct{}{}
+	}
+
+	for i := range stubs {
+		if _, ok := rowByStubID[stubs[i].ExternalId]; ok {
+			continue
+		}
+		rows = append(rows, g.buildFallbackSandboxRow(ctx, workspaceID, &stubs[i]))
+	}
+
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+	})
+
+	return rows
+}
+
 func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, stub *types.StubWithRelated, containers []types.ContainerState, maxRows int) []SandboxRow {
 	rows := make([]SandboxRow, 0, len(containers)+1)
 	activeContainerIDs := make(map[string]struct{}, len(containers))
@@ -1083,6 +1136,8 @@ func (g *StubGroup) buildActiveSandboxRow(ctx context.Context, workspaceID strin
 
 type sandboxContainerSummary struct {
 	ContainerID     string
+	StubID          string
+	AppID           string
 	CreatedAt       time.Time
 	LastEventAt     time.Time
 	StartedAt       *time.Time
@@ -1168,6 +1223,23 @@ func (g *StubGroup) recentSandboxContainerSummaries(ctx context.Context, workspa
 	return sandboxContainerSummariesFromHistory(history.Events, maxContainers)
 }
 
+func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, workspaceID, appID string) []sandboxContainerSummary {
+	if g.eventRepo == nil {
+		return nil
+	}
+
+	history, err := g.eventRepo.GetEventHistory(ctx, types.EventQuery{
+		WorkspaceID: workspaceID,
+		AppID:       appID,
+		Limit:       sandboxStatsHistoryLimit,
+		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
+	})
+	if err != nil || history == nil {
+		return nil
+	}
+	return sandboxContainerSummariesFromHistory(history.Events, 0)
+}
+
 func sandboxContainerSummariesFromHistory(events []types.ContainerEventRecord, maxContainers int) []sandboxContainerSummary {
 	byContainer := map[string][]types.ContainerEventRecord{}
 	for _, event := range events {
@@ -1198,6 +1270,13 @@ func sandboxContainerSummaryFromEvents(containerID string, events []types.Contai
 
 	var startedAt time.Time
 	for _, event := range events {
+		if summary.StubID == "" {
+			summary.StubID = event.StubID
+		}
+		if summary.AppID == "" {
+			summary.AppID = event.AppID
+		}
+
 		eventTime := containerEventTime(event)
 		if eventTime.IsZero() && event.StoredAtNs > 0 {
 			eventTime = time.Unix(0, int64(event.StoredAtNs)).UTC()

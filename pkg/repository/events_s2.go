@@ -488,6 +488,18 @@ func (r *S2EventRepository) GetEventHistory(ctx context.Context, query types.Eve
 		}
 	}
 
+	// App-scoped container lifecycle/event records were originally available
+	// through the workspace stream. Keep that path as a fallback so app
+	// dashboards can read older sandbox/container history without per-stub scans.
+	if len(response.Events) == 0 && query.AppID != "" && query.WorkspaceID != "" && allWorkspaceContainerRealtimeEventTypes(query.EventTypes) {
+		workspaceStream := r.workspaceStreamName(query.WorkspaceID)
+		if !responseReadStream(response.Streams, workspaceStream) {
+			if err := r.readEventHistoryStream(ctx, workspaceStream, query, limit, response); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Tasks that predate the multiplexed stub task stream only have records
 	// in the legacy per-task stream.
 	if len(response.Events) == 0 && query.TaskID != "" {
@@ -654,6 +666,21 @@ func allComputeEventTypes(eventTypes []string) bool {
 	}
 	for _, eventType := range eventTypes {
 		if !strings.HasPrefix(strings.TrimSpace(eventType), "compute.") {
+			return false
+		}
+	}
+	return true
+}
+
+func allWorkspaceContainerRealtimeEventTypes(eventTypes []string) bool {
+	if len(eventTypes) == 0 {
+		return false
+	}
+	for _, eventType := range eventTypes {
+		eventType = strings.TrimSpace(eventType)
+		if eventType != types.EventContainerMetrics &&
+			eventType != types.EventContainerEvent &&
+			eventType != types.EventContainerLifecycle {
 			return false
 		}
 	}
@@ -1050,6 +1077,11 @@ func eventRecordHeadersSkip(record s2.SequencedRecord, query types.EventQuery) b
 			return true
 		}
 	}
+	if query.AppID != "" {
+		if appID, ok := s2RecordHeader(record, "app_id"); ok && appID != query.AppID {
+			return true
+		}
+	}
 	return false
 }
 
@@ -1339,6 +1371,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	}
 	if isWorkspaceContainerRealtimeEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
+		if metadata.AppID != "" {
+			add(r.appStreamName(metadata.WorkspaceID, metadata.AppID))
+		}
 	}
 	if isComputeEvent(eventType) && metadata.WorkspaceID != "" {
 		// Workspace stream powers the live workspace SSE; the compute stream keeps

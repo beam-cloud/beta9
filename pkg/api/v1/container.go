@@ -56,22 +56,27 @@ func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 	}
 
 	containerStatesWithAppId := make([]ContainerStateWithAppId, len(containerStates))
-	stubIdsToAppIds := make(map[string]string)
-	for i, containerState := range containerStates {
-		if appId, ok := stubIdsToAppIds[containerState.StubId]; ok {
-			containerStatesWithAppId[i].AppId = appId
-			containerStatesWithAppId[i].ContainerState = containerState
+	stubIDs := make([]string, 0, len(containerStates))
+	seenStubIDs := map[string]struct{}{}
+	for _, containerState := range containerStates {
+		if containerState.StubId == "" {
 			continue
 		}
-
-		app, err := c.backendRepo.RetrieveAppByStubExternalId(ctx.Request().Context(), containerState.StubId)
-		if err != nil {
-			return HTTPInternalServerError("Failed to get app")
+		if _, ok := seenStubIDs[containerState.StubId]; ok {
+			continue
 		}
+		seenStubIDs[containerState.StubId] = struct{}{}
+		stubIDs = append(stubIDs, containerState.StubId)
+	}
 
-		containerStatesWithAppId[i].AppId = app.ExternalId
+	stubIdsToAppIds, err := c.backendRepo.ListAppIDsByStubExternalIDs(ctx.Request().Context(), workspaceId, stubIDs)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get app")
+	}
+
+	for i, containerState := range containerStates {
 		containerStatesWithAppId[i].ContainerState = containerState
-		stubIdsToAppIds[containerState.StubId] = app.ExternalId
+		containerStatesWithAppId[i].AppId = stubIdsToAppIds[containerState.StubId]
 	}
 
 	return ctx.JSON(http.StatusOK, containerStatesWithAppId)

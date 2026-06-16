@@ -78,6 +78,7 @@ type StubFilter struct {
 type AppFilter struct {
 	Name   string `query:"name"`
 	Cursor string `query:"cursor"`
+	Limit  uint32 `query:"limit"`
 }
 
 type StubGetURLFilter struct {
