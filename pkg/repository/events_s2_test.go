@@ -52,6 +52,33 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2AppScopedContainerEventsUseAppAggregateStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		AppID:       "app-789",
+		ContainerID: "container-abc",
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456/containers/container-abc",
+		"events/workspaces/workspace-123/containers/container-abc",
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+		"events/workspaces/workspace-123/apps/app-789",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
 func TestResolveContainerStreamsUsesExactStreamWithoutExistenceList(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

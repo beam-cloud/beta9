@@ -72,11 +72,13 @@ type StubFilter struct {
 	Cursor      string      `query:"cursor"`
 	Pagination  bool        `query:"pagination"`
 	AppId       string      `query:"app_id"`
+	Limit       uint32      `query:"limit"`
 }
 
 type AppFilter struct {
 	Name   string `query:"name"`
 	Cursor string `query:"cursor"`
+	Limit  uint32 `query:"limit"`
 }
 
 type StubGetURLFilter struct {

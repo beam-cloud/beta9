@@ -75,30 +75,44 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		Next: apps.Next,
 	}
 
+	appIDs := make([]string, 0, len(apps.Data))
+	for i := range apps.Data {
+		appIDs = append(appIDs, apps.Data[i].ExternalId)
+	}
+
+	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(ctx.Request().Context(), workspace.Id, appIDs)
+	if err != nil {
+		return HTTPBadRequest("Failed to get apps")
+	}
+
+	appIDsWithoutDeployment := make([]string, 0, len(apps.Data))
+	for i := range apps.Data {
+		if _, ok := deploymentsByApp[apps.Data[i].ExternalId]; !ok {
+			appIDsWithoutDeployment = append(appIDsWithoutDeployment, apps.Data[i].ExternalId)
+		}
+	}
+
+	stubsByApp, err := a.backendRepo.ListLatestStubsByAppIDs(ctx.Request().Context(), workspace.Id, appIDsWithoutDeployment)
+	if err != nil {
+		return HTTPBadRequest("Failed to get apps")
+	}
+
 	for i := range apps.Data {
 		appsWithLatest.Data[i].App = apps.Data[i]
 
-		deployments, err := a.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), types.DeploymentFilter{AppId: apps.Data[i].ExternalId})
-		if err != nil {
-			return HTTPBadRequest("Failed to get apps")
-		}
-
-		if len(deployments) > 0 {
-			appsWithLatest.Data[i].Deployment = &deployments[0]
+		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
+			deploymentCopy := deployment
+			appsWithLatest.Data[i].Deployment = &deploymentCopy
 			continue
 		}
 
-		// If the app doesn't have a deployment, we get the latest stub
-		stubs, err := a.backendRepo.ListStubs(ctx.Request().Context(), types.StubFilter{AppId: apps.Data[i].ExternalId})
-		if err != nil {
-			return HTTPBadRequest("Failed to get apps")
-		}
-
-		if stubs == nil || len(stubs) == 0 {
+		stub, ok := stubsByApp[apps.Data[i].ExternalId]
+		if !ok {
 			continue
 		}
 
-		appsWithLatest.Data[i].Stub = &stubs[0]
+		stubCopy := stub
+		appsWithLatest.Data[i].Stub = &stubCopy
 		appsWithLatest.Data[i].Stub.SanitizeConfig()
 	}
 
