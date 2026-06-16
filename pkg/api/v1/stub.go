@@ -1026,7 +1026,7 @@ func (g *StubGroup) buildSandboxStatsRows(ctx context.Context, workspaceID, appI
 		}
 	}
 
-	for _, summary := range g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID) {
+	for _, summary := range g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID, stubs) {
 		if _, ok := rowByContainerID[summary.ContainerID]; ok {
 			continue
 		}
@@ -1223,9 +1223,34 @@ func (g *StubGroup) recentSandboxContainerSummaries(ctx context.Context, workspa
 	return sandboxContainerSummariesFromHistory(history.Events, maxContainers)
 }
 
-func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, workspaceID, appID string) []sandboxContainerSummary {
+func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated) []sandboxContainerSummary {
 	if g.eventRepo == nil {
 		return nil
+	}
+
+	if appID != "" {
+		events := make([]types.ContainerEventRecord, 0)
+		limitPerStub := sandboxStatsHistoryLimit
+		if len(stubs) > 1 {
+			limitPerStub = sandboxStatsHistoryLimit / len(stubs)
+			if limitPerStub < sandboxContainerHistoryLimit {
+				limitPerStub = sandboxContainerHistoryLimit
+			}
+		}
+
+		for i := range stubs {
+			history, err := g.eventRepo.GetEventHistory(ctx, types.EventQuery{
+				WorkspaceID: workspaceID,
+				StubID:      stubs[i].ExternalId,
+				Limit:       uint64(limitPerStub),
+				EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
+			})
+			if err != nil || history == nil {
+				continue
+			}
+			events = append(events, history.Events...)
+		}
+		return sandboxContainerSummariesFromHistory(events, 0)
 	}
 
 	history, err := g.eventRepo.GetEventHistory(ctx, types.EventQuery{
