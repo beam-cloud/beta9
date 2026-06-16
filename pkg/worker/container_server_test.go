@@ -183,22 +183,22 @@ func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
 	require.Contains(t, resp.ErrorMsg, "process manager")
 }
 
-func TestAuditedSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
-	repo := &fakeAuditedLogRepo{}
+func TestSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
+	repo := &fakeProcessLogRepo{}
 	server := &ContainerRuntimeServer{
 		eventRepo: repo,
 		workerID:  "worker-1",
 	}
-	instance := auditedSandboxTestInstance("sandbox-test")
-	stream := newFakeAuditedExecStream(
-		&goprocpb.AuditedExecResponse{
-			Message: &goprocpb.AuditedExecResponse_Started{
+	instance := sandboxExecTestInstance("sandbox-test")
+	stream := newFakeStreamExecStream(
+		&goprocpb.StreamExecResponse{
+			Message: &goprocpb.StreamExecResponse_Started{
 				Started: &goprocpb.ExecProcessStarted{Pid: 123},
 			},
 		},
-		&goprocpb.AuditedExecResponse{
-			Message: &goprocpb.AuditedExecResponse_Chunk{
-				Chunk: &goprocpb.AuditLogChunk{
+		&goprocpb.StreamExecResponse{
+			Message: &goprocpb.StreamExecResponse_Chunk{
+				Chunk: &goprocpb.ProcessLogChunk{
 					Pid:    123,
 					Stream: types.EventLogStreamStdout,
 					Seq:    7,
@@ -211,16 +211,16 @@ func TestAuditedSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
 	pidCh := make(chan int, 1)
 	errCh := make(chan error, 1)
 	started := &atomic.Bool{}
-	go server.handleAuditedSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3", "-c", "print('hi')"}, "/workspace", pidCh, errCh, started)
+	go server.handleSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3", "-c", "print('hi')"}, "/workspace", pidCh, errCh, started)
 
 	require.Equal(t, 123, <-pidCh)
 
-	var ack *goprocpb.AuditLogAck
+	var ack *goprocpb.ProcessLogAck
 	select {
 	case req := <-stream.sent:
 		ack = req.GetAck()
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for audit ack")
+		t.Fatal("timed out waiting for log ack")
 	}
 	require.NotNil(t, ack)
 	require.True(t, ack.Ok)
@@ -241,22 +241,22 @@ func TestAuditedSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
 	require.Equal(t, uint64(7), entry.ProcessSeq)
 }
 
-func TestAuditedSandboxExecStreamNacksPersistFailure(t *testing.T) {
-	repo := &fakeAuditedLogRepo{err: errors.New("s2 unavailable")}
+func TestSandboxExecStreamNacksPersistFailure(t *testing.T) {
+	repo := &fakeProcessLogRepo{err: errors.New("s2 unavailable")}
 	server := &ContainerRuntimeServer{
 		eventRepo: repo,
 		workerID:  "worker-1",
 	}
-	instance := auditedSandboxTestInstance("sandbox-test")
-	stream := newFakeAuditedExecStream(
-		&goprocpb.AuditedExecResponse{
-			Message: &goprocpb.AuditedExecResponse_Started{
+	instance := sandboxExecTestInstance("sandbox-test")
+	stream := newFakeStreamExecStream(
+		&goprocpb.StreamExecResponse{
+			Message: &goprocpb.StreamExecResponse_Started{
 				Started: &goprocpb.ExecProcessStarted{Pid: 123},
 			},
 		},
-		&goprocpb.AuditedExecResponse{
-			Message: &goprocpb.AuditedExecResponse_Chunk{
-				Chunk: &goprocpb.AuditLogChunk{
+		&goprocpb.StreamExecResponse{
+			Message: &goprocpb.StreamExecResponse_Chunk{
+				Chunk: &goprocpb.ProcessLogChunk{
 					Pid:    123,
 					Stream: types.EventLogStreamStderr,
 					Seq:    9,
@@ -269,16 +269,16 @@ func TestAuditedSandboxExecStreamNacksPersistFailure(t *testing.T) {
 	pidCh := make(chan int, 1)
 	errCh := make(chan error, 1)
 	started := &atomic.Bool{}
-	go server.handleAuditedSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3"}, "", pidCh, errCh, started)
+	go server.handleSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3"}, "", pidCh, errCh, started)
 
 	require.Equal(t, 123, <-pidCh)
 
-	var ack *goprocpb.AuditLogAck
+	var ack *goprocpb.ProcessLogAck
 	select {
 	case req := <-stream.sent:
 		ack = req.GetAck()
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for audit nack")
+		t.Fatal("timed out waiting for log nack")
 	}
 	require.NotNil(t, ack)
 	require.False(t, ack.Ok)
@@ -286,12 +286,12 @@ func TestAuditedSandboxExecStreamNacksPersistFailure(t *testing.T) {
 	require.Contains(t, ack.ErrorMsg, "s2 unavailable")
 }
 
-type fakeAuditedLogRepo struct {
+type fakeProcessLogRepo struct {
 	entries []types.EventContainerLogSchema
 	err     error
 }
 
-func (r *fakeAuditedLogRepo) PushContainerLogEventSync(entry types.EventContainerLogSchema) error {
+func (r *fakeProcessLogRepo) PushContainerLogEventQueued(entry types.EventContainerLogSchema) error {
 	if r.err != nil {
 		return r.err
 	}
@@ -299,16 +299,16 @@ func (r *fakeAuditedLogRepo) PushContainerLogEventSync(entry types.EventContaine
 	return nil
 }
 
-type fakeAuditedExecStream struct {
+type fakeStreamExecStream struct {
 	grpc.ClientStream
-	recv chan *goprocpb.AuditedExecResponse
-	sent chan *goprocpb.AuditedExecRequest
+	recv chan *goprocpb.StreamExecResponse
+	sent chan *goprocpb.StreamExecRequest
 }
 
-func newFakeAuditedExecStream(responses ...*goprocpb.AuditedExecResponse) *fakeAuditedExecStream {
-	stream := &fakeAuditedExecStream{
-		recv: make(chan *goprocpb.AuditedExecResponse, len(responses)),
-		sent: make(chan *goprocpb.AuditedExecRequest, len(responses)),
+func newFakeStreamExecStream(responses ...*goprocpb.StreamExecResponse) *fakeStreamExecStream {
+	stream := &fakeStreamExecStream{
+		recv: make(chan *goprocpb.StreamExecResponse, len(responses)),
+		sent: make(chan *goprocpb.StreamExecRequest, len(responses)),
 	}
 	for _, response := range responses {
 		stream.recv <- response
@@ -317,12 +317,12 @@ func newFakeAuditedExecStream(responses ...*goprocpb.AuditedExecResponse) *fakeA
 	return stream
 }
 
-func (s *fakeAuditedExecStream) Send(req *goprocpb.AuditedExecRequest) error {
+func (s *fakeStreamExecStream) Send(req *goprocpb.StreamExecRequest) error {
 	s.sent <- req
 	return nil
 }
 
-func (s *fakeAuditedExecStream) Recv() (*goprocpb.AuditedExecResponse, error) {
+func (s *fakeStreamExecStream) Recv() (*goprocpb.StreamExecResponse, error) {
 	resp, ok := <-s.recv
 	if !ok {
 		return nil, io.EOF
@@ -330,7 +330,7 @@ func (s *fakeAuditedExecStream) Recv() (*goprocpb.AuditedExecResponse, error) {
 	return resp, nil
 }
 
-func auditedSandboxTestInstance(containerId string) *ContainerInstance {
+func sandboxExecTestInstance(containerId string) *ContainerInstance {
 	return &ContainerInstance{
 		Id:        containerId,
 		LogBuffer: common.NewLogBuffer(),

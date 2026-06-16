@@ -410,11 +410,11 @@ func TestPushContainerLogSkipsCallbackSinks(t *testing.T) {
 	}
 }
 
-func TestPushContainerLogEventSyncOptionalAuditFields(t *testing.T) {
+func TestPushContainerLogEventQueuedOptionalProcessFields(t *testing.T) {
 	storageSink := &captureEventSink{}
 	repo := &EventClientRepo{storageSinks: []eventSink{storageSink}}
 
-	err := repo.PushContainerLogEventSync(types.EventContainerLogSchema{
+	err := repo.PushContainerLogEventQueued(types.EventContainerLogSchema{
 		ContainerID: "container-1",
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
@@ -443,7 +443,7 @@ func TestPushContainerLogEventSyncOptionalAuditFields(t *testing.T) {
 		}
 	}
 
-	err = repo.PushContainerLogEventSync(types.EventContainerLogSchema{
+	err = repo.PushContainerLogEventQueued(types.EventContainerLogSchema{
 		ContainerID: "container-1",
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
@@ -463,7 +463,7 @@ func TestPushContainerLogEventSyncOptionalAuditFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if event.PID != 123 || event.ProcessSeq != 7 || event.ProcessCwd != "/workspace" {
-		t.Fatalf("unexpected audit fields: %+v", event)
+		t.Fatalf("unexpected process fields: %+v", event)
 	}
 	if got, want := event.ProcessArgs, []string{"python3", "-c", "print('hi')"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected process args: got %#v want %#v", got, want)

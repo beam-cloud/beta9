@@ -321,7 +321,7 @@ func (r *EventClientRepo) PushContainerLogEvent(entry types.EventContainerLogSch
 	r.pushEvent(types.EventContainerLog, types.EventContainerLogSchemaVersion, entry)
 }
 
-func (r *EventClientRepo) PushContainerLogEventSync(entry types.EventContainerLogSchema) error {
+func (r *EventClientRepo) PushContainerLogEventQueued(entry types.EventContainerLogSchema) error {
 	if entry.Line == "" {
 		return nil
 	}
@@ -339,12 +339,6 @@ func (r *EventClientRepo) PushContainerLogEventSync(entry types.EventContainerLo
 
 	var errs []error
 	for _, sink := range r.storageSinks {
-		if syncSink, ok := sink.(syncEventSink); ok {
-			if err := syncSink.PushEventSync(event); err != nil {
-				errs = append(errs, err)
-			}
-			continue
-		}
 		if err := sink.PushEvent(event); err != nil {
 			errs = append(errs, err)
 		}

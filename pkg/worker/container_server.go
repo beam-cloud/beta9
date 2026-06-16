@@ -46,8 +46,8 @@ const (
 )
 
 // ContainerRuntimeServer is a runtime-agnostic container server that works with any OCI runtime
-type auditedLogEventRepository interface {
-	PushContainerLogEventSync(entry types.EventContainerLogSchema) error
+type processLogEventRepository interface {
+	PushContainerLogEventQueued(entry types.EventContainerLogSchema) error
 }
 
 type ContainerRuntimeServer struct {
@@ -58,7 +58,7 @@ type ContainerRuntimeServer struct {
 	containerNetworkManager ContainerNetwork
 	imageClient             *ImageClient
 	runtime                 runtime.Runtime // The worker's configured runtime (from pool config)
-	eventRepo               auditedLogEventRepository
+	eventRepo               processLogEventRepository
 	workerID                string
 	port                    int
 	podAddr                 string
@@ -642,7 +642,7 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 }
 
 func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	pid, err := s.execAuditedSandboxProcess(ctx, containerId, instance, cmd, cwd, env)
+	pid, err := s.streamSandboxProcessExec(ctx, containerId, instance, cmd, cwd, env)
 	if err == nil || !isProcessManagerDialFailure(err) {
 		return pid, err
 	}
@@ -662,7 +662,7 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	case <-timer.C:
 	}
 
-	retryPID, retryErr := s.execAuditedSandboxProcess(ctx, containerId, instance, cmd, cwd, env)
+	retryPID, retryErr := s.streamSandboxProcessExec(ctx, containerId, instance, cmd, cwd, env)
 	if retryErr != nil {
 		return -1, fmt.Errorf("%w; retry failed: %v", err, retryErr)
 	}
@@ -670,7 +670,7 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	return retryPID, nil
 }
 
-func (s *ContainerRuntimeServer) execAuditedSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
+func (s *ContainerRuntimeServer) streamSandboxProcessExec(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
 	if s.eventRepo == nil {
 		return -1, repository.ErrEventWriteUnsupported
 	}
@@ -682,7 +682,7 @@ func (s *ContainerRuntimeServer) execAuditedSandboxProcess(ctx context.Context, 
 		return -1, err
 	}
 
-	stream, err := client.AuditedExec(streamCtx, cmd, cwd, env, false)
+	stream, err := client.StreamExec(streamCtx, cmd, cwd, env, false)
 	if err != nil {
 		cancel()
 		_ = client.Cleanup()
@@ -693,7 +693,7 @@ func (s *ContainerRuntimeServer) execAuditedSandboxProcess(ctx context.Context, 
 	errCh := make(chan error, 1)
 	started := &atomic.Bool{}
 
-	go s.handleAuditedSandboxExecStream(stream, cancel, client.Cleanup, containerId, instance, cmd, cwd, pidCh, errCh, started)
+	go s.handleSandboxExecStream(stream, cancel, client.Cleanup, containerId, instance, cmd, cwd, pidCh, errCh, started)
 
 	select {
 	case pid := <-pidCh:
@@ -707,8 +707,8 @@ func (s *ContainerRuntimeServer) execAuditedSandboxProcess(ctx context.Context, 
 	}
 }
 
-func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
-	stream goprocpb.GoProc_AuditedExecClient,
+func (s *ContainerRuntimeServer) handleSandboxExecStream(
+	stream goprocpb.GoProc_StreamExecClient,
 	cancel context.CancelFunc,
 	cleanup func() error,
 	containerId string,
@@ -722,7 +722,7 @@ func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
 	defer cancel()
 	defer func() {
 		if err := cleanup(); err != nil {
-			log.Debug().Err(err).Str("container_id", containerId).Msg("failed to cleanup audited sandbox process manager client")
+			log.Debug().Err(err).Str("container_id", containerId).Msg("failed to cleanup sandbox process manager client")
 		}
 	}()
 
@@ -739,13 +739,13 @@ func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
-			sendStartErr(errors.New("audited sandbox exec stream closed before process start"))
+			sendStartErr(errors.New("sandbox exec stream closed before process start"))
 			return
 		}
 		if err != nil {
 			sendStartErr(err)
 			if started.Load() {
-				log.Warn().Err(err).Str("container_id", containerId).Msg("audited sandbox exec stream failed")
+				log.Warn().Err(err).Str("container_id", containerId).Msg("sandbox exec stream failed")
 			}
 			return
 		}
@@ -758,13 +758,13 @@ func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
 		}
 
 		if chunk := resp.GetChunk(); chunk != nil {
-			persistErr := s.persistAuditedSandboxLog(instance, chunk, cmd, cwd)
-			ack := &goprocpb.AuditLogAck{Seq: chunk.Seq, Ok: persistErr == nil}
+			persistErr := s.persistSandboxProcessLog(instance, chunk, cmd, cwd)
+			ack := &goprocpb.ProcessLogAck{Seq: chunk.Seq, Ok: persistErr == nil}
 			if persistErr != nil {
 				ack.ErrorMsg = persistErr.Error()
 			}
-			sendErr := stream.Send(&goprocpb.AuditedExecRequest{
-				Message: &goprocpb.AuditedExecRequest_Ack{Ack: ack},
+			sendErr := stream.Send(&goprocpb.StreamExecRequest{
+				Message: &goprocpb.StreamExecRequest_Ack{Ack: ack},
 			})
 			if persistErr != nil {
 				log.Error().
@@ -773,13 +773,13 @@ func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
 					Int32("pid", chunk.Pid).
 					Uint64("seq", chunk.Seq).
 					Str("stream", chunk.Stream).
-					Msg("failed to persist audited sandbox process log")
+					Msg("failed to persist sandbox process log")
 				return
 			}
 			if sendErr != nil {
 				sendStartErr(sendErr)
 				if started.Load() {
-					log.Warn().Err(sendErr).Str("container_id", containerId).Msg("failed to ack audited sandbox process log")
+					log.Warn().Err(sendErr).Str("container_id", containerId).Msg("failed to ack sandbox process log")
 				}
 				return
 			}
@@ -790,7 +790,7 @@ func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
 			if !started.Load() {
 				msg := event.ErrorMsg
 				if msg == "" {
-					msg = "audited sandbox process exited before start acknowledgement"
+					msg = "sandbox process exited before start acknowledgement"
 				}
 				sendStartErr(errors.New(msg))
 			}
@@ -799,12 +799,12 @@ func (s *ContainerRuntimeServer) handleAuditedSandboxExecStream(
 	}
 }
 
-func (s *ContainerRuntimeServer) persistAuditedSandboxLog(instance *ContainerInstance, chunk *goprocpb.AuditLogChunk, cmd []string, cwd string) error {
+func (s *ContainerRuntimeServer) persistSandboxProcessLog(instance *ContainerInstance, chunk *goprocpb.ProcessLogChunk, cmd []string, cwd string) error {
 	if s.eventRepo == nil {
 		return repository.ErrEventWriteUnsupported
 	}
 	if instance == nil || instance.Request == nil {
-		return errors.New("container request not available for audited sandbox log")
+		return errors.New("container request not available for sandbox process log")
 	}
 	if len(chunk.Data) == 0 {
 		return nil
@@ -826,7 +826,7 @@ func (s *ContainerRuntimeServer) persistAuditedSandboxLog(instance *ContainerIns
 		ProcessCwd:  cwd,
 		ProcessSeq:  chunk.Seq,
 	}
-	if err := s.eventRepo.PushContainerLogEventSync(entry); err != nil {
+	if err := s.eventRepo.PushContainerLogEventQueued(entry); err != nil {
 		return err
 	}
 
