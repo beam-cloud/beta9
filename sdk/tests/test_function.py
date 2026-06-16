@@ -1,3 +1,4 @@
+import inspect
 from unittest import TestCase, mock
 from unittest.mock import MagicMock, PropertyMock
 
@@ -24,6 +25,17 @@ class TestTaskQueue(TestCase):
         self.assertEqual(queue.cpu, 1000)
         self.assertEqual(queue.memory, 128)
         self.assertEqual(queue.keep_warm_seconds, 0)
+
+    def test_keep_warm_is_not_function_config(self):
+        self.assertNotIn("keep_warm_seconds", inspect.signature(Function.__init__).parameters)
+
+        with self.assertRaises(TypeError):
+            Function(
+                cpu=1,
+                memory=128,
+                image=Image(python_version="python3.8"),
+                keep_warm_seconds=1000,
+            )
 
     def test_keep_warm_override_is_ignored_for_functions(self):
         @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))

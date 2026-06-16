@@ -97,7 +97,7 @@ class RunnerAbstraction(BaseAbstraction):
         image: Image = Image(),
         workers: int = 1,
         concurrent_requests: int = 1,
-        keep_warm_seconds: float = 10.0,
+        keep_warm_seconds: float = 0.0,
         max_pending_tasks: int = 100,
         retries: int = 3,
         timeout: int = 3600,

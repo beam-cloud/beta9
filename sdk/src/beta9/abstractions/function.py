@@ -142,7 +142,6 @@ class Function(RunnerAbstraction):
             inputs=inputs,
             outputs=outputs,
             pool=pool,
-            keep_warm_seconds=0,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
