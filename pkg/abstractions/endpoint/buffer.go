@@ -198,10 +198,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 		task:       task,
 		enqueuedAt: time.Now(),
 	}
-	if rb.buffer.Push(req, false) {
-		metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
-	}
-	rb.recordBufferOccupancy()
+	rb.enqueueRequest(req, false)
 	rb.signalWork()
 
 	waitTimer := time.NewTimer(rb.requestQueueTimeout())
@@ -261,11 +258,13 @@ func (rb *RequestBuffer) processRequests() {
 				rb.recordBufferOccupancy()
 
 				if req.abandoned.Load() {
+					rb.closeRequest(req)
 					continue
 				}
 
 				if req.ctx.Request().Context().Err() != nil {
 					rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+					rb.closeRequest(req)
 					continue
 				}
 
@@ -289,6 +288,36 @@ func (rb *RequestBuffer) signalWork() {
 	case rb.workReady <- struct{}{}:
 	default:
 	}
+}
+
+func (rb *RequestBuffer) enqueueRequest(req *request, priority bool) {
+	if overwritten, ok := rb.buffer.PushWithOverwrite(req, priority); ok {
+		metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
+		rb.failQueuedRequest(overwritten, http.StatusTooManyRequests, "Request queue full", types.TaskExpired)
+	}
+	rb.recordBufferOccupancy()
+}
+
+func (rb *RequestBuffer) failQueuedRequest(req *request, status int, message string, reason types.TaskCancellationReason) {
+	if req == nil {
+		return
+	}
+
+	req.abandoned.Store(true)
+	rb.cancelInFlightTask(req.task, reason)
+	if req.ctx != nil && !req.ctx.Response().Committed {
+		_ = req.ctx.JSON(status, map[string]interface{}{
+			"error": message,
+		})
+	}
+	rb.closeRequest(req)
+}
+
+func (rb *RequestBuffer) closeRequest(req *request) {
+	if req == nil || req.done == nil {
+		return
+	}
+	close(req.done)
 }
 
 func (rb *RequestBuffer) availableContainerSnapshot() []container {
@@ -325,10 +354,7 @@ func (rb *RequestBuffer) reserveContainer() (container, bool) {
 }
 
 func (rb *RequestBuffer) requeueRequest(req *request) {
-	if rb.buffer.Push(req, true) {
-		metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
-	}
-	rb.recordBufferOccupancy()
+	rb.enqueueRequest(req, true)
 }
 
 func (rb *RequestBuffer) containerRequestCount(containerId string) int {
@@ -688,6 +714,7 @@ func (rb *RequestBuffer) handleRequest(req *request, c container) {
 	}
 
 	close(req.started)
+	go rb.heartBeat(req, c.id)
 	protocol := "http"
 	if req.ctx.IsWebSocket() {
 		protocol = "ws"
@@ -799,7 +826,6 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	httpReq.Header.Add("X-TASK-ID", req.task.msg.TaskId) // Add task ID to header
-	go rb.heartBeat(req, c.id)                           // Send heartbeat via redis for duration of request
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -875,11 +901,21 @@ func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask, reason types.Tas
 }
 
 func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
+	if rb.rdb == nil || rb.workspace == nil || req == nil || req.task == nil || req.task.msg == nil {
+		return
+	}
+
 	ctx := req.ctx.Request().Context()
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
+	select {
+	case <-req.done:
+		return
+	default:
+	}
 	rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatKeepAlive)
+	rb.refreshRequestTokenTTL(containerId)
 	for {
 		select {
 		case <-ctx.Done():
@@ -890,17 +926,27 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatKeepAlive)
+			rb.refreshRequestTokenTTL(containerId)
 		}
 	}
 }
 
-func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
-	defer func() {
-		close(req.done)
-	}()
+func (rb *RequestBuffer) refreshRequestTokenTTL(containerId string) {
+	key, ok := rb.requestTokensKey(containerId)
+	if !ok {
+		return
+	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_ = rb.rdb.Expire(ctx, key, rb.requestTokenTTL()).Err()
+}
+
+func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer rb.signalWork()
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
+	defer close(req.done)
 
 	if rb.rdb == nil || rb.workspace == nil || rb.stubConfig.KeepWarmSeconds == 0 {
 		return

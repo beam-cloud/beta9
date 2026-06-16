@@ -33,6 +33,7 @@ const (
 	connectionKeepAliveInterval   time.Duration = time.Second * 1
 	connectionReadTimeout         time.Duration = time.Minute * 5
 	containerAvailableTimeout     time.Duration = time.Second * 2
+	connectionTTLRefreshInterval  time.Duration = podContainerConnectionTimeout / 2
 	connectionSyncBufferSize      int           = 1024
 	decrementConnectionScript     string        = `
 local current = tonumber(redis.call("GET", KEYS[1]) or "0")
@@ -138,6 +139,9 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 	}
 	defer pb.decrementTotalConnections()
+	totalConnectionKey, _ := pb.totalConnectionsKey()
+	cancelTotalConnectionRefresh := pb.startConnectionKeyTTLRefresh(totalConnectionKey)
+	defer cancelTotalConnectionRefresh()
 
 	done := make(chan struct{})
 	conn := &connection{
@@ -146,10 +150,7 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		enqueuedAt: time.Now(),
 	}
 
-	if pb.buffer.Push(conn, false) {
-		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
-	}
-	pb.recordBufferOccupancy()
+	pb.enqueueConnection(conn, false)
 	pb.signalWork()
 
 	for {
@@ -170,6 +171,9 @@ func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 		return err
 	}
 	defer pb.decrementTotalConnections()
+	totalConnectionKey, _ := pb.totalConnectionsKey()
+	cancelTotalConnectionRefresh := pb.startConnectionKeyTTLRefresh(totalConnectionKey)
+	defer cancelTotalConnectionRefresh()
 
 	done := make(chan struct{})
 	conn := &connection{
@@ -179,10 +183,7 @@ func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 		enqueuedAt: time.Now(),
 	}
 
-	if pb.buffer.Push(conn, false) {
-		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
-	}
-	pb.recordBufferOccupancy()
+	pb.enqueueConnection(conn, false)
 	pb.signalWork()
 
 	for {
@@ -225,6 +226,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 				}
 
 				if conn.ctx.Request().Context().Err() != nil {
+					close(conn.done)
 					continue
 				}
 
@@ -263,6 +265,28 @@ func (pb *PodProxyBuffer) signalWork() {
 	}
 }
 
+func (pb *PodProxyBuffer) enqueueConnection(conn *connection, priority bool) {
+	if overwritten, ok := pb.buffer.PushWithOverwrite(conn, priority); ok {
+		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
+		pb.failQueuedConnection(overwritten, http.StatusServiceUnavailable, "Request queue full")
+	}
+	pb.recordBufferOccupancy()
+}
+
+func (pb *PodProxyBuffer) failQueuedConnection(conn *connection, status int, message string) {
+	if conn == nil {
+		return
+	}
+	if conn.tc != nil {
+		conn.tc.Conn.Close()
+	} else if conn.ctx != nil && !conn.ctx.Response().Committed {
+		_ = conn.ctx.String(status, message)
+	}
+	if conn.done != nil {
+		close(conn.done)
+	}
+}
+
 func (pb *PodProxyBuffer) availableContainerSnapshot() []container {
 	pb.availableContainersLock.RLock()
 	defer pb.availableContainersLock.RUnlock()
@@ -297,15 +321,15 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 }
 
 func (pb *PodProxyBuffer) requeueConnection(conn *connection) {
-	if pb.buffer.Push(conn, true) {
-		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
-	}
-	pb.recordBufferOccupancy()
+	pb.enqueueConnection(conn, true)
 }
 
 func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container container) {
 	defer close(conn.done)
 	defer pb.decrementContainerConnections(container.id)
+	containerConnectionKey, _ := pb.containerConnectionsKey(container.id)
+	cancelContainerConnectionRefresh := pb.startConnectionKeyTTLRefresh(containerConnectionKey)
+	defer cancelContainerConnectionRefresh()
 
 	tc := conn.tc
 	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, "tcp", time.Since(conn.enqueuedAt))
@@ -377,6 +401,9 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 func (pb *PodProxyBuffer) handleConnection(conn *connection, container container, port int32) {
 	defer close(conn.done)
 	defer pb.decrementContainerConnections(container.id)
+	containerConnectionKey, _ := pb.containerConnectionsKey(container.id)
+	cancelContainerConnectionRefresh := pb.startConnectionKeyTTLRefresh(containerConnectionKey)
+	defer cancelContainerConnectionRefresh()
 	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, "http", time.Since(conn.enqueuedAt))
 
 	request := conn.ctx.Request()
@@ -863,6 +890,64 @@ func (pb *PodProxyBuffer) decrementRedisConnectionKey(key string) error {
 		[]string{key},
 		int(podContainerConnectionTimeout/time.Second),
 	).Err()
+}
+
+func (pb *PodProxyBuffer) startConnectionKeyTTLRefresh(keys ...string) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	if pb.rdb == nil {
+		return cancel
+	}
+
+	filteredKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key != "" {
+			filteredKeys = append(filteredKeys, key)
+		}
+	}
+	if len(filteredKeys) == 0 {
+		return cancel
+	}
+
+	go func() {
+		ticker := time.NewTicker(connectionTTLRefreshInterval)
+		defer ticker.Stop()
+		var parentDone <-chan struct{}
+		if pb.ctx != nil {
+			parentDone = pb.ctx.Done()
+		}
+
+		for {
+			select {
+			case <-parentDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pb.refreshRedisConnectionKeys(filteredKeys...)
+			}
+		}
+	}()
+
+	return cancel
+}
+
+func (pb *PodProxyBuffer) refreshRedisConnectionKeys(keys ...string) {
+	if pb.rdb == nil || len(keys) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pipe := pb.rdb.Pipeline()
+	for _, key := range keys {
+		if key != "" {
+			pipe.Expire(ctx, key, podContainerConnectionTimeout)
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to refresh pod connection key ttl")
+	}
 }
 
 func (pb *PodProxyBuffer) workspaceName() string {

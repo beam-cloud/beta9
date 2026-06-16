@@ -3,7 +3,7 @@ from unittest import TestCase, mock
 from pathlib import Path
 
 from beta9 import Image, Service
-from beta9.abstractions.service import ports_from_dockerfile
+from beta9.abstractions.service import ports_from_dockerfile, service_image_implies_default_port
 from beta9.cli.deployment import (
     _generate_service_module,
     _merge_port_options,
@@ -45,6 +45,20 @@ class TestService(TestCase):
         self.assertEqual(service.ports, [8080])
         self.assertEqual(service.autoscaler.min_containers, 0)
         self.assertEqual(service.autoscaler.max_containers, 1)
+
+    def test_image_service_without_explicit_port_defaults_to_8000(self):
+        service = Service(image=Image.from_id("img-123"))
+
+        self.assertEqual(service.entrypoint, [])
+        self.assertEqual(service.ports, [8000])
+        self.assertIn("PORT=8000", service.env)
+
+    def test_command_service_without_image_does_not_default_port(self):
+        service = Service(command="python worker.py")
+
+        self.assertEqual(service.entrypoint, ["sh", "-lc", "python worker.py"])
+        self.assertEqual(service.ports, [])
+        self.assertNotIn("PORT=", service.env)
 
     def test_always_on_keeps_one_replica_running(self):
         service = Service(image=Image.from_id("img-123"), ports=[8080], always_on=True)
@@ -170,10 +184,15 @@ class TestService(TestCase):
     def test_from_dockerfile_marks_image_as_dockerfile_build(self, sync_files_mock):
         with TemporaryDirectory() as tmpdir:
             dockerfile = Path(tmpdir) / "Dockerfile"
-            dockerfile.write_text("FROM python:3.12-slim")
+            dockerfile.write_text("FROM python:3.12-slim\nEXPOSE 5050/tcp\n")
 
             service = Service.from_dockerfile(str(dockerfile), name="dockerfile-app")
 
         self.assertEqual(service.name, "dockerfile-app")
-        self.assertEqual(service.image.dockerfile, "FROM python:3.12-slim")
+        self.assertEqual(service.image.dockerfile, "FROM python:3.12-slim\nEXPOSE 5050/tcp\n")
+        self.assertEqual(service.ports, [5050])
+        self.assertIn("PORT=5050", service.env)
         self.assertTrue(service.image.ignore_python)
+
+    def test_empty_image_does_not_imply_default_service_port(self):
+        self.assertFalse(service_image_implies_default_port(Image()))

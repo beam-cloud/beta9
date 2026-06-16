@@ -167,6 +167,39 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 	})
 }
 
+func TestEnqueueRequestFailsOverwrittenRequest(t *testing.T) {
+	e := echo.New()
+	firstReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	firstRec := httptest.NewRecorder()
+	firstCtx := e.NewContext(firstReq, firstRec)
+	firstDone := make(chan struct{})
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	secondRec := httptest.NewRecorder()
+	secondCtx := e.NewContext(secondReq, secondRec)
+	secondQueuedRequest := &request{ctx: secondCtx, done: make(chan struct{})}
+
+	rb := &RequestBuffer{
+		buffer: abstractions.NewRingBuffer[*request](1),
+	}
+	rb.enqueueRequest(&request{ctx: firstCtx, done: firstDone}, false)
+	rb.enqueueRequest(secondQueuedRequest, false)
+
+	select {
+	case <-firstDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("overwritten request was not released")
+	}
+	if firstRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("overwritten response status = %d, want %d", firstRec.Code, http.StatusTooManyRequests)
+	}
+
+	got, ok := rb.buffer.Pop()
+	if !ok || got != secondQueuedRequest {
+		t.Fatal("expected newest request to remain queued")
+	}
+}
+
 func TestReserveContainerSkipsSaturatedReplica(t *testing.T) {
 	rb := &RequestBuffer{
 		ctx:       context.Background(),
@@ -272,6 +305,26 @@ func TestReleaseRequestTokenIsIdempotentAcrossBuffers(t *testing.T) {
 	}
 	if got := redisInt64(t, rdb, key); got != 2 {
 		t.Fatalf("request tokens after second release = %d, want full bucket", got)
+	}
+}
+
+func TestRefreshRequestTokenTTLExtendsTokenKey(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	rb := newEndpointRequestTokenTestBuffer(rdb, 1)
+	key := Keys.endpointRequestTokens("workspace", "stub", "container-1")
+
+	if err := rdb.Set(context.Background(), key, 0, time.Second).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	rb.refreshRequestTokenTTL("container-1")
+
+	ttl, err := rdb.TTL(context.Background(), key).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl < rb.requestTokenTTL()-time.Second {
+		t.Fatalf("ttl = %s, want refreshed close to %s", ttl, rb.requestTokenTTL())
 	}
 }
 

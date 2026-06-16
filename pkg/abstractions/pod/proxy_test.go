@@ -90,6 +90,40 @@ func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
 	})
 }
 
+func TestEnqueueConnectionFailsOverwrittenHTTPConnection(t *testing.T) {
+	e := echo.New()
+	firstReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	firstRec := httptest.NewRecorder()
+	firstCtx := e.NewContext(firstReq, firstRec)
+	firstDone := make(chan struct{})
+
+	secondReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	secondRec := httptest.NewRecorder()
+	secondCtx := e.NewContext(secondReq, secondRec)
+	secondConn := &connection{ctx: secondCtx, done: make(chan struct{})}
+
+	pb := &PodProxyBuffer{
+		ctx:    context.Background(),
+		buffer: abstractions.NewRingBuffer[*connection](1),
+	}
+	pb.enqueueConnection(&connection{ctx: firstCtx, done: firstDone}, false)
+	pb.enqueueConnection(secondConn, false)
+
+	select {
+	case <-firstDone:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("overwritten connection was not released")
+	}
+	if firstRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("overwritten response status = %d, want %d", firstRec.Code, http.StatusServiceUnavailable)
+	}
+
+	got, ok := pb.buffer.Pop()
+	if !ok || got != secondConn {
+		t.Fatal("expected newest connection to remain queued")
+	}
+}
+
 func TestReserveContainerForPortSkipsContainersWithoutPort(t *testing.T) {
 	pb := &PodProxyBuffer{
 		ctx:        context.Background(),
@@ -280,6 +314,26 @@ func TestContainerConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
 	}
 	if got := redisInt64(t, rdb, key); got != 0 {
 		t.Fatalf("container connections after second decrement = %d, want 0", got)
+	}
+}
+
+func TestRefreshRedisConnectionKeysExtendsCounterTTL(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	pb := newPodProxyConnectionTestBuffer(rdb)
+	key := Keys.podTotalConnections("workspace", "stub")
+
+	if err := rdb.Set(context.Background(), key, 1, time.Second).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	pb.refreshRedisConnectionKeys(key)
+
+	ttl, err := rdb.TTL(context.Background(), key).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl < podContainerConnectionTimeout-time.Second {
+		t.Fatalf("ttl = %s, want refreshed close to %s", ttl, podContainerConnectionTimeout)
 	}
 }
 

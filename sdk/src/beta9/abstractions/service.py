@@ -50,6 +50,15 @@ def resolve_service_ports(
     return [DEFAULT_SERVICE_PORT] if default else []
 
 
+def service_image_implies_default_port(image: Optional[Image]) -> bool:
+    return bool(
+        getattr(image, "dockerfile", "")
+        or getattr(image, "dockerfile_path", "")
+        or getattr(image, "base_image", "")
+        or getattr(image, "image_id", "")
+    )
+
+
 class Service(Pod):
     """
     Service runs arbitrary long-lived web services and background processes.
@@ -89,7 +98,12 @@ class Service(Pod):
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
 
-        service_ports = resolve_service_ports(port=port, ports=ports)
+        service_ports = resolve_service_ports(
+            port=port,
+            ports=ports,
+            image=image,
+            default=service_image_implies_default_port(image),
+        )
 
         service_env = dict(env or {})
         if service_ports and "PORT" not in service_env:
