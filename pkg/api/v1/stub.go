@@ -12,6 +12,7 @@ import (
 	"path"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -687,7 +688,12 @@ const (
 	SandboxStatusFailed   = "FAILED"
 )
 
-const sandboxContainerHistoryLimit = 500
+const (
+	defaultSandboxListLimit      = 50
+	maxSandboxListLimit          = 200
+	sandboxContainerHistoryLimit = 500
+	sandboxHistoryEventsPerRow   = 32
+)
 
 type SandboxRow struct {
 	Id              string    `json:"id"`
@@ -720,11 +726,31 @@ type SandboxStatsResponse struct {
 	CreatedBuckets []SandboxCreatedBucket `json:"created_buckets"`
 }
 
+func sandboxListLimit(ctx echo.Context) (int, error) {
+	raw := ctx.QueryParam("limit")
+	if raw == "" {
+		return defaultSandboxListLimit, nil
+	}
+
+	limit, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil || limit == 0 {
+		return 0, HTTPBadRequest("Invalid sandbox limit")
+	}
+	if limit > maxSandboxListLimit {
+		limit = maxSandboxListLimit
+	}
+	return int(limit), nil
+}
+
 // ListSandboxes returns a cursor-paginated list of sandboxes enriched with live
 // status, GPU, time-to-started, and lifetime. It is scoped to the app when an
 // app_id is provided, otherwise it lists all sandboxes in the workspace.
 func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 	workspaceID := ctx.Param("workspaceId")
+	limit, err := sandboxListLimit(ctx)
+	if err != nil {
+		return err
+	}
 
 	var filters types.StubFilter
 	if err := ctx.Bind(&filters); err != nil {
@@ -734,6 +760,7 @@ func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 	filters.WorkspaceID = workspaceID
 	filters.StubTypes = types.StringSlice{types.StubTypeSandbox}
 	filters.Pagination = true
+	filters.Limit = uint32(limit)
 
 	page, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters)
 	if err != nil {
@@ -742,9 +769,12 @@ func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 
 	containersByStub := g.activeContainersByStub(workspaceID)
 
-	rows := make([]SandboxRow, 0, len(page.Data))
+	rows := make([]SandboxRow, 0, limit)
 	for i := range page.Data {
-		rows = append(rows, g.buildSandboxRows(ctx.Request().Context(), workspaceID, &page.Data[i], containersByStub[page.Data[i].ExternalId])...)
+		if len(rows) >= limit {
+			break
+		}
+		rows = append(rows, g.buildSandboxRows(ctx.Request().Context(), workspaceID, &page.Data[i], containersByStub[page.Data[i].ExternalId], limit-len(rows))...)
 	}
 
 	return ctx.JSON(http.StatusOK, SandboxListResponse{Data: rows, Next: page.Next})
@@ -768,7 +798,7 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 
 	sandboxRows := make([]SandboxRow, 0, len(stubs))
 	for i := range stubs {
-		sandboxRows = append(sandboxRows, g.buildSandboxRows(ctx.Request().Context(), workspaceID, &stubs[i], containersByStub[stubs[i].ExternalId])...)
+		sandboxRows = append(sandboxRows, g.buildSandboxRows(ctx.Request().Context(), workspaceID, &stubs[i], containersByStub[stubs[i].ExternalId], 0)...)
 	}
 
 	statusCounts := map[string]int{
@@ -974,11 +1004,14 @@ func (g *StubGroup) activeContainersByStub(workspaceID string) map[string][]type
 	return byStub
 }
 
-func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, stub *types.StubWithRelated, containers []types.ContainerState) []SandboxRow {
+func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, stub *types.StubWithRelated, containers []types.ContainerState, maxRows int) []SandboxRow {
 	rows := make([]SandboxRow, 0, len(containers)+1)
 	activeContainerIDs := make(map[string]struct{}, len(containers))
 
 	for i := range containers {
+		if maxRows > 0 && len(rows) >= maxRows {
+			break
+		}
 		if containers[i].ContainerId == "" {
 			continue
 		}
@@ -986,11 +1019,20 @@ func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, st
 		rows = append(rows, g.buildActiveSandboxRow(ctx, workspaceID, stub, containers[i]))
 	}
 
-	for _, containerID := range g.recentSandboxContainerIDs(ctx, workspaceID, stub.ExternalId) {
-		if _, ok := activeContainerIDs[containerID]; ok {
-			continue
+	if maxRows <= 0 || len(rows) < maxRows {
+		remaining := 0
+		if maxRows > 0 {
+			remaining = maxRows - len(rows)
 		}
-		rows = append(rows, g.buildTerminalSandboxRow(ctx, workspaceID, stub, containerID))
+		for _, summary := range g.recentSandboxContainerSummaries(ctx, workspaceID, stub.ExternalId, remaining) {
+			if _, ok := activeContainerIDs[summary.ContainerID]; ok {
+				continue
+			}
+			if maxRows > 0 && len(rows) >= maxRows {
+				break
+			}
+			rows = append(rows, g.buildTerminalSandboxRowFromSummary(stub, summary))
+		}
 	}
 
 	if len(rows) == 0 {
@@ -1036,27 +1078,35 @@ func (g *StubGroup) buildActiveSandboxRow(ctx context.Context, workspaceID strin
 		}
 	}
 
-	g.enrichSandboxTimingFromEvents(ctx, workspaceID, stub.ExternalId, &row)
 	return row
 }
 
-func (g *StubGroup) buildTerminalSandboxRow(ctx context.Context, workspaceID string, stub *types.StubWithRelated, containerID string) SandboxRow {
+type sandboxContainerSummary struct {
+	ContainerID     string
+	CreatedAt       time.Time
+	LastEventAt     time.Time
+	StartedAt       *time.Time
+	Status          string
+	TimeToStartedMs *int64
+	LifetimeMs      *int64
+	StartedAtMs     *int64
+}
+
+func (g *StubGroup) buildTerminalSandboxRowFromSummary(stub *types.StubWithRelated, summary sandboxContainerSummary) SandboxRow {
 	row := SandboxRow{
-		Id:          containerID,
-		StubId:      stub.ExternalId,
-		Name:        stub.Name,
-		CreatedAt:   stub.CreatedAt.Time,
-		Status:      SandboxStatusStopped,
-		ContainerId: containerID,
+		Id:              summary.ContainerID,
+		StubId:          stub.ExternalId,
+		Name:            stub.Name,
+		CreatedAt:       stub.CreatedAt.Time,
+		Status:          summary.Status,
+		ContainerId:     summary.ContainerID,
+		TimeToStartedMs: summary.TimeToStartedMs,
+		LifetimeMs:      summary.LifetimeMs,
+		StartedAtMs:     summary.StartedAtMs,
 	}
-
-	resp := g.containerEvents(ctx, workspaceID, stub.ExternalId, containerID)
-	if resp == nil {
-		return row
+	if !summary.CreatedAt.IsZero() {
+		row.CreatedAt = summary.CreatedAt
 	}
-
-	row.Status = terminalStatusFromContainerEvents(resp)
-	applySandboxRowEvents(&row, resp)
 	return row
 }
 
@@ -1075,49 +1125,6 @@ func (g *StubGroup) buildFallbackSandboxRow(ctx context.Context, workspaceID str
 	return row
 }
 
-func (g *StubGroup) enrichSandboxTimingFromEvents(ctx context.Context, workspaceID, stubID string, row *SandboxRow) {
-	resp := g.containerEvents(ctx, workspaceID, stubID, row.ContainerId)
-	if resp == nil {
-		return
-	}
-
-	applySandboxRowEvents(row, resp)
-}
-
-func applySandboxRowEvents(row *SandboxRow, resp *types.ContainerEventsResponse) {
-	if createdAt := firstContainerEventTime(resp.Events); !createdAt.IsZero() {
-		row.CreatedAt = createdAt
-	}
-	if v, ok := resp.Summary["container_request_to_running_ms"]; ok && v > 0 {
-		value := v
-		row.TimeToStartedMs = &value
-	}
-
-	timeline := SandboxTimeline{
-		ContainerId: row.ContainerId,
-		Status:      row.Status,
-		CreatedAt:   row.CreatedAt,
-	}
-	applyContainerTimeline(&timeline, resp)
-
-	if timeline.StartedAt != nil {
-		startedAtMs := timeline.StartedAt.UnixMilli()
-		row.StartedAtMs = &startedAtMs
-	}
-
-	end := timeline.EndedAt
-	if end == nil && row.Status == SandboxStatusRunning {
-		now := time.Now().UTC()
-		end = &now
-	}
-	if timeline.StartedAt != nil && end != nil {
-		lifetime := end.Sub(*timeline.StartedAt).Milliseconds()
-		if lifetime >= 0 {
-			row.LifetimeMs = &lifetime
-		}
-	}
-}
-
 func (g *StubGroup) containerEvents(ctx context.Context, workspaceID, stubID, containerID string) *types.ContainerEventsResponse {
 	if g.eventRepo == nil || containerID == "" {
 		return nil
@@ -1133,46 +1140,116 @@ func (g *StubGroup) containerEvents(ctx context.Context, workspaceID, stubID, co
 	return resp
 }
 
-func (g *StubGroup) recentSandboxContainerIDs(ctx context.Context, workspaceID, stubID string) []string {
+func (g *StubGroup) recentSandboxContainerSummaries(ctx context.Context, workspaceID, stubID string, maxContainers int) []sandboxContainerSummary {
 	if g.eventRepo == nil {
 		return nil
+	}
+
+	limit := uint64(sandboxContainerHistoryLimit)
+	if maxContainers > 0 {
+		limit = uint64(maxContainers * sandboxHistoryEventsPerRow)
+		if limit < uint64(maxContainers) {
+			limit = uint64(maxContainers)
+		}
+		if limit > sandboxContainerHistoryLimit {
+			limit = sandboxContainerHistoryLimit
+		}
 	}
 
 	history, err := g.eventRepo.GetEventHistory(ctx, types.EventQuery{
 		WorkspaceID: workspaceID,
 		StubID:      stubID,
-		Limit:       sandboxContainerHistoryLimit,
+		Limit:       limit,
 		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
 	})
 	if err != nil || history == nil {
 		return nil
 	}
-	return sandboxContainerIDsFromHistory(history.Events)
+	return sandboxContainerSummariesFromHistory(history.Events, maxContainers)
 }
 
-func sandboxContainerIDsFromHistory(events []types.ContainerEventRecord) []string {
-	lastSeen := map[string]time.Time{}
+func sandboxContainerSummariesFromHistory(events []types.ContainerEventRecord, maxContainers int) []sandboxContainerSummary {
+	byContainer := map[string][]types.ContainerEventRecord{}
 	for _, event := range events {
 		if event.ContainerID == "" {
 			continue
 		}
-		t := containerEventTime(event)
-		if t.IsZero() {
-			t = time.Unix(0, int64(event.StoredAtNs)).UTC()
+		byContainer[event.ContainerID] = append(byContainer[event.ContainerID], event)
+	}
+
+	summaries := make([]sandboxContainerSummary, 0, len(byContainer))
+	for containerID, containerEvents := range byContainer {
+		summaries = append(summaries, sandboxContainerSummaryFromEvents(containerID, containerEvents))
+	}
+	sort.SliceStable(summaries, func(i, j int) bool {
+		return summaries[i].LastEventAt.After(summaries[j].LastEventAt)
+	})
+	if maxContainers > 0 && len(summaries) > maxContainers {
+		summaries = summaries[:maxContainers]
+	}
+	return summaries
+}
+
+func sandboxContainerSummaryFromEvents(containerID string, events []types.ContainerEventRecord) sandboxContainerSummary {
+	summary := sandboxContainerSummary{
+		ContainerID: containerID,
+		Status:      SandboxStatusStopped,
+	}
+
+	var startedAt time.Time
+	for _, event := range events {
+		eventTime := containerEventTime(event)
+		if eventTime.IsZero() && event.StoredAtNs > 0 {
+			eventTime = time.Unix(0, int64(event.StoredAtNs)).UTC()
 		}
-		if current, ok := lastSeen[event.ContainerID]; !ok || t.After(current) {
-			lastSeen[event.ContainerID] = t
+		if !eventTime.IsZero() {
+			if summary.CreatedAt.IsZero() || eventTime.Before(summary.CreatedAt) {
+				summary.CreatedAt = eventTime
+			}
+			if eventTime.After(summary.LastEventAt) {
+				summary.LastEventAt = eventTime
+			}
+		}
+
+		if event.Type == types.EventContainerLifecycle && event.EventID == string(types.ContainerLifecycleStartup) {
+			switch {
+			case !event.EndTime.IsZero():
+				startedAt = event.EndTime.UTC()
+			case !event.StartTime.IsZero() && event.DurationMs > 0:
+				startedAt = event.StartTime.Add(time.Duration(event.DurationMs) * time.Millisecond).UTC()
+			case !event.StartTime.IsZero():
+				startedAt = event.StartTime.UTC()
+			}
+		}
+
+		signal := strings.ToLower(strings.Join([]string{event.EventID, event.Reason, event.Message}, " "))
+		if strings.Contains(signal, "oom") || strings.Contains(signal, "fail") || strings.Contains(signal, "error") {
+			summary.Status = SandboxStatusFailed
 		}
 	}
 
-	ids := make([]string, 0, len(lastSeen))
-	for containerID := range lastSeen {
-		ids = append(ids, containerID)
+	if !startedAt.IsZero() {
+		startedAt = startedAt.UTC()
+		summary.StartedAt = &startedAt
+		startedAtMs := startedAt.UnixMilli()
+		summary.StartedAtMs = &startedAtMs
+
+		if !summary.CreatedAt.IsZero() {
+			timeToStarted := startedAt.Sub(summary.CreatedAt).Milliseconds()
+			if timeToStarted >= 0 {
+				summary.TimeToStartedMs = &timeToStarted
+			}
+		}
+
+		if !summary.LastEventAt.IsZero() {
+			lifetime := summary.LastEventAt.Sub(startedAt).Milliseconds()
+			if lifetime >= 0 {
+				summary.LifetimeMs = &lifetime
+			}
+		}
 	}
-	sort.SliceStable(ids, func(i, j int) bool {
-		return lastSeen[ids[i]].After(lastSeen[ids[j]])
-	})
-	return ids
+
+	return summary
 }
 
 func firstContainerEventTime(events []types.ContainerEventRecord) time.Time {

@@ -102,36 +102,21 @@ func TestBuildSandboxRowsReturnsOneRowPerRecentContainer(t *testing.T) {
 		CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
 	}}
 
-	containerEvents := func(containerID string, startedAt time.Time) *types.ContainerEventsResponse {
-		endedAt := startedAt.Add(250 * time.Millisecond)
-		return &types.ContainerEventsResponse{
-			ContainerID: containerID,
-			WorkspaceID: "workspace",
-			StubID:      "sandbox-stub",
-			Summary: map[string]int64{
-				"container_request_to_running_ms": 44,
-			},
-			Events: []types.ContainerEventRecord{
-				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: containerID, WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: startedAt},
-				{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: containerID, WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: endedAt},
-			},
-		}
-	}
-
 	group := &StubGroup{eventRepo: &sandboxRowsEventRepo{
 		history: &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
-			{ContainerID: "sandbox-stub-11111111", Timestamp: base.Add(1 * time.Second)},
-			{ContainerID: "sandbox-stub-22222222", Timestamp: base.Add(2 * time.Second)},
-			{ContainerID: "sandbox-stub-33333333", Timestamp: base.Add(3 * time.Second)},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(1 * time.Second)},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleStartup), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", StartTime: base.Add(1 * time.Second), EndTime: base.Add(1044 * time.Millisecond)},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(1250 * time.Millisecond)},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-22222222", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(2 * time.Second)},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleStartup), ContainerID: "sandbox-stub-22222222", WorkspaceID: "workspace", StubID: "sandbox-stub", StartTime: base.Add(2 * time.Second), EndTime: base.Add(2044 * time.Millisecond)},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-22222222", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(2250 * time.Millisecond)},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-33333333", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(3 * time.Second)},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleStartup), ContainerID: "sandbox-stub-33333333", WorkspaceID: "workspace", StubID: "sandbox-stub", StartTime: base.Add(3 * time.Second), EndTime: base.Add(3044 * time.Millisecond)},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-33333333", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(3250 * time.Millisecond)},
 		}},
-		containers: map[string]*types.ContainerEventsResponse{
-			"sandbox-stub-11111111": containerEvents("sandbox-stub-11111111", base.Add(1*time.Second)),
-			"sandbox-stub-22222222": containerEvents("sandbox-stub-22222222", base.Add(2*time.Second)),
-			"sandbox-stub-33333333": containerEvents("sandbox-stub-33333333", base.Add(3*time.Second)),
-		},
 	}}
 
-	rows := group.buildSandboxRows(context.Background(), "workspace", stub, nil)
+	rows := group.buildSandboxRows(context.Background(), "workspace", stub, nil, 0)
 	if got, want := len(rows), 3; got != want {
 		t.Fatalf("expected %d sandbox rows, got %d", want, got)
 	}
@@ -154,6 +139,31 @@ func TestBuildSandboxRowsReturnsOneRowPerRecentContainer(t *testing.T) {
 		if row.TimeToStartedMs == nil || *row.TimeToStartedMs != 44 {
 			t.Fatalf("row %d time_to_started_ms = %v, want 44", i, row.TimeToStartedMs)
 		}
+	}
+}
+
+func TestBuildSandboxRowsAppliesMaxRows(t *testing.T) {
+	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "sandbox-stub",
+		Name:       "sandbox",
+		CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+	}}
+
+	group := &StubGroup{eventRepo: &sandboxRowsEventRepo{
+		history: &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(1 * time.Second)},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-22222222", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(2 * time.Second)},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-33333333", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(3 * time.Second)},
+		}},
+	}}
+
+	rows := group.buildSandboxRows(context.Background(), "workspace", stub, nil, 2)
+	if got, want := len(rows), 2; got != want {
+		t.Fatalf("expected %d sandbox rows, got %d", want, got)
+	}
+	if rows[0].ContainerId != "sandbox-stub-33333333" || rows[1].ContainerId != "sandbox-stub-22222222" {
+		t.Fatalf("unexpected limited rows: %#v", rows)
 	}
 }
 
@@ -180,7 +190,7 @@ func TestBuildSandboxRowsReturnsEveryActiveContainer(t *testing.T) {
 			Status:      types.ContainerStatusPending,
 			ScheduledAt: base.Add(3 * time.Second).Unix(),
 		},
-	})
+	}, 0)
 	if got, want := len(rows), 2; got != want {
 		t.Fatalf("expected %d sandbox rows, got %d", want, got)
 	}

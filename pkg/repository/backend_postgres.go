@@ -1707,7 +1707,7 @@ func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filt
 			SortOrder:       "DESC",
 			SortColumn:      "created_at",
 			SortQueryPrefix: "s",
-			PageSize:        10,
+			PageSize:        int(filters.Limit),
 		},
 		filters.Cursor,
 	)
