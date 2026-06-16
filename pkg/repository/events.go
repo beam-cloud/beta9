@@ -50,7 +50,10 @@ type EventClientRepo struct {
 	streamer      eventStreamer
 }
 
-var ErrEventReadUnsupported = errors.New("event read unsupported")
+var (
+	ErrEventReadUnsupported  = errors.New("event read unsupported")
+	ErrEventWriteUnsupported = errors.New("event write unsupported")
+)
 
 type eventMetadata struct {
 	ContainerID string
@@ -316,6 +319,37 @@ func (r *EventClientRepo) PushContainerLogEvent(entry types.EventContainerLogSch
 	}
 
 	r.pushEvent(types.EventContainerLog, types.EventContainerLogSchemaVersion, entry)
+}
+
+func (r *EventClientRepo) PushContainerLogEventSync(entry types.EventContainerLogSchema) error {
+	if entry.Line == "" {
+		return nil
+	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+	if len(r.storageSinks) == 0 {
+		return ErrEventWriteUnsupported
+	}
+
+	event, err := r.createEventObject(types.EventContainerLog, types.EventContainerLogSchemaVersion, entry)
+	if err != nil {
+		return fmt.Errorf("create container log event: %w", err)
+	}
+
+	var errs []error
+	for _, sink := range r.storageSinks {
+		if syncSink, ok := sink.(syncEventSink); ok {
+			if err := syncSink.PushEventSync(event); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := sink.PushEvent(event); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (r *EventClientRepo) PushPlatformLogEvent(entry types.EventPlatformLogSchema) {

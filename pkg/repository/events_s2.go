@@ -264,6 +264,10 @@ func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) e
 	return errors.Join(streamErrs...)
 }
 
+func (r *ScopedS2EventRepository) PushEventSync(event cloudevents.Event) error {
+	return r.appendEventBatch([]cloudevents.Event{event})
+}
+
 func (r *ScopedS2EventRepository) targetForStream(streamName s2.StreamName) *scopedS2EventTarget {
 	stream := strings.Trim(string(streamName), "/")
 	for i := range r.targets {
@@ -1818,6 +1822,10 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.WorkerID = entry.WorkerID
 		record.Stream = entry.Stream
 		record.Line = entry.Line
+		record.PID = entry.PID
+		record.ProcessArgs = entry.ProcessArgs
+		record.ProcessCwd = entry.ProcessCwd
+		record.ProcessSeq = entry.ProcessSeq
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = entry.WorkspaceID
 		}

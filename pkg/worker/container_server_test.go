@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,8 +13,10 @@ import (
 	betaruntime "github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.T) {
@@ -177,6 +181,169 @@ func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "process manager")
+}
+
+func TestAuditedSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
+	repo := &fakeAuditedLogRepo{}
+	server := &ContainerRuntimeServer{
+		eventRepo: repo,
+		workerID:  "worker-1",
+	}
+	instance := auditedSandboxTestInstance("sandbox-test")
+	stream := newFakeAuditedExecStream(
+		&goprocpb.AuditedExecResponse{
+			Message: &goprocpb.AuditedExecResponse_Started{
+				Started: &goprocpb.ExecProcessStarted{Pid: 123},
+			},
+		},
+		&goprocpb.AuditedExecResponse{
+			Message: &goprocpb.AuditedExecResponse_Chunk{
+				Chunk: &goprocpb.AuditLogChunk{
+					Pid:    123,
+					Stream: types.EventLogStreamStdout,
+					Seq:    7,
+					Data:   []byte("hello from sandbox\n"),
+				},
+			},
+		},
+	)
+
+	pidCh := make(chan int, 1)
+	errCh := make(chan error, 1)
+	started := &atomic.Bool{}
+	go server.handleAuditedSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3", "-c", "print('hi')"}, "/workspace", pidCh, errCh, started)
+
+	require.Equal(t, 123, <-pidCh)
+
+	var ack *goprocpb.AuditLogAck
+	select {
+	case req := <-stream.sent:
+		ack = req.GetAck()
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audit ack")
+	}
+	require.NotNil(t, ack)
+	require.True(t, ack.Ok)
+	require.Equal(t, uint64(7), ack.Seq)
+
+	require.Len(t, repo.entries, 1)
+	entry := repo.entries[0]
+	require.Equal(t, "sandbox-test", entry.ContainerID)
+	require.Equal(t, "stub-1", entry.StubID)
+	require.Equal(t, "workspace-1", entry.WorkspaceID)
+	require.Equal(t, "app-1", entry.AppID)
+	require.Equal(t, "worker-1", entry.WorkerID)
+	require.Equal(t, types.EventLogStreamStdout, entry.Stream)
+	require.Equal(t, "hello from sandbox\n", entry.Line)
+	require.Equal(t, int32(123), entry.PID)
+	require.Equal(t, []string{"python3", "-c", "print('hi')"}, entry.ProcessArgs)
+	require.Equal(t, "/workspace", entry.ProcessCwd)
+	require.Equal(t, uint64(7), entry.ProcessSeq)
+}
+
+func TestAuditedSandboxExecStreamNacksPersistFailure(t *testing.T) {
+	repo := &fakeAuditedLogRepo{err: errors.New("s2 unavailable")}
+	server := &ContainerRuntimeServer{
+		eventRepo: repo,
+		workerID:  "worker-1",
+	}
+	instance := auditedSandboxTestInstance("sandbox-test")
+	stream := newFakeAuditedExecStream(
+		&goprocpb.AuditedExecResponse{
+			Message: &goprocpb.AuditedExecResponse_Started{
+				Started: &goprocpb.ExecProcessStarted{Pid: 123},
+			},
+		},
+		&goprocpb.AuditedExecResponse{
+			Message: &goprocpb.AuditedExecResponse_Chunk{
+				Chunk: &goprocpb.AuditLogChunk{
+					Pid:    123,
+					Stream: types.EventLogStreamStderr,
+					Seq:    9,
+					Data:   []byte("boom"),
+				},
+			},
+		},
+	)
+
+	pidCh := make(chan int, 1)
+	errCh := make(chan error, 1)
+	started := &atomic.Bool{}
+	go server.handleAuditedSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3"}, "", pidCh, errCh, started)
+
+	require.Equal(t, 123, <-pidCh)
+
+	var ack *goprocpb.AuditLogAck
+	select {
+	case req := <-stream.sent:
+		ack = req.GetAck()
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audit nack")
+	}
+	require.NotNil(t, ack)
+	require.False(t, ack.Ok)
+	require.Equal(t, uint64(9), ack.Seq)
+	require.Contains(t, ack.ErrorMsg, "s2 unavailable")
+}
+
+type fakeAuditedLogRepo struct {
+	entries []types.EventContainerLogSchema
+	err     error
+}
+
+func (r *fakeAuditedLogRepo) PushContainerLogEventSync(entry types.EventContainerLogSchema) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.entries = append(r.entries, entry)
+	return nil
+}
+
+type fakeAuditedExecStream struct {
+	grpc.ClientStream
+	recv chan *goprocpb.AuditedExecResponse
+	sent chan *goprocpb.AuditedExecRequest
+}
+
+func newFakeAuditedExecStream(responses ...*goprocpb.AuditedExecResponse) *fakeAuditedExecStream {
+	stream := &fakeAuditedExecStream{
+		recv: make(chan *goprocpb.AuditedExecResponse, len(responses)),
+		sent: make(chan *goprocpb.AuditedExecRequest, len(responses)),
+	}
+	for _, response := range responses {
+		stream.recv <- response
+	}
+	close(stream.recv)
+	return stream
+}
+
+func (s *fakeAuditedExecStream) Send(req *goprocpb.AuditedExecRequest) error {
+	s.sent <- req
+	return nil
+}
+
+func (s *fakeAuditedExecStream) Recv() (*goprocpb.AuditedExecResponse, error) {
+	resp, ok := <-s.recv
+	if !ok {
+		return nil, io.EOF
+	}
+	return resp, nil
+}
+
+func auditedSandboxTestInstance(containerId string) *ContainerInstance {
+	return &ContainerInstance{
+		Id:        containerId,
+		LogBuffer: common.NewLogBuffer(),
+		Request: &types.ContainerRequest{
+			ContainerId: containerId,
+			StubId:      "stub-1",
+			WorkspaceId: "workspace-1",
+			AppId:       "app-1",
+			Stub: types.StubWithRelated{
+				Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+			},
+		},
+	}
 }
 
 func TestWritableContainerAddressMapHandlesNilMap(t *testing.T) {
