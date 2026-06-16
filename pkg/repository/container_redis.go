@@ -1213,3 +1213,45 @@ func (cr *ContainerRedisRepository) SetBuildContainerTTL(containerId string, ttl
 func (cr *ContainerRedisRepository) HasBuildContainerTTL(containerId string) bool {
 	return cr.rdb.Exists(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Val() != 0
 }
+
+func (c *ContainerRedisRepository) SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error {
+	return c.setKeepWarmLock(ctx, podKeepWarmLockKey(workspaceName, stubId, containerId), keepWarmSeconds)
+}
+
+func (c *ContainerRedisRepository) PodKeepWarmLockExists(ctx context.Context, workspaceName, stubId, containerId string) (bool, error) {
+	return c.keepWarmLockExists(ctx, podKeepWarmLockKey(workspaceName, stubId, containerId))
+}
+
+func (c *ContainerRedisRepository) setKeepWarmLock(ctx context.Context, key string, keepWarmSeconds int) error {
+	if key == "" {
+		return nil
+	}
+
+	switch {
+	case keepWarmSeconds < 0:
+		return c.rdb.Set(ctx, key, 1, 0).Err()
+	case keepWarmSeconds == 0:
+		return c.rdb.Del(ctx, key).Err()
+	default:
+		return c.rdb.SetEx(ctx, key, 1, time.Duration(keepWarmSeconds)*time.Second).Err()
+	}
+}
+
+func (c *ContainerRedisRepository) keepWarmLockExists(ctx context.Context, key string) (bool, error) {
+	if key == "" {
+		return false, nil
+	}
+
+	exists, err := c.rdb.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return exists > 0, nil
+}
+
+func podKeepWarmLockKey(workspaceName, stubId, containerId string) string {
+	if workspaceName == "" || stubId == "" || containerId == "" {
+		return ""
+	}
+	return fmt.Sprintf("pod:%s:%s:keep_warm_lock:%s", workspaceName, stubId, containerId)
+}

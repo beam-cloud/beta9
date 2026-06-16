@@ -836,7 +836,7 @@ func (pb *PodProxyBuffer) syncConnectionState() {
 }
 
 func (pb *PodProxyBuffer) applyConnectionSync(update podConnectionSync) {
-	if pb.rdb == nil || pb.workspace == nil {
+	if pb.containerRepo == nil || pb.workspace == nil {
 		return
 	}
 
@@ -847,12 +847,7 @@ func (pb *PodProxyBuffer) applyConnectionSync(update podConnectionSync) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	pb.rdb.SetEx(
-		ctx,
-		Keys.podKeepWarmLock(pb.workspace.Name, pb.stubId, update.containerID),
-		1,
-		time.Duration(pb.stubConfig.KeepWarmSeconds)*time.Second,
-	)
+	setPodKeepWarmLock(ctx, pb.containerRepo, pb.workspace.Name, pb.stubId, update.containerID, pb.stubConfig.KeepWarmSeconds)
 }
 
 func (pb *PodProxyBuffer) totalConnectionsKey() (string, bool) {

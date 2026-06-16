@@ -97,7 +97,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 
 		setPodKeepWarmLock(
 			context.Background(),
-			i.Rdb,
+			i.ContainerRepo,
 			i.Workspace.Name,
 			i.Stub.ExternalId,
 			runRequest.ContainerId,
@@ -170,13 +170,12 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 		}
 
 		// Skip containers with keep warm locks
-		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
-		if err != nil && err != redis.Nil {
+		keepWarm, err := i.ContainerRepo.PodKeepWarmLockExists(context.TODO(), i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
+		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
 			continue
 		}
 
-		keepWarm := keepWarmVal > 0
 		if keepWarm {
 			continue
 		}

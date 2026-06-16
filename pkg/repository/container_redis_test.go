@@ -847,6 +847,57 @@ func TestEndpointRequestTokenReleaseIsIdempotentAcrossRepositories(t *testing.T)
 	}
 }
 
+func TestContainerRepositoryKeepWarmLocksApplySharedSemantics(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+
+	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", 30); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("expected pod keep-warm lock")
+	}
+
+	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("expected pod keep-warm lock to be cleared")
+	}
+
+	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", -1); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("expected pod keep-warm lock")
+	}
+
+	ttl, err := rdb.TTL(ctx, podKeepWarmLockKey("workspace", "stub", "container-1")).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl != -1 {
+		t.Fatalf("pod keep-warm ttl = %s, want no expiration", ttl)
+	}
+}
+
 func testContainerRequest(containerId, workspaceId string, cpu int64) *types.ContainerRequest {
 	return &types.ContainerRequest{
 		ContainerId: containerId,

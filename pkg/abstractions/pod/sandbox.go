@@ -761,12 +761,11 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 		return nil, err
 	}
 
-	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, instance.Stub.ExternalId, in.ContainerId)
+	keepWarmSeconds := int(in.Ttl)
 	if in.Ttl <= 0 {
-		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
-	} else {
-		s.rdb.SetEx(context.Background(), key, 1, time.Duration(in.Ttl)*time.Second)
+		keepWarmSeconds = -1
 	}
+	setPodKeepWarmLock(context.Background(), s.containerRepo, authInfo.Workspace.Name, instance.Stub.ExternalId, in.ContainerId, keepWarmSeconds)
 
 	return &pb.PodSandboxUpdateTTLResponse{
 		Ok: true,

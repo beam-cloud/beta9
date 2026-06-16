@@ -311,7 +311,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 	setPodKeepWarmLock(
 		context.Background(),
-		s.rdb,
+		s.containerRepo,
 		authInfo.Workspace.Name,
 		stub.ExternalId,
 		containerId,

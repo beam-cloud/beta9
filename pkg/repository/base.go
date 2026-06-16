@@ -83,6 +83,8 @@ type ContainerRepository interface {
 	RefreshEndpointRequestTokenTTL(ctx context.Context, workspaceName, stubId, containerId string, ttl time.Duration) error
 	SetEndpointRequestHeartbeat(ctx context.Context, workspaceName, stubId, taskId, containerId string, ttl time.Duration) error
 	EndpointRequestHeartbeatExists(ctx context.Context, workspaceName, stubId, taskId, containerId string) (bool, error)
+	SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error
+	PodKeepWarmLockExists(ctx context.Context, workspaceName, stubId, containerId string) (bool, error)
 }
 
 type WorkerPoolRepository interface {
