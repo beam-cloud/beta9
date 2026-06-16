@@ -540,7 +540,15 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to get or create instance")
 			continue
 		}
-		instance.Sync()
+		if err := instance.Sync(); err != nil {
+			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to sync instance")
+			continue
+		}
+		if !stub.Active {
+			if err := instance.HandleScalingEvent(0); err != nil {
+				log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to scale inactive deployment to zero")
+			}
+		}
 	}
 
 	return nil

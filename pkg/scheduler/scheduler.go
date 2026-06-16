@@ -226,10 +226,6 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	if err := s.ensureDeploymentActive(request); err != nil {
-		return err
-	}
-
 	// Add checkpoint state to request if auto checkpoint is enabled and checkpoint is not set
 	if request.CheckpointEnabled && request.Checkpoint == nil {
 		checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(context.Background(), request.StubId)
@@ -261,33 +257,6 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		requestLog(log.Error(), request).Err(err).Msg("failed to add request to backlog")
 		newSchedulingAttempt(s, request, nil).fail("backlog_push_failed")
 		return err
-	}
-
-	return nil
-}
-
-func (s *Scheduler) ensureDeploymentActive(request *types.ContainerRequest) error {
-	if request == nil || !request.Stub.Type.IsDeployment() {
-		return nil
-	}
-
-	if request.StubId == "" || request.Workspace.Id == 0 {
-		return fmt.Errorf("deployment container request missing workspace or stub identity")
-	}
-
-	active := true
-	deployments, err := s.backendRepo.ListDeploymentsWithRelated(s.ctx, types.DeploymentFilter{
-		BaseFilter:  types.BaseFilter{Limit: 1},
-		WorkspaceID: request.Workspace.Id,
-		StubIds:     types.StringSlice{request.StubId},
-		StubType:    types.StringSlice{string(request.Stub.Type)},
-		Active:      &active,
-	})
-	if err != nil {
-		return err
-	}
-	if len(deployments) == 0 {
-		return fmt.Errorf("deployment for stub <%s> is not active", request.StubId)
 	}
 
 	return nil

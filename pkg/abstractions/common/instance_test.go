@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -85,6 +88,66 @@ func TestConsumeScaleResultLetsServeScaleToZero(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected scale event to be queued")
+	}
+}
+
+func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
+	server, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+	state := &types.ContainerState{
+		ContainerId: "pod-test-stub-00000000",
+		StubId:      "test-stub",
+		WorkspaceId: "test-workspace",
+		Status:      types.ContainerStatusRunning,
+		ScheduledAt: time.Now().Unix(),
+		StartedAt:   time.Now().Unix(),
+		Cpu:         100,
+		Memory:      128,
+	}
+	if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stopped := make(chan int, 1)
+	instance := &AutoscaledInstance{
+		Ctx:             ctx,
+		CancelFunc:      cancel,
+		Lock:            common.NewRedisLock(rdb),
+		InstanceLockKey: "test-instance-lock",
+		IsActive:        false,
+		Stub:            &types.StubWithRelated{Stub: types.Stub{ExternalId: state.StubId, Type: types.StubType(types.StubTypePodDeployment)}},
+		StubConfig:      &types.StubConfigV1{Autoscaler: &types.Autoscaler{MinContainers: 1, MaxContainers: 1}},
+		ContainerRepo:   containerRepo,
+		StopContainersFunc: func(containersToStop int) error {
+			stopped <- containersToStop
+			return nil
+		},
+	}
+
+	if err := instance.HandleScalingEvent(1); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-stopped:
+		if got != 1 {
+			t.Fatalf("containersToStop = %d, want 1", got)
+		}
+	default:
+		t.Fatal("expected inactive instance to stop running container")
 	}
 }
 
