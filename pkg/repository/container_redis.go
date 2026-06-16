@@ -1242,11 +1242,14 @@ func (c *ContainerRedisRepository) keepWarmLockExists(ctx context.Context, key s
 		return false, nil
 	}
 
-	exists, err := c.rdb.Exists(ctx, key).Result()
+	keepWarm, err := c.rdb.Get(ctx, key).Int()
+	if err == redis.Nil {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	return exists > 0, nil
+	return keepWarm > 0, nil
 }
 
 func podKeepWarmLockKey(workspaceName, stubId, containerId string) string {

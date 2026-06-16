@@ -878,6 +878,17 @@ func TestContainerRepositoryKeepWarmLocksApplySharedSemantics(t *testing.T) {
 		t.Fatal("expected pod keep-warm lock to be cleared")
 	}
 
+	if err := rdb.Set(ctx, podKeepWarmLockKey("workspace", "stub", "container-1"), 0, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("expected zero-valued pod keep-warm lock to be ignored")
+	}
+
 	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", -1); err != nil {
 		t.Fatal(err)
 	}
