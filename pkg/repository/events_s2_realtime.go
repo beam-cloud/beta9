@@ -405,6 +405,10 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 		WorkspaceID: firstNonEmpty(entry.WorkspaceID, eventRecord.WorkspaceID),
 		AppID:       firstNonEmpty(entry.AppID, eventRecord.AppID),
 		WorkerID:    firstNonEmpty(entry.WorkerID, eventRecord.WorkerID),
+		PID:         entry.PID,
+		ProcessArgs: entry.ProcessArgs,
+		ProcessCwd:  entry.ProcessCwd,
+		ProcessSeq:  entry.ProcessSeq,
 	}, true
 }
 
@@ -575,6 +579,10 @@ func containerEventRecordFromLogRecord(record types.LogRecord) types.ContainerEv
 		AppID:       record.AppID,
 		MachineID:   record.MachineID,
 		WorkerID:    record.WorkerID,
+		PID:         record.PID,
+		ProcessArgs: record.ProcessArgs,
+		ProcessCwd:  record.ProcessCwd,
+		ProcessSeq:  record.ProcessSeq,
 	}
 }
 

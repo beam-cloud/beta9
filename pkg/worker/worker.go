@@ -393,6 +393,8 @@ func NewWorker() (*Worker, error) {
 		ImageClient:             imageClient,
 		ContainerRepoClient:     containerRepoClient,
 		ContainerNetworkManager: containerNetworkManager,
+		EventRepo:               eventRepo,
+		WorkerID:                workerId,
 		BackendRoute:            worker.backendRouteFor,
 		CreateCheckpoint:        worker.createCheckpoint,
 	})

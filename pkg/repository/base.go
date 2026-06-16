@@ -269,6 +269,7 @@ type EventRepository interface {
 	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)
 	PushContainerEvent(event types.EventContainerEventSchema)
 	PushContainerLogEvent(entry types.EventContainerLogSchema)
+	PushContainerLogEventQueued(entry types.EventContainerLogSchema) error
 	PushPlatformLogEvent(entry types.EventPlatformLogSchema)
 	PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions)
 	PushContainerRequestLifecycle(workerID string, request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, opts types.ContainerLifecycleOptions)

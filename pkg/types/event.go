@@ -747,6 +747,10 @@ type EventContainerLogSchema struct {
 	WorkerID    string    `json:"worker_id,omitempty"`
 	Stream      string    `json:"stream,omitempty"`
 	Line        string    `json:"line"`
+	PID         int32     `json:"pid,omitempty"`
+	ProcessArgs []string  `json:"process_args,omitempty"`
+	ProcessCwd  string    `json:"process_cwd,omitempty"`
+	ProcessSeq  uint64    `json:"process_seq,omitempty"`
 }
 
 var EventPlatformLogSchemaVersion = "1.0"
@@ -835,6 +839,10 @@ type LogRecord struct {
 	AppID       string    `json:"app_id,omitempty"`
 	MachineID   string    `json:"machine_id,omitempty"`
 	WorkerID    string    `json:"worker_id,omitempty"`
+	PID         int32     `json:"pid,omitempty"`
+	ProcessArgs []string  `json:"process_args,omitempty"`
+	ProcessCwd  string    `json:"process_cwd,omitempty"`
+	ProcessSeq  uint64    `json:"process_seq,omitempty"`
 }
 
 type LogsResponse struct {
@@ -912,6 +920,10 @@ type ContainerEventRecord struct {
 	AppID       string            `json:"app_id,omitempty"`
 	MachineID   string            `json:"machine_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
+	PID         int32             `json:"pid,omitempty"`
+	ProcessArgs []string          `json:"process_args,omitempty"`
+	ProcessCwd  string            `json:"process_cwd,omitempty"`
+	ProcessSeq  uint64            `json:"process_seq,omitempty"`
 }
 
 type ContainerEventsResponse struct {

@@ -539,6 +539,10 @@ func TestLogRecordFromS2ExtractsLineFromEventData(t *testing.T) {
 		WorkerID:    "worker-1",
 		Stream:      "stdout",
 		Line:        "Starting gunicorn 22.0.0",
+		PID:         123,
+		ProcessArgs: []string{"python3", "-c", "print('hi')"},
+		ProcessCwd:  "/workspace",
+		ProcessSeq:  7,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -563,6 +567,18 @@ func TestLogRecordFromS2ExtractsLineFromEventData(t *testing.T) {
 	}
 	if got, want := logRecord.TaskID, "task-123"; got != want {
 		t.Fatalf("unexpected task id: got %q want %q", got, want)
+	}
+	if got, want := logRecord.PID, int32(123); got != want {
+		t.Fatalf("unexpected pid: got %d want %d", got, want)
+	}
+	if got, want := logRecord.ProcessArgs, []string{"python3", "-c", "print('hi')"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected process args: got %#v want %#v", got, want)
+	}
+	if got, want := logRecord.ProcessCwd, "/workspace"; got != want {
+		t.Fatalf("unexpected process cwd: got %q want %q", got, want)
+	}
+	if got, want := logRecord.ProcessSeq, uint64(7); got != want {
+		t.Fatalf("unexpected process seq: got %d want %d", got, want)
 	}
 	if !logRecord.Timestamp.Equal(logAt) {
 		t.Fatalf("unexpected timestamp: got %s want %s", logRecord.Timestamp, logAt)
