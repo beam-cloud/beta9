@@ -94,8 +94,6 @@ require (
 	tailscale.com v1.72.1
 )
 
-replace github.com/beam-cloud/goproc => /Users/luke/beam/goproc
-
 require (
 	cloud.google.com/go v0.112.1 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
