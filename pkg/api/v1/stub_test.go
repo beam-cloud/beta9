@@ -24,11 +24,17 @@ import (
 
 type sandboxRowsEventRepo struct {
 	repository.EventRepository
-	history    *types.EventHistoryResponse
-	containers map[string]*types.ContainerEventsResponse
+	history         *types.EventHistoryResponse
+	historiesByStub map[string]*types.EventHistoryResponse
+	containers      map[string]*types.ContainerEventsResponse
+	queries         []types.EventQuery
 }
 
-func (r *sandboxRowsEventRepo) GetEventHistory(context.Context, types.EventQuery) (*types.EventHistoryResponse, error) {
+func (r *sandboxRowsEventRepo) GetEventHistory(_ context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	r.queries = append(r.queries, query)
+	if r.historiesByStub != nil && query.StubID != "" {
+		return r.historiesByStub[query.StubID], nil
+	}
 	return r.history, nil
 }
 
@@ -208,6 +214,46 @@ func TestBuildSandboxRowsReturnsEveryActiveContainer(t *testing.T) {
 	}
 	if rows[1].Status != SandboxStatusRunning {
 		t.Fatalf("running row status = %q, want %q", rows[1].Status, SandboxStatusRunning)
+	}
+}
+
+func TestBuildSandboxStatsRowsUsesStubHistoryForAppScopedStats(t *testing.T) {
+	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
+	stubs := []types.StubWithRelated{{
+		Stub: types.Stub{
+			ExternalId: "sandbox-stub",
+			Name:       "sandbox",
+			CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+		},
+	}}
+
+	eventRepo := &sandboxRowsEventRepo{
+		historiesByStub: map[string]*types.EventHistoryResponse{
+			"sandbox-stub": {Events: []types.ContainerEventRecord{
+				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(1 * time.Second)},
+				{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(1250 * time.Millisecond)},
+				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-22222222", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(2 * time.Second)},
+				{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-22222222", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(2250 * time.Millisecond)},
+				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-33333333", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(3 * time.Second)},
+				{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-33333333", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(3250 * time.Millisecond)},
+			}},
+		},
+	}
+	group := &StubGroup{eventRepo: eventRepo}
+
+	rows := group.buildSandboxStatsRows(context.Background(), "workspace", "app-1", stubs, nil)
+	if got, want := len(rows), 3; got != want {
+		t.Fatalf("expected %d sandbox stats rows, got %d", want, got)
+	}
+	if got := len(eventRepo.queries); got != 1 {
+		t.Fatalf("expected one stub-scoped history query, got %d", got)
+	}
+	query := eventRepo.queries[0]
+	if query.StubID != "sandbox-stub" {
+		t.Fatalf("history query stub_id = %q, want sandbox-stub", query.StubID)
+	}
+	if query.AppID != "" {
+		t.Fatalf("history query app_id = %q, want empty because DB app scope already selected the stub", query.AppID)
 	}
 }
 
