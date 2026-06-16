@@ -217,6 +217,52 @@ func TestBuildSandboxRowsReturnsEveryActiveContainer(t *testing.T) {
 	}
 }
 
+func TestBuildSandboxRowsEnrichesActiveTimingFromHistory(t *testing.T) {
+	base := time.Now().Add(-2 * time.Minute).UTC().Truncate(time.Millisecond)
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "sandbox-stub",
+		Name:       "sandbox",
+		CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+	}}
+
+	eventRepo := &sandboxRowsEventRepo{
+		history: &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base},
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleStartup), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", StartTime: base.Add(100 * time.Millisecond), EndTime: base.Add(1500 * time.Millisecond)},
+		}},
+	}
+	group := &StubGroup{eventRepo: eventRepo}
+
+	rows := group.buildSandboxRows(context.Background(), "workspace", stub, []types.ContainerState{
+		{
+			ContainerId: "sandbox-stub-11111111",
+			StubId:      "sandbox-stub",
+			Status:      types.ContainerStatusRunning,
+		},
+	}, 1)
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("expected %d sandbox rows, got %d", want, got)
+	}
+	if got := len(eventRepo.queries); got != 1 {
+		t.Fatalf("expected active row timing to query history despite full page, got %d queries", got)
+	}
+
+	row := rows[0]
+	if !row.CreatedAt.Equal(base) {
+		t.Fatalf("created_at = %s, want lifecycle created_at %s", row.CreatedAt, base)
+	}
+	if row.TimeToStartedMs == nil || *row.TimeToStartedMs != 1500 {
+		t.Fatalf("time_to_started_ms = %v, want 1500", row.TimeToStartedMs)
+	}
+	wantStartedAtMs := base.Add(1500 * time.Millisecond).UnixMilli()
+	if row.StartedAtMs == nil || *row.StartedAtMs != wantStartedAtMs {
+		t.Fatalf("started_at_ms = %v, want %d", row.StartedAtMs, wantStartedAtMs)
+	}
+	if row.LifetimeMs == nil || *row.LifetimeMs <= 0 {
+		t.Fatalf("lifetime_ms = %v, want a positive running lifetime", row.LifetimeMs)
+	}
+}
+
 func TestBuildSandboxStatsRowsUsesStubHistoryForAppScopedStats(t *testing.T) {
 	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
 	stubs := []types.StubWithRelated{{
@@ -254,6 +300,51 @@ func TestBuildSandboxStatsRowsUsesStubHistoryForAppScopedStats(t *testing.T) {
 	}
 	if query.AppID != "" {
 		t.Fatalf("history query app_id = %q, want empty because DB app scope already selected the stub", query.AppID)
+	}
+}
+
+func TestBuildSandboxStatsRowsEnrichesActiveTimingFromHistory(t *testing.T) {
+	base := time.Now().Add(-2 * time.Minute).UTC().Truncate(time.Millisecond)
+	stubs := []types.StubWithRelated{{
+		Stub: types.Stub{
+			ExternalId: "sandbox-stub",
+			Name:       "sandbox",
+			CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+		},
+	}}
+	eventRepo := &sandboxRowsEventRepo{
+		historiesByStub: map[string]*types.EventHistoryResponse{
+			"sandbox-stub": {Events: []types.ContainerEventRecord{
+				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base},
+				{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleStartup), ContainerID: "sandbox-stub-11111111", WorkspaceID: "workspace", StubID: "sandbox-stub", StartTime: base.Add(100 * time.Millisecond), EndTime: base.Add(1500 * time.Millisecond)},
+			}},
+		},
+	}
+	group := &StubGroup{eventRepo: eventRepo}
+
+	rows := group.buildSandboxStatsRows(context.Background(), "workspace", "app-1", stubs, map[string][]types.ContainerState{
+		"sandbox-stub": {
+			{
+				ContainerId: "sandbox-stub-11111111",
+				StubId:      "sandbox-stub",
+				Status:      types.ContainerStatusRunning,
+			},
+		},
+	})
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("expected %d sandbox stats rows, got %d", want, got)
+	}
+
+	row := rows[0]
+	if row.TimeToStartedMs == nil || *row.TimeToStartedMs != 1500 {
+		t.Fatalf("time_to_started_ms = %v, want 1500", row.TimeToStartedMs)
+	}
+	wantStartedAtMs := base.Add(1500 * time.Millisecond).UnixMilli()
+	if row.StartedAtMs == nil || *row.StartedAtMs != wantStartedAtMs {
+		t.Fatalf("started_at_ms = %v, want %d", row.StartedAtMs, wantStartedAtMs)
+	}
+	if row.LifetimeMs == nil || *row.LifetimeMs <= 0 {
+		t.Fatalf("lifetime_ms = %v, want a positive running lifetime", row.LifetimeMs)
 	}
 }
 
