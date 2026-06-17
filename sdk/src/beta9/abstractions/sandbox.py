@@ -4,7 +4,7 @@ import io
 import shlex
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .. import terminal
 from ..abstractions.base import unset_channel
@@ -64,6 +64,30 @@ SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
 SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
+SANDBOX_EXEC_READY_TIMEOUT_SECONDS = 90
+SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.5
+SANDBOX_EXEC_READINESS_ERRORS = (
+    "failed to connect to sandbox",
+    "process manager not ready",
+    "sandbox process manager is not ready",
+)
+DOCKER_SANDBOX_NETWORK_MODE = "host"
+DOCKER_SANDBOX_PID_MODE = "host"
+DOCKER_COMPOSE_OVERRIDE_PATH = "/tmp/.docker-compose-override.yml"
+
+
+def _is_sandbox_exec_readiness_error(error_msg: str) -> bool:
+    normalized = (error_msg or "").lower()
+    return any(marker in normalized for marker in SANDBOX_EXEC_READINESS_ERRORS)
+
+
+def _sandbox_docker_namespace_args() -> List[str]:
+    return [
+        "--network",
+        DOCKER_SANDBOX_NETWORK_MODE,
+        "--pid",
+        DOCKER_SANDBOX_PID_MODE,
+    ]
 
 
 class Sandbox(Pod):
@@ -898,21 +922,37 @@ class SandboxProcessManager:
                 timeout=SANDBOX_EXEC_RPC_TIMEOUT_SECONDS,
             )
 
-        response = retry_on_transient_error(_do_exec)
+        response = self._exec_with_readiness_retry(_do_exec)
 
         if not response.ok or response.pid <= 0:
             raise SandboxProcessError(response.error_msg)
 
-        if response.pid > 0:
-            process = SandboxProcess(
-                self.sandbox_instance,
-                pid=response.pid,
-                cwd=cwd,
-                args=command,
-                env=env,
-            )
-            self.processes[response.pid] = process
-            return process
+        process = SandboxProcess(
+            self.sandbox_instance,
+            pid=response.pid,
+            cwd=cwd,
+            args=command,
+            env=env,
+        )
+        self.processes[response.pid] = process
+        return process
+
+    def _exec_with_readiness_retry(
+        self,
+        do_exec: Callable[[], PodSandboxExecResponse],
+    ) -> PodSandboxExecResponse:
+        deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
+
+        while True:
+            response = retry_on_transient_error(do_exec)
+            if response.ok and response.pid > 0:
+                return response
+            if not _is_sandbox_exec_readiness_error(response.error_msg):
+                return response
+            if time.monotonic() >= deadline:
+                return response
+
+            time.sleep(SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS)
 
     def list_processes(self) -> Dict[int, "SandboxProcess"]:
         """
@@ -2361,7 +2401,9 @@ class SandboxDockerManager:
             ```
         """
         cmd = ["docker", "run"]
-        cmd.extend(["--network", "host"])
+        # Inner containers use the sandbox's network/PID namespaces so Docker
+        # commands work consistently under both runc and gVisor.
+        cmd.extend(_sandbox_docker_namespace_args())
 
         if detach:
             cmd.append("-d")
@@ -2555,9 +2597,7 @@ class SandboxDockerManager:
 
         cmd = ["docker", "build", "-t", tag]
 
-        # Use host networking for gVisor
-        # Safe because "host" = sandbox's network namespace, still isolated
-        cmd.extend(["--network", "host"])
+        cmd.extend(["--network", DOCKER_SANDBOX_NETWORK_MODE])
 
         if dockerfile:
             cmd.extend(["-f", dockerfile])
@@ -2697,6 +2737,62 @@ class SandboxDockerManager:
 
     # === Docker Compose ===
 
+    def _compose_file_path(self, file: str, cwd: Optional[str] = None) -> str:
+        return file if file.startswith("/") else f"{cwd or '.'}/{file}"
+
+    def _read_compose_services(
+        self, file: str, cwd: Optional[str] = None
+    ) -> Tuple[List[str], Set[str]]:
+        import os
+        import tempfile
+
+        import yaml
+
+        compose_path = self._compose_file_path(file, cwd)
+        service_names: List[str] = []
+        services_with_build: Set[str] = set()
+
+        try:
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
+                local_compose_path = tmp_file.name
+
+            try:
+                self.sandbox_instance.fs.download_file(compose_path, local_compose_path)
+                with open(local_compose_path, "r") as f:
+                    compose_data = yaml.safe_load(f.read())
+            finally:
+                if os.path.exists(local_compose_path):
+                    os.unlink(local_compose_path)
+        except Exception:
+            return service_names, services_with_build
+
+        services = compose_data.get("services") if isinstance(compose_data, dict) else None
+        if not isinstance(services, dict):
+            return service_names, services_with_build
+
+        service_names = list(services.keys())
+        services_with_build = {
+            name
+            for name, config in services.items()
+            if isinstance(config, dict) and "build" in config
+        }
+        return service_names, services_with_build
+
+    def _upload_text(self, content: str, remote_path: str, suffix: str = "") -> None:
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            local_path = tmp_file.name
+
+        try:
+            self.sandbox_instance.fs.upload_file(local_path, remote_path)
+        finally:
+            if os.path.exists(local_path):
+                os.unlink(local_path)
+
     def _create_compose_override(self, file: str, cwd: Optional[str] = None) -> str:
         """
         Create gVisor-compatible compose override file.
@@ -2710,67 +2806,28 @@ class SandboxDockerManager:
         """
         import yaml
 
-        compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
+        service_names, services_with_build = self._read_compose_services(file, cwd)
+        override_path = DOCKER_COMPOSE_OVERRIDE_PATH
+        override = {"services": {}}
 
-        # Download and parse compose file
-        service_names = []
-        services_with_build = set()
-        try:
-            import os
-            import tempfile
+        for service_name in service_names or ["default"]:
+            service = {
+                "network_mode": DOCKER_SANDBOX_NETWORK_MODE,
+                "pid": DOCKER_SANDBOX_PID_MODE,
+            }
 
-            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
-                local_compose_path = tmp_file.name
+            if len(service_names) > 1:
+                service["extra_hosts"] = [
+                    f"{other_service}:127.0.0.1" for other_service in service_names
+                ]
 
-            try:
-                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
-                with open(local_compose_path, "r") as f:
-                    compose_data = yaml.safe_load(f.read())
-                    if compose_data and "services" in compose_data:
-                        service_names = list(compose_data["services"].keys())
-                        for svc_name, svc_config in compose_data["services"].items():
-                            if isinstance(svc_config, dict) and "build" in svc_config:
-                                services_with_build.add(svc_name)
-            finally:
-                if os.path.exists(local_compose_path):
-                    os.unlink(local_compose_path)
-        except Exception:
-            pass
+            if service_name in services_with_build or not service_names:
+                service["build"] = {"network": DOCKER_SANDBOX_NETWORK_MODE}
 
-        # Generate override
-        override_path = "/tmp/.docker-compose-override.yml"
-        if service_names:
-            override_content = "services:\n"
-            for service_name in service_names:
-                override_content += f"  {service_name}:\n"
-                override_content += "    network_mode: host\n"
-                # Map all service names to localhost for inter-service communication
-                if len(service_names) > 1:
-                    override_content += "    extra_hosts:\n"
-                    for other_service in service_names:
-                        override_content += f'      - "{other_service}:127.0.0.1"\n'
-                if service_name in services_with_build:
-                    override_content += "    build:\n"
-                    override_content += "      network: host\n"
-        else:
-            override_content = (
-                "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
-            )
+            override["services"][service_name] = service
 
-        # Upload override
-        import os
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
-            tmp_file.write(override_content)
-            tmp_file.flush()
-            local_override_path = tmp_file.name
-
-        try:
-            self.sandbox_instance.fs.upload_file(local_override_path, override_path)
-        finally:
-            if os.path.exists(local_override_path):
-                os.unlink(local_override_path)
+        override_content = yaml.safe_dump(override, sort_keys=False)
+        self._upload_text(override_content, override_path, suffix=".yml")
 
         return override_path
 
@@ -2784,8 +2841,9 @@ class SandboxDockerManager:
         """
         Start services from docker-compose file.
 
-        Note: Automatically configures host networking for gVisor compatibility.
-        All services will use the host network - ports are directly accessible.
+        Note: Automatically configures host networking and host PID mode for gVisor
+        compatibility. All services will use the sandbox network, so ports are directly
+        accessible.
 
         Args:
             file: Path to docker-compose file (default: "docker-compose.yml")
@@ -2809,33 +2867,11 @@ class SandboxDockerManager:
             stack.stop()
             ```
         """
-        import yaml
-
         if not self._authenticated:
             self._auto_login()
 
         override_path = self._create_compose_override(file, cwd)
-
-        # Parse service names for the DockerComposeStack object
-        compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
-        service_names = []
-        try:
-            import os
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
-                local_compose_path = tmp_file.name
-            try:
-                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
-                with open(local_compose_path, "r") as f:
-                    compose_data = yaml.safe_load(f.read())
-                    if compose_data and "services" in compose_data:
-                        service_names = list(compose_data["services"].keys())
-            finally:
-                if os.path.exists(local_compose_path):
-                    os.unlink(local_compose_path)
-        except Exception:
-            pass
+        service_names, _ = self._read_compose_services(file, cwd)
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
         if detach:

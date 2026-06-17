@@ -26,18 +26,17 @@ const (
 	// 2. Setup cgroups (fast, ~100ms)
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
-	goprocReadyTimeout             = 30 * time.Second
-	goprocReadyProbeTimeout        = 50 * time.Millisecond
-	goprocInitialBackoff           = 10 * time.Millisecond
-	goprocMaxBackoff               = 50 * time.Millisecond
-	goprocBackoffMultiplier        = 1.5
-	cgroupSetupCompletionWait      = 500 * time.Millisecond
-	sandboxSetupCommandTimeout     = 10 * time.Second
-	dockerDaemonStartupTimeout     = 30 * time.Second
-	dockerDaemonReadyPollInterval  = 1 * time.Second
-	dockerInfoCommandTimeout       = 2 * time.Second
-	dockerInfoCommandCheckInterval = 100 * time.Millisecond
-	sandboxMissingProcessExitCode  = 137
+	goprocReadyTimeout            = 30 * time.Second
+	goprocReadyProbeTimeout       = 50 * time.Millisecond
+	goprocInitialBackoff          = 10 * time.Millisecond
+	goprocMaxBackoff              = 50 * time.Millisecond
+	goprocBackoffMultiplier       = 1.5
+	cgroupSetupCompletionWait     = 500 * time.Millisecond
+	sandboxSetupCommandTimeout    = 10 * time.Second
+	dockerDaemonStartupTimeout    = 30 * time.Second
+	dockerDaemonReadyPollInterval = 1 * time.Second
+	dockerInfoCommandTimeout      = 2 * time.Second
+	sandboxMissingProcessExitCode = 137
 )
 
 type tcpProbeResult struct {
@@ -123,7 +122,8 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--storage-driver=vfs",
 	}
 
-	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
+	// dockerd runs in the foreground; waiting here would block readiness checks.
+	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, false)
 
 	if err != nil {
 		if logDockerStartupCanceled(ctx, containerId, "start dockerd", err) {
@@ -579,9 +579,11 @@ func (s *Worker) waitForDockerDaemon(ctx context.Context, containerId string, in
 			}
 
 			// Check if daemon is ready
-			if s.isDockerDaemonReady(containerId, instance) {
+			if err := s.probeDockerDaemon(ctx, instance); err == nil {
 				log.Info().Str("container_id", containerId).Msg("docker daemon is ready")
 				return
+			} else {
+				log.Debug().Str("container_id", containerId).Err(err).Msg("docker daemon readiness check failed")
 			}
 		}
 	}
@@ -604,32 +606,10 @@ func (s *Worker) dockerDaemonCrashed(containerId string, instance *ContainerInst
 	return false
 }
 
-// isDockerDaemonReady checks if docker daemon responds to 'docker info'
-func (s *Worker) isDockerDaemonReady(containerId string, instance *ContainerInstance) bool {
-	checkPid, err := instance.SandboxProcessManager.Exec(
-		[]string{"docker", "info"},
-		"/",
-		[]string{},
-		false,
-	)
-	if err != nil {
-		return false
-	}
+// probeDockerDaemon checks if Docker responds to commands inside the sandbox.
+func (s *Worker) probeDockerDaemon(ctx context.Context, instance *ContainerInstance) error {
+	infoCtx, cancel := context.WithTimeout(ctx, dockerInfoCommandTimeout)
+	defer cancel()
 
-	// Wait for docker info to complete with timeout
-	deadline := time.Now().Add(dockerInfoCommandTimeout)
-	for time.Now().Before(deadline) {
-		exitCode, err := instance.SandboxProcessManager.Status(checkPid)
-		if err == nil && exitCode == 0 {
-			return true
-		} else if err == nil && exitCode > 0 {
-			return false
-		}
-
-		// Still running, wait a bit
-		time.Sleep(dockerInfoCommandCheckInterval)
-	}
-
-	// Timed out
-	return false
+	return runSandboxProcessManagerCommand(infoCtx, instance.SandboxProcessManager, []string{"docker", "info"}, "/", []string{}, "docker info")
 }

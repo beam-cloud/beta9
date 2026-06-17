@@ -2,7 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from beta9.abstractions.sandbox import SandboxProcess, SandboxProcessStream
+from beta9.abstractions import sandbox as sandbox_module
+from beta9.abstractions.sandbox import (
+    SandboxProcess,
+    SandboxProcessManager,
+    SandboxProcessStream,
+)
 from beta9.exceptions import SandboxProcessError
 
 
@@ -62,6 +67,27 @@ class LateStderrStub:
         return call
 
 
+class ExecReadyRetryStub:
+    def __init__(self, error_msg="Process manager not ready within timeout"):
+        self.calls = 0
+        self.error_msg = error_msg
+
+    def _unary_unary(self, path, *_args, **_kwargs):
+        def call(_request, **_call_kwargs):
+            if path.endswith("SandboxExec"):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(
+                        ok=False,
+                        pid=-1,
+                        error_msg=self.error_msg,
+                    )
+                return SimpleNamespace(ok=True, pid=123, error_msg="")
+            raise AssertionError(f"unexpected RPC path: {path}")
+
+        return call
+
+
 def test_process_stream_read_propagates_fetch_errors():
     def fetch():
         raise SandboxProcessError("stdout unavailable")
@@ -108,3 +134,22 @@ def test_combined_logs_iterator_reads_late_stderr_after_exit():
     process = SandboxProcess(sandbox, pid=42, cwd="/workspace", args=[], env={})
 
     assert "".join(process.logs) == "combined-stdout\ncombined-stderr\n"
+
+
+@pytest.mark.parametrize(
+    "error_msg",
+    [
+        "Process manager not ready within timeout",
+        "Failed to connect to sandbox",
+    ],
+)
+def test_exec_retries_process_manager_not_ready(monkeypatch, error_msg):
+    stub = ExecReadyRetryStub(error_msg)
+    sandbox = SimpleNamespace(container_id="sandbox-123", stub=stub)
+    manager = SandboxProcessManager(sandbox)
+    monkeypatch.setattr(sandbox_module, "SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS", 0)
+
+    process = manager.exec("echo", "ok")
+
+    assert process.pid == 123
+    assert stub.calls == 2
