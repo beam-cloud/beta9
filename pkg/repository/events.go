@@ -39,7 +39,7 @@ type eventStreamer interface {
 	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
-	StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamAppNamespaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error)
 }
 
@@ -261,11 +261,11 @@ func (r *EventClientRepo) StreamWorkspaceEvents(ctx context.Context, query types
 	return r.streamer.StreamWorkspaceEvents(ctx, query)
 }
 
-func (r *EventClientRepo) StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+func (r *EventClientRepo) StreamAppNamespaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
 	if r.streamer == nil {
 		return nil, ErrEventReadUnsupported
 	}
-	return r.streamer.StreamAppEvents(ctx, query)
+	return r.streamer.StreamAppNamespaceEvents(ctx, query)
 }
 
 func (r *EventClientRepo) StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error) {

@@ -266,7 +266,7 @@ type EventRepository interface {
 	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
-	StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamAppNamespaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)

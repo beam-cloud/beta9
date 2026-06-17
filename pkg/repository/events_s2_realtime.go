@@ -238,7 +238,7 @@ func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.Stream
 	case query.StubID != "" && query.WorkspaceID != "":
 		return addKnown(r.stubLogStreamName(query.WorkspaceID, query.StubID))
 	case query.AppID != "" && query.WorkspaceID != "":
-		return addKnown(r.appLogStreamName(query.WorkspaceID, query.AppID))
+		return addKnown(r.appNamespaceLogStreamName(query.WorkspaceID, query.AppID))
 	case query.WorkspaceID != "":
 		return addKnown(r.workspaceLogStreamName(query.WorkspaceID))
 	default:

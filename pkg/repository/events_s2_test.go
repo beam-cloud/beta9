@@ -52,7 +52,7 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	}
 }
 
-func TestS2AppScopedContainerEventsUseAppAggregateStream(t *testing.T) {
+func TestS2AppNamespaceContainerEventsUseAppNamespaceStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
@@ -310,7 +310,7 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
-func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
+func TestS2ContainerLogsUseContainerStubLookupBeforeAppNamespaceIndex(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
@@ -637,7 +637,7 @@ func TestTaskLogQueryRequiresTaskTaggedLogs(t *testing.T) {
 	}
 }
 
-func TestS2TaskEventsUseWorkspaceAndAppAggregateStreams(t *testing.T) {
+func TestS2TaskEventsUseWorkspaceAndAppNamespaceStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{

@@ -274,7 +274,7 @@ func TestBuildSandboxRowsEnrichesActiveTimingFromHistory(t *testing.T) {
 	}
 }
 
-func TestBuildSandboxStatsRowsUsesAppHistoryForAppScopedStats(t *testing.T) {
+func TestBuildSandboxStatsRowsUsesAppHistoryForAppNamespaceStats(t *testing.T) {
 	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
 	stubs := []types.StubWithRelated{{
 		Stub: types.Stub{
@@ -301,7 +301,7 @@ func TestBuildSandboxStatsRowsUsesAppHistoryForAppScopedStats(t *testing.T) {
 		t.Fatalf("expected %d sandbox stats rows, got %d", want, got)
 	}
 	if got := len(eventRepo.queries); got != 2 {
-		t.Fatalf("expected one app-scoped history query and one legacy fallback query, got %d", got)
+		t.Fatalf("expected one app namespace history query and one legacy fallback query, got %d", got)
 	}
 	query := eventRepo.queries[0]
 	if query.AppID != "app-1" {
