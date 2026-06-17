@@ -472,6 +472,7 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      taskIDFromEnv(request.Env),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		WorkerID:    c.workerId,
 		Success:     &success,
 		Source:      types.EventSourceClipFUSE.String(),

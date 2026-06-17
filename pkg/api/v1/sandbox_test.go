@@ -91,7 +91,34 @@ func TestBuildCreatedBuckets(t *testing.T) {
 	}
 
 	week := buildCreatedBucketsAt(stubs, "last_week", now)
-	if len(week) != 7 {
-		t.Errorf("expected last_week to return 7 day buckets, got %d", len(week))
+	if len(week) != 60 {
+		t.Errorf("expected last_week to return fixed 60 buckets, got %d", len(week))
+	}
+	day := buildCreatedBucketsAt(stubs, "last_day", now)
+	if len(day) != 60 {
+		t.Errorf("expected last_day to return fixed 60 buckets, got %d", len(day))
+	}
+}
+
+func TestBuildSandboxSummaryCreatedBucketsDedupeContainers(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 30, 0, 0, time.UTC)
+	base := now.Add(-30 * time.Minute)
+	summaries := []sandboxContainerSummary{
+		{ContainerID: "sandbox-1", CreatedAt: base},
+		{ContainerID: "sandbox-2", CreatedAt: base.Add(10 * time.Second)},
+		{ContainerID: "sandbox-3", CreatedAt: now.Add(-2 * time.Hour)},
+	}
+
+	buckets := buildSandboxSummaryCreatedBucketsAt(summaries, "last_hour", now)
+	if got, want := len(buckets), 60; got != want {
+		t.Fatalf("expected %d buckets, got %d", want, got)
+	}
+
+	total := 0
+	for _, bucket := range buckets {
+		total += bucket.Count
+	}
+	if total != 2 {
+		t.Fatalf("expected in-range bucket counts to sum to 2, got %d", total)
 	}
 }

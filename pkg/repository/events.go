@@ -39,7 +39,7 @@ type eventStreamer interface {
 	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
-	StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamAppNamespaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error)
 }
 
@@ -261,11 +261,11 @@ func (r *EventClientRepo) StreamWorkspaceEvents(ctx context.Context, query types
 	return r.streamer.StreamWorkspaceEvents(ctx, query)
 }
 
-func (r *EventClientRepo) StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
+func (r *EventClientRepo) StreamAppNamespaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error) {
 	if r.streamer == nil {
 		return nil, ErrEventReadUnsupported
 	}
-	return r.streamer.StreamAppEvents(ctx, query)
+	return r.streamer.StreamAppNamespaceEvents(ctx, query)
 }
 
 func (r *EventClientRepo) StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error) {
@@ -370,6 +370,7 @@ func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *ty
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      taskID,
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		WorkerID:    workerID,
 		CPU:         request.Cpu,
 		GPUCount:    request.GpuCount,
@@ -400,6 +401,7 @@ func (r *EventClientRepo) PushContainerRequestLifecycle(workerID string, request
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      firstNonEmpty(opts.TaskID, taskIDFromRequestEnv(request)),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		WorkerID:    workerID,
 		Success:     &success,
 		Source:      opts.Source.String(),
@@ -419,6 +421,7 @@ func (r *EventClientRepo) PushContainerTaskEvent(task *types.TaskWithRelated, ev
 		StubType:    string(task.Stub.Type.Kind()),
 		TaskID:      task.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
+		AppID:       task.App.ExternalId,
 		Reason:      opts.Reason,
 		Source:      opts.Source.String(),
 		Message:     opts.Message.String(),
@@ -469,6 +472,7 @@ func (r *EventClientRepo) PushContainerTaskLifecycle(task *types.TaskWithRelated
 		StubType:    string(task.Stub.Type.Kind()),
 		TaskID:      firstNonEmpty(opts.TaskID, task.ExternalId),
 		WorkspaceID: task.Workspace.ExternalId,
+		AppID:       task.App.ExternalId,
 		Success:     &success,
 		Source:      opts.Source.String(),
 		Attrs:       attrs,
@@ -574,6 +578,7 @@ func (r *EventClientRepo) PushContainerRunnerEvent(workerID string, request *typ
 			StubType:    firstNonEmpty(event.StubType, string(request.Stub.Type.Kind())),
 			TaskID:      firstNonEmpty(event.TaskID, taskIDFromRequestEnv(request)),
 			WorkspaceID: request.WorkspaceId,
+			AppID:       request.AppId,
 			WorkerID:    workerID,
 			Success:     &success,
 			Source:      types.EventSourceRunnerStdout.String(),
@@ -597,6 +602,7 @@ func (r *EventClientRepo) PushContainerRunnerEvent(workerID string, request *typ
 			StubType:    firstNonEmpty(event.StubType, string(request.Stub.Type.Kind())),
 			TaskID:      firstNonEmpty(event.TaskID, taskIDFromRequestEnv(request)),
 			WorkspaceID: request.WorkspaceId,
+			AppID:       request.AppId,
 			WorkerID:    workerID,
 			Source:      types.EventSourceRunnerStdout.String(),
 			Message:     event.Message,
@@ -1119,9 +1125,9 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 	case types.EventContainerMetricsSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
 	case types.EventContainerLifecycleSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerEventSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerLogSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventPlatformLogSchema:

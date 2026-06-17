@@ -52,7 +52,7 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	}
 }
 
-func TestS2AppScopedContainerEventsUseAppAggregateStream(t *testing.T) {
+func TestS2AppNamespaceContainerEventsUseAppNamespaceStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
@@ -310,7 +310,7 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
-func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
+func TestS2ContainerLogsUseContainerStubLookupBeforeAppNamespaceIndex(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
@@ -637,7 +637,7 @@ func TestTaskLogQueryRequiresTaskTaggedLogs(t *testing.T) {
 	}
 }
 
-func TestS2TaskEventsUseWorkspaceAndAppAggregateStreams(t *testing.T) {
+func TestS2TaskEventsUseWorkspaceAndAppNamespaceStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{
@@ -1072,6 +1072,7 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		ContainerID: "container-1",
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
+		AppID:       "app-1",
 		TaskID:      "task-1",
 		WorkerID:    "worker-1",
 	})
@@ -1083,6 +1084,7 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 	if metadata.ContainerID != "container-1" ||
 		metadata.WorkspaceID != "workspace-1" ||
 		metadata.StubID != "stub-1" ||
+		metadata.AppID != "app-1" ||
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)

@@ -320,10 +320,15 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	if imageId == nil {
 		imageId = &stubConfig.Runtime.ImageId
 	}
+	appId := ""
+	if stub.App != nil {
+		appId = stub.App.ExternalId
+	}
 
 	runRequest := &types.ContainerRequest{
 		ContainerId:       containerId,
 		StubId:            stub.ExternalId,
+		AppId:             appId,
 		Env:               env,
 		Cpu:               stubConfig.Runtime.Cpu,
 		Memory:            stubConfig.Runtime.Memory,
