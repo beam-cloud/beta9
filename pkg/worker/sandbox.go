@@ -28,6 +28,7 @@ const (
 	goprocMaxBackoff               = 50 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5
 	cgroupSetupCompletionWait      = 500 * time.Millisecond
+	sandboxSetupCommandTimeout     = 10 * time.Second
 	dockerDaemonStartupTimeout     = 30 * time.Second
 	dockerDaemonReadyPollInterval  = 1 * time.Second
 	dockerInfoCommandTimeout       = 2 * time.Second
@@ -101,12 +102,14 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	// Per https://gvisor.dev/docs/tutorials/docker-in-gvisor/:
 	// --iptables=false --ip6tables=false are REQUIRED for gVisor
 	// --bridge=none disables default bridge network (gVisor doesn't support veth interfaces)
+	// --storage-driver=vfs avoids nested overlay mounts, which are not supported by gVisor
 	// This means inner containers MUST use --network=host
 	cmd := []string{
 		"dockerd",
 		"--iptables=false",
 		"--ip6tables=false",
 		"--bridge=none",
+		"--storage-driver=vfs",
 	}
 
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
@@ -126,9 +129,17 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 func (s *Worker) setupDockerCgroups(ctx context.Context, containerId string, instance *ContainerInstance) error {
 	script := `
 set -e
-mount -t tmpfs cgroups /sys/fs/cgroup
+mkdir -p /sys/fs/cgroup
+if ! grep -q ' /sys/fs/cgroup ' /proc/self/mountinfo; then
+  mount -t tmpfs cgroups /sys/fs/cgroup
+fi
+if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+  exit 0
+fi
 mkdir -p /sys/fs/cgroup/devices
-mount -t cgroup -o devices devices /sys/fs/cgroup/devices
+if ! grep -q ' /sys/fs/cgroup/devices ' /proc/self/mountinfo; then
+  mount -t cgroup -o devices devices /sys/fs/cgroup/devices
+fi
 `
 
 	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
@@ -136,15 +147,7 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 		return err
 	}
 
-	// Wait for cgroup setup to complete
-	time.Sleep(cgroupSetupCompletionWait)
-
-	exitCode, _ := instance.SandboxProcessManager.Status(pid)
-	if exitCode != 0 {
-		return fmt.Errorf("cgroup setup failed with exit code %d", exitCode)
-	}
-
-	return nil
+	return s.waitForSandboxSetupCommand(ctx, instance, pid, "cgroup setup")
 }
 
 // enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking in gVisor sandboxes
@@ -156,15 +159,39 @@ func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, i
 		return err
 	}
 
-	time.Sleep(cgroupSetupCompletionWait)
+	return s.waitForSandboxSetupCommand(ctx, instance, pid, "IPv4 forwarding")
+}
 
-	exitCode, _ := instance.SandboxProcessManager.Status(pid)
-	if exitCode != 0 {
-		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		return fmt.Errorf("IPv4 forwarding failed with exit code %d: %s", exitCode, stderr)
+func (s *Worker) waitForSandboxSetupCommand(ctx context.Context, instance *ContainerInstance, pid int, name string) error {
+	ticker := time.NewTicker(cgroupSetupCompletionWait)
+	defer ticker.Stop()
+	timeout := time.NewTimer(sandboxSetupCommandTimeout)
+	defer timeout.Stop()
+
+	for {
+		exitCode, err := instance.SandboxProcessManager.Status(pid)
+		if err == nil && exitCode == 0 {
+			return nil
+		}
+		if err == nil && exitCode > 0 {
+			stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+			stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+			return fmt.Errorf("%s failed with exit code %d: stdout=%q stderr=%q", name, exitCode, stdout, stderr)
+		}
+		if err != nil {
+			return fmt.Errorf("%s status failed: %w", name, err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s canceled: %w", name, ctx.Err())
+		case <-timeout.C:
+			stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+			stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+			return fmt.Errorf("%s did not finish within %s: stdout=%q stderr=%q", name, sandboxSetupCommandTimeout, stdout, stderr)
+		case <-ticker.C:
+		}
 	}
-
-	return nil
 }
 
 // waitForProcessManager waits for the goproc process manager to be ready to accept commands

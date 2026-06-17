@@ -1121,12 +1121,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}
 
-	// Add Docker capabilities if enabled for sandbox containers with gVisor
-	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
-		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
-			runscRuntime.AddDockerInDockerCapabilities(spec)
-			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
-		}
+	// Add Docker capabilities if enabled for sandbox containers.
+	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		runtime.AddDockerInDockerCapabilities(spec)
+		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
 	}
 
 	// Prepare spec for the selected runtime
