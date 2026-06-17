@@ -1213,6 +1213,7 @@ func (m *ContainerNetworkManager) recordNetworkLifecycle(request *types.Containe
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      taskIDFromContainerRequestEnv(request.Env),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		WorkerID:    m.workerId,
 		Success:     &success,
 		Source:      types.EventSourceWorkerNetwork.String(),

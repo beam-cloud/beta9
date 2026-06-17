@@ -708,6 +708,7 @@ type EventContainerLifecycleSchema struct {
 	StubType    string               `json:"stub_type,omitempty"`
 	TaskID      string               `json:"task_id,omitempty"`
 	WorkspaceID string               `json:"workspace_id,omitempty"`
+	AppID       string               `json:"app_id,omitempty"`
 	WorkerID    string               `json:"worker_id,omitempty"`
 	Success     *bool                `json:"success,omitempty"`
 	Source      string               `json:"source,omitempty"`
@@ -725,6 +726,7 @@ type EventContainerEventSchema struct {
 	StubType    string            `json:"stub_type,omitempty"`
 	TaskID      string            `json:"task_id,omitempty"`
 	WorkspaceID string            `json:"workspace_id,omitempty"`
+	AppID       string            `json:"app_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
 	CPU         int64             `json:"cpu,omitempty"`
 	GPUCount    uint32            `json:"gpu_count,omitempty"`

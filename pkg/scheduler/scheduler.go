@@ -499,6 +499,7 @@ func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, li
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      taskIDFromRequestEnv(request.Env),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		Success:     &success,
 		Source:      types.EventSourceScheduler.String(),
 		Attrs:       attrs,

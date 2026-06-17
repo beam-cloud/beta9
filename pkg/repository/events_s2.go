@@ -1811,6 +1811,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.StubType = lifecycle.StubType
 		record.TaskID = lifecycle.TaskID
 		record.WorkspaceID = lifecycle.WorkspaceID
+		record.AppID = firstNonEmpty(lifecycle.AppID, record.AppID)
 		record.WorkerID = lifecycle.WorkerID
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = lifecycle.WorkspaceID
@@ -1835,6 +1836,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.StubType = event.StubType
 		record.TaskID = event.TaskID
 		record.WorkspaceID = event.WorkspaceID
+		record.AppID = firstNonEmpty(event.AppID, record.AppID)
 		record.WorkerID = event.WorkerID
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = event.WorkspaceID

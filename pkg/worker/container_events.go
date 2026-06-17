@@ -47,6 +47,9 @@ func populateContainerEventFromRequest(event *types.EventContainerEventSchema, r
 	if event.WorkspaceID == "" {
 		event.WorkspaceID = request.WorkspaceId
 	}
+	if event.AppID == "" {
+		event.AppID = request.AppId
+	}
 	if event.TaskID == "" {
 		event.TaskID = taskIDFromEnv(request.Env)
 	}
@@ -70,6 +73,9 @@ func populateContainerLifecycleFromRequest(lifecycle *types.EventContainerLifecy
 	}
 	if lifecycle.WorkspaceID == "" {
 		lifecycle.WorkspaceID = request.WorkspaceId
+	}
+	if lifecycle.AppID == "" {
+		lifecycle.AppID = request.AppId
 	}
 	if lifecycle.TaskID == "" {
 		lifecycle.TaskID = taskIDFromEnv(request.Env)

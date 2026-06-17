@@ -1072,6 +1072,7 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		ContainerID: "container-1",
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
+		AppID:       "app-1",
 		TaskID:      "task-1",
 		WorkerID:    "worker-1",
 	})
@@ -1083,6 +1084,7 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 	if metadata.ContainerID != "container-1" ||
 		metadata.WorkspaceID != "workspace-1" ||
 		metadata.StubID != "stub-1" ||
+		metadata.AppID != "app-1" ||
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)

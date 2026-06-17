@@ -115,12 +115,17 @@ func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscaler
 	}
 
 	for _, container := range containers {
+		appID := ""
+		if i.Stub.App != nil {
+			appID = i.Stub.App.ExternalId
+		}
 		i.EventRepo.PushContainerEvent(types.EventContainerEventSchema{
 			ID:          types.ContainerEventAutoscalerScaleDecision,
 			ContainerID: container.ContainerId,
 			StubID:      container.StubId,
 			StubType:    string(i.Stub.Type.Kind()),
 			WorkspaceID: container.WorkspaceId,
+			AppID:       appID,
 			Reason:      reason,
 			Source:      types.EventSourceEndpointAutoscaler.String(),
 			Message:     types.EventMessageAutoscalerScaleDecision.String(),
