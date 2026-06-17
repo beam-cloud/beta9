@@ -1084,16 +1084,10 @@ class SandboxProcessStream:
         Returns:
             str: New output chunk, or empty string if no new output.
         """
-        try:
-            output = retry_on_transient_error(self.fetch_fn, max_retries=2, delay=0.2)
-        except Exception:
-            # On persistent failure, return empty to avoid blocking
-            return ""
-
         # The sandbox process manager returns output deltas and clears its
         # internal buffer after each read. Do not treat the returned value as
         # cumulative output.
-        return output
+        return retry_on_transient_error(self.fetch_fn, max_retries=2, delay=0.2)
 
     def read(self):
         """
@@ -1316,7 +1310,7 @@ class SandboxProcess:
         return self._stderr_stream
 
     def _stdout(self) -> str:
-        return self.sandbox_instance.stub._unary_unary(
+        response = self.sandbox_instance.stub._unary_unary(
             "/pod.PodService/SandboxStdout",
             PodSandboxStdoutRequest,
             PodSandboxStdoutResponse,
@@ -1325,10 +1319,13 @@ class SandboxProcess:
                 container_id=self.sandbox_instance.container_id, pid=self.pid
             ),
             timeout=SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS,
-        ).stdout
+        )
+        if not response.ok:
+            raise SandboxProcessError(response.error_msg)
+        return response.stdout
 
     def _stderr(self) -> str:
-        return self.sandbox_instance.stub._unary_unary(
+        response = self.sandbox_instance.stub._unary_unary(
             "/pod.PodService/SandboxStderr",
             PodSandboxStderrRequest,
             PodSandboxStderrResponse,
@@ -1337,7 +1334,10 @@ class SandboxProcess:
                 container_id=self.sandbox_instance.container_id, pid=self.pid
             ),
             timeout=SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS,
-        ).stderr
+        )
+        if not response.ok:
+            raise SandboxProcessError(response.error_msg)
+        return response.stderr
 
     @property
     def logs(self):
@@ -1430,9 +1430,16 @@ class SandboxProcess:
                     return self._queue.pop(0)
 
             def read(self):
+                buffered_data = "".join(self._queue)
+                self._queue = []
+                for stream_info in self._streams.values():
+                    if stream_info["buffer"]:
+                        buffered_data += stream_info["buffer"]
+                        stream_info["buffer"] = ""
+
                 stdout_data = self._stdout.read()
                 stderr_data = self._stderr.read()
-                return stdout_data + stderr_data
+                return buffered_data + stdout_data + stderr_data
 
         self._logs_stream = CombinedStream(self)
         return self._logs_stream
