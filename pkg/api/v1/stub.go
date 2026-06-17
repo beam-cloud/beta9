@@ -689,11 +689,13 @@ const (
 )
 
 const (
-	defaultSandboxListLimit      = 50
-	maxSandboxListLimit          = 200
-	sandboxContainerHistoryLimit = 500
-	sandboxHistoryEventsPerRow   = 32
-	sandboxStatsHistoryLimit     = 5000
+	defaultSandboxListLimit       = 50
+	maxSandboxListLimit           = 200
+	sandboxContainerHistoryLimit  = 500
+	sandboxHistoryEventsPerRow    = 32
+	sandboxStatsHistoryLimit      = 5000
+	sandboxStatsFallbackStubLimit = 25
+	sandboxTimingHydrationLimit   = 50
 )
 
 type SandboxRow struct {
@@ -811,6 +813,7 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 
 	appID := ctx.QueryParam("app_id")
 	summaries := g.recentSandboxStatsContainerSummaries(ctx.Request().Context(), workspaceID, appID, stubs)
+	summaries = g.hydrateSandboxStatsSummaries(ctx.Request().Context(), workspaceID, appID, stubs, summaries)
 	sandboxRows := g.buildSandboxStatsRowsWithSummaries(ctx.Request().Context(), workspaceID, stubs, containersByStub, summaries)
 
 	statusCounts := map[string]int{
@@ -1070,6 +1073,7 @@ func (g *StubGroup) activeContainersByStub(workspaceID string) map[string][]type
 
 func (g *StubGroup) buildSandboxStatsRows(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated, containersByStub map[string][]types.ContainerState) []SandboxRow {
 	summaries := g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID, stubs)
+	summaries = g.hydrateSandboxStatsSummaries(ctx, workspaceID, appID, stubs, summaries)
 	return g.buildSandboxStatsRowsWithSummaries(ctx, workspaceID, stubs, containersByStub, summaries)
 }
 
@@ -1096,7 +1100,7 @@ func (g *StubGroup) buildSandboxStatsRowsWithSummaries(ctx context.Context, work
 			}
 			row := g.buildActiveSandboxRow(ctx, workspaceID, stub, container)
 			if summary, ok := summariesByContainerID[container.ContainerId]; ok {
-				applySandboxSummaryToActiveRow(&row, summary, now)
+				applySandboxSummaryToRow(&row, summary, now)
 			}
 			rows = append(rows, row)
 			rowByContainerID[container.ContainerId] = struct{}{}
@@ -1183,7 +1187,7 @@ func (g *StubGroup) buildSandboxRowsWithPreloadedSummaries(ctx context.Context, 
 				continue
 			}
 			if summary, ok := summariesByContainerID[rows[i].ContainerId]; ok {
-				applySandboxSummaryToActiveRow(&rows[i], summary, now)
+				applySandboxSummaryToRow(&rows[i], summary, now)
 			}
 		}
 
@@ -1201,6 +1205,8 @@ func (g *StubGroup) buildSandboxRowsWithPreloadedSummaries(ctx context.Context, 
 	if len(rows) == 0 {
 		rows = append(rows, g.buildFallbackSandboxRow(ctx, workspaceID, stub))
 	}
+
+	g.hydrateSandboxRowTimings(ctx, workspaceID, rows, maxRows)
 
 	sort.SliceStable(rows, func(i, j int) bool {
 		return rows[i].CreatedAt.After(rows[j].CreatedAt)
@@ -1317,7 +1323,7 @@ func sandboxContainerStateNeedsSummary(container types.ContainerState) bool {
 	return container.StartedAt > 0 && container.ScheduledAt > 0 && container.StartedAt < container.ScheduledAt
 }
 
-func applySandboxSummaryToActiveRow(row *SandboxRow, summary sandboxContainerSummary, now time.Time) {
+func applySandboxSummaryToRow(row *SandboxRow, summary sandboxContainerSummary, now time.Time) {
 	if row == nil {
 		return
 	}
@@ -1373,7 +1379,7 @@ func applySandboxSummaryToActiveRow(row *SandboxRow, summary sandboxContainerSum
 		row.InteractiveAtMs = &interactiveAtMs
 	}
 
-	if row.LifetimeMs == nil && isActiveSandboxStatus(row.Status) && startedAt != nil {
+	if isActiveSandboxStatus(row.Status) && startedAt != nil {
 		if now.IsZero() {
 			now = time.Now().UTC()
 		}
@@ -1381,7 +1387,72 @@ func applySandboxSummaryToActiveRow(row *SandboxRow, summary sandboxContainerSum
 		if lifetime >= 0 {
 			row.LifetimeMs = &lifetime
 		}
+	} else if row.LifetimeMs == nil && summary.LifetimeMs != nil {
+		row.LifetimeMs = summary.LifetimeMs
 	}
+}
+
+func sandboxRowNeedsTimingHydration(row SandboxRow) bool {
+	if row.ContainerId == "" || row.StubId == "" {
+		return false
+	}
+	return row.TimeToStartedMs == nil ||
+		row.TimeToInteractiveMs == nil ||
+		row.StartedAtMs == nil ||
+		row.InteractiveAtMs == nil ||
+		row.LifetimeMs == nil
+}
+
+func (g *StubGroup) hydrateSandboxRowTimings(ctx context.Context, workspaceID string, rows []SandboxRow, maxRows int) {
+	if g.eventRepo == nil || len(rows) == 0 {
+		return
+	}
+
+	limit := maxRows
+	if limit <= 0 || limit > sandboxTimingHydrationLimit {
+		limit = sandboxTimingHydrationLimit
+	}
+
+	now := time.Now().UTC()
+	for i := range rows {
+		if limit <= 0 {
+			return
+		}
+		if !sandboxRowNeedsTimingHydration(rows[i]) {
+			continue
+		}
+
+		summary, ok := g.canonicalSandboxContainerSummary(ctx, workspaceID, rows[i].StubId, rows[i].ContainerId)
+		if !ok {
+			limit--
+			continue
+		}
+
+		applySandboxSummaryToRow(&rows[i], summary, now)
+		limit--
+	}
+}
+
+func (g *StubGroup) canonicalSandboxContainerSummary(ctx context.Context, workspaceID, stubID, containerID string) (sandboxContainerSummary, bool) {
+	if g.eventRepo == nil || containerID == "" {
+		return sandboxContainerSummary{}, false
+	}
+
+	resp, err := g.eventRepo.GetContainerEvents(ctx, containerID, types.EventQuery{
+		WorkspaceID: workspaceID,
+		StubID:      stubID,
+		Limit:       sandboxContainerHistoryLimit,
+		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
+	})
+	if err != nil || resp == nil || len(resp.Events) == 0 {
+		return sandboxContainerSummary{}, false
+	}
+
+	summary := sandboxContainerSummaryFromEvents(containerID, resp.Events)
+	if summary.StubID == "" {
+		summary.StubID = stubID
+	}
+	return summary, true
 }
 
 func (g *StubGroup) buildFallbackSandboxRow(ctx context.Context, workspaceID string, stub *types.StubWithRelated) SandboxRow {
@@ -1489,6 +1560,53 @@ func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, wo
 		return nil
 	}
 	return sandboxContainerSummariesFromHistory(history.Events, 0)
+}
+
+func (g *StubGroup) hydrateSandboxStatsSummaries(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated, summaries []sandboxContainerSummary) []sandboxContainerSummary {
+	if g.eventRepo == nil || appID == "" || len(stubs) == 0 {
+		return summaries
+	}
+
+	byContainerID := indexSandboxContainerSummaries(summaries)
+	for _, stub := range recentSandboxStatsFallbackStubs(stubs, sandboxStatsFallbackStubLimit) {
+		for _, summary := range g.recentSandboxContainerSummaries(ctx, workspaceID, stub.ExternalId, 0) {
+			if summary.ContainerID == "" {
+				continue
+			}
+			if summary.AppID != "" && summary.AppID != appID {
+				continue
+			}
+			if summary.StubID == "" {
+				summary.StubID = stub.ExternalId
+			}
+			if _, ok := byContainerID[summary.ContainerID]; ok {
+				continue
+			}
+
+			summaries = append(summaries, summary)
+			byContainerID[summary.ContainerID] = summary
+		}
+	}
+
+	sort.SliceStable(summaries, func(i, j int) bool {
+		return summaries[i].LastEventAt.After(summaries[j].LastEventAt)
+	})
+	return summaries
+}
+
+func recentSandboxStatsFallbackStubs(stubs []types.StubWithRelated, limit int) []types.StubWithRelated {
+	if limit <= 0 || len(stubs) == 0 {
+		return nil
+	}
+
+	candidates := append([]types.StubWithRelated(nil), stubs...)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].CreatedAt.Time.After(candidates[j].CreatedAt.Time)
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	return candidates
 }
 
 func legacySandboxEventsForApp(events []types.ContainerEventRecord, stubs []types.StubWithRelated) []types.ContainerEventRecord {
