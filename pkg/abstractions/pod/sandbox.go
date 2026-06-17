@@ -833,6 +833,18 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 			ErrorMsg: err.Error(),
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+	if resp.CheckpointId == "" {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: "checkpoint response missing checkpoint ID",
+		}, nil
+	}
 
 	return &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -17,6 +18,10 @@ func forceSymlink(source, link string) error {
 	err := os.RemoveAll(link)
 	if err != nil {
 		return fmt.Errorf("error removing existing file or directory: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+		return fmt.Errorf("error creating symlink parent directory: %v", err)
 	}
 
 	return os.Symlink(source, link)
@@ -66,9 +71,22 @@ func copyFile(src, dst string) error {
 }
 
 func createTar(srcDir, destTar string) error {
-	cmd := exec.Command("tar", "-cf", destTar, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		_ = os.Remove(destTar)
+
+		cmd := exec.Command("tar", "-cf", destTar, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			lastErr = err
+			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+			continue
+		}
+
+		return nil
+	}
+
+	return lastErr
 }
 
 func untarTar(srcTar, destDir string) error {

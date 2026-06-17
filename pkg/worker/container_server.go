@@ -17,11 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -642,7 +640,7 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 }
 
 func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	pid, err := s.streamSandboxProcessExec(ctx, containerId, instance, cmd, cwd, env)
+	pid, err := s.execSandboxProcessOnce(ctx, instance, cmd, cwd, env)
 	if err == nil || !isProcessManagerDialFailure(err) {
 		return pid, err
 	}
@@ -662,7 +660,7 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	case <-timer.C:
 	}
 
-	retryPID, retryErr := s.streamSandboxProcessExec(ctx, containerId, instance, cmd, cwd, env)
+	retryPID, retryErr := s.execSandboxProcessOnce(ctx, instance, cmd, cwd, env)
 	if retryErr != nil {
 		return -1, fmt.Errorf("%w; retry failed: %v", err, retryErr)
 	}
@@ -670,170 +668,14 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	return retryPID, nil
 }
 
-func (s *ContainerRuntimeServer) streamSandboxProcessExec(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	if s.eventRepo == nil {
-		return -1, repository.ErrEventWriteUnsupported
-	}
-
-	streamCtx, cancel := context.WithCancel(context.Background())
-	client, err := newProcessManagerClient(streamCtx, instance)
+func (s *ContainerRuntimeServer) execSandboxProcessOnce(ctx context.Context, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
+	client, err := newProcessManagerClient(ctx, instance)
 	if err != nil {
-		cancel()
 		return -1, err
 	}
+	defer client.Cleanup()
 
-	stream, err := client.StreamExec(streamCtx, cmd, cwd, env, false)
-	if err != nil {
-		cancel()
-		_ = client.Cleanup()
-		return -1, err
-	}
-
-	pidCh := make(chan int, 1)
-	errCh := make(chan error, 1)
-	started := &atomic.Bool{}
-
-	go s.handleSandboxExecStream(stream, cancel, client.Cleanup, containerId, instance, cmd, cwd, pidCh, errCh, started)
-
-	select {
-	case pid := <-pidCh:
-		return pid, nil
-	case err := <-errCh:
-		cancel()
-		return -1, err
-	case <-ctx.Done():
-		cancel()
-		return -1, ctx.Err()
-	}
-}
-
-func (s *ContainerRuntimeServer) handleSandboxExecStream(
-	stream goprocpb.GoProc_StreamExecClient,
-	cancel context.CancelFunc,
-	cleanup func() error,
-	containerId string,
-	instance *ContainerInstance,
-	cmd []string,
-	cwd string,
-	pidCh chan<- int,
-	errCh chan<- error,
-	started *atomic.Bool,
-) {
-	defer cancel()
-	defer func() {
-		if err := cleanup(); err != nil {
-			log.Debug().Err(err).Str("container_id", containerId).Msg("failed to cleanup sandbox process manager client")
-		}
-	}()
-
-	sendStartErr := func(err error) {
-		if err == nil || started.Load() {
-			return
-		}
-		select {
-		case errCh <- err:
-		default:
-		}
-	}
-
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			sendStartErr(errors.New("sandbox exec stream closed before process start"))
-			return
-		}
-		if err != nil {
-			sendStartErr(err)
-			if started.Load() {
-				log.Warn().Err(err).Str("container_id", containerId).Msg("sandbox exec stream failed")
-			}
-			return
-		}
-
-		if event := resp.GetStarted(); event != nil {
-			if started.CompareAndSwap(false, true) {
-				pidCh <- int(event.Pid)
-			}
-			continue
-		}
-
-		if chunk := resp.GetChunk(); chunk != nil {
-			persistErr := s.persistSandboxProcessLog(instance, chunk, cmd, cwd)
-			ack := &goprocpb.ProcessLogAck{Seq: chunk.Seq, Ok: persistErr == nil}
-			if persistErr != nil {
-				ack.ErrorMsg = persistErr.Error()
-			}
-			sendErr := stream.Send(&goprocpb.StreamExecRequest{
-				Message: &goprocpb.StreamExecRequest_Ack{Ack: ack},
-			})
-			if persistErr != nil {
-				log.Error().
-					Err(persistErr).
-					Str("container_id", containerId).
-					Int32("pid", chunk.Pid).
-					Uint64("seq", chunk.Seq).
-					Str("stream", chunk.Stream).
-					Msg("failed to persist sandbox process log")
-				return
-			}
-			if sendErr != nil {
-				sendStartErr(sendErr)
-				if started.Load() {
-					log.Warn().Err(sendErr).Str("container_id", containerId).Msg("failed to ack sandbox process log")
-				}
-				return
-			}
-			continue
-		}
-
-		if event := resp.GetExited(); event != nil {
-			if !started.Load() {
-				msg := event.ErrorMsg
-				if msg == "" {
-					msg = "sandbox process exited before start acknowledgement"
-				}
-				sendStartErr(errors.New(msg))
-			}
-			return
-		}
-	}
-}
-
-func (s *ContainerRuntimeServer) persistSandboxProcessLog(instance *ContainerInstance, chunk *goprocpb.ProcessLogChunk, cmd []string, cwd string) error {
-	if s.eventRepo == nil {
-		return repository.ErrEventWriteUnsupported
-	}
-	if instance == nil || instance.Request == nil {
-		return errors.New("container request not available for sandbox process log")
-	}
-	if len(chunk.Data) == 0 {
-		return nil
-	}
-
-	request := instance.Request
-	entry := types.EventContainerLogSchema{
-		Timestamp:   time.Now().UTC(),
-		ContainerID: request.ContainerId,
-		StubID:      request.StubId,
-		StubType:    string(request.Stub.Type.Kind()),
-		WorkspaceID: request.WorkspaceId,
-		AppID:       request.AppId,
-		WorkerID:    s.workerID,
-		Stream:      chunk.Stream,
-		Line:        string(chunk.Data),
-		PID:         chunk.Pid,
-		ProcessArgs: append([]string(nil), cmd...),
-		ProcessCwd:  cwd,
-		ProcessSeq:  chunk.Seq,
-	}
-	if err := s.eventRepo.PushContainerLogEventQueued(entry); err != nil {
-		return err
-	}
-
-	if instance.LogBuffer != nil {
-		_ = instance.LogBuffer.Write(chunk.Data)
-	}
-	return nil
+	return client.Exec(cmd, cwd, env, false)
 }
 
 func isProcessManagerDialFailure(err error) bool {

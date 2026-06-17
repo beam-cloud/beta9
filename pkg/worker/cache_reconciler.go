@@ -830,6 +830,7 @@ func (m *WorkerCacheManager) pruneLocalCheckpoints(active map[string]struct{}) {
 	if err != nil {
 		return
 	}
+	pruneCutoff := time.Now().Add(-m.recentStubTTL())
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") {
@@ -844,8 +845,20 @@ func (m *WorkerCacheManager) pruneLocalCheckpoints(active map[string]struct{}) {
 		if _, ok := active[checkpointID]; ok {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(m.checkpointRoot, name))
+		path := filepath.Join(m.checkpointRoot, name)
+		if checkpointLocalPathFresh(path, pruneCutoff) {
+			continue
+		}
+		_ = os.RemoveAll(path)
 	}
+}
+
+func checkpointLocalPathFresh(path string, pruneCutoff time.Time) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.ModTime().After(pruneCutoff)
 }
 
 func (m *WorkerCacheManager) pruneStaleCacheCheckpoints() {
@@ -858,7 +871,7 @@ func (m *WorkerCacheManager) pruneStaleCacheCheckpoints() {
 		return
 	}
 	if resp.Pruned > 0 {
-		log.Info().Str("locality", m.locality).Int32("pruned", resp.Pruned).Msg("pruned stale cache checkpoints")
+		log.Info().Str("locality", m.locality).Int32("pruned", resp.Pruned).Msg("pruned stale cache-managed checkpoints")
 	}
 }
 

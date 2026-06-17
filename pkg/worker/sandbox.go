@@ -88,12 +88,18 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	// Setup cgroups for Docker-in-Docker
 	if err := s.setupDockerCgroups(ctx, containerId, instance); err != nil {
+		if logDockerStartupCanceled(ctx, containerId, "setup cgroups", err) {
+			return
+		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup cgroups")
 		return
 	}
 
 	// Enable IPv4 forwarding (required for Docker networking)
 	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
+		if logDockerStartupCanceled(ctx, containerId, "enable IPv4 forwarding", err) {
+			return
+		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
 		return
 	}
@@ -115,6 +121,9 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 
 	if err != nil {
+		if logDockerStartupCanceled(ctx, containerId, "start dockerd", err) {
+			return
+		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
 		return
 	}
@@ -123,6 +132,27 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	// Wait for daemon to be ready
 	s.waitForDockerDaemon(ctx, containerId, instance, pid)
+}
+
+func logDockerStartupCanceled(ctx context.Context, containerId, phase string, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		msg := strings.ToLower(err.Error())
+		shutdownTransport := strings.Contains(msg, "graceful_stop") || strings.Contains(msg, "received prior goaway")
+		if !shutdownTransport && !strings.Contains(msg, "context canceled") && !strings.Contains(msg, "code = canceled") {
+			return false
+		}
+	}
+
+	log.Debug().
+		Str("container_id", containerId).
+		Str("phase", phase).
+		Err(err).
+		Msg("docker daemon startup canceled during sandbox shutdown")
+	return true
 }
 
 // setupDockerCgroups configures cgroups required for Docker-in-Docker in gVisor

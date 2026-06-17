@@ -335,6 +335,50 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 	})
 }
 
+func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T) {
+	checkpointPath := filepath.Join(t.TempDir(), "checkpoint-1")
+
+	if checkpointMaterialized(checkpointPath) {
+		t.Fatal("missing checkpoint path should not be materialized")
+	}
+
+	if err := os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if checkpointMaterialized(checkpointPath) {
+		t.Fatal("filesystem-only checkpoint should not be materialized")
+	}
+
+	if err := os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime payload"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !checkpointMaterialized(checkpointPath) {
+		t.Fatal("checkpoint with filesystem and runtime payload should be materialized")
+	}
+}
+
+func TestMaterializeCheckpointArchiveRejectsFilesystemOnlyPayload(t *testing.T) {
+	root := t.TempDir()
+	checkpointID := "checkpoint-1"
+	sourcePath := filepath.Join(root, "source", checkpointID)
+	if err := os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	archivePath := filepath.Join(root, checkpointID+checkpointArchiveExtension)
+	if err := createTar(sourcePath, archivePath); err != nil {
+		t.Fatal(err)
+	}
+
+	checkpointPath := filepath.Join(root, "materialized", checkpointID)
+	if err := materializeCheckpointArchive(archivePath, checkpointPath, checkpointID); err == nil {
+		t.Fatal("expected filesystem-only archive to be rejected")
+	}
+	if checkpointMaterialized(checkpointPath) {
+		t.Fatal("filesystem-only archive should not materialize checkpoint")
+	}
+}
+
 // TestRuntimeCompatibility tests that the CRIU manager works with different runtimes
 func TestRuntimeCompatibility(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "criu-compat-test-*")

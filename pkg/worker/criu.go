@@ -215,6 +215,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
 		return err
 	}
+	if !checkpointMaterialized(checkpointPath) {
+		return fmt.Errorf("checkpoint missing runtime or filesystem payload")
+	}
 
 	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
 	if err != nil {
@@ -376,7 +379,7 @@ func materializeCheckpointArchive(archivePath, checkpointPath, checkpointID stri
 	}
 	extractedPath := filepath.Join(tmpRoot, checkpointID)
 	if !checkpointMaterialized(extractedPath) {
-		return fmt.Errorf("checkpoint archive missing filesystem payload")
+		return fmt.Errorf("checkpoint archive missing runtime or filesystem payload")
 	}
 	_ = os.RemoveAll(checkpointPath)
 	if err := os.Rename(extractedPath, checkpointPath); err != nil {
@@ -387,7 +390,53 @@ func materializeCheckpointArchive(archivePath, checkpointPath, checkpointID stri
 
 func checkpointMaterialized(checkpointPath string) bool {
 	info, err := os.Stat(filepath.Join(checkpointPath, checkpointFsDir))
-	return err == nil && info.IsDir()
+	if err != nil || !info.IsDir() {
+		return false
+	}
+
+	return checkpointHasRuntimePayload(checkpointPath)
+}
+
+func checkpointHasRuntimePayload(checkpointPath string) bool {
+	entries, err := os.ReadDir(checkpointPath)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == checkpointFsDir {
+			continue
+		}
+
+		entryPath := filepath.Join(checkpointPath, entry.Name())
+		if entry.Type().IsRegular() {
+			return true
+		}
+		if entry.IsDir() && checkpointDirHasRegularFile(entryPath) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func checkpointDirHasRegularFile(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		entryPath := filepath.Join(dir, entry.Name())
+		if entry.Type().IsRegular() {
+			return true
+		}
+		if entry.IsDir() && checkpointDirHasRegularFile(entryPath) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Worker) writeCheckpointArchiveFromCache(ctx context.Context, archivePath string, checkpoint *types.Checkpoint) error {

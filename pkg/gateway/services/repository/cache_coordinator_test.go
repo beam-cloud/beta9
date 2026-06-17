@@ -346,6 +346,56 @@ func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T)
 	}, backendRepo.activeKeys)
 }
 
+func TestPruneStaleCacheCheckpointsKeepsSandboxAndFreshCheckpoints(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	now := time.Now()
+	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
+	backendRepo := &pruneCheckpointBackendRepo{
+		checkpoints: []types.Checkpoint{
+			{
+				CheckpointId: "sandbox-checkpoint",
+				StubType:     types.StubTypeSandbox,
+				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
+			},
+			{
+				CheckpointId: "fresh-endpoint-checkpoint",
+				StubType:     types.StubTypeEndpointDeployment,
+				CreatedAt:    types.Time{Time: now.Add(-5 * time.Minute)},
+			},
+			{
+				CheckpointId: "old-endpoint-checkpoint",
+				StubType:     types.StubTypeEndpointDeployment,
+				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
+			},
+		},
+	}
+	service := &WorkerRepositoryService{
+		cacheMetadata: metadataStore,
+		backendRepo:   backendRepo,
+		appConfig: types.AppConfig{
+			Cache: cache.Config{
+				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 3600},
+			},
+		},
+	}
+
+	resp, err := service.PruneStaleCacheCheckpoints(
+		cacheRepositoryAuthContext(types.TokenTypeWorker),
+		&pb.PruneStaleCacheCheckpointsRequest{},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+	require.EqualValues(t, 1, resp.Pruned)
+	require.Equal(t, []string{"old-endpoint-checkpoint"}, backendRepo.pruneIDs)
+}
+
 func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *testing.T) {
 	server, err := miniredis.Run()
 	require.NoError(t, err)
@@ -360,6 +410,8 @@ func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *tes
 			CheckpointId: "checkpoint-a",
 			WorkspaceId:  7,
 			OriginKey:    "checkpoints/checkpoint-a.tar",
+			StubType:     types.StubTypeEndpointDeployment,
+			CreatedAt:    types.Time{Time: time.Now().Add(-2 * time.Hour)},
 		}},
 		workspaces: map[uint]*types.Workspace{7: {Name: "workspace"}},
 	}
