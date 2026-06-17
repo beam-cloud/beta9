@@ -826,6 +826,7 @@ func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, req
 			WorkspaceID:      request.WorkspaceId,
 			StubID:           request.StubId,
 			StubType:         string(request.Stub.Type.Kind()),
+			AppID:            request.AppId,
 			CPU:              request.Cpu,
 			GPUCount:         request.GpuCount,
 			ContainerMetrics: metrics,
@@ -1123,7 +1124,7 @@ func firstNonEmpty(values ...string) string {
 func eventMetadataFromData(data interface{}) eventMetadata {
 	switch d := data.(type) {
 	case types.EventContainerMetricsSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerLifecycleSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerEventSchema:

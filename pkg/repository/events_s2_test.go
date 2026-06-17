@@ -864,6 +864,35 @@ func TestLogRecordHeadersSkipDemultiplexesByTaskHeader(t *testing.T) {
 	}
 }
 
+func TestMetricsRecordMatchesAppScopedQuery(t *testing.T) {
+	query := types.EventQuery{AppID: "app-1"}
+	matchingPayload := types.EventContainerMetricsSchema{AppID: "app-1"}
+	otherPayload := types.EventContainerMetricsSchema{AppID: "app-2"}
+
+	if !metricsRecordMatchesQuery(s2.SequencedRecord{}, matchingPayload, query) {
+		t.Fatal("expected matching payload app id to pass")
+	}
+	if metricsRecordMatchesQuery(s2.SequencedRecord{}, types.EventContainerMetricsSchema{}, query) {
+		t.Fatal("expected app-scoped query to reject records without app id")
+	}
+	if metricsRecordMatchesQuery(s2.SequencedRecord{}, otherPayload, query) {
+		t.Fatal("expected mismatched payload app id to be rejected")
+	}
+
+	matchingHeader := s2.SequencedRecord{Headers: []s2.Header{s2.NewHeader("app_id", "app-1")}}
+	if !metricsRecordMatchesQuery(matchingHeader, types.EventContainerMetricsSchema{}, query) {
+		t.Fatal("expected matching app header to pass legacy payload")
+	}
+	if metricsRecordMatchesQuery(matchingHeader, otherPayload, query) {
+		t.Fatal("expected mismatched payload to reject even with a matching header")
+	}
+
+	otherHeader := s2.SequencedRecord{Headers: []s2.Header{s2.NewHeader("app_id", "app-2")}}
+	if metricsRecordMatchesQuery(otherHeader, matchingPayload, query) {
+		t.Fatal("expected mismatched app header to be rejected")
+	}
+}
+
 func TestTaskEventSchemaIncludesStubTypeAndDeploymentContext(t *testing.T) {
 	version := uint(7)
 	deploymentID := "deployment-123"

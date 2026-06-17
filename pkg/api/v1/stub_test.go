@@ -245,6 +245,8 @@ func TestBuildSandboxRowsEnrichesActiveTimingFromHistory(t *testing.T) {
 			ContainerId: "sandbox-stub-11111111",
 			StubId:      "sandbox-stub",
 			Status:      types.ContainerStatusRunning,
+			ScheduledAt: base.Unix(),
+			StartedAt:   base.Add(time.Second).Unix(),
 		},
 	}, 1)
 	if got, want := len(rows), 1; got != want {
@@ -400,6 +402,8 @@ func TestBuildSandboxStatsRowsEnrichesActiveTimingFromHistory(t *testing.T) {
 				ContainerId: "sandbox-stub-11111111",
 				StubId:      "sandbox-stub",
 				Status:      types.ContainerStatusRunning,
+				ScheduledAt: base.Unix(),
+				StartedAt:   base.Add(time.Second).Unix(),
 			},
 		},
 	})
