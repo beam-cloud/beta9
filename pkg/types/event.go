@@ -134,6 +134,7 @@ type EventContainerMetricsSchema struct {
 	WorkspaceID      string                    `json:"workspace_id"`
 	StubID           string                    `json:"stub_id"`
 	StubType         string                    `json:"stub_type,omitempty"`
+	AppID            string                    `json:"app_id,omitempty"`
 	CPU              int64                     `json:"cpu,omitempty"`
 	GPUCount         uint32                    `json:"gpu_count,omitempty"`
 	ContainerMetrics EventContainerMetricsData `json:"metrics"`

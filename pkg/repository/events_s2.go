@@ -1891,6 +1891,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.StubID = metrics.StubID
 		record.StubType = metrics.StubType
 		record.WorkspaceID = metrics.WorkspaceID
+		record.AppID = metrics.AppID
 		record.WorkerID = metrics.WorkerID
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = metrics.WorkspaceID

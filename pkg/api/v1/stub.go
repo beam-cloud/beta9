@@ -1235,13 +1235,11 @@ func (g *StubGroup) buildActiveSandboxRow(ctx context.Context, workspaceID strin
 	if container.StartedAt > 0 && container.ScheduledAt > 0 && container.StartedAt >= container.ScheduledAt {
 		tts := (container.StartedAt - container.ScheduledAt) * 1000
 		row.TimeToStartedMs = &tts
-		row.TimeToInteractiveMs = &tts
 	}
 
 	if isActiveSandboxStatus(row.Status) && container.StartedAt > 0 {
 		startedAtMs := container.StartedAt * 1000
 		row.StartedAtMs = &startedAtMs
-		row.InteractiveAtMs = &startedAtMs
 
 		lifetime := (time.Now().Unix() - container.StartedAt) * 1000
 		if lifetime >= 0 {
@@ -1314,10 +1312,10 @@ func sandboxContainerStateNeedsSummary(container types.ContainerState) bool {
 	if container.ContainerId == "" {
 		return false
 	}
-	if container.ScheduledAt <= 0 {
+	if isActiveSandboxStatus(string(container.Status)) {
 		return true
 	}
-	if isActiveSandboxStatus(string(container.Status)) && container.StartedAt <= 0 {
+	if container.ScheduledAt <= 0 {
 		return true
 	}
 	return container.StartedAt > 0 && container.ScheduledAt > 0 && container.StartedAt < container.ScheduledAt
@@ -1330,16 +1328,16 @@ func applySandboxSummaryToRow(row *SandboxRow, summary sandboxContainerSummary, 
 	if !summary.CreatedAt.IsZero() {
 		row.CreatedAt = summary.CreatedAt
 	}
-	if row.TimeToStartedMs == nil && summary.TimeToStartedMs != nil {
+	if summary.TimeToStartedMs != nil {
 		row.TimeToStartedMs = summary.TimeToStartedMs
 	}
-	if row.TimeToInteractiveMs == nil && summary.TimeToInteractiveMs != nil {
+	if summary.TimeToInteractiveMs != nil {
 		row.TimeToInteractiveMs = summary.TimeToInteractiveMs
 	}
-	if row.StartedAtMs == nil && summary.StartedAtMs != nil {
+	if summary.StartedAtMs != nil {
 		row.StartedAtMs = summary.StartedAtMs
 	}
-	if row.InteractiveAtMs == nil && summary.InteractiveAtMs != nil {
+	if summary.InteractiveAtMs != nil {
 		row.InteractiveAtMs = summary.InteractiveAtMs
 	}
 

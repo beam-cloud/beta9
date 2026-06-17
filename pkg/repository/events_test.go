@@ -294,6 +294,7 @@ func TestPushContainerResourceMetricsEventIncludesReservedResources(t *testing.T
 		ContainerId: "container-1",
 		StubId:      "stub-1",
 		WorkspaceId: "workspace-1",
+		AppId:       "app-1",
 		Cpu:         2500,
 		GpuCount:    2,
 		Stub: types.StubWithRelated{
@@ -318,6 +319,12 @@ func TestPushContainerResourceMetricsEventIncludesReservedResources(t *testing.T
 	}
 	if got, want := event.GPUCount, request.GpuCount; got != want {
 		t.Fatalf("unexpected gpu count: got %d want %d", got, want)
+	}
+	if got, want := event.AppID, request.AppId; got != want {
+		t.Fatalf("unexpected app id: got %q want %q", got, want)
+	}
+	if got, want := sink.events[0].Extensions()["appid"], request.AppId; got != want {
+		t.Fatalf("unexpected app extension: got %q want %q", got, want)
 	}
 }
 
