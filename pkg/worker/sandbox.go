@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sort"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
+	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,6 +37,7 @@ const (
 	dockerDaemonReadyPollInterval  = 1 * time.Second
 	dockerInfoCommandTimeout       = 2 * time.Second
 	dockerInfoCommandCheckInterval = 100 * time.Millisecond
+	sandboxMissingProcessExitCode  = 137
 )
 
 type tcpProbeResult struct {
@@ -134,6 +137,155 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	// Wait for daemon to be ready
 	s.waitForDockerDaemon(ctx, containerId, instance, pid)
+}
+
+func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstance, force bool) {
+	if force || instance == nil || instance.Request == nil || !instance.Request.DockerEnabled {
+		return
+	}
+	if instance.SandboxProcessManager == nil || !instance.SandboxProcessManagerReady {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), sandboxSetupCommandTimeout)
+	defer cancel()
+
+	if err := runSandboxProcessManagerCommand(ctx, instance.SandboxProcessManager, []string{"sh", "-c", dockerSandboxShutdownScript()}, "/", []string{}, "docker sandbox pre-stop"); err != nil {
+		if logDockerStartupCanceled(ctx, containerId, "stop docker", err) {
+			return
+		}
+		log.Debug().Str("container_id", containerId).Err(err).Msg("docker sandbox pre-stop did not complete cleanly")
+		return
+	}
+
+	log.Info().Str("container_id", containerId).Msg("docker sandbox pre-stop complete")
+}
+
+func runSandboxProcessManagerCommand(ctx context.Context, manager *goproc.GoProcClient, args []string, cwd string, env []string, name string) error {
+	stream, err := manager.StreamExec(ctx, args, cwd, env, true)
+	if err != nil {
+		return fmt.Errorf("%s start failed: %w", name, err)
+	}
+
+	var stdout, stderr strings.Builder
+
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s stream closed before process exit", name)
+		}
+		if err != nil {
+			return fmt.Errorf("%s stream failed: %w", name, err)
+		}
+
+		if resp.GetStarted() != nil {
+			continue
+		}
+
+		if chunk := resp.GetChunk(); chunk != nil {
+			if chunk.Stream == "stderr" {
+				stderr.Write(chunk.Data)
+			} else {
+				stdout.Write(chunk.Data)
+			}
+			if err := stream.Send(&goprocpb.StreamExecRequest{
+				Message: &goprocpb.StreamExecRequest_Ack{
+					Ack: &goprocpb.ProcessLogAck{Seq: chunk.Seq, Ok: true},
+				},
+			}); err != nil {
+				return fmt.Errorf("%s log ack failed: %w", name, err)
+			}
+			continue
+		}
+
+		if exited := resp.GetExited(); exited != nil {
+			if exited.ExitCode == 0 {
+				return nil
+			}
+			if exited.ErrorMsg != "" {
+				return fmt.Errorf("%s failed with exit code %d: %s stdout=%q stderr=%q", name, exited.ExitCode, exited.ErrorMsg, stdout.String(), stderr.String())
+			}
+			return fmt.Errorf("%s failed with exit code %d: stdout=%q stderr=%q", name, exited.ExitCode, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func sandboxProcessMissing(manager *goproc.GoProcClient, pid int32) (bool, error) {
+	checkPID, err := manager.Exec([]string{
+		"sh",
+		"-c",
+		fmt.Sprintf("if [ -d /proc/%d ]; then echo alive; else echo missing; fi", pid),
+	}, "/", []string{}, true)
+	if err != nil {
+		return false, err
+	}
+
+	output, err := manager.Stdout(checkPID)
+	if err != nil {
+		return false, err
+	}
+
+	return strings.TrimSpace(output) == "missing", nil
+}
+
+func waitForSandboxProcessMissing(ctx context.Context, manager *goproc.GoProcClient, pid int32, timeout time.Duration) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		missing, err := sandboxProcessMissing(manager, pid)
+		if err != nil {
+			return false, err
+		}
+		if missing {
+			return true, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func dockerSandboxShutdownScript() string {
+	return `
+set +e
+run() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 3s "$@"
+  else
+    "$@"
+  fi
+}
+if command -v docker >/dev/null 2>&1; then
+  ids="$(run docker ps -q 2>/dev/null || true)"
+  if [ -n "$ids" ]; then
+    run docker kill $ids >/dev/null 2>&1 || true
+  fi
+  ids="$(run docker ps -aq 2>/dev/null || true)"
+  if [ -n "$ids" ]; then
+    run docker rm -f $ids >/dev/null 2>&1 || true
+  fi
+fi
+if command -v pkill >/dev/null 2>&1; then
+  pkill -TERM dockerd >/dev/null 2>&1 || true
+  pkill -TERM containerd-shim >/dev/null 2>&1 || true
+  pkill -TERM containerd >/dev/null 2>&1 || true
+  for _ in 1 2 3 4 5; do
+    pgrep dockerd >/dev/null 2>&1 || pgrep containerd >/dev/null 2>&1 || pgrep containerd-shim >/dev/null 2>&1 || exit 0
+    sleep 0.2
+  done
+  pkill -KILL dockerd >/dev/null 2>&1 || true
+  pkill -KILL containerd-shim >/dev/null 2>&1 || true
+  pkill -KILL containerd >/dev/null 2>&1 || true
+fi
+exit 0
+`
 }
 
 func logDockerStartupCanceled(ctx context.Context, containerId, phase string, err error) bool {

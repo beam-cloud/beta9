@@ -42,6 +42,26 @@ class SequencedStub:
         return call
 
 
+class LateStderrStub:
+    def __init__(self):
+        self.stdout_chunks = ["combined-stdout\n", ""]
+        self.stderr_chunks = ["", "combined-stderr\n", ""]
+
+    def _unary_unary(self, path, *_args, **_kwargs):
+        def call(_request, **_call_kwargs):
+            if path.endswith("SandboxStdout"):
+                value = self.stdout_chunks.pop(0) if self.stdout_chunks else ""
+                return SimpleNamespace(ok=True, stdout=value)
+            if path.endswith("SandboxStderr"):
+                value = self.stderr_chunks.pop(0) if self.stderr_chunks else ""
+                return SimpleNamespace(ok=True, stderr=value)
+            if path.endswith("SandboxStatus"):
+                return SimpleNamespace(ok=True, exit_code=0, status="exited")
+            raise AssertionError(f"unexpected RPC path: {path}")
+
+        return call
+
+
 def test_process_stream_read_propagates_fetch_errors():
     def fetch():
         raise SandboxProcessError("stdout unavailable")
@@ -81,3 +101,10 @@ def test_combined_logs_read_preserves_buffered_partial_line():
 
     assert next(logs) == "line one\n"
     assert logs.read() == "partial"
+
+
+def test_combined_logs_iterator_reads_late_stderr_after_exit():
+    sandbox = SimpleNamespace(container_id="sandbox-123", stub=LateStderrStub())
+    process = SandboxProcess(sandbox, pid=42, cwd="/workspace", args=[], env={})
+
+    assert "".join(process.logs) == "combined-stdout\ncombined-stderr\n"

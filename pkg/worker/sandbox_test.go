@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -76,4 +77,15 @@ func TestDockerStartupCanceledClassification(t *testing.T) {
 			require.Equal(t, tt.want, dockerStartupCanceled(tt.ctx, tt.err))
 		})
 	}
+}
+
+func TestDockerSandboxShutdownScriptStopsInnerRuntime(t *testing.T) {
+	script := dockerSandboxShutdownScript()
+
+	require.Contains(t, script, "docker ps -q")
+	require.Contains(t, script, "docker kill")
+	require.Contains(t, script, "docker rm -f")
+	require.Contains(t, script, "pkill -TERM dockerd")
+	require.Contains(t, script, "pkill -KILL containerd")
+	require.True(t, strings.HasSuffix(strings.TrimSpace(script), "exit 0"))
 }

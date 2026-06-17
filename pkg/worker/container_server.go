@@ -52,6 +52,7 @@ type ContainerRuntimeServer struct {
 	baseConfigSpec specs.Spec
 	pb.UnimplementedContainerServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
+	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
 	imageClient             *ImageClient
@@ -735,6 +736,34 @@ func (s *ContainerRuntimeServer) refreshContainerInstance(containerId string, fa
 	return fallback
 }
 
+func sandboxProcessMarkKey(containerId string, pid int32) string {
+	return fmt.Sprintf("%s:%d", containerId, pid)
+}
+
+func (s *ContainerRuntimeServer) markSandboxProcessExited(containerId string, pid int32) {
+	s.killedSandboxProcesses.Store(sandboxProcessMarkKey(containerId, pid), time.Now())
+}
+
+func (s *ContainerRuntimeServer) clearSandboxProcessExited(containerId string, pid int32) {
+	s.killedSandboxProcesses.Delete(sandboxProcessMarkKey(containerId, pid))
+}
+
+func (s *ContainerRuntimeServer) sandboxProcessMarkedExited(containerId string, pid int32) bool {
+	key := sandboxProcessMarkKey(containerId, pid)
+	value, ok := s.killedSandboxProcesses.Load(key)
+	if !ok {
+		return false
+	}
+
+	markedAt, ok := value.(time.Time)
+	if !ok || time.Since(markedAt) > 10*time.Minute {
+		s.killedSandboxProcesses.Delete(key)
+		return false
+	}
+
+	return true
+}
+
 func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in *pb.ContainerSandboxStatusRequest) (*pb.ContainerSandboxStatusResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
@@ -779,6 +808,11 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
+	}
+	if exitCode >= 0 {
+		s.clearSandboxProcessExited(in.ContainerId, in.Pid)
+	} else if s.sandboxProcessMarkedExited(in.ContainerId, in.Pid) {
+		exitCode = sandboxMissingProcessExitCode
 	}
 
 	status := "running"
@@ -894,6 +928,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxKill(ctx context.Context, in *p
 		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Msgf("failed to kill sandbox process: %v", err)
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	missing, err := waitForSandboxProcessMissing(ctx, client, in.Pid, 3*time.Second)
+	if err != nil {
+		log.Debug().
+			Str("container_id", in.ContainerId).
+			Int32("pid", in.Pid).
+			Err(err).
+			Msg("failed to confirm killed sandbox process exit")
+	} else if missing {
+		s.markSandboxProcessExited(in.ContainerId, in.Pid)
+	}
 
 	return &pb.ContainerSandboxKillResponse{Ok: true}, err
 }
@@ -947,7 +991,15 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 	}
 
 	for _, process := range ps {
-		processes = append(processes, &pb.ProcessInfo{Pid: int32(process.Pid), ExitCode: int32(process.ExitCode), Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: process.Running})
+		exitCode := int32(process.ExitCode)
+		running := process.Running
+		if exitCode >= 0 {
+			s.clearSandboxProcessExited(in.ContainerId, int32(process.Pid))
+		} else if running && s.sandboxProcessMarkedExited(in.ContainerId, int32(process.Pid)) {
+			running = false
+			exitCode = sandboxMissingProcessExitCode
+		}
+		processes = append(processes, &pb.ProcessInfo{Pid: int32(process.Pid), ExitCode: exitCode, Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: running})
 	}
 
 	return &pb.ContainerSandboxListProcessesResponse{Ok: true, Processes: processes}, nil

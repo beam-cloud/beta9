@@ -47,6 +47,20 @@ func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.
 	require.ErrorContains(t, <-done, "Request cancelled")
 }
 
+func TestSandboxKilledProcessMarksPersistUntilExpiryOrClear(t *testing.T) {
+	server := &ContainerRuntimeServer{}
+
+	require.False(t, server.sandboxProcessMarkedExited("sandbox-test", 42))
+	server.markSandboxProcessExited("sandbox-test", 42)
+	require.True(t, server.sandboxProcessMarkedExited("sandbox-test", 42))
+
+	server.clearSandboxProcessExited("sandbox-test", 42)
+	require.False(t, server.sandboxProcessMarkedExited("sandbox-test", 42))
+
+	server.killedSandboxProcesses.Store(sandboxProcessMarkKey("sandbox-test", 43), time.Now().Add(-11*time.Minute))
+	require.False(t, server.sandboxProcessMarkedExited("sandbox-test", 43))
+}
+
 func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
 	containerId := "sandbox-test"
 	ready := make(chan struct{})

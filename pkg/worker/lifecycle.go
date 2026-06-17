@@ -115,6 +115,8 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		signal = syscall.SIGKILL
 	}
 
+	s.stopDockerSandbox(containerId, instance, kill)
+
 	// Use the runtime that was selected for this container
 	rt := instance.Runtime
 	if rt == nil {

@@ -1385,22 +1385,27 @@ class SandboxProcess:
                     return
 
                 chunk = stream_info["stream"]._fetch_next_chunk()
-                if chunk:
-                    stream_info["buffer"] += chunk
-
-                    while "\n" in stream_info["buffer"]:  # Process any complete lines
-                        line, stream_info["buffer"] = stream_info["buffer"].split("\n", 1)
-                        self._queue.append(line + "\n")
-
-                else:
+                if not chunk:
                     exit_code, _ = self.process.status()
                     if exit_code >= 0:  # Process has exited
+                        chunk = stream_info["stream"]._fetch_next_chunk()
+                    else:
+                        return
+
+                    if not chunk:
                         if stream_info["buffer"]:
                             self._queue.append(stream_info["buffer"])
                             stream_info["buffer"] = ""
                             return
 
                         stream_info["exhausted"] = True
+                        return
+
+                stream_info["buffer"] += chunk
+
+                while "\n" in stream_info["buffer"]:  # Process any complete lines
+                    line, stream_info["buffer"] = stream_info["buffer"].split("\n", 1)
+                    self._queue.append(line + "\n")
 
             def _fill_queue(self):
                 self._process_stream("stdout")
@@ -2056,6 +2061,8 @@ class DockerResult:
         self._waited = False
         self._output = None
         self._success = None
+        self._stdout = None
+        self._stderr = None
 
     def wait(self) -> bool:
         """Wait for operation to complete. Returns True if successful."""
@@ -2125,14 +2132,18 @@ class DockerResult:
         """Get all stdout (auto-waits if needed)."""
         if not self._waited:
             self.wait()
-        return self.process.stdout.read()
+        if self._stdout is None:
+            self._stdout = self.process.stdout.read()
+        return self._stdout
 
     @property
     def stderr(self) -> str:
         """Get all stderr (auto-waits if needed)."""
         if not self._waited:
             self.wait()
-        return self.process.stderr.read()
+        if self._stderr is None:
+            self._stderr = self.process.stderr.read()
+        return self._stderr
 
 
 class DockerComposeStack:
@@ -2401,7 +2412,7 @@ class SandboxDockerManager:
         if quiet:
             cmd.append("-q")
 
-        output = self._run(*cmd)
+        output = self._run(*cmd).stdout
         return output.split("\n") if quiet and output else output
 
     def stop(self, container: str) -> bool:
@@ -2579,7 +2590,7 @@ class SandboxDockerManager:
         if quiet:
             cmd.append("-q")
 
-        output = self._run(*cmd)
+        output = self._run(*cmd).stdout
         return output.split("\n") if quiet and output else output
 
     def rmi(self, image: str, force: bool = False) -> bool:
@@ -2977,7 +2988,7 @@ class SandboxDockerManager:
         cmd = ["docker", "volume", "ls"]
         if quiet:
             cmd.append("-q")
-        output = self._run(*cmd)
+        output = self._run(*cmd).stdout
         return output.split("\n") if quiet and output else output
 
     @property
