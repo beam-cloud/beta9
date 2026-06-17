@@ -214,12 +214,12 @@ func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	checkpoints, err := s.backendRepo.ListStaleCheckpoints(ctx, activeKeys)
+	pruneCutoff := s.staleCacheCheckpointPruneCutoff()
+	checkpoints, err := s.backendRepo.ListStaleCheckpoints(ctx, activeKeys, pruneCutoff)
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	pruneCutoff := s.staleCacheCheckpointPruneCutoff()
 	pruneIDs := make([]string, 0, len(checkpoints))
 	for _, checkpoint := range checkpoints {
 		if !cacheCheckpointPruneCandidate(checkpoint, pruneCutoff) {

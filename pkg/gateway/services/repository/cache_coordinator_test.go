@@ -21,14 +21,16 @@ import (
 type pruneCheckpointBackendRepo struct {
 	repository.BackendRepository
 	activeKeys               []string
+	stubLastUsedBefore       time.Time
 	checkpoints              []types.Checkpoint
 	recentKeysByCheckpointID map[string]string
 	pruneIDs                 []string
 	workspaces               map[uint]*types.Workspace
 }
 
-func (r *pruneCheckpointBackendRepo) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
+func (r *pruneCheckpointBackendRepo) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
 	r.activeKeys = append([]string(nil), activeRecentStubKeys...)
+	r.stubLastUsedBefore = stubLastUsedBefore
 	active := map[string]struct{}{}
 	for _, key := range activeRecentStubKeys {
 		active[key] = struct{}{}
@@ -358,6 +360,7 @@ func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T)
 		cache.RecentStubKey("workspace", "stub-a"),
 		cache.RecentStubKey("workspace", "stub-b"),
 	}, backendRepo.activeKeys)
+	require.WithinDuration(t, time.Now().Add(-time.Hour), backendRepo.stubLastUsedBefore, 5*time.Second)
 }
 
 func TestPruneStaleCacheCheckpointsPrunesStaleSandboxAndEndpointCheckpoints(t *testing.T) {
