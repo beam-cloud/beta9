@@ -208,7 +208,7 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 	if err != nil {
 		return &pb.PodSandboxStderrResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to get sandbox stdout",
+			ErrorMsg: "Failed to get sandbox stderr",
 		}, nil
 	}
 

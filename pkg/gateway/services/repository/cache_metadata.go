@@ -257,13 +257,14 @@ func (s *WorkerRepositoryService) staleCacheCheckpointPruneCutoff() time.Time {
 }
 
 func cacheCheckpointPruneCandidate(checkpoint types.Checkpoint, pruneCutoff time.Time) bool {
-	if types.StubType(checkpoint.StubType).Kind() == types.StubTypeSandbox {
+	lastUsedAt := checkpoint.CreatedAt.Time
+	if checkpoint.LastRestoredAt.Time.After(lastUsedAt) {
+		lastUsedAt = checkpoint.LastRestoredAt.Time
+	}
+	if lastUsedAt.IsZero() {
 		return false
 	}
-	if checkpoint.CreatedAt.Time.IsZero() {
-		return false
-	}
-	return checkpoint.CreatedAt.Time.Before(pruneCutoff)
+	return lastUsedAt.Before(pruneCutoff)
 }
 
 type anyLocalityRecentStubStore interface {

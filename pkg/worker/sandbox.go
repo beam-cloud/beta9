@@ -14,6 +14,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -135,16 +137,8 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 }
 
 func logDockerStartupCanceled(ctx context.Context, containerId, phase string, err error) bool {
-	if err == nil {
+	if !dockerStartupCanceled(ctx, err) {
 		return false
-	}
-
-	if ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		msg := strings.ToLower(err.Error())
-		shutdownTransport := strings.Contains(msg, "graceful_stop") || strings.Contains(msg, "received prior goaway")
-		if !shutdownTransport && !strings.Contains(msg, "context canceled") && !strings.Contains(msg, "code = canceled") {
-			return false
-		}
 	}
 
 	log.Debug().
@@ -153,6 +147,33 @@ func logDockerStartupCanceled(ctx context.Context, containerId, phase string, er
 		Err(err).
 		Msg("docker daemon startup canceled during sandbox shutdown")
 	return true
+}
+
+func dockerStartupCanceled(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	switch status.Code(err) {
+	case codes.Canceled, codes.DeadlineExceeded:
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	shutdownTransport := strings.Contains(msg, "graceful_stop") ||
+		strings.Contains(msg, "received prior goaway") ||
+		strings.Contains(msg, "transport is closing")
+
+	return shutdownTransport ||
+		strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "code = canceled") ||
+		strings.Contains(msg, "code = deadlineexceeded") ||
+		strings.Contains(msg, "code = deadline exceeded")
 }
 
 // setupDockerCgroups configures cgroups required for Docker-in-Docker in gVisor
@@ -199,6 +220,12 @@ func (s *Worker) waitForSandboxSetupCommand(ctx context.Context, instance *Conta
 	defer timeout.Stop()
 
 	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s canceled: %w", name, ctx.Err())
+		default:
+		}
+
 		exitCode, err := instance.SandboxProcessManager.Status(pid)
 		if err == nil && exitCode == 0 {
 			return nil
