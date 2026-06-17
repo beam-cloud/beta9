@@ -280,10 +280,7 @@ func (r *ScopedS2EventRepository) targetForStream(streamName s2.StreamName) *sco
 }
 
 func appendScopedS2Records(basin *s2.BasinClient, streamName s2.StreamName, records []s2.AppendRecord) error {
-	ctx, cancel := s2EventWriteContext()
-	defer cancel()
-	_, err := basin.Stream(streamName).Append(ctx, &s2.AppendInput{Records: records})
-	return err
+	return appendS2RecordsForWrite(basin, streamName, records)
 }
 
 func (r *S2EventRepository) PushEvent(event cloudevents.Event) error {
@@ -1259,10 +1256,29 @@ func s2TimestampMillisToNanos(timestamp uint64) uint64 {
 }
 
 func (r *S2EventRepository) appendRecordsForWrite(streamName s2.StreamName, records []s2.AppendRecord) error {
-	ctx, cancel := s2EventWriteContext()
-	defer cancel()
-	_, err := r.basin.Stream(streamName).Append(ctx, &s2.AppendInput{Records: records})
-	return err
+	return appendS2RecordsForWrite(r.basin, streamName, records)
+}
+
+func appendS2RecordsForWrite(basin *s2.BasinClient, streamName s2.StreamName, records []s2.AppendRecord) error {
+	appendRecords := func() error {
+		ctx, cancel := s2EventWriteContext()
+		defer cancel()
+		_, err := basin.Stream(streamName).Append(ctx, &s2.AppendInput{Records: records})
+		return err
+	}
+
+	err := appendRecords()
+	if !isS2StreamNotFound(err) {
+		return err
+	}
+
+	ensureCtx, ensureCancel := s2EventWriteContext()
+	defer ensureCancel()
+	if _, ensureErr := basin.Streams.Ensure(ensureCtx, s2.EnsureStreamArgs{Stream: streamName}); ensureErr != nil {
+		return fmt.Errorf("ensure missing s2 stream %q: %w; append: %v", streamName, ensureErr, err)
+	}
+
+	return appendRecords()
 }
 
 func s2EventWriteContext() (context.Context, context.CancelFunc) {
