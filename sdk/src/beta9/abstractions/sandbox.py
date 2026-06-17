@@ -91,7 +91,7 @@ class Sandbox(Pod):
         authorized (bool):
             Whether the sandbox should be authorized for external access. Default is False.
         name (str):
-            The name of the Sandbox app. Default is none, which means you must provide it during deployment.
+            Assign the sandbox to an app namespace. If the app does not exist, it will be created with the given name.
         volumes (List[Union[Volume, CloudBucket]]):
             The volumes and/or cloud buckets to mount into the Sandbox container. Default is an empty list.
         secrets (List[str]):
