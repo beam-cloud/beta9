@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
-	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,12 +31,10 @@ const (
 	goprocInitialBackoff          = 10 * time.Millisecond
 	goprocMaxBackoff              = 50 * time.Millisecond
 	goprocBackoffMultiplier       = 1.5
-	cgroupSetupCompletionWait     = 500 * time.Millisecond
 	sandboxSetupCommandTimeout    = 10 * time.Second
 	dockerDaemonStartupTimeout    = 30 * time.Second
 	dockerDaemonReadyPollInterval = 1 * time.Second
 	dockerInfoCommandTimeout      = 2 * time.Second
-	restoredGVisorGoProcReadyTime = 5 * time.Second
 	sandboxMissingProcessExitCode = 137
 )
 
@@ -122,7 +119,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
 
 	// Setup cgroups for Docker-in-Docker
-	if err := s.setupDockerCgroups(ctx, containerId, instance); err != nil {
+	if err := s.setupDockerCgroups(ctx, instance); err != nil {
 		if s.logDockerStartupCanceled(ctx, containerId, "setup cgroups", err) {
 			return
 		}
@@ -131,7 +128,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	}
 
 	// Enable IPv4 forwarding (required for Docker networking)
-	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
+	if err := s.enableIPv4Forwarding(ctx, instance); err != nil {
 		if s.logDockerStartupCanceled(ctx, containerId, "enable IPv4 forwarding", err) {
 			return
 		}
@@ -181,7 +178,7 @@ func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstan
 	ctx, cancel := context.WithTimeout(context.Background(), sandboxSetupCommandTimeout)
 	defer cancel()
 
-	if err := runSandboxProcessManagerCommand(ctx, instance.SandboxProcessManager, []string{"sh", "-c", dockerSandboxShutdownScript()}, "/", []string{}, "docker sandbox pre-stop"); err != nil {
+	if err := runSandboxShell(ctx, instance.SandboxProcessManager, "docker sandbox pre-stop", dockerSandboxShutdownScript()); err != nil {
 		if s.logDockerStartupCanceled(ctx, containerId, "stop docker", err) {
 			return
 		}
@@ -192,21 +189,22 @@ func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstan
 	log.Info().Str("container_id", containerId).Msg("docker sandbox pre-stop complete")
 }
 
+func runSandboxShell(ctx context.Context, manager *goproc.GoProcClient, name, script string) error {
+	return runSandboxProcessManagerCommand(ctx, manager, []string{"sh", "-c", script}, "/", nil, name)
+}
+
 func runSandboxProcessManagerCommand(ctx context.Context, manager *goproc.GoProcClient, args []string, cwd string, env []string, name string) error {
 	stream, err := manager.StreamExec(ctx, args, cwd, env, true)
 	if err != nil {
 		return fmt.Errorf("%s start failed: %w", name, err)
 	}
 
-	var stdout, stderr strings.Builder
+	output := sandboxCommandOutput{}
 
 	for {
 		resp, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			return fmt.Errorf("%s stream closed before process exit", name)
-		}
 		if err != nil {
-			return fmt.Errorf("%s stream failed: %w", name, err)
+			return sandboxCommandStreamError(name, err)
 		}
 
 		if resp.GetStarted() != nil {
@@ -214,31 +212,57 @@ func runSandboxProcessManagerCommand(ctx context.Context, manager *goproc.GoProc
 		}
 
 		if chunk := resp.GetChunk(); chunk != nil {
-			if chunk.Stream == "stderr" {
-				stderr.Write(chunk.Data)
-			} else {
-				stdout.Write(chunk.Data)
-			}
-			if err := stream.Send(&goprocpb.StreamExecRequest{
-				Message: &goprocpb.StreamExecRequest_Ack{
-					Ack: &goprocpb.ProcessLogAck{Seq: chunk.Seq, Ok: true},
-				},
-			}); err != nil {
+			output.write(chunk)
+			if err := ackSandboxCommandChunk(stream, chunk.Seq); err != nil {
 				return fmt.Errorf("%s log ack failed: %w", name, err)
 			}
 			continue
 		}
 
 		if exited := resp.GetExited(); exited != nil {
-			if exited.ExitCode == 0 {
-				return nil
-			}
-			if exited.ErrorMsg != "" {
-				return fmt.Errorf("%s failed with exit code %d: %s stdout=%q stderr=%q", name, exited.ExitCode, exited.ErrorMsg, stdout.String(), stderr.String())
-			}
-			return fmt.Errorf("%s failed with exit code %d: stdout=%q stderr=%q", name, exited.ExitCode, stdout.String(), stderr.String())
+			return output.exitError(name, exited)
 		}
 	}
+}
+
+type sandboxCommandOutput struct {
+	stdout strings.Builder
+	stderr strings.Builder
+}
+
+func (o *sandboxCommandOutput) write(chunk *goprocpb.ProcessLogChunk) {
+	if chunk.Stream == "stderr" {
+		o.stderr.Write(chunk.Data)
+		return
+	}
+	o.stdout.Write(chunk.Data)
+}
+
+func (o *sandboxCommandOutput) exitError(name string, exited *goprocpb.ExecProcessExited) error {
+	if exited.ExitCode == 0 {
+		return nil
+	}
+
+	msg := fmt.Sprintf("%s failed with exit code %d", name, exited.ExitCode)
+	if exited.ErrorMsg != "" {
+		msg += ": " + exited.ErrorMsg
+	}
+	return fmt.Errorf("%s stdout=%q stderr=%q", msg, o.stdout.String(), o.stderr.String())
+}
+
+func sandboxCommandStreamError(name string, err error) error {
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s stream closed before process exit", name)
+	}
+	return fmt.Errorf("%s stream failed: %w", name, err)
+}
+
+func ackSandboxCommandChunk(stream goprocpb.GoProc_StreamExecClient, seq uint64) error {
+	return stream.Send(&goprocpb.StreamExecRequest{
+		Message: &goprocpb.StreamExecRequest_Ack{
+			Ack: &goprocpb.ProcessLogAck{Seq: seq, Ok: true},
+		},
+	})
 }
 
 func sandboxProcessMissing(manager *goproc.GoProcClient, pid int32) (bool, error) {
@@ -375,7 +399,7 @@ func dockerStartupCanceled(ctx context.Context, err error) bool {
 }
 
 // setupDockerCgroups configures cgroups required for Docker-in-Docker in gVisor
-func (s *Worker) setupDockerCgroups(ctx context.Context, containerId string, instance *ContainerInstance) error {
+func (s *Worker) setupDockerCgroups(ctx context.Context, instance *ContainerInstance) error {
 	script := `
 set -e
 mkdir -p /sys/fs/cgroup
@@ -391,62 +415,12 @@ if ! grep -q ' /sys/fs/cgroup/devices ' /proc/self/mountinfo; then
 fi
 `
 
-	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
-	if err != nil {
-		return err
-	}
-
-	return s.waitForSandboxSetupCommand(ctx, instance, pid, "cgroup setup")
+	return runSandboxShell(ctx, instance.SandboxProcessManager, "cgroup setup", script)
 }
 
 // enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking in gVisor sandboxes
-func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	script := `echo 1 > /proc/sys/net/ipv4/ip_forward`
-
-	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
-	if err != nil {
-		return err
-	}
-
-	return s.waitForSandboxSetupCommand(ctx, instance, pid, "IPv4 forwarding")
-}
-
-func (s *Worker) waitForSandboxSetupCommand(ctx context.Context, instance *ContainerInstance, pid int, name string) error {
-	ticker := time.NewTicker(cgroupSetupCompletionWait)
-	defer ticker.Stop()
-	timeout := time.NewTimer(sandboxSetupCommandTimeout)
-	defer timeout.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("%s canceled: %w", name, ctx.Err())
-		default:
-		}
-
-		exitCode, err := instance.SandboxProcessManager.Status(pid)
-		if err == nil && exitCode == 0 {
-			return nil
-		}
-		if err == nil && exitCode > 0 {
-			stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-			stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-			return fmt.Errorf("%s failed with exit code %d: stdout=%q stderr=%q", name, exitCode, stdout, stderr)
-		}
-		if err != nil {
-			return fmt.Errorf("%s status failed: %w", name, err)
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("%s canceled: %w", name, ctx.Err())
-		case <-timeout.C:
-			stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-			stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-			return fmt.Errorf("%s did not finish within %s: stdout=%q stderr=%q", name, sandboxSetupCommandTimeout, stdout, stderr)
-		case <-ticker.C:
-		}
-	}
+func (s *Worker) enableIPv4Forwarding(ctx context.Context, instance *ContainerInstance) error {
+	return runSandboxShell(ctx, instance.SandboxProcessManager, "IPv4 forwarding", `echo 1 > /proc/sys/net/ipv4/ip_forward`)
 }
 
 // waitForProcessManager waits for the goproc process manager to be ready to accept commands
@@ -504,7 +478,7 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		}
 
 		stats.ReadyAttempts++
-		client, err := readyProcessManagerClient(ctx, instance)
+		client, err := newProcessManagerClient(ctx, instance)
 		if err == nil {
 			log.Info().
 				Str("container_id", containerId).
@@ -606,39 +580,36 @@ type processManagerEndpoint struct {
 	port int
 }
 
-func sandboxProcessManagerEndpoint(instance *ContainerInstance) (processManagerEndpoint, bool) {
-	endpoints := sandboxProcessManagerEndpoints(instance)
-	if len(endpoints) == 0 {
-		return processManagerEndpoint{}, false
-	}
-	return endpoints[0], true
-}
-
 func sandboxProcessManagerEndpoints(instance *ContainerInstance) []processManagerEndpoint {
 	if instance == nil {
 		return nil
 	}
 
 	endpoints := make([]processManagerEndpoint, 0, 2)
-	port := sandboxProcessManagerPort(instance)
 	if instance.ContainerIp != "" {
-		endpoints = append(endpoints, processManagerEndpoint{host: instance.ContainerIp, port: port})
+		endpoints = appendProcessManagerEndpoint(endpoints, processManagerEndpoint{
+			host: instance.ContainerIp,
+			port: int(types.WorkerSandboxProcessManagerPort),
+		})
 	}
-	if port == int(types.WorkerSandboxProcessManagerPort) {
-		if endpoint, ok := processManagerEndpointFromAddress(instance.ContainerAddressMap[types.WorkerSandboxProcessManagerPort]); ok {
-			if len(endpoints) == 0 || endpoints[0] != endpoint {
-				endpoints = append(endpoints, endpoint)
-			}
-		}
+
+	if endpoint, ok := processManagerEndpointFromAddress(instance.ContainerAddressMap[types.WorkerSandboxProcessManagerPort]); ok {
+		endpoints = appendProcessManagerEndpoint(endpoints, endpoint)
 	}
+
 	return endpoints
 }
 
-func sandboxProcessManagerPort(instance *ContainerInstance) int {
-	if instance != nil && instance.SandboxProcessManagerPort > 0 {
-		return instance.SandboxProcessManagerPort
+func appendProcessManagerEndpoint(endpoints []processManagerEndpoint, endpoint processManagerEndpoint) []processManagerEndpoint {
+	if endpoint.host == "" || endpoint.port <= 0 {
+		return endpoints
 	}
-	return int(types.WorkerSandboxProcessManagerPort)
+	for _, existing := range endpoints {
+		if existing == endpoint {
+			return endpoints
+		}
+	}
+	return append(endpoints, endpoint)
 }
 
 func processManagerEndpointFromAddress(address string) (processManagerEndpoint, bool) {
@@ -646,108 +617,13 @@ func processManagerEndpointFromAddress(address string) (processManagerEndpoint, 
 	if err != nil || host == "" {
 		return processManagerEndpoint{}, false
 	}
+
 	port, err := strconv.Atoi(portText)
 	if err != nil || port <= 0 {
 		return processManagerEndpoint{}, false
 	}
+
 	return processManagerEndpoint{host: host, port: port}, true
-}
-
-func readyProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
-	return newProcessManagerClient(ctx, instance)
-}
-
-func (s *Worker) recoverRestoredSandboxProcessManager(ctx context.Context, containerId string) error {
-	instance, exists := s.containerInstances.Get(containerId)
-	if !exists || instance == nil || instance.Runtime == nil || instance.Runtime.Name() != "gvisor" {
-		return nil
-	}
-	if instance.ContainerIp == "" {
-		return fmt.Errorf("restored sandbox %s has no container IP", containerId)
-	}
-
-	var lastErr error
-	for port := int(types.WorkerSandboxProcessManagerPort) + 1; port <= int(types.WorkerSandboxProcessManagerPort)+8; port++ {
-		s.setSandboxProcessManagerPort(containerId, port)
-
-		if err := startRestoredSandboxProcessManager(ctx, instance, port); err != nil {
-			lastErr = err
-			continue
-		}
-		if err := waitForProcessManagerPort(ctx, instance.ContainerIp, port, restoredGVisorGoProcReadyTime); err != nil {
-			lastErr = err
-			continue
-		}
-
-		log.Info().
-			Str("container_id", containerId).
-			Int("port", port).
-			Msg("restored sandbox process manager recovered")
-		return nil
-	}
-
-	s.setSandboxProcessManagerPort(containerId, int(types.WorkerSandboxProcessManagerPort))
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("restored sandbox process manager recovery failed")
-}
-
-func (s *Worker) setSandboxProcessManagerPort(containerId string, port int) {
-	instance, exists := s.containerInstances.Get(containerId)
-	if !exists || instance == nil {
-		return
-	}
-	instance.SandboxProcessManagerPort = port
-	s.containerInstances.Set(containerId, instance)
-}
-
-func startRestoredSandboxProcessManager(ctx context.Context, instance *ContainerInstance, port int) error {
-	execCtx, cancel := context.WithTimeout(ctx, sandboxSetupCommandTimeout)
-	defer cancel()
-
-	configJSON := fmt.Sprintf(`{"server_port":%d,"grpc_dial_timeout_s":1,"grpc_message_size_bytes":1000000000,"pretty_logs":true}`, port)
-	return instance.Runtime.Exec(execCtx, instance.Id, specs.Process{
-		Args: []string{
-			"/bin/sh",
-			"-c",
-			fmt.Sprintf("/usr/bin/goproc >/tmp/goproc-restore-%d.log 2>&1 &", port),
-		},
-		Cwd: "/",
-		Env: []string{"CONFIG_JSON=" + configJSON},
-	}, nil)
-}
-
-func waitForProcessManagerPort(ctx context.Context, host string, port int, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(goprocInitialBackoff)
-	defer ticker.Stop()
-
-	var lastErr error
-	for {
-		client, err := goproc.NewGoProcClient(ctx, host, uint(port))
-		if err == nil {
-			probeCtx, probeCancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
-			err = client.ReadyContext(probeCtx)
-			probeCancel()
-			_ = client.Cleanup()
-			if err == nil {
-				return nil
-			}
-		}
-		lastErr = err
-
-		select {
-		case <-ctx.Done():
-			if lastErr != nil {
-				return lastErr
-			}
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
 }
 
 func classifyProcessManagerReadyError(err error) string {
@@ -896,5 +772,5 @@ func (s *Worker) probeDockerDaemon(ctx context.Context, instance *ContainerInsta
 	infoCtx, cancel := context.WithTimeout(ctx, dockerInfoCommandTimeout)
 	defer cancel()
 
-	return runSandboxProcessManagerCommand(infoCtx, instance.SandboxProcessManager, []string{"docker", "info"}, "/", []string{}, "docker info")
+	return runSandboxProcessManagerCommand(infoCtx, instance.SandboxProcessManager, []string{"docker", "info"}, "/", nil, "docker info")
 }

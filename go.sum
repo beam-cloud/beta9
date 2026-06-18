@@ -128,12 +128,6 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.30.1/go.mod h1:jiNR3JqT15Dm+QWq2SRgh
 github.com/aws/smithy-go v1.22.2 h1:6D9hW43xKFrRx/tXXfAlIZc4JI+yQe6snnWcQyxSyLQ=
 github.com/aws/smithy-go v1.22.2/go.mod h1:irrKGvNn1InZwb2d7fkIRNucdfwR8R+Ts3wxYa/cJHg=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
-github.com/beam-cloud/clip v0.0.0-20260612144806-eae949ea4db2 h1:Z5+oOObrr0XRakgOax+jhg233eahDrFVe5ngWLR+d/A=
-github.com/beam-cloud/clip v0.0.0-20260612144806-eae949ea4db2/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
-github.com/beam-cloud/clip v0.0.0-20260612150033-ed56df845021 h1:lb+/IU0QcO/tFNwVB8XyML8aOoZleFwPNaBKN9pob3g=
-github.com/beam-cloud/clip v0.0.0-20260612150033-ed56df845021/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
-github.com/beam-cloud/clip v0.0.0-20260612150809-b81a1ae06df9 h1:AcqZvhzj4TRrQ2Z1RzIojtT2V5OgsY6XGrwBYqxhaRE=
-github.com/beam-cloud/clip v0.0.0-20260612150809-b81a1ae06df9/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
 github.com/beam-cloud/clip v0.0.0-20260612152219-fc12eb359a11 h1:03G4HcFrvMfM2xT472mT9Vg4WuZ3TO+nXbUEfzWerl4=
 github.com/beam-cloud/clip v0.0.0-20260612152219-fc12eb359a11/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
 github.com/beam-cloud/geesefs v0.0.0-20260604132438-6acb73b2cebd h1:qdvWIpwFIHK4yhLV27r7D2HZj80Umq/h3tHGITpgM6g=
@@ -144,10 +138,8 @@ github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1 h1:EUB/gApGrZW0
 github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/gofuse v0.0.0-20260524202825-ee695e692747 h1:OZJmeUHKMeejeznwdFNt254KZIxtADnyHuRZiUV8AoI=
 github.com/beam-cloud/gofuse v0.0.0-20260524202825-ee695e692747/go.mod h1:JYi9iIxdYNgxmMgLwtSHO/hmVnP2kfX1oc+mtx+XWLA=
-github.com/beam-cloud/goproc v0.1.5 h1:FDldQgLn5AbfEJ4Ais70xxmbQhfl2Cmx1IqupJYF11M=
-github.com/beam-cloud/goproc v0.1.5/go.mod h1:eis19sZHSHNCmj8PjiRCdHwp3kkc31wdW3hrynKZq8k=
-github.com/beam-cloud/goproc v0.1.6 h1:cAMoYSY6j3fgpyiJm9mZMmkJIMF2MBAgSNMlWtWHrQw=
-github.com/beam-cloud/goproc v0.1.6/go.mod h1:eis19sZHSHNCmj8PjiRCdHwp3kkc31wdW3hrynKZq8k=
+github.com/beam-cloud/goproc v0.1.9 h1:SEjDS5aCKH128JpUDzyQkOTqWmLF4q9XSIstMEhy7hw=
+github.com/beam-cloud/goproc v0.1.9/go.mod h1:eis19sZHSHNCmj8PjiRCdHwp3kkc31wdW3hrynKZq8k=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324/go.mod h1:pBb6ZWEw7rhALuBZTGZxT3p+Sd5b8jsvP5EPEsM8T/Q=
 github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8 h1:lc3G6/sHW4e5/XPHO2w2Ni43fbu42nojS/uX45Ws6Ck=

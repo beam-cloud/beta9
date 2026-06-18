@@ -108,7 +108,7 @@ func (s *Worker) cacheContainerAddressMap(containerId string, addressMap map[int
 	}
 
 	instance, exists := s.containerInstances.Get(containerId)
-	if !exists {
+	if !exists || instance == nil {
 		return
 	}
 
@@ -120,18 +120,12 @@ func cloneContainerAddressMap(addressMap map[int32]string) map[int32]string {
 	if len(addressMap) == 0 {
 		return nil
 	}
+
 	cloned := make(map[int32]string, len(addressMap))
 	for port, address := range addressMap {
 		cloned[port] = address
 	}
 	return cloned
-}
-
-func (s *Worker) containerPortAddress(containerId string, binding PortBinding) (string, error) {
-	if s.containerNetworkManager == nil {
-		return "", fmt.Errorf("container network manager unavailable")
-	}
-	return s.containerNetworkManager.ContainerPortAddress(containerId, binding)
 }
 
 func (s *Worker) containerPortAddressMap(containerId string, bindings []PortBinding) (map[int32]string, error) {

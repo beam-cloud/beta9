@@ -1217,17 +1217,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		isSandbox := request.Stub.Type.Kind() == types.StubTypeSandbox
-		if isSandbox {
-			defer releaseStartupSlot()
-		} else {
-			releaseStartupSlot()
-		}
+		releaseStartupSlot()
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		if isSandbox {
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance, exists := s.containerInstances.Get(containerId)
 			if !exists {
 				return
@@ -1457,11 +1452,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 		runtimeStart = time.Now()
 		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
-		if restored && request.Stub.Type.Kind() == types.StubTypeSandbox {
-			if err := s.recoverRestoredSandboxProcessManager(ctx, request.ContainerId); err != nil {
-				log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to recover restored sandbox process manager")
-			}
-		}
 		if restored {
 			close(runtimeStartedDone)
 			<-runtimeStartedHandled

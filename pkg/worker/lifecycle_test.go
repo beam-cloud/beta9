@@ -1304,7 +1304,6 @@ type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
 	state        func(context.Context, string) (runtime.State, error)
-	exec         func(context.Context, string, specs.Process, *runtime.ExecOpts) error
 }
 
 func (m *mockRuntime) Name() string {
@@ -1324,9 +1323,6 @@ func (m *mockRuntime) Run(ctx context.Context, containerID, bundlePath string, o
 }
 
 func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.Process, opts *runtime.ExecOpts) error {
-	if m.exec != nil {
-		return m.exec(ctx, containerID, proc, opts)
-	}
 	return nil
 }
 

@@ -30,7 +30,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -642,7 +641,7 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 }
 
 func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	pid, err := s.streamSandboxProcessExec(ctx, containerId, instance, cmd, cwd, env)
+	pid, err := s.execSandboxProcessOnce(ctx, instance, cmd, cwd, env)
 	if err == nil || !isProcessManagerDialFailure(err) {
 		return pid, err
 	}
@@ -662,7 +661,7 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	case <-timer.C:
 	}
 
-	retryPID, retryErr := s.streamSandboxProcessExec(ctx, containerId, instance, cmd, cwd, env)
+	retryPID, retryErr := s.execSandboxProcessOnce(ctx, instance, cmd, cwd, env)
 	if retryErr != nil {
 		return -1, fmt.Errorf("%w; retry failed: %v", err, retryErr)
 	}
@@ -670,144 +669,14 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	return retryPID, nil
 }
 
-func (s *ContainerRuntimeServer) streamSandboxProcessExec(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	streamCtx, cancel := context.WithCancel(context.Background())
-	client, err := newProcessManagerClient(streamCtx, instance)
+func (s *ContainerRuntimeServer) execSandboxProcessOnce(ctx context.Context, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
+	client, err := newProcessManagerClient(ctx, instance)
 	if err != nil {
-		cancel()
 		return -1, err
 	}
+	defer client.Cleanup()
 
-	stream, err := client.StreamExec(streamCtx, cmd, cwd, env, false)
-	if err != nil {
-		cancel()
-		_ = client.Cleanup()
-		return -1, err
-	}
-
-	pidCh := make(chan int, 1)
-	errCh := make(chan error, 1)
-	go s.drainSandboxExecStream(stream, cancel, client.Cleanup, containerId, instance, cmd, cwd, pidCh, errCh)
-
-	select {
-	case pid := <-pidCh:
-		return pid, nil
-	case err := <-errCh:
-		cancel()
-		return -1, err
-	case <-ctx.Done():
-		cancel()
-		return -1, ctx.Err()
-	}
-}
-
-func (s *ContainerRuntimeServer) drainSandboxExecStream(
-	stream goprocpb.GoProc_StreamExecClient,
-	cancel context.CancelFunc,
-	cleanup func() error,
-	containerId string,
-	instance *ContainerInstance,
-	cmd []string,
-	cwd string,
-	pidCh chan<- int,
-	errCh chan<- error,
-) {
-	defer cancel()
-	defer func() {
-		if err := cleanup(); err != nil {
-			log.Debug().Err(err).Str("container_id", containerId).Msg("failed to cleanup sandbox process manager client")
-		}
-	}()
-
-	started := false
-	for {
-		resp, err := stream.Recv()
-		if err != nil {
-			if !started {
-				if errors.Is(err, io.EOF) {
-					err = errors.New("sandbox exec stream closed before process start")
-				}
-				select {
-				case errCh <- err:
-				default:
-				}
-			} else if started && !errors.Is(err, io.EOF) {
-				log.Debug().Err(err).Str("container_id", containerId).Msg("sandbox exec stream ended")
-			}
-			return
-		}
-
-		if event := resp.GetStarted(); event != nil {
-			if !started {
-				started = true
-				pidCh <- int(event.Pid)
-			}
-			continue
-		}
-
-		if event := resp.GetExited(); event != nil {
-			if !started {
-				msg := event.ErrorMsg
-				if msg == "" {
-					msg = "sandbox process exited before start acknowledgement"
-				}
-				select {
-				case errCh <- errors.New(msg):
-				default:
-				}
-			}
-			return
-		}
-
-		chunk := resp.GetChunk()
-		if chunk == nil {
-			continue
-		}
-
-		if err := s.persistSandboxProcessLog(instance, chunk, cmd, cwd); err != nil {
-			log.Error().Err(err).Str("container_id", containerId).Uint64("seq", chunk.Seq).Msg("failed to persist sandbox process log")
-		}
-		if err := stream.Send(&goprocpb.StreamExecRequest{
-			Message: &goprocpb.StreamExecRequest_Ack{Ack: &goprocpb.ProcessLogAck{Seq: chunk.Seq, Ok: true}},
-		}); err != nil {
-			if !started {
-				select {
-				case errCh <- err:
-				default:
-				}
-			}
-			return
-		}
-	}
-}
-
-func (s *ContainerRuntimeServer) persistSandboxProcessLog(instance *ContainerInstance, chunk *goprocpb.ProcessLogChunk, cmd []string, cwd string) error {
-	if chunk == nil || len(chunk.Data) == 0 {
-		return nil
-	}
-	if instance != nil && instance.LogBuffer != nil {
-		_ = instance.LogBuffer.Write(chunk.Data)
-	}
-	if s.eventRepo == nil || instance == nil || instance.Request == nil {
-		return nil
-	}
-
-	request := instance.Request
-	return s.eventRepo.PushContainerLogEventQueued(types.EventContainerLogSchema{
-		Timestamp:   time.Now().UTC(),
-		ContainerID: request.ContainerId,
-		StubID:      request.StubId,
-		StubType:    string(request.Stub.Type.Kind()),
-		WorkspaceID: request.WorkspaceId,
-		AppID:       request.AppId,
-		WorkerID:    s.workerID,
-		Stream:      chunk.Stream,
-		Line:        string(chunk.Data),
-		PID:         chunk.Pid,
-		ProcessArgs: append([]string(nil), cmd...),
-		ProcessCwd:  cwd,
-		ProcessSeq:  chunk.Seq,
-	})
+	return client.Exec(cmd, cwd, env, false)
 }
 
 func isProcessManagerDialFailure(err error) bool {
@@ -1122,7 +991,6 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	seen := make(map[int32]struct{}, len(ps))
 	for _, process := range ps {
 		exitCode := int32(process.ExitCode)
 		running := process.Running
@@ -1133,89 +1001,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 			exitCode = sandboxMissingProcessExitCode
 		}
 		pid := int32(process.Pid)
-		seen[pid] = struct{}{}
 		processes = append(processes, &pb.ProcessInfo{Pid: pid, ExitCode: exitCode, Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: running})
 	}
 
-	if instance.SandboxProcessManagerPort != 0 && instance.SandboxProcessManagerPort != int(types.WorkerSandboxProcessManagerPort) {
-		fallbackProcesses, err := s.listRestoredSandboxProcesses(ctx, in.ContainerId, instance)
-		if err != nil {
-			log.Debug().Err(err).Str("container_id", in.ContainerId).Msg("failed to list restored sandbox processes from procfs")
-		} else {
-			for _, process := range fallbackProcesses {
-				if _, ok := seen[process.Pid]; ok {
-					continue
-				}
-				processes = append(processes, process)
-			}
-		}
-	}
-
 	return &pb.ContainerSandboxListProcessesResponse{Ok: true, Processes: processes}, nil
-}
-
-func (s *ContainerRuntimeServer) listRestoredSandboxProcesses(ctx context.Context, containerId string, instance *ContainerInstance) ([]*pb.ProcessInfo, error) {
-	if instance == nil || instance.Runtime == nil {
-		return nil, fmt.Errorf("container runtime unavailable")
-	}
-
-	const script = `
-self=$$
-for p in /proc/[0-9]*; do
-  pid=${p##*/}
-  [ "$pid" = "1" ] && continue
-  [ "$pid" = "$self" ] && continue
-  [ -r "$p/cmdline" ] || continue
-  cmd=$(tr '\000' ' ' < "$p/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')
-  [ -n "$cmd" ] || continue
-  case "$cmd" in
-    *"/usr/bin/goproc"*) continue ;;
-    *"/bin/sh -c"*"for p in /proc/"*) continue ;;
-  esac
-  cwd=$(readlink "$p/cwd" 2>/dev/null || true)
-  printf '%s\t%s\t%s\n' "$pid" "$cwd" "$cmd"
-done
-`
-	var output bytes.Buffer
-	execCtx, cancel := context.WithTimeout(ctx, sandboxSetupCommandTimeout)
-	defer cancel()
-
-	var env []string
-	if instance.Spec != nil && instance.Spec.Process != nil {
-		env = instance.Spec.Process.Env
-	}
-	err := instance.Runtime.Exec(execCtx, containerId, specs.Process{
-		Args: []string{"/bin/sh", "-c", script},
-		Cwd:  "/",
-		Env:  env,
-	}, &runtime.ExecOpts{OutputWriter: &output})
-	if err != nil {
-		return nil, err
-	}
-
-	processes := make([]*pb.ProcessInfo, 0)
-	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
-		if line == "" {
-			continue
-		}
-		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) != 3 {
-			continue
-		}
-		pid, err := strconv.ParseInt(fields[0], 10, 32)
-		if err != nil {
-			continue
-		}
-		processes = append(processes, &pb.ProcessInfo{
-			Pid:      int32(pid),
-			Cwd:      fields[1],
-			Cmd:      fields[2],
-			Running:  true,
-			ExitCode: -1,
-		})
-	}
-
-	return processes, nil
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context, in *pb.ContainerSandboxUploadFileRequest) (*pb.ContainerSandboxUploadFileResponse, error) {

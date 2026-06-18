@@ -1,4 +1,4 @@
-.PHONY: docs tests build
+.PHONY: docs tests sandbox-log-streaming-integration build
 
 init:
 	git submodule update --init --recursive
@@ -9,6 +9,9 @@ docs:
 tests:
 	uv run --with pytest-cov pytest -s 
 	# open .htmlcov/index.html
+
+sandbox-log-streaming-integration:
+	BETA9_SANDBOX_INTEGRATION=1 uv run pytest -s tests/test_sandbox_log_streaming_integration.py
 
 format:
 	uv ruff check .
