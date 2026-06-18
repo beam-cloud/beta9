@@ -52,33 +52,6 @@ type agentContainerNetwork struct {
 	*localContainerNetwork
 }
 
-func (m *agentContainerNetwork) ContainerPortAddress(containerId string, binding PortBinding) (string, error) {
-	info, err := m.getContainerNetworkInfo(containerId)
-	if err != nil {
-		return "", err
-	}
-	if info.ContainerIp == "" {
-		return "", fmt.Errorf("container %s has no bridge IP", containerId)
-	}
-	return joinHostPort(info.ContainerIp, binding.ContainerPort), nil
-}
-
-func (m *agentContainerNetwork) ContainerPortAddressMap(containerId string, bindings []PortBinding) (map[int32]string, error) {
-	info, err := m.getContainerNetworkInfo(containerId)
-	if err != nil {
-		return nil, err
-	}
-	if info.ContainerIp == "" {
-		return nil, fmt.Errorf("container %s has no bridge IP", containerId)
-	}
-
-	addressMap := make(map[int32]string, len(bindings))
-	for _, binding := range bindings {
-		addressMap[int32(binding.ContainerPort)] = joinHostPort(info.ContainerIp, binding.ContainerPort)
-	}
-	return addressMap, nil
-}
-
 func joinHostPort(host string, port int) string {
 	host = strings.TrimSpace(host)
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
