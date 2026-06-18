@@ -67,9 +67,9 @@ SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 SANDBOX_EXEC_READY_TIMEOUT_SECONDS = 90
 SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.5
 SANDBOX_EXEC_READINESS_ERRORS = (
-    "failed to connect to sandbox",
     "process manager not ready",
     "sandbox process manager is not ready",
+    "process manager failed to become ready",
 )
 DOCKER_SANDBOX_NETWORK_MODE = "host"
 DOCKER_SANDBOX_PID_MODE = "host"

@@ -136,15 +136,8 @@ def test_combined_logs_iterator_reads_late_stderr_after_exit():
     assert "".join(process.logs) == "combined-stdout\ncombined-stderr\n"
 
 
-@pytest.mark.parametrize(
-    "error_msg",
-    [
-        "Process manager not ready within timeout",
-        "Failed to connect to sandbox",
-    ],
-)
-def test_exec_retries_process_manager_not_ready(monkeypatch, error_msg):
-    stub = ExecReadyRetryStub(error_msg)
+def test_exec_retries_process_manager_not_ready(monkeypatch):
+    stub = ExecReadyRetryStub("Process manager not ready within timeout")
     sandbox = SimpleNamespace(container_id="sandbox-123", stub=stub)
     manager = SandboxProcessManager(sandbox)
     monkeypatch.setattr(sandbox_module, "SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS", 0)
@@ -153,3 +146,15 @@ def test_exec_retries_process_manager_not_ready(monkeypatch, error_msg):
 
     assert process.pid == 123
     assert stub.calls == 2
+
+
+def test_exec_does_not_retry_generic_sandbox_connect_error(monkeypatch):
+    stub = ExecReadyRetryStub("Failed to connect to sandbox")
+    sandbox = SimpleNamespace(container_id="sandbox-123", stub=stub)
+    manager = SandboxProcessManager(sandbox)
+    monkeypatch.setattr(sandbox_module, "SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS", 0)
+
+    with pytest.raises(SandboxProcessError, match="Failed to connect to sandbox"):
+        manager.exec("echo", "ok")
+
+    assert stub.calls == 1

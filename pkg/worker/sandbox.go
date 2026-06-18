@@ -459,7 +459,6 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		ReadyFailureClasses: map[string]int{},
 	}
 	tcpReadyRecorded := false
-	restartNudged := false
 
 	for time.Since(start) < goprocReadyTimeout {
 		select {
@@ -493,11 +492,6 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 				stats.LastError = tcp.Err.Error()
 			}
 
-			if shouldNudgeRestoredProcessManager(instance, restartNudged) {
-				s.nudgeSandboxProcessManager(ctx, containerId, instance.Runtime)
-				restartNudged = true
-			}
-
 			if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
 				stats.LastError = ctx.Err().Error()
 				return nil, false, stats
@@ -525,11 +519,6 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		stats.LastReadyClass = classifyProcessManagerReadyError(err)
 		stats.ReadyFailureClasses[stats.LastReadyClass]++
 
-		if shouldNudgeRestoredProcessManager(instance, restartNudged) {
-			s.nudgeSandboxProcessManager(ctx, containerId, instance.Runtime)
-			restartNudged = true
-		}
-
 		if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
 			stats.LastError = ctx.Err().Error()
 			return nil, false, stats
@@ -556,15 +545,6 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 	}
 
 	return nil, false, stats
-}
-
-func shouldNudgeRestoredProcessManager(instance *ContainerInstance, nudged bool) bool {
-	return !nudged &&
-		instance != nil &&
-		instance.Runtime != nil &&
-		instance.Request != nil &&
-		instance.Request.Checkpoint != nil &&
-		instance.Request.Stub.Type.Kind() == types.StubTypeSandbox
 }
 
 func nextProcessManagerBackoff(delay time.Duration) time.Duration {

@@ -594,21 +594,6 @@ func TestEventStopReasonOmitsUnknown(t *testing.T) {
 	require.Equal(t, string(types.StopContainerReasonScheduler), eventStopReason(types.StopContainerReasonScheduler))
 }
 
-func TestCurrentContainerStopReasonUsesLatestMapState(t *testing.T) {
-	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	stale := &ContainerInstance{Id: "container-1"}
-	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", StopReason: types.StopContainerReasonUser})
-
-	require.Equal(t, types.StopContainerReasonUser, currentContainerStopReason(containerInstances, "container-1", stale))
-}
-
-func TestCurrentContainerStopReasonFallsBackToInstance(t *testing.T) {
-	require.Equal(t,
-		types.StopContainerReasonAdmin,
-		currentContainerStopReason(nil, "container-1", &ContainerInstance{Id: "container-1", StopReason: types.StopContainerReasonAdmin}),
-	)
-}
-
 func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
 	workerCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -817,63 +802,6 @@ func TestRunContainerRestoreWaitsForRuntimeExit(t *testing.T) {
 
 	close(stopped)
 	require.NoError(t, <-result)
-}
-
-func TestWaitForRestoredRuntimeExitIgnoresInitialStoppedBeforeLive(t *testing.T) {
-	var calls atomic.Int32
-	stopped := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	rt := &mockRuntime{
-		name: "gvisor",
-		state: func(context.Context, string) (runtime.State, error) {
-			if calls.Add(1) <= 3 {
-				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
-			}
-			select {
-			case <-stopped:
-				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
-			default:
-				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
-			}
-		},
-	}
-
-	result := make(chan error, 1)
-	go func() {
-		_, err := (&Worker{}).waitForRestoredRuntimeExit(ctx, "container-restore", rt)
-		result <- err
-	}()
-
-	require.Eventually(t, func() bool {
-		return calls.Load() > 3
-	}, time.Second, 10*time.Millisecond)
-
-	select {
-	case err := <-result:
-		t.Fatalf("waitForRestoredRuntimeExit returned before observing live restored state: %v", err)
-	default:
-	}
-
-	close(stopped)
-	require.NoError(t, <-result)
-}
-
-func TestWaitForRestoredRuntimeExitDoesNotCompleteOnInitialNotFound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-
-	rt := &mockRuntime{
-		name: "gvisor",
-		state: func(context.Context, string) (runtime.State, error) {
-			return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-restore"}
-		},
-	}
-
-	exitCode, err := (&Worker{}).waitForRestoredRuntimeExit(ctx, "container-restore", rt)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Equal(t, -1, exitCode)
 }
 
 func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {

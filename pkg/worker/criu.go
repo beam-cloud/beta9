@@ -12,7 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -161,25 +160,6 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 
 	outputLogger.Info("Checkpoint found and restored")
 	return exitCode, true, nil
-}
-
-func (s *Worker) nudgeSandboxProcessManager(ctx context.Context, containerId string, rt runtime.Runtime) {
-	if containerId == "" || rt == nil {
-		return
-	}
-
-	signalCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	if err := rt.Kill(signalCtx, containerId, syscall.SIGWINCH, nil); err != nil {
-		log.Debug().
-			Err(err).
-			Str("container_id", containerId).
-			Msg("failed to nudge sandbox process manager")
-		return
-	}
-
-	log.Debug().Str("container_id", containerId).Msg("nudged sandbox process manager")
 }
 
 type CreateCheckpointOpts struct {
