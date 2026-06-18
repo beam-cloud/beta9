@@ -30,9 +30,11 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 	if err == nil {
 		exists := true
 
-		objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
-		if _, err := os.Stat(objectPath); os.IsNotExist(err) {
-			exists = false
+		if !useWorkspaceStorage {
+			objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
+			if _, err := os.Stat(objectPath); os.IsNotExist(err) {
+				exists = false
+			}
 		}
 
 		if useWorkspaceStorage {
@@ -104,8 +106,12 @@ func workspaceObjectHasHashMetadata(head *s3.HeadObjectOutput, expectedHash stri
 func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObjectRequest) (*pb.CreateObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
-	os.MkdirAll(objectPath, 0644)
+	if !authInfo.Workspace.StorageAvailable() {
+		return &pb.CreateObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Workspace storage is unavailable",
+		}, nil
+	}
 
 	presignEndpointUrl := gws.defaultWorkspacePresignEndpointUrl(authInfo.Workspace.Storage)
 	storageClient, err := clients.NewWorkspaceStorageClientWithPresignEndpoint(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage, presignEndpointUrl)
@@ -225,7 +231,12 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 	}
 
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
-	os.MkdirAll(objectPath, 0644)
+	if err := os.MkdirAll(objectPath, 0755); err != nil {
+		return stream.SendAndClose(&pb.PutObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to create object directory",
+		})
+	}
 
 	var size int
 	var file *os.File
