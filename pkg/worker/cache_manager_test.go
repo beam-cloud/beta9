@@ -179,6 +179,33 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
+func TestNodeCacheServerWatchStartsImmediately(t *testing.T) {
+	t.Setenv(types.CacheServerOnlyEnv, "false")
+	t.Setenv(types.CacheNodeEnv, "single-node")
+	t.Setenv(types.CacheLocalityEnv, "test")
+	t.Setenv(types.WorkerCacheAdvertiseAddrEnv, "127.0.0.1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	repoClient, repo, cleanup := startTestCacheCoordinator(t)
+	defer cleanup()
+
+	cacheDir := t.TempDir()
+	config := testCacheManagerConfig(cacheDir)
+	config.Cache.Coordinator.HostWatchIntervalSeconds = 3600
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-a", "default", "127.0.0.1")
+	defer func() { _ = manager.Close() }()
+
+	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")
+	cacheConfig.Global.ServerPort = uint(freeTCPPort(t))
+	manager.nodeCacheServer(cacheConfig, "cache-host").Watch()
+
+	require.Eventually(t, func() bool {
+		return manager.runningCacheServer() && len(repo.activeHosts()) == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestCacheServerDaemonSetMarkerFreshUsesTTL(t *testing.T) {
 	cacheDir := t.TempDir()
 	require.False(t, cacheServerDaemonSetMarkerFresh(cacheDir, time.Second))
@@ -475,6 +502,18 @@ func startTestCacheCoordinator(t *testing.T) (pb.WorkerRepositoryServiceClient, 
 		_ = listener.Close()
 	}
 	return pb.NewWorkerRepositoryServiceClient(conn), coordinator, cleanup
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	return addr.Port
 }
 
 func (s *testCacheCoordinator) RegisterCacheHost(ctx context.Context, req *pb.RegisterCacheHostRequest) (*pb.RegisterCacheHostResponse, error) {

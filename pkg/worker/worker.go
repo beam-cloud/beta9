@@ -1072,7 +1072,19 @@ func (s *Worker) shutdown() error {
 		s.gvisorRuntime.Close()
 	}
 
+	return s.finishShutdown(errs)
+}
+
+func (s *Worker) finishShutdown(errs error) error {
+	if errs != nil && s.shutdownCanceled() {
+		log.Warn().Err(errs).Msg("worker shutdown cleanup completed with errors")
+		return nil
+	}
 	return errs
+}
+
+func (s *Worker) shutdownCanceled() bool {
+	return s != nil && s.ctx != nil && s.ctx.Err() != nil
 }
 
 func (s *Worker) waitForActiveContainersBeforeShutdown() {

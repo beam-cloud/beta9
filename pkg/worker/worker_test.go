@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"syscall"
 	"testing"
@@ -290,6 +291,23 @@ func TestStopActiveContainersForShutdownForceKillsStuckRuntime(t *testing.T) {
 	require.GreaterOrEqual(t, time.Since(start), time.Second)
 	require.Empty(t, worker.activeContainerIDs())
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.recordedSignals())
+}
+
+func TestFinishShutdownSuppressesCleanupErrorsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := (&Worker{ctx: ctx}).finishShutdown(errors.New("cleanup failed"))
+
+	require.NoError(t, err)
+}
+
+func TestFinishShutdownReturnsCleanupErrorsWithoutCancellation(t *testing.T) {
+	cleanupErr := errors.New("cleanup failed")
+
+	err := (&Worker{ctx: context.Background()}).finishShutdown(cleanupErr)
+
+	require.ErrorIs(t, err, cleanupErr)
 }
 
 func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {

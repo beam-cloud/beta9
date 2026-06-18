@@ -753,9 +753,12 @@ func (m *ContainerNetworkManager) deleteNetworkSlotResources(slotID string) {
 
 func (m *ContainerNetworkManager) Close() error {
 	slots := m.drainFreeNetworkSlots()
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+	defer cancel()
+
 	var errs error
 	for _, slot := range slots {
-		if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+		if err := m.releaseUnusedNetworkSlotWithContext(ctx, slot); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -778,13 +781,19 @@ func (m *ContainerNetworkManager) drainFreeNetworkSlots() []*containerNetworkSlo
 }
 
 func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetworkSlot) error {
+	ctx, cancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+	defer cancel()
+	return m.releaseUnusedNetworkSlotWithContext(ctx, slot)
+}
+
+func (m *ContainerNetworkManager) releaseUnusedNetworkSlotWithContext(ctx context.Context, slot *containerNetworkSlot) error {
 	if slot == nil {
 		return nil
 	}
 
 	m.clearNetworkSlotNeighbor(slot)
 	m.deleteNetworkSlotResources(slot.id)
-	if err := m.removeContainerIPFromRepositoryWithContext(context.Background(), m.containerNetworkSlotReservation(slot)); err != nil {
+	if err := m.removeContainerIPFromRepositoryWithContext(ctx, m.containerNetworkSlotReservation(slot)); err != nil {
 		return fmt.Errorf("failed to release preallocated network slot %s: %w", slot.id, err)
 	}
 	m.forgetContainerIP(m.containerNetworkSlotReservation(slot), slot.ip)

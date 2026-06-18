@@ -531,43 +531,49 @@ func (s nodeCacheServer) Watch() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		if !s.reconcile() {
+			return
+		}
+
 		for {
 			select {
 			case <-m.ctx.Done():
 				return
 			case <-ticker.C:
-				m.mu.Lock()
-				draining := m.draining
-				running := m.server != nil
-				m.mu.Unlock()
-				if draining {
-					return
-				}
-				if !cacheServerOnlyMode() && cacheServerDaemonSetMarkerFresh(s.config.Server.DiskCacheDir, cacheRegistrationTTL(s.config)) {
-					if running {
-						if err := m.stopNodeCacheServer("cache server daemonset marker is fresh"); err != nil {
-							log.Warn().Err(err).Msg("failed to stop embedded cache server")
-						}
-					}
-					continue
-				}
-				if running {
-					if cacheServerOnlyMode() {
-						return
-					}
-					continue
-				}
-				startedCacheServer, err := s.Start()
-				if err != nil {
-					log.Warn().Err(err).Msg("failed to start standby cache server")
-					continue
-				}
-				if startedCacheServer && cacheServerOnlyMode() {
+				if !s.reconcile() {
 					return
 				}
 			}
 		}
 	}()
+}
+
+func (s nodeCacheServer) reconcile() bool {
+	m := s.manager
+	m.mu.Lock()
+	draining := m.draining
+	running := m.server != nil
+	m.mu.Unlock()
+	if draining {
+		return false
+	}
+	if !cacheServerOnlyMode() && cacheServerDaemonSetMarkerFresh(s.config.Server.DiskCacheDir, cacheRegistrationTTL(s.config)) {
+		if running {
+			if err := m.stopNodeCacheServer("cache server daemonset marker is fresh"); err != nil {
+				log.Warn().Err(err).Msg("failed to stop embedded cache server")
+			}
+		}
+		return true
+	}
+	if running {
+		return !cacheServerOnlyMode()
+	}
+	startedCacheServer, err := s.Start()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to start standby cache server")
+		return true
+	}
+	return !startedCacheServer || !cacheServerOnlyMode()
 }
 
 func (m *WorkerCacheManager) stopNodeCacheServer(reason string) error {
