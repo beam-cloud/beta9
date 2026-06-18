@@ -117,6 +117,8 @@ type ContainerInstance struct {
 	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	ProcessManagerHost         string
+	ProcessManagerPort         int
 	DeferredCPUQuota           *specs.LinuxCPU
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
@@ -153,6 +155,12 @@ type stopContainerEvent struct {
 
 func NewWorker() (*Worker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
+	cancelOnError := true
+	defer func() {
+		if cancelOnError {
+			cancel()
+		}
+	}()
 
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
@@ -331,7 +339,6 @@ func NewWorker() (*Worker, error) {
 
 	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport)
@@ -400,25 +407,23 @@ func NewWorker() (*Worker, error) {
 		CreateCheckpoint:        worker.createCheckpoint,
 	})
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	err = containerServer.Start()
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType, poolConfig.Mode)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	worker.workerUsageMetrics = workerMetrics
 	worker.containerServer = containerServer
 
+	cancelOnError = false
 	return worker, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -229,6 +230,62 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, "10.0.0.2:30002", repoClient.lastSetAddressMap.AddressMap[2222])
 	require.Empty(t, repoClient.lastSetAddressMap.Routes)
+}
+
+func TestRegisterContainerPortsCachesProcessManagerEndpoint(t *testing.T) {
+	containerID := "container-restore"
+	repoClient := &fakeContainerRepoClient{}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerID, &ContainerInstance{
+		Id:          containerID,
+		ContainerIp: "192.168.0.81",
+	})
+	worker := &Worker{
+		containerNetworkManager: &fakeContainerNetworkController{},
+		containerRepoClient:     repoClient,
+		containerInstances:      instances,
+	}
+
+	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
+		ContainerId: containerID,
+	}, []PortBinding{
+		{HostPort: 30001, ContainerPort: 8765},
+		{HostPort: 30002, ContainerPort: int(types.WorkerSandboxProcessManagerPort)},
+	})
+	require.NoError(t, err)
+
+	instance, exists := instances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "10.0.0.2", instance.ProcessManagerHost)
+	require.Equal(t, 30002, instance.ProcessManagerPort)
+}
+
+func TestPublishContainerAddressesCachesProcessManagerEndpoint(t *testing.T) {
+	containerID := "container-restore"
+	repoClient := &fakeContainerRepoClient{}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerID, &ContainerInstance{
+		Id:          containerID,
+		ContainerIp: "192.168.0.81",
+	})
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  instances,
+		podAddr:             "10.42.0.17",
+	}
+
+	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
+		ContainerId: containerID,
+	}, []PortBinding{
+		{HostPort: 36491, ContainerPort: 8765},
+		{HostPort: 36273, ContainerPort: int(types.WorkerSandboxProcessManagerPort)},
+	})
+	require.NoError(t, err)
+
+	instance, exists := instances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "10.42.0.17", instance.ProcessManagerHost)
+	require.Equal(t, 36273, instance.ProcessManagerPort)
 }
 
 func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
@@ -537,6 +594,21 @@ func TestEventStopReasonOmitsUnknown(t *testing.T) {
 	require.Equal(t, string(types.StopContainerReasonScheduler), eventStopReason(types.StopContainerReasonScheduler))
 }
 
+func TestCurrentContainerStopReasonUsesLatestMapState(t *testing.T) {
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	stale := &ContainerInstance{Id: "container-1"}
+	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", StopReason: types.StopContainerReasonUser})
+
+	require.Equal(t, types.StopContainerReasonUser, currentContainerStopReason(containerInstances, "container-1", stale))
+}
+
+func TestCurrentContainerStopReasonFallsBackToInstance(t *testing.T) {
+	require.Equal(t,
+		types.StopContainerReasonAdmin,
+		currentContainerStopReason(nil, "container-1", &ContainerInstance{Id: "container-1", StopReason: types.StopContainerReasonAdmin}),
+	)
+}
+
 func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
 	workerCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -612,9 +684,16 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
 	}
 	backendRepoClient := &fakeBackendRepoClient{}
+	var stateCalls atomic.Int32
 	rt := &mockRuntime{
 		name:         "runc",
 		capabilities: runtime.Capabilities{CheckpointRestore: true},
+		state: func(context.Context, string) (runtime.State, error) {
+			if stateCalls.Add(1) == 1 {
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+			return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+		},
 	}
 	worker := &Worker{
 		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
@@ -661,6 +740,140 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Equal(t, 1, backendRepoClient.updateCalls)
+}
+
+func TestRunContainerRestoreWaitsForRuntimeExit(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+	tmpDir := t.TempDir()
+	checkpointId := "checkpoint-1"
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
+
+	bundleDir := filepath.Join(tmpDir, "bundle")
+	require.NoError(t, os.MkdirAll(bundleDir, 0755))
+	configPath := filepath.Join(bundleDir, specBaseName)
+	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
+
+	stopped := make(chan struct{})
+	rt := &mockRuntime{
+		name:         "runc",
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+		state: func(context.Context, string) (runtime.State, error) {
+			select {
+			case <-stopped:
+				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+			default:
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+		},
+	}
+	repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusPending)}}
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         &startedCRIUManager{},
+		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient: repoClient,
+		backendRepoClient:   &fakeBackendRepoClient{},
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-restore-wait",
+		ConfigPath:  configPath,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointId,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Runtime: rt})
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := worker.runContainer(
+			context.Background(),
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			time.Now(),
+			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		)
+		result <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		return repoClient.updateStatusCalls == 1 && repoClient.lastUpdateStatus.Status == string(types.ContainerStatusRunning)
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case err := <-result:
+		t.Fatalf("runContainer returned before restored runtime exit: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(stopped)
+	require.NoError(t, <-result)
+}
+
+func TestWaitForRestoredRuntimeExitIgnoresInitialStoppedBeforeLive(t *testing.T) {
+	var calls atomic.Int32
+	stopped := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rt := &mockRuntime{
+		name: "gvisor",
+		state: func(context.Context, string) (runtime.State, error) {
+			if calls.Add(1) <= 3 {
+				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+			}
+			select {
+			case <-stopped:
+				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+			default:
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+		},
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := (&Worker{}).waitForRestoredRuntimeExit(ctx, "container-restore", rt)
+		result <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		return calls.Load() > 3
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case err := <-result:
+		t.Fatalf("waitForRestoredRuntimeExit returned before observing live restored state: %v", err)
+	default:
+	}
+
+	close(stopped)
+	require.NoError(t, <-result)
+}
+
+func TestWaitForRestoredRuntimeExitDoesNotCompleteOnInitialNotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	rt := &mockRuntime{
+		name: "gvisor",
+		state: func(context.Context, string) (runtime.State, error) {
+			return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-restore"}
+		},
+	}
+
+	exitCode, err := (&Worker{}).waitForRestoredRuntimeExit(ctx, "container-restore", rt)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, -1, exitCode)
 }
 
 func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
@@ -1184,6 +1397,7 @@ func envListToMap(env []string) map[string]string {
 type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
+	state        func(context.Context, string) (runtime.State, error)
 }
 
 func (m *mockRuntime) Name() string {
@@ -1215,6 +1429,9 @@ func (m *mockRuntime) Delete(ctx context.Context, containerID string, opts *runt
 }
 
 func (m *mockRuntime) State(ctx context.Context, containerID string) (runtime.State, error) {
+	if m.state != nil {
+		return m.state(ctx, containerID)
+	}
 	return runtime.State{}, nil
 }
 

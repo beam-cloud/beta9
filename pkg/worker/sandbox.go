@@ -51,18 +51,39 @@ type processManagerWaitStats struct {
 	TCPAttempts         int
 	TCPFailures         int
 	TCPFailureClasses   map[string]int
+	ReadyAttempts       int
+	ReadyFailures       int
+	ReadyFailureClasses map[string]int
 	FirstTCPReadyAfter  time.Duration
 	LastTCPFailureClass string
+	LastReadyClass      string
 	LastError           string
 }
 
 func (s processManagerWaitStats) attrs() map[string]string {
 	attrs := map[string]string{
-		types.EventAttrAttempts:     strconv.Itoa(s.TCPAttempts),
-		types.EventAttrFailureCount: strconv.Itoa(s.TCPFailures),
+		types.EventAttrAttempts:     strconv.Itoa(s.ReadyAttempts),
+		types.EventAttrFailureCount: strconv.Itoa(s.ReadyFailures),
 	}
 	if s.FirstTCPReadyAfter > 0 {
 		attrs[types.EventAttrFirstTCPReadyMs] = strconv.FormatInt(s.FirstTCPReadyAfter.Milliseconds(), 10)
+	}
+	if s.LastReadyClass != "" {
+		attrs[types.EventAttrFailureClass] = s.LastReadyClass
+	}
+	if s.LastError != "" {
+		attrs[types.EventAttrLastError] = s.LastError
+	}
+	if len(s.ReadyFailureClasses) > 0 {
+		attrs[types.EventAttrFailureClasses] = failureClassSummary(s.ReadyFailureClasses)
+	}
+	return attrs
+}
+
+func (s processManagerWaitStats) tcpAttrs() map[string]string {
+	attrs := map[string]string{
+		types.EventAttrAttempts:     strconv.Itoa(s.TCPAttempts),
+		types.EventAttrFailureCount: strconv.Itoa(s.TCPFailures),
 	}
 	if s.LastTCPFailureClass != "" {
 		attrs[types.EventAttrFailureClass] = s.LastTCPFailureClass
@@ -71,14 +92,22 @@ func (s processManagerWaitStats) attrs() map[string]string {
 		attrs[types.EventAttrLastError] = s.LastError
 	}
 	if len(s.TCPFailureClasses) > 0 {
-		parts := make([]string, 0, len(s.TCPFailureClasses))
-		for class, count := range s.TCPFailureClasses {
-			parts = append(parts, fmt.Sprintf("%s=%d", class, count))
-		}
-		sort.Strings(parts)
-		attrs[types.EventAttrFailureClasses] = strings.Join(parts, ",")
+		attrs[types.EventAttrFailureClasses] = failureClassSummary(s.TCPFailureClasses)
 	}
 	return attrs
+}
+
+func failureClassSummary(classes map[string]int) string {
+	if len(classes) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(classes))
+	for class, count := range classes {
+		parts = append(parts, fmt.Sprintf("%s=%d", class, count))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
 // startDockerDaemon starts the Docker daemon inside a sandbox container
@@ -92,7 +121,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	// Setup cgroups for Docker-in-Docker
 	if err := s.setupDockerCgroups(ctx, containerId, instance); err != nil {
-		if logDockerStartupCanceled(ctx, containerId, "setup cgroups", err) {
+		if s.logDockerStartupCanceled(ctx, containerId, "setup cgroups", err) {
 			return
 		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup cgroups")
@@ -101,7 +130,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	// Enable IPv4 forwarding (required for Docker networking)
 	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
-		if logDockerStartupCanceled(ctx, containerId, "enable IPv4 forwarding", err) {
+		if s.logDockerStartupCanceled(ctx, containerId, "enable IPv4 forwarding", err) {
 			return
 		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
@@ -126,7 +155,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, false)
 
 	if err != nil {
-		if logDockerStartupCanceled(ctx, containerId, "start dockerd", err) {
+		if s.logDockerStartupCanceled(ctx, containerId, "start dockerd", err) {
 			return
 		}
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
@@ -151,7 +180,7 @@ func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstan
 	defer cancel()
 
 	if err := runSandboxProcessManagerCommand(ctx, instance.SandboxProcessManager, []string{"sh", "-c", dockerSandboxShutdownScript()}, "/", []string{}, "docker sandbox pre-stop"); err != nil {
-		if logDockerStartupCanceled(ctx, containerId, "stop docker", err) {
+		if s.logDockerStartupCanceled(ctx, containerId, "stop docker", err) {
 			return
 		}
 		log.Debug().Str("container_id", containerId).Err(err).Msg("docker sandbox pre-stop did not complete cleanly")
@@ -288,8 +317,8 @@ exit 0
 `
 }
 
-func logDockerStartupCanceled(ctx context.Context, containerId, phase string, err error) bool {
-	if !dockerStartupCanceled(ctx, err) {
+func (s *Worker) logDockerStartupCanceled(ctx context.Context, containerId, phase string, err error) bool {
+	if !s.dockerStartupCanceled(ctx, containerId, err) {
 		return false
 	}
 
@@ -299,6 +328,21 @@ func logDockerStartupCanceled(ctx context.Context, containerId, phase string, er
 		Err(err).
 		Msg("docker daemon startup canceled during sandbox shutdown")
 	return true
+}
+
+func (s *Worker) dockerStartupCanceled(ctx context.Context, containerId string, err error) bool {
+	if dockerStartupCanceled(ctx, err) {
+		return true
+	}
+	if err == nil || s == nil || s.containerInstances == nil {
+		return false
+	}
+
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists {
+		return true
+	}
+	return instance != nil && instance.StopReason != ""
 }
 
 func dockerStartupCanceled(ctx context.Context, err error) bool {
@@ -410,8 +454,12 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 	start := time.Now()
 	backoff := goprocInitialBackoff
 	var lastErr error
-	stats := processManagerWaitStats{TCPFailureClasses: map[string]int{}}
+	stats := processManagerWaitStats{
+		TCPFailureClasses:   map[string]int{},
+		ReadyFailureClasses: map[string]int{},
+	}
 	tcpReadyRecorded := false
+	restartNudged := false
 
 	for time.Since(start) < goprocReadyTimeout {
 		select {
@@ -422,8 +470,8 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		}
 
 		stats.TCPAttempts++
-		probe := probeProcessManager(ctx, instance)
-		if probe.Connected {
+		tcp := probeProcessManager(ctx, instance)
+		if tcp.Connected {
 			if !tcpReadyRecorded {
 				stats.FirstTCPReadyAfter = time.Since(start)
 				s.recordContainerLifecycle(ctx, instance.Request, containerLifecycleFromDuration(
@@ -432,39 +480,62 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 					start,
 					stats.FirstTCPReadyAfter,
 					true,
-					stats.attrs(),
+					stats.tcpAttrs(),
 				))
 				tcpReadyRecorded = true
 			}
-
-			client, err := newProcessManagerClient(ctx, instance)
-			if err != nil {
-				lastErr = err
-				stats.LastError = err.Error()
-			} else {
-				log.Info().
-					Str("container_id", containerId).
-					Dur("wait_time", time.Since(start)).
-					Int("tcp_attempts", stats.TCPAttempts).
-					Msg("process manager is ready")
-				return client, true, stats
-			}
 		} else {
+			lastErr = tcp.Err
 			stats.TCPFailures++
-			stats.TCPFailureClasses[probe.Class]++
-			stats.LastTCPFailureClass = probe.Class
-			if probe.Err != nil {
-				stats.LastError = probe.Err.Error()
+			stats.LastTCPFailureClass = tcp.Class
+			stats.TCPFailureClasses[tcp.Class]++
+			if tcp.Err != nil {
+				stats.LastError = tcp.Err.Error()
 			}
+
+			if shouldNudgeRestoredProcessManager(instance, restartNudged) {
+				s.nudgeSandboxProcessManager(ctx, containerId, instance.Runtime)
+				restartNudged = true
+			}
+
+			if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
+				stats.LastError = ctx.Err().Error()
+				return nil, false, stats
+			}
+
+			backoff = nextProcessManagerBackoff(backoff)
+			continue
 		}
 
-		// Not ready yet - wait with exponential backoff
-		time.Sleep(backoff)
-
-		backoff = time.Duration(float64(backoff) * goprocBackoffMultiplier)
-		if backoff > goprocMaxBackoff {
-			backoff = goprocMaxBackoff
+		stats.ReadyAttempts++
+		client, err := readyProcessManagerClient(ctx, instance)
+		if err == nil {
+			log.Info().
+				Str("container_id", containerId).
+				Dur("wait_time", time.Since(start)).
+				Int("tcp_attempts", stats.TCPAttempts).
+				Int("ready_attempts", stats.ReadyAttempts).
+				Msg("process manager is ready")
+			return client, true, stats
 		}
+
+		lastErr = err
+		stats.ReadyFailures++
+		stats.LastError = err.Error()
+		stats.LastReadyClass = classifyProcessManagerReadyError(err)
+		stats.ReadyFailureClasses[stats.LastReadyClass]++
+
+		if shouldNudgeRestoredProcessManager(instance, restartNudged) {
+			s.nudgeSandboxProcessManager(ctx, containerId, instance.Runtime)
+			restartNudged = true
+		}
+
+		if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
+			stats.LastError = ctx.Err().Error()
+			return nil, false, stats
+		}
+
+		backoff = nextProcessManagerBackoff(backoff)
 	}
 
 	logEvent := log.Error().Str("container_id", containerId)
@@ -480,26 +551,143 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 			start,
 			time.Since(start),
 			false,
-			stats.attrs(),
+			stats.tcpAttrs(),
 		))
 	}
 
 	return nil, false, stats
 }
 
+func shouldNudgeRestoredProcessManager(instance *ContainerInstance, nudged bool) bool {
+	return !nudged &&
+		instance != nil &&
+		instance.Runtime != nil &&
+		instance.Request != nil &&
+		instance.Request.Checkpoint != nil &&
+		instance.Request.Stub.Type.Kind() == types.StubTypeSandbox
+}
+
+func nextProcessManagerBackoff(delay time.Duration) time.Duration {
+	delay = time.Duration(float64(delay) * goprocBackoffMultiplier)
+	if delay > goprocMaxBackoff {
+		return goprocMaxBackoff
+	}
+	return delay
+}
+
 func probeProcessManager(ctx context.Context, instance *ContainerInstance) tcpProbeResult {
-	if instance == nil || instance.ContainerIp == "" {
+	endpoints := sandboxProcessManagerEndpoints(instance)
+	if len(endpoints) == 0 {
 		return tcpProbeResult{Class: "address_unavailable"}
 	}
 
-	return probeTCP(ctx, instance.ContainerIp, int(types.WorkerSandboxProcessManagerPort), goprocReadyProbeTimeout)
+	var last tcpProbeResult
+	for _, endpoint := range endpoints {
+		result := probeTCP(ctx, endpoint.host, endpoint.port, goprocReadyProbeTimeout)
+		if result.Connected {
+			return result
+		}
+		last = result
+	}
+	return last
 }
 
 func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
-	if instance == nil || instance.ContainerIp == "" {
+	endpoints := sandboxProcessManagerEndpoints(instance)
+	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("sandbox process manager address unavailable")
 	}
-	return goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
+
+	var lastErr error
+	for _, endpoint := range endpoints {
+		client, err := goproc.NewGoProcClient(ctx, endpoint.host, uint(endpoint.port))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+		err = client.ReadyContext(probeCtx)
+		cancel()
+		if err == nil {
+			return client, nil
+		}
+
+		_ = client.Cleanup()
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+type processManagerEndpoint struct {
+	host string
+	port int
+}
+
+func sandboxProcessManagerEndpoint(instance *ContainerInstance) (processManagerEndpoint, bool) {
+	endpoints := sandboxProcessManagerEndpoints(instance)
+	if len(endpoints) == 0 {
+		return processManagerEndpoint{}, false
+	}
+	return endpoints[0], true
+}
+
+func sandboxProcessManagerEndpoints(instance *ContainerInstance) []processManagerEndpoint {
+	if instance == nil {
+		return nil
+	}
+
+	endpoints := make([]processManagerEndpoint, 0, 2)
+	if instance.ProcessManagerHost != "" && instance.ProcessManagerPort > 0 {
+		endpoints = append(endpoints, processManagerEndpoint{host: instance.ProcessManagerHost, port: instance.ProcessManagerPort})
+	}
+
+	if instance.ContainerIp != "" {
+		endpoints = append(endpoints, processManagerEndpoint{host: instance.ContainerIp, port: int(types.WorkerSandboxProcessManagerPort)})
+	}
+
+	return endpoints
+}
+
+func readyProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	return newProcessManagerClient(ctx, instance)
+}
+
+func classifyProcessManagerReadyError(err error) string {
+	switch code := status.Code(err); code {
+	case codes.OK:
+		return "ok"
+	case codes.Unavailable:
+		return "unavailable"
+	case codes.DeadlineExceeded:
+		return "timeout"
+	case codes.Unimplemented:
+		return "unimplemented"
+	}
+
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return "connection_refused"
+	case strings.Contains(msg, "no route") || strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "host is unreachable"):
+		return "no_route"
+	case strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "i/o timeout"):
+		return "timeout"
+	default:
+		return "other"
+	}
+}
+
+func waitProcessManagerBackoff(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func probeTCP(ctx context.Context, ip string, port int, timeout time.Duration) tcpProbeResult {

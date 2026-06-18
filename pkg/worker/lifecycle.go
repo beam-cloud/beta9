@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,15 +29,16 @@ import (
 )
 
 const (
-	baseConfigPath              string = types.AgentTmpPath
-	defaultContainerDirectory   string = types.WorkerUserCodeVolume
-	specBaseName                string = "config.json"
-	initialSpecBaseName         string = "initial_config.json"
-	containerInnerPort          int    = 8001 // Use a fixed port inside the container
-	markRunningRetryTimeout            = 3 * time.Second
-	markRunningRetryInterval           = 100 * time.Millisecond
-	runtimeDeleteTimeout               = 30 * time.Second
-	sandboxCPUQuotaApplyTimeout        = 2 * time.Second
+	baseConfigPath                   string = types.AgentTmpPath
+	defaultContainerDirectory        string = types.WorkerUserCodeVolume
+	specBaseName                     string = "config.json"
+	initialSpecBaseName              string = "initial_config.json"
+	containerInnerPort               int    = 8001 // Use a fixed port inside the container
+	markRunningRetryTimeout                 = 3 * time.Second
+	markRunningRetryInterval                = 100 * time.Millisecond
+	runtimeDeleteTimeout                    = 30 * time.Second
+	restoredRuntimeStateReadyTimeout        = 30 * time.Second
+	sandboxCPUQuotaApplyTimeout             = 2 * time.Second
 )
 
 const (
@@ -81,7 +83,12 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 	}
 
 	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
-		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
+		log.Info().
+			Str("container_id", stopArgs.ContainerId).
+			Str("reason", string(reason)).
+			Str("source", source.String()).
+			Bool("force", stopArgs.Force).
+			Msg("received stop container event")
 		containerInstance.StopReason = reason
 		s.containerInstances.Set(stopArgs.ContainerId, containerInstance)
 		s.recordContainerEvent(context.Background(), containerInstance.Request, types.EventContainerEventSchema{
@@ -176,9 +183,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Set container exit code on instance
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
-		updatedInstance := *instance
-		updatedInstance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, &updatedInstance)
+		instance.ExitCode = exitCode
 	}
 	s.markContainerStopping(containerId)
 
@@ -560,6 +565,7 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 		Int("port_count", len(addressMap)).
 		Interface("address_map", addressMap).
 		Msg("set container address map")
+	s.rememberProcessManagerAddress(containerId, addressMap)
 	return nil
 }
 
@@ -1216,12 +1222,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		releaseStartupSlot()
+		isSandbox := request.Stub.Type.Kind() == types.StubTypeSandbox
+		if isSandbox {
+			defer releaseStartupSlot()
+		} else {
+			releaseStartupSlot()
+		}
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		if isSandbox {
 			instance, exists := s.containerInstances.Get(containerId)
 			if !exists {
 				return
@@ -1249,11 +1260,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 					instance = fresh
 				}
 			}
+			if stopReason := currentContainerStopReason(s.containerInstances, containerId, instance); stopReason != "" {
+				instance.StopReason = stopReason
+			}
 			instance.SandboxProcessManager = processManagerClient
 			instance.signalProcessManagerReadiness(processManagerReady)
 			s.containerInstances.Set(containerId, instance)
 
 			if !processManagerReady {
+				if stopReason := currentContainerStopReason(s.containerInstances, containerId, instance); stopReason != "" {
+					log.Info().
+						Str("container_id", containerId).
+						Str("stop_reason", string(stopReason)).
+						Msg("sandbox process manager readiness ended after container stop requested")
+					return
+				}
 				log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
 				return
 			}
@@ -1376,6 +1397,18 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
+func currentContainerStopReason(containerInstances *common.SafeMap[*ContainerInstance], containerId string, instance *ContainerInstance) types.StopContainerReason {
+	if containerInstances != nil {
+		if fresh, exists := containerInstances.Get(containerId); exists && fresh.StopReason != "" {
+			return fresh.StopReason
+		}
+	}
+	if instance != nil && instance.StopReason != "" {
+		return instance.StopReason
+	}
+	return ""
+}
+
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
@@ -1454,7 +1487,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if restored {
 			close(runtimeStartedDone)
 			<-runtimeStartedHandled
-			return exitCode, err
+			return s.waitForRestoredRuntimeExit(ctx, request.ContainerId, instance.Runtime)
 		}
 
 		// If this is not a deployment stub, don't fall back to running the container
@@ -1495,6 +1528,74 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	return exitCode, err
+}
+
+func (s *Worker) waitForRestoredRuntimeExit(ctx context.Context, containerID string, rt runtime.Runtime) (int, error) {
+	const pollInterval = 100 * time.Millisecond
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	observedAlive := false
+	readyDeadline := time.Now().Add(restoredRuntimeStateReadyTimeout)
+	var lastStatus string
+	var lastErr error
+	for {
+		state, err := rt.State(ctx, containerID)
+		if err == nil {
+			lastStatus = state.Status
+			lastErr = nil
+			if runtimeStateAlive(state.Status) {
+				observedAlive = true
+			} else if observedAlive {
+				return 0, nil
+			} else {
+				log.Debug().
+					Str("container_id", containerID).
+					Str("status", state.Status).
+					Msg("waiting for restored container to become live")
+			}
+		} else if isRuntimeContainerNotFound(err) {
+			lastErr = err
+			if observedAlive {
+				return 0, nil
+			}
+			log.Debug().Err(err).Str("container_id", containerID).Msg("waiting for restored container state")
+		} else if !observedAlive {
+			lastErr = err
+			log.Debug().Err(err).Str("container_id", containerID).Msg("waiting for restored container state")
+		} else {
+			lastErr = err
+			log.Debug().Err(err).Str("container_id", containerID).Msg("transient restored container state error")
+		}
+
+		if !observedAlive && time.Now().After(readyDeadline) {
+			if lastErr != nil {
+				return -1, fmt.Errorf("restored container did not become live within %s: %w", restoredRuntimeStateReadyTimeout, lastErr)
+			}
+			return -1, fmt.Errorf("restored container did not become live within %s: last status %q", restoredRuntimeStateReadyTimeout, lastStatus)
+		}
+
+		select {
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func runtimeStateAlive(status string) bool {
+	switch status {
+	case types.RuncContainerStatusCreated, types.RuncContainerStatusRunning, types.RuncContainerStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRuntimeContainerNotFound(err error) bool {
+	var notFound runtime.ErrContainerNotFound
+	return errors.As(err, &notFound)
 }
 
 func (s *Worker) markContainerRunning(ctx context.Context, request *types.ContainerRequest, startupStartedAt time.Time) {
