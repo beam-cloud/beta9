@@ -74,9 +74,11 @@ func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
 	}
 	server.containerInstances.Set(containerId, instance)
 
-	fresh := *instance
-	fresh.SandboxProcessManagerReady = true
-	server.containerInstances.Set(containerId, &fresh)
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                         containerId,
+		ProcessManagerReadyChan:    ready,
+		SandboxProcessManagerReady: true,
+	})
 	close(ready)
 
 	got, err := server.waitForSandboxProcessManager(context.Background(), containerId, instance)
@@ -114,13 +116,15 @@ func TestWaitForSandboxProcessManagerWaitsForLateReadyChannel(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		time.Sleep(25 * time.Millisecond)
-		fresh := *instance
-		fresh.ProcessManagerReadyChan = ready
-		server.containerInstances.Set(containerId, &fresh)
+		fresh := &ContainerInstance{
+			Id:                      containerId,
+			ProcessManagerReadyChan: ready,
+		}
+		server.containerInstances.Set(containerId, fresh)
 
 		time.Sleep(25 * time.Millisecond)
 		fresh.SandboxProcessManagerReady = true
-		server.containerInstances.Set(containerId, &fresh)
+		server.containerInstances.Set(containerId, fresh)
 		close(ready)
 	}()
 
@@ -198,6 +202,15 @@ func TestWritableContainerAddressMapHandlesNilMap(t *testing.T) {
 	addressMap[1234] = "127.0.0.1:1234"
 
 	require.Equal(t, "127.0.0.1:1234", addressMap[1234])
+}
+
+func TestWritableContainerAddressMapClonesInput(t *testing.T) {
+	input := map[int32]string{1234: "127.0.0.1:1234"}
+	addressMap := writableContainerAddressMap(input)
+	addressMap[1234] = "127.0.0.1:5678"
+
+	require.Equal(t, "127.0.0.1:1234", input[1234])
+	require.Equal(t, "127.0.0.1:5678", addressMap[1234])
 }
 
 func TestRecordSandboxExposedPortOnlyAppendsMissingPort(t *testing.T) {

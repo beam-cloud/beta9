@@ -196,6 +196,7 @@ func TestNodeCacheServerWatchStartsImmediately(t *testing.T) {
 	config := testCacheManagerConfig(cacheDir)
 	config.Cache.Coordinator.HostWatchIntervalSeconds = 3600
 	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-a", "default", "127.0.0.1")
+	manager.metadataStore = newGatewayCacheMetadataStore(repoClient)
 	defer func() { _ = manager.Close() }()
 
 	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")

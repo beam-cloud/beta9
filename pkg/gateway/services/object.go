@@ -45,6 +45,12 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 					ErrorMsg: "Unable to create storage client",
 				}, nil
 			}
+			if err := storageClient.EnsureLocalBucket(ctx); err != nil {
+				return &pb.HeadObjectResponse{
+					Ok:       false,
+					ErrorMsg: "Unable to ensure workspace storage bucket",
+				}, nil
+			}
 
 			objectExists, head, err := storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
 			if err != nil {
@@ -119,6 +125,12 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		return &pb.CreateObjectResponse{
 			Ok:       false,
 			ErrorMsg: "Unable to create storage client",
+		}, nil
+	}
+	if err := storageClient.EnsureLocalBucket(ctx); err != nil {
+		return &pb.CreateObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to ensure workspace storage bucket",
 		}, nil
 	}
 

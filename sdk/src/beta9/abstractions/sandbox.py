@@ -70,6 +70,7 @@ SANDBOX_EXEC_READINESS_ERRORS = (
     "failed to connect to sandbox",
     "process manager not ready",
     "sandbox process manager is not ready",
+    "process manager failed to become ready",
 )
 DOCKER_SANDBOX_NETWORK_MODE = "host"
 DOCKER_SANDBOX_PID_MODE = "host"

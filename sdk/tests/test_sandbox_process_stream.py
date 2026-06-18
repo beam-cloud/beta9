@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -27,44 +28,26 @@ class FakeStub:
         return call
 
 
-class SequencedStub:
-    def __init__(self):
-        self.stdout_chunks = ["line one\npartial"]
-        self.stderr_chunks = [""]
+class StreamStub:
+    def __init__(self, stdout=None, stderr=None):
+        self.stdout = list(stdout or [])
+        self.stderr = list(stderr or [])
 
     def _unary_unary(self, path, *_args, **_kwargs):
         def call(_request, **_call_kwargs):
             if path.endswith("SandboxStdout"):
-                value = self.stdout_chunks.pop(0) if self.stdout_chunks else ""
-                return SimpleNamespace(ok=True, stdout=value)
+                return SimpleNamespace(ok=True, stdout=self._pop(self.stdout))
             if path.endswith("SandboxStderr"):
-                value = self.stderr_chunks.pop(0) if self.stderr_chunks else ""
-                return SimpleNamespace(ok=True, stderr=value)
+                return SimpleNamespace(ok=True, stderr=self._pop(self.stderr))
             if path.endswith("SandboxStatus"):
                 return SimpleNamespace(ok=True, exit_code=0, status="exited")
             raise AssertionError(f"unexpected RPC path: {path}")
 
         return call
 
-
-class LateStderrStub:
-    def __init__(self):
-        self.stdout_chunks = ["combined-stdout\n", ""]
-        self.stderr_chunks = ["", "combined-stderr\n", ""]
-
-    def _unary_unary(self, path, *_args, **_kwargs):
-        def call(_request, **_call_kwargs):
-            if path.endswith("SandboxStdout"):
-                value = self.stdout_chunks.pop(0) if self.stdout_chunks else ""
-                return SimpleNamespace(ok=True, stdout=value)
-            if path.endswith("SandboxStderr"):
-                value = self.stderr_chunks.pop(0) if self.stderr_chunks else ""
-                return SimpleNamespace(ok=True, stderr=value)
-            if path.endswith("SandboxStatus"):
-                return SimpleNamespace(ok=True, exit_code=0, status="exited")
-            raise AssertionError(f"unexpected RPC path: {path}")
-
-        return call
+    @staticmethod
+    def _pop(chunks):
+        return chunks.pop(0) if chunks else ""
 
 
 class ExecReadyRetryStub:
@@ -121,7 +104,9 @@ def test_process_stderr_checks_rpc_ok():
 
 
 def test_combined_logs_read_preserves_buffered_partial_line():
-    sandbox = SimpleNamespace(container_id="sandbox-123", stub=SequencedStub())
+    sandbox = SimpleNamespace(
+        container_id="sandbox-123", stub=StreamStub(["line one\npartial"], [""])
+    )
     process = SandboxProcess(sandbox, pid=42, cwd="/workspace", args=[], env={})
     logs = process.logs
 
@@ -130,10 +115,64 @@ def test_combined_logs_read_preserves_buffered_partial_line():
 
 
 def test_combined_logs_iterator_reads_late_stderr_after_exit():
-    sandbox = SimpleNamespace(container_id="sandbox-123", stub=LateStderrStub())
+    sandbox = SimpleNamespace(
+        container_id="sandbox-123",
+        stub=StreamStub(["combined-stdout\n", ""], ["", "combined-stderr\n", ""]),
+    )
     process = SandboxProcess(sandbox, pid=42, cwd="/workspace", args=[], env={})
 
     assert "".join(process.logs) == "combined-stdout\ncombined-stderr\n"
+
+
+def stream_process(container_id="sandbox-123"):
+    sandbox = SimpleNamespace(
+        container_id=container_id,
+        stub=StreamStub(["stdout-line\nstdout-tail", ""], ["stderr-line\nstderr-tail", ""]),
+    )
+    return SandboxProcess(sandbox, pid=42, cwd="/workspace", args=[], env={})
+
+
+def test_split_stdout_stderr_streams_iterate_read_and_consume_independently():
+    process = stream_process()
+
+    assert next(process.stdout) == "stdout-line\n"
+    assert process.stdout.read() == "stdout-tail"
+    assert process.stdout.read() == ""
+
+    assert next(process.stderr) == "stderr-line\n"
+    assert process.stderr.read() == "stderr-tail"
+    assert process.stderr.read() == ""
+
+
+def test_combined_logs_read_returns_buffered_line_then_consumes_streams():
+    process = stream_process()
+
+    assert next(process.logs) == "stdout-line\n"
+    assert process.logs.read() == "stderr-line\nstdout-tailstderr-tail"
+    assert process.logs.read() == ""
+
+
+def test_async_process_streams_wrap_sync_stdout_stderr_and_logs():
+    async def run():
+        process = stream_process()
+
+        stdout_line = await process.aio.stdout.__anext__()
+        stdout_tail = await process.aio.stdout.read()
+        stderr = await process.aio.stderr.read()
+
+        process = stream_process("sandbox-456")
+        first_log = await process.aio.logs.__anext__()
+        remaining_logs = await process.aio.logs.read()
+
+        return stdout_line, stdout_tail, stderr, first_log, remaining_logs
+
+    assert asyncio.run(run()) == (
+        "stdout-line\n",
+        "stdout-tail",
+        "stderr-line\nstderr-tail",
+        "stdout-line\n",
+        "stderr-line\nstdout-tailstderr-tail",
+    )
 
 
 @pytest.mark.parametrize(
@@ -143,7 +182,7 @@ def test_combined_logs_iterator_reads_late_stderr_after_exit():
         "Failed to connect to sandbox",
     ],
 )
-def test_exec_retries_process_manager_not_ready(monkeypatch, error_msg):
+def test_exec_retries_transient_readiness_errors(monkeypatch, error_msg):
     stub = ExecReadyRetryStub(error_msg)
     sandbox = SimpleNamespace(container_id="sandbox-123", stub=stub)
     manager = SandboxProcessManager(sandbox)

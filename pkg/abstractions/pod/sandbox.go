@@ -72,34 +72,15 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	if in.Pid == 0 {
-		container, err := s.getSandboxContainerStateForStatus(ctx, in.ContainerId)
-		if err != nil || container == nil {
+		resp, err := s.sandboxContainerStatus(ctx, in.ContainerId, authInfo)
+		if err != nil {
 			return &pb.PodSandboxStatusResponse{
 				Ok:       false,
 				ErrorMsg: "Failed to get sandbox status",
 			}, nil
 		}
 
-		if container.WorkspaceId != authInfo.Workspace.ExternalId {
-			return &pb.PodSandboxStatusResponse{
-				Ok:       false,
-				ErrorMsg: "Failed to get sandbox status",
-			}, nil
-		}
-
-		status := "pending"
-		switch container.Status {
-		case types.ContainerStatusRunning:
-			status = "running"
-		case types.ContainerStatusStopping:
-			status = "stopping"
-		}
-
-		return &pb.PodSandboxStatusResponse{
-			Ok:       true,
-			Status:   status,
-			ExitCode: -1,
-		}, nil
+		return resp, nil
 	}
 
 	cacheKey := sandboxClientCacheKey(in.ContainerId, authInfo.Token.Key)
@@ -141,6 +122,63 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 		Status:   resp.Status,
 		ExitCode: resp.ExitCode,
 	}, nil
+}
+
+func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
+	container, err := s.getSandboxContainerStateForStatus(ctx, containerId)
+	if err != nil || container == nil {
+		return nil, err
+	}
+
+	if container.WorkspaceId != authInfo.Workspace.ExternalId {
+		return nil, errors.New("invalid workspace")
+	}
+
+	switch container.Status {
+	case types.ContainerStatusRunning:
+		return s.sandboxRuntimeStatus(ctx, containerId, authInfo)
+	case types.ContainerStatusStopping:
+		return sandboxStatus("stopping"), nil
+	default:
+		return sandboxStatus("pending"), nil
+	}
+}
+
+func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
+	cacheKey := sandboxClientCacheKey(containerId, authInfo.Token.Key)
+
+	client, _, err := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return sandboxStatus("pending"), nil
+	}
+
+	resp, err := client.SandboxStatusContext(ctx, containerId, 0)
+	if err != nil && isTransientSandboxConnectFailure(err) {
+		s.evictClient(cacheKey)
+		client, _, retryErr := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+		if retryErr != nil {
+			err = retryErr
+		} else {
+			resp, err = client.SandboxStatusContext(ctx, containerId, 0)
+		}
+	}
+	if err != nil {
+		return sandboxStatus("pending"), nil
+	}
+
+	if !resp.Ok {
+		return nil, errors.New(resp.ErrorMsg)
+	}
+
+	return sandboxStatus(resp.Status), nil
+}
+
+func sandboxStatus(status string) *pb.PodSandboxStatusResponse {
+	return &pb.PodSandboxStatusResponse{
+		Ok:       true,
+		Status:   status,
+		ExitCode: -1,
+	}
 }
 
 func (s *GenericPodService) getSandboxContainerStateForStatus(ctx context.Context, containerId string) (*types.ContainerState, error) {

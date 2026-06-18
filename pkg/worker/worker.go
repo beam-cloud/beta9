@@ -121,8 +121,28 @@ type ContainerInstance struct {
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
+	containerAddressMu         sync.RWMutex
+	ContainerAddressMap        map[int32]string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
+}
+
+func (i *ContainerInstance) setContainerAddressMap(addressMap map[int32]string) {
+	if i == nil {
+		return
+	}
+	i.containerAddressMu.Lock()
+	defer i.containerAddressMu.Unlock()
+	i.ContainerAddressMap = cloneContainerAddressMap(addressMap)
+}
+
+func (i *ContainerInstance) containerAddress(port int32) string {
+	if i == nil {
+		return ""
+	}
+	i.containerAddressMu.RLock()
+	defer i.containerAddressMu.RUnlock()
+	return i.ContainerAddressMap[port]
 }
 
 func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
@@ -151,8 +171,13 @@ type stopContainerEvent struct {
 	Kill        bool
 }
 
-func NewWorker() (*Worker, error) {
+func NewWorker() (_ *Worker, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		if err != nil {
+			cancel()
+		}
+	}()
 
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -142,6 +143,43 @@ func TestDefaultStorageClientPresignedURLRejectsInheritedLoopbackOverrideForRemo
 	}
 	if got, want := parsedURL.Hostname(), "s3.amazonaws.com"; got != want {
 		t.Fatalf("presigned URL hostname = %q, want %q; url=%s", got, want, presignedURL)
+	}
+}
+
+func TestIsBucketAlreadyCreatedError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "already owned",
+			err:  &smithy.GenericAPIError{Code: "BucketAlreadyOwnedByYou"},
+			want: true,
+		},
+		{
+			name: "already exists",
+			err:  &smithy.GenericAPIError{Code: "BucketAlreadyExists"},
+			want: true,
+		},
+		{
+			name: "other api error",
+			err:  &smithy.GenericAPIError{Code: "AccessDenied"},
+			want: false,
+		},
+		{
+			name: "plain error",
+			err:  context.Canceled,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isBucketAlreadyCreatedError(tt.err); got != tt.want {
+				t.Fatalf("isBucketAlreadyCreatedError() = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -12,9 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+)
+
+const (
+	runscRestoreStateTimeout      = 2 * time.Second
+	runscRestoreStatePollInterval = 25 * time.Millisecond
 )
 
 // Runsc implements Runtime using the gVisor runsc runtime
@@ -27,6 +33,11 @@ type Runsc struct {
 	cfg                   Config
 	dockerPacketWriteFlag string
 	nvproxyEnabled        bool
+}
+
+type runscCommandResult struct {
+	exitCode int
+	err      error
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -368,10 +379,13 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, fmt.Errorf("restore options cannot be nil")
 	}
 
+	cleanupOnFailure := true
 	defer func() {
-		deleteArgs := r.baseArgs(false)
-		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+		if cleanupOnFailure {
+			deleteArgs := r.baseArgs(false)
+			deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+			_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+		}
 	}()
 
 	// Ensure directories exist
@@ -418,31 +432,25 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	if opts.Started != nil {
-		opts.Started <- cmd.Process.Pid
+	killRestoreProcess := func() {
+		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
+			syscall.Kill(-pgid, syscall.SIGKILL)
+		}
 	}
 
 	go func() {
 		<-ctx.Done()
-		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
-			syscall.Kill(-pgid, syscall.SIGKILL)
-		}
+		killRestoreProcess()
 	}()
 
-	err := cmd.Wait()
+	restoreDone := make(chan runscCommandResult, 1)
+	go func() {
+		restoreDone <- runscWaitResult(cmd.Wait(), stderr.String(), "restore")
+	}()
+
+	pid, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)
 	if err != nil {
-		stderrStr := stderr.String()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				if stderrStr != "" {
-					return ws.ExitStatus(), fmt.Errorf("restore failed with exit code %d (stderr: %s)", ws.ExitStatus(), stderrStr)
-				}
-				return ws.ExitStatus(), nil
-			}
-		}
-		if stderrStr != "" {
-			return -1, fmt.Errorf("restore failed: %w (stderr: %s)", err, stderrStr)
-		}
+		killRestoreProcess()
 		return -1, err
 	}
 
@@ -456,7 +464,82 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		}
 	}
 
+	if opts.Started != nil {
+		select {
+		case opts.Started <- pid:
+		case <-ctx.Done():
+			killRestoreProcess()
+			return -1, ctx.Err()
+		}
+	}
+
+	cleanupOnFailure = false
 	return 0, nil
+}
+
+func (r *Runsc) waitForRestoredContainerPID(ctx context.Context, containerID string, restoreDone <-chan runscCommandResult) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, runscRestoreStateTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(runscRestoreStatePollInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	var restoreResult *runscCommandResult
+	for {
+		state, err := r.State(ctx, containerID)
+		if err == nil && state.Pid > 0 {
+			return state.Pid, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("restored container state has no pid")
+		}
+
+		select {
+		case <-ctx.Done():
+			if restoreResult != nil && restoreResult.err != nil {
+				return restoreResult.exitCode, restoreResult.err
+			}
+			return -1, fmt.Errorf("restore succeeded but restored container state was unavailable: %w", lastErr)
+		case result := <-restoreDone:
+			restoreResult = &result
+			restoreDone = nil
+			if result.err != nil {
+				return result.exitCode, result.err
+			}
+		case <-ticker.C:
+		}
+	}
+}
+
+func runscWaitResult(err error, stderr, operation string) runscCommandResult {
+	if err == nil {
+		return runscCommandResult{exitCode: 0}
+	}
+
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			exitCode := ws.ExitStatus()
+			if stderr != "" {
+				return runscCommandResult{
+					exitCode: exitCode,
+					err:      fmt.Errorf("%s failed with exit code %d (stderr: %s)", operation, exitCode, stderr),
+				}
+			}
+			return runscCommandResult{exitCode: exitCode, err: err}
+		}
+	}
+
+	if stderr != "" {
+		return runscCommandResult{
+			exitCode: -1,
+			err:      fmt.Errorf("%s failed: %w (stderr: %s)", operation, err, stderr),
+		}
+	}
+
+	return runscCommandResult{exitCode: -1, err: err}
 }
 
 // cudaCheckpointProcesses runs cuda-checkpoint on all CUDA processes inside the container

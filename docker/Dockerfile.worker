@@ -264,9 +264,9 @@ EOT
 RUN apt-get install -y ripgrep wget
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.6/goproc-0.1.6-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.11/goproc-0.1.11-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
     elif [ "$TARGETARCH" = "amd64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.6/goproc-0.1.6-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.11/goproc-0.1.11-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
     else \
       echo "Unsupported architecture: $TARGETARCH" && exit 1 ; \
     fi

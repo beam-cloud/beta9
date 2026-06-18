@@ -939,7 +939,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxKill(ctx context.Context, in *p
 		s.markSandboxProcessExited(in.ContainerId, in.Pid)
 	}
 
-	return &pb.ContainerSandboxKillResponse{Ok: true}, err
+	return &pb.ContainerSandboxKillResponse{Ok: true}, nil
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxListExposedPorts(ctx context.Context, in *pb.ContainerSandboxListExposedPortsRequest) (*pb.ContainerSandboxListExposedPortsResponse, error) {
@@ -974,11 +974,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	processes := make([]*pb.ProcessInfo, 0)
-	if !instance.SandboxProcessManagerReady {
-		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: "Sandbox process manager is not ready"}, nil
+	instance, err := s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
+	if err != nil {
+		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	processes := make([]*pb.ProcessInfo, 0)
 	client, err := newProcessManagerClient(ctx, instance)
 	if err != nil {
 		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -999,7 +1000,8 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 			running = false
 			exitCode = sandboxMissingProcessExitCode
 		}
-		processes = append(processes, &pb.ProcessInfo{Pid: int32(process.Pid), ExitCode: exitCode, Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: running})
+		pid := int32(process.Pid)
+		processes = append(processes, &pb.ProcessInfo{Pid: pid, ExitCode: exitCode, Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: running})
 	}
 
 	return &pb.ContainerSandboxListProcessesResponse{Ok: true, Processes: processes}, nil
@@ -1342,11 +1344,12 @@ func (s *ContainerRuntimeServer) backendRouteForContainerPort(instance *Containe
 }
 
 func writableContainerAddressMap(addressMap map[int32]string) map[int32]string {
-	if addressMap == nil {
+	cloned := cloneContainerAddressMap(addressMap)
+	if cloned == nil {
 		return map[int32]string{}
 	}
 
-	return addressMap
+	return cloned
 }
 
 func recordSandboxExposedPort(containerInstances *common.SafeMap[*ContainerInstance], containerId string, instance *ContainerInstance, port uint32) {

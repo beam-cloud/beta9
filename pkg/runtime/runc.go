@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -120,6 +121,9 @@ func (r *Runc) Delete(ctx context.Context, containerID string, opts *DeleteOpts)
 func (r *Runc) State(ctx context.Context, containerID string) (State, error) {
 	state, err := r.handle.State(ctx, containerID)
 	if err != nil {
+		if runcContainerNotFound(err) {
+			return State{}, ErrContainerNotFound{ContainerID: containerID}
+		}
 		return State{}, err
 	}
 
@@ -128,6 +132,13 @@ func (r *Runc) State(ctx context.Context, containerID string) (State, error) {
 		Pid:    state.Pid,
 		Status: state.Status,
 	}, nil
+}
+
+func runcContainerNotFound(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no such container")
 }
 
 func (r *Runc) Events(ctx context.Context, containerID string) (<-chan Event, error) {
