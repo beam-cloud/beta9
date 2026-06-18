@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNormalizeCacheConfigAppliesPoolDiskOverrides(t *testing.T) {
@@ -521,9 +522,9 @@ func (s *testCacheCoordinator) RegisterCacheHost(ctx context.Context, req *pb.Re
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: "host is required"}, nil
 	}
 
-	host := *req.Host
+	host := proto.Clone(req.Host).(*pb.CacheCoordinatorHost)
 	s.mu.Lock()
-	s.hosts[host.GetLogicalHostId()] = &host
+	s.hosts[host.GetLogicalHostId()] = host
 	s.mu.Unlock()
 	return &pb.RegisterCacheHostResponse{Ok: true}, nil
 }
@@ -551,8 +552,7 @@ func (s *testCacheCoordinator) ListCacheHosts(ctx context.Context, req *pb.ListC
 		if req != nil && req.GetLocality() != "" && host.GetLocality() != req.GetLocality() {
 			continue
 		}
-		copyHost := *host
-		hosts = append(hosts, &copyHost)
+		hosts = append(hosts, proto.Clone(host).(*pb.CacheCoordinatorHost))
 	}
 	return &pb.ListCacheHostsResponse{Ok: true, Hosts: hosts}, nil
 }
@@ -563,8 +563,7 @@ func (s *testCacheCoordinator) activeHosts() map[string]*pb.CacheCoordinatorHost
 
 	hosts := make(map[string]*pb.CacheCoordinatorHost, len(s.hosts))
 	for id, host := range s.hosts {
-		copyHost := *host
-		hosts[id] = &copyHost
+		hosts[id] = proto.Clone(host).(*pb.CacheCoordinatorHost)
 	}
 	return hosts
 }
