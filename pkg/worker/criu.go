@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -154,12 +155,32 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 
 		return exitCode, false, err
 	}
+
+	s.signalRestoredSandboxProcessManager(ctx, request, instance)
+
 	if err := s.updateCheckpointRestored(checkpoint.CheckpointId); err != nil {
 		log.Warn().Err(err).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
 	}
 
 	outputLogger.Info("Checkpoint found and restored")
 	return exitCode, true, nil
+}
+
+func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, request *types.ContainerRequest, instance *ContainerInstance) {
+	if request.Stub.Type.Kind() != types.StubTypeSandbox || instance == nil || instance.Runtime == nil {
+		return
+	}
+
+	signalCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// SIGWINCH is ignored by older goproc builds, so this nudge is safe during rolling upgrades.
+	if err := instance.Runtime.Kill(signalCtx, request.ContainerId, syscall.SIGWINCH, &runtime.KillOpts{}); err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Msg("failed to signal restored sandbox process manager")
+	}
 }
 
 type CreateCheckpointOpts struct {

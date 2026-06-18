@@ -6,35 +6,34 @@ import time
 import pytest
 
 from beta9 import Image, Sandbox
+from beta9.abstractions.base import unset_channel
+from beta9.config import set_settings
 
 
-def _configure_local_gateway(monkeypatch):
+def _configure_local_gateway(monkeypatch, tmp_path):
     if os.environ.get("BETA9_SANDBOX_INTEGRATION") != "1":
         pytest.skip("BETA9_SANDBOX_INTEGRATION=1 is required")
 
-    host = (
-        os.environ.get("BETA9_INTEGRATION_GATEWAY_HOST")
-        or os.environ.get("BETA9_GATEWAY_HOST")
-        or "127.0.0.1"
-    )
-    port = (
-        os.environ.get("BETA9_INTEGRATION_GATEWAY_PORT")
-        or os.environ.get("BETA9_GATEWAY_PORT")
-        or "1993"
-    )
+    host = os.environ.get("BETA9_INTEGRATION_GATEWAY_HOST") or "127.0.0.1"
+    port = os.environ.get("BETA9_INTEGRATION_GATEWAY_PORT") or "1993"
     token = os.environ.get("BETA9_INTEGRATION_TOKEN") or os.environ.get("BETA9_TOKEN")
+    if token == "test-token":
+        token = None
 
+    monkeypatch.setenv("CONFIG_PATH", str(tmp_path / "config.ini"))
     monkeypatch.setenv("BETA9_GATEWAY_HOST", host)
     monkeypatch.setenv("BETA9_GATEWAY_PORT", port)
     if token:
         monkeypatch.setenv("BETA9_TOKEN", token)
-        return
+    else:
+        monkeypatch.delenv("BETA9_TOKEN", raising=False)
 
-    monkeypatch.delenv("BETA9_TOKEN", raising=False)
+    set_settings()
+    unset_channel()
 
 
-def test_python_sdk_sandbox_log_streaming_live(monkeypatch):
-    _configure_local_gateway(monkeypatch)
+def test_python_sdk_sandbox_log_streaming_live(monkeypatch, tmp_path):
+    _configure_local_gateway(monkeypatch, tmp_path)
 
     script = (
         "printf 'py-stdout-start\\n'; "
@@ -45,11 +44,13 @@ def test_python_sdk_sandbox_log_streaming_live(monkeypatch):
         "printf 'py-stderr-end\\n' >&2"
     )
 
+    pool = os.environ.get("BETA9_INTEGRATION_POOL")
+    kwargs = {"pool": pool} if pool else {}
     sandbox = Sandbox(
         name="python-sdk-log-streaming",
         image=Image(python_version="python3.11"),
         keep_warm_seconds=300,
-        pool=os.environ.get("BETA9_INTEGRATION_POOL", "gvisor"),
+        **kwargs,
     )
     instance = sandbox.create()
     try:

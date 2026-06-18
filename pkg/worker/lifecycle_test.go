@@ -824,6 +824,50 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
 }
 
+func TestAttemptRestoreCheckpointSignalsSandboxProcessManagerAfterRestore(t *testing.T) {
+	containerID := "container-restore-sandbox"
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
+
+	rt := &mockRuntime{name: "runc"}
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{
+		criuManager:        &startedCRIUManager{},
+		backendRepoClient:  backendRepoClient,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: rt,
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-sandbox-restore",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, restored, err := worker.attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+	)
+
+	require.NoError(t, err)
+	require.True(t, restored)
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, []syscall.Signal{syscall.SIGWINCH}, rt.signals)
+	require.Len(t, rt.killOpts, 1)
+	require.False(t, rt.killOpts[0].All)
+	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.NotNil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+}
+
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "volume")
 	spec := getTestBaseSpec()
@@ -1304,6 +1348,9 @@ type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
 	state        func(context.Context, string) (runtime.State, error)
+	signals      []syscall.Signal
+	killOpts     []*runtime.KillOpts
+	killErr      error
 }
 
 func (m *mockRuntime) Name() string {
@@ -1327,7 +1374,12 @@ func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.P
 }
 
 func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
-	return nil
+	m.signals = append(m.signals, sig)
+	if opts == nil {
+		opts = &runtime.KillOpts{}
+	}
+	m.killOpts = append(m.killOpts, opts)
+	return m.killErr
 }
 
 func (m *mockRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
