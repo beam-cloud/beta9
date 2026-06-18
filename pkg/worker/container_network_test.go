@@ -28,6 +28,24 @@ func TestNewContainerNetworkUsesLocalImplementationByDefault(t *testing.T) {
 	}, addressMap)
 }
 
+func TestNewContainerNetworkFormatsBracketedIPv6PodAddress(t *testing.T) {
+	network := newContainerNetwork(&ContainerNetworkManager{}, "[2600:1f18:37a4:c02::7286]", false, "", "")
+
+	address, err := network.ContainerPortAddress("container-one", PortBinding{HostPort: 32000, ContainerPort: 8001})
+	require.NoError(t, err)
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:32000", address)
+
+	addressMap, err := network.ContainerPortAddressMap("container-one", []PortBinding{
+		{HostPort: 32000, ContainerPort: 8001},
+		{HostPort: 32001, ContainerPort: 2222},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[int32]string{
+		8001: "[2600:1f18:37a4:c02::7286]:32000",
+		2222: "[2600:1f18:37a4:c02::7286]:32001",
+	}, addressMap)
+}
+
 func TestNewContainerNetworkUsesAgentImplementationForPersistentMachine(t *testing.T) {
 	containerID := "container-one"
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
@@ -53,5 +71,30 @@ func TestNewContainerNetworkUsesAgentImplementationForPersistentMachine(t *testi
 	require.Equal(t, map[int32]string{
 		8001: "192.168.0.44:8001",
 		2222: "192.168.0.44:2222",
+	}, addressMap)
+}
+
+func TestNewContainerNetworkFormatsAgentIPv6ContainerAddress(t *testing.T) {
+	containerID := "container-one"
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	containerInstances.Set(containerID, &ContainerInstance{
+		Id:          containerID,
+		ContainerIp: "fd00:abcd::3f",
+	})
+
+	network := newContainerNetwork(&ContainerNetworkManager{containerInstances: containerInstances}, "127.0.0.1", true, "machine-one", "tsnet_restricted")
+
+	address, err := network.ContainerPortAddress(containerID, PortBinding{HostPort: 32000, ContainerPort: 8001})
+	require.NoError(t, err)
+	require.Equal(t, "[fd00:abcd::3f]:8001", address)
+
+	addressMap, err := network.ContainerPortAddressMap(containerID, []PortBinding{
+		{HostPort: 32000, ContainerPort: 8001},
+		{HostPort: 32001, ContainerPort: 2222},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[int32]string{
+		8001: "[fd00:abcd::3f]:8001",
+		2222: "[fd00:abcd::3f]:2222",
 	}, addressMap)
 }

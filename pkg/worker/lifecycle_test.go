@@ -260,6 +260,32 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.Equal(t, "10.0.0.2:30002", instance.ContainerAddressMap[2222])
 }
 
+func TestPublishContainerAddressesFormatsBracketedIPv6PodAddress(t *testing.T) {
+	containerID := "container-ipv6"
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		podAddr:             "[2600:1f18:37a4:c02::7286]",
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
+
+	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
+		ContainerId: containerID,
+	}, []PortBinding{
+		{HostPort: 30001, ContainerPort: 8001},
+		{HostPort: 30002, ContainerPort: 2222},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, repoClient.lastSetAddress)
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddress.Address)
+
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30002", repoClient.lastSetAddressMap.AddressMap[2222])
+}
+
 func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{}
 	worker := &Worker{
