@@ -548,6 +548,11 @@ func (s nodeCacheServer) Watch() {
 	}()
 }
 
+// reconcile runs one node-cache ownership pass. It returns false only when the
+// watcher should exit: the manager is draining, or this cache-server-only
+// process successfully owns the server and needs no standby loop. Embedded
+// workers keep watching even when they fail to acquire ownership so a node does
+// not remain without a cache host after the current owner exits.
 func (s nodeCacheServer) reconcile() bool {
 	m := s.manager
 	m.mu.Lock()
@@ -566,14 +571,20 @@ func (s nodeCacheServer) reconcile() bool {
 		return true
 	}
 	if running {
-		return !cacheServerOnlyMode()
+		if cacheServerOnlyMode() {
+			return false
+		}
+		return true
 	}
 	startedCacheServer, err := s.Start()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to start standby cache server")
 		return true
 	}
-	return !startedCacheServer || !cacheServerOnlyMode()
+	if cacheServerOnlyMode() && startedCacheServer {
+		return false
+	}
+	return true
 }
 
 func (m *WorkerCacheManager) stopNodeCacheServer(reason string) error {

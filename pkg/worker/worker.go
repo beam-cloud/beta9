@@ -1015,8 +1015,8 @@ func (s *Worker) shutdown() error {
 	s.stopActiveContainersForShutdown()
 
 	if s.cacheManager != nil {
-		if err := s.cacheManager.Drain(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to drain cache registration: %v", err))
+		if err := s.cacheManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
 		}
 	}
 
@@ -1035,13 +1035,6 @@ func (s *Worker) shutdown() error {
 			WorkerId: s.workerId,
 		})); err != nil {
 			errs = errors.Join(errs, err)
-		}
-	}
-
-	if s.cacheManager != nil {
-		err := s.cacheManager.Close()
-		if err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
 		}
 	}
 
