@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestNormalizeCacheConfigAppliesPoolDiskOverrides(t *testing.T) {
@@ -177,6 +178,33 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !manager.runningCacheServer() && repo.unregisterCalled("worker-a")
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestNodeCacheServerWatchStartsImmediately(t *testing.T) {
+	t.Setenv(types.CacheServerOnlyEnv, "false")
+	t.Setenv(types.CacheNodeEnv, "single-node")
+	t.Setenv(types.CacheLocalityEnv, "test")
+	t.Setenv(types.WorkerCacheAdvertiseAddrEnv, "127.0.0.1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	repoClient, repo, cleanup := startTestCacheCoordinator(t)
+	defer cleanup()
+
+	cacheDir := t.TempDir()
+	config := testCacheManagerConfig(cacheDir)
+	config.Cache.Coordinator.HostWatchIntervalSeconds = 3600
+	manager := NewWorkerCacheManager(ctx, config, types.WorkerPoolConfig{}, repoClient, nil, nil, "worker-a", "default", "127.0.0.1")
+	defer func() { _ = manager.Close() }()
+
+	cacheConfig := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "single-node", "test")
+	cacheConfig.Global.ServerPort = uint(freeTCPPort(t))
+	manager.nodeCacheServer(cacheConfig, "cache-host").Watch()
+
+	require.Eventually(t, func() bool {
+		return manager.runningCacheServer() && len(repo.activeHosts()) == 1
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestCacheServerDaemonSetMarkerFreshUsesTTL(t *testing.T) {
@@ -477,14 +505,26 @@ func startTestCacheCoordinator(t *testing.T) (pb.WorkerRepositoryServiceClient, 
 	return pb.NewWorkerRepositoryServiceClient(conn), coordinator, cleanup
 }
 
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	return addr.Port
+}
+
 func (s *testCacheCoordinator) RegisterCacheHost(ctx context.Context, req *pb.RegisterCacheHostRequest) (*pb.RegisterCacheHostResponse, error) {
 	if req == nil || req.Host == nil {
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: "host is required"}, nil
 	}
 
-	host := *req.Host
+	host := proto.Clone(req.Host).(*pb.CacheCoordinatorHost)
 	s.mu.Lock()
-	s.hosts[host.GetLogicalHostId()] = &host
+	s.hosts[host.GetLogicalHostId()] = host
 	s.mu.Unlock()
 	return &pb.RegisterCacheHostResponse{Ok: true}, nil
 }
@@ -512,8 +552,7 @@ func (s *testCacheCoordinator) ListCacheHosts(ctx context.Context, req *pb.ListC
 		if req != nil && req.GetLocality() != "" && host.GetLocality() != req.GetLocality() {
 			continue
 		}
-		copyHost := *host
-		hosts = append(hosts, &copyHost)
+		hosts = append(hosts, proto.Clone(host).(*pb.CacheCoordinatorHost))
 	}
 	return &pb.ListCacheHostsResponse{Ok: true, Hosts: hosts}, nil
 }
@@ -524,8 +563,7 @@ func (s *testCacheCoordinator) activeHosts() map[string]*pb.CacheCoordinatorHost
 
 	hosts := make(map[string]*pb.CacheCoordinatorHost, len(s.hosts))
 	for id, host := range s.hosts {
-		copyHost := *host
-		hosts[id] = &copyHost
+		hosts[id] = proto.Clone(host).(*pb.CacheCoordinatorHost)
 	}
 	return hosts
 }

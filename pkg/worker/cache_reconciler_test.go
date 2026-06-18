@@ -678,15 +678,28 @@ func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
 	require.Empty(t, fake.cacheEvents)
 }
 
-func TestPruneLocalCheckpointsKeepsActive(t *testing.T) {
+func TestPruneLocalCheckpointsKeepsActiveAndFresh(t *testing.T) {
 	root := t.TempDir()
-	manager := &WorkerCacheManager{checkpointRoot: root}
+	manager := &WorkerCacheManager{
+		checkpointRoot: root,
+		config: types.AppConfig{
+			Cache: cache.Config{
+				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 60},
+			},
+		},
+	}
 
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "keep", checkpointFsDir), 0755))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "drop", checkpointFsDir), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "fresh", checkpointFsDir), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "keep"+checkpointArchiveExtension), []byte("archive"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "drop"+checkpointArchiveExtension), []byte("archive"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "fresh"+checkpointArchiveExtension), []byte("archive"), 0644))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".extracting"), 0755))
+
+	old := time.Now().Add(-2 * time.Minute)
+	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"), old, old))
+	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"+checkpointArchiveExtension), old, old))
 
 	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}})
 
@@ -694,6 +707,8 @@ func TestPruneLocalCheckpointsKeepsActive(t *testing.T) {
 	require.FileExists(t, filepath.Join(root, "keep"+checkpointArchiveExtension))
 	require.NoDirExists(t, filepath.Join(root, "drop"))
 	require.NoFileExists(t, filepath.Join(root, "drop"+checkpointArchiveExtension))
+	require.DirExists(t, filepath.Join(root, "fresh"))
+	require.FileExists(t, filepath.Join(root, "fresh"+checkpointArchiveExtension))
 	require.DirExists(t, filepath.Join(root, ".extracting"))
 }
 

@@ -186,6 +186,12 @@ func (s *GenericPodService) SandboxStdout(ctx context.Context, in *pb.PodSandbox
 			ErrorMsg: "Failed to get sandbox stdout",
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxStdoutResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
 
 	return &pb.PodSandboxStdoutResponse{
 		Ok:     true,
@@ -208,7 +214,13 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 	if err != nil {
 		return &pb.PodSandboxStderrResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to get sandbox stdout",
+			ErrorMsg: "Failed to get sandbox stderr",
+		}, nil
+	}
+	if !resp.Ok {
+		return &pb.PodSandboxStderrResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 
@@ -528,6 +540,12 @@ func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSand
 			ErrorMsg: fmt.Sprintf("Failed to list files in '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxListFilesResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
 
 	files := make([]*pb.PodSandboxFileInfo, 0)
 	for _, file := range resp.Files {
@@ -833,6 +851,18 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 			ErrorMsg: err.Error(),
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+	if resp.CheckpointId == "" {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: "checkpoint response missing checkpoint ID",
+		}, nil
+	}
 
 	return &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,
@@ -874,6 +904,12 @@ func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandb
 			ErrorMsg: "Failed to list urls",
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxListUrlsResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
 
 	urls := make(map[int32]string)
 	for _, port := range resp.ExposedPorts {
@@ -902,6 +938,12 @@ func (s *GenericPodService) SandboxListProcesses(ctx context.Context, in *pb.Pod
 		return &pb.PodSandboxListProcessesResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to list processes",
+		}, nil
+	}
+	if !resp.Ok {
+		return &pb.PodSandboxListProcessesResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 

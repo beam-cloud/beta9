@@ -42,6 +42,7 @@ const (
 	shutdownDrainMax               time.Duration = 5 * time.Second
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
+	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
 	defaultContainerStartupTimeout time.Duration = 5 * time.Minute
 	// maxContainerStartupTimeout bounds the configurable startup timeout so a
 	// large/sentinel maxSchedulingLatencyMs cannot overflow time.Duration (int64
@@ -705,16 +706,17 @@ func (s *Worker) cancelBuildIfAlreadyStopping(ctx context.Context, cancel contex
 func (s *Worker) listenForShutdown() {
 	terminate := make(chan os.Signal, 1)
 	signal.Notify(terminate, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(terminate)
 
 	<-terminate
 	log.Info().Msg("shutdown signal received")
 
-	s.disableSchedulingForShutdown()
 	s.cancel()
+	s.disableSchedulingForShutdown()
 }
 
 func (s *Worker) disableSchedulingForShutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
 	defer cancel()
 
 	if _, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
@@ -1013,8 +1015,8 @@ func (s *Worker) shutdown() error {
 	s.stopActiveContainersForShutdown()
 
 	if s.cacheManager != nil {
-		if err := s.cacheManager.Drain(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to drain cache registration: %v", err))
+		if err := s.cacheManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
 		}
 	}
 
@@ -1027,17 +1029,12 @@ func (s *Worker) shutdown() error {
 	if s.persistent {
 		s.disableSchedulingForShutdown()
 	} else {
-		if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
+		ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+		defer cancel()
+		if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(ctx, &pb.RemoveWorkerRequest{
 			WorkerId: s.workerId,
 		})); err != nil {
 			errs = errors.Join(errs, err)
-		}
-	}
-
-	if s.cacheManager != nil {
-		err := s.cacheManager.Close()
-		if err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
 		}
 	}
 
@@ -1068,7 +1065,19 @@ func (s *Worker) shutdown() error {
 		s.gvisorRuntime.Close()
 	}
 
+	return s.finishShutdown(errs)
+}
+
+func (s *Worker) finishShutdown(errs error) error {
+	if errs != nil && s.shutdownCanceled() {
+		log.Warn().Err(errs).Msg("worker shutdown cleanup completed with errors")
+		return nil
+	}
 	return errs
+}
+
+func (s *Worker) shutdownCanceled() bool {
+	return s != nil && s.ctx != nil && s.ctx.Err() != nil
 }
 
 func (s *Worker) waitForActiveContainersBeforeShutdown() {

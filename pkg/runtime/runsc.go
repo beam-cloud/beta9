@@ -24,8 +24,9 @@ import (
 // inside the container via runsc exec to freeze/unfreeze GPU state before/after
 // checkpoint/restore operations.
 type Runsc struct {
-	cfg            Config
-	nvproxyEnabled bool
+	cfg                   Config
+	dockerPacketWriteFlag string
+	nvproxyEnabled        bool
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -46,7 +47,8 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 	}
 
 	return &Runsc{
-		cfg: cfg,
+		cfg:                   cfg,
+		dockerPacketWriteFlag: selectDockerPacketWriteFlag(runscFlags(cfg.RunscPath)),
 	}, nil
 }
 
@@ -534,54 +536,39 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 
 	args = append(args, r.cfg.RunscExtraArgs...)
 
-	// Add --net-raw flag if Docker-in-Docker is enabled
-	// This is required for Docker to function properly inside gVisor
+	// Add flags required for Docker to function properly inside gVisor.
 	if dockerEnabled {
 		args = append(args, "--net-raw")
+		if r.dockerPacketWriteFlag != "" {
+			args = append(args, r.dockerPacketWriteFlag)
+		}
 	}
 
 	return args
 }
 
+func runscFlags(runscPath string) string {
+	out, err := exec.Command(runscPath, "flags").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func selectDockerPacketWriteFlag(flags string) string {
+	switch {
+	case strings.Contains(flags, "-allow-packet-socket-write"):
+		return "--allow-packet-socket-write"
+	case strings.Contains(flags, "-TESTONLY-allow-packet-endpoint-write"):
+		return "--TESTONLY-allow-packet-endpoint-write"
+	default:
+		return ""
+	}
+}
+
 // AddDockerInDockerCapabilities adds the capabilities required for running Docker inside gVisor.
-// According to gVisor documentation, Docker requires: audit_write, chown, dac_override, fowner,
-// fsetid, kill, mknod, net_bind_service, net_admin, net_raw, setfcap, setgid, setpcap, setuid,
-// sys_admin, sys_chroot, sys_ptrace
 func (r *Runsc) AddDockerInDockerCapabilities(spec *specs.Spec) {
-	if spec.Process == nil {
-		spec.Process = &specs.Process{}
-	}
-
-	if spec.Process.Capabilities == nil {
-		spec.Process.Capabilities = &specs.LinuxCapabilities{}
-	}
-
-	// Capabilities required for Docker-in-Docker according to gVisor documentation
-	dockerCaps := []string{
-		"CAP_AUDIT_WRITE",
-		"CAP_CHOWN",
-		"CAP_DAC_OVERRIDE",
-		"CAP_FOWNER",
-		"CAP_FSETID",
-		"CAP_KILL",
-		"CAP_MKNOD",
-		"CAP_NET_BIND_SERVICE",
-		"CAP_NET_ADMIN",
-		"CAP_NET_RAW",
-		"CAP_SETFCAP",
-		"CAP_SETGID",
-		"CAP_SETPCAP",
-		"CAP_SETUID",
-		"CAP_SYS_ADMIN",
-		"CAP_SYS_CHROOT",
-		"CAP_SYS_PTRACE",
-	}
-
-	// Add capabilities to all capability sets
-	spec.Process.Capabilities.Bounding = mergeCapabilities(spec.Process.Capabilities.Bounding, dockerCaps)
-	spec.Process.Capabilities.Effective = mergeCapabilities(spec.Process.Capabilities.Effective, dockerCaps)
-	spec.Process.Capabilities.Permitted = mergeCapabilities(spec.Process.Capabilities.Permitted, dockerCaps)
-	spec.Process.Capabilities.Inheritable = mergeCapabilities(spec.Process.Capabilities.Inheritable, dockerCaps)
+	AddDockerInDockerCapabilities(spec)
 }
 
 // mergeCapabilities merges two capability lists, avoiding duplicates

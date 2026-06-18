@@ -866,8 +866,9 @@ class Image(BaseAbstraction):
         - Docker Compose standalone (docker-compose)
         - Docker Buildx plugin (docker buildx)
 
-        NOTE: This feature only works with gVisor as the container runtime for
-        enhanced security isolation.
+        NOTE: Docker-enabled sandboxes work with both runc and gVisor. Docker
+        helper methods run inner containers with host network/PID mode so common
+        Docker operations behave consistently inside the sandbox.
 
         Returns:
             Image: The Image object.

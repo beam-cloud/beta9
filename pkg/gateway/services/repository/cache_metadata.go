@@ -214,13 +214,17 @@ func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	checkpoints, err := s.backendRepo.ListStaleCheckpoints(ctx, activeKeys)
+	pruneCutoff := s.staleCacheCheckpointPruneCutoff()
+	checkpoints, err := s.backendRepo.ListStaleCheckpoints(ctx, activeKeys, pruneCutoff)
 	if err != nil {
 		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	pruneIDs := make([]string, 0, len(checkpoints))
 	for _, checkpoint := range checkpoints {
+		if !cacheCheckpointPruneCandidate(checkpoint, pruneCutoff) {
+			continue
+		}
 		if checkpoint.OriginKey != "" {
 			workspace, err := s.backendRepo.GetWorkspace(ctx, checkpoint.WorkspaceId)
 			if err != nil {
@@ -246,6 +250,21 @@ func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context
 	}
 
 	return &pb.PruneStaleCacheCheckpointsResponse{Ok: true, Pruned: int32(len(pruned))}, nil
+}
+
+func (s *WorkerRepositoryService) staleCacheCheckpointPruneCutoff() time.Time {
+	return time.Now().Add(-s.recentCacheStubTTL())
+}
+
+func cacheCheckpointPruneCandidate(checkpoint types.Checkpoint, pruneCutoff time.Time) bool {
+	lastUsedAt := checkpoint.CreatedAt.Time
+	if checkpoint.LastRestoredAt.Time.After(lastUsedAt) {
+		lastUsedAt = checkpoint.LastRestoredAt.Time
+	}
+	if lastUsedAt.IsZero() {
+		return false
+	}
+	return lastUsedAt.Before(pruneCutoff)
 }
 
 type anyLocalityRecentStubStore interface {

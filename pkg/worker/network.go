@@ -753,9 +753,12 @@ func (m *ContainerNetworkManager) deleteNetworkSlotResources(slotID string) {
 
 func (m *ContainerNetworkManager) Close() error {
 	slots := m.drainFreeNetworkSlots()
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+	defer cancel()
+
 	var errs error
 	for _, slot := range slots {
-		if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+		if err := m.releaseUnusedNetworkSlotWithContext(ctx, slot); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -778,13 +781,19 @@ func (m *ContainerNetworkManager) drainFreeNetworkSlots() []*containerNetworkSlo
 }
 
 func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetworkSlot) error {
+	ctx, cancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+	defer cancel()
+	return m.releaseUnusedNetworkSlotWithContext(ctx, slot)
+}
+
+func (m *ContainerNetworkManager) releaseUnusedNetworkSlotWithContext(ctx context.Context, slot *containerNetworkSlot) error {
 	if slot == nil {
 		return nil
 	}
 
 	m.clearNetworkSlotNeighbor(slot)
 	m.deleteNetworkSlotResources(slot.id)
-	if err := m.removeContainerIPFromRepositoryWithContext(context.Background(), m.containerNetworkSlotReservation(slot)); err != nil {
+	if err := m.removeContainerIPFromRepositoryWithContext(ctx, m.containerNetworkSlotReservation(slot)); err != nil {
 		return fmt.Errorf("failed to release preallocated network slot %s: %w", slot.id, err)
 	}
 	m.forgetContainerIP(m.containerNetworkSlotReservation(slot), slot.ip)
@@ -793,6 +802,7 @@ func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetwor
 
 func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
 	var slot *containerNetworkSlot
+	discardedSlots := 0
 	for attempts := 0; attempts < containerNetworkSlotAcquireAttempts; attempts++ {
 		candidate := m.acquireNetworkSlot()
 		if candidate == nil {
@@ -800,12 +810,13 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 		}
 
 		if err := m.prepareNetworkSlotForAssignment(candidate); err != nil {
-			log.Warn().
+			discardedSlots++
+			log.Debug().
 				Str("container_id", containerId).
 				Str("network_slot", candidate.id).
 				Str("ip_address", candidate.ip).
 				Err(err).
-				Msg("discarding unreachable preallocated network slot")
+				Msg("skipping unavailable preallocated network slot")
 			m.discardNetworkSlot("", candidate)
 			continue
 		}
@@ -814,6 +825,12 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 		break
 	}
 	if slot == nil {
+		if discardedSlots > 0 {
+			log.Debug().
+				Str("container_id", containerId).
+				Int("discarded_slots", discardedSlots).
+				Msg("falling back to on-demand network setup after unavailable preallocated slots")
+		}
 		return false, nil
 	}
 

@@ -218,7 +218,7 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 
 		err = updateReadAheadKB(bc.clientConfig.CacheFS.MountPoint, readAheadKB)
 		if err != nil {
-			Logger.Errorf("Failed to update read_ahead_kb: %v", err)
+			Logger.Debugf("CacheFS read-ahead tuning unavailable; continuing without read_ahead_kb update: %v", err)
 		}
 
 		bc.cachefsServer = server

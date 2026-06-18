@@ -112,6 +112,134 @@ func TestTaskEventPublisherPreservesOrder(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetOrCreateStubTouchesExistingWorkspaceScopedStub(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	createdAt := time.Now().Add(-time.Hour)
+	updatedAt := time.Now()
+	stubRows := []string{
+		"id",
+		"external_id",
+		"name",
+		"type",
+		"config",
+		"config_version",
+		"object_id",
+		"workspace_id",
+		"created_at",
+		"updated_at",
+		"app_id",
+	}
+
+	mock.ExpectQuery("FROM stub").
+		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11)).
+		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
+			uint(5),
+			"stub-external",
+			"stub-name",
+			types.StubTypeFunction,
+			`{"runtime":"python3"}`,
+			uint(1),
+			uint(7),
+			uint(11),
+			createdAt,
+			createdAt,
+			uint(13),
+		))
+	mock.ExpectQuery("UPDATE stub").
+		WithArgs(uint(5)).
+		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
+			uint(5),
+			"stub-external",
+			"stub-name",
+			types.StubTypeFunction,
+			`{"runtime":"python3"}`,
+			uint(1),
+			uint(7),
+			uint(11),
+			createdAt,
+			updatedAt,
+			uint(13),
+		))
+	mock.ExpectExec("UPDATE app set updated_at=NOW").
+		WithArgs(uint(13)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	stub, err := postgresRepo.GetOrCreateStub(
+		context.Background(),
+		"stub-name",
+		string(types.StubTypeFunction),
+		types.StubConfigV1{},
+		7,
+		11,
+		false,
+		13,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, uint(5), stub.Id)
+	require.Equal(t, uint(11), stub.WorkspaceId)
+	require.True(t, stub.UpdatedAt.Time.Equal(updatedAt))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+
+	mock.ExpectQuery(`s\.updated_at < \$2`).
+		WithArgs(sqlmock.AnyArg(), cutoff).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"checkpoint_id",
+			"external_id",
+			"source_container_id",
+			"container_ip",
+			"status",
+			"remote_key",
+			"workspace_id",
+			"stub_id",
+			"stub_type",
+			"app_id",
+			"exposed_ports",
+			"created_at",
+			"last_restored_at",
+			"cache_hash",
+			"cache_size_bytes",
+			"origin_key",
+			"locality",
+			"accelerator",
+		}).AddRow(
+			"checkpoint-123",
+			"external-123",
+			"sandbox-stub-123-container",
+			"10.0.0.12",
+			string(types.CheckpointStatusAvailable),
+			"checkpoint-123",
+			uint(1),
+			uint(2),
+			types.StubTypeSandbox,
+			uint(3),
+			"{8080}",
+			cutoff.Add(-time.Hour),
+			cutoff.Add(-30*time.Minute),
+			"sha256-cache",
+			int64(128),
+			"checkpoints/checkpoint-123.tar",
+			"default",
+			"cpu",
+		))
+
+	checkpoints, err := postgresRepo.ListStaleCheckpoints(context.Background(), []string{"workspace|active-stub"}, cutoff)
+
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 1)
+	require.Equal(t, "checkpoint-123", checkpoints[0].CheckpointId)
+	require.Equal(t, []uint32{8080}, checkpoints[0].ExposedPorts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func expectTaskWithRelatedQuery(mock sqlmock.Sqlmock, taskSnapshot types.Task, dbStatus types.TaskStatus) {
 	mock.ExpectQuery("SELECT").
 		WithArgs(taskSnapshot.ExternalId).

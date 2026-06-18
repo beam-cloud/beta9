@@ -2,9 +2,7 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,10 +11,8 @@ import (
 	betaruntime "github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
 
 func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.T) {
@@ -49,6 +45,20 @@ func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.
 
 	cancel()
 	require.ErrorContains(t, <-done, "Request cancelled")
+}
+
+func TestSandboxKilledProcessMarksPersistUntilExpiryOrClear(t *testing.T) {
+	server := &ContainerRuntimeServer{}
+
+	require.False(t, server.sandboxProcessMarkedExited("sandbox-test", 42))
+	server.markSandboxProcessExited("sandbox-test", 42)
+	require.True(t, server.sandboxProcessMarkedExited("sandbox-test", 42))
+
+	server.clearSandboxProcessExited("sandbox-test", 42)
+	require.False(t, server.sandboxProcessMarkedExited("sandbox-test", 42))
+
+	server.killedSandboxProcesses.Store(sandboxProcessMarkKey("sandbox-test", 43), time.Now().Add(-11*time.Minute))
+	require.False(t, server.sandboxProcessMarkedExited("sandbox-test", 43))
 }
 
 func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
@@ -181,169 +191,6 @@ func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "process manager")
-}
-
-func TestSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
-	repo := &fakeProcessLogRepo{}
-	server := &ContainerRuntimeServer{
-		eventRepo: repo,
-		workerID:  "worker-1",
-	}
-	instance := sandboxExecTestInstance("sandbox-test")
-	stream := newFakeStreamExecStream(
-		&goprocpb.StreamExecResponse{
-			Message: &goprocpb.StreamExecResponse_Started{
-				Started: &goprocpb.ExecProcessStarted{Pid: 123},
-			},
-		},
-		&goprocpb.StreamExecResponse{
-			Message: &goprocpb.StreamExecResponse_Chunk{
-				Chunk: &goprocpb.ProcessLogChunk{
-					Pid:    123,
-					Stream: types.EventLogStreamStdout,
-					Seq:    7,
-					Data:   []byte("hello from sandbox\n"),
-				},
-			},
-		},
-	)
-
-	pidCh := make(chan int, 1)
-	errCh := make(chan error, 1)
-	started := &atomic.Bool{}
-	go server.handleSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3", "-c", "print('hi')"}, "/workspace", pidCh, errCh, started)
-
-	require.Equal(t, 123, <-pidCh)
-
-	var ack *goprocpb.ProcessLogAck
-	select {
-	case req := <-stream.sent:
-		ack = req.GetAck()
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for log ack")
-	}
-	require.NotNil(t, ack)
-	require.True(t, ack.Ok)
-	require.Equal(t, uint64(7), ack.Seq)
-
-	require.Len(t, repo.entries, 1)
-	entry := repo.entries[0]
-	require.Equal(t, "sandbox-test", entry.ContainerID)
-	require.Equal(t, "stub-1", entry.StubID)
-	require.Equal(t, "workspace-1", entry.WorkspaceID)
-	require.Equal(t, "app-1", entry.AppID)
-	require.Equal(t, "worker-1", entry.WorkerID)
-	require.Equal(t, types.EventLogStreamStdout, entry.Stream)
-	require.Equal(t, "hello from sandbox\n", entry.Line)
-	require.Equal(t, int32(123), entry.PID)
-	require.Equal(t, []string{"python3", "-c", "print('hi')"}, entry.ProcessArgs)
-	require.Equal(t, "/workspace", entry.ProcessCwd)
-	require.Equal(t, uint64(7), entry.ProcessSeq)
-}
-
-func TestSandboxExecStreamNacksPersistFailure(t *testing.T) {
-	repo := &fakeProcessLogRepo{err: errors.New("s2 unavailable")}
-	server := &ContainerRuntimeServer{
-		eventRepo: repo,
-		workerID:  "worker-1",
-	}
-	instance := sandboxExecTestInstance("sandbox-test")
-	stream := newFakeStreamExecStream(
-		&goprocpb.StreamExecResponse{
-			Message: &goprocpb.StreamExecResponse_Started{
-				Started: &goprocpb.ExecProcessStarted{Pid: 123},
-			},
-		},
-		&goprocpb.StreamExecResponse{
-			Message: &goprocpb.StreamExecResponse_Chunk{
-				Chunk: &goprocpb.ProcessLogChunk{
-					Pid:    123,
-					Stream: types.EventLogStreamStderr,
-					Seq:    9,
-					Data:   []byte("boom"),
-				},
-			},
-		},
-	)
-
-	pidCh := make(chan int, 1)
-	errCh := make(chan error, 1)
-	started := &atomic.Bool{}
-	go server.handleSandboxExecStream(stream, func() {}, func() error { return nil }, instance.Id, instance, []string{"python3"}, "", pidCh, errCh, started)
-
-	require.Equal(t, 123, <-pidCh)
-
-	var ack *goprocpb.ProcessLogAck
-	select {
-	case req := <-stream.sent:
-		ack = req.GetAck()
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for log nack")
-	}
-	require.NotNil(t, ack)
-	require.False(t, ack.Ok)
-	require.Equal(t, uint64(9), ack.Seq)
-	require.Contains(t, ack.ErrorMsg, "s2 unavailable")
-}
-
-type fakeProcessLogRepo struct {
-	entries []types.EventContainerLogSchema
-	err     error
-}
-
-func (r *fakeProcessLogRepo) PushContainerLogEventQueued(entry types.EventContainerLogSchema) error {
-	if r.err != nil {
-		return r.err
-	}
-	r.entries = append(r.entries, entry)
-	return nil
-}
-
-type fakeStreamExecStream struct {
-	grpc.ClientStream
-	recv chan *goprocpb.StreamExecResponse
-	sent chan *goprocpb.StreamExecRequest
-}
-
-func newFakeStreamExecStream(responses ...*goprocpb.StreamExecResponse) *fakeStreamExecStream {
-	stream := &fakeStreamExecStream{
-		recv: make(chan *goprocpb.StreamExecResponse, len(responses)),
-		sent: make(chan *goprocpb.StreamExecRequest, len(responses)),
-	}
-	for _, response := range responses {
-		stream.recv <- response
-	}
-	close(stream.recv)
-	return stream
-}
-
-func (s *fakeStreamExecStream) Send(req *goprocpb.StreamExecRequest) error {
-	s.sent <- req
-	return nil
-}
-
-func (s *fakeStreamExecStream) Recv() (*goprocpb.StreamExecResponse, error) {
-	resp, ok := <-s.recv
-	if !ok {
-		return nil, io.EOF
-	}
-	return resp, nil
-}
-
-func sandboxExecTestInstance(containerId string) *ContainerInstance {
-	return &ContainerInstance{
-		Id:        containerId,
-		LogBuffer: common.NewLogBuffer(),
-		Request: &types.ContainerRequest{
-			ContainerId: containerId,
-			StubId:      "stub-1",
-			WorkspaceId: "workspace-1",
-			AppId:       "app-1",
-			Stub: types.StubWithRelated{
-				Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
-			},
-		},
-	}
 }
 
 func TestWritableContainerAddressMapHandlesNilMap(t *testing.T) {

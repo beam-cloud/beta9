@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -90,7 +91,11 @@ func (d *DiscoveryClient) discoveryJitter() time.Duration {
 func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hosts, err := d.hostDirectory.GetAvailableHosts(ctx, d.locality)
 	if err != nil {
-		Logger.Warnf("cache host discovery failed to list hosts for locality %s: %v", d.locality, err)
+		if errors.Is(err, ErrHostNotFound) || errors.Is(err, context.Canceled) {
+			Logger.Debugf("cache host discovery has no hosts for locality %s: %v", d.locality, err)
+		} else {
+			Logger.Warnf("cache host discovery failed to list hosts for locality %s: %v", d.locality, err)
+		}
 		return nil, err
 	}
 
