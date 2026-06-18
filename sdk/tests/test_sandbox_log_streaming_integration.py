@@ -2,12 +2,21 @@ import os
 import queue
 import threading
 import time
+import urllib.request
 
 import pytest
 
 from beta9 import Image, Sandbox
+from beta9.abstractions import base as base_module
 from beta9.abstractions.base import unset_channel
 from beta9.config import set_settings
+
+
+def _close_global_channel():
+    channel = getattr(base_module, "_channel", None)
+    if channel is not None:
+        channel.close()
+    unset_channel()
 
 
 def _configure_local_gateway(monkeypatch, tmp_path):
@@ -29,7 +38,31 @@ def _configure_local_gateway(monkeypatch, tmp_path):
         monkeypatch.delenv("BETA9_TOKEN", raising=False)
 
     set_settings()
-    unset_channel()
+    _close_global_channel()
+
+
+def _wait_public_url_contains(url, *values):
+    token = os.environ.get("BETA9_TOKEN")
+    deadline = time.monotonic() + 90
+    last_error = None
+    last_body = ""
+
+    while time.monotonic() < deadline:
+        try:
+            request = urllib.request.Request(url)
+            if token:
+                request.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(request, timeout=5) as response:
+                last_body = response.read().decode()
+            if all(value in last_body for value in values):
+                return last_body
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.5)
+
+    raise AssertionError(
+        f"timed out waiting for {url} to contain {values}: body={last_body!r} error={last_error!r}"
+    )
 
 
 def test_python_sdk_sandbox_log_streaming_live(monkeypatch, tmp_path):
@@ -100,3 +133,64 @@ def test_python_sdk_sandbox_log_streaming_live(monkeypatch, tmp_path):
         assert "py-log-out" in combined and "py-log-err" in combined
     finally:
         instance.terminate()
+        _close_global_channel()
+
+
+def test_python_sdk_sandbox_expose_port_listener_families(monkeypatch, tmp_path):
+    _configure_local_gateway(monkeypatch, tmp_path)
+
+    pool = os.environ.get("BETA9_INTEGRATION_POOL")
+    kwargs = {"pool": pool} if pool else {}
+    sandbox = Sandbox(
+        name="python-sdk-listener-families",
+        image=Image(python_version="python3.11"),
+        keep_warm_seconds=300,
+        ports=[8092, 8093],
+        **kwargs,
+    )
+    instance = sandbox.create()
+    servers = []
+    try:
+        instance.fs.create_directory("/workspace/py-sdk")
+        local_file = tmp_path / "file.txt"
+        local_file.write_text("python-sdk-listener-ok\n")
+        instance.fs.upload_file(str(local_file), "/workspace/py-sdk/file.txt")
+
+        servers.append(
+            instance.process.exec(
+                "python3",
+                "-m",
+                "http.server",
+                "8092",
+                "--bind",
+                "0.0.0.0",
+                "--directory",
+                "/workspace/py-sdk",
+            )
+        )
+        servers.append(
+            instance.process.exec(
+                "python3",
+                "-m",
+                "http.server",
+                "8093",
+                "--bind",
+                "::",
+                "--directory",
+                "/workspace/py-sdk",
+            )
+        )
+
+        ipv4_url = instance.expose_port(8092)
+        _wait_public_url_contains(f"{ipv4_url}/file.txt", "python-sdk-listener-ok")
+
+        ipv6_url = instance.expose_port(8093)
+        _wait_public_url_contains(f"{ipv6_url}/file.txt", "python-sdk-listener-ok")
+    finally:
+        for server in servers:
+            try:
+                server.kill()
+            except Exception:
+                pass
+        instance.terminate()
+        _close_global_channel()

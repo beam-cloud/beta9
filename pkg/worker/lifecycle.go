@@ -524,7 +524,7 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 
 	containerId := request.ContainerId
 	if len(bindings) > 0 {
-		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindings[0].HostPort)
+		containerAddr := joinHostPort(s.podAddr, bindings[0].HostPort)
 		phaseStart := time.Now()
 		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 			ContainerId: containerId,
@@ -540,7 +540,7 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 
 	addressMap := make(map[int32]string, len(bindings))
 	for _, binding := range bindings {
-		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
+		addressMap[int32(binding.ContainerPort)] = joinHostPort(s.podAddr, binding.HostPort)
 	}
 	s.cacheContainerAddressMap(containerId, addressMap)
 

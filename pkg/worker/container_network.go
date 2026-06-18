@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -32,7 +33,7 @@ func (m *localContainerNetwork) ContainerPortAddress(_ string, binding PortBindi
 	if m.podAddr == "" {
 		return "", fmt.Errorf("pod address is empty")
 	}
-	return net.JoinHostPort(m.podAddr, strconv.Itoa(binding.HostPort)), nil
+	return joinHostPort(m.podAddr, binding.HostPort), nil
 }
 
 func (m *localContainerNetwork) ContainerPortAddressMap(containerId string, bindings []PortBinding) (map[int32]string, error) {
@@ -51,34 +52,19 @@ type agentContainerNetwork struct {
 	*localContainerNetwork
 }
 
-func (m *agentContainerNetwork) ContainerPortAddress(containerId string, binding PortBinding) (string, error) {
-	info, err := m.getContainerNetworkInfo(containerId)
-	if err != nil {
-		return "", err
+func joinHostPort(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		unwrapped := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if net.ParseIP(unwrapped) != nil {
+			host = unwrapped
+		}
 	}
-	if info.ContainerIp == "" {
-		return "", fmt.Errorf("container %s has no bridge IP", containerId)
-	}
-	return net.JoinHostPort(info.ContainerIp, strconv.Itoa(binding.ContainerPort)), nil
-}
-
-func (m *agentContainerNetwork) ContainerPortAddressMap(containerId string, bindings []PortBinding) (map[int32]string, error) {
-	info, err := m.getContainerNetworkInfo(containerId)
-	if err != nil {
-		return nil, err
-	}
-	if info.ContainerIp == "" {
-		return nil, fmt.Errorf("container %s has no bridge IP", containerId)
-	}
-
-	addressMap := make(map[int32]string, len(bindings))
-	for _, binding := range bindings {
-		addressMap[int32(binding.ContainerPort)] = net.JoinHostPort(info.ContainerIp, strconv.Itoa(binding.ContainerPort))
-	}
-	return addressMap, nil
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func newContainerNetwork(base *ContainerNetworkManager, podAddr string, persistent bool, machineID, transport string) ContainerNetwork {
+	base.podAddr = podAddr
 	local := &localContainerNetwork{
 		ContainerNetworkManager: base,
 		podAddr:                 podAddr,
