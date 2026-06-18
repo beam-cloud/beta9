@@ -613,20 +613,10 @@ func sandboxProcessManagerEndpoint(instance *ContainerInstance) (processManagerE
 }
 
 func sandboxProcessManagerEndpoints(instance *ContainerInstance) []processManagerEndpoint {
-	if instance == nil {
+	if instance == nil || instance.ContainerIp == "" {
 		return nil
 	}
-
-	endpoints := make([]processManagerEndpoint, 0, 2)
-	if instance.ProcessManagerHost != "" && instance.ProcessManagerPort > 0 {
-		endpoints = append(endpoints, processManagerEndpoint{host: instance.ProcessManagerHost, port: instance.ProcessManagerPort})
-	}
-
-	if instance.ContainerIp != "" {
-		endpoints = append(endpoints, processManagerEndpoint{host: instance.ContainerIp, port: int(types.WorkerSandboxProcessManagerPort)})
-	}
-
-	return endpoints
+	return []processManagerEndpoint{{host: instance.ContainerIp, port: int(types.WorkerSandboxProcessManagerPort)}}
 }
 
 func readyProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {

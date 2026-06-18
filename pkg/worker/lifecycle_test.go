@@ -232,62 +232,6 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.Empty(t, repoClient.lastSetAddressMap.Routes)
 }
 
-func TestRegisterContainerPortsCachesProcessManagerEndpoint(t *testing.T) {
-	containerID := "container-restore"
-	repoClient := &fakeContainerRepoClient{}
-	instances := common.NewSafeMap[*ContainerInstance]()
-	instances.Set(containerID, &ContainerInstance{
-		Id:          containerID,
-		ContainerIp: "192.168.0.81",
-	})
-	worker := &Worker{
-		containerNetworkManager: &fakeContainerNetworkController{},
-		containerRepoClient:     repoClient,
-		containerInstances:      instances,
-	}
-
-	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
-		ContainerId: containerID,
-	}, []PortBinding{
-		{HostPort: 30001, ContainerPort: 8765},
-		{HostPort: 30002, ContainerPort: int(types.WorkerSandboxProcessManagerPort)},
-	})
-	require.NoError(t, err)
-
-	instance, exists := instances.Get(containerID)
-	require.True(t, exists)
-	require.Equal(t, "10.0.0.2", instance.ProcessManagerHost)
-	require.Equal(t, 30002, instance.ProcessManagerPort)
-}
-
-func TestPublishContainerAddressesCachesProcessManagerEndpoint(t *testing.T) {
-	containerID := "container-restore"
-	repoClient := &fakeContainerRepoClient{}
-	instances := common.NewSafeMap[*ContainerInstance]()
-	instances.Set(containerID, &ContainerInstance{
-		Id:          containerID,
-		ContainerIp: "192.168.0.81",
-	})
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		containerInstances:  instances,
-		podAddr:             "10.42.0.17",
-	}
-
-	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
-		ContainerId: containerID,
-	}, []PortBinding{
-		{HostPort: 36491, ContainerPort: 8765},
-		{HostPort: 36273, ContainerPort: int(types.WorkerSandboxProcessManagerPort)},
-	})
-	require.NoError(t, err)
-
-	instance, exists := instances.Get(containerID)
-	require.True(t, exists)
-	require.Equal(t, "10.42.0.17", instance.ProcessManagerHost)
-	require.Equal(t, 36273, instance.ProcessManagerPort)
-}
-
 func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{}
 	worker := &Worker{

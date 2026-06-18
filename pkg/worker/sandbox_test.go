@@ -99,28 +99,6 @@ func TestWorkerDockerStartupCanceledTreatsMissingContainerAsTeardown(t *testing.
 	require.True(t, worker.dockerStartupCanceled(context.Background(), "already-cleaned-up", err))
 }
 
-func TestSandboxProcessManagerEndpointPrefersRegisteredAddress(t *testing.T) {
-	endpoint, ok := sandboxProcessManagerEndpoint(&ContainerInstance{
-		ContainerIp:        "192.168.0.81",
-		ProcessManagerHost: "10.42.0.17",
-		ProcessManagerPort: 36273,
-	})
-	require.True(t, ok)
-	require.Equal(t, "10.42.0.17", endpoint.host)
-	require.Equal(t, 36273, endpoint.port)
-}
-
-func TestSandboxProcessManagerEndpointsIncludesContainerIPFallback(t *testing.T) {
-	endpoints := sandboxProcessManagerEndpoints(&ContainerInstance{
-		ContainerIp:        "192.168.0.81",
-		ProcessManagerHost: "10.42.0.17",
-		ProcessManagerPort: 36273,
-	})
-	require.Len(t, endpoints, 2)
-	require.Equal(t, processManagerEndpoint{host: "10.42.0.17", port: 36273}, endpoints[0])
-	require.Equal(t, processManagerEndpoint{host: "192.168.0.81", port: int(types.WorkerSandboxProcessManagerPort)}, endpoints[1])
-}
-
 func TestSandboxProcessManagerEndpointFallsBackToContainerIP(t *testing.T) {
 	endpoint, ok := sandboxProcessManagerEndpoint(&ContainerInstance{
 		ContainerIp: "192.168.0.81",

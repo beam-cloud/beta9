@@ -560,7 +560,6 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 		Int("port_count", len(addressMap)).
 		Interface("address_map", addressMap).
 		Msg("set container address map")
-	s.rememberProcessManagerAddress(containerId, addressMap)
 	return nil
 }
 

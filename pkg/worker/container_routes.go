@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -99,8 +98,6 @@ func (s *Worker) registerContainerPorts(ctx context.Context, request *types.Cont
 		Interface("address_map", addressMap).
 		Msg("registered container network addresses")
 
-	s.rememberProcessManagerAddress(request.ContainerId, addressMap)
-
 	return nil
 }
 
@@ -131,36 +128,4 @@ func (s *Worker) agentRouteLocalTarget(localTarget string) string {
 		return localTarget
 	}
 	return net.JoinHostPort(s.routeLocalTargetHost, port)
-}
-
-func (s *Worker) rememberProcessManagerAddress(containerId string, addressMap map[int32]string) {
-	if s == nil || s.containerInstances == nil {
-		return
-	}
-
-	address := addressMap[types.WorkerSandboxProcessManagerPort]
-	if address == "" {
-		return
-	}
-
-	host, portValue, err := net.SplitHostPort(address)
-	if err != nil {
-		log.Warn().Err(err).Str("container_id", containerId).Str("address", address).Msg("invalid sandbox process manager address")
-		return
-	}
-
-	port, err := strconv.Atoi(portValue)
-	if err != nil || port <= 0 {
-		log.Warn().Err(err).Str("container_id", containerId).Str("address", address).Msg("invalid sandbox process manager port")
-		return
-	}
-
-	instance, exists := s.containerInstances.Get(containerId)
-	if !exists {
-		return
-	}
-
-	instance.ProcessManagerHost = host
-	instance.ProcessManagerPort = port
-	s.containerInstances.Set(containerId, instance)
 }

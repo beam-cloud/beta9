@@ -117,8 +117,6 @@ type ContainerInstance struct {
 	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
-	ProcessManagerHost         string
-	ProcessManagerPort         int
 	DeferredCPUQuota           *specs.LinuxCPU
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
