@@ -593,7 +593,7 @@ func sandboxProcessManagerEndpoints(instance *ContainerInstance) []processManage
 		})
 	}
 
-	if endpoint, ok := processManagerEndpointFromAddress(instance.ContainerAddressMap[types.WorkerSandboxProcessManagerPort]); ok {
+	if endpoint, ok := processManagerEndpointFromAddress(instance.containerAddress(types.WorkerSandboxProcessManagerPort)); ok {
 		endpoints = appendProcessManagerEndpoint(endpoints, endpoint)
 	}
 

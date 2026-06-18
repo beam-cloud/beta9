@@ -112,8 +112,7 @@ func (s *Worker) cacheContainerAddressMap(containerId string, addressMap map[int
 		return
 	}
 
-	instance.ContainerAddressMap = cloneContainerAddressMap(addressMap)
-	s.containerInstances.Set(containerId, instance)
+	instance.setContainerAddressMap(addressMap)
 }
 
 func cloneContainerAddressMap(addressMap map[int32]string) map[int32]string {

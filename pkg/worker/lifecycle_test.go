@@ -209,8 +209,22 @@ func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 
 	instance, exists := worker.containerInstances.Get(containerID)
 	require.True(t, exists)
-	require.Equal(t, "192.168.0.44:8001", instance.ContainerAddressMap[8001])
-	require.Equal(t, "192.168.0.44:2222", instance.ContainerAddressMap[2222])
+	require.Equal(t, "192.168.0.44:8001", instance.containerAddress(8001))
+	require.Equal(t, "192.168.0.44:2222", instance.containerAddress(2222))
+}
+
+func TestCacheContainerAddressMapClonesInput(t *testing.T) {
+	containerID := "container-route"
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
+
+	addressMap := map[int32]string{8001: "192.168.0.44:8001"}
+	worker.cacheContainerAddressMap(containerID, addressMap)
+	addressMap[8001] = "changed"
+
+	instance, exists := worker.containerInstances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "192.168.0.44:8001", instance.containerAddress(8001))
 }
 
 func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {

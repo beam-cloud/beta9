@@ -204,6 +204,15 @@ func TestWritableContainerAddressMapHandlesNilMap(t *testing.T) {
 	require.Equal(t, "127.0.0.1:1234", addressMap[1234])
 }
 
+func TestWritableContainerAddressMapClonesInput(t *testing.T) {
+	input := map[int32]string{1234: "127.0.0.1:1234"}
+	addressMap := writableContainerAddressMap(input)
+	addressMap[1234] = "127.0.0.1:5678"
+
+	require.Equal(t, "127.0.0.1:1234", input[1234])
+	require.Equal(t, "127.0.0.1:5678", addressMap[1234])
+}
+
 func TestRecordSandboxExposedPortOnlyAppendsMissingPort(t *testing.T) {
 	containerId := "sandbox-test"
 	instances := common.NewSafeMap[*ContainerInstance]()

@@ -1344,11 +1344,12 @@ func (s *ContainerRuntimeServer) backendRouteForContainerPort(instance *Containe
 }
 
 func writableContainerAddressMap(addressMap map[int32]string) map[int32]string {
-	if addressMap == nil {
+	cloned := cloneContainerAddressMap(addressMap)
+	if cloned == nil {
 		return map[int32]string{}
 	}
 
-	return addressMap
+	return cloned
 }
 
 func recordSandboxExposedPort(containerInstances *common.SafeMap[*ContainerInstance], containerId string, instance *ContainerInstance, port uint32) {
