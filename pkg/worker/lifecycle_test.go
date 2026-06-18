@@ -183,7 +183,9 @@ func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 		},
 		routeTransport:      types.BackendRouteTransportTSNet,
 		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
 	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
 
 	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
 		ContainerId: containerID,
@@ -204,6 +206,11 @@ func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	require.Len(t, repoClient.lastSetAddressMap.Routes, 2)
 	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddressMap.Routes[0].LocalTarget)
 	require.Equal(t, "192.168.0.44:2222", repoClient.lastSetAddressMap.Routes[1].LocalTarget)
+
+	instance, exists := worker.containerInstances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "192.168.0.44:8001", instance.ContainerAddressMap[8001])
+	require.Equal(t, "192.168.0.44:2222", instance.ContainerAddressMap[2222])
 }
 
 func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
@@ -212,7 +219,9 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	worker := &Worker{
 		containerNetworkManager: &fakeContainerNetworkController{},
 		containerRepoClient:     repoClient,
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
 	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
 
 	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
 		ContainerId: containerID,
@@ -230,6 +239,11 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, "10.0.0.2:30002", repoClient.lastSetAddressMap.AddressMap[2222])
 	require.Empty(t, repoClient.lastSetAddressMap.Routes)
+
+	instance, exists := worker.containerInstances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "10.0.0.2:30001", instance.ContainerAddressMap[8001])
+	require.Equal(t, "10.0.0.2:30002", instance.ContainerAddressMap[2222])
 }
 
 func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
@@ -669,6 +683,103 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Equal(t, 1, backendRepoClient.updateCalls)
+}
+
+func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+	tmpDir := t.TempDir()
+	checkpointId := "checkpoint-1"
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
+
+	bundleDir := filepath.Join(tmpDir, "bundle")
+	require.NoError(t, os.MkdirAll(bundleDir, 0755))
+	configPath := filepath.Join(bundleDir, specBaseName)
+	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
+
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+	}
+	backendRepoClient := &fakeBackendRepoClient{}
+	restoreStopped := make(chan struct{})
+	enteredWait := make(chan struct{}, 1)
+	rt := &mockRuntime{
+		name:         "gvisor",
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+		state: func(context.Context, string) (runtime.State, error) {
+			select {
+			case enteredWait <- struct{}{}:
+			default:
+			}
+			select {
+			case <-restoreStopped:
+				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+			default:
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+		},
+	}
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         &startedCRIUManager{},
+		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient: repoClient,
+		backendRepoClient:   backendRepoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		ConfigPath:  configPath,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointId,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Runtime: rt,
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := worker.runContainer(
+			context.Background(),
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			time.Now(),
+			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		)
+		done <- err
+	}()
+
+	select {
+	case <-enteredWait:
+	case err := <-done:
+		t.Fatalf("runContainer returned before polling restored runtime state: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for restored runtime state polling")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("runContainer returned before restored runtime exited: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(restoreStopped)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * restoredContainerPollInterval):
+		t.Fatal("runContainer did not return after restored runtime exited")
+	}
 }
 
 func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
@@ -1193,6 +1304,7 @@ type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
 	state        func(context.Context, string) (runtime.State, error)
+	exec         func(context.Context, string, specs.Process, *runtime.ExecOpts) error
 }
 
 func (m *mockRuntime) Name() string {
@@ -1212,6 +1324,9 @@ func (m *mockRuntime) Run(ctx context.Context, containerID, bundlePath string, o
 }
 
 func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.Process, opts *runtime.ExecOpts) error {
+	if m.exec != nil {
+		return m.exec(ctx, containerID, proc, opts)
+	}
 	return nil
 }
 

@@ -28,15 +28,16 @@ import (
 )
 
 const (
-	baseConfigPath              string = types.AgentTmpPath
-	defaultContainerDirectory   string = types.WorkerUserCodeVolume
-	specBaseName                string = "config.json"
-	initialSpecBaseName         string = "initial_config.json"
-	containerInnerPort          int    = 8001 // Use a fixed port inside the container
-	markRunningRetryTimeout            = 3 * time.Second
-	markRunningRetryInterval           = 100 * time.Millisecond
-	runtimeDeleteTimeout               = 30 * time.Second
-	sandboxCPUQuotaApplyTimeout        = 2 * time.Second
+	baseConfigPath                string = types.AgentTmpPath
+	defaultContainerDirectory     string = types.WorkerUserCodeVolume
+	specBaseName                  string = "config.json"
+	initialSpecBaseName           string = "initial_config.json"
+	containerInnerPort            int    = 8001 // Use a fixed port inside the container
+	markRunningRetryTimeout              = 3 * time.Second
+	markRunningRetryInterval             = 100 * time.Millisecond
+	runtimeDeleteTimeout                 = 30 * time.Second
+	sandboxCPUQuotaApplyTimeout          = 2 * time.Second
+	restoredContainerPollInterval        = 500 * time.Millisecond
 )
 
 const (
@@ -176,9 +177,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Set container exit code on instance
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
-		updatedInstance := *instance
-		updatedInstance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, &updatedInstance)
+		instance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, instance)
 	}
 	s.markContainerStopping(containerId)
 
@@ -542,6 +542,7 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 	for _, binding := range bindings {
 		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
 	}
+	s.cacheContainerAddressMap(containerId, addressMap)
 
 	phaseStart := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
@@ -1456,10 +1457,18 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 		runtimeStart = time.Now()
 		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
+		if restored && request.Stub.Type.Kind() == types.StubTypeSandbox {
+			if err := s.recoverRestoredSandboxProcessManager(ctx, request.ContainerId); err != nil {
+				log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to recover restored sandbox process manager")
+			}
+		}
 		if restored {
 			close(runtimeStartedDone)
 			<-runtimeStartedHandled
-			return exitCode, err
+			if err != nil {
+				return exitCode, err
+			}
+			return s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
 		}
 
 		// If this is not a deployment stub, don't fall back to running the container
@@ -1500,6 +1509,30 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	return exitCode, err
+}
+
+func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Runtime, containerId string, fallbackExitCode int) (int, error) {
+	ticker := time.NewTicker(restoredContainerPollInterval)
+	defer ticker.Stop()
+
+	for {
+		state, err := rt.State(ctx, containerId)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fallbackExitCode, ctxErr
+			}
+			return fallbackExitCode, nil
+		}
+		if state.Status != types.RuncContainerStatusRunning {
+			return fallbackExitCode, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fallbackExitCode, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Worker) markContainerRunning(ctx context.Context, request *types.ContainerRequest, startupStartedAt time.Time) {

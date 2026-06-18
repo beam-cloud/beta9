@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -36,6 +37,7 @@ const (
 	dockerDaemonStartupTimeout    = 30 * time.Second
 	dockerDaemonReadyPollInterval = 1 * time.Second
 	dockerInfoCommandTimeout      = 2 * time.Second
+	restoredGVisorGoProcReadyTime = 5 * time.Second
 	sandboxMissingProcessExitCode = 137
 )
 
@@ -613,14 +615,139 @@ func sandboxProcessManagerEndpoint(instance *ContainerInstance) (processManagerE
 }
 
 func sandboxProcessManagerEndpoints(instance *ContainerInstance) []processManagerEndpoint {
-	if instance == nil || instance.ContainerIp == "" {
+	if instance == nil {
 		return nil
 	}
-	return []processManagerEndpoint{{host: instance.ContainerIp, port: int(types.WorkerSandboxProcessManagerPort)}}
+
+	endpoints := make([]processManagerEndpoint, 0, 2)
+	port := sandboxProcessManagerPort(instance)
+	if instance.ContainerIp != "" {
+		endpoints = append(endpoints, processManagerEndpoint{host: instance.ContainerIp, port: port})
+	}
+	if port == int(types.WorkerSandboxProcessManagerPort) {
+		if endpoint, ok := processManagerEndpointFromAddress(instance.ContainerAddressMap[types.WorkerSandboxProcessManagerPort]); ok {
+			if len(endpoints) == 0 || endpoints[0] != endpoint {
+				endpoints = append(endpoints, endpoint)
+			}
+		}
+	}
+	return endpoints
+}
+
+func sandboxProcessManagerPort(instance *ContainerInstance) int {
+	if instance != nil && instance.SandboxProcessManagerPort > 0 {
+		return instance.SandboxProcessManagerPort
+	}
+	return int(types.WorkerSandboxProcessManagerPort)
+}
+
+func processManagerEndpointFromAddress(address string) (processManagerEndpoint, bool) {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return processManagerEndpoint{}, false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 {
+		return processManagerEndpoint{}, false
+	}
+	return processManagerEndpoint{host: host, port: port}, true
 }
 
 func readyProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
 	return newProcessManagerClient(ctx, instance)
+}
+
+func (s *Worker) recoverRestoredSandboxProcessManager(ctx context.Context, containerId string) error {
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists || instance == nil || instance.Runtime == nil || instance.Runtime.Name() != "gvisor" {
+		return nil
+	}
+	if instance.ContainerIp == "" {
+		return fmt.Errorf("restored sandbox %s has no container IP", containerId)
+	}
+
+	var lastErr error
+	for port := int(types.WorkerSandboxProcessManagerPort) + 1; port <= int(types.WorkerSandboxProcessManagerPort)+8; port++ {
+		s.setSandboxProcessManagerPort(containerId, port)
+
+		if err := startRestoredSandboxProcessManager(ctx, instance, port); err != nil {
+			lastErr = err
+			continue
+		}
+		if err := waitForProcessManagerPort(ctx, instance.ContainerIp, port, restoredGVisorGoProcReadyTime); err != nil {
+			lastErr = err
+			continue
+		}
+
+		log.Info().
+			Str("container_id", containerId).
+			Int("port", port).
+			Msg("restored sandbox process manager recovered")
+		return nil
+	}
+
+	s.setSandboxProcessManagerPort(containerId, int(types.WorkerSandboxProcessManagerPort))
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("restored sandbox process manager recovery failed")
+}
+
+func (s *Worker) setSandboxProcessManagerPort(containerId string, port int) {
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists || instance == nil {
+		return
+	}
+	instance.SandboxProcessManagerPort = port
+	s.containerInstances.Set(containerId, instance)
+}
+
+func startRestoredSandboxProcessManager(ctx context.Context, instance *ContainerInstance, port int) error {
+	execCtx, cancel := context.WithTimeout(ctx, sandboxSetupCommandTimeout)
+	defer cancel()
+
+	configJSON := fmt.Sprintf(`{"server_port":%d,"grpc_dial_timeout_s":1,"grpc_message_size_bytes":1000000000,"pretty_logs":true}`, port)
+	return instance.Runtime.Exec(execCtx, instance.Id, specs.Process{
+		Args: []string{
+			"/bin/sh",
+			"-c",
+			fmt.Sprintf("/usr/bin/goproc >/tmp/goproc-restore-%d.log 2>&1 &", port),
+		},
+		Cwd: "/",
+		Env: []string{"CONFIG_JSON=" + configJSON},
+	}, nil)
+}
+
+func waitForProcessManagerPort(ctx context.Context, host string, port int, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(goprocInitialBackoff)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		client, err := goproc.NewGoProcClient(ctx, host, uint(port))
+		if err == nil {
+			probeCtx, probeCancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+			err = client.ReadyContext(probeCtx)
+			probeCancel()
+			_ = client.Cleanup()
+			if err == nil {
+				return nil
+			}
+		}
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func classifyProcessManagerReadyError(err error) string {

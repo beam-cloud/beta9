@@ -108,6 +108,48 @@ func TestSandboxProcessManagerEndpointFallsBackToContainerIP(t *testing.T) {
 	require.Equal(t, int(types.WorkerSandboxProcessManagerPort), endpoint.port)
 }
 
+func TestSandboxProcessManagerEndpointFallsBackToPublishedAddress(t *testing.T) {
+	endpoints := sandboxProcessManagerEndpoints(&ContainerInstance{
+		ContainerIp: "192.168.0.81",
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: "10.42.0.163:35659",
+		},
+	})
+
+	require.Len(t, endpoints, 2)
+	require.Equal(t, "192.168.0.81", endpoints[0].host)
+	require.Equal(t, int(types.WorkerSandboxProcessManagerPort), endpoints[0].port)
+	require.Equal(t, "10.42.0.163", endpoints[1].host)
+	require.Equal(t, 35659, endpoints[1].port)
+}
+
+func TestSandboxProcessManagerEndpointFallsBackWhenPublishedAddressInvalid(t *testing.T) {
+	endpoint, ok := sandboxProcessManagerEndpoint(&ContainerInstance{
+		ContainerIp: "192.168.0.81",
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: "route://not-a-host-port",
+		},
+	})
+
+	require.True(t, ok)
+	require.Equal(t, "192.168.0.81", endpoint.host)
+	require.Equal(t, int(types.WorkerSandboxProcessManagerPort), endpoint.port)
+}
+
+func TestSandboxProcessManagerEndpointUsesRecoveredPort(t *testing.T) {
+	endpoints := sandboxProcessManagerEndpoints(&ContainerInstance{
+		ContainerIp:               "192.168.0.81",
+		SandboxProcessManagerPort: 7112,
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: "10.42.0.163:35659",
+		},
+	})
+
+	require.Len(t, endpoints, 1)
+	require.Equal(t, "192.168.0.81", endpoints[0].host)
+	require.Equal(t, 7112, endpoints[0].port)
+}
+
 func TestDockerSandboxShutdownScriptStopsInnerRuntime(t *testing.T) {
 	script := dockerSandboxShutdownScript()
 

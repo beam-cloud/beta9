@@ -117,10 +117,12 @@ type ContainerInstance struct {
 	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	SandboxProcessManagerPort  int
 	DeferredCPUQuota           *specs.LinuxCPU
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
+	ContainerAddressMap        map[int32]string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
 }
@@ -151,8 +153,13 @@ type stopContainerEvent struct {
 	Kill        bool
 }
 
-func NewWorker() (*Worker, error) {
+func NewWorker() (_ *Worker, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		if err != nil {
+			cancel()
+		}
+	}()
 
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 

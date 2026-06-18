@@ -45,6 +45,7 @@ func (s *Worker) registerContainerPorts(ctx context.Context, request *types.Cont
 		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, false, map[string]string{"port_count": fmt.Sprintf("%d", len(bindings))})
 		return err
 	}
+	s.cacheContainerAddressMap(request.ContainerId, addressMap)
 
 	primaryPort := int32(bindings[0].ContainerPort)
 	primaryTarget := addressMap[primaryPort]
@@ -99,6 +100,31 @@ func (s *Worker) registerContainerPorts(ctx context.Context, request *types.Cont
 		Msg("registered container network addresses")
 
 	return nil
+}
+
+func (s *Worker) cacheContainerAddressMap(containerId string, addressMap map[int32]string) {
+	if len(addressMap) == 0 || s.containerInstances == nil {
+		return
+	}
+
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists {
+		return
+	}
+
+	instance.ContainerAddressMap = cloneContainerAddressMap(addressMap)
+	s.containerInstances.Set(containerId, instance)
+}
+
+func cloneContainerAddressMap(addressMap map[int32]string) map[int32]string {
+	if len(addressMap) == 0 {
+		return nil
+	}
+	cloned := make(map[int32]string, len(addressMap))
+	for port, address := range addressMap {
+		cloned[port] = address
+	}
+	return cloned
 }
 
 func (s *Worker) containerPortAddress(containerId string, binding PortBinding) (string, error) {

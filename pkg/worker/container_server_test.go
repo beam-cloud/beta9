@@ -201,6 +201,37 @@ func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
 	require.Contains(t, resp.ErrorMsg, "process manager")
 }
 
+func TestListRestoredSandboxProcessesScansProcfs(t *testing.T) {
+	server := &ContainerRuntimeServer{}
+	rt := &mockRuntime{
+		name: types.ContainerRuntimeGvisor.String(),
+		exec: func(ctx context.Context, containerID string, proc specs.Process, opts *betaruntime.ExecOpts) error {
+			require.Equal(t, "sandbox-test", containerID)
+			require.NotNil(t, opts)
+			require.NotNil(t, opts.OutputWriter)
+			_, err := io.WriteString(opts.OutputWriter, "10\t/workspace\tpython3 -m http.server 8765\n")
+			return err
+		},
+	}
+	instance := &ContainerInstance{
+		Id:                        "sandbox-test",
+		Runtime:                   rt,
+		SandboxProcessManagerPort: 7112,
+		Spec: &specs.Spec{Process: &specs.Process{
+			Env: []string{"A=B"},
+		}},
+	}
+
+	processes, err := server.listRestoredSandboxProcesses(context.Background(), "sandbox-test", instance)
+	require.NoError(t, err)
+	require.Len(t, processes, 1)
+	require.Equal(t, int32(10), processes[0].Pid)
+	require.Equal(t, "/workspace", processes[0].Cwd)
+	require.Equal(t, "python3 -m http.server 8765", processes[0].Cmd)
+	require.True(t, processes[0].Running)
+	require.Equal(t, int32(-1), processes[0].ExitCode)
+}
+
 func TestSandboxExecStreamPersistsChunkBeforeAck(t *testing.T) {
 	repo := &fakeProcessLogRepo{}
 	server := &ContainerRuntimeServer{eventRepo: repo, workerID: "worker-1"}
