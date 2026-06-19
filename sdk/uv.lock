@@ -110,7 +110,7 @@ wheels = [
 
 [[package]]
 name = "beta9"
-version = "0.1.245"
+version = "0.1.247"
 source = { editable = "." }
 dependencies = [
     { name = "asgiref" },
@@ -155,20 +155,20 @@ requires-dist = [
     { name = "cloudpickle", specifier = ">=3.0.0,<4.0.0" },
     { name = "croniter", specifier = ">=3.0.3,<4.0.0" },
     { name = "fastapi", specifier = ">=0.115.11,<1.0.0" },
-    { name = "grpcio", specifier = "==1.69.0" },
+    { name = "grpcio", specifier = ">=1.69.0,<2.0.0" },
     { name = "grpclib", specifier = ">=0.4.7,<1.0.0" },
     { name = "paramiko", specifier = ">=3.5.0,<4.0.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.48,<4.0.0" },
-    { name = "protobuf", specifier = ">=4.25.1,<5.0.0" },
+    { name = "protobuf", specifier = ">=4.25.1,<7.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0,<7.0.0" },
     { name = "requests", specifier = ">=2.32.3,<3.0.0" },
-    { name = "rich", specifier = ">=13.9.4,<14.0.0" },
+    { name = "rich", specifier = ">=13.9.4,<15.0.0" },
     { name = "typeguard", specifier = ">=2.13.3,<3.0.0" },
     { name = "typing-extensions", specifier = ">=4.7.1,<5.0.0" },
     { name = "uvicorn", specifier = ">=0.29.0,<1.0.0" },
     { name = "watchdog", specifier = ">=4.0.0,<5.0.0" },
     { name = "websocket-client", specifier = ">=1.8.0,<2.0.0" },
-    { name = "websockets", specifier = ">=13,<14" },
+    { name = "websockets", specifier = ">=13,<16" },
 ]
 
 [package.metadata.requires-dev]
