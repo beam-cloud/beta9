@@ -146,6 +146,43 @@ func TestDefaultStorageClientPresignedURLRejectsInheritedLoopbackOverrideForRemo
 	}
 }
 
+func TestWorkspacePresignEndpointForDefaultStorage(t *testing.T) {
+	cfg := types.WorkspaceStorageConfig{
+		DefaultEndpointUrl:          "http://localstack:4566",
+		DefaultPresignedEndpointUrl: "http://127.0.0.1:4566",
+	}
+
+	tests := []struct {
+		name    string
+		storage *types.WorkspaceStorage
+		want    string
+	}{
+		{
+			name:    "uses configured presign endpoint for default storage",
+			storage: testWorkspaceStorage("http://localstack:4566"),
+			want:    "http://127.0.0.1:4566",
+		},
+		{
+			name:    "does not override external storage",
+			storage: testWorkspaceStorage("https://s3.amazonaws.com"),
+			want:    "",
+		},
+		{
+			name:    "handles missing workspace storage",
+			storage: nil,
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WorkspacePresignEndpointForDefaultStorage(tt.storage, cfg); got != tt.want {
+				t.Fatalf("WorkspacePresignEndpointForDefaultStorage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsBucketAlreadyCreatedError(t *testing.T) {
 	tests := []struct {
 		name string

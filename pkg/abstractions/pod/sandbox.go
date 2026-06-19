@@ -24,6 +24,21 @@ const (
 	sandboxStatusMetadataTimeout       = 500 * time.Millisecond
 )
 
+func sandboxKillFailureMessage(resp *pb.ContainerSandboxKillResponse) string {
+	if resp != nil && resp.ErrorMsg != "" {
+		return resp.ErrorMsg
+	}
+	return "Failed to kill sandbox process"
+}
+
+func sandboxAuthInfoFromContext(ctx context.Context) (*auth.AuthInfo, bool) {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Workspace == nil {
+		return nil, false
+	}
+	return authInfo, true
+}
+
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	cacheKey := sandboxClientCacheKey(in.ContainerId, authInfo.Token.Key)
@@ -269,7 +284,14 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 }
 
 func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKillRequest) (*pb.PodSandboxKillResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing sandbox kill request")
+	}
+
+	authInfo, ok := sandboxAuthInfoFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
+	}
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
@@ -283,14 +305,21 @@ func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKi
 	if err != nil {
 		return &pb.PodSandboxKillResponse{
 			Ok:       false,
-			ErrorMsg: resp.ErrorMsg,
+			ErrorMsg: sandboxKillFailureMessage(resp),
+		}, nil
+	}
+
+	if resp == nil {
+		return &pb.PodSandboxKillResponse{
+			Ok:       false,
+			ErrorMsg: sandboxKillFailureMessage(resp),
 		}, nil
 	}
 
 	if !resp.Ok {
 		return &pb.PodSandboxKillResponse{
 			Ok:       false,
-			ErrorMsg: resp.ErrorMsg,
+			ErrorMsg: sandboxKillFailureMessage(resp),
 		}, nil
 	}
 
