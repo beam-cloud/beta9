@@ -2,12 +2,14 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -18,9 +20,13 @@ type MockRuntime struct {
 	name             string
 	checkpointCalled bool
 	restoreCalled    bool
+	checkpointCalls  int
 	checkpointError  error
+	checkpointErrors []error
 	restoreError     error
 	restoreExitCode  int
+	killCalled       bool
+	killSignal       syscall.Signal
 	capabilities     runtime.Capabilities
 }
 
@@ -52,6 +58,8 @@ func (m *MockRuntime) Exec(ctx context.Context, containerID string, proc specs.P
 }
 
 func (m *MockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
+	m.killCalled = true
+	m.killSignal = sig
 	return nil
 }
 
@@ -71,6 +79,14 @@ func (m *MockRuntime) Events(ctx context.Context, containerID string) (<-chan ru
 
 func (m *MockRuntime) Checkpoint(ctx context.Context, containerID string, opts *runtime.CheckpointOpts) error {
 	m.checkpointCalled = true
+	m.checkpointCalls++
+	if len(m.checkpointErrors) > 0 {
+		err := m.checkpointErrors[0]
+		m.checkpointErrors = m.checkpointErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if m.checkpointError != nil {
 		return m.checkpointError
 	}
@@ -99,7 +115,10 @@ func (m *MockRuntime) Close() error {
 // Reset clears the mock runtime state flags for reuse in subtests
 func (m *MockRuntime) Reset() {
 	m.checkpointCalled = false
+	m.checkpointCalls = 0
 	m.restoreCalled = false
+	m.killCalled = false
+	m.killSignal = 0
 }
 
 // TestNvidiaCRIUManager tests NVIDIA CRIU manager with different runtimes
@@ -354,6 +373,123 @@ func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T)
 	}
 	if !checkpointMaterialized(checkpointPath) {
 		t.Fatal("checkpoint with filesystem and runtime payload should be materialized")
+	}
+}
+
+func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
+	containerID := "container-no-criu"
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: NewMockRuntime("runc", runtime.Capabilities{CheckpointRestore: true}),
+	})
+
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request:      &types.ContainerRequest{ContainerId: containerID},
+		CheckpointId: "checkpoint-no-criu",
+	})
+	if !errors.Is(err, errCRIUManagerUnavailable) {
+		t.Fatalf("createCheckpoint error = %v, want %v", err, errCRIUManagerUnavailable)
+	}
+}
+
+func TestCreateCheckpointRetriesTransientGvisorTCPStateError(t *testing.T) {
+	manager := &NvidiaCRIUManager{checkpointRoot: t.TempDir(), available: true}
+	rt := NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true})
+	rt.checkpointErrors = []error{
+		errors.New("encoding error: invalid memory address or nil pointer dereference for object tcp.Endpoint"),
+		nil,
+	}
+
+	_, err := manager.CreateCheckpoint(context.Background(), rt, "checkpoint-retry", &types.ContainerRequest{
+		ContainerId: "sandbox-retry",
+	})
+
+	if err != nil {
+		t.Fatalf("CreateCheckpoint error = %v", err)
+	}
+	if rt.checkpointCalls != 2 {
+		t.Fatalf("checkpoint calls = %d, want 2", rt.checkpointCalls)
+	}
+}
+
+func TestCreateCheckpointDoesNotRetryRuncCheckpointError(t *testing.T) {
+	manager := &NvidiaCRIUManager{checkpointRoot: t.TempDir(), available: true}
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	rt.checkpointError = errors.New("encoding error: invalid memory address or nil pointer dereference for object tcp.Endpoint")
+
+	_, err := manager.CreateCheckpoint(context.Background(), rt, "checkpoint-no-retry", &types.ContainerRequest{
+		ContainerId: "sandbox-no-retry",
+	})
+
+	if err == nil {
+		t.Fatal("expected CreateCheckpoint error")
+	}
+	if rt.checkpointCalls != 1 {
+		t.Fatalf("checkpoint calls = %d, want 1", rt.checkpointCalls)
+	}
+}
+
+func TestAttemptRestoreCheckpointRequiresCRIUManager(t *testing.T) {
+	request := &types.ContainerRequest{
+		ContainerId: "container-restore-no-criu",
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-no-criu",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, restored, err := (&Worker{}).attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	if !errors.Is(err, errCRIUManagerUnavailable) {
+		t.Fatalf("attemptRestoreCheckpoint error = %v, want %v", err, errCRIUManagerUnavailable)
+	}
+	if restored {
+		t.Fatal("attemptRestoreCheckpoint restored with unavailable CRIU manager")
+	}
+	if exitCode != -1 {
+		t.Fatalf("attemptRestoreCheckpoint exitCode = %d, want -1", exitCode)
+	}
+}
+
+func TestSignalRestoredSandboxProcessManager(t *testing.T) {
+	rt := NewMockRuntime("gvisor", runtime.Capabilities{CheckpointRestore: true})
+	request := &types.ContainerRequest{
+		ContainerId: "sandbox-restore",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeSandbox),
+		}},
+	}
+
+	(&Worker{}).signalRestoredSandboxProcessManager(context.Background(), request, rt)
+
+	if !rt.killCalled {
+		t.Fatal("expected restored sandbox process manager to be signaled")
+	}
+	if rt.killSignal != syscall.SIGWINCH {
+		t.Fatalf("signal = %v, want %v", rt.killSignal, syscall.SIGWINCH)
+	}
+}
+
+func TestSignalRestoredSandboxProcessManagerSkipsNonSandbox(t *testing.T) {
+	rt := NewMockRuntime("gvisor", runtime.Capabilities{CheckpointRestore: true})
+	request := &types.ContainerRequest{
+		ContainerId: "endpoint-restore",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeEndpoint),
+		}},
+	}
+
+	(&Worker{}).signalRestoredSandboxProcessManager(context.Background(), request, rt)
+
+	if rt.killCalled {
+		t.Fatal("did not expect non-sandbox restore to be signaled")
 	}
 }
 

@@ -3,7 +3,6 @@ package gatewayservices
 import (
 	"context"
 	"io"
-	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -119,8 +118,12 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		}, nil
 	}
 
-	presignEndpointUrl := gws.defaultWorkspacePresignEndpointUrl(authInfo.Workspace.Storage)
-	storageClient, err := clients.NewWorkspaceStorageClientWithPresignEndpoint(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage, presignEndpointUrl)
+	storageClient, err := clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(
+		ctx,
+		authInfo.Workspace.Name,
+		authInfo.Workspace.Storage,
+		gws.appConfig.Storage.WorkspaceStorage,
+	)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
@@ -176,62 +179,6 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		PresignedUrl: presignedURL,
 		PutHeaders:   putHeaders,
 	}, nil
-}
-
-func (gws *GatewayService) defaultWorkspacePresignEndpointUrl(workspaceStorage *types.WorkspaceStorage) string {
-	if workspaceStorage == nil || workspaceStorage.EndpointUrl == nil {
-		return ""
-	}
-
-	storageConfig := gws.appConfig.Storage.WorkspaceStorage
-	if storageConfig.DefaultPresignedEndpointUrl == "" {
-		return ""
-	}
-
-	if !sameStorageEndpoint(*workspaceStorage.EndpointUrl, storageConfig.DefaultEndpointUrl) {
-		return ""
-	}
-
-	return storageConfig.DefaultPresignedEndpointUrl
-}
-
-func sameStorageEndpoint(a, b string) bool {
-	a = strings.TrimRight(strings.TrimSpace(a), "/")
-	b = strings.TrimRight(strings.TrimSpace(b), "/")
-	if a == "" || b == "" {
-		return a == b
-	}
-	if a == b {
-		return true
-	}
-
-	aURL, aErr := url.Parse(a)
-	bURL, bErr := url.Parse(b)
-	if aErr != nil || bErr != nil {
-		return false
-	}
-
-	if !strings.EqualFold(aURL.Scheme, bURL.Scheme) {
-		return false
-	}
-
-	return strings.EqualFold(aURL.Hostname(), bURL.Hostname()) &&
-		effectiveURLPort(aURL) == effectiveURLPort(bURL)
-}
-
-func effectiveURLPort(u *url.URL) string {
-	if port := u.Port(); port != "" {
-		return port
-	}
-
-	switch strings.ToLower(u.Scheme) {
-	case "http":
-		return "80"
-	case "https":
-		return "443"
-	default:
-		return ""
-	}
 }
 
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -11,6 +12,16 @@ import (
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
+
+const (
+	runcRestoreStateTimeout      = 2 * time.Second
+	runcRestoreStatePollInterval = 25 * time.Millisecond
+)
+
+type runcCommandResult struct {
+	exitCode int
+	err      error
+}
 
 // Runc implements Runtime using the runc container runtime
 type Runc struct {
@@ -34,7 +45,8 @@ func NewRunc(cfg Config) (*Runc, error) {
 
 	return &Runc{
 		handle: runc.Runc{
-			Debug: cfg.Debug,
+			Command: cfg.RuncPath,
+			Debug:   cfg.Debug,
 		},
 		cfg: cfg,
 	}, nil
@@ -196,19 +208,162 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 		return -1, fmt.Errorf("restore options cannot be nil")
 	}
 
-	runcOpts := &runc.RestoreOpts{
-		CheckpointOpts: runc.CheckpointOpts{
-			ImagePath:    opts.ImagePath,
-			WorkDir:      opts.WorkDir,
-			LinkRemap:    true,
-			Cgroups:      runc.Soft,
-			OutputWriter: opts.OutputWriter,
-		},
-		TCPClose: opts.TCPClose,
-		Started:  opts.Started,
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), r.runcCommand(), r.restoreArgs(containerID, opts)...)
+	if opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = opts.OutputWriter
 	}
 
-	return r.handle.Restore(ctx, containerID, opts.BundlePath, runcOpts)
+	if err := cmd.Start(); err != nil {
+		return -1, err
+	}
+
+	restoreDone := make(chan runcCommandResult, 1)
+	go func() {
+		restoreDone <- runcWaitResult(cmd.Wait())
+		close(restoreDone)
+	}()
+
+	pid, result, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)
+	if err != nil {
+		if result != nil {
+			return result.exitCode, result.err
+		}
+		_ = cmd.Process.Kill()
+		return -1, err
+	}
+	if result != nil {
+		return result.exitCode, result.err
+	}
+
+	if opts.Started != nil {
+		select {
+		case opts.Started <- pid:
+		default:
+			_ = cmd.Process.Kill()
+			return -1, fmt.Errorf("restore started but started channel was unavailable")
+		}
+	}
+
+	finalResult := <-restoreDone
+	return finalResult.exitCode, finalResult.err
+}
+
+func (r *Runc) runcCommand() string {
+	if r.handle.Command != "" {
+		return r.handle.Command
+	}
+	return runc.DefaultCommand
+}
+
+func (r *Runc) restoreArgs(containerID string, opts *RestoreOpts) []string {
+	args := r.globalArgs()
+	args = append(args, "restore")
+	args = append(args, restoreCheckpointArgs(opts)...)
+	if opts.TCPClose {
+		args = append(args, "--tcp-close")
+	}
+	args = append(args, "--bundle", opts.BundlePath, containerID)
+	return args
+}
+
+func (r *Runc) globalArgs() []string {
+	var args []string
+	if r.handle.Root != "" {
+		args = append(args, "--root", r.handle.Root)
+	}
+	if r.handle.Debug {
+		args = append(args, "--debug")
+	}
+	if r.handle.Log != "" {
+		args = append(args, "--log", r.handle.Log)
+	}
+	if string(r.handle.LogFormat) != "" {
+		args = append(args, "--log-format", string(r.handle.LogFormat))
+	}
+	if r.handle.SystemdCgroup {
+		args = append(args, "--systemd-cgroup")
+	}
+	if r.handle.Rootless != nil {
+		args = append(args, "--rootless="+strconv.FormatBool(*r.handle.Rootless))
+	}
+	return append(args, r.handle.ExtraArgs...)
+}
+
+func restoreCheckpointArgs(opts *RestoreOpts) []string {
+	var args []string
+	if opts.ImagePath != "" {
+		args = append(args, "--image-path", opts.ImagePath)
+	}
+	if opts.WorkDir != "" {
+		args = append(args, "--work-path", opts.WorkDir)
+	}
+	args = append(args, "--link-remap", "--manage-cgroups-mode", string(runc.Soft))
+	return args
+}
+
+func (r *Runc) waitForRestoredContainerPID(ctx context.Context, containerID string, restoreDone <-chan runcCommandResult) (int, *runcCommandResult, error) {
+	return pollRestoredContainerPID(ctx, containerID, restoreDone, runcRestoreStateTimeout, runcRestoreStatePollInterval, r.State)
+}
+
+func pollRestoredContainerPID(
+	ctx context.Context,
+	containerID string,
+	restoreDone <-chan runcCommandResult,
+	timeout time.Duration,
+	interval time.Duration,
+	stateFn func(context.Context, string) (State, error),
+) (int, *runcCommandResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		state, err := stateFn(ctx, containerID)
+		if err == nil && state.Pid > 0 {
+			return state.Pid, nil, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("restored container state has no pid")
+		}
+
+		select {
+		case <-ctx.Done():
+			return -1, nil, fmt.Errorf("restore succeeded but restored container state was unavailable: %w", lastErr)
+		case result := <-restoreDone:
+			return -1, &result, nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func runcWaitResult(err error) runcCommandResult {
+	if err == nil {
+		return runcCommandResult{exitCode: 0}
+	}
+
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			if ws.Exited() {
+				return runcCommandResult{exitCode: ws.ExitStatus(), err: err}
+			}
+			if ws.Signaled() {
+				return runcCommandResult{exitCode: 128 + int(ws.Signal()), err: err}
+			}
+		}
+		return runcCommandResult{exitCode: exitErr.ExitCode(), err: err}
+	}
+
+	return runcCommandResult{exitCode: -1, err: err}
+}
+
+func (r *Runc) RestoreWaitsForExit() bool {
+	return true
 }
 
 func (r *Runc) Close() error {

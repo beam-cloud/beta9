@@ -715,14 +715,16 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
+	require.Equal(t, -1, exitCode)
 	require.Equal(t, 1, repoClient.setAddressCalls)
 	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddress.Address)
 	require.Equal(t, 1, repoClient.setAddressMapCalls)
 	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.Eventually(t, func() bool {
+		return backendRepoClient.updateCalls == 1 && backendRepoClient.lastUpdate.LastRestoredAt != nil
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
@@ -822,6 +824,20 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 	}
 }
 
+func TestWaitForRestoredContainerExitFailsBeforeRunningState(t *testing.T) {
+	rt := &mockRuntime{
+		state: func(context.Context, string) (runtime.State, error) {
+			return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-restore"}
+		},
+	}
+
+	exitCode, err := (&Worker{}).waitForRestoredContainerExit(context.Background(), rt, "container-restore", 0)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "restored container state unavailable")
+	require.Equal(t, -1, exitCode)
+}
+
 func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
 	restoreErr := assert.AnError
 	containerID := "container-restore-generic-error"
@@ -864,7 +880,7 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
 }
 
-func TestAttemptRestoreCheckpointSignalsSandboxProcessManagerAfterRestore(t *testing.T) {
+func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
 	containerID := "container-restore-sandbox"
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
 
@@ -901,11 +917,9 @@ func TestAttemptRestoreCheckpointSignalsSandboxProcessManagerAfterRestore(t *tes
 	require.NoError(t, err)
 	require.True(t, restored)
 	require.Equal(t, 0, exitCode)
-	require.Equal(t, []syscall.Signal{syscall.SIGWINCH}, rt.signals)
-	require.Len(t, rt.killOpts, 1)
-	require.False(t, rt.killOpts[0].All)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.NotNil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+	require.Empty(t, rt.signals)
+	require.Empty(t, rt.killOpts)
+	require.Equal(t, 0, backendRepoClient.updateCalls)
 }
 
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {

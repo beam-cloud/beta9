@@ -1,10 +1,14 @@
 package pod
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {
@@ -34,5 +38,40 @@ func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 				t.Fatalf("podRunnableStub(%q) = %t, want %t", tt.stubType, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSandboxKillFailureMessageHandlesNilResponse(t *testing.T) {
+	if got := sandboxKillFailureMessage(nil); got != "Failed to kill sandbox process" {
+		t.Fatalf("sandboxKillFailureMessage(nil) = %q", got)
+	}
+
+	resp := &pb.ContainerSandboxKillResponse{ErrorMsg: "worker said no"}
+	if got := sandboxKillFailureMessage(resp); got != "worker said no" {
+		t.Fatalf("sandboxKillFailureMessage(resp) = %q", got)
+	}
+}
+
+func TestSandboxKillRejectsNilRequest(t *testing.T) {
+	service := &GenericPodService{}
+
+	resp, err := service.SandboxKill(context.Background(), nil)
+	if resp != nil {
+		t.Fatalf("SandboxKill response = %#v, want nil", resp)
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("SandboxKill error code = %s, want %s", status.Code(err), codes.InvalidArgument)
+	}
+}
+
+func TestSandboxKillRejectsMissingAuthContext(t *testing.T) {
+	service := &GenericPodService{}
+
+	resp, err := service.SandboxKill(context.Background(), &pb.PodSandboxKillRequest{ContainerId: "sandbox-123", Pid: 1})
+	if resp != nil {
+		t.Fatalf("SandboxKill response = %#v, want nil", resp)
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("SandboxKill error code = %s, want %s", status.Code(err), codes.Unauthenticated)
 	}
 }

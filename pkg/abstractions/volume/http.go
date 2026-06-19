@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
@@ -345,7 +344,7 @@ func (g *volumeGroup) GetUploadURL(ctx echo.Context) error {
 const PresignedGetURLExpiration = 3600 // 1 hour
 
 func (g *volumeGroup) generatePresignedURL(ctx context.Context, workspace *types.Workspace, volumePath string, urlType string) (string, error) {
-	storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
+	storageClient, err := g.gvs.newWorkspaceStorageClientForPresign(ctx, workspace)
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
 	}
