@@ -383,7 +383,7 @@ func NewWorker() (_ *Worker, err error) {
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
-		containerMountManager:   NewContainerMountManager(config),
+		containerMountManager:   NewContainerMountManager(config, poolConfig),
 		podAddr:                 podAddr,
 		routeLocalTargetHost:    routeLocalTargetHost,
 		imageClient:             imageClient,

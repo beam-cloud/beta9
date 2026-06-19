@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,47 @@ func TestSetupContainerMountsCachesStubCodeWithoutSharingContainerWorkspaces(t *
 	workspace2Bytes, err := os.ReadFile(filepath.Join(workspace2, "main.py"))
 	require.NoError(t, err)
 	require.Equal(t, "print('hello')\n", string(workspace2Bytes))
+}
+
+func TestSetupContainerMountsReusesDurableStubCodeCacheAcrossManagers(t *testing.T) {
+	cacheRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	config := types.AppConfig{
+		Worker: types.WorkerConfig{CacheEnabled: true},
+		Storage: types.StorageConfig{
+			WorkspaceStorage: types.WorkspaceStorageConfig{
+				BaseMountPath: storageRoot,
+			},
+		},
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:   true,
+				MountPath: cacheRoot,
+			},
+		},
+	}
+
+	workspace := "workspace-durable"
+	objectID := "object-durable"
+	objectPath := filepath.Join(storageRoot, workspace, types.DefaultObjectPrefix, objectID)
+	require.NoError(t, writeZipObject(objectPath, map[string]string{
+		"main.py": "print('durable')\n",
+	}))
+
+	request1 := stubCodeMountRequest("container-durable-1", workspace, objectID)
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request1.ContainerId))) })
+	require.NoError(t, NewContainerMountManager(config).SetupContainerMounts(context.Background(), request1, discardLogger()))
+	require.NoError(t, os.Remove(objectPath))
+
+	request2 := stubCodeMountRequest("container-durable-2", workspace, objectID)
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request2.ContainerId))) })
+	require.NoError(t, NewContainerMountManager(config).SetupContainerMounts(context.Background(), request2, discardLogger()))
+
+	workspaceBytes, err := os.ReadFile(filepath.Join(request2.Mounts[0].LocalPath, "main.py"))
+	require.NoError(t, err)
+	require.Equal(t, "print('durable')\n", string(workspaceBytes))
+	require.FileExists(t, filepath.Join(cacheRoot, "stub-code", stubCodeCacheKey(workspace, objectID), ".beta9-cache-ready"))
 }
 
 func TestStubCodeCacheKeyDoesNotCollideAcrossWorkspaceObjectPairs(t *testing.T) {
@@ -123,6 +165,84 @@ func TestSetupContainerMountsPrefersDirectWorkspaceStorageForStubCode(t *testing
 	workspaceBytes, err := os.ReadFile(filepath.Join(workspacePath, "main.py"))
 	require.NoError(t, err)
 	require.Equal(t, "direct\n", string(workspaceBytes))
+}
+
+func TestStubCodeCacheRootUsesDiskCacheWhenEnabled(t *testing.T) {
+	cacheRoot := t.TempDir()
+	config := types.AppConfig{
+		Worker: types.WorkerConfig{CacheEnabled: true},
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:   true,
+				MountPath: cacheRoot,
+			},
+		},
+	}
+
+	require.Equal(t, filepath.Join(cacheRoot, "stub-code"), stubCodeCacheRoot(config))
+}
+
+func TestStubCodeCacheRootFallsBackToTempWhenDiskCacheDisabled(t *testing.T) {
+	config := types.AppConfig{
+		Worker: types.WorkerConfig{CacheEnabled: true},
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:   false,
+				MountPath: t.TempDir(),
+			},
+		},
+	}
+
+	require.Equal(t, filepath.Join(os.TempDir(), "beta9-stub-code-cache"), stubCodeCacheRoot(config))
+}
+
+func TestStubCodeCacheRootRespectsPoolDiskCacheOverride(t *testing.T) {
+	globalCacheRoot := t.TempDir()
+	poolCacheRoot := t.TempDir()
+	config := types.AppConfig{
+		Worker: types.WorkerConfig{CacheEnabled: true},
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:   true,
+				MountPath: globalCacheRoot,
+			},
+		},
+	}
+	poolConfig := types.WorkerPoolConfig{
+		Cache: types.WorkerPoolCacheConfig{
+			Disk: types.WorkerPoolCacheDiskConfig{
+				MountPath: poolCacheRoot,
+			},
+		},
+	}
+
+	require.Equal(t, filepath.Join(poolCacheRoot, "stub-code"), stubCodeCacheRoot(config, poolConfig))
+}
+
+func TestStubCodeCacheRootRespectsPoolDiskCacheDisable(t *testing.T) {
+	disabled := false
+	config := types.AppConfig{
+		Worker: types.WorkerConfig{CacheEnabled: true},
+		Cache: cache.Config{
+			Enabled: true,
+			Disk: cache.DiskConfig{
+				Enabled:   true,
+				MountPath: t.TempDir(),
+			},
+		},
+	}
+	poolConfig := types.WorkerPoolConfig{
+		Cache: types.WorkerPoolCacheConfig{
+			Disk: types.WorkerPoolCacheDiskConfig{
+				Enabled: &disabled,
+			},
+		},
+	}
+
+	require.Equal(t, filepath.Join(os.TempDir(), "beta9-stub-code-cache"), stubCodeCacheRoot(config, poolConfig))
 }
 
 func TestRequiresWorkspaceStorageMount(t *testing.T) {
