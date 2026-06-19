@@ -43,4 +43,5 @@ var dockerInDockerCapabilities = []string{
 	"CAP_SYS_ADMIN",
 	"CAP_SYS_CHROOT",
 	"CAP_SYS_PTRACE",
+	"CAP_SYS_RESOURCE",
 }

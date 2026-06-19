@@ -29,6 +29,10 @@ func TestAddDockerInDockerCapabilities(t *testing.T) {
 	require.Equal(t, 1, countCapability(spec.Process.Capabilities.Bounding, "CAP_CHOWN"))
 }
 
+func TestDockerInDockerCapabilitiesIncludesNestedRuncRequirements(t *testing.T) {
+	require.Contains(t, DockerInDockerCapabilities(), "CAP_SYS_RESOURCE")
+}
+
 func countCapability(values []string, cap string) int {
 	count := 0
 	for _, value := range values {
