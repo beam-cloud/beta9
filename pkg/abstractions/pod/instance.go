@@ -10,7 +10,6 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -184,8 +183,8 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		connectionsVal, err := i.Rdb.Get(context.TODO(), Keys.podContainerConnections(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
-		if err != nil && err != redis.Nil {
+		connectionsVal, err := sharedPodContainerConnections(context.TODO(), i.Rdb, i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
+		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for container")
 			continue
 		}

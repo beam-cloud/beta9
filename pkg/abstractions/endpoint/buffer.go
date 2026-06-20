@@ -70,8 +70,6 @@ type RequestBuffer struct {
 	buffer                  *abstractions.RingBuffer[*request]
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
-	containerRequests       map[string]int
-	containerRequestsLock   sync.Mutex
 	maxTokens               int
 	isASGI                  bool
 	keyEventManager         *common.KeyEventManager
@@ -101,7 +99,6 @@ func NewRequestBuffer(
 		buffer:                  abstractions.NewRingBuffer[*request](size),
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
-		containerRequests:       map[string]int{},
 		containerRepo:           containerRepo,
 		keyEventManager:         keyEventManager,
 		keyEventChan:            make(chan common.KeyEvent),
@@ -202,6 +199,45 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	}
 }
 
+func (rb *RequestBuffer) ForwardHealthRequest(ctx echo.Context) error {
+	ctx.Set("stubId", rb.stubId)
+
+	containers := rb.availableContainerSnapshot()
+	if len(containers) == 0 {
+		return ctx.JSON(http.StatusOK, map[string]interface{}{
+			"ok": true,
+		})
+	}
+
+	c := containers[0]
+	request := ctx.Request()
+	backendURL := backendHTTPURL("http", c.address, ctx.Param("subPath"), request.URL.RawQuery)
+	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, backendURL, request.Body)
+	if err != nil {
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+	}
+
+	httpReq.Header = request.Header.Clone()
+	httpReq.Header.Del("X-TASK-ID")
+
+	resp, err := rb.getHttpClient(c.address, checkAddressIsReadyTimeout).Do(httpReq)
+	if err != nil {
+		return ctx.JSON(http.StatusBadGateway, map[string]interface{}{
+			"error": "Backend route unavailable",
+		})
+	}
+	defer resp.Body.Close()
+
+	if err := writeBackendResponse(ctx, resp); err != nil && err != io.EOF && err != context.Canceled {
+		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+	}
+	return nil
+}
+
 func (rb *RequestBuffer) requestQueueTimeout() time.Duration {
 	if rb.stubConfig != nil && rb.stubConfig.TaskPolicy.Timeout > 0 {
 		return time.Duration(rb.stubConfig.TaskPolicy.Timeout) * time.Second
@@ -300,20 +336,11 @@ func (rb *RequestBuffer) reserveContainer() (container, bool) {
 		return container{}, false
 	}
 
-	// Containers are sorted by in-flight requests, so this is least-connections
-	// load balancing. If a replica's shared token bucket is already full, try
-	// the next least-loaded replica.
 	for _, c := range containers {
-		if rb.containerRequestCount(c.id) >= rb.effectiveMaxTokens() {
-			continue
-		}
-
 		if err := rb.acquireRequestToken(c.id); err != nil {
 			continue
 		}
 
-		selectedLoad := rb.incrementLocalContainerRequests(c.id)
-		c.inFlightRequests = selectedLoad
 		return c, true
 	}
 
@@ -323,58 +350,6 @@ func (rb *RequestBuffer) reserveContainer() (container, bool) {
 
 func (rb *RequestBuffer) requeueRequest(req *request) {
 	rb.enqueueRequest(req, true)
-}
-
-func (rb *RequestBuffer) containerRequestCount(containerId string) int {
-	rb.containerRequestsLock.Lock()
-	defer rb.containerRequestsLock.Unlock()
-
-	if rb.containerRequests == nil {
-		return 0
-	}
-	return rb.containerRequests[containerId]
-}
-
-func (rb *RequestBuffer) incrementLocalContainerRequests(containerId string) int {
-	rb.containerRequestsLock.Lock()
-	defer rb.containerRequestsLock.Unlock()
-
-	if rb.containerRequests == nil {
-		rb.containerRequests = map[string]int{}
-	}
-	rb.containerRequests[containerId]++
-	return rb.containerRequests[containerId]
-}
-
-func (rb *RequestBuffer) decrementLocalContainerRequests(containerId string) bool {
-	rb.containerRequestsLock.Lock()
-	defer rb.containerRequestsLock.Unlock()
-
-	if rb.containerRequests == nil || rb.containerRequests[containerId] <= 0 {
-		return false
-	}
-
-	if rb.containerRequests[containerId] == 1 {
-		delete(rb.containerRequests, containerId)
-	} else {
-		rb.containerRequests[containerId]--
-	}
-	return true
-}
-
-func (rb *RequestBuffer) pruneContainerRequestCounts(containers []container) {
-	active := make(map[string]struct{}, len(containers))
-	for _, c := range containers {
-		active[c.id] = struct{}{}
-	}
-
-	rb.containerRequestsLock.Lock()
-	defer rb.containerRequestsLock.Unlock()
-	for containerId, count := range rb.containerRequests {
-		if _, ok := active[containerId]; !ok && count <= 0 {
-			delete(rb.containerRequests, containerId)
-		}
-	}
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
@@ -467,7 +442,6 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainersLock.Lock()
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
-			rb.pruneContainerRequestCounts(availableContainers)
 			rb.pruneBackendTransports(availableContainers)
 			rb.signalWork()
 
@@ -479,7 +453,7 @@ func (rb *RequestBuffer) discoverContainers() {
 func (rb *RequestBuffer) requestTokens(containerId string) (int, error) {
 	maxTokens := rb.effectiveMaxTokens()
 	if rb.containerRepo == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
-		return maxTokens - rb.containerRequestCount(containerId), nil
+		return maxTokens, nil
 	}
 
 	return rb.containerRepo.GetEndpointRequestTokens(
@@ -523,8 +497,6 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 }
 
 func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
-	rb.decrementLocalContainerRequests(containerId)
-
 	if rb.containerRepo == nil || rb.workspace == nil || rb.stubId == "" || containerId == "" {
 		return nil
 	}
@@ -751,12 +723,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		return
 	}
 
-	// Copy headers to new request
-	for key, values := range request.Header {
-		for _, val := range values {
-			httpReq.Header.Add(key, val)
-		}
-	}
+	httpReq.Header = request.Header.Clone()
 
 	httpReq.Header.Add("X-TASK-ID", req.task.msg.TaskId) // Add task ID to header
 
@@ -773,31 +740,27 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 	defer resp.Body.Close()
 
-	// Set response headers and status code before writing the body
-	for key, values := range resp.Header {
-		for _, value := range values {
-			req.ctx.Response().Header().Add(key, value)
-		}
-	}
-	req.ctx.Response().WriteHeader(resp.StatusCode)
-
-	// Check if we can stream the response
-	streamingSupported := true
-	flusher, ok := req.ctx.Response().Writer.(http.Flusher)
-	if !ok {
-		streamingSupported = false
-	}
-
-	if streamingSupported && shouldFlushProxyResponse(resp) {
-		_, err = abstractions.CopyWithProxyBufferFlush(req.ctx.Response().Writer, resp.Body, flusher.Flush)
-	} else {
-		_, err = abstractions.CopyWithProxyBuffer(req.ctx.Response().Writer, resp.Body)
-	}
-	if err != nil && err != io.EOF && err != context.Canceled {
+	if err := writeBackendResponse(req.ctx, resp); err != nil && err != io.EOF && err != context.Canceled {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
 		})
 	}
+}
+
+func writeBackendResponse(ctx echo.Context, resp *http.Response) error {
+	for key, values := range resp.Header {
+		for _, value := range values {
+			ctx.Response().Header().Add(key, value)
+		}
+	}
+	ctx.Response().WriteHeader(resp.StatusCode)
+
+	if flusher, ok := ctx.Response().Writer.(http.Flusher); ok && shouldFlushProxyResponse(resp) {
+		_, err := abstractions.CopyWithProxyBufferFlush(ctx.Response().Writer, resp.Body, flusher.Flush)
+		return err
+	}
+	_, err := abstractions.CopyWithProxyBuffer(ctx.Response().Writer, resp.Body)
+	return err
 }
 
 func shouldFlushProxyResponse(resp *http.Response) bool {
@@ -920,7 +883,6 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	go rb.heartBeat(r, c.id) // Send heartbeat via redis for duration of request
 	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
 
 	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())

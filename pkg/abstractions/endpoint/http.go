@@ -96,7 +96,19 @@ func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
 		return err
 	}
 
+	if isASGIHealthRequest(ctx) {
+		instance, err := g.es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
+		if err != nil {
+			return err
+		}
+		return instance.buffer.ForwardHealthRequest(ctx)
+	}
+
 	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
+}
+
+func isASGIHealthRequest(ctx echo.Context) bool {
+	return ctx.Param("subPath") == "health"
 }
 
 func (g *endpointGroup) WarmUpEndpoint(ctx echo.Context) error {

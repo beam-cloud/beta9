@@ -5,6 +5,7 @@ import (
 	stdjson "encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -29,6 +30,87 @@ func TestBackendHTTPURLPreservesDirectAddressAndQuery(t *testing.T) {
 	got := backendHTTPURL("http", "127.0.0.1:8001", "/invoke", "a=b")
 	if got != "http://127.0.0.1:8001/invoke?a=b" {
 		t.Fatalf("direct backend url = %q", got)
+	}
+}
+
+func TestIsASGIHealthRequest(t *testing.T) {
+	e := echo.New()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/health", nil), httptest.NewRecorder())
+	ctx.SetParamNames("subPath")
+	ctx.SetParamValues("health")
+	if !isASGIHealthRequest(ctx) {
+		t.Fatal("expected /health to be treated as an ASGI health request")
+	}
+
+	ctx.SetParamValues("healthz")
+	if isASGIHealthRequest(ctx) {
+		t.Fatal("expected non-health subpath to use normal ASGI task forwarding")
+	}
+}
+
+func TestForwardHealthRequestReturnsOKWhenNoBackendIsReady(t *testing.T) {
+	e := echo.New()
+	httpReq := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(httpReq, rec)
+	ctx.SetParamNames("subPath")
+	ctx.SetParamValues("health")
+
+	rb := &RequestBuffer{}
+	if err := rb.ForwardHealthRequest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestForwardHealthRequestProxiesWithoutTaskHeader(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-TASK-ID"); got != "" {
+			t.Errorf("forwarded X-TASK-ID = %q, want empty", got)
+			http.Error(w, "unexpected task header", http.StatusInternalServerError)
+			return
+		}
+		if got := r.URL.String(); got != "/health?probe=1" {
+			t.Errorf("backend URL = %q, want /health?probe=1", got)
+			http.Error(w, "unexpected url", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("X-Backend-Health", "ok")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := echo.New()
+	httpReq := httptest.NewRequest(http.MethodGet, "/health?probe=1", nil)
+	httpReq.Header.Set("X-TASK-ID", "client-supplied-task")
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(httpReq, rec)
+	ctx.SetParamNames("subPath")
+	ctx.SetParamValues("health")
+
+	rb := &RequestBuffer{
+		ctx:        context.Background(),
+		httpClient: backend.Client(),
+		availableContainers: []container{{
+			id:      "container-1",
+			address: backendURL.Host,
+		}},
+	}
+	if err := rb.ForwardHealthRequest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := rec.Header().Get("X-Backend-Health"); got != "ok" {
+		t.Fatalf("response header = %q, want ok", got)
 	}
 }
 
@@ -203,21 +285,27 @@ func TestEnqueueRequestFailsOverwrittenRequest(t *testing.T) {
 }
 
 func TestReserveContainerSkipsSaturatedReplica(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
 	rb := &RequestBuffer{
-		ctx:       context.Background(),
-		workspace: &types.Workspace{Name: "workspace"},
-		stubId:    "stub",
+		ctx:           context.Background(),
+		rdb:           rdb,
+		containerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
 		stubConfig: &types.StubConfigV1{
 			TaskPolicy: types.TaskPolicy{Timeout: 30},
 		},
 		maxTokens: 1,
-		containerRequests: map[string]int{
-			"full": 1,
-		},
 		availableContainers: []container{
 			{id: "full", address: "127.0.0.1:8001"},
 			{id: "open", address: "127.0.0.1:8002"},
 		},
+	}
+	if err := rdb.Set(context.Background(), Keys.endpointRequestTokens("workspace", "stub", "full"), 0, time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.Set(context.Background(), Keys.endpointRequestTokens("workspace", "stub", "open"), 1, time.Minute).Err(); err != nil {
+		t.Fatal(err)
 	}
 
 	c, ok := rb.reserveContainer()
@@ -228,11 +316,8 @@ func TestReserveContainerSkipsSaturatedReplica(t *testing.T) {
 		t.Fatalf("container id = %q, want open", c.id)
 	}
 
-	if got := rb.containerRequestCount("full"); got != 1 {
-		t.Fatalf("full replica local reservations = %d, want 1", got)
-	}
-	if got := rb.containerRequestCount("open"); got != 1 {
-		t.Fatalf("open replica local reservations = %d, want 1", got)
+	if got := redisInt64(t, rdb, Keys.endpointRequestTokens("workspace", "stub", "open")); got != 0 {
+		t.Fatalf("open replica tokens = %d, want 0", got)
 	}
 }
 
@@ -287,12 +372,6 @@ func TestReleaseRequestTokenIsIdempotentAcrossBuffers(t *testing.T) {
 	}
 	if got := redisInt64(t, rdb, key); got != 1 {
 		t.Fatalf("request tokens after first release = %d, want 1", got)
-	}
-	if got := rb1.containerRequestCount("container-1"); got != 0 {
-		t.Fatalf("first buffer local requests = %d, want 0", got)
-	}
-	if got := rb2.containerRequestCount("container-1"); got != 1 {
-		t.Fatalf("second buffer local requests = %d, want 1", got)
 	}
 
 	if err := rb1.releaseRequestToken("container-1", "task-1"); err != nil {

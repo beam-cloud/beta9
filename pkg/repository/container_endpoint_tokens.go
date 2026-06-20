@@ -29,6 +29,15 @@ return next
 var releaseEndpointRequestTokenScript = redis.NewScript(`
 local max_tokens = tonumber(ARGV[1])
 local ttl_seconds = tonumber(ARGV[2])
+local use_release_key = ARGV[3] == "1"
+
+if use_release_key then
+  local created = redis.call("SET", KEYS[2], 1, "NX", "EX", ttl_seconds)
+  if created == false then
+    return -1
+  end
+end
+
 local current = redis.call("GET", KEYS[1])
 if current == false then
   current = max_tokens
@@ -112,23 +121,20 @@ func (c *ContainerRedisRepository) ReleaseEndpointRequestToken(ctx context.Conte
 		return nil
 	}
 
+	keys := []string{key}
+	useReleaseKey := 0
 	if taskId != "" {
-		releaseKey := common.RedisKeys.EndpointRequestRelease(workspaceName, stubId, taskId, containerId)
-		created, err := c.rdb.SetNX(ctx, releaseKey, 1, ttl).Result()
-		if err != nil {
-			return err
-		}
-		if !created {
-			return nil
-		}
+		keys = append(keys, common.RedisKeys.EndpointRequestRelease(workspaceName, stubId, taskId, containerId))
+		useReleaseKey = 1
 	}
 
 	if err := releaseEndpointRequestTokenScript.Run(
 		ctx,
 		c.rdb,
-		[]string{key},
+		keys,
 		normalizeEndpointRequestMaxTokens(maxTokens),
 		endpointRequestTokenTTLSeconds(ttl),
+		useReleaseKey,
 	).Err(); err != nil {
 		return err
 	}

@@ -23,8 +23,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	redis "github.com/redis/go-redis/v9"
 )
 
 const (
@@ -33,23 +35,27 @@ const (
 	connectionKeepAliveInterval   time.Duration = time.Second * 1
 	connectionReadTimeout         time.Duration = time.Minute * 5
 	containerAvailableTimeout     time.Duration = time.Second * 2
-	connectionTTLRefreshInterval  time.Duration = podContainerConnectionTimeout / 2
-	connectionSyncBufferSize      int           = 1024
-	decrementConnectionScript     string        = `
-local current = tonumber(redis.call("GET", KEYS[1]) or "0")
-if current <= 0 then
-  redis.call("SET", KEYS[1], 0, "EX", ARGV[1])
-  return 0
-end
-local next = redis.call("DECR", KEYS[1])
-if next < 0 then
-  redis.call("SET", KEYS[1], 0, "EX", ARGV[1])
-  return 0
-end
-redis.call("EXPIRE", KEYS[1], ARGV[1])
-return next
-`
+	connectionSyncInterval        time.Duration = 100 * time.Millisecond
+	connectionSnapshotTTL         time.Duration = 2 * time.Second
+	reverseProxyBufferSize        int           = 32 * 1024
 )
+
+var reverseProxyBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, reverseProxyBufferSize)
+		return &buf
+	},
+}
+
+type podReverseProxyBufferPool struct{}
+
+func (podReverseProxyBufferPool) Get() []byte {
+	return *reverseProxyBufferPool.Get().(*[]byte)
+}
+
+func (podReverseProxyBufferPool) Put(buf []byte) {
+	reverseProxyBufferPool.Put(&buf)
+}
 
 type container struct {
 	id              string
@@ -65,33 +71,27 @@ type connection struct {
 	enqueuedAt time.Time
 }
 
-type podConnectionSync struct {
-	containerID string
-	keepWarm    bool
-}
-
 type PodProxyBuffer struct {
-	ctx                      context.Context
-	rdb                      *common.RedisClient
-	workspace                *types.Workspace
-	stubId                   string
-	size                     int
-	containerRepo            repository.ContainerRepository
-	keyEventManager          *common.KeyEventManager
-	stubConfig               *types.StubConfigV1
-	httpClient               *http.Client
-	backendTransports        sync.Map
-	backendProxies           sync.Map
-	tailscale                *network.Tailscale
-	tsConfig                 types.TailscaleConfig
-	availableContainers      []container
-	availableContainersLock  sync.RWMutex
-	containerConnections     map[string]int
-	containerConnectionsLock sync.Mutex
-	totalConnections         atomic.Int64
-	connectionSyncChan       chan podConnectionSync
-	buffer                   *abstractions.RingBuffer[*connection]
-	workReady                chan struct{}
+	ctx                     context.Context
+	rdb                     *common.RedisClient
+	workspace               *types.Workspace
+	stubId                  string
+	proxyId                 string
+	size                    int
+	containerRepo           repository.ContainerRepository
+	keyEventManager         *common.KeyEventManager
+	stubConfig              *types.StubConfigV1
+	httpClient              *http.Client
+	backendTransports       sync.Map
+	backendProxies          sync.Map
+	tailscale               *network.Tailscale
+	tsConfig                types.TailscaleConfig
+	availableContainers     []container
+	availableContainersLock sync.RWMutex
+	totalConnections        atomic.Int64
+	containerConnections    sync.Map
+	buffer                  *abstractions.RingBuffer[*connection]
+	workReady               chan struct{}
 }
 
 func NewPodProxyBuffer(ctx context.Context,
@@ -110,6 +110,7 @@ func NewPodProxyBuffer(ctx context.Context,
 		rdb:                     rdb,
 		workspace:               workspace,
 		stubId:                  stubId,
+		proxyId:                 uuid.NewString(),
 		size:                    size,
 		containerRepo:           containerRepo,
 		keyEventManager:         keyEventManager,
@@ -119,8 +120,6 @@ func NewPodProxyBuffer(ctx context.Context,
 		tsConfig:                tsConfig,
 		availableContainers:     []container{},
 		availableContainersLock: sync.RWMutex{},
-		containerConnections:    map[string]int{},
-		connectionSyncChan:      make(chan podConnectionSync, connectionSyncBufferSize),
 		buffer:                  abstractions.NewRingBuffer[*connection](size),
 		workReady:               make(chan struct{}, 1),
 	}
@@ -139,20 +138,38 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 	}
 	defer pb.decrementTotalConnections()
-	totalConnectionKey, _ := pb.totalConnectionsKey()
-	cancelTotalConnectionRefresh := pb.startConnectionKeyTTLRefresh(totalConnectionKey)
-	defer cancelTotalConnectionRefresh()
+
+	port, err := strconv.Atoi(ctx.Param("port"))
+	if err != nil {
+		return ctx.String(http.StatusBadRequest, "Invalid port")
+	}
 
 	done := make(chan struct{})
 	conn := &connection{
-		ctx:        ctx,
-		done:       done,
-		enqueuedAt: time.Now(),
+		ctx:  ctx,
+		done: done,
 	}
 
+	if ctx.Request().Context().Err() != nil {
+		return nil
+	}
+
+	container, ok, hasContainers, hasPort := pb.reserveContainerForPort(int32(port))
+	if ok {
+		pb.handleConnection(conn, container, int32(port))
+		return nil
+	}
+	if hasContainers && !hasPort {
+		return ctx.String(http.StatusServiceUnavailable, "Port not available")
+	}
+
+	conn.enqueuedAt = time.Now()
 	pb.enqueueConnection(conn, false)
 	pb.signalWork()
+	return pb.waitForConnection(ctx, conn)
+}
 
+func (pb *PodProxyBuffer) waitForConnection(ctx echo.Context, conn *connection) error {
 	for {
 		select {
 		case <-pb.ctx.Done():
@@ -171,9 +188,6 @@ func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 		return err
 	}
 	defer pb.decrementTotalConnections()
-	totalConnectionKey, _ := pb.totalConnectionsKey()
-	cancelTotalConnectionRefresh := pb.startConnectionKeyTTLRefresh(totalConnectionKey)
-	defer cancelTotalConnectionRefresh()
 
 	done := make(chan struct{})
 	conn := &connection{
@@ -297,13 +311,15 @@ func (pb *PodProxyBuffer) availableContainerSnapshot() []container {
 }
 
 func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, bool, bool) {
-	containers := pb.availableContainerSnapshot()
-	if len(containers) == 0 {
+	pb.availableContainersLock.RLock()
+	defer pb.availableContainersLock.RUnlock()
+
+	if len(pb.availableContainers) == 0 {
 		return container{}, false, false, false
 	}
 
 	hasPort := false
-	for _, c := range containers {
+	for _, c := range pb.availableContainers {
 		if _, ok := c.addressMap[port]; !ok {
 			continue
 		}
@@ -327,12 +343,9 @@ func (pb *PodProxyBuffer) requeueConnection(conn *connection) {
 func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container container) {
 	defer close(conn.done)
 	defer pb.decrementContainerConnections(container.id)
-	containerConnectionKey, _ := pb.containerConnectionsKey(container.id)
-	cancelContainerConnectionRefresh := pb.startConnectionKeyTTLRefresh(containerConnectionKey)
-	defer cancelContainerConnectionRefresh()
 
 	tc := conn.tc
-	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, "tcp", time.Since(conn.enqueuedAt))
+	pb.recordQueuedRequestWait(conn, "tcp")
 
 	port := tc.Fields.Port
 	targetHost, ok := container.addressMap[int32(port)]
@@ -401,13 +414,9 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 func (pb *PodProxyBuffer) handleConnection(conn *connection, container container, port int32) {
 	defer close(conn.done)
 	defer pb.decrementContainerConnections(container.id)
-	containerConnectionKey, _ := pb.containerConnectionsKey(container.id)
-	cancelContainerConnectionRefresh := pb.startConnectionKeyTTLRefresh(containerConnectionKey)
-	defer cancelContainerConnectionRefresh()
-	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, "http", time.Since(conn.enqueuedAt))
+	pb.recordQueuedRequestWait(conn, "http")
 
 	request := conn.ctx.Request()
-	response := conn.ctx.Response()
 
 	targetHost, ok := container.addressMap[port]
 	if !ok {
@@ -436,7 +445,14 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		}
 	}()
 
-	pb.backendProxy(targetHost).ServeHTTP(response, request)
+	pb.backendProxy(targetHost).ServeHTTP(conn.ctx.Response(), request)
+}
+
+func (pb *PodProxyBuffer) recordQueuedRequestWait(conn *connection, protocol string) {
+	if conn.enqueuedAt.IsZero() {
+		return
+	}
+	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, protocol, time.Since(conn.enqueuedAt))
 }
 
 func podBackendHost(address string) string {
@@ -452,8 +468,9 @@ func (pb *PodProxyBuffer) backendProxy(targetHost string) *httputil.ReverseProxy
 	}
 
 	proxy := &httputil.ReverseProxy{
-		Director:  func(req *http.Request) {},
-		Transport: pb.backendTransport(targetHost),
+		Director:   func(req *http.Request) {},
+		Transport:  pb.backendTransport(targetHost),
+		BufferPool: podReverseProxyBufferPool{},
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
 			http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
 		},
@@ -632,11 +649,16 @@ func (pb *PodProxyBuffer) discoverContainers() {
 						return
 					}
 
+					connections, err := pb.sharedContainerConnectionCount(cs.ContainerId)
+					if err != nil {
+						return
+					}
+
 					availableContainersChan <- container{
 						id:              cs.ContainerId,
 						addressMap:      addressMap,
 						readyAddressMap: readyAddressMap,
-						connections:     pb.containerConnectionCount(cs.ContainerId),
+						connections:     connections,
 					}
 				}(containerState)
 			}
@@ -658,7 +680,6 @@ func (pb *PodProxyBuffer) discoverContainers() {
 			pb.availableContainersLock.Lock()
 			pb.availableContainers = availableContainers
 			pb.availableContainersLock.Unlock()
-			pb.pruneContainerConnectionCounts(availableContainers)
 			pb.pruneBackendTransports(availableContainers)
 			pb.signalWork()
 
@@ -704,79 +725,39 @@ func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool 
 }
 
 func (pb *PodProxyBuffer) incrementTotalConnections() (int64, error) {
-	if key, ok := pb.totalConnectionsKey(); ok {
-		if err := pb.incrementRedisConnectionKey(key); err != nil {
-			return pb.totalConnections.Load(), err
-		}
-	}
-
 	val := pb.totalConnections.Add(1)
+	if val == 1 {
+		pb.publishTotalConnectionSnapshot(1)
+	}
 	return val, nil
 }
 
 func (pb *PodProxyBuffer) decrementTotalConnections() error {
-	decremented := false
-	for {
-		current := pb.totalConnections.Load()
-		if current <= 0 {
-			break
-		}
-		if pb.totalConnections.CompareAndSwap(current, current-1) {
-			decremented = true
-			break
-		}
-	}
-
-	if decremented {
-		if key, ok := pb.totalConnectionsKey(); ok {
-			return pb.decrementRedisConnectionKey(key)
-		}
-	}
-
+	decrementCounter(&pb.totalConnections)
 	return nil
 }
 
 func (pb *PodProxyBuffer) incrementContainerConnections(containerId string) error {
-	if key, ok := pb.containerConnectionsKey(containerId); ok {
-		if err := pb.incrementRedisConnectionKey(key); err != nil {
-			return err
-		}
+	counter, ok := pb.containerConnectionCounter(containerId)
+	if !ok {
+		return nil
 	}
-
-	pb.containerConnectionsLock.Lock()
-	if pb.containerConnections == nil {
-		pb.containerConnections = map[string]int{}
+	if counter.Add(1) == 1 {
+		pb.publishContainerConnectionSnapshot(containerId, 1)
 	}
-	pb.containerConnections[containerId]++
-	pb.containerConnectionsLock.Unlock()
-
 	return nil
 }
 
 func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) error {
 	defer pb.signalWork()
+	go pb.setPodKeepWarmLock(containerId)
 
-	decremented := false
-	pb.containerConnectionsLock.Lock()
-	if pb.containerConnections != nil && pb.containerConnections[containerId] > 0 {
-		if pb.containerConnections[containerId] == 1 {
-			delete(pb.containerConnections, containerId)
-		} else {
-			pb.containerConnections[containerId]--
-		}
-		decremented = true
-	}
-	pb.containerConnectionsLock.Unlock()
-
-	if !decremented {
+	counter, ok := pb.containerConnectionCounter(containerId)
+	if !ok {
 		return nil
 	}
 
-	pb.enqueueConnectionSync(containerId, true)
-	if key, ok := pb.containerConnectionsKey(containerId); ok {
-		return pb.decrementRedisConnectionKey(key)
-	}
-
+	decrementCounter(counter)
 	return nil
 }
 
@@ -784,165 +765,212 @@ func (pb *PodProxyBuffer) totalConnectionCount() int64 {
 	return pb.totalConnections.Load()
 }
 
-func (pb *PodProxyBuffer) containerConnectionCount(containerId string) int {
-	pb.containerConnectionsLock.Lock()
-	defer pb.containerConnectionsLock.Unlock()
+func (pb *PodProxyBuffer) containerConnectionCounter(containerId string) (*atomic.Int64, bool) {
+	if containerId == "" {
+		return nil, false
+	}
+	actual, _ := pb.containerConnections.LoadOrStore(containerId, &atomic.Int64{})
+	return actual.(*atomic.Int64), true
+}
 
-	if pb.containerConnections == nil {
+func (pb *PodProxyBuffer) containerConnectionCount(containerId string) int64 {
+	value, ok := pb.containerConnections.Load(containerId)
+	if !ok {
 		return 0
 	}
-	return pb.containerConnections[containerId]
+	return value.(*atomic.Int64).Load()
 }
 
-func (pb *PodProxyBuffer) pruneContainerConnectionCounts(containers []container) {
-	active := make(map[string]struct{}, len(containers))
-	for _, c := range containers {
-		active[c.id] = struct{}{}
+func (pb *PodProxyBuffer) sharedContainerConnectionCount(containerId string) (int, error) {
+	if pb.workspace == nil {
+		return 0, nil
 	}
 
-	pb.containerConnectionsLock.Lock()
-	defer pb.containerConnectionsLock.Unlock()
-	for containerId, count := range pb.containerConnections {
-		if _, ok := active[containerId]; !ok && count <= 0 {
-			delete(pb.containerConnections, containerId)
-		}
-	}
-}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-func (pb *PodProxyBuffer) enqueueConnectionSync(containerID string, keepWarm bool) {
-	if pb.connectionSyncChan == nil || pb.rdb == nil || pb.workspace == nil {
-		return
+	connections, err := sharedPodContainerConnections(ctx, pb.rdb, pb.workspace.Name, pb.stubId, containerId)
+	if err != nil {
+		return 0, err
 	}
-
-	update := podConnectionSync{containerID: containerID, keepWarm: keepWarm}
-	select {
-	case pb.connectionSyncChan <- update:
-	default:
-		if keepWarm {
-			go pb.applyConnectionSync(update)
-		}
-	}
+	return int(connections), nil
 }
 
 func (pb *PodProxyBuffer) syncConnectionState() {
+	ticker := time.NewTicker(connectionSyncInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-pb.ctx.Done():
 			return
-		case update := <-pb.connectionSyncChan:
-			pb.applyConnectionSync(update)
+		case <-ticker.C:
+			pb.flushConnectionState()
 		}
 	}
 }
 
-func (pb *PodProxyBuffer) applyConnectionSync(update podConnectionSync) {
+func (pb *PodProxyBuffer) flushConnectionState() {
+	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" || pb.proxyId == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pipe := pb.rdb.Pipeline()
+	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), pb.totalConnections.Load(), connectionSnapshotTTL)
+	pb.containerConnections.Range(func(key, value any) bool {
+		containerId, ok := key.(string)
+		if !ok {
+			return true
+		}
+		count := value.(*atomic.Int64).Load()
+		if count == 0 {
+			pb.containerConnections.Delete(key)
+		}
+		pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL)
+		return true
+	})
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to publish pod connection snapshot")
+		return
+	}
+
+	pb.refreshConnectionAggregates(ctx)
+}
+
+func (pb *PodProxyBuffer) publishContainerConnectionSnapshot(containerId string, count int64) {
+	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" || pb.proxyId == "" || containerId == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if err := pb.rdb.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL).Err(); err != nil {
+		log.Debug().Err(err).Str("stub_id", pb.stubId).Str("container_id", containerId).Msg("failed to publish pod container busy snapshot")
+	}
+}
+
+func (pb *PodProxyBuffer) publishTotalConnectionSnapshot(count int64) {
+	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" || pb.proxyId == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if err := pb.rdb.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), count, connectionSnapshotTTL).Err(); err != nil {
+		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to publish pod total busy snapshot")
+	}
+}
+
+func (pb *PodProxyBuffer) refreshConnectionAggregates(ctx context.Context) {
+	total, _, err := sumRedisIntKeys(ctx, pb.rdb, Keys.podProxyConnectionsScan(pb.workspace.Name, pb.stubId, "total"))
+	if err != nil {
+		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to sum pod total connections")
+		return
+	}
+
+	pipe := pb.rdb.Pipeline()
+	pipe.Set(ctx, Keys.podTotalConnections(pb.workspace.Name, pb.stubId), total, podContainerConnectionTimeout)
+	for _, c := range pb.availableContainerSnapshot() {
+		containerTotal, _, err := sumRedisIntKeys(ctx, pb.rdb, Keys.podProxyConnectionsScan(pb.workspace.Name, pb.stubId, c.id))
+		if err != nil {
+			log.Debug().Err(err).Str("stub_id", pb.stubId).Str("container_id", c.id).Msg("failed to sum pod container connections")
+			continue
+		}
+		pipe.Set(ctx, Keys.podContainerConnections(pb.workspace.Name, pb.stubId, c.id), containerTotal, podContainerConnectionTimeout)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to publish pod connection aggregates")
+	}
+}
+
+func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
 	if pb.containerRepo == nil || pb.workspace == nil {
 		return
 	}
 
-	if update.containerID == "" || !update.keepWarm || pb.stubConfig == nil || pb.stubConfig.KeepWarmSeconds <= 0 {
+	if containerID == "" || pb.stubConfig == nil || pb.stubConfig.KeepWarmSeconds <= 0 {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	setPodKeepWarmLock(ctx, pb.containerRepo, pb.workspace.Name, pb.stubId, update.containerID, pb.stubConfig.KeepWarmSeconds)
+	setPodKeepWarmLock(ctx, pb.containerRepo, pb.workspace.Name, pb.stubId, containerID, pb.stubConfig.KeepWarmSeconds)
 }
 
-func (pb *PodProxyBuffer) totalConnectionsKey() (string, bool) {
-	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" {
-		return "", false
+func decrementCounter(counter *atomic.Int64) {
+	for {
+		current := counter.Load()
+		if current <= 0 {
+			return
+		}
+		if counter.CompareAndSwap(current, current-1) {
+			return
+		}
 	}
-	return Keys.podTotalConnections(pb.workspace.Name, pb.stubId), true
 }
 
-func (pb *PodProxyBuffer) containerConnectionsKey(containerID string) (string, bool) {
-	if pb.rdb == nil || pb.workspace == nil || pb.stubId == "" || containerID == "" {
-		return "", false
-	}
-	return Keys.podContainerConnections(pb.workspace.Name, pb.stubId, containerID), true
-}
-
-func (pb *PodProxyBuffer) incrementRedisConnectionKey(key string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	pipe := pb.rdb.Pipeline()
-	pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, podContainerConnectionTimeout)
-	_, err := pipe.Exec(ctx)
-	return err
-}
-
-func (pb *PodProxyBuffer) decrementRedisConnectionKey(key string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	return pb.rdb.Eval(
-		ctx,
-		decrementConnectionScript,
-		[]string{key},
-		int(podContainerConnectionTimeout/time.Second),
-	).Err()
-}
-
-func (pb *PodProxyBuffer) startConnectionKeyTTLRefresh(keys ...string) context.CancelFunc {
-	ctx, cancel := context.WithCancel(context.Background())
-	if pb.rdb == nil {
-		return cancel
+func sharedPodTotalConnections(ctx context.Context, rdb *common.RedisClient, workspaceName, stubId string) (int64, error) {
+	if rdb == nil || workspaceName == "" || stubId == "" {
+		return 0, nil
 	}
 
-	filteredKeys := make([]string, 0, len(keys))
+	total, found, err := sumRedisIntKeys(ctx, rdb, Keys.podProxyConnectionsScan(workspaceName, stubId, "total"))
+	if err != nil || found {
+		return total, err
+	}
+
+	total, err = rdb.Get(ctx, Keys.podTotalConnections(workspaceName, stubId)).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return total, err
+}
+
+func sharedPodContainerConnections(ctx context.Context, rdb *common.RedisClient, workspaceName, stubId, containerId string) (int64, error) {
+	if rdb == nil || workspaceName == "" || stubId == "" || containerId == "" {
+		return 0, nil
+	}
+
+	total, found, err := sumRedisIntKeys(ctx, rdb, Keys.podProxyConnectionsScan(workspaceName, stubId, containerId))
+	if err != nil || found {
+		return total, err
+	}
+
+	total, err = rdb.Get(ctx, Keys.podContainerConnections(workspaceName, stubId, containerId)).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return total, err
+}
+
+func sumRedisIntKeys(ctx context.Context, rdb *common.RedisClient, pattern string) (int64, bool, error) {
+	var total int64
+
+	keys, err := rdb.Scan(ctx, pattern)
+	if err != nil {
+		return 0, false, err
+	}
+
 	for _, key := range keys {
-		if key != "" {
-			filteredKeys = append(filteredKeys, key)
+		value, err := rdb.Get(ctx, key).Int64()
+		if err == redis.Nil {
+			continue
+		}
+		if err != nil {
+			return 0, false, err
+		}
+		if value > 0 {
+			total += value
 		}
 	}
-	if len(filteredKeys) == 0 {
-		return cancel
-	}
 
-	go func() {
-		ticker := time.NewTicker(connectionTTLRefreshInterval)
-		defer ticker.Stop()
-		var parentDone <-chan struct{}
-		if pb.ctx != nil {
-			parentDone = pb.ctx.Done()
-		}
-
-		for {
-			select {
-			case <-parentDone:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				pb.refreshRedisConnectionKeys(filteredKeys...)
-			}
-		}
-	}()
-
-	return cancel
-}
-
-func (pb *PodProxyBuffer) refreshRedisConnectionKeys(keys ...string) {
-	if pb.rdb == nil || len(keys) == 0 {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	pipe := pb.rdb.Pipeline()
-	for _, key := range keys {
-		if key != "" {
-			pipe.Expire(ctx, key, podContainerConnectionTimeout)
-		}
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to refresh pod connection key ttl")
-	}
+	return total, len(keys) > 0, nil
 }
 
 func (pb *PodProxyBuffer) workspaceName() string {

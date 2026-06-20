@@ -116,6 +116,10 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 	if projectCost == nil {
 		projectCost = identityCost
 	}
+	machineID := reservation.MachineID
+	if machineID == "" && reservation.Managed() && reservation.Status == model.ReservationFailed {
+		machineID = reservation.ID
+	}
 	return &pb.ProviderInstance{
 		Id:                reservation.ID,
 		PoolName:          reservation.PoolName,
@@ -132,7 +136,7 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		BillingRenewalAt:  timestampOrNil(reservation.BillingRenewalAt),
 		StatusMessage:     reservation.LastStatusMessage,
 		TerminatingReason: reservation.TerminatingReason,
-		MachineId:         reservation.MachineID,
+		MachineId:         machineID,
 		NodeCount:         reservation.NodeCount,
 		InstanceType:      reservation.InstanceType,
 		CpuMillicores:     reservation.CPUMillicores,
