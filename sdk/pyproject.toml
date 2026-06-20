@@ -50,6 +50,7 @@ package = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]
 addopts = "--verbose --cov --cov-report=html:.htmlcov"
 
 [tool.coverage.report]
