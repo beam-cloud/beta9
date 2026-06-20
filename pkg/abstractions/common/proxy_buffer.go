@@ -14,6 +14,17 @@ var proxyCopyBufferPool = sync.Pool{
 	},
 }
 
+// ProxyBufferPool adapts the shared proxy copy buffers for httputil.ReverseProxy.
+type ProxyBufferPool struct{}
+
+func (ProxyBufferPool) Get() []byte {
+	return *proxyCopyBufferPool.Get().(*[]byte)
+}
+
+func (ProxyBufferPool) Put(buf []byte) {
+	proxyCopyBufferPool.Put(&buf)
+}
+
 func CopyWithProxyBuffer(dst io.Writer, src io.Reader) (int64, error) {
 	buf := proxyCopyBufferPool.Get().(*[]byte)
 	defer proxyCopyBufferPool.Put(buf)
