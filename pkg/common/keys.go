@@ -80,6 +80,10 @@ var (
 )
 
 var (
+	podKeepWarmLock string = "pod:%s:%s:keep_warm_lock:%s"
+)
+
+var (
 	workspacePrefix string = "workspace"
 
 	workspaceVolumePathDownloadToken          string = "workspace:volume_path_download_token:%s"
@@ -412,6 +416,11 @@ func (rk *redisKeys) EndpointRequestHeartbeat(workspaceName, stubId, taskId, con
 
 func (rk *redisKeys) EndpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
 	return fmt.Sprintf(endpointRequestRelease, workspaceName, stubId, taskId, containerId)
+}
+
+// Pod keys
+func (rk *redisKeys) PodKeepWarmLock(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(podKeepWarmLock, workspaceName, stubId, containerId)
 }
 
 // Workspace keys

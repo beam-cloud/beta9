@@ -1256,5 +1256,5 @@ func podKeepWarmLockKey(workspaceName, stubId, containerId string) string {
 	if workspaceName == "" || stubId == "" || containerId == "" {
 		return ""
 	}
-	return fmt.Sprintf("pod:%s:%s:keep_warm_lock:%s", workspaceName, stubId, containerId)
+	return common.RedisKeys.PodKeepWarmLock(workspaceName, stubId, containerId)
 }
