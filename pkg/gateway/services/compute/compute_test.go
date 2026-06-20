@@ -2351,6 +2351,54 @@ func TestDeletePoolMachineByReservationIDCleansLinkedMachine(t *testing.T) {
 	}
 }
 
+func TestDeletePoolMachineDismissesFailedManagedReservation(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID:      "workspace-1",
+		Name:             "pool-1",
+		CreatedByTokenID: "token-owner",
+		ReservedNodes:    1,
+		Reservations: []model.Reservation{
+			{
+				ID:                "reservation-1",
+				Provider:          "shadeform",
+				InstanceID:        "instance-1",
+				MachineID:         "machine-1",
+				Name:              "node-1",
+				Source:            model.SourceCLIReservation,
+				Status:            model.ReservationFailed,
+				CreatedAt:         now.Add(-time.Minute),
+				ExpiresAt:         now.Add(time.Hour),
+				LastStatusMessage: "provider failed to provision instance",
+			},
+		},
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {state}},
+	}
+	service := &Service{computeRepo: repo}
+
+	_, res, err := service.DeletePoolMachine(
+		testAuthContext("workspace-1", "token-owner"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if !repo.savedPool {
+		t.Fatal("DeletePoolMachine() did not persist the failed reservation removal")
+	}
+	if got := len(state.Reservations); got != 0 {
+		t.Fatalf("reservation count after release = %d, want 0", got)
+	}
+	if got, want := state.ReservedNodes, uint32(0); got != want {
+		t.Fatalf("reserved nodes = %d, want %d", got, want)
+	}
+}
+
 func TestAssignManagedReservationToMachineUsesJoinTokenHash(t *testing.T) {
 	state := &model.PoolState{
 		WorkspaceID: "workspace-1",
