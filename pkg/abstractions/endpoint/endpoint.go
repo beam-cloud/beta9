@@ -112,7 +112,15 @@ func NewHTTPEndpointService(
 	}
 	eventManager.Listen()
 
-	es.controller = abstractions.NewInstanceController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
+	es.controller = abstractions.NewInstanceController(
+		ctx,
+		es.InstanceFactory,
+		es.GetInstance,
+		[]string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment},
+		es.backendRepo,
+		es.containerRepo,
+		es.rdb,
+	)
 	err = es.controller.Init()
 	if err != nil {
 		return nil, err
@@ -199,6 +207,14 @@ func (es *HttpEndpointService) forwardRequest(
 
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return es.getOrCreateEndpointInstance(ctx, stubId)
+}
+
+func (es *HttpEndpointService) GetInstance(stubId string) (abstractions.IAutoscaledInstance, bool) {
+	instance, exists := es.endpointInstances.Get(stubId)
+	if !exists {
+		return nil, false
+	}
+	return instance, true
 }
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {

@@ -151,6 +151,81 @@ func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
 	}
 }
 
+func TestInstanceControllerSkipsInactiveDeploymentWithoutInstanceOrContainers(t *testing.T) {
+	controller, _ := newTestInstanceController(t, types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: false},
+		Stub:       types.Stub{ExternalId: "stub-inactive", Type: types.StubType(types.StubTypePodDeployment)},
+	})
+
+	if err := controller.Load(&types.DeploymentFilter{ShowDeleted: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if controller.created != 0 {
+		t.Fatalf("created instances = %d, want 0", controller.created)
+	}
+}
+
+func TestInstanceControllerDeactivatesExistingInactiveDeployment(t *testing.T) {
+	instance := &testAutoscaledInstance{}
+	controller, _ := newTestInstanceController(t, types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: false},
+		Stub:       types.Stub{ExternalId: "stub-inactive", Type: types.StubType(types.StubTypePodDeployment)},
+	})
+	controller.instances["stub-inactive"] = instance
+
+	if err := controller.Load(&types.DeploymentFilter{ShowDeleted: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if controller.created != 0 {
+		t.Fatalf("created instances = %d, want 0", controller.created)
+	}
+	if instance.syncs != 1 {
+		t.Fatalf("syncs = %d, want 1", instance.syncs)
+	}
+	if len(instance.scalingEvents) != 1 || instance.scalingEvents[0] != 0 {
+		t.Fatalf("scaling events = %v, want [0]", instance.scalingEvents)
+	}
+}
+
+func TestInstanceControllerCreatesInactiveDeploymentOnlyForStaleContainers(t *testing.T) {
+	controller, containerRepo := newTestInstanceController(t, types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: false},
+		Stub:       types.Stub{ExternalId: "stub-inactive", Type: types.StubType(types.StubTypePodDeployment)},
+	})
+
+	state := &types.ContainerState{
+		ContainerId: "pod-stub-inactive-00000000",
+		StubId:      "stub-inactive",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+		ScheduledAt: time.Now().Unix(),
+		StartedAt:   time.Now().Unix(),
+		Cpu:         100,
+		Memory:      128,
+	}
+	if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := controller.Load(&types.DeploymentFilter{ShowDeleted: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if controller.created != 1 {
+		t.Fatalf("created instances = %d, want 1", controller.created)
+	}
+
+	instance := controller.instances["stub-inactive"]
+	if instance.syncs != 1 {
+		t.Fatalf("syncs = %d, want 1", instance.syncs)
+	}
+	if len(instance.scalingEvents) != 1 || instance.scalingEvents[0] != 0 {
+		t.Fatalf("scaling events = %v, want [0]", instance.scalingEvents)
+	}
+}
+
 func TestConsumeContainerEventDoesNotBlockWhenChannelIsFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -183,4 +258,80 @@ func TestConsumeContainerEventDoesNotBlockWhenChannelIsFull(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("async container event was not queued after channel space became available")
 	}
+}
+
+type testInstanceController struct {
+	*InstanceController
+	created   int
+	instances map[string]*testAutoscaledInstance
+}
+
+func newTestInstanceController(t *testing.T, deployments ...types.DeploymentWithRelated) (*testInstanceController, repository.ContainerRepository) {
+	t.Helper()
+
+	server, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+	testController := &testInstanceController{instances: map[string]*testAutoscaledInstance{}}
+	backendRepo := &testInstanceControllerBackendRepo{deployments: deployments}
+
+	testController.InstanceController = NewInstanceController(
+		context.Background(),
+		func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error) {
+			testController.created++
+			instance := &testAutoscaledInstance{}
+			testController.instances[stubId] = instance
+			return instance, nil
+		},
+		func(stubId string) (IAutoscaledInstance, bool) {
+			instance, exists := testController.instances[stubId]
+			if !exists {
+				return nil, false
+			}
+			return instance, true
+		},
+		[]string{types.StubTypePodDeployment},
+		backendRepo,
+		containerRepo,
+		rdb,
+	)
+
+	return testController, containerRepo
+}
+
+type testInstanceControllerBackendRepo struct {
+	repository.BackendRepository
+	deployments []types.DeploymentWithRelated
+}
+
+func (r *testInstanceControllerBackendRepo) ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	return r.deployments, nil
+}
+
+type testAutoscaledInstance struct {
+	syncs         int
+	scalingEvents []int
+}
+
+func (i *testAutoscaledInstance) ConsumeScaleResult(*AutoscalerResult) {}
+
+func (i *testAutoscaledInstance) ConsumeContainerEvent(types.ContainerEvent) {}
+
+func (i *testAutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
+	i.scalingEvents = append(i.scalingEvents, desiredContainers)
+	return nil
+}
+
+func (i *testAutoscaledInstance) Sync() error {
+	i.syncs++
+	return nil
 }

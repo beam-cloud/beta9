@@ -100,7 +100,15 @@ func NewPodService(
 	eventManager.Listen()
 
 	// Initialize deployment manager
-	ps.controller = abstractions.NewInstanceController(ctx, ps.InstanceFactory, []string{types.StubTypePodDeployment}, opts.BackendRepo, opts.RedisClient)
+	ps.controller = abstractions.NewInstanceController(
+		ctx,
+		ps.InstanceFactory,
+		ps.GetInstance,
+		[]string{types.StubTypePodDeployment},
+		opts.BackendRepo,
+		opts.ContainerRepo,
+		opts.RedisClient,
+	)
 	err = ps.controller.Init()
 	if err != nil {
 		return nil, err
@@ -128,6 +136,14 @@ func NewPodService(
 
 func (ps *GenericPodService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return ps.getOrCreatePodInstance(stubId)
+}
+
+func (ps *GenericPodService) GetInstance(stubId string) (abstractions.IAutoscaledInstance, bool) {
+	instance, exists := ps.podInstances.Get(stubId)
+	if !exists {
+		return nil, false
+	}
+	return instance, true
 }
 
 func (ps *GenericPodService) IsPublic(stubId string) (*types.Workspace, error) {

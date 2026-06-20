@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -274,10 +275,18 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 
 		// Stop active containers
 		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
-		if err == nil {
-			for _, container := range containers {
-				gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonUser})
+		if err != nil {
+			return fmt.Errorf("list active containers for deployment %s: %w", deployment.Stub.ExternalId, err)
+		}
+
+		var stopErr error
+		for _, container := range containers {
+			if err := gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonUser}); err != nil {
+				stopErr = errors.Join(stopErr, fmt.Errorf("stop container %s: %w", container.ContainerId, err))
 			}
+		}
+		if stopErr != nil {
+			return stopErr
 		}
 
 		// Disable deployment

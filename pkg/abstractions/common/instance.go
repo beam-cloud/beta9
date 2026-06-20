@@ -440,8 +440,10 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 type InstanceController struct {
 	ctx                 context.Context
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
+	getInstance         func(stubId string) (IAutoscaledInstance, bool)
 	stubTypes           []string
 	backendRepo         repository.BackendRepository
+	containerRepo       repository.ContainerRepository
 	redisClient         *common.RedisClient
 	eventBus            *common.EventBus
 }
@@ -449,15 +451,19 @@ type InstanceController struct {
 func NewInstanceController(
 	ctx context.Context,
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error),
+	getInstance func(stubId string) (IAutoscaledInstance, bool),
 	stubTypes []string,
 	backendRepo repository.BackendRepository,
+	containerRepo repository.ContainerRepository,
 	redisClient *common.RedisClient,
 ) *InstanceController {
 	return &InstanceController{
 		ctx:                 ctx,
 		getOrCreateInstance: getOrCreateInstance,
+		getInstance:         getInstance,
 		stubTypes:           stubTypes,
 		backendRepo:         backendRepo,
+		containerRepo:       containerRepo,
 		redisClient:         redisClient,
 		eventBus:            common.NewEventBus(redisClient),
 	}
@@ -535,6 +541,13 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 	}
 
 	for _, stub := range stubs {
+		if !stub.Active {
+			if err := c.deactivateInactiveDeployment(stub); err != nil {
+				log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to deactivate inactive deployment")
+			}
+			continue
+		}
+
 		instance, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
 		if err != nil {
 			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to get or create instance")
@@ -544,12 +557,53 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to sync instance")
 			continue
 		}
-		if !stub.Active {
-			if err := instance.HandleScalingEvent(0); err != nil {
-				log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to scale inactive deployment to zero")
-			}
-		}
 	}
 
 	return nil
+}
+
+func (c *InstanceController) deactivateInactiveDeployment(stub types.DeploymentWithRelated) error {
+	instance, exists := c.getExistingInstance(stub.Stub.ExternalId)
+	if !exists {
+		hasContainers, err := c.hasActiveContainers(stub.Stub.ExternalId)
+		if err != nil {
+			return err
+		}
+		if !hasContainers {
+			return nil
+		}
+
+		createdInstance, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
+		if err != nil {
+			return err
+		}
+		instance = createdInstance
+	}
+
+	if err := instance.Sync(); err != nil {
+		return err
+	}
+
+	return instance.HandleScalingEvent(0)
+}
+
+func (c *InstanceController) getExistingInstance(stubId string) (IAutoscaledInstance, bool) {
+	if c.getInstance == nil {
+		return nil, false
+	}
+
+	return c.getInstance(stubId)
+}
+
+func (c *InstanceController) hasActiveContainers(stubId string) (bool, error) {
+	if c.containerRepo == nil {
+		return true, nil
+	}
+
+	containers, err := c.containerRepo.GetActiveContainersByStubId(stubId)
+	if err != nil {
+		return false, err
+	}
+
+	return len(containers) > 0, nil
 }
