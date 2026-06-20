@@ -62,7 +62,6 @@ type PodProxyBuffer struct {
 	stubConfig              *types.StubConfigV1
 	httpClient              *http.Client
 	backendTransports       sync.Map
-	backendProxies          sync.Map
 	tailscale               *network.Tailscale
 	tsConfig                types.TailscaleConfig
 	availableContainers     []container
@@ -406,6 +405,8 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	subPath := conn.ctx.Param("subPath")
 	if subPath != "" && subPath[0] != '/' {
 		subPath = "/" + subPath
+	} else if subPath == "" {
+		subPath = "/"
 	}
 
 	request.URL.Scheme = "http"
@@ -424,7 +425,12 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		}
 	}()
 
-	pb.backendProxy(targetHost).ServeHTTP(conn.ctx.Response(), request)
+	proxy, err := pb.backendProxy(targetHost)
+	if err != nil {
+		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
+		return
+	}
+	proxy.ServeHTTP(conn.ctx.Response(), request)
 }
 
 func (pb *PodProxyBuffer) recordQueuedRequestWait(conn *connection, protocol string) {
@@ -441,25 +447,19 @@ func podBackendHost(address string) string {
 	return address
 }
 
-func (pb *PodProxyBuffer) backendProxy(targetHost string) *httputil.ReverseProxy {
-	if proxy, ok := pb.backendProxies.Load(targetHost); ok {
-		return proxy.(*httputil.ReverseProxy)
+func (pb *PodProxyBuffer) backendProxy(targetHost string) (*httputil.ReverseProxy, error) {
+	targetURL, err := url.Parse(podBackendURL("http", targetHost, "", ""))
+	if err != nil {
+		return nil, err
 	}
 
-	proxy := &httputil.ReverseProxy{
-		Director:   func(req *http.Request) {},
-		Transport:  pb.backendTransport(targetHost),
-		BufferPool: abstractions.ProxyBufferPool{},
-		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
-			http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
-		},
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = pb.backendTransport(targetHost)
+	proxy.BufferPool = abstractions.ProxyBufferPool{}
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+		http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
 	}
-
-	actual, loaded := pb.backendProxies.LoadOrStore(targetHost, proxy)
-	if loaded {
-		return actual.(*httputil.ReverseProxy)
-	}
-	return proxy
+	return proxy, nil
 }
 
 func (pb *PodProxyBuffer) backendTransport(targetHost string) *http.Transport {
@@ -514,7 +514,6 @@ func (pb *PodProxyBuffer) pruneBackendTransports(containers []container) {
 		}
 		value.(*http.Transport).CloseIdleConnections()
 		pb.backendTransports.Delete(key)
-		pb.backendProxies.Delete(key)
 		return true
 	})
 }
