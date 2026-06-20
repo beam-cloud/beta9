@@ -72,6 +72,15 @@ SANDBOX_EXEC_READINESS_ERRORS = (
     "sandbox process manager is not ready",
     "process manager failed to become ready",
 )
+SANDBOX_TERMINAL_STATUSES = {
+    "complete",
+    "completed",
+    "exited",
+    "failed",
+    "error",
+    "stopped",
+    "terminated",
+}
 DOCKER_SANDBOX_NETWORK_MODE = "host"
 DOCKER_SANDBOX_PID_MODE = "host"
 DOCKER_COMPOSE_OVERRIDE_PATH = "/tmp/.docker-compose-override.yml"
@@ -89,6 +98,19 @@ def _sandbox_docker_namespace_args() -> List[str]:
         "--pid",
         DOCKER_SANDBOX_PID_MODE,
     ]
+
+
+def _is_sandbox_terminal_status(status: str) -> bool:
+    return (status or "").strip().lower() in SANDBOX_TERMINAL_STATUSES
+
+
+def _default_sandbox_exit_code(status: str) -> int:
+    normalized = (status or "").strip().lower()
+    if normalized in {"failed", "error"}:
+        return 1
+    if normalized == "terminated":
+        return 137
+    return 0
 
 
 class Sandbox(Pod):
@@ -156,6 +178,9 @@ class Sandbox(Pod):
             List of ports to expose from the sandbox. When specified, these ports will be accessible
             via public URLs upon sandbox creation. Default is an empty list. You can also dynamically
             expose ports at runtime using `instance.expose_port(port)`.
+        pool (Optional[Union[str, Pool]]):
+            The private pool to run the sandbox on. Pass a pool name to select an existing private
+            pool, or a Pool object to request managed pool capacity.
 
     Example:
         ```python
@@ -165,6 +190,7 @@ class Sandbox(Pod):
         sandbox = Sandbox(
             cpu=2.0,
             memory="2Gi",
+            pool="my-private-pool",
             keep_warm_seconds=1800  # 30 minutes
         )
 
@@ -537,6 +563,50 @@ class SandboxInstance(BaseAbstraction):
             ```
         """
         return self.container_id
+
+    def status(self) -> Tuple[int, str]:
+        """
+        Get the current sandbox status.
+
+        Returns:
+            Tuple[int, str]: The sandbox exit code and status string. An exit code of -1
+            indicates that the sandbox is still running.
+        """
+        res: "PodSandboxStatusResponse" = self.stub.sandbox_status(
+            PodSandboxStatusRequest(container_id=self.container_id)
+        )
+        if not res.ok:
+            raise SandboxProcessError(res.error_msg)
+        return res.exit_code, res.status
+
+    def poll(self) -> Optional[int]:
+        """
+        Return the sandbox exit code if it has exited, otherwise None.
+        """
+        exit_code, status = self.status()
+        if not _is_sandbox_terminal_status(status):
+            return None
+        if exit_code < 0:
+            return _default_sandbox_exit_code(status)
+        return exit_code
+
+    def wait(self, timeout: Optional[float] = None) -> int:
+        """
+        Wait for the sandbox to exit and return its exit code.
+
+        Parameters:
+            timeout (Optional[float]): Maximum seconds to wait. Default is None.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            exit_code = self.poll()
+            if exit_code is not None:
+                return exit_code
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SandboxProcessError(
+                    f"Sandbox {self.container_id} did not exit within {timeout} seconds"
+                )
+            time.sleep(SANDBOX_WAIT_POLL_INTERVAL_SECONDS)
 
     def update_ttl(self, ttl: int):
         """
@@ -1704,6 +1774,32 @@ class SandboxFileSystem:
                     container_id=self.sandbox_instance.container_id,
                 )
 
+    def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 644):
+        """
+        Write bytes to a file in the sandbox.
+        """
+        response = self.sandbox_instance.stub.sandbox_upload_file(
+            PodSandboxUploadFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+                data=data,
+                mode=mode,
+            )
+        )
+        if not response.ok:
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="write_bytes",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
+
+    def write_text(self, sandbox_path: str, text: str, encoding: str = "utf-8", mode: int = 644):
+        """
+        Write text to a file in the sandbox.
+        """
+        self.write_bytes(sandbox_path, text.encode(encoding), mode=mode)
+
     def download_file(self, sandbox_path: str, local_path: str):
         """
         Download a file from the sandbox to a local path.
@@ -1744,6 +1840,31 @@ class SandboxFileSystem:
 
         with open(local_path, "wb") as f:
             f.write(response.data)
+
+    def read_bytes(self, sandbox_path: str) -> bytes:
+        """
+        Read a file from the sandbox and return its bytes.
+        """
+        response = self.sandbox_instance.stub.sandbox_download_file(
+            PodSandboxDownloadFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not response.ok:
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="read_bytes",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
+        return response.data
+
+    def read_text(self, sandbox_path: str, encoding: str = "utf-8") -> str:
+        """
+        Read a file from the sandbox and return text.
+        """
+        return self.read_bytes(sandbox_path).decode(encoding)
 
     def stat_file(self, sandbox_path: str) -> "SandboxFileInfo":
         """
@@ -1941,6 +2062,18 @@ class SandboxFileSystem:
                 path=sandbox_path,
                 container_id=self.sandbox_instance.container_id,
             )
+
+    def remove(self, sandbox_path: str):
+        """
+        Remove a file or directory from the sandbox.
+
+        Directories are removed with the backend directory-delete RPC, which may
+        require the directory to be empty.
+        """
+        info = self.stat_file(sandbox_path)
+        if info.is_dir:
+            return self.delete_directory(sandbox_path)
+        return self.delete_file(sandbox_path)
 
     def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
         r"""
@@ -3434,6 +3567,20 @@ class AsyncSandboxFileSystem:
         """
         return await asyncio.to_thread(self._sync.upload_file, local_path, sandbox_path)
 
+    async def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 644):
+        """
+        Write bytes to a sandbox file asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.write_bytes, sandbox_path, data, mode)
+
+    async def write_text(
+        self, sandbox_path: str, text: str, encoding: str = "utf-8", mode: int = 644
+    ):
+        """
+        Write text to a sandbox file asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.write_text, sandbox_path, text, encoding, mode)
+
     async def download_file(self, sandbox_path: str, local_path: str):
         """
         Download a file from the sandbox asynchronously.
@@ -3446,6 +3593,18 @@ class AsyncSandboxFileSystem:
             SandboxFileSystemError: If the download fails.
         """
         return await asyncio.to_thread(self._sync.download_file, sandbox_path, local_path)
+
+    async def read_bytes(self, sandbox_path: str) -> bytes:
+        """
+        Read bytes from a sandbox file asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.read_bytes, sandbox_path)
+
+    async def read_text(self, sandbox_path: str, encoding: str = "utf-8") -> str:
+        """
+        Read text from a sandbox file asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.read_text, sandbox_path, encoding)
 
     async def stat_file(self, sandbox_path: str) -> "SandboxFileInfo":
         """
@@ -3512,6 +3671,12 @@ class AsyncSandboxFileSystem:
             SandboxFileSystemError: If the file doesn't exist or deletion fails.
         """
         return await asyncio.to_thread(self._sync.delete_file, sandbox_path)
+
+    async def remove(self, sandbox_path: str):
+        """
+        Remove a sandbox file or directory asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.remove, sandbox_path)
 
     async def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
         """
@@ -3972,6 +4137,24 @@ class AsyncSandboxInstance:
             str: The container ID of the sandbox.
         """
         return self._sync.sandbox_id()
+
+    async def status(self) -> Tuple[int, str]:
+        """
+        Get the current sandbox status asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.status)
+
+    async def poll(self) -> Optional[int]:
+        """
+        Return the sandbox exit code if it has exited, otherwise None.
+        """
+        return await asyncio.to_thread(self._sync.poll)
+
+    async def wait(self, timeout: Optional[float] = None) -> int:
+        """
+        Wait for the sandbox to exit asynchronously.
+        """
+        return await asyncio.to_thread(self._sync.wait, timeout)
 
     async def update_ttl(self, ttl: int):
         """

@@ -21,6 +21,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
@@ -1714,20 +1715,79 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
-// setupBuildahDirs creates and returns optimal paths for buildah operations using /dev/shm
-// All paths use tmpfs (/dev/shm) for fast I/O and to avoid slow disk bottlenecks
-func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
-	// Use /dev/shm for all paths - tmpfs is fast and overlay can work here for builds
-	graphroot = filepath.Join("/dev/shm", "buildah-storage")
-	runroot = filepath.Join("/dev/shm", "buildah-run")
-	tmpdir = filepath.Join("/dev/shm", "buildah-tmp")
+// setupBuildahDirs creates paths for buildah operations. The graphroot is where
+// buildah keeps reusable Dockerfile layers, so use a cache-backed directory when
+// one is available and keep runroot/tmpdir ephemeral.
+func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string, cleanupGraphroot bool) {
+	cacheRoot := buildahLayerCacheRoot()
+	if cacheRoot != "" {
+		graphroot = filepath.Join(cacheRoot, "storage")
+		if err := ensureBuildahGraphroot(graphroot); err == nil {
+			runroot = mustMkdirTempBuildahDir("buildah-run-")
+			tmpdir = mustMkdirTempBuildahDir("buildah-tmp-")
+			return graphroot, runroot, tmpdir, false
+		} else {
+			log.Warn().Err(err).Str("path", graphroot).Msg("buildah layer cache unavailable")
+		}
+	}
 
-	// Create directories with proper permissions
-	_ = os.MkdirAll(graphroot, 0o700)
-	_ = os.MkdirAll(runroot, 0o700)
-	_ = os.MkdirAll(tmpdir, 0o700)
+	graphroot = mustMkdirTempBuildahDir("buildah-storage-")
+	runroot = mustMkdirTempBuildahDir("buildah-run-")
+	tmpdir = mustMkdirTempBuildahDir("buildah-tmp-")
+	return graphroot, runroot, tmpdir, true
+}
 
-	return
+func buildahLayerCacheRoot() string {
+	if dir := strings.TrimSpace(os.Getenv(types.AgentBuildCacheDirEnv)); dir != "" {
+		return filepath.Join(dir, "buildah")
+	}
+
+	cacheRoot := filepath.Join(types.AgentCachePath, "buildah")
+	if err := os.MkdirAll(cacheRoot, 0o700); err == nil {
+		return cacheRoot
+	}
+
+	return ""
+}
+
+func ensureBuildahGraphroot(graphroot string) error {
+	overlayDir := filepath.Join(graphroot, "overlay")
+	if err := os.MkdirAll(overlayDir, 0o700); err != nil {
+		return err
+	}
+
+	// Buildah probes this marker under the overlay graphroot. Some mounted
+	// cache filesystems do not support that write, so validate it before using
+	// the directory as persistent layer cache.
+	marker := filepath.Join(overlayDir, ".has-mount-program")
+	if err := os.WriteFile(marker, []byte("false"), 0o600); err != nil {
+		return err
+	}
+	return os.Remove(marker)
+}
+
+func buildahStorageDriver(graphroot string) string {
+	const overlayFSMagic = 0x794c7630
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(graphroot, &stat); err == nil && uint64(stat.Type) == overlayFSMagic {
+		log.Warn().Str("path", graphroot).Msg("buildah graphroot is overlayfs, using vfs storage driver")
+		return "vfs"
+	}
+
+	return "overlay"
+}
+
+func mustMkdirTempBuildahDir(pattern string) string {
+	for _, parent := range []string{"/dev/shm", ""} {
+		dir, err := os.MkdirTemp(parent, pattern)
+		if err == nil {
+			return dir
+		}
+	}
+	fallback := filepath.Join(os.TempDir(), pattern+fmt.Sprintf("%d", time.Now().UnixNano()))
+	_ = os.MkdirAll(fallback, 0o700)
+	return fallback
 }
 
 // writeStorageConf creates a containers/storage configuration file
@@ -2084,17 +2144,18 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	defer os.RemoveAll(buildPath)
 
 	// Set up paths for buildah operations - use /dev/shm (ram disk) for all storage we can
-	graphroot, runroot, tmpdir := c.setupBuildahDirs()
-	defer os.RemoveAll(graphroot)
+	graphroot, runroot, tmpdir, cleanupGraphroot := c.setupBuildahDirs()
+	if cleanupGraphroot {
+		defer os.RemoveAll(graphroot)
+	}
 	defer os.RemoveAll(runroot)
 	defer os.RemoveAll(tmpdir)
 
-	storageDriver := "overlay"
+	storageDriver := buildahStorageDriver(graphroot)
 	storageConf, err := c.writeStorageConf(graphroot, runroot, storageDriver)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
+		log.Warn().Err(err).Str("storage_driver", storageDriver).Msg("failed to write buildah storage config, falling back to vfs")
 		storageDriver = "vfs"
-		// Write vfs config for fallback case
 		storageConf, err = c.writeStorageConf(graphroot, runroot, storageDriver)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to write vfs storage config")
@@ -2547,9 +2608,16 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 
 	if request.StorageAvailable() {
-		// Overwrite the path if workspace storage is available
-		objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
 		buildCtxPath = path.Join(buildPath, "build-ctx")
+
+		if workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+			objectPath = path.Join(buildPath, "build-ctx.zip")
+			if err := downloadWorkspaceBuildContext(ctx, request, *request.BuildOptions.BuildCtxObject, objectPath); err != nil {
+				return "", err
+			}
+		} else {
+			objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
+		}
 	}
 
 	err := common.ExtractObjectFile(ctx, objectPath, buildCtxPath)
@@ -2558,4 +2626,29 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	}
 
 	return buildCtxPath, nil
+}
+
+func downloadWorkspaceBuildContext(ctx context.Context, request *types.ContainerRequest, objectID, destPath string) error {
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		return fmt.Errorf("create workspace storage client: %w", err)
+	}
+
+	reader, err := storageClient.DownloadWithReader(ctx, path.Join(types.DefaultObjectPrefix, objectID))
+	if err != nil {
+		return fmt.Errorf("download workspace build context: %w", err)
+	}
+	defer reader.Close()
+
+	file, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("create local build context archive: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(file, reader); err != nil {
+		return fmt.Errorf("write local build context archive: %w", err)
+	}
+
+	return nil
 }

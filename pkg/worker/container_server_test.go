@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 	betaruntime "github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +88,81 @@ func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
 	got, err := server.waitForSandboxProcessManager(context.Background(), containerId, instance)
 	require.NoError(t, err)
 	require.True(t, got.SandboxProcessManagerReady)
+}
+
+func TestWriteInitialSpecFromImagePreservesBaseCwd(t *testing.T) {
+	baseSpec := specs.Spec{Process: &specs.Process{Cwd: "/workspace", Args: []string{"sh"}}}
+	server := &ContainerRuntimeServer{
+		baseConfigSpec: baseSpec,
+		imageClient:    &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()},
+	}
+	destPath := filepath.Join(t.TempDir(), "initial_config.json")
+
+	err := server.writeInitialSpecFromImage(context.Background(), &ContainerInstance{
+		Request: &types.ContainerRequest{ImageId: "image-without-clip-metadata"},
+	}, destPath)
+	require.NoError(t, err)
+
+	spec := readSpecFile(t, destPath)
+	require.Equal(t, "/workspace", spec.Process.Cwd)
+	require.Equal(t, "/workspace", server.baseConfigSpec.Process.Cwd)
+}
+
+func TestWriteInitialSpecFromImageUsesClipWorkingDirWithoutMutatingBase(t *testing.T) {
+	imageId := "image-with-workdir"
+	imageClient := &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()}
+	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			ImageMetadata: &clipCommon.ImageMetadata{
+				WorkingDir: "/app",
+				Cmd:        []string{"python", "app.py"},
+			},
+		},
+	})
+	server := &ContainerRuntimeServer{
+		baseConfigSpec: specs.Spec{Process: &specs.Process{Cwd: "/workspace", Args: []string{"sh"}}},
+		imageClient:    imageClient,
+	}
+	destPath := filepath.Join(t.TempDir(), "initial_config.json")
+
+	err := server.writeInitialSpecFromImage(context.Background(), &ContainerInstance{
+		Request: &types.ContainerRequest{ImageId: imageId},
+	}, destPath)
+	require.NoError(t, err)
+
+	spec := readSpecFile(t, destPath)
+	require.Equal(t, "/app", spec.Process.Cwd)
+	require.Equal(t, []string{"python", "app.py"}, spec.Process.Args)
+	require.Equal(t, "/workspace", server.baseConfigSpec.Process.Cwd)
+}
+
+func TestWriteInitialSpecFromImageDefaultsEmptyCwd(t *testing.T) {
+	server := &ContainerRuntimeServer{
+		baseConfigSpec: specs.Spec{Process: &specs.Process{Args: []string{"sh"}}},
+		imageClient:    &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()},
+	}
+	destPath := filepath.Join(t.TempDir(), "initial_config.json")
+
+	err := server.writeInitialSpecFromImage(context.Background(), &ContainerInstance{
+		Request: &types.ContainerRequest{ImageId: "image-with-empty-cwd"},
+	}, destPath)
+	require.NoError(t, err)
+
+	spec := readSpecFile(t, destPath)
+	require.Equal(t, "/", spec.Process.Cwd)
+	require.Empty(t, server.baseConfigSpec.Process.Cwd)
+}
+
+func readSpecFile(t *testing.T, path string) specs.Spec {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal(data, &spec))
+	require.NotNil(t, spec.Process)
+	return spec
 }
 
 func TestWaitForSandboxProcessManagerFailsAfterFailedReadySignal(t *testing.T) {

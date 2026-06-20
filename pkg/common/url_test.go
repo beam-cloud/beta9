@@ -103,3 +103,62 @@ func TestBuildServeURL(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildPodURL(t *testing.T) {
+	externalUrl := "http://app.example.com"
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		Type:       types.StubType(types.StubTypePodDeployment),
+	}}
+
+	tests := []struct {
+		name        string
+		config      *types.StubConfigV1
+		invokeType  string
+		expectedUrl string
+	}{
+		{
+			name: "returns public path URL for unauthenticated pod",
+			config: &types.StubConfigV1{
+				Authorized: false,
+				Ports:      []uint32{8000},
+			},
+			invokeType:  InvokeUrlTypePath,
+			expectedUrl: "http://app.example.com/pod/public/e9c29586-c465-4a67-9c9b-25293d1ce77b/8000",
+		},
+		{
+			name: "returns authenticated path URL for authorized pod",
+			config: &types.StubConfigV1{
+				Authorized: true,
+				Ports:      []uint32{8000},
+			},
+			invokeType:  InvokeUrlTypePath,
+			expectedUrl: "http://app.example.com/pod/id/e9c29586-c465-4a67-9c9b-25293d1ce77b/8000",
+		},
+		{
+			name: "keeps host URL shape for pod ports",
+			config: &types.StubConfigV1{
+				Authorized: false,
+				Ports:      []uint32{8000},
+			},
+			invokeType:  InvokeUrlTypeHost,
+			expectedUrl: "http://e9c29586-c465-4a67-9c9b-25293d1ce77b-8000.app.example.com",
+		},
+		{
+			name: "uses port placeholder for multi-port pods",
+			config: &types.StubConfigV1{
+				Authorized: false,
+				Ports:      []uint32{8000, 9000},
+			},
+			invokeType:  InvokeUrlTypePath,
+			expectedUrl: "http://app.example.com/pod/public/e9c29586-c465-4a67-9c9b-25293d1ce77b/<PORT>",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := BuildPodURL(externalUrl, test.invokeType, stub, test.config)
+			assert.Equal(t, test.expectedUrl, got)
+		})
+	}
+}

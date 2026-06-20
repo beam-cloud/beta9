@@ -34,7 +34,6 @@ from benchmarks.sandbox_parallel import (  # noqa: E402
     parse_host_port,
     parse_sdk_cpu,
     parse_sdk_memory,
-    wait_running as wait_instance_running,
     write_sdk_config,
 )
 from benchmarks.startup import (  # noqa: E402
@@ -566,7 +565,7 @@ class CacheProbeTools:
         build_dir.mkdir(parents=True, exist_ok=True)
         source = build_dir / "raw_read.go"
         output = build_dir / f"raw-read-linux-{goarch}"
-        source.write_text(self._read("raw_read.go"), encoding="utf-8")
+        source.write_text(self._read("raw_read/main.go"), encoding="utf-8")
         proc = run(
             [
                 "env",
@@ -594,7 +593,7 @@ class CacheProbeTools:
         build_dir.mkdir(parents=True, exist_ok=True)
         source = build_dir / "net_probe.go"
         output = build_dir / f"net-probe-linux-{goarch}"
-        source.write_text(self._read("net_probe.go"), encoding="utf-8")
+        source.write_text(self._read("net_probe/main.go"), encoding="utf-8")
         proc = run(
             [
                 "env",
@@ -630,7 +629,7 @@ class CacheProbeTools:
                 + " && env -u GOROOT go build -trimpath -o "
                 + shlex.quote(str(output))
                 + " "
-                + shlex.quote(str(self.root / "remote_object.go")),
+                + shlex.quote(str(self.root / "remote_object")),
             ],
             check=False,
             timeout=120,
@@ -1347,7 +1346,7 @@ rm -rf /var/lib/beta9/cache/.benchmark-probes 2>/dev/null || true
             [
                 go,
                 "run",
-                "./benchmarks/b9bench/cache_tools/hrw_routing.go",
+                "./benchmarks/b9bench/cache_tools/hrw_routing",
                 "--hosts-json",
                 json.dumps(hrw_hosts, sort_keys=True),
                 "--keys",
@@ -3379,7 +3378,7 @@ class CacheBenchmark:
                 )
 
             if access_type == "workspace_fuse":
-                log(f"Evicting workspace-fuse mounted file from holder worker")
+                log("Evicting workspace-fuse mounted file from holder worker")
             mounted_eviction = self.cache.evict_mounted_file(
                 worker_path, entry["size"], pods=workspace_worker_pods
             )

@@ -10,7 +10,6 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -95,13 +94,14 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			return err
 		}
 
-		ttl := time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second
-		key := Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, runRequest.ContainerId)
-		if ttl <= 0 {
-			i.Rdb.Set(context.Background(), key, 1, 0)
-		} else {
-			i.Rdb.SetEx(context.Background(), key, 1, ttl)
-		}
+		setPodKeepWarmLock(
+			context.Background(),
+			i.ContainerRepo,
+			i.Workspace.Name,
+			i.Stub.ExternalId,
+			runRequest.ContainerId,
+			i.StubConfig.KeepWarmSeconds,
+		)
 
 		err = i.Scheduler.Run(runRequest)
 		if err != nil {
@@ -169,25 +169,26 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 		}
 
 		// Skip containers with keep warm locks
-		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
-		if err != nil && err != redis.Nil {
+		keepWarm, err := i.ContainerRepo.PodKeepWarmLockExists(context.TODO(), i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
+		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
 			continue
 		}
 
-		keepWarm := keepWarmVal > 0
 		if keepWarm {
 			continue
 		}
 
-		connectionsVal, err := i.Rdb.Get(context.TODO(), Keys.podContainerConnections(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
-		if err != nil && err != redis.Nil {
-			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for container")
+		if i.buffer != nil && i.buffer.containerConnectionCount(container.ContainerId) > 0 {
 			continue
 		}
 
-		connections := connectionsVal > 0
-		if connections {
+		connectionsVal, err := sharedPodContainerConnections(context.TODO(), i.Rdb, i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
+		if err != nil {
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for container")
+			continue
+		}
+		if connectionsVal > 0 {
 			continue
 		}
 

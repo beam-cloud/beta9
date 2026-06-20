@@ -419,7 +419,10 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 // The base spec is designed to be the fallback when CLIP metadata is not available.
 func (s *ContainerRuntimeServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
 	// Start from the base config (this is the designed fallback for v1 images)
-	spec := s.baseConfigSpec
+	spec, err := cloneSpec(s.baseConfigSpec)
+	if err != nil {
+		return err
+	}
 
 	// Try to get CLIP metadata from archive (v2 images only)
 	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(instance.Request.ImageId)
@@ -444,12 +447,28 @@ func (s *ContainerRuntimeServer) writeInitialSpecFromImage(ctx context.Context, 
 		}
 	}
 	// If no CLIP metadata, use base spec as-is (designed for v1 images)
+	if spec.Process.Cwd == "" {
+		spec.Process.Cwd = "/"
+	}
 
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(destPath, b, 0644)
+}
+
+func cloneSpec(spec specs.Spec) (specs.Spec, error) {
+	b, err := json.Marshal(spec)
+	if err != nil {
+		return specs.Spec{}, err
+	}
+
+	var cloned specs.Spec
+	if err := json.Unmarshal(b, &cloned); err != nil {
+		return specs.Spec{}, err
+	}
+	return cloned, nil
 }
 
 func (s *ContainerRuntimeServer) addRequestEnvToInitialSpec(instance *ContainerInstance) error {

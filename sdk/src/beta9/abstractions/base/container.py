@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Callable, Optional
 
@@ -19,6 +20,13 @@ from .runner import BaseAbstraction
 DEFAULT_SYNC_INTERVAL = 0.1
 
 
+@dataclass
+class ContainerAttachResult:
+    done: bool
+    exit_code: int
+    output: str = ""
+
+
 class Container(BaseAbstraction):
     def __init__(
         self,
@@ -28,7 +36,14 @@ class Container(BaseAbstraction):
         self.gateway_stub = GatewayServiceStub(self.channel)
         self.container_id = container_id
 
-    def attach(self, *, container_id: str, sync_dir: Optional[str] = None, hide_logs: bool = False):
+    def attach(
+        self,
+        *,
+        container_id: str,
+        sync_dir: Optional[str] = None,
+        hide_logs: bool = False,
+        exit_on_error: bool = True,
+    ) -> ContainerAttachResult:
         """
         Attach to a running container and stream messages back and forth. Also, optionally sync a directory to the container workspace.
         """
@@ -61,13 +76,29 @@ class Container(BaseAbstraction):
                 break
 
         if r is None:
-            return terminal.error("Container failed ❌")
+            terminal.error("Container failed ❌")
+            return ContainerAttachResult(done=False, exit_code=1)
+
+        result = ContainerAttachResult(
+            done=r.done,
+            exit_code=r.exit_code,
+            output=r.output,
+        )
+
+        if r.exit_code != 0:
+            terminal.error(f"\nContainer exited with code {r.exit_code} ❌", exit=False)
+            if exit_on_error:
+                raise SystemExit(r.exit_code)
+            return result
 
         if not r.done:
-            return terminal.error(f"\n{r.output} ❌")
+            terminal.error(f"\n{r.output} ❌")
+            return result
 
         if not hide_logs:
             terminal.header(r.output)
+
+        return result
 
     def _sync_dir_to_workspace(
         self,

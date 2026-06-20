@@ -30,6 +30,7 @@ from .abstractions.sandbox import (
     SandboxProcessResponse,
     SandboxProcessStream,
 )
+from .abstractions.service import Service
 from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from .client.client import Client
@@ -73,6 +74,7 @@ __all__ = [
     "BotEventType",
     "BotContext",
     "Pod",
+    "Service",
     "PricingPolicy",
     "PricingPolicyCostModel",
     "Client",

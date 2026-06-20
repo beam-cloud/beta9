@@ -134,6 +134,38 @@ func TestCreateOverlayKeepsDefaultPathForNormalWorkers(t *testing.T) {
 	require.Equal(t, baseConfigPath, overlay.OverlayPath())
 }
 
+func TestSetupBuildahDirsUsesPersistentLayerCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(types.AgentBuildCacheDirEnv, cacheDir)
+
+	graphroot, runroot, tmpdir, cleanupGraphroot := (&ImageClient{}).setupBuildahDirs()
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	require.False(t, cleanupGraphroot)
+	require.Equal(t, filepath.Join(cacheDir, "buildah", "storage"), graphroot)
+	require.DirExists(t, graphroot)
+	require.DirExists(t, runroot)
+	require.DirExists(t, tmpdir)
+}
+
+func TestSetupBuildahDirsFallsBackWhenLayerCacheUnavailable(t *testing.T) {
+	cacheFile := filepath.Join(t.TempDir(), "cache-file")
+	require.NoError(t, os.WriteFile(cacheFile, []byte("not a dir"), 0o600))
+	t.Setenv(types.AgentBuildCacheDirEnv, cacheFile)
+
+	graphroot, runroot, tmpdir, cleanupGraphroot := (&ImageClient{}).setupBuildahDirs()
+	defer os.RemoveAll(graphroot)
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	require.True(t, cleanupGraphroot)
+	require.DirExists(t, graphroot)
+	require.DirExists(t, runroot)
+	require.DirExists(t, tmpdir)
+	require.NotContains(t, graphroot, cacheFile)
+}
+
 func TestGetContainerEnvironmentUsesGatewayConfigFallback(t *testing.T) {
 	worker := &Worker{
 		podAddr: "127.0.0.1",
@@ -436,6 +468,31 @@ func TestSpecFromRequestRejectsUnsupportedEmptyEntrypoint(t *testing.T) {
 
 	require.Nil(t, spec)
 	require.ErrorContains(t, err, "empty process args")
+}
+
+func TestSpecFromRequestPreservesPodInitialSpecCwd(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		StubId:      "stub-1",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}, &ContainerOptions{
+		BindPorts: []int{8001},
+		InitialSpec: &specs.Spec{Process: &specs.Process{
+			Args: []string{"python", "app.py"},
+			Cwd:  "/app",
+			User: specs.User{UID: 1000, GID: 1000},
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"python", "app.py"}, spec.Process.Args)
+	require.Equal(t, "/app", spec.Process.Cwd)
+	require.Equal(t, uint32(1000), spec.Process.User.UID)
+	require.Equal(t, uint32(1000), spec.Process.User.GID)
 }
 
 func TestSpecFromRequestRejectsRunnerStubWithoutRunnerEnv(t *testing.T) {
@@ -1290,6 +1347,31 @@ func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
 	got, ok := imageClient.GetCLIPImageMetadata(imageId)
 	require.True(t, ok)
 	assert.Equal(t, imageMetadata, got)
+}
+
+func TestBuildSpecFromCLIPMetadataDefaultsCwd(t *testing.T) {
+	worker := &Worker{}
+
+	spec := worker.buildSpecFromCLIPMetadata(&clipCommon.ImageMetadata{
+		Cmd: []string{"python", "-m", "http.server", "8000"},
+	})
+
+	require.NotNil(t, spec.Process)
+	assert.Equal(t, "/", spec.Process.Cwd)
+	assert.Equal(t, []string{"python", "-m", "http.server", "8000"}, spec.Process.Args)
+}
+
+func TestBuildSpecFromCLIPMetadataPreservesWorkingDir(t *testing.T) {
+	worker := &Worker{}
+
+	spec := worker.buildSpecFromCLIPMetadata(&clipCommon.ImageMetadata{
+		WorkingDir: "/app",
+		Cmd:        []string{"python", "app.py"},
+	})
+
+	require.NotNil(t, spec.Process)
+	assert.Equal(t, "/app", spec.Process.Cwd)
+	assert.Equal(t, []string{"python", "app.py"}, spec.Process.Args)
 }
 
 func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {

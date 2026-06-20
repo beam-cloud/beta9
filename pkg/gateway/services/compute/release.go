@@ -246,23 +246,23 @@ func managedReservationForMachineRelease(state *model.PoolState, machineID strin
 	return nil, nil
 }
 
-func managedReservationForDeleteTarget(state *model.PoolState, targetID string) *model.Reservation {
+func managedReservationIndexForDeleteTarget(state *model.PoolState, targetID string) int {
 	if state == nil || targetID == "" {
-		return nil
+		return -1
 	}
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservationClosed(reservation.Status) {
+		if !reservation.Managed() || reservation.Status == model.ReservationDeleted {
 			continue
 		}
 		if reservation.ID == targetID ||
 			reservation.MachineID == targetID ||
 			reservation.InstanceID == targetID ||
 			reservation.Name == targetID {
-			return reservation
+			return i
 		}
 	}
-	return nil
+	return -1
 }
 
 func hasOpenManagedReservations(state *model.PoolState) bool {

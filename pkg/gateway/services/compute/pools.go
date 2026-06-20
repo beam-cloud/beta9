@@ -298,12 +298,20 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 		if err != nil || state == nil {
 			return err
 		}
-		reservation := managedReservationForDeleteTarget(state, targetID)
-		if reservation == nil {
+		reservationIndex := managedReservationIndexForDeleteTarget(state, targetID)
+		if reservationIndex < 0 {
 			return nil
 		}
+		reservation := &state.Reservations[reservationIndex]
 		found = true
 		machineID = reservation.MachineID
+		if reservation.Status == model.ReservationFailed {
+			state.Reservations = append(state.Reservations[:reservationIndex], state.Reservations[reservationIndex+1:]...)
+			now := time.Now().UTC()
+			state.ReservedNodes = activeReservationNodes(state.Reservations, now)
+			state.UpdatedAt = now
+			return s.savePrivatePoolState(ctx, workspaceID, state)
+		}
 		return s.releaseManagedReservation(ctx, workspaceID, state, reservation)
 	})
 	if err != nil || !found {

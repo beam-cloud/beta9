@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -622,7 +621,7 @@ def hrw_routing_proof(
         [
             go,
             "run",
-            "./benchmarks/b9bench/cache_tools/hrw_routing.go",
+            "./benchmarks/b9bench/cache_tools/hrw_routing",
             "--hosts-json",
             json.dumps(hrw_hosts, sort_keys=True),
             "--keys",
@@ -782,7 +781,7 @@ def extract_archive_hashes(kube: Kube, image_id: str, artifact_dir: Path) -> lis
                 continue
 
             parse = subprocess.run(
-                [go, "run", "./benchmarks/b9bench/cache_tools/clip_hashes.go", str(archive)],
+                [go, "run", "./benchmarks/b9bench/cache_tools/clip_hashes", str(archive)],
                 cwd=REPO_ROOT,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

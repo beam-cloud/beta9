@@ -115,7 +115,15 @@ func NewRedisTaskQueueService(
 	eventManager.Listen()
 
 	// Initialize deployment manager
-	tq.controller = abstractions.NewInstanceController(ctx, tq.InstanceFactory, []string{types.StubTypeTaskQueueDeployment}, opts.BackendRepo, opts.RedisClient)
+	tq.controller = abstractions.NewInstanceController(
+		ctx,
+		tq.InstanceFactory,
+		tq.GetInstance,
+		[]string{types.StubTypeTaskQueueDeployment},
+		opts.BackendRepo,
+		opts.ContainerRepo,
+		opts.RedisClient,
+	)
 	err = tq.controller.Init()
 	if err != nil {
 		return nil, err
@@ -580,6 +588,14 @@ func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueL
 
 func (tq *RedisTaskQueue) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return tq.getOrCreateQueueInstance(stubId)
+}
+
+func (tq *RedisTaskQueue) GetInstance(stubId string) (abstractions.IAutoscaledInstance, bool) {
+	instance, exists := tq.queueInstances.Get(stubId)
+	if !exists {
+		return nil, false
+	}
+	return instance, true
 }
 
 func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...func(*taskQueueInstance)) (*taskQueueInstance, error) {

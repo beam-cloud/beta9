@@ -1,7 +1,7 @@
 from unittest import TestCase, mock
 from unittest.mock import MagicMock
 
-from beta9 import Image, Pod, asgi, endpoint, function, realtime, schedule, task_queue
+from beta9 import Image, Pod, Service, asgi, endpoint, function, realtime, schedule, task_queue
 from beta9.integrations import VLLM, VLLMArgs
 
 PHI_VISION_INSTRUCT = "microsoft/Phi-3.5-vision-instruct"
@@ -182,6 +182,31 @@ class TestDeployment(TestCase):
         )
 
         resp, ok = test_pod.deploy()
+
+        self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)
+        self.assertEqual(resp["deployment_id"], gateway_stub_mock.deploy_stub().deployment_id)
+
+    @mock.patch(
+        "beta9.abstractions.pod.Pod.prepare_runtime",
+        return_value=True,
+    )
+    @mock.patch(
+        "beta9.abstractions.pod.Pod.gateway_stub",
+        return_value=MagicMock(
+            deploy_stub=MagicMock(
+                return_value=MagicMock(deployment_id="test-deployment-id", ok=True)
+            )
+        ),
+    )
+    def test_service_deploy_with_image_entrypoint(self, gateway_stub_mock, prepare_runtime_mock):
+        test_service = Service(
+            name="test-service",
+            image=Image.from_id("img-123"),
+            ports=[8080],
+        )
+
+        with mock.patch.object(Service, "print_invocation_snippet"):
+            resp, ok = test_service.deploy()
 
         self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)
         self.assertEqual(resp["deployment_id"], gateway_stub_mock.deploy_stub().deployment_id)
