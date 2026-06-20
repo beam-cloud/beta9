@@ -111,6 +111,9 @@ func runGatewayCacheRegistration(ctx context.Context, registration *gatewayCache
 			return
 		case <-ticker.C:
 			if err := registration.registerOnce(ctx); err != nil {
+				if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+					return
+				}
 				log.Warn().
 					Err(err).
 					Str("logical_host_id", registration.logicalHostID).

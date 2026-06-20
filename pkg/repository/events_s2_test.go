@@ -52,6 +52,33 @@ func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2AppNamespaceContainerEventsUseAppNamespaceStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerLifecycle, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		AppID:       "app-789",
+		ContainerID: "container-abc",
+	})
+
+	want := []s2.StreamName{
+		"events/workspaces/workspace-123/stubs/stub-456/containers/container-abc",
+		"events/workspaces/workspace-123/containers/container-abc",
+		"events/workspaces/workspace-123/stubs/stub-456",
+		"events/workspaces/workspace-123",
+		"events/workspaces/workspace-123/apps/app-789",
+	}
+	if len(streams) != len(want) {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", len(streams), len(want), streams)
+	}
+	for i := range want {
+		if streams[i] != want[i] {
+			t.Fatalf("unexpected stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
 func TestResolveContainerStreamsUsesExactStreamWithoutExistenceList(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -283,7 +310,7 @@ func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
-func TestS2ContainerLogsUseDifferentiatedLogStreams(t *testing.T) {
+func TestS2ContainerLogsUseContainerStubLookupBeforeAppNamespaceIndex(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
@@ -539,6 +566,10 @@ func TestLogRecordFromS2ExtractsLineFromEventData(t *testing.T) {
 		WorkerID:    "worker-1",
 		Stream:      "stdout",
 		Line:        "Starting gunicorn 22.0.0",
+		PID:         123,
+		ProcessArgs: []string{"python3", "-c", "print('hi')"},
+		ProcessCwd:  "/workspace",
+		ProcessSeq:  7,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -563,6 +594,18 @@ func TestLogRecordFromS2ExtractsLineFromEventData(t *testing.T) {
 	}
 	if got, want := logRecord.TaskID, "task-123"; got != want {
 		t.Fatalf("unexpected task id: got %q want %q", got, want)
+	}
+	if got, want := logRecord.PID, int32(123); got != want {
+		t.Fatalf("unexpected pid: got %d want %d", got, want)
+	}
+	if got, want := logRecord.ProcessArgs, []string{"python3", "-c", "print('hi')"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected process args: got %#v want %#v", got, want)
+	}
+	if got, want := logRecord.ProcessCwd, "/workspace"; got != want {
+		t.Fatalf("unexpected process cwd: got %q want %q", got, want)
+	}
+	if got, want := logRecord.ProcessSeq, uint64(7); got != want {
+		t.Fatalf("unexpected process seq: got %d want %d", got, want)
 	}
 	if !logRecord.Timestamp.Equal(logAt) {
 		t.Fatalf("unexpected timestamp: got %s want %s", logRecord.Timestamp, logAt)
@@ -594,7 +637,7 @@ func TestTaskLogQueryRequiresTaskTaggedLogs(t *testing.T) {
 	}
 }
 
-func TestS2TaskEventsUseWorkspaceAndAppAggregateStreams(t *testing.T) {
+func TestS2TaskEventsUseWorkspaceAndAppNamespaceStreams(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.streamNamesForEvent(types.EventTaskCreated, eventMetadata{
@@ -821,6 +864,35 @@ func TestLogRecordHeadersSkipDemultiplexesByTaskHeader(t *testing.T) {
 	}
 }
 
+func TestMetricsRecordMatchesAppScopedQuery(t *testing.T) {
+	query := types.EventQuery{AppID: "app-1"}
+	matchingPayload := types.EventContainerMetricsSchema{AppID: "app-1"}
+	otherPayload := types.EventContainerMetricsSchema{AppID: "app-2"}
+
+	if !metricsRecordMatchesQuery(s2.SequencedRecord{}, matchingPayload, query) {
+		t.Fatal("expected matching payload app id to pass")
+	}
+	if metricsRecordMatchesQuery(s2.SequencedRecord{}, types.EventContainerMetricsSchema{}, query) {
+		t.Fatal("expected app-scoped query to reject records without app id")
+	}
+	if metricsRecordMatchesQuery(s2.SequencedRecord{}, otherPayload, query) {
+		t.Fatal("expected mismatched payload app id to be rejected")
+	}
+
+	matchingHeader := s2.SequencedRecord{Headers: []s2.Header{s2.NewHeader("app_id", "app-1")}}
+	if !metricsRecordMatchesQuery(matchingHeader, types.EventContainerMetricsSchema{}, query) {
+		t.Fatal("expected matching app header to pass legacy payload")
+	}
+	if metricsRecordMatchesQuery(matchingHeader, otherPayload, query) {
+		t.Fatal("expected mismatched payload to reject even with a matching header")
+	}
+
+	otherHeader := s2.SequencedRecord{Headers: []s2.Header{s2.NewHeader("app_id", "app-2")}}
+	if metricsRecordMatchesQuery(otherHeader, matchingPayload, query) {
+		t.Fatal("expected mismatched app header to be rejected")
+	}
+}
+
 func TestTaskEventSchemaIncludesStubTypeAndDeploymentContext(t *testing.T) {
 	version := uint(7)
 	deploymentID := "deployment-123"
@@ -1029,6 +1101,7 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		ContainerID: "container-1",
 		WorkspaceID: "workspace-1",
 		StubID:      "stub-1",
+		AppID:       "app-1",
 		TaskID:      "task-1",
 		WorkerID:    "worker-1",
 	})
@@ -1040,6 +1113,7 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 	if metadata.ContainerID != "container-1" ||
 		metadata.WorkspaceID != "workspace-1" ||
 		metadata.StubID != "stub-1" ||
+		metadata.AppID != "app-1" ||
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)

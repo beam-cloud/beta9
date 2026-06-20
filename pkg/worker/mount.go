@@ -33,12 +33,37 @@ type containerMountPoint struct {
 	storage   storage.Storage
 }
 
-func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
+func NewContainerMountManager(config types.AppConfig, poolConfig ...types.WorkerPoolConfig) *ContainerMountManager {
 	return &ContainerMountManager{
 		mountPointMounts: common.NewSafeMap[[]containerMountPoint](),
 		storageConfig:    config.Storage,
-		codeCacheRoot:    filepath.Join(os.TempDir(), "beta9-stub-code-cache"),
+		codeCacheRoot:    stubCodeCacheRoot(config, poolConfig...),
 	}
+}
+
+func stubCodeCacheRoot(config types.AppConfig, poolConfigs ...types.WorkerPoolConfig) string {
+	cacheEnabled := config.Cache.Enabled && config.Worker.CacheEnabled
+	diskEnabled := config.Cache.Disk.Enabled
+	mountPath := config.Cache.Disk.MountPath
+
+	if len(poolConfigs) > 0 {
+		poolCache := poolConfigs[0].Cache
+		if poolCache.Enabled != nil {
+			cacheEnabled = cacheEnabled && *poolCache.Enabled
+		}
+		if poolCache.Disk.Enabled != nil {
+			diskEnabled = *poolCache.Disk.Enabled
+		}
+		if poolCache.Disk.MountPath != "" {
+			mountPath = poolCache.Disk.MountPath
+		}
+	}
+
+	if cacheEnabled && diskEnabled && mountPath != "" {
+		return filepath.Join(filepath.Clean(mountPath), "stub-code")
+	}
+
+	return filepath.Join(os.TempDir(), "beta9-stub-code-cache")
 }
 
 // SetupContainerMounts initializes any external storage for a container

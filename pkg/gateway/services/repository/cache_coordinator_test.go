@@ -20,15 +20,31 @@ import (
 
 type pruneCheckpointBackendRepo struct {
 	repository.BackendRepository
-	activeKeys  []string
-	checkpoints []types.Checkpoint
-	pruneIDs    []string
-	workspaces  map[uint]*types.Workspace
+	activeKeys               []string
+	stubLastUsedBefore       time.Time
+	checkpoints              []types.Checkpoint
+	recentKeysByCheckpointID map[string]string
+	pruneIDs                 []string
+	workspaces               map[uint]*types.Workspace
 }
 
-func (r *pruneCheckpointBackendRepo) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
+func (r *pruneCheckpointBackendRepo) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
 	r.activeKeys = append([]string(nil), activeRecentStubKeys...)
-	return r.checkpoints, nil
+	r.stubLastUsedBefore = stubLastUsedBefore
+	active := map[string]struct{}{}
+	for _, key := range activeRecentStubKeys {
+		active[key] = struct{}{}
+	}
+	checkpoints := make([]types.Checkpoint, 0, len(r.checkpoints))
+	for _, checkpoint := range r.checkpoints {
+		if key := r.recentKeysByCheckpointID[checkpoint.CheckpointId]; key != "" {
+			if _, ok := active[key]; ok {
+				continue
+			}
+		}
+		checkpoints = append(checkpoints, checkpoint)
+	}
+	return checkpoints, nil
 }
 
 func (r *pruneCheckpointBackendRepo) PruneCheckpoints(ctx context.Context, checkpointIDs []string) ([]types.Checkpoint, error) {
@@ -344,6 +360,72 @@ func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T)
 		cache.RecentStubKey("workspace", "stub-a"),
 		cache.RecentStubKey("workspace", "stub-b"),
 	}, backendRepo.activeKeys)
+	require.WithinDuration(t, time.Now().Add(-time.Hour), backendRepo.stubLastUsedBefore, 5*time.Second)
+}
+
+func TestPruneStaleCacheCheckpointsPrunesStaleSandboxAndEndpointCheckpoints(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	now := time.Now()
+	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
+	require.NoError(t, metadataStore.AddRecentStub(context.Background(), "locality-a", "workspace", "recent-sandbox-stub", time.Hour))
+	backendRepo := &pruneCheckpointBackendRepo{
+		checkpoints: []types.Checkpoint{
+			{
+				CheckpointId: "sandbox-checkpoint",
+				StubType:     types.StubTypeSandbox,
+				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
+			},
+			{
+				CheckpointId: "recent-sandbox-checkpoint",
+				StubType:     types.StubTypeSandbox,
+				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
+			},
+			{
+				CheckpointId:   "recently-restored-sandbox-checkpoint",
+				StubType:       types.StubTypeSandbox,
+				CreatedAt:      types.Time{Time: now.Add(-2 * time.Hour)},
+				LastRestoredAt: types.Time{Time: now.Add(-5 * time.Minute)},
+			},
+			{
+				CheckpointId: "fresh-endpoint-checkpoint",
+				StubType:     types.StubTypeEndpointDeployment,
+				CreatedAt:    types.Time{Time: now.Add(-5 * time.Minute)},
+			},
+			{
+				CheckpointId: "old-endpoint-checkpoint",
+				StubType:     types.StubTypeEndpointDeployment,
+				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
+			},
+		},
+		recentKeysByCheckpointID: map[string]string{
+			"recent-sandbox-checkpoint": cache.RecentStubKey("workspace", "recent-sandbox-stub"),
+		},
+	}
+	service := &WorkerRepositoryService{
+		cacheMetadata: metadataStore,
+		backendRepo:   backendRepo,
+		appConfig: types.AppConfig{
+			Cache: cache.Config{
+				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 3600},
+			},
+		},
+	}
+
+	resp, err := service.PruneStaleCacheCheckpoints(
+		cacheRepositoryAuthContext(types.TokenTypeWorker),
+		&pb.PruneStaleCacheCheckpointsRequest{},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+	require.EqualValues(t, 2, resp.Pruned)
+	require.Equal(t, []string{"sandbox-checkpoint", "old-endpoint-checkpoint"}, backendRepo.pruneIDs)
 }
 
 func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *testing.T) {
@@ -360,6 +442,8 @@ func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *tes
 			CheckpointId: "checkpoint-a",
 			WorkspaceId:  7,
 			OriginKey:    "checkpoints/checkpoint-a.tar",
+			StubType:     types.StubTypeEndpointDeployment,
+			CreatedAt:    types.Time{Time: time.Now().Add(-2 * time.Hour)},
 		}},
 		workspaces: map[uint]*types.Workspace{7: {Name: "workspace"}},
 	}

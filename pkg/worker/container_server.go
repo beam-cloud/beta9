@@ -26,9 +26,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -37,20 +39,28 @@ import (
 const (
 	gRPCMaxRecvMsgSize                  = 1024 * 1024 * 16
 	gRPCMaxSendMsgSize                  = 1024 * 1024 * 16
-	sandboxExecDialRetryDelay           = 25 * time.Millisecond
+	sandboxProcessManagerClientRetry    = 25 * time.Millisecond
+	sandboxProcessManagerClientTimeout  = 10 * time.Second
 	sandboxProcessManagerReadyTimeout   = 10 * time.Second
 	sandboxProcessManagerReadyPollDelay = 25 * time.Millisecond
 )
 
 // ContainerRuntimeServer is a runtime-agnostic container server that works with any OCI runtime
+type processLogEventRepository interface {
+	PushContainerLogEventQueued(entry types.EventContainerLogSchema) error
+}
+
 type ContainerRuntimeServer struct {
 	baseConfigSpec specs.Spec
 	pb.UnimplementedContainerServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
+	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
 	imageClient             *ImageClient
 	runtime                 runtime.Runtime // The worker's configured runtime (from pool config)
+	eventRepo               processLogEventRepository
+	workerID                string
 	port                    int
 	podAddr                 string
 	backendRoute            backendRouteFunc
@@ -69,6 +79,8 @@ type ContainerRuntimeServerOpts struct {
 	ImageClient             *ImageClient
 	ContainerRepoClient     pb.ContainerRepositoryServiceClient
 	ContainerNetworkManager ContainerNetwork
+	EventRepo               repository.EventRepository
+	WorkerID                string
 	BackendRoute            backendRouteFunc
 	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 }
@@ -93,6 +105,8 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		imageClient:             opts.ImageClient,
 		containerRepoClient:     opts.ContainerRepoClient,
 		containerNetworkManager: opts.ContainerNetworkManager,
+		eventRepo:               opts.EventRepo,
+		workerID:                opts.WorkerID,
 		backendRoute:            opts.BackendRoute,
 		createCheckpoint:        opts.CreateCheckpoint,
 	}, nil
@@ -648,42 +662,75 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 }
 
 func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	pid, err := execSandboxProcess(ctx, instance, cmd, cwd, env)
-	if err == nil || !isProcessManagerDialFailure(err) {
-		return pid, err
-	}
-
-	log.Debug().
-		Str("container_id", containerId).
-		Str("container_ip", instance.ContainerIp).
-		Err(err).
-		Msg("retrying sandbox process manager exec after dial failure")
-
-	timer := time.NewTimer(sandboxExecDialRetryDelay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return -1, ctx.Err()
-	case <-timer.C:
-	}
-
-	retryPID, retryErr := execSandboxProcess(ctx, instance, cmd, cwd, env)
-	if retryErr != nil {
-		return -1, fmt.Errorf("%w; retry failed: %v", err, retryErr)
-	}
-
-	return retryPID, nil
-}
-
-func execSandboxProcess(ctx context.Context, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	client, err := newProcessManagerClient(ctx, instance)
+	client, err := s.newSandboxProcessManagerClient(ctx, containerId, instance)
 	if err != nil {
 		return -1, err
 	}
 	defer client.Cleanup()
 
 	return client.Exec(cmd, cwd, env, false)
+}
+
+func (s *ContainerRuntimeServer) newSandboxProcessManagerClient(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	var lastErr error
+	loggedRetry := false
+	deadline := time.Now().Add(sandboxProcessManagerClientTimeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, sandboxProcessManagerClientError(err, lastErr)
+		}
+		if time.Now().After(deadline) {
+			return nil, sandboxProcessManagerClientTimeoutError(lastErr)
+		}
+
+		instance = s.refreshContainerInstance(containerId, instance)
+		client, err := newProcessManagerClient(ctx, instance)
+		if err == nil {
+			return client, nil
+		}
+
+		lastErr = err
+		retryable := isProcessManagerDialFailure(err)
+		if !retryable {
+			return nil, err
+		}
+		if !loggedRetry {
+			log.Debug().
+				Str("container_id", containerId).
+				Str("container_ip", instance.ContainerIp).
+				Err(err).
+				Msg("waiting for sandbox process manager client after dial failure")
+			loggedRetry = true
+		}
+
+		timer := time.NewTimer(sandboxProcessManagerClientRetry)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, sandboxProcessManagerClientError(ctx.Err(), lastErr)
+		case <-timer.C:
+		}
+	}
+}
+
+func sandboxProcessManagerClientError(ctxErr, lastErr error) error {
+	if errors.Is(ctxErr, context.Canceled) {
+		return errors.New("Request cancelled")
+	}
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
+		return sandboxProcessManagerClientTimeoutError(lastErr)
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return ctxErr
+}
+
+func sandboxProcessManagerClientTimeoutError(lastErr error) error {
+	if lastErr != nil {
+		return fmt.Errorf("sandbox process manager client not ready within timeout: %w", lastErr)
+	}
+	return errors.New("sandbox process manager client not ready within timeout")
 }
 
 func isProcessManagerDialFailure(err error) bool {
@@ -743,6 +790,34 @@ func (s *ContainerRuntimeServer) refreshContainerInstance(containerId string, fa
 	return fallback
 }
 
+func sandboxProcessMarkKey(containerId string, pid int32) string {
+	return fmt.Sprintf("%s:%d", containerId, pid)
+}
+
+func (s *ContainerRuntimeServer) markSandboxProcessExited(containerId string, pid int32) {
+	s.killedSandboxProcesses.Store(sandboxProcessMarkKey(containerId, pid), time.Now())
+}
+
+func (s *ContainerRuntimeServer) clearSandboxProcessExited(containerId string, pid int32) {
+	s.killedSandboxProcesses.Delete(sandboxProcessMarkKey(containerId, pid))
+}
+
+func (s *ContainerRuntimeServer) sandboxProcessMarkedExited(containerId string, pid int32) bool {
+	key := sandboxProcessMarkKey(containerId, pid)
+	value, ok := s.killedSandboxProcesses.Load(key)
+	if !ok {
+		return false
+	}
+
+	markedAt, ok := value.(time.Time)
+	if !ok || time.Since(markedAt) > 10*time.Minute {
+		s.killedSandboxProcesses.Delete(key)
+		return false
+	}
+
+	return true
+}
+
 func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in *pb.ContainerSandboxStatusRequest) (*pb.ContainerSandboxStatusResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
@@ -772,7 +847,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 		}, nil
 	}
 
-	client, err := newProcessManagerClient(ctx, instance)
+	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxStatusResponse{
 			Ok:       false,
@@ -787,6 +862,11 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
+	}
+	if exitCode >= 0 {
+		s.clearSandboxProcessExited(in.ContainerId, in.Pid)
+	} else if s.sandboxProcessMarkedExited(in.ContainerId, in.Pid) {
+		exitCode = sandboxMissingProcessExitCode
 	}
 
 	status := "running"
@@ -817,7 +897,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStdout(ctx context.Context, in 
 		}, nil
 	}
 
-	client, err := newProcessManagerClient(ctx, instance)
+	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxStdoutResponse{
 			Ok:       false,
@@ -856,7 +936,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStderr(ctx context.Context, in 
 		}, nil
 	}
 
-	client, err := newProcessManagerClient(ctx, instance)
+	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxStderrResponse{
 			Ok:       false,
@@ -891,7 +971,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxKill(ctx context.Context, in *p
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: "Sandbox process manager is not ready"}, nil
 	}
 
-	client, err := newProcessManagerClient(ctx, instance)
+	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -902,8 +982,18 @@ func (s *ContainerRuntimeServer) ContainerSandboxKill(ctx context.Context, in *p
 		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Msgf("failed to kill sandbox process: %v", err)
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	missing, err := waitForSandboxProcessMissing(ctx, client, in.Pid, 3*time.Second)
+	if err != nil {
+		log.Debug().
+			Str("container_id", in.ContainerId).
+			Int32("pid", in.Pid).
+			Err(err).
+			Msg("failed to confirm killed sandbox process exit")
+	} else if missing {
+		s.markSandboxProcessExited(in.ContainerId, in.Pid)
+	}
 
-	return &pb.ContainerSandboxKillResponse{Ok: true}, err
+	return &pb.ContainerSandboxKillResponse{Ok: true}, nil
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxListExposedPorts(ctx context.Context, in *pb.ContainerSandboxListExposedPortsRequest) (*pb.ContainerSandboxListExposedPortsResponse, error) {
@@ -938,12 +1028,13 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	processes := make([]*pb.ProcessInfo, 0)
-	if !instance.SandboxProcessManagerReady {
-		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: "Sandbox process manager is not ready"}, nil
+	instance, err := s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
+	if err != nil {
+		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	client, err := newProcessManagerClient(ctx, instance)
+	processes := make([]*pb.ProcessInfo, 0)
+	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -955,7 +1046,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 	}
 
 	for _, process := range ps {
-		processes = append(processes, &pb.ProcessInfo{Pid: int32(process.Pid), ExitCode: int32(process.ExitCode), Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: process.Running})
+		exitCode := int32(process.ExitCode)
+		running := process.Running
+		if exitCode >= 0 {
+			s.clearSandboxProcessExited(in.ContainerId, int32(process.Pid))
+		} else if running && s.sandboxProcessMarkedExited(in.ContainerId, int32(process.Pid)) {
+			running = false
+			exitCode = sandboxMissingProcessExitCode
+		}
+		pid := int32(process.Pid)
+		processes = append(processes, &pb.ProcessInfo{Pid: pid, ExitCode: exitCode, Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: running})
 	}
 
 	return &pb.ContainerSandboxListProcessesResponse{Ok: true, Processes: processes}, nil
@@ -1298,11 +1398,12 @@ func (s *ContainerRuntimeServer) backendRouteForContainerPort(instance *Containe
 }
 
 func writableContainerAddressMap(addressMap map[int32]string) map[int32]string {
-	if addressMap == nil {
+	cloned := cloneContainerAddressMap(addressMap)
+	if cloned == nil {
 		return map[int32]string{}
 	}
 
-	return addressMap
+	return cloned
 }
 
 func recordSandboxExposedPort(containerInstances *common.SafeMap[*ContainerInstance], containerId string, instance *ContainerInstance, port uint32) {

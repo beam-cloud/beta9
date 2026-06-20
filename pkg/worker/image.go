@@ -1156,7 +1156,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		}
 		return &sourceRegistry, nil
 	} else if err != nil {
-		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive cache unavailable, falling back to registry")
+		logEmbeddedImageCacheFallback(err, imageId, request)
 	}
 
 	// Download to temp file, then atomically rename
@@ -1188,7 +1188,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	if err != nil {
-		log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
+		logImageRegistryPullFailure(err, imageId, request)
 		return nil, err
 	}
 
@@ -1198,6 +1198,36 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	go c.publishImageArchiveToEmbeddedCache(archivePath, imageId)
 
 	return &sourceRegistry, nil
+}
+
+func logEmbeddedImageCacheFallback(err error, imageId string, request *types.ContainerRequest) {
+	if request != nil && request.IsBuildRequest() {
+		log.Debug().
+			Err(err).
+			Str("image_id", imageId).
+			Msg("embedded image archive cache unavailable for build image, continuing with build request path")
+		return
+	}
+
+	log.Warn().
+		Err(err).
+		Str("image_id", imageId).
+		Msg("embedded image archive cache unavailable, falling back to registry")
+}
+
+func logImageRegistryPullFailure(err error, imageId string, request *types.ContainerRequest) {
+	if request != nil && request.IsBuildRequest() {
+		log.Debug().
+			Err(err).
+			Str("image_id", imageId).
+			Msg("build image archive unavailable in registry, continuing with build request path")
+		return
+	}
+
+	log.Error().
+		Err(err).
+		Str("image_id", imageId).
+		Msg("failed to pull image from registry")
 }
 
 func (c *ImageClient) privateWorkerImageRequest(request *types.ContainerRequest) bool {
@@ -1959,6 +1989,44 @@ func (w *activeOutputWriter) Write(p []byte) (int, error) {
 }
 
 const buildOutputHeartbeatInterval = 15 * time.Second
+const buildahCancelGracePeriod = 2 * time.Second
+
+func newBuildahCommand(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "buildah", args...)
+	cmd.Env = env
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = buildahCancelGracePeriod
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return terminateBuildahProcessGroup(cmd.Process.Pid)
+	}
+	return cmd
+}
+
+func terminateBuildahProcessGroup(pid int) error {
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+
+	time.Sleep(buildahCancelGracePeriod)
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+
+	return nil
+}
 
 // startSilentOutputHeartbeat emits a user-facing heartbeat only when the
 // wrapped command has produced no output for a while. This keeps noisy phases
@@ -2144,10 +2212,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			}
 
 			pullArgs = append(pullArgs, "docker://"+sourceImage)
-			cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
-			cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-			cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-			cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+			cmd := newBuildahCommand(
+				ctx,
+				pullArgs,
+				c.buildahEnv(runroot, tmpdir, storageConf),
+				&common.ExecWriter{Logger: outputLogger},
+				&common.ExecWriter{Logger: outputLogger},
+			)
 			if err := cmd.Run(); err != nil {
 				return err
 			}
@@ -2197,11 +2268,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		// Build w/ buildah
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
-		cmd := exec.CommandContext(ctx, "buildah", budArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		buildOutput := newActiveOutputWriter(outputLogger)
-		cmd.Stdout = buildOutput
-		cmd.Stderr = buildOutput
+		cmd := newBuildahCommand(ctx, budArgs, c.buildahEnv(runroot, tmpdir, storageConf), buildOutput, buildOutput)
 		buildStart := time.Now()
 		stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, buildStart, buildOutput, "Still building image...")
 		err = cmd.Run()
@@ -2233,11 +2301,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
-		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		pushOutput := newActiveOutputWriter(outputLogger)
-		cmd.Stdout = pushOutput
-		cmd.Stderr = pushOutput
+		cmd = newBuildahCommand(ctx, pushArgs, c.buildahEnv(runroot, tmpdir, storageConf), pushOutput, pushOutput)
 
 		// buildah push emits no progress for large blobs, so surface a
 		// heartbeat to the user while it runs
@@ -2268,10 +2333,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Clip v1: Build, push to OCI layout, then process locally
 	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
-	cmd := exec.CommandContext(ctx, "buildah", budArgs...)
-	cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+	cmd := newBuildahCommand(
+		ctx,
+		budArgs,
+		c.buildahEnv(runroot, tmpdir, storageConf),
+		&common.ExecWriter{Logger: outputLogger},
+		&common.ExecWriter{Logger: outputLogger},
+	)
 	err = cmd.Run()
 	if err != nil {
 		return err
@@ -2279,10 +2347,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Push to local OCI layout (v1 clip path)
 	v1PushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
-	cmd = exec.CommandContext(ctx, "buildah", v1PushArgs...)
-	cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+	cmd = newBuildahCommand(
+		ctx,
+		v1PushArgs,
+		c.buildahEnv(runroot, tmpdir, storageConf),
+		&common.ExecWriter{Logger: outputLogger},
+		&common.ExecWriter{Logger: outputLogger},
+	)
 	err = cmd.Run()
 	if err != nil {
 		return err

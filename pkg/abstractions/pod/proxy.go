@@ -953,5 +953,8 @@ func (pb *PodProxyBuffer) workspaceName() string {
 }
 
 func (pb *PodProxyBuffer) recordBufferOccupancy() {
+	if pb.buffer == nil {
+		return
+	}
 	metrics.RecordRingBufferOccupancy("pod", pb.workspaceName(), pb.stubId, pb.buffer.Len(), pb.buffer.Capacity())
 }

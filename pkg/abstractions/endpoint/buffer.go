@@ -676,6 +676,9 @@ func backendDialTimeout(requestTimeout time.Duration) time.Duration {
 }
 
 func (rb *RequestBuffer) recordBufferOccupancy() {
+	if rb.buffer == nil {
+		return
+	}
 	metrics.RecordRingBufferOccupancy("endpoint", rb.workspaceName(), rb.stubId, rb.buffer.Len(), rb.buffer.Capacity())
 }
 
@@ -925,13 +928,13 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 	return nil
 }
 
-func forwardWSConn(src net.Conn, dst net.Conn) {
+func forwardWSConn(dst net.Conn, src net.Conn) {
 	defer func() {
 		src.Close()
 		dst.Close()
 	}()
 
-	_, err := abstractions.CopyWithProxyBuffer(src, dst)
+	_, err := abstractions.CopyWithProxyBuffer(dst, src)
 	if err != nil {
 		return
 	}

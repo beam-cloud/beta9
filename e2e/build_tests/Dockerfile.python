@@ -1,0 +1,3 @@
+FROM docker.io/library/python:3.10-slim
+
+RUN mkdir -p /opt/beta9-build-tests && printf %s dockerfile-base > /opt/beta9-build-tests/source.txt

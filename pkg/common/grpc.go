@@ -30,6 +30,7 @@ func GRPCClientAuthStreamInterceptor(token string) grpc.StreamClientInterceptor 
 // GRPCClientRetryInterceptor retries the call on some gRPC errors
 func GRPCClientRetryInterceptor(maxRetries int, delay time.Duration) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		retryDelay := delay
 		for i := 0; i < maxRetries; i++ {
 			err := invoker(ctx, method, req, reply, cc, opts...)
 			if err == nil {
@@ -41,8 +42,18 @@ func GRPCClientRetryInterceptor(maxRetries int, delay time.Duration) grpc.UnaryC
 				return err
 			}
 
-			time.Sleep(delay)
-			delay *= 2
+			if i == maxRetries-1 {
+				break
+			}
+
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			retryDelay *= 2
 		}
 
 		return errors.New("max retries reached")

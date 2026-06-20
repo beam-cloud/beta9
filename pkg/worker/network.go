@@ -70,9 +70,11 @@ type ContainerNetworkManager struct {
 	containerRepoClient pb.ContainerRepositoryServiceClient
 	eventRepo           repo.EventRepository
 	networkPrefix       string
+	podAddr             string
 	bridgeMu            sync.Mutex
 	ipMu                sync.Mutex
 	iptablesMu          sync.Mutex
+	portExposureMu      sync.Mutex
 	containerLocksMu    sync.Mutex
 	containerLocks      sync.Map
 	config              types.AppConfig
@@ -88,6 +90,7 @@ type ContainerNetworkManager struct {
 	slotMu              sync.Mutex
 	freeSlots           []*containerNetworkSlot
 	containerSlots      map[string]*containerNetworkSlot
+	portExposures       map[int]*containerPortExposure
 	totalSlots          int
 	slotFillRunning     bool
 	slotPoolClosed      bool
@@ -752,10 +755,15 @@ func (m *ContainerNetworkManager) deleteNetworkSlotResources(slotID string) {
 }
 
 func (m *ContainerNetworkManager) Close() error {
+	m.stopAllPortExposures()
+
 	slots := m.drainFreeNetworkSlots()
+	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
+	defer cancel()
+
 	var errs error
 	for _, slot := range slots {
-		if err := m.releaseUnusedNetworkSlot(slot); err != nil {
+		if err := m.releaseUnusedNetworkSlotWithContext(ctx, slot); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -778,13 +786,19 @@ func (m *ContainerNetworkManager) drainFreeNetworkSlots() []*containerNetworkSlo
 }
 
 func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetworkSlot) error {
+	ctx, cancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
+	defer cancel()
+	return m.releaseUnusedNetworkSlotWithContext(ctx, slot)
+}
+
+func (m *ContainerNetworkManager) releaseUnusedNetworkSlotWithContext(ctx context.Context, slot *containerNetworkSlot) error {
 	if slot == nil {
 		return nil
 	}
 
 	m.clearNetworkSlotNeighbor(slot)
 	m.deleteNetworkSlotResources(slot.id)
-	if err := m.removeContainerIPFromRepositoryWithContext(context.Background(), m.containerNetworkSlotReservation(slot)); err != nil {
+	if err := m.removeContainerIPFromRepositoryWithContext(ctx, m.containerNetworkSlotReservation(slot)); err != nil {
 		return fmt.Errorf("failed to release preallocated network slot %s: %w", slot.id, err)
 	}
 	m.forgetContainerIP(m.containerNetworkSlotReservation(slot), slot.ip)
@@ -793,6 +807,7 @@ func (m *ContainerNetworkManager) releaseUnusedNetworkSlot(slot *containerNetwor
 
 func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId string, spec *specs.Spec, request *types.ContainerRequest) (bool, error) {
 	var slot *containerNetworkSlot
+	discardedSlots := 0
 	for attempts := 0; attempts < containerNetworkSlotAcquireAttempts; attempts++ {
 		candidate := m.acquireNetworkSlot()
 		if candidate == nil {
@@ -800,12 +815,13 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 		}
 
 		if err := m.prepareNetworkSlotForAssignment(candidate); err != nil {
-			log.Warn().
+			discardedSlots++
+			log.Debug().
 				Str("container_id", containerId).
 				Str("network_slot", candidate.id).
 				Str("ip_address", candidate.ip).
 				Err(err).
-				Msg("discarding unreachable preallocated network slot")
+				Msg("skipping unavailable preallocated network slot")
 			m.discardNetworkSlot("", candidate)
 			continue
 		}
@@ -814,6 +830,12 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 		break
 	}
 	if slot == nil {
+		if discardedSlots > 0 {
+			log.Debug().
+				Str("container_id", containerId).
+				Int("discarded_slots", discardedSlots).
+				Msg("falling back to on-demand network setup after unavailable preallocated slots")
+		}
 		return false, nil
 	}
 
@@ -1213,6 +1235,7 @@ func (m *ContainerNetworkManager) recordNetworkLifecycle(request *types.Containe
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      taskIDFromContainerRequestEnv(request.Env),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		WorkerID:    m.workerId,
 		Success:     &success,
 		Source:      types.EventSourceWorkerNetwork.String(),
@@ -2076,6 +2099,8 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	unlockContainer := m.lockContainerNetwork(containerId)
 	defer unlockContainer()
 
+	m.stopContainerPortExposures(containerId)
+
 	if slot := m.containerNetworkSlot(containerId); slot != nil {
 		return m.tearDownPreallocatedNetworkSlot(containerId, slot)
 	}
@@ -2283,11 +2308,8 @@ func (m *ContainerNetworkManager) ExposePorts(containerId string, bindings []Por
 		return err
 	}
 
-	m.iptablesMu.Lock()
-	defer m.iptablesMu.Unlock()
-
 	for _, binding := range bindings {
-		if err := m.exposePortLocked(info, binding.HostPort, binding.ContainerPort); err != nil {
+		if err := m.startContainerPortExposure(containerId, info, binding); err != nil {
 			return err
 		}
 	}
@@ -2295,38 +2317,126 @@ func (m *ContainerNetworkManager) ExposePorts(containerId string, bindings []Por
 	return nil
 }
 
-func (m *ContainerNetworkManager) exposePortLocked(info *containerNetworkInfo, hostPort, containerPort int) error {
-	// Insert NAT PREROUTING rule at the top of the chain
-	// IPv4
-	err := m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
-	if err != nil {
-		return err
+func (m *ContainerNetworkManager) startContainerPortExposure(containerId string, info *containerNetworkInfo, binding PortBinding) error {
+	family := addressFamilyForHost(m.podAddr)
+	native, fallback := containerPortTargets(info, binding.ContainerPort, family)
+	if native == "" && fallback == "" {
+		return fmt.Errorf("container %s has no network targets for port %d", containerId, binding.ContainerPort)
 	}
 
-	// IPv6
-	if m.ipt6 != nil && info.ContainerIpv6 != "" {
-		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", info.ContainerIpv6, containerPort), "-m", "comment", "--comment", info.Comment)
-		if err != nil {
-			return err
+	exposure := newContainerPortExposure(m.ctx, containerId, binding)
+
+	m.portExposureMu.Lock()
+	if m.portExposures == nil {
+		m.portExposures = map[int]*containerPortExposure{}
+	}
+	if existing := m.portExposures[binding.HostPort]; existing != nil {
+		m.portExposureMu.Unlock()
+		if existing.containerID == containerId && existing.containerPort == binding.ContainerPort {
+			return nil
 		}
+		return fmt.Errorf("host port %d is already proxied for container %s port %d", binding.HostPort, existing.containerID, existing.containerPort)
 	}
+	m.portExposures[binding.HostPort] = exposure
+	m.portExposureMu.Unlock()
 
-	// Add FORWARD rule for the DNAT'd traffic
-	// IPv4
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
-	if err != nil {
-		return err
-	}
-
-	// IPv6
-	if m.ipt6 != nil && info.ContainerIpv6 != "" {
-		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIpv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
-		if err != nil {
-			return err
-		}
-	}
-
+	go m.runContainerPortExposure(exposure, info, binding, family, native, fallback)
 	return nil
+}
+
+func (m *ContainerNetworkManager) runContainerPortExposure(exposure *containerPortExposure, info *containerNetworkInfo, binding PortBinding, family addressFamily, native, fallback string) {
+	ticker := time.NewTicker(containerPortProxyReadyPollInterval)
+	defer ticker.Stop()
+
+	for {
+		nativeReady := containerPortTargetReachable(exposure.ctx, native, containerPortProxyDialTimeout)
+		fallbackReady := containerPortTargetReachable(exposure.ctx, fallback, containerPortProxyDialTimeout)
+		if nativeReady || (family == addressFamilyUnknown && fallbackReady) {
+			if err := m.exposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); err != nil {
+				log.Warn().
+					Err(err).
+					Str("container_id", exposure.containerID).
+					Int("host_port", binding.HostPort).
+					Int("container_port", binding.ContainerPort).
+					Msg("failed to expose container port with kernel forwarding")
+			}
+			return
+		}
+		if fallbackReady {
+			exposure.startProxy(family, []string{fallback})
+			return
+		}
+
+		select {
+		case <-exposure.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *ContainerNetworkManager) exposePortDNAT(ctx context.Context, info *containerNetworkInfo, hostPort, containerPort int, family addressFamily) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	m.iptablesMu.Lock()
+	defer m.iptablesMu.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return m.exposePortDNATLocked(info, hostPort, containerPort, family)
+}
+
+func (m *ContainerNetworkManager) exposePortDNATLocked(info *containerNetworkInfo, hostPort, containerPort int, family addressFamily) error {
+	if family != addressFamilyIPv6 {
+		if err := m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment); err != nil {
+			return err
+		}
+		if err := m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment); err != nil {
+			return err
+		}
+	}
+	if family != addressFamilyIPv4 && m.ipt6 != nil && info.ContainerIpv6 != "" {
+		if err := m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", info.ContainerIpv6, containerPort), "-m", "comment", "--comment", info.Comment); err != nil {
+			return err
+		}
+		if err := m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIpv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ContainerNetworkManager) stopContainerPortExposures(containerId string) {
+	var exposures []*containerPortExposure
+
+	m.portExposureMu.Lock()
+	for hostPort, exposure := range m.portExposures {
+		if exposure.containerID != containerId {
+			continue
+		}
+		delete(m.portExposures, hostPort)
+		exposures = append(exposures, exposure)
+	}
+	m.portExposureMu.Unlock()
+
+	for _, exposure := range exposures {
+		exposure.close()
+	}
+}
+
+func (m *ContainerNetworkManager) stopAllPortExposures() {
+	m.portExposureMu.Lock()
+	exposures := make([]*containerPortExposure, 0, len(m.portExposures))
+	for hostPort, exposure := range m.portExposures {
+		delete(m.portExposures, hostPort)
+		exposures = append(exposures, exposure)
+	}
+	m.portExposureMu.Unlock()
+
+	for _, exposure := range exposures {
+		exposure.close()
+	}
 }
 
 func (m *ContainerNetworkManager) UpdateNetworkPermissions(containerId string, request *types.ContainerRequest) error {

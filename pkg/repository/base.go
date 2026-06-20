@@ -174,6 +174,7 @@ type BackendRepository interface {
 	DeleteVolume(ctx context.Context, workspaceId uint, name string) error
 	ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error)
 	ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
+	ListLatestDeploymentsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]types.DeploymentWithRelated, error)
 	ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error)
@@ -185,6 +186,8 @@ type BackendRepository interface {
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
+	ListLatestStubsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]types.StubWithRelated, error)
+	ListAppIDsByStubExternalIDs(ctx context.Context, workspaceID string, stubExternalIDs []string) (map[string]string, error)
 	ListStubsPaginated(ctx context.Context, filters types.StubFilter) (common.CursorPaginationInfo[types.StubWithRelated], error)
 	GetConcurrencyLimit(ctx context.Context, concurrenyLimitId uint) (*types.ConcurrencyLimit, error)
 	GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error)
@@ -223,7 +226,7 @@ type BackendRepository interface {
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
 	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
 	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
-	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error)
+	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error)
 	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
 }
 
@@ -271,12 +274,13 @@ type EventRepository interface {
 	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamWorkspaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
-	StreamAppEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
+	StreamAppNamespaceEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamLogs(ctx context.Context, query types.LogQuery) (EventStream, error)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushContainerLifecycleEvent(lifecycle types.EventContainerLifecycleSchema)
 	PushContainerEvent(event types.EventContainerEventSchema)
 	PushContainerLogEvent(entry types.EventContainerLogSchema)
+	PushContainerLogEventQueued(entry types.EventContainerLogSchema) error
 	PushPlatformLogEvent(entry types.EventPlatformLogSchema)
 	PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions)
 	PushContainerRequestLifecycle(workerID string, request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, opts types.ContainerLifecycleOptions)

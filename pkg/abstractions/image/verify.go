@@ -136,6 +136,7 @@ func (is *ContainerImageService) prepareBuildOptionsForImageID(ctx context.Conte
 		opts.BaseImageName = baseImage.Repo
 		opts.BaseImageTag = baseImage.Tag
 		opts.BaseImageDigest = baseImage.Digest
+		opts.addPythonRequirements()
 	}
 
 	is.resolveBaseImageDigest(ctx, opts, in.ExistingImageUri == "")

@@ -39,8 +39,28 @@ func (r *appBackendRepo) ListDeploymentsWithRelated(_ context.Context, filters t
 	return r.deploymentsByApp[filters.AppId], nil
 }
 
+func (r *appBackendRepo) ListLatestDeploymentsByAppIDs(_ context.Context, _ uint, appExternalIDs []string) (map[string]types.DeploymentWithRelated, error) {
+	deployments := map[string]types.DeploymentWithRelated{}
+	for _, appID := range appExternalIDs {
+		if len(r.deploymentsByApp[appID]) > 0 {
+			deployments[appID] = r.deploymentsByApp[appID][0]
+		}
+	}
+	return deployments, nil
+}
+
 func (r *appBackendRepo) ListStubs(_ context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
 	return r.stubsByApp[filters.AppId], nil
+}
+
+func (r *appBackendRepo) ListLatestStubsByAppIDs(_ context.Context, _ uint, appExternalIDs []string) (map[string]types.StubWithRelated, error) {
+	stubs := map[string]types.StubWithRelated{}
+	for _, appID := range appExternalIDs {
+		if len(r.stubsByApp[appID]) > 0 {
+			stubs[appID] = r.stubsByApp[appID][0]
+		}
+	}
+	return stubs, nil
 }
 
 func TestListAppWithLatestActivityAllowsAppsWithoutActivity(t *testing.T) {

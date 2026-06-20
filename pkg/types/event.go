@@ -134,6 +134,7 @@ type EventContainerMetricsSchema struct {
 	WorkspaceID      string                    `json:"workspace_id"`
 	StubID           string                    `json:"stub_id"`
 	StubType         string                    `json:"stub_type,omitempty"`
+	AppID            string                    `json:"app_id,omitempty"`
 	CPU              int64                     `json:"cpu,omitempty"`
 	GPUCount         uint32                    `json:"gpu_count,omitempty"`
 	ContainerMetrics EventContainerMetricsData `json:"metrics"`
@@ -708,6 +709,7 @@ type EventContainerLifecycleSchema struct {
 	StubType    string               `json:"stub_type,omitempty"`
 	TaskID      string               `json:"task_id,omitempty"`
 	WorkspaceID string               `json:"workspace_id,omitempty"`
+	AppID       string               `json:"app_id,omitempty"`
 	WorkerID    string               `json:"worker_id,omitempty"`
 	Success     *bool                `json:"success,omitempty"`
 	Source      string               `json:"source,omitempty"`
@@ -725,6 +727,7 @@ type EventContainerEventSchema struct {
 	StubType    string            `json:"stub_type,omitempty"`
 	TaskID      string            `json:"task_id,omitempty"`
 	WorkspaceID string            `json:"workspace_id,omitempty"`
+	AppID       string            `json:"app_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
 	CPU         int64             `json:"cpu,omitempty"`
 	GPUCount    uint32            `json:"gpu_count,omitempty"`
@@ -747,6 +750,10 @@ type EventContainerLogSchema struct {
 	WorkerID    string    `json:"worker_id,omitempty"`
 	Stream      string    `json:"stream,omitempty"`
 	Line        string    `json:"line"`
+	PID         int32     `json:"pid,omitempty"`
+	ProcessArgs []string  `json:"process_args,omitempty"`
+	ProcessCwd  string    `json:"process_cwd,omitempty"`
+	ProcessSeq  uint64    `json:"process_seq,omitempty"`
 }
 
 var EventPlatformLogSchemaVersion = "1.0"
@@ -835,6 +842,10 @@ type LogRecord struct {
 	AppID       string    `json:"app_id,omitempty"`
 	MachineID   string    `json:"machine_id,omitempty"`
 	WorkerID    string    `json:"worker_id,omitempty"`
+	PID         int32     `json:"pid,omitempty"`
+	ProcessArgs []string  `json:"process_args,omitempty"`
+	ProcessCwd  string    `json:"process_cwd,omitempty"`
+	ProcessSeq  uint64    `json:"process_seq,omitempty"`
 }
 
 type LogsResponse struct {
@@ -912,6 +923,10 @@ type ContainerEventRecord struct {
 	AppID       string            `json:"app_id,omitempty"`
 	MachineID   string            `json:"machine_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
+	PID         int32             `json:"pid,omitempty"`
+	ProcessArgs []string          `json:"process_args,omitempty"`
+	ProcessCwd  string            `json:"process_cwd,omitempty"`
+	ProcessSeq  uint64            `json:"process_seq,omitempty"`
 }
 
 type ContainerEventsResponse struct {

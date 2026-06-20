@@ -120,6 +120,10 @@ func writeLogStream(ctx echo.Context, stream repository.EventStream) error {
 			AppID:       record.AppID,
 			MachineID:   record.MachineID,
 			WorkerID:    record.WorkerID,
+			PID:         record.PID,
+			ProcessArgs: record.ProcessArgs,
+			ProcessCwd:  record.ProcessCwd,
+			ProcessSeq:  record.ProcessSeq,
 		}
 		payload, err := json.Marshal(logRecord)
 		if err != nil {

@@ -95,6 +95,7 @@ def parse_args():
     parser.add_argument("--warmup", type=int, default=env_int("BENCH_SANDBOX_WARMUP", 1))
     parser.add_argument("--sandbox-cpu", default=os.getenv("BENCH_SANDBOX_CPU", "0.1"))
     parser.add_argument("--sandbox-memory", default=os.getenv("BENCH_SANDBOX_MEMORY", "192"))
+    parser.add_argument("--sandbox-app-name", default=os.getenv("BENCH_SANDBOX_APP_NAME", "sandbox-parallel-benchmark"))
     parser.add_argument("--sandbox-keep-warm-seconds", type=int, default=env_int("BENCH_SANDBOX_KEEP_WARM_SECONDS", 600))
     parser.add_argument("--sandbox-image-uri", default=os.getenv("BENCH_SANDBOX_IMAGE_URI", os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "registry.localhost:5000/beta9-bench-alpine:latest")))
     parser.add_argument("--sandbox-exec", default=os.getenv("BENCH_SANDBOX_EXEC", DEFAULT_SANDBOX_EXEC))
@@ -278,7 +279,7 @@ def prepare_sandbox_runtime(args):
     Image, Sandbox, sandbox_stub_type = import_sdk()
     image = Image.from_registry(args.sandbox_image_uri)
     sandbox = Sandbox(
-        name="sandbox-parallel-benchmark",
+        name=args.sandbox_app_name,
         image=image,
         cpu=parse_sdk_cpu(args.sandbox_cpu),
         memory=parse_sdk_memory(args.sandbox_memory),
@@ -814,6 +815,7 @@ def main():
             "warmup": args.warmup,
             "sandboxCpu": args.sandbox_cpu,
             "sandboxMemory": args.sandbox_memory,
+            "sandboxAppName": args.sandbox_app_name,
             "sandboxKeepWarmSeconds": args.sandbox_keep_warm_seconds,
             "sandboxImageUri": args.sandbox_image_uri,
             "sandboxExec": args.sandbox_exec,

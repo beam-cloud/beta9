@@ -410,7 +410,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterEndpointServiceServer(g.grpcServer, ws)
 
 	// Register volume service
-	vs, err := volume.NewGlobalVolumeService(g.Config.FileService, g.BackendRepo, g.WorkspaceRepo, g.RedisClient, g.rootRouteGroup)
+	vs, err := volume.NewGlobalVolumeService(g.Config.FileService, g.Config.Storage.WorkspaceStorage, g.BackendRepo, g.WorkspaceRepo, g.RedisClient, g.rootRouteGroup)
 	if err != nil {
 		return err
 	}

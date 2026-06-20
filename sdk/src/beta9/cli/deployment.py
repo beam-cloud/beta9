@@ -149,12 +149,19 @@ def _autodetect_dockerfile(kwargs: Dict) -> Optional[Image]:
     return image
 
 
+def _service_image_option(kwargs: Dict) -> Optional[Image]:
+    dockerfile = kwargs.get("dockerfile")
+    if dockerfile is not None:
+        return dockerfile
+    return kwargs.get("image")
+
+
 def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
-    image = kwargs.get("dockerfile") or kwargs.get("image") or Image()
+    service_image = _service_image_option(kwargs)
     ports = resolve_service_ports(
         ports=kwargs.get("ports"),
-        image=kwargs.get("dockerfile"),
-        default=bool(kwargs.get("dockerfile") or kwargs.get("image")),
+        image=service_image,
+        default=service_image is not None,
     )
     keep_warm_seconds = kwargs.get("keep_warm_seconds")
 
@@ -162,7 +169,7 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         name=name or os.path.basename(os.getcwd()),
         entrypoint=kwargs.get("entrypoint") or [],
         ports=ports,
-        image=image,
+        image=service_image or Image(),
         env=env_vars_to_dict(kwargs.get("env")),
         keep_warm_seconds=0 if keep_warm_seconds is None else keep_warm_seconds,
         min_replicas=kwargs.get("min_replicas") or 0,
@@ -263,9 +270,8 @@ def create_deployment(
                     user_obj.set_handler(f"{module_name}:{obj_name}")
 
             else:
-                dockerfile = _autodetect_dockerfile(kwargs)
-                image = kwargs.get("image")
-                if entrypoint or dockerfile or image or kwargs.get("dockerfile"):
+                _autodetect_dockerfile(kwargs)
+                if entrypoint or _service_image_option(kwargs) is not None:
                     user_obj = _generate_service_module(name, kwargs)
                 else:
                     terminal.error("No handler, entrypoint, image, or Dockerfile specified")

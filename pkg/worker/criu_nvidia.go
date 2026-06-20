@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -17,7 +18,9 @@ import (
 )
 
 const (
-	minNvidiaDriverVersion = 570
+	minNvidiaDriverVersion     = 570
+	gvisorCheckpointAttempts   = 4
+	gvisorCheckpointRetryDelay = 250 * time.Millisecond
 )
 
 type ErrCRIURestoreFailed struct {
@@ -64,17 +67,45 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Run
 		return "", fmt.Errorf("failed to create checkpoint work directory: %w", err)
 	}
 
-	// Create checkpoint with all required options for proper CUDA checkpoint
-	err := rt.Checkpoint(ctx, request.ContainerId, &runtime.CheckpointOpts{
+	checkpointOpts := &runtime.CheckpointOpts{
 		ImagePath:    checkpointPath,
 		WorkDir:      workDir, // Required for checkpoint files (logs, cache, sockets)
 		LeaveRunning: true,    // Keep container running (hot checkpoint)
 		AllowOpenTCP: true,    // Allow open TCP connections
 		SkipInFlight: true,    // Skip in-flight TCP packets
 		LinkRemap:    true,    // Enable link remapping for file descriptors
-	})
-	if err != nil {
-		return "", fmt.Errorf("checkpoint failed for runtime %s: %w", rt.Name(), err)
+	}
+
+	attempts := 1
+	if rt.Name() == types.ContainerRuntimeGvisor.String() {
+		attempts = gvisorCheckpointAttempts
+	}
+
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = rt.Checkpoint(ctx, request.ContainerId, checkpointOpts)
+		if err == nil {
+			break
+		}
+		if attempt == attempts || !retryableGvisorCheckpointError(rt, err) {
+			return "", fmt.Errorf("checkpoint failed for runtime %s: %w", rt.Name(), err)
+		}
+
+		log.Warn().
+			Err(err).
+			Str("runtime", rt.Name()).
+			Str("checkpoint_id", checkpointId).
+			Int("attempt", attempt).
+			Msg("retrying checkpoint after transient runtime error")
+
+		_ = os.RemoveAll(checkpointPath)
+		_ = os.RemoveAll(workDir)
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to recreate checkpoint work directory: %w", err)
+		}
+		if err := waitCheckpointRetry(ctx, attempt); err != nil {
+			return "", err
+		}
 	}
 
 	log.Info().
@@ -85,6 +116,28 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Run
 		Msg("checkpoint created successfully")
 
 	return checkpointPath, nil
+}
+
+func retryableGvisorCheckpointError(rt runtime.Runtime, err error) bool {
+	if err == nil || rt.Name() != types.ContainerRuntimeGvisor.String() {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "tcp.Endpoint") ||
+		strings.Contains(msg, "invalid memory address or nil pointer dereference")
+}
+
+func waitCheckpointRetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt) * gvisorCheckpointRetryDelay
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {

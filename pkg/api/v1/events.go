@@ -191,7 +191,7 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
 	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
 	g.GET("/:workspaceId/tasks/:taskId/stream", auth.WithWorkspaceAuth(group.StreamTaskEvents))
-	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppEvents))
+	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppNamespaceEvents))
 	g.GET("/:workspaceId/history", auth.WithWorkspaceAuth(group.GetEventHistory))
 	g.GET("/:workspaceId/stream", auth.WithWorkspaceAuth(group.StreamWorkspaceEvents))
 	g.POST("/:workspaceId/containers/batch", auth.WithWorkspaceAuth(group.GetContainerEventsBatch))
@@ -405,7 +405,7 @@ func (g *EventGroup) StreamWorkspaceEvents(ctx echo.Context) error {
 	return g.writeEventStream(ctx, stream)
 }
 
-func (g *EventGroup) StreamAppEvents(ctx echo.Context) error {
+func (g *EventGroup) StreamAppNamespaceEvents(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	appID := ctx.Param("appId")
 	if appID == "" {
@@ -424,12 +424,12 @@ func (g *EventGroup) StreamAppEvents(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	stream, err := g.eventRepo.StreamAppEvents(ctx.Request().Context(), query)
+	stream, err := g.eventRepo.StreamAppNamespaceEvents(ctx.Request().Context(), query)
 	if err != nil {
 		if errors.Is(err, repository.ErrEventReadUnsupported) {
 			return NewHTTPError(http.StatusServiceUnavailable, "Event streams are not configured")
 		}
-		return HTTPInternalServerError("Failed to stream app events")
+		return HTTPInternalServerError("Failed to stream app namespace events")
 	}
 	defer stream.Close()
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -19,6 +20,10 @@ type captureEventSink struct {
 func (s *captureEventSink) PushEvent(event cloudevents.Event) error {
 	s.events = append(s.events, event)
 	return nil
+}
+
+func (s *captureEventSink) PushEventSync(event cloudevents.Event) error {
+	return s.PushEvent(event)
 }
 
 func TestEventHTTPSinkDeliversCloudEvent(t *testing.T) {
@@ -289,6 +294,7 @@ func TestPushContainerResourceMetricsEventIncludesReservedResources(t *testing.T
 		ContainerId: "container-1",
 		StubId:      "stub-1",
 		WorkspaceId: "workspace-1",
+		AppId:       "app-1",
 		Cpu:         2500,
 		GpuCount:    2,
 		Stub: types.StubWithRelated{
@@ -313,6 +319,12 @@ func TestPushContainerResourceMetricsEventIncludesReservedResources(t *testing.T
 	}
 	if got, want := event.GPUCount, request.GpuCount; got != want {
 		t.Fatalf("unexpected gpu count: got %d want %d", got, want)
+	}
+	if got, want := event.AppID, request.AppId; got != want {
+		t.Fatalf("unexpected app id: got %q want %q", got, want)
+	}
+	if got, want := sink.events[0].Extensions()["appid"], request.AppId; got != want {
+		t.Fatalf("unexpected app extension: got %q want %q", got, want)
 	}
 }
 
@@ -402,6 +414,66 @@ func TestPushContainerLogSkipsCallbackSinks(t *testing.T) {
 	}
 	if got := len(callbackSink.events); got != 0 {
 		t.Fatalf("expected log event to skip callbacks, got %d callback events", got)
+	}
+}
+
+func TestPushContainerLogEventQueuedOptionalProcessFields(t *testing.T) {
+	storageSink := &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{storageSink}}
+
+	err := repo.PushContainerLogEventQueued(types.EventContainerLogSchema{
+		ContainerID: "container-1",
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Stream:      types.EventLogStreamStdout,
+		Line:        "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := len(storageSink.events), 1; got != want {
+		t.Fatalf("unexpected storage event count: got %d want %d", got, want)
+	}
+
+	raw := storageSink.events[0].Data()
+	if json.Valid(raw) {
+		var payload map[string]interface{}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["pid"]; ok {
+			t.Fatal("expected pid to be omitted for ordinary log")
+		}
+		if _, ok := payload["process_args"]; ok {
+			t.Fatal("expected process_args to be omitted for ordinary log")
+		}
+	}
+
+	err = repo.PushContainerLogEventQueued(types.EventContainerLogSchema{
+		ContainerID: "container-1",
+		WorkspaceID: "workspace-1",
+		StubID:      "stub-1",
+		Stream:      types.EventLogStreamStderr,
+		Line:        "boom",
+		PID:         123,
+		ProcessArgs: []string{"python3", "-c", "print('hi')"},
+		ProcessCwd:  "/workspace",
+		ProcessSeq:  7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var event types.EventContainerLogSchema
+	if err := json.Unmarshal(storageSink.events[1].Data(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.PID != 123 || event.ProcessSeq != 7 || event.ProcessCwd != "/workspace" {
+		t.Fatalf("unexpected process fields: %+v", event)
+	}
+	if got, want := event.ProcessArgs, []string{"python3", "-c", "print('hi')"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected process args: got %#v want %#v", got, want)
 	}
 }
 

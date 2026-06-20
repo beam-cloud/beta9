@@ -127,10 +127,10 @@ test-pkg:
 bench-pkg:
 	go test -run '^$$' -bench=. ./pkg/...
 
-# build-test can be run with "local" to run extra tests when pointing to your local
-# dev setup. It will also exclude custom image tests due to arm64 issues on mac.
+# build-test runs CPU-only image build e2e checks. Set MODE=functions or
+# MODE=pods to run a subset; MODE=local is kept as an alias for all.
 build-test:
-	uv run python e2e/build_tests/app.py $(MODE)
+	PYTHONPATH=$(CURDIR)/sdk/src uv run --project sdk python e2e/build_tests/app.py $(MODE)
 
 load-test:
 	cd e2e/load_tests && k6 run --env URL=$(URL) --env TOKEN=$(TOKEN) throughput.js

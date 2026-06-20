@@ -12,9 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+)
+
+const (
+	runscRestoreStateTimeout      = 2 * time.Second
+	runscRestoreStatePollInterval = 25 * time.Millisecond
 )
 
 // Runsc implements Runtime using the gVisor runsc runtime
@@ -24,8 +30,14 @@ import (
 // inside the container via runsc exec to freeze/unfreeze GPU state before/after
 // checkpoint/restore operations.
 type Runsc struct {
-	cfg            Config
-	nvproxyEnabled bool
+	cfg                   Config
+	dockerPacketWriteFlag string
+	nvproxyEnabled        bool
+}
+
+type runscCommandResult struct {
+	exitCode int
+	err      error
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -46,7 +58,8 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 	}
 
 	return &Runsc{
-		cfg: cfg,
+		cfg:                   cfg,
+		dockerPacketWriteFlag: selectDockerPacketWriteFlag(runscFlags(cfg.RunscPath)),
 	}, nil
 }
 
@@ -366,10 +379,13 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, fmt.Errorf("restore options cannot be nil")
 	}
 
+	cleanupOnFailure := true
 	defer func() {
-		deleteArgs := r.baseArgs(false)
-		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+		if cleanupOnFailure {
+			deleteArgs := r.baseArgs(false)
+			deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+			_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+		}
 	}()
 
 	// Ensure directories exist
@@ -416,31 +432,25 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	if opts.Started != nil {
-		opts.Started <- cmd.Process.Pid
+	killRestoreProcess := func() {
+		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
+			syscall.Kill(-pgid, syscall.SIGKILL)
+		}
 	}
 
 	go func() {
 		<-ctx.Done()
-		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
-			syscall.Kill(-pgid, syscall.SIGKILL)
-		}
+		killRestoreProcess()
 	}()
 
-	err := cmd.Wait()
+	restoreDone := make(chan runscCommandResult, 1)
+	go func() {
+		restoreDone <- runscWaitResult(cmd.Wait(), stderr.String(), "restore")
+	}()
+
+	pid, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)
 	if err != nil {
-		stderrStr := stderr.String()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				if stderrStr != "" {
-					return ws.ExitStatus(), fmt.Errorf("restore failed with exit code %d (stderr: %s)", ws.ExitStatus(), stderrStr)
-				}
-				return ws.ExitStatus(), nil
-			}
-		}
-		if stderrStr != "" {
-			return -1, fmt.Errorf("restore failed: %w (stderr: %s)", err, stderrStr)
-		}
+		killRestoreProcess()
 		return -1, err
 	}
 
@@ -454,7 +464,82 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		}
 	}
 
+	if opts.Started != nil {
+		select {
+		case opts.Started <- pid:
+		case <-ctx.Done():
+			killRestoreProcess()
+			return -1, ctx.Err()
+		}
+	}
+
+	cleanupOnFailure = false
 	return 0, nil
+}
+
+func (r *Runsc) waitForRestoredContainerPID(ctx context.Context, containerID string, restoreDone <-chan runscCommandResult) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, runscRestoreStateTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(runscRestoreStatePollInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	var restoreResult *runscCommandResult
+	for {
+		state, err := r.State(ctx, containerID)
+		if err == nil && state.Pid > 0 {
+			return state.Pid, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("restored container state has no pid")
+		}
+
+		select {
+		case <-ctx.Done():
+			if restoreResult != nil && restoreResult.err != nil {
+				return restoreResult.exitCode, restoreResult.err
+			}
+			return -1, fmt.Errorf("restore succeeded but restored container state was unavailable: %w", lastErr)
+		case result := <-restoreDone:
+			restoreResult = &result
+			restoreDone = nil
+			if result.err != nil {
+				return result.exitCode, result.err
+			}
+		case <-ticker.C:
+		}
+	}
+}
+
+func runscWaitResult(err error, stderr, operation string) runscCommandResult {
+	if err == nil {
+		return runscCommandResult{exitCode: 0}
+	}
+
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			exitCode := ws.ExitStatus()
+			if stderr != "" {
+				return runscCommandResult{
+					exitCode: exitCode,
+					err:      fmt.Errorf("%s failed with exit code %d (stderr: %s)", operation, exitCode, stderr),
+				}
+			}
+			return runscCommandResult{exitCode: exitCode, err: err}
+		}
+	}
+
+	if stderr != "" {
+		return runscCommandResult{
+			exitCode: -1,
+			err:      fmt.Errorf("%s failed: %w (stderr: %s)", operation, err, stderr),
+		}
+	}
+
+	return runscCommandResult{exitCode: -1, err: err}
 }
 
 // cudaCheckpointProcesses runs cuda-checkpoint on all CUDA processes inside the container
@@ -534,54 +619,39 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 
 	args = append(args, r.cfg.RunscExtraArgs...)
 
-	// Add --net-raw flag if Docker-in-Docker is enabled
-	// This is required for Docker to function properly inside gVisor
+	// Add flags required for Docker to function properly inside gVisor.
 	if dockerEnabled {
 		args = append(args, "--net-raw")
+		if r.dockerPacketWriteFlag != "" {
+			args = append(args, r.dockerPacketWriteFlag)
+		}
 	}
 
 	return args
 }
 
+func runscFlags(runscPath string) string {
+	out, err := exec.Command(runscPath, "flags").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func selectDockerPacketWriteFlag(flags string) string {
+	switch {
+	case strings.Contains(flags, "-allow-packet-socket-write"):
+		return "--allow-packet-socket-write"
+	case strings.Contains(flags, "-TESTONLY-allow-packet-endpoint-write"):
+		return "--TESTONLY-allow-packet-endpoint-write"
+	default:
+		return ""
+	}
+}
+
 // AddDockerInDockerCapabilities adds the capabilities required for running Docker inside gVisor.
-// According to gVisor documentation, Docker requires: audit_write, chown, dac_override, fowner,
-// fsetid, kill, mknod, net_bind_service, net_admin, net_raw, setfcap, setgid, setpcap, setuid,
-// sys_admin, sys_chroot, sys_ptrace
 func (r *Runsc) AddDockerInDockerCapabilities(spec *specs.Spec) {
-	if spec.Process == nil {
-		spec.Process = &specs.Process{}
-	}
-
-	if spec.Process.Capabilities == nil {
-		spec.Process.Capabilities = &specs.LinuxCapabilities{}
-	}
-
-	// Capabilities required for Docker-in-Docker according to gVisor documentation
-	dockerCaps := []string{
-		"CAP_AUDIT_WRITE",
-		"CAP_CHOWN",
-		"CAP_DAC_OVERRIDE",
-		"CAP_FOWNER",
-		"CAP_FSETID",
-		"CAP_KILL",
-		"CAP_MKNOD",
-		"CAP_NET_BIND_SERVICE",
-		"CAP_NET_ADMIN",
-		"CAP_NET_RAW",
-		"CAP_SETFCAP",
-		"CAP_SETGID",
-		"CAP_SETPCAP",
-		"CAP_SETUID",
-		"CAP_SYS_ADMIN",
-		"CAP_SYS_CHROOT",
-		"CAP_SYS_PTRACE",
-	}
-
-	// Add capabilities to all capability sets
-	spec.Process.Capabilities.Bounding = mergeCapabilities(spec.Process.Capabilities.Bounding, dockerCaps)
-	spec.Process.Capabilities.Effective = mergeCapabilities(spec.Process.Capabilities.Effective, dockerCaps)
-	spec.Process.Capabilities.Permitted = mergeCapabilities(spec.Process.Capabilities.Permitted, dockerCaps)
-	spec.Process.Capabilities.Inheritable = mergeCapabilities(spec.Process.Capabilities.Inheritable, dockerCaps)
+	AddDockerInDockerCapabilities(spec)
 }
 
 // mergeCapabilities merges two capability lists, avoiding duplicates

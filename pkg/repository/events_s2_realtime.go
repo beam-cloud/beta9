@@ -121,7 +121,7 @@ func (r *S2EventRepository) GetStubMetricsTimeseries(ctx context.Context, query 
 		return response, nil
 	}
 
-	return r.getMetricsTimeseries(ctx, r.stubStreamName(query.WorkspaceID, query.StubID), start, end, interval, query.StubType)
+	return r.getMetricsTimeseries(ctx, r.stubStreamName(query.WorkspaceID, query.StubID), start, end, interval, query)
 }
 
 func (r *S2EventRepository) GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error) {
@@ -130,10 +130,10 @@ func (r *S2EventRepository) GetWorkspaceMetricsTimeseries(ctx context.Context, q
 		return response, nil
 	}
 
-	return r.getMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, end, interval, query.StubType)
+	return r.getMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, end, interval, query)
 }
 
-func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string, stubTypeFilter string) (*types.MetricsTimeseriesResponse, error) {
+func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string, query types.EventQuery) (*types.MetricsTimeseriesResponse, error) {
 	response := &types.MetricsTimeseriesResponse{}
 	buckets := map[int64]*metricsBucketAccumulator{}
 	seqNum := uint64(0)
@@ -166,7 +166,10 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 			if !ok {
 				continue
 			}
-			if stubTypeFilter != "" && types.StubType(metrics.StubType).Kind() != stubTypeFilter {
+			if !metricsRecordMatchesQuery(record, metrics, query) {
+				continue
+			}
+			if query.StubType != "" && types.StubType(metrics.StubType).Kind() != query.StubType {
 				continue
 			}
 			if eventTime.Before(start) || !eventTime.Before(end) {
@@ -238,7 +241,7 @@ func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.Stream
 	case query.StubID != "" && query.WorkspaceID != "":
 		return addKnown(r.stubLogStreamName(query.WorkspaceID, query.StubID))
 	case query.AppID != "" && query.WorkspaceID != "":
-		return addKnown(r.appLogStreamName(query.WorkspaceID, query.AppID))
+		return addKnown(r.appNamespaceLogStreamName(query.WorkspaceID, query.AppID))
 	case query.WorkspaceID != "":
 		return addKnown(r.workspaceLogStreamName(query.WorkspaceID))
 	default:
@@ -405,6 +408,10 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 		WorkspaceID: firstNonEmpty(entry.WorkspaceID, eventRecord.WorkspaceID),
 		AppID:       firstNonEmpty(entry.AppID, eventRecord.AppID),
 		WorkerID:    firstNonEmpty(entry.WorkerID, eventRecord.WorkerID),
+		PID:         entry.PID,
+		ProcessArgs: entry.ProcessArgs,
+		ProcessCwd:  entry.ProcessCwd,
+		ProcessSeq:  entry.ProcessSeq,
 	}, true
 }
 
@@ -575,6 +582,10 @@ func containerEventRecordFromLogRecord(record types.LogRecord) types.ContainerEv
 		AppID:       record.AppID,
 		MachineID:   record.MachineID,
 		WorkerID:    record.WorkerID,
+		PID:         record.PID,
+		ProcessArgs: record.ProcessArgs,
+		ProcessCwd:  record.ProcessCwd,
+		ProcessSeq:  record.ProcessSeq,
 	}
 }
 
@@ -595,6 +606,21 @@ func containerMetricsFromS2(record s2.SequencedRecord) (types.EventContainerMetr
 		envelope.Time = time.UnixMilli(int64(record.Timestamp)).UTC()
 	}
 	return envelope.Data, envelope.Time, true
+}
+
+func metricsRecordMatchesQuery(record s2.SequencedRecord, metrics types.EventContainerMetricsSchema, query types.EventQuery) bool {
+	if query.AppID == "" {
+		return true
+	}
+
+	headerAppID, hasAppIDHeader := s2RecordHeader(record, "app_id")
+	if hasAppIDHeader && headerAppID != query.AppID {
+		return false
+	}
+	if !hasAppIDHeader && metrics.AppID != query.AppID {
+		return false
+	}
+	return metrics.AppID == "" || metrics.AppID == query.AppID
 }
 
 func metricsBucketKey(t time.Time, interval string) int64 {

@@ -1061,11 +1061,22 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		queryGet := `
     SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id
     FROM stub
-    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
+    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb AND workspace_id = $5;
     `
-		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))
+		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON), workspaceId)
 		if err == nil {
-			// Stub found, return it
+			queryTouch := `
+    UPDATE stub
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
+    `
+			if err := r.client.GetContext(ctx, &stub, queryTouch, stub.Id); err != nil {
+				return types.Stub{}, err
+			}
+			if err := r.updateAppActivity(ctx, appId); err != nil {
+				return stub, err
+			}
 			return stub, nil
 		}
 	}
@@ -1408,7 +1419,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 			SortOrder:       "DESC",
 			SortColumn:      "created_at",
 			SortQueryPrefix: "d",
-			PageSize:        10,
+			PageSize:        int(filters.Limit),
 		},
 		filters.Cursor,
 	)
@@ -1610,6 +1621,44 @@ func (c *PostgresBackendRepository) ListDeploymentsWithRelated(ctx context.Conte
 	return deployments, nil
 }
 
+type latestDeploymentByAppRow struct {
+	types.DeploymentWithRelated
+	AppExternalID string `db:"app_external_id"`
+}
+
+func (c *PostgresBackendRepository) ListLatestDeploymentsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]types.DeploymentWithRelated, error) {
+	deploymentsByApp := make(map[string]types.DeploymentWithRelated, len(appExternalIDs))
+	if workspaceID == 0 || len(appExternalIDs) == 0 {
+		return deploymentsByApp, nil
+	}
+
+	query := `
+		SELECT DISTINCT ON (a.external_id)
+			a.external_id AS app_external_id,
+			d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at, d.deleted_at, d.app_id,
+			w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at",
+			s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s.type AS "stub.type", s.created_at AS "stub.created_at", s.updated_at AS "stub.updated_at",
+			a.id AS "app.id", a.external_id AS "app.external_id", a.name AS "app.name", a.description AS "app.description", a.workspace_id AS "app.workspace_id", a.created_at AS "app.created_at", a.updated_at AS "app.updated_at", a.deleted_at AS "app.deleted_at"
+		FROM app a
+		JOIN deployment d ON d.app_id = a.id AND d.deleted_at IS NULL
+		JOIN workspace w ON d.workspace_id = w.id
+		JOIN stub s ON d.stub_id = s.id
+		WHERE a.workspace_id = $1
+		  AND a.deleted_at IS NULL
+		  AND a.external_id = ANY($2)
+		ORDER BY a.external_id, d.created_at DESC, d.id DESC;
+	`
+
+	var rows []latestDeploymentByAppRow
+	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(appExternalIDs)); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		deploymentsByApp[row.AppExternalID] = row.DeploymentWithRelated
+	}
+	return deploymentsByApp, nil
+}
+
 func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
 	qb := c.listDeploymentsQueryBuilder(filters)
 
@@ -1697,6 +1746,73 @@ func (c *PostgresBackendRepository) ListStubs(ctx context.Context, filters types
 	return stubs, nil
 }
 
+type latestStubByAppRow struct {
+	types.StubWithRelated
+	AppExternalID string `db:"app_external_id"`
+}
+
+func (c *PostgresBackendRepository) ListLatestStubsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]types.StubWithRelated, error) {
+	stubsByApp := make(map[string]types.StubWithRelated, len(appExternalIDs))
+	if workspaceID == 0 || len(appExternalIDs) == 0 {
+		return stubsByApp, nil
+	}
+
+	query := `
+		SELECT DISTINCT ON (a.external_id)
+			a.external_id AS app_external_id,
+			s.*,
+			w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at",
+			a.id AS "app.id", a.external_id AS "app.external_id", a.name AS "app.name", a.description AS "app.description", a.workspace_id AS "app.workspace_id", a.created_at AS "app.created_at", a.updated_at AS "app.updated_at", a.deleted_at AS "app.deleted_at"
+		FROM app a
+		JOIN stub s ON s.app_id = a.id
+		JOIN workspace w ON s.workspace_id = w.id
+		WHERE a.workspace_id = $1
+		  AND a.deleted_at IS NULL
+		  AND a.external_id = ANY($2)
+		ORDER BY a.external_id, s.created_at DESC, s.id DESC;
+	`
+
+	var rows []latestStubByAppRow
+	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(appExternalIDs)); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		stubsByApp[row.AppExternalID] = row.StubWithRelated
+	}
+	return stubsByApp, nil
+}
+
+type stubAppIDRow struct {
+	StubExternalID string `db:"stub_external_id"`
+	AppExternalID  string `db:"app_external_id"`
+}
+
+func (c *PostgresBackendRepository) ListAppIDsByStubExternalIDs(ctx context.Context, workspaceID string, stubExternalIDs []string) (map[string]string, error) {
+	appIDsByStub := make(map[string]string, len(stubExternalIDs))
+	if workspaceID == "" || len(stubExternalIDs) == 0 {
+		return appIDsByStub, nil
+	}
+
+	query := `
+		SELECT s.external_id AS stub_external_id, a.external_id AS app_external_id
+		FROM stub s
+		JOIN workspace w ON s.workspace_id = w.id
+		JOIN app a ON s.app_id = a.id
+		WHERE w.external_id = $1
+		  AND s.external_id = ANY($2)
+		  AND a.deleted_at IS NULL;
+	`
+
+	var rows []stubAppIDRow
+	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(stubExternalIDs)); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		appIDsByStub[row.StubExternalID] = row.AppExternalID
+	}
+	return appIDsByStub, nil
+}
+
 func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filters types.StubFilter) (common.CursorPaginationInfo[types.StubWithRelated], error) {
 	qb := c.listStubsQueryBuilder(filters)
 
@@ -1707,7 +1823,7 @@ func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filt
 			SortOrder:       "DESC",
 			SortColumn:      "created_at",
 			SortQueryPrefix: "s",
-			PageSize:        10,
+			PageSize:        int(filters.Limit),
 		},
 		filters.Cursor,
 	)
@@ -2335,7 +2451,7 @@ func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, works
 			SortOrder:       "DESC",
 			SortColumn:      "updated_at",
 			SortQueryPrefix: "a",
-			PageSize:        10,
+			PageSize:        int(filters.Limit),
 		},
 		filters.Cursor,
 	)
@@ -2767,7 +2883,7 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	return &checkpoint, nil
 }
 
-func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
+func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
@@ -2776,9 +2892,10 @@ func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, ac
 		INNER JOIN stub s ON c.stub_id = s.id
 		INNER JOIN workspace w ON s.workspace_id = w.id
 		WHERE c.deleted_at IS NULL
-		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]));`
+		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
+		  AND s.updated_at < $2;`
 
-	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys))
+	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys), stubLastUsedBefore)
 	if err != nil {
 		return nil, err
 	}

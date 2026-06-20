@@ -499,6 +499,7 @@ func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, li
 		StubType:    string(request.Stub.Type.Kind()),
 		TaskID:      taskIDFromRequestEnv(request.Env),
 		WorkspaceID: request.WorkspaceId,
+		AppID:       request.AppId,
 		Success:     &success,
 		Source:      types.EventSourceScheduler.String(),
 		Attrs:       attrs,
@@ -726,10 +727,6 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 			continue
 		}
 
-		if request.DockerEnabled && controller.ContainerRuntime() != "gvisor" {
-			continue
-		}
-
 		filteredControllers = append(filteredControllers, controller)
 	}
 
@@ -818,10 +815,6 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
 		if !request.Preemptable && worker.Preemptable {
-			continue
-		}
-
-		if request.DockerEnabled && worker.Runtime != types.ContainerRuntimeGvisor.String() {
 			continue
 		}
 

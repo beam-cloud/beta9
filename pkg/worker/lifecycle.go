@@ -28,15 +28,16 @@ import (
 )
 
 const (
-	baseConfigPath              string = types.AgentTmpPath
-	defaultContainerDirectory   string = types.WorkerUserCodeVolume
-	specBaseName                string = "config.json"
-	initialSpecBaseName         string = "initial_config.json"
-	containerInnerPort          int    = 8001 // Use a fixed port inside the container
-	markRunningRetryTimeout            = 3 * time.Second
-	markRunningRetryInterval           = 100 * time.Millisecond
-	runtimeDeleteTimeout               = 30 * time.Second
-	sandboxCPUQuotaApplyTimeout        = 2 * time.Second
+	baseConfigPath                string = types.AgentTmpPath
+	defaultContainerDirectory     string = types.WorkerUserCodeVolume
+	specBaseName                  string = "config.json"
+	initialSpecBaseName           string = "initial_config.json"
+	containerInnerPort            int    = 8001 // Use a fixed port inside the container
+	markRunningRetryTimeout              = 3 * time.Second
+	markRunningRetryInterval             = 100 * time.Millisecond
+	runtimeDeleteTimeout                 = 30 * time.Second
+	sandboxCPUQuotaApplyTimeout          = 2 * time.Second
+	restoredContainerPollInterval        = 500 * time.Millisecond
 )
 
 const (
@@ -115,6 +116,8 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		signal = syscall.SIGKILL
 	}
 
+	s.stopDockerSandbox(containerId, instance, kill)
+
 	// Use the runtime that was selected for this container
 	rt := instance.Runtime
 	if rt == nil {
@@ -174,9 +177,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Set container exit code on instance
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
-		updatedInstance := *instance
-		updatedInstance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, &updatedInstance)
+		instance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, instance)
 	}
 	s.markContainerStopping(containerId)
 
@@ -522,7 +524,7 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 
 	containerId := request.ContainerId
 	if len(bindings) > 0 {
-		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindings[0].HostPort)
+		containerAddr := joinHostPort(s.podAddr, bindings[0].HostPort)
 		phaseStart := time.Now()
 		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 			ContainerId: containerId,
@@ -538,8 +540,9 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 
 	addressMap := make(map[int32]string, len(bindings))
 	for _, binding := range bindings {
-		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
+		addressMap[int32(binding.ContainerPort)] = joinHostPort(s.podAddr, binding.HostPort)
 	}
+	s.cacheContainerAddressMap(containerId, addressMap)
 
 	phaseStart := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
@@ -1125,12 +1128,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}
 
-	// Add Docker capabilities if enabled for sandbox containers with gVisor
-	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
-		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
-			runscRuntime.AddDockerInDockerCapabilities(spec)
-			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
-		}
+	// Add Docker capabilities if enabled for sandbox containers.
+	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		runtime.AddDockerInDockerCapabilities(spec)
+		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
 	}
 
 	// Prepare spec for the selected runtime
@@ -1181,6 +1182,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
+	restoringCheckpoint := request.Checkpoint != nil &&
+		request.Checkpoint.Status == string(types.CheckpointStatusAvailable) &&
+		containerInstance.Runtime != nil &&
+		containerInstance.Runtime.Capabilities().CheckpointRestore &&
+		s.IsCRIUAvailable(request.GpuCount)
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
@@ -1229,6 +1235,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			instance, exists := s.containerInstances.Get(containerId)
 			if !exists {
 				return
+			}
+			if restoringCheckpoint {
+				s.signalRestoredSandboxProcessManager(ctx, request, instance.Runtime)
 			}
 
 			phaseStart := time.Now()
@@ -1390,6 +1399,19 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
+	restoringCheckpoint := supportsCheckpoint && request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable)
+	var checkpointRestoredOnce sync.Once
+	markCheckpointRestored := func() {
+		if !restoringCheckpoint {
+			return
+		}
+		checkpointRestoredOnce.Do(func() {
+			if err := s.updateCheckpointRestored(request.Checkpoint.CheckpointId); err != nil {
+				log.Warn().Err(err).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
+			}
+			outputLogger.Info("Checkpoint found and restored")
+		})
+	}
 
 	// Handle automatic checkpoint creation if applicable
 	// (This occurs when checkpoint_enabled is true and an existing checkpoint is not available)
@@ -1432,6 +1454,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			return
 		}
 		s.markContainerRunning(ctx, request, startupStartedAt)
+		markCheckpointRestored()
 	}
 
 	go func() {
@@ -1458,7 +1481,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if restored {
 			close(runtimeStartedDone)
 			<-runtimeStartedHandled
-			return exitCode, err
+			if runtimeRestoreWaitsForExit(instance.Runtime) {
+				return exitCode, err
+			}
+			if err != nil {
+				return exitCode, err
+			}
+			return s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
 		}
 
 		// If this is not a deployment stub, don't fall back to running the container
@@ -1499,6 +1528,44 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	return exitCode, err
+}
+
+func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Runtime, containerId string, fallbackExitCode int) (int, error) {
+	ticker := time.NewTicker(restoredContainerPollInterval)
+	defer ticker.Stop()
+	observedRunning := false
+
+	for {
+		state, err := rt.State(ctx, containerId)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fallbackExitCode, ctxErr
+			}
+			if !observedRunning {
+				return -1, fmt.Errorf("restored container state unavailable: %w", err)
+			}
+			return -1, nil
+		}
+		if state.Status != types.RuncContainerStatusRunning {
+			return -1, nil
+		}
+		observedRunning = true
+
+		select {
+		case <-ctx.Done():
+			return fallbackExitCode, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+type restoreWaitsForExitRuntime interface {
+	RestoreWaitsForExit() bool
+}
+
+func runtimeRestoreWaitsForExit(rt runtime.Runtime) bool {
+	restoreRuntime, ok := rt.(restoreWaitsForExitRuntime)
+	return ok && restoreRuntime.RestoreWaitsForExit()
 }
 
 func (s *Worker) markContainerRunning(ctx context.Context, request *types.ContainerRequest, startupStartedAt time.Time) {

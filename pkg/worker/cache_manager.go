@@ -531,43 +531,60 @@ func (s nodeCacheServer) Watch() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		if !s.reconcile() {
+			return
+		}
+
 		for {
 			select {
 			case <-m.ctx.Done():
 				return
 			case <-ticker.C:
-				m.mu.Lock()
-				draining := m.draining
-				running := m.server != nil
-				m.mu.Unlock()
-				if draining {
-					return
-				}
-				if !cacheServerOnlyMode() && cacheServerDaemonSetMarkerFresh(s.config.Server.DiskCacheDir, cacheRegistrationTTL(s.config)) {
-					if running {
-						if err := m.stopNodeCacheServer("cache server daemonset marker is fresh"); err != nil {
-							log.Warn().Err(err).Msg("failed to stop embedded cache server")
-						}
-					}
-					continue
-				}
-				if running {
-					if cacheServerOnlyMode() {
-						return
-					}
-					continue
-				}
-				startedCacheServer, err := s.Start()
-				if err != nil {
-					log.Warn().Err(err).Msg("failed to start standby cache server")
-					continue
-				}
-				if startedCacheServer && cacheServerOnlyMode() {
+				if !s.reconcile() {
 					return
 				}
 			}
 		}
 	}()
+}
+
+// reconcile runs one node-cache ownership pass. It returns false only when the
+// watcher should exit: the manager is draining, or this cache-server-only
+// process successfully owns the server and needs no standby loop. Embedded
+// workers keep watching even when they fail to acquire ownership so a node does
+// not remain without a cache host after the current owner exits.
+func (s nodeCacheServer) reconcile() bool {
+	m := s.manager
+	m.mu.Lock()
+	draining := m.draining
+	running := m.server != nil
+	m.mu.Unlock()
+	if draining {
+		return false
+	}
+	if !cacheServerOnlyMode() && cacheServerDaemonSetMarkerFresh(s.config.Server.DiskCacheDir, cacheRegistrationTTL(s.config)) {
+		if running {
+			if err := m.stopNodeCacheServer("cache server daemonset marker is fresh"); err != nil {
+				log.Warn().Err(err).Msg("failed to stop embedded cache server")
+			}
+		}
+		return true
+	}
+	if running {
+		if cacheServerOnlyMode() {
+			return false
+		}
+		return true
+	}
+	startedCacheServer, err := s.Start()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to start standby cache server")
+		return true
+	}
+	if cacheServerOnlyMode() && startedCacheServer {
+		return false
+	}
+	return true
 }
 
 func (m *WorkerCacheManager) stopNodeCacheServer(reason string) error {
