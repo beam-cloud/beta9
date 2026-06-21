@@ -2,6 +2,7 @@ package abstractions
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -148,6 +149,53 @@ func TestHandleScalingEventInactiveStopsRunningContainers(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected inactive instance to stop running container")
+	}
+}
+
+func TestSyncMirrorsDeploymentActiveState(t *testing.T) {
+	stubConfig, err := json.Marshal(&types.StubConfigV1{
+		Autoscaler: &types.Autoscaler{MaxContainers: 1, TasksPerContainer: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := types.Workspace{Id: 1, Name: "workspace"}
+	stub := types.Stub{
+		ExternalId:  "stub",
+		Type:        types.StubType(types.StubTypePodDeployment),
+		Config:      string(stubConfig),
+		WorkspaceId: workspace.Id,
+	}
+	backendRepo := &testInstanceControllerBackendRepo{
+		deployments: []types.DeploymentWithRelated{{
+			Deployment: types.Deployment{Active: true},
+			Workspace:  workspace,
+			Stub:       stub,
+		}},
+	}
+
+	instance := &AutoscaledInstance{
+		Ctx:         context.Background(),
+		IsActive:    false,
+		BackendRepo: backendRepo,
+		Stub:        &types.StubWithRelated{Stub: stub, Workspace: workspace},
+		StubConfig:  &types.StubConfigV1{},
+	}
+
+	if err := instance.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if !instance.IsActive {
+		t.Fatal("expected active deployment to reactivate the instance")
+	}
+
+	backendRepo.deployments[0].Active = false
+	if err := instance.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if instance.IsActive {
+		t.Fatal("expected inactive deployment to deactivate the instance")
 	}
 }
 

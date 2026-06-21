@@ -284,10 +284,20 @@ func TestRequiresWorkspaceStorageMount(t *testing.T) {
 	})
 
 	t.Run("build request", func(t *testing.T) {
-		sourceImage := "alpine"
+		dockerfile := "FROM alpine"
 		request := stubCodeMountRequest("container-build", "workspace", "object")
 		request.Workspace.Storage = directWorkspaceStorage()
-		request.BuildOptions.SourceImage = &sourceImage
+		request.BuildOptions.Dockerfile = &dockerfile
+		request.BuildOptions.BuildCtxObject = &request.Stub.Object.ExternalId
+
+		require.False(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+
+	t.Run("build request with incomplete direct storage", func(t *testing.T) {
+		dockerfile := "FROM alpine"
+		request := stubCodeMountRequest("container-build-incomplete", "workspace", "object")
+		request.BuildOptions.Dockerfile = &dockerfile
+		request.BuildOptions.BuildCtxObject = &request.Stub.Object.ExternalId
 
 		require.True(t, manager.RequiresWorkspaceStorageMount(request))
 	})

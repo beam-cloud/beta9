@@ -2610,13 +2610,13 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	if request.StorageAvailable() {
 		buildCtxPath = path.Join(buildPath, "build-ctx")
 
-		if workspaceStorageDownloadAvailable(request.Workspace.Storage) {
-			objectPath = path.Join(buildPath, "build-ctx.zip")
-			if err := downloadWorkspaceBuildContext(ctx, request, *request.BuildOptions.BuildCtxObject, objectPath); err != nil {
-				return "", err
-			}
-		} else {
-			objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
+		if !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+			return "", fmt.Errorf("workspace storage credentials are required to download build context %q directly", *request.BuildOptions.BuildCtxObject)
+		}
+
+		objectPath = path.Join(buildPath, "build-ctx.zip")
+		if err := downloadWorkspaceBuildContext(ctx, request, *request.BuildOptions.BuildCtxObject, objectPath); err != nil {
+			return "", err
 		}
 	}
 

@@ -163,6 +163,12 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 		return err
 	}
 
+	if !instance.buffer.hasAvailableContainers() {
+		if err := instance.ensureReadyForRequest(); err != nil {
+			return err
+		}
+	}
+
 	return instance.buffer.ForwardRequest(ctx)
 }
 
@@ -170,6 +176,12 @@ func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string)
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return err
+	}
+
+	if !instance.buffer.hasAvailableContainers() {
+		if err := instance.ensureReadyForRequest(); err != nil {
+			return err
+		}
 	}
 
 	return instance.buffer.ForwardTCPRequest(tc)

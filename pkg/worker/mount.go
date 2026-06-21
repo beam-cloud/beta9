@@ -123,7 +123,9 @@ func (c *ContainerMountManager) RequiresWorkspaceStorageMount(request *types.Con
 	}
 
 	if request.IsBuildRequest() {
-		return true
+		return request.BuildOptions.Dockerfile != nil &&
+			request.BuildOptions.BuildCtxObject != nil &&
+			!workspaceStorageDownloadAvailable(request.Workspace.Storage)
 	}
 
 	directCodeDownload := workspaceStorageDownloadAvailable(request.Workspace.Storage)

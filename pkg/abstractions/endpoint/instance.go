@@ -32,6 +32,22 @@ type endpointInstance struct {
 	isASGI bool
 }
 
+func (i *endpointInstance) ensureReadyForTasklessRequest() error {
+	if err := i.Sync(); err != nil {
+		return err
+	}
+
+	state, err := i.State()
+	if err != nil {
+		return err
+	}
+
+	if state.RunningContainers+state.PendingContainers > 0 {
+		return nil
+	}
+	return i.HandleScalingEvent(1)
+}
+
 func (i *endpointInstance) startContainers(containersToRun int) error {
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.buffer.stubConfig)
 	if err != nil {
@@ -177,6 +193,17 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 		if !i.IsActive {
 			keys = append(keys, container.ContainerId)
 			continue
+		}
+
+		if i.buffer != nil {
+			availableTokens, err := i.buffer.requestTokens(container.ContainerId)
+			if err != nil {
+				log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting endpoint request tokens for container")
+				continue
+			}
+			if availableTokens < i.buffer.effectiveMaxTokens() {
+				continue
+			}
 		}
 
 		if i.Stub.Type.IsDeployment() {

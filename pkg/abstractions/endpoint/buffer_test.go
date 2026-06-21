@@ -48,24 +48,7 @@ func TestIsASGIHealthRequest(t *testing.T) {
 	}
 }
 
-func TestForwardHealthRequestReturnsOKWhenNoBackendIsReady(t *testing.T) {
-	e := echo.New()
-	httpReq := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
-	ctx := e.NewContext(httpReq, rec)
-	ctx.SetParamNames("subPath")
-	ctx.SetParamValues("health")
-
-	rb := &RequestBuffer{}
-	if err := rb.ForwardHealthRequest(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-}
-
-func TestForwardHealthRequestProxiesWithoutTaskHeader(t *testing.T) {
+func TestTasklessASGIRequestProxiesWithoutTaskHeader(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-TASK-ID"); got != "" {
 			t.Errorf("forwarded X-TASK-ID = %q, want empty", got)
@@ -95,15 +78,30 @@ func TestForwardHealthRequestProxiesWithoutTaskHeader(t *testing.T) {
 	ctx.SetParamNames("subPath")
 	ctx.SetParamValues("health")
 
+	rdb := newEndpointBufferTestRedis(t)
+	bufferCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	rb := &RequestBuffer{
-		ctx:        context.Background(),
-		httpClient: backend.Client(),
+		ctx:           bufferCtx,
+		rdb:           rdb,
+		containerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
+		stubConfig:    &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
+		buffer:        abstractions.NewRingBuffer[*request](1),
+		httpClient:    backend.Client(),
+		maxTokens:     1,
+		isASGI:        true,
+		workReady:     make(chan struct{}, 1),
 		availableContainers: []container{{
 			id:      "container-1",
 			address: backendURL.Host,
 		}},
 	}
-	if err := rb.ForwardHealthRequest(ctx); err != nil {
+	go rb.processRequests()
+
+	if err := rb.ForwardRequest(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if rec.Code != http.StatusNoContent {
@@ -112,6 +110,11 @@ func TestForwardHealthRequestProxiesWithoutTaskHeader(t *testing.T) {
 	if got := rec.Header().Get("X-Backend-Health"); got != "ok" {
 		t.Fatalf("response header = %q, want ok", got)
 	}
+
+	key := Keys.endpointRequestTokens("workspace", "stub", "container-1")
+	waitForCondition(t, 50*time.Millisecond, func() bool {
+		return redisInt64(t, rdb, key) == 1
+	})
 }
 
 func TestBackendDialTimeoutCapsLongRequestTimeouts(t *testing.T) {
@@ -221,10 +224,11 @@ func TestProcessRequestsWakesWhenBackendBecomesAvailable(t *testing.T) {
 		workReady:           make(chan struct{}, 1),
 	}
 	req := &request{
-		ctx:     reqCtx,
-		task:    &EndpointTask{msg: &types.TaskMessage{TaskId: "task"}},
-		done:    make(chan struct{}),
-		started: make(chan struct{}),
+		ctx:       reqCtx,
+		task:      &EndpointTask{msg: &types.TaskMessage{TaskId: "task"}},
+		requestID: "task",
+		done:      make(chan struct{}),
+		started:   make(chan struct{}),
 	}
 	if rb.buffer.Push(req, false) {
 		t.Fatal("unexpected overwrite")
@@ -406,6 +410,59 @@ func TestRefreshRequestTokenTTLExtendsTokenKey(t *testing.T) {
 	}
 	if ttl < rb.requestTokenTTL()-time.Second {
 		t.Fatalf("ttl = %s, want refreshed close to %s", ttl, rb.requestTokenTTL())
+	}
+}
+
+func TestStoppableContainersSkipsInFlightEndpointRequests(t *testing.T) {
+	rdb := newEndpointBufferTestRedis(t)
+	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+	state := &types.ContainerState{
+		ContainerId: "container-1",
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+		ScheduledAt: time.Now().Unix(),
+		StartedAt:   time.Now().Unix(),
+	}
+	if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+
+	rb := newEndpointRequestTokenTestBuffer(rdb, 1)
+	rb.containerRepo = containerRepo
+	if err := rb.acquireRequestToken("container-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	instance := &endpointInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{
+			Rdb:           rdb,
+			IsActive:      true,
+			Workspace:     &types.Workspace{Name: "workspace"},
+			Stub:          &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeEndpointDeployment)}},
+			StubConfig:    &types.StubConfigV1{},
+			ContainerRepo: containerRepo,
+		},
+		buffer: rb,
+	}
+
+	containers, err := instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 0 {
+		t.Fatalf("stoppable containers = %v, want none while request token is consumed", containers)
+	}
+
+	if err := rb.releaseRequestToken("container-1", "request-1"); err != nil {
+		t.Fatal(err)
+	}
+	containers, err = instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 1 || containers[0] != "container-1" {
+		t.Fatalf("stoppable containers = %v, want [container-1] after request token release", containers)
 	}
 }
 

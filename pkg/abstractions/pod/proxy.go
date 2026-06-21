@@ -288,6 +288,13 @@ func (pb *PodProxyBuffer) availableContainerSnapshot() []container {
 	return containers
 }
 
+func (pb *PodProxyBuffer) hasAvailableContainers() bool {
+	pb.availableContainersLock.RLock()
+	defer pb.availableContainersLock.RUnlock()
+
+	return len(pb.availableContainers) > 0
+}
+
 func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, bool, bool) {
 	pb.availableContainersLock.RLock()
 	defer pb.availableContainersLock.RUnlock()

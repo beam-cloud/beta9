@@ -205,6 +205,19 @@ func (es *HttpEndpointService) forwardRequest(
 	return task.Execute(ctx.Request().Context(), ctx, authInfo)
 }
 
+func (es *HttpEndpointService) forwardASGIHealthRequest(ctx echo.Context, stubId string) error {
+	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
+	if err != nil {
+		return err
+	}
+
+	if err := instance.ensureReadyForTasklessRequest(); err != nil {
+		return err
+	}
+
+	return instance.buffer.ForwardRequest(ctx, nil)
+}
+
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return es.getOrCreateEndpointInstance(ctx, stubId)
 }

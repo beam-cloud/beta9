@@ -18,6 +18,34 @@ type podInstance struct {
 	buffer *PodProxyBuffer
 }
 
+func (i *podInstance) ensureReadyForRequest() error {
+	if err := i.Sync(); err != nil {
+		return err
+	}
+
+	state, err := i.State()
+	if err != nil {
+		return err
+	}
+	if state.RunningContainers+state.PendingContainers > 0 {
+		return nil
+	}
+
+	desiredContainers := 1
+	if i.Stub.Type == types.StubType(types.StubTypePodDeployment) {
+		desiredContainers = desiredPodDeploymentContainers(
+			i.StubConfig,
+			1,
+			i.AppConfig.GatewayService.StubLimits.MaxReplicas,
+		)
+	}
+	if desiredContainers <= 0 {
+		return nil
+	}
+
+	return i.HandleScalingEvent(desiredContainers)
+}
+
 func (i *podInstance) startContainers(containersToRun int) error {
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
 	if err != nil {
