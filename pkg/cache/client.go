@@ -1139,7 +1139,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	if err != nil {
 		status = "conn_wait_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
+		return 0, ErrUnableToReachHost
 	}
 	reusable := false
 	defer func() {
@@ -1677,6 +1677,10 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		if err == ErrContentNotFound {
 			c.removeLocalHostCache(hash)
 			return 0, err
+		}
+		if errors.Is(err, ErrUnableToReachHost) {
+			c.removeHost(host)
+			return 0, ErrSelectedHostUnavailable
 		}
 		if err != nil {
 			cacheReadRawFallbackTotal.Inc()

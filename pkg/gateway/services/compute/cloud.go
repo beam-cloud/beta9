@@ -464,6 +464,16 @@ Resources:
         - Key: Name
           Value: !Sub beam-${BeamPoolName}-nodes
 
+  NodeSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref NodeSecurityGroup
+      Description: Beam BYOC node-to-node private traffic
+
   NodeRole:
     Type: AWS::IAM::Role
     Properties:

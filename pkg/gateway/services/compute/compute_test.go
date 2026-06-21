@@ -362,6 +362,9 @@ func TestAWSCloudFormationTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"VolumeType: gp3",
 		"ContainerStartConcurrency:",
 		"--container-start-concurrency '${ContainerStartConcurrency}'",
+		"NodeSecurityGroupSelfIngress:",
+		"SourceSecurityGroupId: !Ref NodeSecurityGroup",
+		"Description: Beam BYOC node-to-node private traffic",
 	} {
 		if !strings.Contains(template, fragment) {
 			t.Fatalf("template missing %q", fragment)
