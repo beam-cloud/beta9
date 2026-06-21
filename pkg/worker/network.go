@@ -91,6 +91,7 @@ type ContainerNetworkManager struct {
 	freeSlots           []*containerNetworkSlot
 	containerSlots      map[string]*containerNetworkSlot
 	portExposures       map[int]*containerPortExposure
+	forcePortProxy      bool
 	totalSlots          int
 	slotFillRunning     bool
 	slotPoolClosed      bool
@@ -2352,6 +2353,14 @@ func (m *ContainerNetworkManager) runContainerPortExposure(exposure *containerPo
 		nativeReady := containerPortTargetReachable(exposure.ctx, native, containerPortProxyDialTimeout)
 		fallbackReady := containerPortTargetReachable(exposure.ctx, fallback, containerPortProxyDialTimeout)
 		if nativeReady || (family == addressFamilyUnknown && fallbackReady) {
+			if m.forcePortProxy {
+				target := native
+				if !nativeReady {
+					target = fallback
+				}
+				exposure.startProxy(family, []string{target})
+				return
+			}
 			if err := m.exposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); err != nil {
 				log.Warn().
 					Err(err).

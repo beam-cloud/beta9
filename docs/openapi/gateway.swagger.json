@@ -656,6 +656,38 @@
         ]
       }
     },
+    "/pools/cloud/aws/onboarding": {
+      "post": {
+        "operationId": "GatewayService_CreateAWSCloudPoolOnboarding",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateAWSCloudPoolOnboardingResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateAWSCloudPoolOnboardingRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/pools/join-tokens/revoke": {
       "post": {
         "operationId": "GatewayService_RevokePoolJoinToken",
@@ -785,6 +817,36 @@
             "schema": {
               "$ref": "#/definitions/GatewayServiceExtendPoolCapacityBody"
             }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/pools/{poolName}/cloud/onboarding-status": {
+      "get": {
+        "operationId": "GatewayService_GetCloudPoolOnboardingStatus",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetCloudPoolOnboardingStatusResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "path",
+            "required": true,
+            "type": "string"
           }
         ],
         "tags": [
@@ -1902,6 +1964,51 @@
         }
       }
     },
+    "gatewayCreateAWSCloudPoolOnboardingRequest": {
+      "type": "object",
+      "properties": {
+        "poolName": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "desiredNodes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "maxNodes": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayCreateAWSCloudPoolOnboardingResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "pool": {
+          "$ref": "#/definitions/gatewayPrivatePool"
+        },
+        "stackName": {
+          "type": "string"
+        },
+        "templateUrl": {
+          "type": "string"
+        },
+        "awsConsoleUrl": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayCreateMachineRequest": {
       "type": "object",
       "properties": {
@@ -2235,6 +2342,31 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
+        }
+      }
+    },
+    "gatewayGetCloudPoolOnboardingStatusResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "pool": {
+          "$ref": "#/definitions/gatewayPrivatePool"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "machineCount": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

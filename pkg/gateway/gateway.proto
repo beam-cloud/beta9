@@ -156,6 +156,19 @@ service GatewayService {
       get : "/pools/private"
     };
   }
+  rpc CreateAWSCloudPoolOnboarding(CreateAWSCloudPoolOnboardingRequest)
+      returns (CreateAWSCloudPoolOnboardingResponse) {
+    option (google.api.http) = {
+      post : "/pools/cloud/aws/onboarding"
+      body : "*"
+    };
+  }
+  rpc GetCloudPoolOnboardingStatus(GetCloudPoolOnboardingStatusRequest)
+      returns (GetCloudPoolOnboardingStatusResponse) {
+    option (google.api.http) = {
+      get : "/pools/{pool_name}/cloud/onboarding-status"
+    };
+  }
   rpc CreatePool(CreatePoolRequest)
       returns (CreatePoolResponse) {
     option (google.api.http) = {
@@ -763,6 +776,36 @@ message ListPrivatePoolsResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated PrivatePool pools = 3;
+}
+
+message CreateAWSCloudPoolOnboardingRequest {
+  string pool_name = 1;
+  string region = 2;
+  string instance_type = 3;
+  uint32 desired_nodes = 4;
+  uint32 max_nodes = 5;
+}
+
+message CreateAWSCloudPoolOnboardingResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+  string stack_name = 4;
+  string template_url = 5;
+  string aws_console_url = 6;
+}
+
+message GetCloudPoolOnboardingStatusRequest {
+  string pool_name = 1;
+}
+
+message GetCloudPoolOnboardingStatusResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+  bool ready = 4;
+  uint32 ready_machine_count = 5;
+  uint32 machine_count = 6;
 }
 
 message CreatePoolRequest { PoolConfig pool = 1; }

@@ -607,6 +607,40 @@ class ListPrivatePoolsResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CreateAwsCloudPoolOnboardingRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    region: str = betterproto.string_field(2)
+    instance_type: str = betterproto.string_field(3)
+    desired_nodes: int = betterproto.uint32_field(4)
+    max_nodes: int = betterproto.uint32_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class CreateAwsCloudPoolOnboardingResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pool: "PrivatePool" = betterproto.message_field(3)
+    stack_name: str = betterproto.string_field(4)
+    template_url: str = betterproto.string_field(5)
+    aws_console_url: str = betterproto.string_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class GetCloudPoolOnboardingStatusRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class GetCloudPoolOnboardingStatusResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    pool: "PrivatePool" = betterproto.message_field(3)
+    ready: bool = betterproto.bool_field(4)
+    ready_machine_count: int = betterproto.uint32_field(5)
+    machine_count: int = betterproto.uint32_field(6)
+
+
+@dataclass(eq=False, repr=False)
 class CreatePoolRequest(betterproto.Message):
     pool: "PoolConfig" = betterproto.message_field(1)
 
@@ -1349,6 +1383,26 @@ class GatewayServiceStub(SyncServiceStub):
             ListPrivatePoolsRequest,
             ListPrivatePoolsResponse,
         )(list_private_pools_request)
+
+    def create_aws_cloud_pool_onboarding(
+        self,
+        create_aws_cloud_pool_onboarding_request: "CreateAwsCloudPoolOnboardingRequest",
+    ) -> "CreateAwsCloudPoolOnboardingResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateAWSCloudPoolOnboarding",
+            CreateAwsCloudPoolOnboardingRequest,
+            CreateAwsCloudPoolOnboardingResponse,
+        )(create_aws_cloud_pool_onboarding_request)
+
+    def get_cloud_pool_onboarding_status(
+        self,
+        get_cloud_pool_onboarding_status_request: "GetCloudPoolOnboardingStatusRequest",
+    ) -> "GetCloudPoolOnboardingStatusResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetCloudPoolOnboardingStatus",
+            GetCloudPoolOnboardingStatusRequest,
+            GetCloudPoolOnboardingStatusResponse,
+        )(get_cloud_pool_onboarding_status_request)
 
     def create_pool(
         self, create_pool_request: "CreatePoolRequest"

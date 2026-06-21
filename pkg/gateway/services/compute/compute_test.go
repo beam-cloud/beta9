@@ -204,6 +204,171 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 	}
 }
 
+func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{
+		computeRepo: repo,
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			Worker: types.WorkerConfig{
+				ImageRegistry: "public.ecr.aws/n4e0e1y0",
+				ImageName:     "beta9-worker",
+				ImageTag:      "worker-test",
+			},
+		},
+	}
+
+	res, err := service.CreateAWSCloudPoolOnboarding(ctx, &pb.CreateAWSCloudPoolOnboardingRequest{
+		PoolName:     "aws-cpu",
+		Region:       "us-east-1",
+		InstanceType: "t3.large",
+		DesiredNodes: 2,
+		MaxNodes:     4,
+	})
+	if err != nil {
+		t.Fatalf("CreateAWSCloudPoolOnboarding() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("CreateAWSCloudPoolOnboarding() not ok: %s", res.ErrMsg)
+	}
+	if got, want := res.Pool.Name, "aws-cpu"; got != want {
+		t.Fatalf("pool name = %q, want %q", got, want)
+	}
+	if got, want := res.Pool.Source, string(model.SourceAWSCloudFormation); got != want {
+		t.Fatalf("pool source = %q, want %q", got, want)
+	}
+	if got, want := res.TemplateUrl, AWSCloudFormationTemplateURL; got != want {
+		t.Fatalf("template url = %q, want %q", got, want)
+	}
+	for _, fragment := range []string{
+		"templateURL=",
+		"stackName=",
+		"param_BeamGatewayURL=",
+		"param_BeamJoinToken=",
+		"param_BeamWorkerImage=public.ecr.aws%2Fn4e0e1y0%2Fbeta9-worker%3Aworker-test",
+		"param_ContainerStartConcurrency=16",
+		"param_DesiredCapacity=2",
+		"param_MaxSize=4",
+		"param_NetworkSlots=128",
+		"param_NodeInstanceType=t3.large",
+		"param_RootVolumeSizeGB=200",
+	} {
+		if !strings.Contains(res.AwsConsoleUrl, fragment) {
+			t.Fatalf("console url missing %q: %s", fragment, res.AwsConsoleUrl)
+		}
+	}
+	if got, want := len(repo.joinTokens), 1; got != want {
+		t.Fatalf("join token count = %d, want %d", got, want)
+	}
+	for _, token := range repo.joinTokens {
+		if token.WorkspaceID != "workspace-1" || token.PoolName != "aws-cpu" || token.CreatedByTokenID != "owner-token" {
+			t.Fatalf("join token identity = %+v, want workspace/pool/owner", token)
+		}
+		if time.Until(token.ExpiresAt) < 29*24*time.Hour {
+			t.Fatalf("join token expiry = %s, want roughly 30 days", token.ExpiresAt)
+		}
+	}
+}
+
+func TestCreateAWSCloudPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "viewer-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "existing", CreatedByTokenID: "owner-token", Status: "active"},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreateAWSCloudPoolOnboarding(ctx, &pb.CreateAWSCloudPoolOnboardingRequest{
+		PoolName: "existing",
+	})
+	if err != nil {
+		t.Fatalf("CreateAWSCloudPoolOnboarding() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("CreateAWSCloudPoolOnboarding() unexpectedly succeeded")
+	}
+	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestGetCloudPoolOnboardingStatusReportsReadiness(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWSCloudFormation},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {
+				{
+					WorkspaceID:     "workspace-1",
+					PoolName:        "aws-cpu",
+					MachineID:       "machine-1",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Minute),
+					LastHeartbeatAt: now,
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.GetCloudPoolOnboardingStatus(ctx, &pb.GetCloudPoolOnboardingStatusRequest{PoolName: "aws-cpu"})
+	if err != nil {
+		t.Fatalf("GetCloudPoolOnboardingStatus() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("GetCloudPoolOnboardingStatus() not ok: %s", res.ErrMsg)
+	}
+	if !res.Ready {
+		t.Fatal("expected pool to be ready")
+	}
+	if got, want := res.ReadyMachineCount, uint32(1); got != want {
+		t.Fatalf("ready machines = %d, want %d", got, want)
+	}
+}
+
+func TestAWSCloudFormationTemplateDoesNotEmbedSecrets(t *testing.T) {
+	template := AWSCloudFormationTemplate()
+	if !strings.Contains(template, "NoEcho: true") {
+		t.Fatal("template should mark BeamJoinToken NoEcho")
+	}
+	if strings.Contains(template, "sk_") || strings.Contains(template, "test-secret-token") {
+		t.Fatalf("template appears to contain an embedded secret: %s", template)
+	}
+	if !strings.Contains(template, "AWS::AutoScaling::AutoScalingGroup") {
+		t.Fatal("template should create an auto scaling group")
+	}
+	if !strings.Contains(template, "FromPort: 41641") {
+		t.Fatal("template should allow Tailscale direct WireGuard UDP")
+	}
+	for _, fragment := range []string{
+		"BeamWorkerImage:",
+		"--worker-image '${BeamWorkerImage}'",
+		"NetworkSlots:",
+		"Default: 128",
+		"--network-slots '${NetworkSlots}'",
+		"RootVolumeSizeGB:",
+		"VolumeSize: !Ref RootVolumeSizeGB",
+		"VolumeType: gp3",
+		"ContainerStartConcurrency:",
+		"--container-start-concurrency '${ContainerStartConcurrency}'",
+	} {
+		if !strings.Contains(template, fragment) {
+			t.Fatalf("template missing %q", fragment)
+		}
+	}
+}
+
 func TestValidatePrivatePoolGPURequestAllowsWorkloadPreferenceList(t *testing.T) {
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{

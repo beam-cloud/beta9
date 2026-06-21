@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/beam-cloud/redislock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,10 +66,18 @@ func (r *workerRuntimeCredentialsBackendRepo) GetStubByExternalId(ctx context.Co
 
 type workerRuntimeCredentialsContainerRepo struct {
 	repository.ContainerRepository
-	state *types.ContainerState
+	state    *types.ContainerState
+	errs     []error
+	attempts int
 }
 
 func (r *workerRuntimeCredentialsContainerRepo) GetContainerState(containerID string) (*types.ContainerState, error) {
+	r.attempts++
+	if len(r.errs) > 0 {
+		err := r.errs[0]
+		r.errs = r.errs[1:]
+		return nil, err
+	}
 	return r.state, nil
 }
 
@@ -194,6 +203,44 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Zero(t, backendRepo.workspaceByExternalIDCalls)
+}
+
+func TestGetContainerRuntimeCredentialsRetriesContainerStateLockContention(t *testing.T) {
+	workspaceID := uint(7)
+	containerRepo := &workerRuntimeCredentialsContainerRepo{
+		state: &types.ContainerState{
+			ContainerId: "container-id",
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+		},
+		errs: []error{redislock.ErrNotObtained, redislock.ErrNotObtained},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
+			workspace: &types.Workspace{Id: workspaceID, ExternalId: "workspace-id"},
+			tokens: []types.Token{{
+				Key:       "restricted-runtime-token",
+				Active:    true,
+				TokenType: types.TokenTypeWorkspaceRestricted,
+			}},
+		},
+		containerRepo: containerRepo,
+	}
+
+	resp, err := service.GetContainerRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{
+			WorkspaceId:  "workspace-id",
+			StubId:       "stub-id",
+			ContainerId:  "container-id",
+			RuntimeToken: true,
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token"}, resp.Env)
+	require.Equal(t, 3, containerRepo.attempts)
 }
 
 func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRuntimeToken(t *testing.T) {

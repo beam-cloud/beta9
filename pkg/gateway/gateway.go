@@ -39,6 +39,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	gatewaymiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -214,6 +215,9 @@ func (g *Gateway) initHttp() error {
 	e.Use(middleware.Recover())
 	e.GET("/install/agent", agentInstallScriptHandler())
 	e.GET("/install/agent/:os/:arch", agentBinaryHandler())
+	e.GET(computesvc.AWSCloudFormationTemplatePath, func(c echo.Context) error {
+		return c.Blob(http.StatusOK, "application/yaml", []byte(computesvc.AWSCloudFormationTemplate()))
+	})
 
 	// Accept both HTTP/2 and HTTP/1
 	g.httpServer = &http.Server{

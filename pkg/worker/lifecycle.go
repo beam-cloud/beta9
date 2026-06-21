@@ -33,7 +33,7 @@ const (
 	specBaseName                  string = "config.json"
 	initialSpecBaseName           string = "initial_config.json"
 	containerInnerPort            int    = 8001 // Use a fixed port inside the container
-	markRunningRetryTimeout              = 3 * time.Second
+	markRunningRetryTimeout              = 15 * time.Second
 	markRunningRetryInterval             = 100 * time.Millisecond
 	runtimeDeleteTimeout                 = 30 * time.Second
 	sandboxCPUQuotaApplyTimeout          = 2 * time.Second

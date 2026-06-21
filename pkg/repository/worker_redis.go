@@ -23,6 +23,18 @@ type WorkerRedisRepository struct {
 	config types.WorkerConfig
 }
 
+const (
+	schedulerWorkerLockTTL      = 10
+	schedulerWorkerLockRetries  = 20
+	schedulerWorkerLockInterval = 50 * time.Millisecond
+)
+
+var schedulerWorkerLockOptions = common.RedisLockOptions{
+	TtlS:          schedulerWorkerLockTTL,
+	Retries:       schedulerWorkerLockRetries,
+	RetryInterval: schedulerWorkerLockInterval,
+}
+
 var setWorkerNetworkContainerIPScript = redis.NewScript(`
 local container_key = KEYS[1]
 local index_key = KEYS[2]
@@ -133,7 +145,7 @@ func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) 
 
 // AddWorker adds or updates a worker
 func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
@@ -165,7 +177,7 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 
 func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
 	ctx := context.TODO()
-	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
@@ -280,7 +292,7 @@ func (r *WorkerRedisRepository) UpdateWorkerStatus(workerId string, status types
 }
 
 func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status types.WorkerStatus, reconcileCapacity bool) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
@@ -511,7 +523,7 @@ func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error
 }
 
 func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, error) {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +769,7 @@ func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
@@ -795,7 +807,7 @@ func (r *WorkerRedisRepository) workerWithCapacityChange(workerId string, reques
 	}
 
 	if currentWorker == nil {
-		return nil, fmt.Errorf("worker state <%s> not found", key)
+		return nil, &types.ErrWorkerNotFound{WorkerId: workerId}
 	}
 
 	updatedWorker := &types.Worker{}
@@ -875,7 +887,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		return fmt.Errorf("failed to serialize request: %w", err)
 	}
 
-	if err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3}); err != nil {
+	if err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions); err != nil {
 		return err
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))

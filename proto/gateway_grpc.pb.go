@@ -44,6 +44,8 @@ const (
 	GatewayService_ListPoolOffers_FullMethodName                  = "/gateway.GatewayService/ListPoolOffers"
 	GatewayService_LaunchPoolCapacity_FullMethodName              = "/gateway.GatewayService/LaunchPoolCapacity"
 	GatewayService_ListPrivatePools_FullMethodName                = "/gateway.GatewayService/ListPrivatePools"
+	GatewayService_CreateAWSCloudPoolOnboarding_FullMethodName    = "/gateway.GatewayService/CreateAWSCloudPoolOnboarding"
+	GatewayService_GetCloudPoolOnboardingStatus_FullMethodName    = "/gateway.GatewayService/GetCloudPoolOnboardingStatus"
 	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
 	GatewayService_DeletePool_FullMethodName                      = "/gateway.GatewayService/DeletePool"
 	GatewayService_ExtendPoolCapacity_FullMethodName              = "/gateway.GatewayService/ExtendPoolCapacity"
@@ -108,6 +110,8 @@ type GatewayServiceClient interface {
 	ListPoolOffers(ctx context.Context, in *ListPoolOffersRequest, opts ...grpc.CallOption) (*ListPoolOffersResponse, error)
 	LaunchPoolCapacity(ctx context.Context, in *LaunchPoolCapacityRequest, opts ...grpc.CallOption) (*LaunchPoolCapacityResponse, error)
 	ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error)
+	CreateAWSCloudPoolOnboarding(ctx context.Context, in *CreateAWSCloudPoolOnboardingRequest, opts ...grpc.CallOption) (*CreateAWSCloudPoolOnboardingResponse, error)
+	GetCloudPoolOnboardingStatus(ctx context.Context, in *GetCloudPoolOnboardingStatusRequest, opts ...grpc.CallOption) (*GetCloudPoolOnboardingStatusResponse, error)
 	CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error)
 	DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error)
 	ExtendPoolCapacity(ctx context.Context, in *ExtendPoolCapacityRequest, opts ...grpc.CallOption) (*ExtendPoolCapacityResponse, error)
@@ -413,6 +417,24 @@ func (c *gatewayServiceClient) LaunchPoolCapacity(ctx context.Context, in *Launc
 func (c *gatewayServiceClient) ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error) {
 	out := new(ListPrivatePoolsResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListPrivatePools_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CreateAWSCloudPoolOnboarding(ctx context.Context, in *CreateAWSCloudPoolOnboardingRequest, opts ...grpc.CallOption) (*CreateAWSCloudPoolOnboardingResponse, error) {
+	out := new(CreateAWSCloudPoolOnboardingResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateAWSCloudPoolOnboarding_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetCloudPoolOnboardingStatus(ctx context.Context, in *GetCloudPoolOnboardingStatusRequest, opts ...grpc.CallOption) (*GetCloudPoolOnboardingStatusResponse, error) {
+	out := new(GetCloudPoolOnboardingStatusResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetCloudPoolOnboardingStatus_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -729,6 +751,8 @@ type GatewayServiceServer interface {
 	ListPoolOffers(context.Context, *ListPoolOffersRequest) (*ListPoolOffersResponse, error)
 	LaunchPoolCapacity(context.Context, *LaunchPoolCapacityRequest) (*LaunchPoolCapacityResponse, error)
 	ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error)
+	CreateAWSCloudPoolOnboarding(context.Context, *CreateAWSCloudPoolOnboardingRequest) (*CreateAWSCloudPoolOnboardingResponse, error)
+	GetCloudPoolOnboardingStatus(context.Context, *GetCloudPoolOnboardingStatusRequest) (*GetCloudPoolOnboardingStatusResponse, error)
 	CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error)
 	DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error)
 	ExtendPoolCapacity(context.Context, *ExtendPoolCapacityRequest) (*ExtendPoolCapacityResponse, error)
@@ -839,6 +863,12 @@ func (UnimplementedGatewayServiceServer) LaunchPoolCapacity(context.Context, *La
 }
 func (UnimplementedGatewayServiceServer) ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPrivatePools not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateAWSCloudPoolOnboarding(context.Context, *CreateAWSCloudPoolOnboardingRequest) (*CreateAWSCloudPoolOnboardingResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateAWSCloudPoolOnboarding not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetCloudPoolOnboardingStatus(context.Context, *GetCloudPoolOnboardingStatusRequest) (*GetCloudPoolOnboardingStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCloudPoolOnboardingStatus not implemented")
 }
 func (UnimplementedGatewayServiceServer) CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePool not implemented")
@@ -1390,6 +1420,42 @@ func _GatewayService_ListPrivatePools_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GatewayServiceServer).ListPrivatePools(ctx, req.(*ListPrivatePoolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CreateAWSCloudPoolOnboarding_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAWSCloudPoolOnboardingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateAWSCloudPoolOnboarding(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateAWSCloudPoolOnboarding_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateAWSCloudPoolOnboarding(ctx, req.(*CreateAWSCloudPoolOnboardingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetCloudPoolOnboardingStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCloudPoolOnboardingStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetCloudPoolOnboardingStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetCloudPoolOnboardingStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetCloudPoolOnboardingStatus(ctx, req.(*GetCloudPoolOnboardingStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1953,6 +2019,14 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListPrivatePools",
 			Handler:    _GatewayService_ListPrivatePools_Handler,
+		},
+		{
+			MethodName: "CreateAWSCloudPoolOnboarding",
+			Handler:    _GatewayService_CreateAWSCloudPoolOnboarding_Handler,
+		},
+		{
+			MethodName: "GetCloudPoolOnboardingStatus",
+			Handler:    _GatewayService_GetCloudPoolOnboardingStatus_Handler,
 		},
 		{
 			MethodName: "CreatePool",

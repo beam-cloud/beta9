@@ -487,7 +487,7 @@ func (s *GenericPodService) SandboxDeleteDirectory(ctx context.Context, in *pb.P
 func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, container, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxExposePortResponse{
 			Ok:       false,
@@ -510,14 +510,40 @@ func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSan
 		}, nil
 	}
 
-	instance, err := s.getOrCreatePodInstance(in.StubId)
+	stubId := in.StubId
+	if container != nil && container.StubId != "" {
+		if stubId != "" && stubId != container.StubId {
+			return &pb.PodSandboxExposePortResponse{
+				Ok:       false,
+				ErrorMsg: "Invalid stub id",
+			}, nil
+		}
+		stubId = container.StubId
+	}
+	if stubId == "" {
+		var extractErr error
+		stubId, extractErr = common.ExtractStubIdFromContainerId(in.ContainerId)
+		if extractErr != nil {
+			return &pb.PodSandboxExposePortResponse{
+				Ok:       false,
+				ErrorMsg: "Invalid container id",
+			}, nil
+		}
+	}
+
+	instance, err := s.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return nil, err
+	}
+	if instance.buffer != nil {
+		if ok := instance.buffer.primeContainerPort(in.ContainerId, in.Port, containerPrimeTimeout); !ok {
+			log.Debug().Str("container_id", in.ContainerId).Int32("port", in.Port).Msg("sandbox port prime did not complete before returning url")
+		}
 	}
 
 	return &pb.PodSandboxExposePortResponse{
 		Ok:  resp.Ok,
-		Url: common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, in.Port),
+		Url: common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, in.ContainerId, in.Port),
 	}, nil
 }
 
@@ -979,7 +1005,11 @@ func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandb
 
 	urls := make(map[int32]string)
 	for _, port := range resp.ExposedPorts {
-		urls[port] = common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, port)
+		urls[port] = common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, in.ContainerId, port)
+		if instance.buffer != nil {
+			port := port
+			go instance.buffer.primeContainerPort(in.ContainerId, port, containerPrimeTimeout)
+		}
 	}
 
 	return &pb.PodSandboxListUrlsResponse{

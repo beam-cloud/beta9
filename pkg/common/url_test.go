@@ -162,3 +162,20 @@ func TestBuildPodURL(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildSandboxURLPinsContainerPath(t *testing.T) {
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		Type:       types.StubType(types.StubTypeSandbox),
+		ExternalId: "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+	}}
+
+	got := BuildSandboxURL(
+		"http://app.example.com",
+		InvokeUrlTypeHost,
+		stub,
+		"sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345",
+		8765,
+	)
+
+	assert.Equal(t, "http://app.example.com/sandbox/container/e9c29586-c465-4a67-9c9b-25293d1ce77b/sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345/8765", got)
+}

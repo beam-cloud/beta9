@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	ComputeSourceAutosolver     ComputeCapacitySource = "autosolver"
-	ComputeSourceCLIReservation ComputeCapacitySource = "cli_reservation"
-	ComputeSourceAttached       ComputeCapacitySource = "attached"
-	ComputeSourceManual         ComputeCapacitySource = "manual"
+	ComputeSourceAutosolver        ComputeCapacitySource = "autosolver"
+	ComputeSourceCLIReservation    ComputeCapacitySource = "cli_reservation"
+	ComputeSourceAttached          ComputeCapacitySource = "attached"
+	ComputeSourceManual            ComputeCapacitySource = "manual"
+	ComputeSourceAWSCloudFormation ComputeCapacitySource = "aws_cloudformation"
 
 	ComputeReservationPending     ComputeReservationStatus = "pending"
 	ComputeReservationActive      ComputeReservationStatus = "active"
@@ -42,7 +43,7 @@ func (s ComputeCapacitySource) Canonical() ComputeCapacitySource {
 }
 
 func (s ComputeCapacitySource) IsAttached() bool {
-	return s == ComputeSourceAttached || s == ComputeSourceManual
+	return s == ComputeSourceAttached || s == ComputeSourceManual || s == ComputeSourceAWSCloudFormation
 }
 
 type ComputeVendor interface {

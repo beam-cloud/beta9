@@ -29,11 +29,12 @@ import (
 )
 
 const (
-	containerDiscoveryInterval    time.Duration = time.Millisecond * 250
-	containerDialTimeoutDurationS time.Duration = time.Second * 30
-	connectionKeepAliveInterval   time.Duration = time.Second * 1
-	connectionReadTimeout         time.Duration = time.Minute * 5
-	containerAvailableTimeout     time.Duration = time.Second * 2
+	containerDiscoveryInterval  time.Duration = time.Millisecond * 250
+	containerForwardDialTimeout time.Duration = time.Millisecond * 900
+	containerAvailableTimeout   time.Duration = time.Millisecond * 900
+	containerPrimeTimeout       time.Duration = time.Second * 3
+	connectionKeepAliveInterval time.Duration = time.Second * 1
+	connectionReadTimeout       time.Duration = time.Minute * 5
 )
 
 type container struct {
@@ -145,6 +146,40 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	pb.enqueueConnection(conn, false)
 	pb.signalWork()
 	return pb.waitForConnection(ctx, conn)
+}
+
+func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId string) error {
+	ctx.Set("stubId", pb.stubId)
+
+	if _, err := pb.incrementTotalConnections(); err != nil {
+		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+	}
+	defer pb.decrementTotalConnections()
+
+	port, err := strconv.Atoi(ctx.Param("port"))
+	if err != nil {
+		return ctx.String(http.StatusBadRequest, "Invalid port")
+	}
+
+	addressMap, err := pb.containerRepo.GetContainerAddressMap(containerId)
+	if err != nil {
+		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+	}
+	if _, ok := addressMap[int32(port)]; !ok {
+		return ctx.String(http.StatusServiceUnavailable, "Port not available")
+	}
+
+	if err := pb.incrementContainerConnections(containerId); err != nil {
+		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+	}
+
+	done := make(chan struct{})
+	pb.handleConnection(&connection{ctx: ctx, done: done}, container{
+		id:         containerId,
+		addressMap: addressMap,
+	}, int32(port))
+
+	return nil
 }
 
 func (pb *PodProxyBuffer) waitForConnection(ctx echo.Context, conn *connection) error {
@@ -321,6 +356,68 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 	return container{}, false, true, hasPort
 }
 
+func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, timeout time.Duration) bool {
+	if pb == nil || pb.containerRepo == nil || containerID == "" || port <= 0 {
+		return false
+	}
+
+	addressMap, err := pb.containerRepo.GetContainerAddressMap(containerID)
+	if err != nil || len(addressMap) == 0 {
+		return false
+	}
+
+	address, ok := addressMap[port]
+	if !ok || strings.TrimSpace(address) == "" {
+		return false
+	}
+	if !pb.checkContainerAvailableWithTimeout(address, timeout) {
+		return false
+	}
+
+	connections := int(pb.containerConnectionCount(containerID))
+	if sharedConnections, err := pb.sharedContainerConnectionCount(containerID); err == nil && sharedConnections > connections {
+		connections = sharedConnections
+	}
+
+	pb.availableContainersLock.Lock()
+	next := make([]container, 0, len(pb.availableContainers)+1)
+	updated := false
+	for _, c := range pb.availableContainers {
+		if c.id != containerID {
+			next = append(next, c)
+			continue
+		}
+
+		readyAddressMap := make(map[int32]string, len(c.readyAddressMap)+1)
+		for readyPort, readyAddress := range c.readyAddressMap {
+			readyAddressMap[readyPort] = readyAddress
+		}
+		readyAddressMap[port] = address
+
+		c.addressMap = addressMap
+		c.readyAddressMap = readyAddressMap
+		c.connections = connections
+		next = append(next, c)
+		updated = true
+	}
+	if !updated {
+		next = append(next, container{
+			id:              containerID,
+			addressMap:      addressMap,
+			readyAddressMap: map[int32]string{port: address},
+			connections:     connections,
+		})
+	}
+	sort.Slice(next, func(i, j int) bool {
+		return next[i].connections < next[j].connections
+	})
+	pb.availableContainers = next
+	pb.availableContainersLock.Unlock()
+
+	pb.signalWork()
+	return true
+}
+
 func (pb *PodProxyBuffer) requeueConnection(conn *connection) {
 	pb.enqueueConnection(conn, true)
 }
@@ -341,7 +438,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 	}
 
 	dialStart := time.Now()
-	podConn, err := network.ConnectToBackend(context.TODO(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
+	podConn, err := network.ConnectToBackend(pb.baseContext(), targetHost, containerForwardDialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "tcp", err == nil, time.Since(dialStart))
 	if err == nil {
 		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, connectionReadTimeout)
@@ -485,7 +582,7 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string) *http.Transport {
 				dialAddress = targetHost
 			}
 			start := time.Now()
-			conn, err := network.ConnectToBackend(ctx, dialAddress, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
+			conn, err := network.ConnectToBackend(ctx, dialAddress, containerForwardDialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
 			if err == nil {
 				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
@@ -551,7 +648,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 			if _, isRoute := types.ParseBackendRouteAddress(addr); isRoute {
 				dialAddress = addr
 			}
-			return network.ConnectToBackend(ctx, dialAddress, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig, pb.containerRepo)
+			return network.ConnectToBackend(ctx, dialAddress, containerForwardDialTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 		},
 		Subprotocols: subprotocols,
 	}
@@ -698,8 +795,15 @@ func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32
 
 // checkContainerAvailable checks if a container is available (meaning you can connect to it via a TCP dial)
 func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool {
+	return pb.checkContainerAvailableWithTimeout(containerAddress, containerAvailableTimeout)
+}
+
+func (pb *PodProxyBuffer) checkContainerAvailableWithTimeout(containerAddress string, timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = containerAvailableTimeout
+	}
 	start := time.Now()
-	conn, err := network.ConnectToBackend(pb.ctx, containerAddress, containerAvailableTimeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
+	conn, err := network.ConnectToBackend(pb.baseContext(), containerAddress, timeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
 	if err != nil {
 		metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", false, time.Since(start))
 		return false
@@ -707,6 +811,13 @@ func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool 
 	defer conn.Close()
 	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", true, time.Since(start))
 	return conn != nil
+}
+
+func (pb *PodProxyBuffer) baseContext() context.Context {
+	if pb != nil && pb.ctx != nil {
+		return pb.ctx
+	}
+	return context.Background()
 }
 
 func (pb *PodProxyBuffer) workspaceName() string {
