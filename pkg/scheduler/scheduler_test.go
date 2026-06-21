@@ -1708,6 +1708,86 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 	assert.True(t, shouldSanitize)
 }
 
+func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	wb.workerPoolManager = NewWorkerPoolManager(false)
+
+	ctx := context.Background()
+	workspaceID := "workspace-private-select"
+	poolState := &compute.PoolState{
+		Name:     "stored-private-pool",
+		Selector: "private-cpu",
+		Config: &pb.PoolConfig{
+			Name:     "stored-private-pool",
+			Selector: "private-cpu",
+			Mode:     string(types.PoolModePrivate),
+			Priority: 1000,
+		},
+		Mode:     string(types.PoolModePrivate),
+		Priority: 1000,
+	}
+	assert.NoError(t, wb.computeRepo.SavePoolState(ctx, workspaceID, poolState))
+
+	now := time.Now()
+	assert.NoError(t, wb.computeRepo.SaveAgentTokenState(ctx, &compute.AgentTokenState{
+		TokenHash:       "live-agent-token",
+		WorkspaceID:     workspaceID,
+		PoolName:        poolState.Name,
+		MachineID:       "live-machine",
+		Hostname:        "live-agent",
+		OS:              "linux",
+		Arch:            "amd64",
+		CPUMillicores:   1000,
+		MemoryMB:        2048,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		CreatedAt:       now,
+		LastJoinAt:      now,
+		LastHeartbeatAt: now,
+	}, time.Hour))
+	assert.NoError(t, wb.computeRepo.SaveAgentTokenState(ctx, &compute.AgentTokenState{
+		TokenHash:       "stale-agent-token",
+		WorkspaceID:     workspaceID,
+		PoolName:        poolState.Name,
+		MachineID:       "stale-machine",
+		Hostname:        "stale-agent",
+		OS:              "linux",
+		Arch:            "amd64",
+		CPUMillicores:   8000,
+		MemoryMB:        16384,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		CreatedAt:       now.Add(-2 * compute.AgentHeartbeatTimeout),
+		LastJoinAt:      now.Add(-2 * compute.AgentHeartbeatTimeout),
+		LastHeartbeatAt: now.Add(-2 * compute.AgentHeartbeatTimeout),
+	}, time.Hour))
+
+	assert.NoError(t, wb.RegisterAgentPool(workspaceID, poolState))
+	assert.NoError(t, wb.workerRepo.UpdateWorkerStatus(compute.AgentMachineWorkerID("live-machine"), types.WorkerStatusAvailable))
+	assert.NoError(t, wb.workerRepo.AddWorker(&types.Worker{
+		Id:                   compute.AgentMachineWorkerID("stale-machine"),
+		Status:               types.WorkerStatusAvailable,
+		TotalCpu:             8000,
+		TotalMemory:          16384,
+		FreeCpu:              8000,
+		FreeMemory:           16384,
+		PoolName:             poolState.Selector,
+		MachineId:            "stale-machine",
+		RequiresPoolSelector: true,
+		Priority:             1000,
+	}))
+
+	worker, err := wb.selectWorker(&types.ContainerRequest{
+		WorkspaceId:  workspaceID,
+		PoolSelector: poolState.Selector,
+		Cpu:          1000,
+		Memory:       1000,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, compute.AgentMachineWorkerID("live-machine"), worker.Id)
+}
+
 func TestSelectGPUWorker(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)

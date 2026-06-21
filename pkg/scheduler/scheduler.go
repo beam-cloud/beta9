@@ -873,7 +873,8 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)      // Filter workers by pool selector
+	filteredWorkers := filterWorkersByPoolSelector(workers, request) // Filter workers by pool selector
+	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
 	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
 	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
@@ -898,6 +899,51 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if len(workers) == 0 || s == nil || request == nil || request.PoolSelector == "" || request.WorkspaceId == "" || s.workerPoolManager == nil || s.computeRepo == nil {
+		return workers
+	}
+
+	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
+	if !ok || pool.Controller == nil || pool.Controller.Mode() != types.PoolModePrivate {
+		return workers
+	}
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state, err := s.agentPoolStateForRequest(request)
+	if err != nil || state == nil {
+		return workers
+	}
+	poolName := firstNonEmpty(state.Name, state.Selector, request.PoolSelector)
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, request.WorkspaceId, poolName)
+	if err != nil {
+		return workers
+	}
+
+	liveWorkers := make(map[string]struct{}, len(machines))
+	now := time.Now()
+	for _, machine := range machines {
+		if machine == nil || machine.WorkspaceID != request.WorkspaceId || machine.PoolName != poolName || machine.Executor != types.DefaultAgentWorkerContainerMode || !compute.AgentMachineConnected(machine, now) {
+			continue
+		}
+		liveWorkers[compute.AgentMachineWorkerID(machine.MachineID)] = struct{}{}
+	}
+
+	filteredWorkers := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		if _, ok := liveWorkers[worker.Id]; ok {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
 }
 
 func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest) int32 {
