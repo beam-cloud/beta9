@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"testing"
@@ -59,6 +60,46 @@ func TestEmbeddedImageCacheFallbackLogLevel(t *testing.T) {
 	logEmbeddedImageCacheFallback(errors.New("cache unavailable"), "runtime-image", &types.ContainerRequest{})
 	require.Contains(t, buf.String(), `"level":"warn"`)
 	require.Contains(t, buf.String(), "falling back to registry")
+}
+
+func TestGetBuildContextDoesNotFallBackToWorkspaceFuseMount(t *testing.T) {
+	baseMountPath := t.TempDir()
+	buildPath := t.TempDir()
+	workspaceName := "workspace"
+	objectID := "build-context"
+	storageID := uint(1)
+	bucket := "bucket"
+
+	fuseFallbackPath := filepath.Join(baseMountPath, workspaceName, types.DefaultObjectPrefix, objectID)
+	require.NoError(t, writeZipObject(fuseFallbackPath, map[string]string{
+		"main.py": "print('do not read through fuse')\n",
+	}))
+
+	client := &ImageClient{
+		config: types.AppConfig{
+			Storage: types.StorageConfig{
+				WorkspaceStorage: types.WorkspaceStorageConfig{
+					BaseMountPath: baseMountPath,
+				},
+			},
+		},
+	}
+	request := &types.ContainerRequest{
+		Workspace: types.Workspace{
+			Name: workspaceName,
+			Storage: &types.WorkspaceStorage{
+				Id:         &storageID,
+				BucketName: &bucket,
+			},
+		},
+		BuildOptions: types.BuildOptions{
+			BuildCtxObject: &objectID,
+		},
+	}
+
+	_, err := client.getBuildContext(context.Background(), buildPath, request)
+
+	require.ErrorContains(t, err, "workspace storage credentials are required")
 }
 
 func TestNewBuildahCommandUsesCancelableProcessGroup(t *testing.T) {

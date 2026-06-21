@@ -97,11 +97,7 @@ func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
 	}
 
 	if isASGIHealthRequest(ctx) {
-		instance, err := g.es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
-		if err != nil {
-			return err
-		}
-		return instance.buffer.ForwardHealthRequest(ctx)
+		return g.es.forwardASGIHealthRequest(ctx, stubId)
 	}
 
 	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)

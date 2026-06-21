@@ -358,8 +358,8 @@ func (i *AutoscaledInstance) Sync() error {
 			return err
 		}
 
-		if len(deployments) == 1 && !deployments[0].Active {
-			i.IsActive = false
+		if len(deployments) == 1 {
+			i.IsActive = deployments[0].Active
 		}
 
 		stubConfigRaw := deployments[0].Stub.Config

@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 
@@ -39,6 +40,7 @@ const (
 type request struct {
 	ctx        echo.Context
 	task       *EndpointTask
+	requestID  string
 	done       chan struct{}
 	started    chan struct{}
 	abandoned  atomic.Bool
@@ -151,6 +153,11 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	ctx.Set("stubId", rb.stubId)
 
+	requestID := uuid.NewString()
+	if task != nil && task.msg != nil && task.msg.TaskId != "" {
+		requestID = task.msg.TaskId
+	}
+
 	done := make(chan struct{})
 	started := make(chan struct{})
 	req := &request{
@@ -158,6 +165,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 		done:       done,
 		started:    started,
 		task:       task,
+		requestID:  requestID,
 		enqueuedAt: time.Now(),
 	}
 	rb.enqueueRequest(req, false)
@@ -197,45 +205,6 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 			return nil
 		}
 	}
-}
-
-func (rb *RequestBuffer) ForwardHealthRequest(ctx echo.Context) error {
-	ctx.Set("stubId", rb.stubId)
-
-	containers := rb.availableContainerSnapshot()
-	if len(containers) == 0 {
-		return ctx.JSON(http.StatusOK, map[string]interface{}{
-			"ok": true,
-		})
-	}
-
-	c := containers[0]
-	request := ctx.Request()
-	backendURL := backendHTTPURL("http", c.address, ctx.Param("subPath"), request.URL.RawQuery)
-	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, backendURL, request.Body)
-	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
-	}
-
-	httpReq.Header = request.Header.Clone()
-	httpReq.Header.Del("X-TASK-ID")
-
-	resp, err := rb.getHttpClient(c.address, checkAddressIsReadyTimeout).Do(httpReq)
-	if err != nil {
-		return ctx.JSON(http.StatusBadGateway, map[string]interface{}{
-			"error": "Backend route unavailable",
-		})
-	}
-	defer resp.Body.Close()
-
-	if err := writeBackendResponse(ctx, resp); err != nil && err != io.EOF && err != context.Canceled {
-		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
-	}
-	return nil
 }
 
 func (rb *RequestBuffer) requestQueueTimeout() time.Duration {
@@ -725,7 +694,11 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 
 	httpReq.Header = request.Header.Clone()
 
-	httpReq.Header.Add("X-TASK-ID", req.task.msg.TaskId) // Add task ID to header
+	if req.task != nil && req.task.msg != nil && req.task.msg.TaskId != "" {
+		httpReq.Header.Set("X-TASK-ID", req.task.msg.TaskId)
+	} else {
+		httpReq.Header.Del("X-TASK-ID")
+	}
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
@@ -840,8 +813,8 @@ func (rb *RequestBuffer) refreshRequestTokenTTL(containerId string) {
 
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer rb.signalWork()
-	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
 	defer close(req.done)
+	defer rb.releaseRequestToken(containerId, req.requestID)
 
 	if rb.rdb == nil || rb.workspace == nil || rb.stubConfig.KeepWarmSeconds == 0 {
 		return
@@ -872,7 +845,9 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 	}
 
 	headers := http.Header{}
-	headers.Add("X-TASK-ID", r.task.msg.TaskId) // Add task ID to header
+	if r.task != nil && r.task.msg != nil && r.task.msg.TaskId != "" {
+		headers.Set("X-TASK-ID", r.task.msg.TaskId)
+	}
 
 	wsDst, resp, err := dialer.Dial(dstAddress, headers)
 	if err != nil {
