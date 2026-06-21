@@ -19,7 +19,6 @@ import (
 
 const (
 	AWSCloudFormationTemplatePath = "/api/v1/gateway/pools/cloud/aws/template.yaml"
-	AWSCloudFormationTemplateURL  = "https://beam-runner-python-deps.s3.amazonaws.com/cloudformation/aws-byoc-cpu-pool.yaml"
 
 	awsCloudDefaultRegion       = "us-east-1"
 	awsCloudDefaultInstanceType = "t3.large"
@@ -77,7 +76,7 @@ func (s *Service) CreateAWSCloudPoolOnboarding(ctx context.Context, in *pb.Creat
 	}
 
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
-	templateURL := awsCloudFormationTemplateURL()
+	templateURL := awsCloudFormationTemplateURL(gatewayURL)
 	stackName := awsCloudFormationStackName(workspaceID, req.poolName)
 	consoleURL := awsCloudFormationConsoleURL(req.region, stackName, templateURL, map[string]string{
 		"BeamGatewayURL":            gatewayURL,
@@ -263,8 +262,8 @@ func (s *Service) createOrUpdateAWSCloudPool(ctx context.Context, authInfo *auth
 	return state, nil
 }
 
-func awsCloudFormationTemplateURL() string {
-	return AWSCloudFormationTemplateURL
+func awsCloudFormationTemplateURL(gatewayURL string) string {
+	return strings.TrimRight(gatewayURL, "/") + AWSCloudFormationTemplatePath
 }
 
 func awsCloudFormationConsoleURL(region, stackName, templateURL string, params map[string]string) string {

@@ -171,7 +171,6 @@ func TestBuildSandboxURLPinsContainerPath(t *testing.T) {
 
 	got := BuildSandboxURL(
 		"http://app.example.com",
-		InvokeUrlTypeHost,
 		stub,
 		"sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345",
 		8765,

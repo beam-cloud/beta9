@@ -240,7 +240,7 @@ func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 	if got, want := res.Pool.Source, string(model.SourceAWSCloudFormation); got != want {
 		t.Fatalf("pool source = %q, want %q", got, want)
 	}
-	if got, want := res.TemplateUrl, AWSCloudFormationTemplateURL; got != want {
+	if got, want := res.TemplateUrl, "https://app.beam.cloud"+AWSCloudFormationTemplatePath; got != want {
 		t.Fatalf("template url = %q, want %q", got, want)
 	}
 	for _, fragment := range []string{

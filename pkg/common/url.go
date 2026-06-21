@@ -70,7 +70,7 @@ func BuildPodURL(externalUrl, urlType string, stub *types.StubWithRelated, stubC
 	return url
 }
 
-func BuildSandboxURL(externalUrl, urlType string, stub *types.StubWithRelated, containerId string, port int32) string {
+func BuildSandboxURL(externalUrl string, stub *types.StubWithRelated, containerId string, port int32) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {
 		return ""

@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/redislock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -48,6 +50,13 @@ func TestRedisLock(t *testing.T) {
 	// Test acquiring lock after releasing
 	err = lock.Acquire(context.Background(), key, RedisLockOptions{TtlS: 2, Retries: 0})
 	assert.NoError(t, err)
+}
+
+func TestIsRedisLockNotObtained(t *testing.T) {
+	assert.True(t, IsRedisLockNotObtained(redislock.ErrNotObtained))
+	assert.True(t, IsRedisLockNotObtained(errors.New("redislock: not obtained")))
+	assert.False(t, IsRedisLockNotObtained(errors.New("other error")))
+	assert.False(t, IsRedisLockNotObtained(nil))
 }
 
 func TestRedisLockWithTTLAndRetry(t *testing.T) {

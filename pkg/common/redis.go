@@ -25,6 +25,11 @@ var (
 	ErrUnknownRedisMode = errors.New("redis: unknown mode")
 )
 
+func IsRedisLockNotObtained(err error) bool {
+	return errors.Is(err, redislock.ErrNotObtained) ||
+		(err != nil && strings.Contains(err.Error(), "redislock: not obtained"))
+}
+
 const redisPubSubChannelBufferSize = 65536
 
 type RedisClient struct {

@@ -292,7 +292,7 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 }
 
 func isAgentSnapshotTransient(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "redislock: not obtained")
+	return common.IsRedisLockNotObtained(err)
 }
 
 // touchAgentHeartbeat refreshes the machine's liveness timestamp without

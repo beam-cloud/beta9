@@ -504,7 +504,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	go m.cleanupOrphanedNamespaces()
 	if m.slotPoolSize > 0 {
 		if err := m.cleanupStaleNetworkSlots(); err != nil {
-			if isRedisLockNotObtained(err) {
+			if common.IsRedisLockNotObtained(err) {
 				log.Debug().Err(err).Msg("skipped stale preallocated network slot cleanup because another worker holds the cleanup lock")
 			} else {
 				log.Warn().Err(err).Msg("failed to clean up stale preallocated network slots")
@@ -539,10 +539,6 @@ func (m *ContainerNetworkManager) lockContainerNetwork(containerId string) func(
 			m.containerLocks.Delete(containerId)
 		}
 	}
-}
-
-func isRedisLockNotObtained(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "redislock: not obtained")
 }
 
 func isMissingNetworkReservation(err error) bool {

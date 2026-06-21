@@ -543,7 +543,7 @@ func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSan
 
 	return &pb.PodSandboxExposePortResponse{
 		Ok:  resp.Ok,
-		Url: common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, in.ContainerId, in.Port),
+		Url: common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), instance.Stub, in.ContainerId, in.Port),
 	}, nil
 }
 
@@ -1005,7 +1005,7 @@ func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandb
 
 	urls := make(map[int32]string)
 	for _, port := range resp.ExposedPorts {
-		urls[port] = common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, in.ContainerId, port)
+		urls[port] = common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), instance.Stub, in.ContainerId, port)
 		if instance.buffer != nil {
 			port := port
 			go instance.buffer.primeContainerPort(in.ContainerId, port, containerPrimeTimeout)

@@ -963,7 +963,7 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 			return nil
 		}
 		lastErr = err
-		if !isRedisLockNotObtained(err) {
+		if !common.IsRedisLockNotObtained(err) {
 			return err
 		}
 

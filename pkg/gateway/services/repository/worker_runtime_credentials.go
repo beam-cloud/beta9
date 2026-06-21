@@ -3,17 +3,14 @@ package repository_services
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/beam-cloud/redislock"
 )
 
 const (
@@ -92,7 +89,7 @@ func (s *WorkerRepositoryService) runtimeCredentialsContainerState(ctx context.C
 		if err == nil {
 			return state, nil
 		}
-		if !runtimeCredentialsLockNotObtained(err) {
+		if !common.IsRedisLockNotObtained(err) {
 			return nil, err
 		}
 		lastErr = err
@@ -105,10 +102,6 @@ func (s *WorkerRepositoryService) runtimeCredentialsContainerState(ctx context.C
 	}
 
 	return nil, lastErr
-}
-
-func runtimeCredentialsLockNotObtained(err error) bool {
-	return errors.Is(err, redislock.ErrNotObtained) || (err != nil && strings.Contains(err.Error(), "redislock: not obtained"))
 }
 
 func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Context, workspaceID uint, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
