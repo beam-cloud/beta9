@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -35,12 +34,11 @@ type PodServiceOpts struct {
 }
 
 const (
-	podContainerPrefix            string = "pod"
-	sandboxContainerPrefix        string = "sandbox"
-	podRoutePrefix                string = "/pod"
-	sandboxRoutePrefix            string = "/sandbox"
-	podContainerConnectionTimeout        = 600 * time.Second
-	podProxyBufferSize                   = 300
+	podContainerPrefix     string = "pod"
+	sandboxContainerPrefix string = "sandbox"
+	podRoutePrefix         string = "/pod"
+	sandboxRoutePrefix     string = "/sandbox"
+	podProxyBufferSize            = 300
 )
 
 type PodService interface {
