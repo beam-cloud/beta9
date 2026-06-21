@@ -734,7 +734,13 @@ func sandboxProcessManagerClientTimeoutError(lastErr error) error {
 }
 
 func isProcessManagerDialFailure(err error) bool {
-	if err == nil || status.Code(err) != codes.Unavailable {
+	if err == nil {
+		return false
+	}
+	if status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	if status.Code(err) != codes.Unavailable {
 		return false
 	}
 

@@ -65,12 +65,15 @@ SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 SANDBOX_EXEC_READY_TIMEOUT_SECONDS = 90
-SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.5
+SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.05
 SANDBOX_EXEC_READINESS_ERRORS = (
     "failed to connect to sandbox",
     "process manager not ready",
     "sandbox process manager is not ready",
     "process manager failed to become ready",
+    "sandbox process manager client not ready",
+    "deadline exceeded while waiting for connections to become ready",
+    "context deadline exceeded while waiting for connections to become ready",
 )
 SANDBOX_TERMINAL_STATUSES = {
     "complete",
@@ -89,6 +92,21 @@ DOCKER_COMPOSE_OVERRIDE_PATH = "/tmp/.docker-compose-override.yml"
 def _is_sandbox_exec_readiness_error(error_msg: str) -> bool:
     normalized = (error_msg or "").lower()
     return any(marker in normalized for marker in SANDBOX_EXEC_READINESS_ERRORS)
+
+
+def _call_with_sandbox_readiness_retry(do_call):
+    deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
+
+    while True:
+        response = retry_on_transient_error(do_call)
+        if response.ok:
+            return response
+        if not _is_sandbox_exec_readiness_error(response.error_msg):
+            return response
+        if time.monotonic() >= deadline:
+            return response
+
+        time.sleep(SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS)
 
 
 def _sandbox_docker_namespace_args() -> List[str]:
@@ -1012,18 +1030,7 @@ class SandboxProcessManager:
         self,
         do_exec: Callable[[], PodSandboxExecResponse],
     ) -> PodSandboxExecResponse:
-        deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
-
-        while True:
-            response = retry_on_transient_error(do_exec)
-            if response.ok and response.pid > 0:
-                return response
-            if not _is_sandbox_exec_readiness_error(response.error_msg):
-                return response
-            if time.monotonic() >= deadline:
-                return response
-
-            time.sleep(SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS)
+        return _call_with_sandbox_readiness_retry(do_exec)
 
     def list_processes(self) -> Dict[int, "SandboxProcess"]:
         """
@@ -1367,7 +1374,7 @@ class SandboxProcess:
                 timeout=SANDBOX_STATUS_RPC_TIMEOUT_SECONDS,
             )
 
-        response = retry_on_transient_error(_get_status)
+        response = _call_with_sandbox_readiness_retry(_get_status)
 
         if not response.ok:
             raise SandboxProcessError(response.error_msg)

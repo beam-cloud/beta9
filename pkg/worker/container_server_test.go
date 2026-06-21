@@ -17,6 +17,8 @@ import (
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.T) {
@@ -49,6 +51,11 @@ func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.
 
 	cancel()
 	require.ErrorContains(t, <-done, "Request cancelled")
+}
+
+func TestProcessManagerDialFailureRetriesReadyDeadline(t *testing.T) {
+	err := status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready")
+	require.True(t, isProcessManagerDialFailure(err))
 }
 
 func TestSandboxKilledProcessMarksPersistUntilExpiryOrClear(t *testing.T) {
