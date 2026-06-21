@@ -73,7 +73,7 @@ func TestDesiredPodDeploymentContainersAppliesGlobalReplicaLimit(t *testing.T) {
 	}
 }
 
-func TestPodAutoscalerSampleUsesSharedConnectionAggregate(t *testing.T) {
+func TestPodAutoscalerSampleUsesSharedConnectionSnapshots(t *testing.T) {
 	server, err := miniredis.Run()
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestPodAutoscalerSampleUsesSharedConnectionAggregate(t *testing.T) {
 	buffer := &PodProxyBuffer{}
 	buffer.totalConnections.Store(1)
 
-	if err := rdb.Set(ctx, Keys.podTotalConnections(workspace.Name, stub.ExternalId), 2, 0).Err(); err != nil {
+	if err := rdb.Set(ctx, Keys.podProxyConnections(workspace.Name, stub.ExternalId, "proxy-1", "total"), 2, connectionSnapshotTTL).Err(); err != nil {
 		t.Fatal(err)
 	}
 

@@ -203,7 +203,11 @@ func TestReserveContainerForPortSkipsContainersWithoutPort(t *testing.T) {
 	}
 
 	pb.flushConnectionState()
-	if connections := redisInt64(t, rdb, Keys.podContainerConnections("workspace", "stub", "right-port")); connections != 1 {
+	connections, err := sharedPodContainerConnections(context.Background(), rdb, "workspace", "stub", "right-port")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connections != 1 {
 		t.Fatalf("published connections = %d, want 1", connections)
 	}
 }
@@ -271,7 +275,7 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 }
 
-func TestTotalConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
+func TestSharedTotalConnectionsAcrossProxyBuffers(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	pb1 := newPodProxyConnectionTestBuffer(rdb)
 	pb2 := newPodProxyConnectionTestBuffer(rdb)
@@ -285,16 +289,19 @@ func TestTotalConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
 	pb1.flushConnectionState()
 	pb2.flushConnectionState()
 
-	key := Keys.podTotalConnections("workspace", "stub")
-	if got := redisInt64(t, rdb, key); got != 2 {
-		t.Fatalf("total connections = %d, want aggregate count from both proxy buffers", got)
+	if got, err := sharedPodTotalConnections(context.Background(), rdb, "workspace", "stub"); err != nil {
+		t.Fatal(err)
+	} else if got != 2 {
+		t.Fatalf("total connections = %d, want shared count from both proxy buffers", got)
 	}
 
 	if err := pb1.decrementTotalConnections(); err != nil {
 		t.Fatal(err)
 	}
 	pb1.flushConnectionState()
-	if got := redisInt64(t, rdb, key); got != 1 {
+	if got, err := sharedPodTotalConnections(context.Background(), rdb, "workspace", "stub"); err != nil {
+		t.Fatal(err)
+	} else if got != 1 {
 		t.Fatalf("total connections after first decrement = %d, want 1", got)
 	}
 
@@ -302,7 +309,9 @@ func TestTotalConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
 		t.Fatal(err)
 	}
 	pb1.flushConnectionState()
-	if got := redisInt64(t, rdb, key); got != 1 {
+	if got, err := sharedPodTotalConnections(context.Background(), rdb, "workspace", "stub"); err != nil {
+		t.Fatal(err)
+	} else if got != 1 {
 		t.Fatalf("total connections after duplicate first-buffer decrement = %d, want other buffer count preserved", got)
 	}
 
@@ -310,7 +319,9 @@ func TestTotalConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
 		t.Fatal(err)
 	}
 	pb2.flushConnectionState()
-	if got := redisInt64(t, rdb, key); got != 0 {
+	if got, err := sharedPodTotalConnections(context.Background(), rdb, "workspace", "stub"); err != nil {
+		t.Fatal(err)
+	} else if got != 0 {
 		t.Fatalf("total connections after second decrement = %d, want 0", got)
 	}
 
@@ -318,12 +329,14 @@ func TestTotalConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
 		t.Fatal(err)
 	}
 	pb2.flushConnectionState()
-	if got := redisInt64(t, rdb, key); got != 0 {
+	if got, err := sharedPodTotalConnections(context.Background(), rdb, "workspace", "stub"); err != nil {
+		t.Fatal(err)
+	} else if got != 0 {
 		t.Fatalf("total connections after extra decrement = %d, want capped zero", got)
 	}
 }
 
-func TestContainerConnectionsAggregateAcrossProxyBuffers(t *testing.T) {
+func TestSharedContainerConnectionsAcrossProxyBuffers(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	pb1 := newPodProxyConnectionTestBuffer(rdb)
 	pb2 := newPodProxyConnectionTestBuffer(rdb)
@@ -419,7 +432,35 @@ func TestConnectionCountersPublishBusySnapshotsBeforeFlush(t *testing.T) {
 	}
 }
 
-func TestFlushConnectionStatePublishesSnapshotsAndAggregates(t *testing.T) {
+func TestSharedPodConnectionsIgnoreStaleAggregatesWithoutSnapshots(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	ctx := context.Background()
+
+	if err := rdb.Set(ctx, Keys.podTotalConnections("workspace", "stub"), 1, time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.Set(ctx, Keys.podContainerConnections("workspace", "stub", "container-1"), 1, time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	total, err := sharedPodTotalConnections(ctx, rdb, "workspace", "stub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 0 {
+		t.Fatalf("total connections = %d, want 0 without live proxy snapshots", total)
+	}
+
+	containerTotal, err := sharedPodContainerConnections(ctx, rdb, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containerTotal != 0 {
+		t.Fatalf("container connections = %d, want 0 without live proxy snapshots", containerTotal)
+	}
+}
+
+func TestFlushConnectionStatePublishesSnapshots(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	pb := newPodProxyConnectionTestBuffer(rdb)
 	pb.availableContainers = []container{{id: "container-1"}}
@@ -443,12 +484,6 @@ func TestFlushConnectionStatePublishesSnapshotsAndAggregates(t *testing.T) {
 	}
 	if ttl <= 0 || ttl > connectionSnapshotTTL {
 		t.Fatalf("snapshot ttl = %s, want within %s", ttl, connectionSnapshotTTL)
-	}
-	if got := redisInt64(t, rdb, Keys.podTotalConnections("workspace", "stub")); got != 1 {
-		t.Fatalf("aggregate total connections = %d, want 1", got)
-	}
-	if got := redisInt64(t, rdb, Keys.podContainerConnections("workspace", "stub", "container-1")); got != 1 {
-		t.Fatalf("aggregate container connections = %d, want 1", got)
 	}
 }
 
