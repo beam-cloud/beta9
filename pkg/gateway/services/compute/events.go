@@ -32,7 +32,7 @@ func computePoolEvent(workspaceID string, state *model.PoolState, action, status
 		Status:      status,
 		Transport:   state.Transport,
 		Fallback:    state.Fallback,
-		Source:      string(state.Source),
+		Source:      string(state.Source.Canonical()),
 		NodeCount:   state.ReservedNodes,
 		Attrs: map[string]string{
 			"selector":               state.Selector,

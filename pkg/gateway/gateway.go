@@ -215,8 +215,8 @@ func (g *Gateway) initHttp() error {
 	e.Use(middleware.Recover())
 	e.GET("/install/agent", agentInstallScriptHandler())
 	e.GET("/install/agent/:os/:arch", agentBinaryHandler())
-	e.GET(computesvc.AWSCloudFormationTemplatePath, func(c echo.Context) error {
-		return c.Blob(http.StatusOK, "application/yaml", []byte(computesvc.AWSCloudFormationTemplate()))
+	e.GET(computesvc.AWSBYOCTemplatePath, func(c echo.Context) error {
+		return c.Blob(http.StatusOK, "application/yaml", []byte(computesvc.AWSBYOCTemplate()))
 	})
 
 	// Accept both HTTP/2 and HTTP/1

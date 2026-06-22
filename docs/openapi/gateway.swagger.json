@@ -656,14 +656,14 @@
         ]
       }
     },
-    "/pools/cloud/aws/onboarding": {
+    "/pools/byoc/aws/onboarding": {
       "post": {
-        "operationId": "GatewayService_CreateAWSCloudPoolOnboarding",
+        "operationId": "GatewayService_CreateBYOCAWSPoolOnboarding",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayCreateAWSCloudPoolOnboardingResponse"
+              "$ref": "#/definitions/gatewayCreateBYOCAWSPoolOnboardingResponse"
             }
           },
           "default": {
@@ -679,7 +679,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/gatewayCreateAWSCloudPoolOnboardingRequest"
+              "$ref": "#/definitions/gatewayCreateBYOCAWSPoolOnboardingRequest"
             }
           }
         ],
@@ -824,14 +824,14 @@
         ]
       }
     },
-    "/pools/{poolName}/cloud/onboarding-status": {
+    "/pools/{poolName}/byoc/onboarding-status": {
       "get": {
-        "operationId": "GatewayService_GetCloudPoolOnboardingStatus",
+        "operationId": "GatewayService_GetBYOCPoolOnboardingStatus",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayGetCloudPoolOnboardingStatusResponse"
+              "$ref": "#/definitions/gatewayGetBYOCPoolOnboardingStatusResponse"
             }
           },
           "default": {
@@ -1964,7 +1964,7 @@
         }
       }
     },
-    "gatewayCreateAWSCloudPoolOnboardingRequest": {
+    "gatewayCreateBYOCAWSPoolOnboardingRequest": {
       "type": "object",
       "properties": {
         "poolName": {
@@ -1986,7 +1986,7 @@
         }
       }
     },
-    "gatewayCreateAWSCloudPoolOnboardingResponse": {
+    "gatewayCreateBYOCAWSPoolOnboardingResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -1998,13 +1998,7 @@
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
         },
-        "stackName": {
-          "type": "string"
-        },
-        "templateUrl": {
-          "type": "string"
-        },
-        "awsConsoleUrl": {
+        "setupUrl": {
           "type": "string"
         }
       }
@@ -2345,7 +2339,7 @@
         }
       }
     },
-    "gatewayGetCloudPoolOnboardingStatusResponse": {
+    "gatewayGetBYOCPoolOnboardingStatusResponse": {
       "type": "object",
       "properties": {
         "ok": {

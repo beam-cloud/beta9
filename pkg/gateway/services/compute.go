@@ -10,12 +10,12 @@ func (gws *GatewayService) ListPrivatePools(ctx context.Context, in *pb.ListPriv
 	return gws.computeService.ListPrivatePools(ctx, in)
 }
 
-func (gws *GatewayService) CreateAWSCloudPoolOnboarding(ctx context.Context, in *pb.CreateAWSCloudPoolOnboardingRequest) (*pb.CreateAWSCloudPoolOnboardingResponse, error) {
-	return gws.computeService.CreateAWSCloudPoolOnboarding(ctx, in)
+func (gws *GatewayService) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.CreateBYOCAWSPoolOnboardingRequest) (*pb.CreateBYOCAWSPoolOnboardingResponse, error) {
+	return gws.computeService.CreateBYOCAWSPoolOnboarding(ctx, in)
 }
 
-func (gws *GatewayService) GetCloudPoolOnboardingStatus(ctx context.Context, in *pb.GetCloudPoolOnboardingStatusRequest) (*pb.GetCloudPoolOnboardingStatusResponse, error) {
-	return gws.computeService.GetCloudPoolOnboardingStatus(ctx, in)
+func (gws *GatewayService) GetBYOCPoolOnboardingStatus(ctx context.Context, in *pb.GetBYOCPoolOnboardingStatusRequest) (*pb.GetBYOCPoolOnboardingStatusResponse, error) {
+	return gws.computeService.GetBYOCPoolOnboardingStatus(ctx, in)
 }
 
 func (gws *GatewayService) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {

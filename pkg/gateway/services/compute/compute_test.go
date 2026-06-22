@@ -204,7 +204,7 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 	}
 }
 
-func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
+func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	service := &Service{
@@ -221,7 +221,7 @@ func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		},
 	}
 
-	res, err := service.CreateAWSCloudPoolOnboarding(ctx, &pb.CreateAWSCloudPoolOnboardingRequest{
+	res, err := service.CreateBYOCAWSPoolOnboarding(ctx, &pb.CreateBYOCAWSPoolOnboardingRequest{
 		PoolName:     "aws-cpu",
 		Region:       "us-east-1",
 		InstanceType: "t3.large",
@@ -229,19 +229,22 @@ func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		MaxNodes:     4,
 	})
 	if err != nil {
-		t.Fatalf("CreateAWSCloudPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCAWSPoolOnboarding() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("CreateAWSCloudPoolOnboarding() not ok: %s", res.ErrMsg)
+		t.Fatalf("CreateBYOCAWSPoolOnboarding() not ok: %s", res.ErrMsg)
 	}
 	if got, want := res.Pool.Name, "aws-cpu"; got != want {
 		t.Fatalf("pool name = %q, want %q", got, want)
 	}
-	if got, want := res.Pool.Source, string(model.SourceAWSCloudFormation); got != want {
+	if got, want := res.Pool.Source, string(model.SourceAWS); got != want {
 		t.Fatalf("pool source = %q, want %q", got, want)
 	}
-	if got, want := res.TemplateUrl, "https://app.beam.cloud"+AWSCloudFormationTemplatePath; got != want {
-		t.Fatalf("template url = %q, want %q", got, want)
+	if res.SetupUrl == "" {
+		t.Fatal("setup url is required")
+	}
+	if !strings.Contains(res.SetupUrl, "templateURL=https%3A%2F%2Fapp.beam.cloud%2Fapi%2Fv1%2Fgateway%2Fpools%2Fbyoc%2Faws%2Ftemplate.yaml") {
+		t.Fatalf("setup url should reference the BYOC AWS template endpoint: %s", res.SetupUrl)
 	}
 	for _, fragment := range []string{
 		"templateURL=",
@@ -256,8 +259,8 @@ func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		"param_NodeInstanceType=t3.large",
 		"param_RootVolumeSizeGB=200",
 	} {
-		if !strings.Contains(res.AwsConsoleUrl, fragment) {
-			t.Fatalf("console url missing %q: %s", fragment, res.AwsConsoleUrl)
+		if !strings.Contains(res.SetupUrl, fragment) {
+			t.Fatalf("setup url missing %q: %s", fragment, res.SetupUrl)
 		}
 	}
 	if got, want := len(repo.joinTokens), 1; got != want {
@@ -273,7 +276,7 @@ func TestCreateAWSCloudPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 	}
 }
 
-func TestCreateAWSCloudPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
+func TestCreateBYOCAWSPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
@@ -284,27 +287,27 @@ func TestCreateAWSCloudPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.CreateAWSCloudPoolOnboarding(ctx, &pb.CreateAWSCloudPoolOnboardingRequest{
+	res, err := service.CreateBYOCAWSPoolOnboarding(ctx, &pb.CreateBYOCAWSPoolOnboardingRequest{
 		PoolName: "existing",
 	})
 	if err != nil {
-		t.Fatalf("CreateAWSCloudPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCAWSPoolOnboarding() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("CreateAWSCloudPoolOnboarding() unexpectedly succeeded")
+		t.Fatal("CreateBYOCAWSPoolOnboarding() unexpectedly succeeded")
 	}
 	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
 
-func TestGetCloudPoolOnboardingStatusReportsReadiness(t *testing.T) {
+func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWSCloudFormation},
+				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWS},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
@@ -322,12 +325,12 @@ func TestGetCloudPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.GetCloudPoolOnboardingStatus(ctx, &pb.GetCloudPoolOnboardingStatusRequest{PoolName: "aws-cpu"})
+	res, err := service.GetBYOCPoolOnboardingStatus(ctx, &pb.GetBYOCPoolOnboardingStatusRequest{PoolName: "aws-cpu"})
 	if err != nil {
-		t.Fatalf("GetCloudPoolOnboardingStatus() error = %v", err)
+		t.Fatalf("GetBYOCPoolOnboardingStatus() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("GetCloudPoolOnboardingStatus() not ok: %s", res.ErrMsg)
+		t.Fatalf("GetBYOCPoolOnboardingStatus() not ok: %s", res.ErrMsg)
 	}
 	if !res.Ready {
 		t.Fatal("expected pool to be ready")
@@ -337,8 +340,8 @@ func TestGetCloudPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	}
 }
 
-func TestAWSCloudFormationTemplateDoesNotEmbedSecrets(t *testing.T) {
-	template := AWSCloudFormationTemplate()
+func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
+	template := AWSBYOCTemplate()
 	if !strings.Contains(template, "NoEcho: true") {
 		t.Fatal("template should mark BeamJoinToken NoEcho")
 	}

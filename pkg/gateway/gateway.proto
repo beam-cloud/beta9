@@ -156,17 +156,17 @@ service GatewayService {
       get : "/pools/private"
     };
   }
-  rpc CreateAWSCloudPoolOnboarding(CreateAWSCloudPoolOnboardingRequest)
-      returns (CreateAWSCloudPoolOnboardingResponse) {
+  rpc CreateBYOCAWSPoolOnboarding(CreateBYOCAWSPoolOnboardingRequest)
+      returns (CreateBYOCAWSPoolOnboardingResponse) {
     option (google.api.http) = {
-      post : "/pools/cloud/aws/onboarding"
+      post : "/pools/byoc/aws/onboarding"
       body : "*"
     };
   }
-  rpc GetCloudPoolOnboardingStatus(GetCloudPoolOnboardingStatusRequest)
-      returns (GetCloudPoolOnboardingStatusResponse) {
+  rpc GetBYOCPoolOnboardingStatus(GetBYOCPoolOnboardingStatusRequest)
+      returns (GetBYOCPoolOnboardingStatusResponse) {
     option (google.api.http) = {
-      get : "/pools/{pool_name}/cloud/onboarding-status"
+      get : "/pools/{pool_name}/byoc/onboarding-status"
     };
   }
   rpc CreatePool(CreatePoolRequest)
@@ -778,7 +778,7 @@ message ListPrivatePoolsResponse {
   repeated PrivatePool pools = 3;
 }
 
-message CreateAWSCloudPoolOnboardingRequest {
+message CreateBYOCAWSPoolOnboardingRequest {
   string pool_name = 1;
   string region = 2;
   string instance_type = 3;
@@ -786,20 +786,18 @@ message CreateAWSCloudPoolOnboardingRequest {
   uint32 max_nodes = 5;
 }
 
-message CreateAWSCloudPoolOnboardingResponse {
+message CreateBYOCAWSPoolOnboardingResponse {
   bool ok = 1;
   string err_msg = 2;
   PrivatePool pool = 3;
-  string stack_name = 4;
-  string template_url = 5;
-  string aws_console_url = 6;
+  string setup_url = 4;
 }
 
-message GetCloudPoolOnboardingStatusRequest {
+message GetBYOCPoolOnboardingStatusRequest {
   string pool_name = 1;
 }
 
-message GetCloudPoolOnboardingStatusResponse {
+message GetBYOCPoolOnboardingStatusResponse {
   bool ok = 1;
   string err_msg = 2;
   PrivatePool pool = 3;

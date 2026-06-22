@@ -7,11 +7,11 @@ import (
 )
 
 const (
-	SourceAutosolver        = types.ComputeSourceAutosolver
-	SourceCLIReservation    = types.ComputeSourceCLIReservation
-	SourceAttached          = types.ComputeSourceAttached
-	SourceManual            = types.ComputeSourceManual
-	SourceAWSCloudFormation = types.ComputeSourceAWSCloudFormation
+	SourceAutosolver     = types.ComputeSourceAutosolver
+	SourceCLIReservation = types.ComputeSourceCLIReservation
+	SourceAttached       = types.ComputeSourceAttached
+	SourceManual         = types.ComputeSourceManual
+	SourceAWS            = types.ComputeSourceAWS
 
 	ReservationPending     = types.ComputeReservationPending
 	ReservationActive      = types.ComputeReservationActive

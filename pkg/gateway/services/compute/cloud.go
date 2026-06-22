@@ -18,16 +18,16 @@ import (
 )
 
 const (
-	AWSCloudFormationTemplatePath = "/api/v1/gateway/pools/cloud/aws/template.yaml"
+	AWSBYOCTemplatePath = "/api/v1/gateway/pools/byoc/aws/template.yaml"
 
-	awsCloudDefaultRegion       = "us-east-1"
-	awsCloudDefaultInstanceType = "t3.large"
-	awsCloudDefaultDesiredNodes = uint32(1)
-	awsCloudMaxNodesLimit       = uint32(100)
-	awsCloudJoinTokenTTL        = 30 * 24 * time.Hour
-	awsCloudDefaultNetworkSlots = uint32(128)
-	awsCloudDefaultStartLimit   = uint32(16)
-	awsCloudDefaultRootVolumeGB = uint32(200)
+	awsBYOCDefaultRegion       = "us-east-1"
+	awsBYOCDefaultInstanceType = "t3.large"
+	awsBYOCDefaultDesiredNodes = uint32(1)
+	awsBYOCMaxNodesLimit       = uint32(100)
+	awsBYOCJoinTokenTTL        = 30 * 24 * time.Hour
+	awsBYOCDefaultNetworkSlots = uint32(128)
+	awsBYOCDefaultStartLimit   = uint32(16)
+	awsBYOCDefaultRootVolumeGB = uint32(200)
 )
 
 var (
@@ -37,22 +37,22 @@ var (
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
 )
 
-func (s *Service) CreateAWSCloudPoolOnboarding(ctx context.Context, in *pb.CreateAWSCloudPoolOnboardingRequest) (*pb.CreateAWSCloudPoolOnboardingResponse, error) {
+func (s *Service) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.CreateBYOCAWSPoolOnboardingRequest) (*pb.CreateBYOCAWSPoolOnboardingResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	ownerTokenID := computeOwnerTokenID(authInfo)
 	if workspaceID == "" || ownerTokenID == "" {
-		return &pb.CreateAWSCloudPoolOnboardingResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.CreateBYOCAWSPoolOnboardingResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 
-	req, err := normalizeAWSCloudPoolOnboardingRequest(in)
+	req, err := normalizeBYOCAWSPoolOnboardingRequest(in)
 	if err != nil {
-		return &pb.CreateAWSCloudPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.CreateBYOCAWSPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
 	var state *model.PoolState
 	lockErr := s.withPoolStateLock(ctx, workspaceID, req.poolName, func() error {
-		next, err := s.createOrUpdateAWSCloudPool(ctx, authInfo, req)
+		next, err := s.createOrUpdateBYOCAWSPool(ctx, authInfo, req)
 		if err != nil {
 			return err
 		}
@@ -60,7 +60,7 @@ func (s *Service) CreateAWSCloudPoolOnboarding(ctx context.Context, in *pb.Creat
 		return nil
 	})
 	if lockErr != nil {
-		return &pb.CreateAWSCloudPoolOnboardingResponse{Ok: false, ErrMsg: lockErr.Error()}, nil
+		return &pb.CreateBYOCAWSPoolOnboardingResponse{Ok: false, ErrMsg: lockErr.Error()}, nil
 	}
 
 	joinToken, _, err := s.createPrivatePoolJoinTokenForOwner(
@@ -68,36 +68,36 @@ func (s *Service) CreateAWSCloudPoolOnboarding(ctx context.Context, in *pb.Creat
 		workspaceID,
 		ownerTokenID,
 		req.poolName,
-		awsCloudJoinTokenTTL.String(),
+		awsBYOCJoinTokenTTL.String(),
 		"",
 	)
 	if err != nil {
-		return &pb.CreateAWSCloudPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.CreateBYOCAWSPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
-	templateURL := awsCloudFormationTemplateURL(gatewayURL)
+	templateURL := awsBYOCTemplateURL(gatewayURL)
 	stackName := awsCloudFormationStackName(workspaceID, req.poolName)
 	consoleURL := awsCloudFormationConsoleURL(req.region, stackName, templateURL, map[string]string{
 		"BeamGatewayURL":            gatewayURL,
 		"BeamJoinToken":             joinToken,
 		"BeamPoolName":              req.poolName,
 		"BeamWorkerImage":           agentWorkerImage(s.appConfig),
-		"ContainerStartConcurrency": strconv.FormatUint(uint64(awsCloudDefaultStartLimit), 10),
+		"ContainerStartConcurrency": strconv.FormatUint(uint64(awsBYOCDefaultStartLimit), 10),
 		"DesiredCapacity":           strconv.FormatUint(uint64(req.desiredNodes), 10),
 		"MaxSize":                   strconv.FormatUint(uint64(req.maxNodes), 10),
 		"MinSize":                   strconv.FormatUint(uint64(req.desiredNodes), 10),
-		"NetworkSlots":              strconv.FormatUint(uint64(awsCloudDefaultNetworkSlots), 10),
+		"NetworkSlots":              strconv.FormatUint(uint64(awsBYOCDefaultNetworkSlots), 10),
 		"NodeInstanceType":          req.instanceType,
-		"RootVolumeSizeGB":          strconv.FormatUint(uint64(awsCloudDefaultRootVolumeGB), 10),
+		"RootVolumeSizeGB":          strconv.FormatUint(uint64(awsBYOCDefaultRootVolumeGB), 10),
 	})
 
 	s.emitComputeEvent(types.EventComputePool, types.EventComputeSchema{
 		WorkspaceID: workspaceID,
 		PoolName:    state.Name,
 		Action:      types.EventComputeActionPoolCreated,
-		Status:      "cloud_onboarding",
-		Source:      string(model.SourceAWSCloudFormation),
+		Status:      "byoc_onboarding",
+		Source:      string(model.SourceAWS),
 		Transport:   state.Transport,
 		Fallback:    state.Fallback,
 		NodeCount:   req.desiredNodes,
@@ -105,40 +105,37 @@ func (s *Service) CreateAWSCloudPoolOnboarding(ctx context.Context, in *pb.Creat
 			"cloud":         "aws",
 			"region":        req.region,
 			"instance_type": req.instanceType,
-			"stack_name":    stackName,
 		},
 	})
 
-	return &pb.CreateAWSCloudPoolOnboardingResponse{
-		Ok:            true,
-		Pool:          s.privatePoolStateToProto(state),
-		StackName:     stackName,
-		TemplateUrl:   templateURL,
-		AwsConsoleUrl: consoleURL,
+	return &pb.CreateBYOCAWSPoolOnboardingResponse{
+		Ok:       true,
+		Pool:     s.privatePoolStateToProto(state),
+		SetupUrl: consoleURL,
 	}, nil
 }
 
-func (s *Service) GetCloudPoolOnboardingStatus(ctx context.Context, in *pb.GetCloudPoolOnboardingStatusRequest) (*pb.GetCloudPoolOnboardingStatusResponse, error) {
+func (s *Service) GetBYOCPoolOnboardingStatus(ctx context.Context, in *pb.GetBYOCPoolOnboardingStatusRequest) (*pb.GetBYOCPoolOnboardingStatusResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
-		return &pb.GetCloudPoolOnboardingStatusResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.GetBYOCPoolOnboardingStatusResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 
 	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, strings.TrimSpace(in.PoolName))
 	if err != nil {
-		return &pb.GetCloudPoolOnboardingStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.GetBYOCPoolOnboardingStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if state == nil {
-		return &pb.GetCloudPoolOnboardingStatusResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return &pb.GetBYOCPoolOnboardingStatusResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 
 	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
 	if err != nil {
-		return &pb.GetCloudPoolOnboardingStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.GetBYOCPoolOnboardingStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	pool := s.privatePoolStateToProtoWithMachines(state, machines)
-	return &pb.GetCloudPoolOnboardingStatusResponse{
+	return &pb.GetBYOCPoolOnboardingStatusResponse{
 		Ok:                true,
 		Pool:              pool,
 		Ready:             pool.ReadyMachineCount > 0,
@@ -147,7 +144,7 @@ func (s *Service) GetCloudPoolOnboardingStatus(ctx context.Context, in *pb.GetCl
 	}, nil
 }
 
-type awsCloudPoolOnboardingRequest struct {
+type byocAWSPoolOnboardingRequest struct {
 	poolName     string
 	region       string
 	instanceType string
@@ -155,11 +152,11 @@ type awsCloudPoolOnboardingRequest struct {
 	maxNodes     uint32
 }
 
-func normalizeAWSCloudPoolOnboardingRequest(in *pb.CreateAWSCloudPoolOnboardingRequest) (awsCloudPoolOnboardingRequest, error) {
+func normalizeBYOCAWSPoolOnboardingRequest(in *pb.CreateBYOCAWSPoolOnboardingRequest) (byocAWSPoolOnboardingRequest, error) {
 	if in == nil {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("request is required")
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("request is required")
 	}
-	req := awsCloudPoolOnboardingRequest{
+	req := byocAWSPoolOnboardingRequest{
 		poolName:     strings.TrimSpace(in.PoolName),
 		region:       strings.TrimSpace(in.Region),
 		instanceType: strings.TrimSpace(in.InstanceType),
@@ -167,42 +164,42 @@ func normalizeAWSCloudPoolOnboardingRequest(in *pb.CreateAWSCloudPoolOnboardingR
 		maxNodes:     in.MaxNodes,
 	}
 	if req.poolName == "" {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("pool name is required")
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("pool name is required")
 	}
 	if err := model.ValidatePoolName(req.poolName); err != nil {
-		return awsCloudPoolOnboardingRequest{}, err
+		return byocAWSPoolOnboardingRequest{}, err
 	}
 	if req.region == "" {
-		req.region = awsCloudDefaultRegion
+		req.region = awsBYOCDefaultRegion
 	}
 	if !awsRegionPattern.MatchString(req.region) {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("invalid AWS region %q", req.region)
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("invalid AWS region %q", req.region)
 	}
 	if req.instanceType == "" {
-		req.instanceType = awsCloudDefaultInstanceType
+		req.instanceType = awsBYOCDefaultInstanceType
 	}
 	if !strings.Contains(req.instanceType, ".") || !awsInstanceTypePattern.MatchString(req.instanceType) {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("invalid AWS instance type %q", req.instanceType)
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("invalid AWS instance type %q", req.instanceType)
 	}
 	if req.desiredNodes == 0 {
-		req.desiredNodes = awsCloudDefaultDesiredNodes
+		req.desiredNodes = awsBYOCDefaultDesiredNodes
 	}
-	if req.desiredNodes > awsCloudMaxNodesLimit {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("desired_nodes must be <= %d", awsCloudMaxNodesLimit)
+	if req.desiredNodes > awsBYOCMaxNodesLimit {
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("desired_nodes must be <= %d", awsBYOCMaxNodesLimit)
 	}
 	if req.maxNodes == 0 {
 		req.maxNodes = req.desiredNodes
 	}
 	if req.maxNodes < req.desiredNodes {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("max_nodes must be >= desired_nodes")
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("max_nodes must be >= desired_nodes")
 	}
-	if req.maxNodes > awsCloudMaxNodesLimit {
-		return awsCloudPoolOnboardingRequest{}, fmt.Errorf("max_nodes must be <= %d", awsCloudMaxNodesLimit)
+	if req.maxNodes > awsBYOCMaxNodesLimit {
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("max_nodes must be <= %d", awsBYOCMaxNodesLimit)
 	}
 	return req, nil
 }
 
-func (s *Service) createOrUpdateAWSCloudPool(ctx context.Context, authInfo *auth.AuthInfo, req awsCloudPoolOnboardingRequest) (*model.PoolState, error) {
+func (s *Service) createOrUpdateBYOCAWSPool(ctx context.Context, authInfo *auth.AuthInfo, req byocAWSPoolOnboardingRequest) (*model.PoolState, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	ownerTokenID := computeOwnerTokenID(authInfo)
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, req.poolName)
@@ -213,7 +210,7 @@ func (s *Service) createOrUpdateAWSCloudPool(ctx context.Context, authInfo *auth
 		return nil, fmt.Errorf("pool already exists in this workspace")
 	}
 	if existing != nil && configuredPoolGPU(existing) != "" {
-		return nil, fmt.Errorf("AWS cloud onboarding currently supports CPU pools only")
+		return nil, fmt.Errorf("AWS BYOC currently supports CPU pools only")
 	}
 
 	config := normalizePoolConfig(&pb.PoolConfig{
@@ -234,7 +231,7 @@ func (s *Service) createOrUpdateAWSCloudPool(ctx context.Context, authInfo *auth
 		Selector:         config.Selector,
 		Config:           config,
 		Status:           "active",
-		Source:           model.SourceAWSCloudFormation,
+		Source:           model.SourceAWS,
 		Mode:             config.Mode,
 		Transport:        config.Transport,
 		Fallback:         config.Fallback,
@@ -262,8 +259,8 @@ func (s *Service) createOrUpdateAWSCloudPool(ctx context.Context, authInfo *auth
 	return state, nil
 }
 
-func awsCloudFormationTemplateURL(gatewayURL string) string {
-	return strings.TrimRight(gatewayURL, "/") + AWSCloudFormationTemplatePath
+func awsBYOCTemplateURL(gatewayURL string) string {
+	return strings.TrimRight(gatewayURL, "/") + AWSBYOCTemplatePath
 }
 
 func awsCloudFormationConsoleURL(region, stackName, templateURL string, params map[string]string) string {
@@ -297,7 +294,7 @@ func cloudFormationNamePart(value string) string {
 	return strings.Trim(value, "-")
 }
 
-func AWSCloudFormationTemplate() string {
+func AWSBYOCTemplate() string {
 	return awsCloudFormationTemplate
 }
 

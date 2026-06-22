@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	ComputeSourceAutosolver        ComputeCapacitySource = "autosolver"
-	ComputeSourceCLIReservation    ComputeCapacitySource = "cli_reservation"
-	ComputeSourceAttached          ComputeCapacitySource = "attached"
-	ComputeSourceManual            ComputeCapacitySource = "manual"
-	ComputeSourceAWSCloudFormation ComputeCapacitySource = "aws_cloudformation"
+	ComputeSourceAutosolver     ComputeCapacitySource = "autosolver"
+	ComputeSourceCLIReservation ComputeCapacitySource = "cli_reservation"
+	ComputeSourceAttached       ComputeCapacitySource = "attached"
+	ComputeSourceManual         ComputeCapacitySource = "manual"
+	ComputeSourceAWS            ComputeCapacitySource = "aws"
 
 	ComputeReservationPending     ComputeReservationStatus = "pending"
 	ComputeReservationActive      ComputeReservationStatus = "active"
@@ -27,6 +27,8 @@ const (
 	ComputeActionCreate ComputeSolveActionType = "create"
 	ComputeActionKeep   ComputeSolveActionType = "keep"
 	ComputeActionDelete ComputeSolveActionType = "delete"
+
+	computeSourceAWSCloudFormationLegacy ComputeCapacitySource = "aws_cloudformation"
 )
 
 var computePoolNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
@@ -36,6 +38,9 @@ type ComputeReservationStatus string
 type ComputeSolveActionType string
 
 func (s ComputeCapacitySource) Canonical() ComputeCapacitySource {
+	if s == computeSourceAWSCloudFormationLegacy {
+		return ComputeSourceAWS
+	}
 	if s == ComputeSourceManual {
 		return ComputeSourceAttached
 	}
@@ -43,7 +48,7 @@ func (s ComputeCapacitySource) Canonical() ComputeCapacitySource {
 }
 
 func (s ComputeCapacitySource) IsAttached() bool {
-	return s == ComputeSourceAttached || s == ComputeSourceManual || s == ComputeSourceAWSCloudFormation
+	return s == ComputeSourceAttached || s == ComputeSourceManual || s == ComputeSourceAWS || s == computeSourceAWSCloudFormationLegacy
 }
 
 type ComputeVendor interface {
