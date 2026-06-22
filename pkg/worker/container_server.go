@@ -31,6 +31,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	goproc "github.com/beam-cloud/goproc/pkg"
+	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/google/shlex"
 	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -44,7 +45,6 @@ const (
 	sandboxProcessManagerReadyTimeout   = 10 * time.Second
 	sandboxProcessManagerReadyPollDelay = 25 * time.Millisecond
 	sandboxExecInlineWaitTimeout        = 750 * time.Millisecond
-	sandboxExecInlineWaitPollDelay      = 20 * time.Millisecond
 )
 
 // ContainerRuntimeServer is a runtime-agnostic container server that works with any OCI runtime
@@ -668,66 +668,180 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 	if err != nil {
 		return nil, err
 	}
-	defer client.Cleanup()
 
+	if wait {
+		return s.execSandboxProcessInline(ctx, containerId, client, cmd, cwd, env)
+	}
+
+	defer client.Cleanup()
 	pid, err := client.Exec(cmd, cwd, env, false)
 	if err != nil {
 		return nil, err
 	}
 
-	resp := &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}
-	if !wait {
-		return resp, nil
-	}
-
-	exitCode, done, err := s.waitForSandboxProcessInline(ctx, client, containerId, int32(pid))
-	if err != nil {
-		return nil, err
-	}
-	if !done {
-		return resp, nil
-	}
-
-	stdout, err := client.Stdout(pid)
-	if err != nil {
-		return nil, err
-	}
-	stderr, err := client.Stderr(pid)
-	if err != nil {
-		return nil, err
-	}
-
-	resp.Done = true
-	resp.ExitCode = int32(exitCode)
-	resp.Stdout = stdout
-	resp.Stderr = stderr
-	return resp, nil
+	return &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}, nil
 }
 
-func (s *ContainerRuntimeServer) waitForSandboxProcessInline(ctx context.Context, client *goproc.GoProcClient, containerId string, pid int32) (int, bool, error) {
-	deadline := time.Now().Add(sandboxExecInlineWaitTimeout)
+type sandboxExecStreamResult struct {
+	pid      int32
+	exitCode int32
+	stdout   string
+	stderr   string
+	err      error
+}
+
+func (s *ContainerRuntimeServer) execSandboxProcessInline(ctx context.Context, containerId string, client *goproc.GoProcClient, cmd []string, cwd string, env []string) (*pb.ContainerSandboxExecResponse, error) {
+	if err := ctx.Err(); err != nil {
+		client.Cleanup()
+		return nil, err
+	}
+
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream, err := client.StreamExec(streamCtx, cmd, cwd, env, false)
+	if err != nil {
+		cancel()
+		client.Cleanup()
+		return nil, err
+	}
+
+	startedCh := make(chan int32, 1)
+	resultCh := make(chan sandboxExecStreamResult, 1)
+	go s.drainSandboxExecStream(containerId, stream, startedCh, resultCh, func() {
+		cancel()
+		client.Cleanup()
+	})
+
+	timer := time.NewTimer(sandboxExecInlineWaitTimeout)
+	defer timer.Stop()
+
+	var pid int32
 	for {
-		exitCode, err := client.Status(int(pid))
+		select {
+		case startedPid := <-startedCh:
+			if startedPid > 0 {
+				pid = startedPid
+			}
+		case result := <-resultCh:
+			if result.err != nil {
+				if result.pid > 0 {
+					pid = result.pid
+				}
+				if pid > 0 {
+					return &pb.ContainerSandboxExecResponse{Ok: true, Pid: pid}, nil
+				}
+				return nil, result.err
+			}
+			if result.pid > 0 {
+				pid = result.pid
+			}
+			return &pb.ContainerSandboxExecResponse{
+				Ok:       true,
+				Pid:      pid,
+				Done:     true,
+				ExitCode: result.exitCode,
+				Stdout:   result.stdout,
+				Stderr:   result.stderr,
+			}, nil
+		case <-timer.C:
+			if pid > 0 {
+				return &pb.ContainerSandboxExecResponse{Ok: true, Pid: pid}, nil
+			}
+			cancel()
+			return nil, errors.New("timed out starting sandbox process")
+		case <-ctx.Done():
+			if pid > 0 {
+				return &pb.ContainerSandboxExecResponse{Ok: true, Pid: pid}, nil
+			}
+			cancel()
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (s *ContainerRuntimeServer) drainSandboxExecStream(containerId string, stream goprocpb.GoProc_StreamExecClient, startedCh chan<- int32, resultCh chan<- sandboxExecStreamResult, cleanup func()) {
+	defer cleanup()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var pid int32
+
+	sendResult := func(result sandboxExecStreamResult) {
+		select {
+		case resultCh <- result:
+		default:
+		}
+	}
+
+	for {
+		resp, err := stream.Recv()
 		if err != nil {
-			return -1, false, err
-		}
-		if exitCode >= 0 {
-			s.clearSandboxProcessExited(containerId, pid)
-			return exitCode, true, nil
-		}
-		if s.sandboxProcessMarkedExited(containerId, pid) {
-			return sandboxMissingProcessExitCode, true, nil
-		}
-		if time.Now().Add(sandboxExecInlineWaitPollDelay).After(deadline) {
-			return -1, false, nil
+			if errors.Is(err, io.EOF) {
+				err = errors.New("sandbox process stream closed before exit")
+			}
+			sendResult(sandboxExecStreamResult{pid: pid, err: err})
+			return
 		}
 
-		timer := time.NewTimer(sandboxExecInlineWaitPollDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return -1, false, ctx.Err()
-		case <-timer.C:
+		if started := resp.GetStarted(); started != nil {
+			pid = started.Pid
+			select {
+			case startedCh <- pid:
+			default:
+			}
+			continue
+		}
+
+		if chunk := resp.GetChunk(); chunk != nil {
+			if chunk.Pid > 0 {
+				pid = chunk.Pid
+			}
+
+			switch chunk.Stream {
+			case goproc.ProcessStreamStdout:
+				stdout.Write(chunk.Data)
+			case goproc.ProcessStreamStderr:
+				stderr.Write(chunk.Data)
+			}
+
+			err := stream.Send(&goprocpb.StreamExecRequest{
+				Message: &goprocpb.StreamExecRequest_Ack{
+					Ack: &goprocpb.ProcessLogAck{Seq: chunk.Seq, Ok: true},
+				},
+			})
+			if err != nil {
+				sendResult(sandboxExecStreamResult{pid: pid, err: err})
+				return
+			}
+			continue
+		}
+
+		if exited := resp.GetExited(); exited != nil {
+			if exited.Pid > 0 {
+				pid = exited.Pid
+			}
+			exitCode := exited.ExitCode
+			if pid > 0 && exitCode < 0 && s.sandboxProcessMarkedExited(containerId, pid) {
+				exitCode = sandboxMissingProcessExitCode
+			}
+			if pid > 0 && exitCode >= 0 {
+				s.clearSandboxProcessExited(containerId, pid)
+			}
+			if pid <= 0 || (exitCode < 0 && exited.ErrorMsg != "") {
+				err := errors.New(exited.ErrorMsg)
+				if exited.ErrorMsg == "" {
+					err = errors.New("sandbox process stream exited without a pid")
+				}
+				sendResult(sandboxExecStreamResult{pid: pid, err: err})
+				return
+			}
+
+			sendResult(sandboxExecStreamResult{
+				pid:      pid,
+				exitCode: exitCode,
+				stdout:   stdout.String(),
+				stderr:   stderr.String(),
+			})
+			return
 		}
 	}
 }
