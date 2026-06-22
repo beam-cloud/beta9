@@ -1213,11 +1213,14 @@ class SandboxProcessStream:
         """
         data = self._buffer
         self._buffer = ""
+        process_exited = getattr(self.process, "exit_code", -1) >= 0
 
         while True:
             chunk = self._fetch_next_chunk()
             if chunk:
                 data += chunk
+                if process_exited:
+                    break
             else:
                 break
 

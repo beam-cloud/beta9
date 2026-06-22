@@ -81,6 +81,22 @@ def test_process_stream_read_propagates_fetch_errors():
         stream.read()
 
 
+def test_finished_process_stream_read_fetches_output_once():
+    calls = 0
+
+    def fetch():
+        nonlocal calls
+        calls += 1
+        return "done"
+
+    process = FakeProcess()
+    process.exit_code = 0
+    stream = SandboxProcessStream(process, fetch)
+
+    assert stream.read() == "done"
+    assert calls == 1
+
+
 def test_process_stdout_checks_rpc_ok():
     sandbox = SimpleNamespace(
         container_id="sandbox-123",

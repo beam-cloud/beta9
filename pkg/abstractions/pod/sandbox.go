@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -866,7 +867,15 @@ func sandboxClientCacheKeyForRoute(route *types.BackendRoute, workerAddress, tok
 		route.Kind == types.BackendRouteKindWorker &&
 		route.Transport == types.BackendRouteTransportTSNet &&
 		route.ProxyTarget != "" {
-		return route.Transport + ":" + route.ProxyTarget + ":" + token
+		parts := []string{route.Transport, route.ProxyTarget}
+		if route.LocalTarget != "" {
+			parts = append(parts, route.LocalTarget)
+		}
+		if route.UpdatedAt != 0 {
+			parts = append(parts, strconv.FormatInt(route.UpdatedAt, 10))
+		}
+		parts = append(parts, token)
+		return strings.Join(parts, ":")
 	}
 	return workerAddress + ":" + token
 }
