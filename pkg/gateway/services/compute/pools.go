@@ -128,6 +128,10 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 
+	if err := s.releasePrivatePoolMachines(ctx, workspaceID, state.Name); err != nil {
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+
 	vendors := s.computeVendors()
 	for _, reservation := range state.Reservations {
 		if reservation.Source.IsAttached() || reservation.Source == model.SourceAutosolver {
@@ -148,6 +152,19 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolDeleted, "deleted"))
 	return &pb.DeletePoolResponse{Ok: true}, nil
+}
+
+func (s *Service) releasePrivatePoolMachines(ctx context.Context, workspaceID, poolName string) error {
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, poolName)
+	if err != nil {
+		return err
+	}
+	for _, machine := range machines {
+		if err := s.removePrivateMachine(ctx, machine); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapacityRequest) (*pb.ExtendPoolCapacityResponse, error) {

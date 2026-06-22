@@ -340,6 +340,60 @@ func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	}
 }
 
+func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	machineA := &model.AgentTokenState{
+		WorkspaceID:      "workspace-1",
+		PoolName:         "aws-cpu",
+		MachineID:        "machine-a",
+		Schedulable:      true,
+		LastJoinAt:       now,
+		LastHeartbeatAt:  now,
+		LastDisconnectAt: time.Time{},
+	}
+	machineB := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "aws-cpu",
+		MachineID:       "machine-b",
+		Schedulable:     true,
+		LastJoinAt:      now,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWS},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {machineA, machineB},
+		},
+	}
+	containerRepo := &fakeContainerRepo{}
+	service := &Service{computeRepo: repo, containerRepo: containerRepo}
+
+	res, err := service.DeletePool(ctx, &pb.DeletePoolRequest{Name: "aws-cpu"})
+	if err != nil {
+		t.Fatalf("DeletePool() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("DeletePool() not ok: %s", res.ErrMsg)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 0 {
+		t.Fatalf("machine count after pool release = %d, want 0", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("pool count after pool release = %d, want 0", got)
+	}
+	if machineA.Schedulable || machineB.Schedulable {
+		t.Fatal("DeletePool() did not mark BYOC machines unschedulable before deleting them")
+	}
+	if got, want := containerRepo.deletedRoutes, []string{"workspace-1/aws-cpu/machine-a", "workspace-1/aws-cpu/machine-b"}; !sameStrings(got, want) {
+		t.Fatalf("deleted machine routes = %v, want %v", got, want)
+	}
+}
+
 func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 	template := AWSBYOCTemplate()
 	if !strings.Contains(template, "NoEcho: true") {
@@ -2805,6 +2859,18 @@ func (r *fakeComputeRepo) ListAllPoolStates(ctx context.Context, limit int) ([]*
 }
 
 func (r *fakeComputeRepo) DeletePoolState(ctx context.Context, workspaceID, name string) error {
+	states := r.pools[workspaceID]
+	kept := states[:0]
+	for _, state := range states {
+		if state == nil || state.Name != name {
+			kept = append(kept, state)
+		}
+	}
+	if len(kept) == 0 {
+		delete(r.pools, workspaceID)
+		return nil
+	}
+	r.pools[workspaceID] = kept
 	return nil
 }
 
@@ -3004,8 +3070,9 @@ func (r *fakeWorkerRepo) UpdateWorkerStatus(workerID string, status types.Worker
 
 type fakeContainerRepo struct {
 	repository.ContainerRepository
-	containers []types.ContainerState
-	stopped    []string
+	containers    []types.ContainerState
+	stopped       []string
+	deletedRoutes []string
 }
 
 func (r *fakeContainerRepo) GetActiveContainersByWorkerId(string) ([]types.ContainerState, error) {
@@ -3016,5 +3083,10 @@ func (r *fakeContainerRepo) UpdateContainerStatus(containerID string, status typ
 	if status == types.ContainerStatusStopping {
 		r.stopped = append(r.stopped, containerID)
 	}
+	return nil
+}
+
+func (r *fakeContainerRepo) DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
+	r.deletedRoutes = append(r.deletedRoutes, workspaceID+"/"+poolName+"/"+machineID)
 	return nil
 }
