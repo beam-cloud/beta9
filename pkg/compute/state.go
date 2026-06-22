@@ -48,8 +48,10 @@ type JoinTokenState struct {
 	MachineID        string    `json:"machine_id,omitempty"`
 	CreatedByTokenID string    `json:"created_by_token_id"`
 	CreatedAt        time.Time `json:"created_at"`
-	ExpiresAt        time.Time `json:"expires_at"`
-	Revoked          bool      `json:"revoked"`
+	// A zero ExpiresAt is a persistent bootstrap token; it must be explicitly
+	// revoked when the owning resource is deleted.
+	ExpiresAt time.Time `json:"expires_at"`
+	Revoked   bool      `json:"revoked"`
 	// BoundFingerprint pins a machine-specific join token to the first
 	// machine that used it.
 	BoundFingerprint string `json:"bound_fingerprint,omitempty"`

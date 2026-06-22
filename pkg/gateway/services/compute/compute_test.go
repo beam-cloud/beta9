@@ -279,17 +279,25 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 	if got, want := len(repo.joinTokens), 1; got != want {
 		t.Fatalf("join token count = %d, want %d", got, want)
 	}
+	joinTokenHash := ""
 	for _, token := range repo.joinTokens {
+		joinTokenHash = token.TokenHash
 		if token.WorkspaceID != "workspace-1" || token.PoolName != "aws-cpu" || token.CreatedByTokenID != "owner-token" {
 			t.Fatalf("join token identity = %+v, want workspace/pool/owner", token)
 		}
-		if time.Until(token.ExpiresAt) < 29*24*time.Hour {
-			t.Fatalf("join token expiry = %s, want roughly 30 days", token.ExpiresAt)
+		if !token.ExpiresAt.IsZero() {
+			t.Fatalf("join token expiry = %s, want persistent BYOC bootstrap token", token.ExpiresAt)
 		}
 	}
 	stored := repo.pools["workspace-1"][0]
 	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.ResourceName {
 		t.Fatalf("stored BYOC metadata = %+v, want aws account/region/resource", stored.BYOC)
+	}
+	if got := stored.BYOC.Labels[byocBootstrapJoinTokenHashLabel]; got == "" || got != joinTokenHash {
+		t.Fatalf("stored BYOC join token hash = %q, want %q", got, joinTokenHash)
+	}
+	if got := stored.BYOC.Labels[byocBootstrapJoinTokenHashesLabel]; got == "" || got != joinTokenHash {
+		t.Fatalf("stored BYOC join token hashes = %q, want %q", got, joinTokenHash)
 	}
 	for key, want := range map[string]string{
 		"instance_type":      "i4i.xlarge",
@@ -301,6 +309,61 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestCreateBYOCPoolOnboardingKeepsExistingBYOCBootstrapJoinTokens(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{
+		computeRepo: repo,
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				BYOC: types.ManagedComputeBYOCConfig{
+					AWS: types.ManagedComputeBYOCAWSConfig{TemplateURL: "https://s3.us-east-1.amazonaws.com/beam-byoc-templates-test/aws/byoc-template.yaml"},
+				},
+			},
+		},
+	}
+
+	first, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:     "aws",
+		PoolName:     "aws-cpu",
+		InstanceType: "i4i.xlarge",
+		AccountId:    "123456789012",
+	})
+	if err != nil || !first.Ok {
+		t.Fatalf("first CreateBYOCPoolOnboarding() = (%v, %v)", first, err)
+	}
+	firstHash := repo.pools["workspace-1"][0].BYOC.Labels[byocBootstrapJoinTokenHashLabel]
+
+	second, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:     "aws",
+		PoolName:     "aws-cpu",
+		InstanceType: "i4i.xlarge",
+		DesiredNodes: 2,
+		MaxNodes:     2,
+		AccountId:    "123456789012",
+	})
+	if err != nil || !second.Ok {
+		t.Fatalf("second CreateBYOCPoolOnboarding() = (%v, %v)", second, err)
+	}
+	secondHash := repo.pools["workspace-1"][0].BYOC.Labels[byocBootstrapJoinTokenHashLabel]
+	if firstHash == "" || secondHash == "" || firstHash == secondHash {
+		t.Fatalf("BYOC join token hashes = first %q second %q, want a new setup token", firstHash, secondHash)
+	}
+	if repo.joinTokens[firstHash].Revoked {
+		t.Fatal("previous BYOC bootstrap join token was revoked before pool deletion")
+	}
+	if repo.joinTokens[secondHash].Revoked {
+		t.Fatal("current BYOC bootstrap join token was revoked")
+	}
+	hashes := strings.Split(repo.pools["workspace-1"][0].BYOC.Labels[byocBootstrapJoinTokenHashesLabel], ",")
+	if got, want := hashes, []string{firstHash, secondHash}; !sameStrings(got, want) {
+		t.Fatalf("stored BYOC bootstrap join token hashes = %v, want %v", got, want)
 	}
 }
 
@@ -509,11 +572,36 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWS},
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					BYOC: &model.BYOCProviderState{
+						Provider: string(model.SourceAWS),
+						Labels: map[string]string{
+							byocBootstrapJoinTokenHashLabel:   hashComputeToken("byoc-token"),
+							byocBootstrapJoinTokenHashesLabel: strings.Join([]string{hashComputeToken("byoc-token"), hashComputeToken("old-byoc-token")}, ","),
+						},
+					},
+				},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
 			fakeComputeKey("workspace-1", "aws-cpu"): {machineA, machineB},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			hashComputeToken("byoc-token"): {
+				TokenHash:        hashComputeToken("byoc-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "aws-cpu",
+				CreatedByTokenID: "owner-token",
+			},
+			hashComputeToken("old-byoc-token"): {
+				TokenHash:        hashComputeToken("old-byoc-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "aws-cpu",
+				CreatedByTokenID: "owner-token",
+			},
 		},
 	}
 	containerRepo := &fakeContainerRepo{}
@@ -534,6 +622,12 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 	}
 	if machineA.Schedulable || machineB.Schedulable {
 		t.Fatal("DeletePool() did not mark BYOC machines unschedulable before deleting them")
+	}
+	if !repo.joinTokens[hashComputeToken("byoc-token")].Revoked {
+		t.Fatal("DeletePool() did not revoke the BYOC bootstrap join token")
+	}
+	if !repo.joinTokens[hashComputeToken("old-byoc-token")].Revoked {
+		t.Fatal("DeletePool() did not revoke the old BYOC bootstrap join token")
 	}
 	if got, want := containerRepo.deletedRoutes, []string{"workspace-1/aws-cpu/machine-a", "workspace-1/aws-cpu/machine-b"}; !sameStrings(got, want) {
 		t.Fatalf("deleted machine routes = %v, want %v", got, want)
@@ -657,6 +751,44 @@ func TestJoinAgentLocksPoolGPUTypeFromFirstMachine(t *testing.T) {
 	pool := repo.pools["workspace-1"][0]
 	if got, want := pool.Config.Gpu, []string{"A4000"}; !sameStrings(got, want) {
 		t.Fatalf("pool GPU config = %v, want %v", got, want)
+	}
+}
+
+func TestJoinAgentAcceptsPersistentJoinToken(t *testing.T) {
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID:      "workspace-1",
+					Name:             "aws-cpu",
+					Config:           &pb.PoolConfig{Name: "aws-cpu"},
+					CreatedByTokenID: "owner-token",
+				},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			hashComputeToken("byoc-token"): {
+				TokenHash:        hashComputeToken("byoc-token"),
+				WorkspaceID:      "workspace-1",
+				PoolName:         "aws-cpu",
+				CreatedByTokenID: "owner-token",
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          "byoc-token",
+		MachineFingerprint: "fingerprint-1",
+		CpuCount:           4,
+		MemoryMb:           1024,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("JoinAgent() not ok: %s", res.ErrMsg)
 	}
 }
 

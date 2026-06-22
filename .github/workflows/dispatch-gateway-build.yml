@@ -7,6 +7,14 @@ on:
         description: 'image tag'
         required: true
         type: string
+      byoc_template_bucket:
+        description: 'Optional S3 bucket for publishing the AWS BYOC template'
+        required: false
+        type: string
+      byoc_template_alias:
+        description: 'Optional AWS BYOC template alias, for example byoc-template.yaml'
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -29,6 +37,19 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
           aws-region: us-east-1
+
+      - name: Publish AWS BYOC template
+        if: inputs.byoc_template_bucket != ''
+        env:
+          BYOC_TEMPLATE_BUCKET: ${{ inputs.byoc_template_bucket }}
+          BYOC_TEMPLATE_ALIAS: ${{ inputs.byoc_template_alias }}
+          BYOC_TEMPLATE_VERSION: ${{ inputs.tag }}
+        run: |
+          args=("$BYOC_TEMPLATE_BUCKET" "$BYOC_TEMPLATE_VERSION")
+          if [[ -n "$BYOC_TEMPLATE_ALIAS" ]]; then
+            args+=("$BYOC_TEMPLATE_ALIAS")
+          fi
+          hack/publish_byoc_template.sh "${args[@]}"
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2

@@ -112,16 +112,7 @@ func (s *Service) revokeReservationJoinToken(ctx context.Context, reservation *m
 	if s == nil || s.computeRepo == nil || reservation == nil || reservation.RegistrationTokenHash == "" {
 		return
 	}
-	token, err := s.computeRepo.GetJoinTokenState(ctx, reservation.RegistrationTokenHash)
-	if err != nil || token == nil || token.Revoked {
-		return
-	}
-	token.Revoked = true
-	ttl := time.Until(token.ExpiresAt)
-	if ttl <= 0 {
-		ttl = time.Second
-	}
-	_ = s.saveComputeJoinTokenState(ctx, token, ttl)
+	_ = s.revokeComputeJoinTokenHash(ctx, reservation.RegistrationTokenHash)
 }
 
 func (s *Service) removePrivateMachineWorker(machine *model.AgentTokenState) error {
