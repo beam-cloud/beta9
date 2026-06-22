@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .. import terminal
-from ..abstractions.base import unset_channel
+from ..abstractions.base import set_channel, unset_channel
 from ..abstractions.base.runner import (
     SANDBOX_STUB_TYPE,
     BaseAbstraction,
@@ -55,6 +55,7 @@ from ..clients.pod import (
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
+from ..config import ConfigContext
 from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias, Pool
@@ -87,6 +88,7 @@ SANDBOX_TERMINAL_STATUSES = {
 DOCKER_SANDBOX_NETWORK_MODE = "host"
 DOCKER_SANDBOX_PID_MODE = "host"
 DOCKER_COMPOSE_OVERRIDE_PATH = "/tmp/.docker-compose-override.yml"
+SANDBOX_IDLE_ENTRYPOINT = ["tail", "-f", "/dev/null"]
 
 
 def _is_sandbox_exec_readiness_error(error_msg: str) -> bool:
@@ -244,9 +246,12 @@ class Sandbox(Pod):
         docker_enabled: bool = False,
         ports: Optional[List[int]] = [],
         pool: Optional[Union[str, Pool]] = None,
+        context: Optional[ConfigContext] = None,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
+        if context is not None:
+            set_channel(context=context)
 
         super().__init__(
             cpu=cpu,
@@ -265,7 +270,10 @@ class Sandbox(Pod):
             docker_enabled=docker_enabled,
             ports=ports,
             pool=pool,
+            entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),
         )
+        if context is not None:
+            self.config_context = context
 
     def debug(self):
         """
@@ -377,8 +385,6 @@ class Sandbox(Pod):
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
-
-        self.entrypoint = ["tail", "-f", "/dev/null"]
 
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,
