@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -207,11 +208,17 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
+	templateURL := "https://s3.us-east-1.amazonaws.com/beam-byoc-templates-test/aws/byoc-template.yaml"
 	service := &Service{
 		computeRepo: repo,
 		appConfig: types.AppConfig{
 			GatewayService: types.GatewayServiceConfig{
 				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				BYOC: types.ManagedComputeBYOCConfig{
+					AWS: types.ManagedComputeBYOCAWSConfig{TemplateURL: templateURL},
+				},
 			},
 			Worker: types.WorkerConfig{
 				ImageRegistry: "public.ecr.aws/n4e0e1y0",
@@ -248,8 +255,8 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 	if res.ResourceName == "" || !strings.Contains(res.ResourceUrl, res.ResourceName) {
 		t.Fatalf("resource response = name %q url %q, want URL containing resource name", res.ResourceName, res.ResourceUrl)
 	}
-	if !strings.Contains(res.SetupUrl, "templateURL=https%3A%2F%2Fapp.beam.cloud%2Fapi%2Fv1%2Fgateway%2Fpools%2Fbyoc%2Faws%2Ftemplate.yaml") {
-		t.Fatalf("setup url should reference the BYOC AWS template endpoint: %s", res.SetupUrl)
+	if !strings.Contains(res.SetupUrl, "templateURL="+url.QueryEscape(templateURL)) {
+		t.Fatalf("setup url should reference the BYOC AWS S3 template URL: %s", res.SetupUrl)
 	}
 	for _, fragment := range []string{
 		"templateURL=",
@@ -294,6 +301,61 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
 		}
+	}
+}
+
+func TestCreateBYOCPoolOnboardingRejectsMissingAWSTemplateURL(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:  "aws",
+		PoolName:  "aws-cpu",
+		AccountId: "123456789012",
+	})
+	if err != nil {
+		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
+	}
+	if !strings.Contains(res.ErrMsg, "template URL is not configured") {
+		t.Fatalf("error = %q, want missing template URL", res.ErrMsg)
+	}
+	if len(repo.pools["workspace-1"]) != 0 || len(repo.joinTokens) != 0 {
+		t.Fatalf("misconfigured onboarding created state: pools=%d tokens=%d", len(repo.pools["workspace-1"]), len(repo.joinTokens))
+	}
+}
+
+func TestCreateBYOCPoolOnboardingRejectsNonS3AWSTemplateURL(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	service := &Service{
+		computeRepo: &fakeComputeRepo{},
+		appConfig: types.AppConfig{
+			ManagedCompute: types.ManagedComputeConfig{
+				BYOC: types.ManagedComputeBYOCConfig{
+					AWS: types.ManagedComputeBYOCAWSConfig{
+						TemplateURL: "https://app.stage.beam.cloud/api/v1/gateway/pools/byoc/aws/template.yaml",
+					},
+				},
+			},
+		},
+	}
+
+	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:  "aws",
+		PoolName:  "aws-cpu",
+		AccountId: "123456789012",
+	})
+	if err != nil {
+		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
+	}
+	if !strings.Contains(res.ErrMsg, "CloudFormation-supported S3 URL") {
+		t.Fatalf("error = %q, want unsupported URL", res.ErrMsg)
 	}
 }
 

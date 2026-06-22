@@ -664,6 +664,7 @@ const (
 type ManagedComputeConfig struct {
 	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
+	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
 }
 
 func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {
@@ -674,6 +675,14 @@ func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {
 		return 0
 	}
 	return *c.BillableMarginPct
+}
+
+type ManagedComputeBYOCConfig struct {
+	AWS ManagedComputeBYOCAWSConfig `key:"aws" json:"aws"`
+}
+
+type ManagedComputeBYOCAWSConfig struct {
+	TemplateURL string `key:"templateUrl" json:"template_url"`
 }
 
 type ManagedComputeBillingConfig struct {

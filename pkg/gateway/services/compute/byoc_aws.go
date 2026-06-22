@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -30,6 +31,7 @@ var (
 	awsRegionPattern       = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z0-9-]+-\d$`)
 	awsInstanceTypePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,63}$`)
 	awsAccountIDPattern    = regexp.MustCompile(`^\d{12}$`)
+	awsS3TemplateHostRe    = regexp.MustCompile(`^(?:s3[.-][a-z0-9-]+|[a-z0-9][a-z0-9.-]*\.s3[.-][a-z0-9-]+)\.amazonaws\.com$`)
 	cloudFormationPartRe   = regexp.MustCompile(`[^a-z0-9-]+`)
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
 	awsBYOCInstanceTypes   = map[string]struct{}{
@@ -115,13 +117,22 @@ func (byocAWSProvider) PoolState(workspaceID string, req byocPoolOnboardingReque
 	}
 }
 
+func (byocAWSProvider) ValidateSetupConfig(config types.ManagedComputeConfig) error {
+	_, err := awsBYOCTemplateURL(config.BYOC.AWS.TemplateURL)
+	return err
+}
+
 func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*byocProviderSetupResult, error) {
 	if input.ProviderData == nil || input.ProviderData.ResourceName == "" {
 		return nil, fmt.Errorf("missing AWS BYOC resource metadata")
 	}
 	stackName := input.ProviderData.ResourceName
 	stackURL := awsCloudFormationStackURL(input.Request.region, stackName)
-	consoleURL := awsCloudFormationConsoleURL(input.Request.region, stackName, awsBYOCTemplateURL(input.GatewayURL), map[string]string{
+	templateURL, err := awsBYOCTemplateURL(input.Config.BYOC.AWS.TemplateURL)
+	if err != nil {
+		return nil, err
+	}
+	consoleURL := awsCloudFormationConsoleURL(input.Request.region, stackName, templateURL, map[string]string{
 		"BeamGatewayURL":            input.GatewayURL,
 		"BeamJoinToken":             input.JoinToken,
 		"BeamPoolName":              input.Request.poolName,
@@ -180,8 +191,19 @@ func (byocAWSProvider) ValidateExistingPool(existing *model.PoolState) error {
 	return nil
 }
 
-func awsBYOCTemplateURL(gatewayURL string) string {
-	return strings.TrimRight(gatewayURL, "/") + AWSBYOCTemplatePath
+func awsBYOCTemplateURL(raw string) (string, error) {
+	templateURL := strings.TrimSpace(raw)
+	if templateURL == "" {
+		return "", fmt.Errorf("AWS BYOC template URL is not configured")
+	}
+	parsed, err := url.Parse(templateURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Path == "" {
+		return "", fmt.Errorf("AWS BYOC template URL must be an HTTPS S3 object URL")
+	}
+	if !awsS3TemplateHostRe.MatchString(strings.ToLower(parsed.Host)) {
+		return "", fmt.Errorf("AWS BYOC template URL must use a CloudFormation-supported S3 URL")
+	}
+	return templateURL, nil
 }
 
 func awsBYOCCapacityLabels(req byocPoolOnboardingRequest) map[string]string {

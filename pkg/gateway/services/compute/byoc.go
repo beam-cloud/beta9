@@ -19,6 +19,7 @@ const byocJoinTokenTTL = 30 * 24 * time.Hour
 type byocProvider interface {
 	Source() model.CapacitySource
 	NormalizeOnboarding(byocRawOnboardingRequest) (byocPoolOnboardingRequest, error)
+	ValidateSetupConfig(types.ManagedComputeConfig) error
 	PoolState(workspaceID string, req byocPoolOnboardingRequest) *model.BYOCProviderState
 	Setup(context.Context, byocProviderSetupInput) (*byocProviderSetupResult, error)
 	Resource(workspaceID string, state *model.PoolState) (*byocProviderResource, error)
@@ -48,6 +49,7 @@ type byocProviderSetupInput struct {
 	GatewayURL   string
 	JoinToken    string
 	WorkerImage  string
+	Config       types.ManagedComputeConfig
 	Request      byocPoolOnboardingRequest
 	Pool         *model.PoolState
 	ProviderData *model.BYOCProviderState
@@ -192,6 +194,7 @@ func (s *Service) createBYOCPoolOnboarding(ctx context.Context, provider byocPro
 		GatewayURL:   strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/"),
 		JoinToken:    joinToken,
 		WorkerImage:  agentWorkerImage(s.appConfig),
+		Config:       s.appConfig.ManagedCompute,
 		Request:      req,
 		Pool:         state,
 		ProviderData: state.BYOC,
@@ -272,6 +275,9 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 		return nil, fmt.Errorf("pool already exists with source %s", existing.Source)
 	}
 	if err := provider.ValidateExistingPool(existing); err != nil {
+		return nil, err
+	}
+	if err := provider.ValidateSetupConfig(s.appConfig.ManagedCompute); err != nil {
 		return nil, err
 	}
 
