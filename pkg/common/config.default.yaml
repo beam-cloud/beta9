@@ -397,6 +397,9 @@ monitoring:
     apiKey: ""
 managedCompute:
   billableMarginPct: 0.10
+  byoc:
+    aws:
+      templateUrl: ""
   billing:
     mode: noop
     endpoint: ""

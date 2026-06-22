@@ -16,6 +16,9 @@ config:
       baseImageRegistry: public.ecr.aws/n4e0e1y0
   managedCompute:
     billableMarginPct: 0.10
+    byoc:
+      aws:
+        templateUrl: ""
     billing:
       mode: noop
       endpoint: ""
