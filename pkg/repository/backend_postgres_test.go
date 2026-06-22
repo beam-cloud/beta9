@@ -112,6 +112,50 @@ func TestTaskEventPublisherPreservesOrder(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUpdateDeploymentDoesNotMatchDeletedRowsByNumericID(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	updatedAt := time.Now()
+	mock.ExpectQuery(`WHERE \(id = \$1 OR external_id = \$2\) AND deleted_at IS NULL`).
+		WithArgs(uint(10), "deployment-id", "service-probe", false, uint(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"external_id",
+			"name",
+			"active",
+			"version",
+			"workspace_id",
+			"stub_id",
+			"stub_type",
+			"created_at",
+			"updated_at",
+		}).AddRow(
+			uint(10),
+			"deployment-id",
+			"service-probe",
+			false,
+			uint(1),
+			uint(1),
+			uint(20),
+			string(types.StubTypePodDeployment),
+			updatedAt,
+			updatedAt,
+		))
+
+	deployment, err := postgresRepo.UpdateDeployment(context.Background(), types.Deployment{
+		Id:         10,
+		ExternalId: "deployment-id",
+		Name:       "service-probe",
+		Active:     false,
+		Version:    1,
+	})
+
+	require.NoError(t, err)
+	require.False(t, deployment.Active)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGetOrCreateStubTouchesExistingWorkspaceScopedStub(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)

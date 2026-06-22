@@ -152,12 +152,8 @@ func (s *WorkerRepositoryService) DisableWorker(ctx context.Context, req *pb.Dis
 }
 
 func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req *pb.UpdateWorkerCapacityRequest) (*pb.UpdateWorkerCapacityResponse, error) {
-	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
-	if err != nil {
-		return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	err = s.workerRepo.UpdateWorkerCapacity(worker, types.NewContainerRequestFromProto(req.ContainerRequest), types.CapacityUpdateType(req.CapacityChange))
+	worker := &types.Worker{Id: req.WorkerId}
+	err := s.workerRepo.UpdateWorkerCapacity(worker, types.NewContainerRequestFromProto(req.ContainerRequest), types.CapacityUpdateType(req.CapacityChange))
 	if err != nil {
 		return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

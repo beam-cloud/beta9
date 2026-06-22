@@ -18,6 +18,45 @@ func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {
 	}
 }
 
+func TestSandboxExecFailureMessageKeepsTransientErrorsRetryable(t *testing.T) {
+	got := sandboxExecFailureMessage(status.Error(codes.Unavailable, "transport is closing"))
+	if got != "Failed to connect to sandbox" {
+		t.Fatalf("transient exec error message = %q, want retryable connect message", got)
+	}
+}
+
+func TestSandboxExecFailureMessageKeepsCommandErrorsGeneric(t *testing.T) {
+	got := sandboxExecFailureMessage(errors.New("permission denied"))
+	if got != "Failed to execute command" {
+		t.Fatalf("command exec error message = %q, want generic command failure", got)
+	}
+}
+
+func TestSandboxExecFailureMessageKeepsConnectErrorsRetryable(t *testing.T) {
+	got := sandboxExecFailureMessage(sandboxConnectionError{err: errors.New("container not found")})
+	if got != "Failed to connect to sandbox" {
+		t.Fatalf("connect error message = %q, want retryable connect message", got)
+	}
+}
+
+func TestSandboxClientCacheKeyUsesStableWorkerRouteAddress(t *testing.T) {
+	address := types.BackendRouteAddress(types.BackendRouteID("machine-a", "worker-a", "", types.BackendRouteKindWorker, 0))
+
+	keyA := sandboxClientCacheKey(address, "token")
+	keyB := sandboxClientCacheKey(address, "token")
+	if keyA != keyB {
+		t.Fatalf("worker route cache keys differ: %q != %q", keyA, keyB)
+	}
+}
+
+func TestSandboxClientCacheKeyKeepsDifferentWorkerAddressesDistinct(t *testing.T) {
+	keyA := sandboxClientCacheKey("route://worker-a", "token")
+	keyB := sandboxClientCacheKey("route://worker-b", "token")
+	if keyA == keyB {
+		t.Fatalf("worker route cache keys unexpectedly matched: %q", keyA)
+	}
+}
+
 func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 	tests := []struct {
 		name     string

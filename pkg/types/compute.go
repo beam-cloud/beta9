@@ -16,6 +16,7 @@ const (
 	ComputeSourceCLIReservation ComputeCapacitySource = "cli_reservation"
 	ComputeSourceAttached       ComputeCapacitySource = "attached"
 	ComputeSourceManual         ComputeCapacitySource = "manual"
+	ComputeSourceAWS            ComputeCapacitySource = "aws"
 
 	ComputeReservationPending     ComputeReservationStatus = "pending"
 	ComputeReservationActive      ComputeReservationStatus = "active"
@@ -42,7 +43,7 @@ func (s ComputeCapacitySource) Canonical() ComputeCapacitySource {
 }
 
 func (s ComputeCapacitySource) IsAttached() bool {
-	return s == ComputeSourceAttached || s == ComputeSourceManual
+	return s == ComputeSourceAttached || s == ComputeSourceManual || s == ComputeSourceAWS
 }
 
 type ComputeVendor interface {

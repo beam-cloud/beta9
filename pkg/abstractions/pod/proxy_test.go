@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -174,6 +176,127 @@ func TestForwardRequestProxiesReadyBackendWithoutQueueing(t *testing.T) {
 	}
 }
 
+func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.String() != "/health?probe=1" {
+			t.Fatalf("backend URL = %q, want /health?probe=1", r.URL.String())
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(backend.Close)
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerId := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(containerId, map[int32]string{
+		8765: backend.URL[len("http://"):],
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/health?probe=1", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("port", "subPath")
+	ctx.SetParamValues("8765", "health")
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	if err := pb.ForwardContainerRequest(ctx, containerId); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want released", got)
+	}
+	if got := pb.containerConnectionCount(containerId); got != 0 {
+		t.Fatalf("container connections = %d, want released", got)
+	}
+}
+
+func TestForwardContainerRequestPinsMultipleContainersAndPorts(t *testing.T) {
+	stubID := "e9c29586-c465-4a67-9c9b-25293d1ce77b"
+	containerA := "sandbox-" + stubID + "-aaaa1111"
+	containerB := "sandbox-" + stubID + "-bbbb2222"
+
+	serverA8765 := sandboxBackend(t, "a-8765")
+	serverA9000 := sandboxBackend(t, "a-9000")
+	serverB8765 := sandboxBackend(t, "b-8765")
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	if err := repo.SetContainerAddressMap(containerA, map[int32]string{
+		8765: serverA8765.URL[len("http://"):],
+		9000: serverA9000.URL[len("http://"):],
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetContainerAddressMap(containerB, map[int32]string{
+		8765: serverB8765.URL[len("http://"):],
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        stubID,
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	for _, tt := range []struct {
+		name        string
+		containerID string
+		port        string
+		wantBody    string
+	}{
+		{name: "container-a-first-port", containerID: containerA, port: "8765", wantBody: "a-8765"},
+		{name: "container-a-second-port", containerID: containerA, port: "9000", wantBody: "a-9000"},
+		{name: "container-b-same-port", containerID: containerB, port: "8765", wantBody: "b-8765"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/id", nil)
+			rec := httptest.NewRecorder()
+			ctx := e.NewContext(req, rec)
+			ctx.SetParamNames("port", "subPath")
+			ctx.SetParamValues(tt.port, "id")
+
+			if err := pb.ForwardContainerRequest(ctx, tt.containerID); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if got := rec.Body.String(); got != tt.wantBody {
+				t.Fatalf("body = %q, want %q", got, tt.wantBody)
+			}
+		})
+	}
+
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want released", got)
+	}
+	if got := pb.containerConnectionCount(containerA); got != 0 {
+		t.Fatalf("container A connections = %d, want released", got)
+	}
+	if got := pb.containerConnectionCount(containerB); got != 0 {
+		t.Fatalf("container B connections = %d, want released", got)
+	}
+}
+
 func TestReserveContainerForPortSkipsContainersWithoutPort(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	pb := newPodProxyConnectionTestBuffer(rdb)
@@ -246,10 +369,21 @@ func TestPodBackendTransportReusesTransportForSameTarget(t *testing.T) {
 	pb := &PodProxyBuffer{}
 	target := types.BackendRouteAddress("machine:worker:container:container:8001")
 
-	first := pb.backendTransport(target)
-	second := pb.backendTransport(target)
+	first := pb.backendTransport(target, containerDialTimeoutDurationS)
+	second := pb.backendTransport(target, containerDialTimeoutDurationS)
 	if first != second {
 		t.Fatal("expected pod backend transport to be reused for same target")
+	}
+
+	pinned := pb.backendTransport(target, containerPinnedDialTimeout)
+	if pinned == first {
+		t.Fatal("expected pinned sandbox transport to be isolated from default pod transport")
+	}
+
+	routeA := types.BackendRouteAddress("machine:worker:container-a:container:8765")
+	routeB := types.BackendRouteAddress("machine:worker:container-b:container:8765")
+	if pb.backendTransport(routeA, containerPinnedDialTimeout) == pb.backendTransport(routeB, containerPinnedDialTimeout) {
+		t.Fatal("expected different sandbox container routes to use different backend transports")
 	}
 }
 
@@ -272,6 +406,130 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 	if _, ok := ready[9000]; ok {
 		t.Fatal("unready port was included in ready address map")
+	}
+}
+
+func TestPrimeContainerPortMakesPortImmediatelyReservable(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(containerID, map[int32]string{
+		8765: backend.URL[len("http://"):],
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:                 context.Background(),
+		rdb:                 rdb,
+		workspace:           &types.Workspace{Name: "workspace"},
+		stubId:              "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		proxyId:             uuid.NewString(),
+		stubConfig:          &types.StubConfigV1{},
+		containerRepo:       repo,
+		availableContainers: []container{},
+		workReady:           make(chan struct{}, 1),
+	}
+
+	if ok := pb.primeContainerPort(containerID, 8765, 100*time.Millisecond); !ok {
+		t.Fatal("expected sandbox port prime to succeed")
+	}
+
+	c, ok, hasContainers, hasPort := pb.reserveContainerForPort(8765)
+	if !ok {
+		t.Fatalf("expected primed port to be reservable, hasContainers=%v hasPort=%v", hasContainers, hasPort)
+	}
+	if c.id != containerID {
+		t.Fatalf("container id = %q, want %q", c.id, containerID)
+	}
+	if got := c.readyAddressMap[8765]; got == "" {
+		t.Fatal("primed port was not marked ready")
+	}
+}
+
+func TestPrimeContainerPortMissingPortDoesNotPublishContainer(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(containerID, map[int32]string{
+		9000: "127.0.0.1:9000",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		containerRepo: repo,
+	}
+
+	if ok := pb.primeContainerPort(containerID, 8765, 50*time.Millisecond); ok {
+		t.Fatal("expected sandbox port prime to fail for a missing port")
+	}
+	if _, ok, hasContainers, hasPort := pb.reserveContainerForPort(8765); ok || hasContainers || hasPort {
+		t.Fatalf("missing port was published, ok=%v hasContainers=%v hasPort=%v", ok, hasContainers, hasPort)
+	}
+}
+
+func TestForwardContainerRequestTimesOutOpeningRouteQuickly(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	routeID := "machine:worker:" + containerID + ":container:8765"
+	if err := repo.SetContainerAddressMap(containerID, map[int32]string{
+		8765: types.BackendRouteAddress(routeID),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetBackendRoute(context.Background(), types.BackendRoute{
+		RouteID:     routeID,
+		ContainerID: containerID,
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8765,
+		Transport:   types.BackendRouteTransportDirect,
+		State:       types.BackendRouteStateOpening,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("port", "subPath")
+	ctx.SetParamValues("8765", "")
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	start := time.Now()
+	if err := pb.ForwardContainerRequest(ctx, containerID); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 1200*time.Millisecond {
+		t.Fatalf("forwarding opening route took %s, want bounded below 1.2s", elapsed)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want released", got)
+	}
+	if got := pb.containerConnectionCount(containerID); got != 0 {
+		t.Fatalf("container connections = %d, want released", got)
 	}
 }
 
@@ -501,6 +759,19 @@ func newPodProxyTestRedis(t *testing.T) *common.RedisClient {
 		t.Fatal(err)
 	}
 	return rdb
+}
+
+func sandboxBackend(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/id" {
+			t.Fatalf("backend path = %q, want /id", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+	return server
 }
 
 func newPodProxyConnectionTestBuffer(rdb *common.RedisClient) *PodProxyBuffer {

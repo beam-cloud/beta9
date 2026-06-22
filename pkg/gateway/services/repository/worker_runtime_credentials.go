@@ -5,11 +5,17 @@ import (
 	"database/sql"
 	"fmt"
 	"path"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+)
+
+const (
+	runtimeCredentialStateRetries       = 50
+	runtimeCredentialStateRetryInterval = 100 * time.Millisecond
 )
 
 // GetContainerRuntimeCredentials vends per-container credentials over the worker
@@ -61,7 +67,7 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, fmt.Errorf("backend repository is unavailable")
 	}
 
-	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	state, err := s.runtimeCredentialsContainerState(ctx, req.ContainerId)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +80,28 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, err
 	}
 	return workspace, nil
+}
+
+func (s *WorkerRepositoryService) runtimeCredentialsContainerState(ctx context.Context, containerID string) (*types.ContainerState, error) {
+	var lastErr error
+	for attempt := 0; attempt <= runtimeCredentialStateRetries; attempt++ {
+		state, err := s.containerRepo.GetContainerState(containerID)
+		if err == nil {
+			return state, nil
+		}
+		if !common.IsRedisLockNotObtained(err) {
+			return nil, err
+		}
+		lastErr = err
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(runtimeCredentialStateRetryInterval):
+		}
+	}
+
+	return nil, lastErr
 }
 
 func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Context, workspaceID uint, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {

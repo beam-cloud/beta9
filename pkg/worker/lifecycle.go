@@ -33,7 +33,7 @@ const (
 	specBaseName                  string = "config.json"
 	initialSpecBaseName           string = "initial_config.json"
 	containerInnerPort            int    = 8001 // Use a fixed port inside the container
-	markRunningRetryTimeout              = 3 * time.Second
+	markRunningRetryTimeout              = 15 * time.Second
 	markRunningRetryInterval             = 100 * time.Millisecond
 	runtimeDeleteTimeout                 = 30 * time.Second
 	sandboxCPUQuotaApplyTimeout          = 2 * time.Second
@@ -231,6 +231,12 @@ func (s *Worker) markContainerStopping(containerId string) {
 }
 
 func (s *Worker) deleteContainer(containerId string) {
+	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
+		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
+			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+		}
+	}
+
 	s.containerInstances.Delete(containerId)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

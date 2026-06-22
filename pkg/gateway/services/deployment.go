@@ -124,6 +124,14 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 
 func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDeploymentRequest) (*pb.ScaleDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	// Get deployment
 	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
 	if err != nil {

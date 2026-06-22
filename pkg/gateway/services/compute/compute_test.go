@@ -204,6 +204,331 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 	}
 }
 
+func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{
+		computeRepo: repo,
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			Worker: types.WorkerConfig{
+				ImageRegistry: "public.ecr.aws/n4e0e1y0",
+				ImageName:     "beta9-worker",
+				ImageTag:      "worker-test",
+			},
+		},
+	}
+
+	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:     "aws",
+		PoolName:     "aws-cpu",
+		Region:       "us-east-1",
+		InstanceType: "i4i.xlarge",
+		DesiredNodes: 2,
+		MaxNodes:     4,
+		AccountId:    "123456789012",
+	})
+	if err != nil {
+		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("CreateBYOCPoolOnboarding() not ok: %s", res.ErrMsg)
+	}
+	if got, want := res.Pool.Name, "aws-cpu"; got != want {
+		t.Fatalf("pool name = %q, want %q", got, want)
+	}
+	if got, want := res.Pool.Source, string(model.SourceAWS); got != want {
+		t.Fatalf("pool source = %q, want %q", got, want)
+	}
+	if res.SetupUrl == "" {
+		t.Fatal("setup url is required")
+	}
+	if res.ResourceName == "" || !strings.Contains(res.ResourceUrl, res.ResourceName) {
+		t.Fatalf("resource response = name %q url %q, want URL containing resource name", res.ResourceName, res.ResourceUrl)
+	}
+	if !strings.Contains(res.SetupUrl, "templateURL=https%3A%2F%2Fapp.beam.cloud%2Fapi%2Fv1%2Fgateway%2Fpools%2Fbyoc%2Faws%2Ftemplate.yaml") {
+		t.Fatalf("setup url should reference the BYOC AWS template endpoint: %s", res.SetupUrl)
+	}
+	for _, fragment := range []string{
+		"templateURL=",
+		"stackName=",
+		"param_BeamGatewayURL=",
+		"param_BeamJoinToken=",
+		"param_BeamWorkerImage=public.ecr.aws%2Fn4e0e1y0%2Fbeta9-worker%3Aworker-test",
+		"param_ContainerStartConcurrency=16",
+		"param_DesiredCapacity=2",
+		"param_MaxSize=4",
+		"param_NetworkSlots=128",
+		"param_NodeInstanceType=i4i.xlarge",
+		"param_RootVolumeSizeGB=200",
+		"param_TargetAWSAccountID=123456789012",
+	} {
+		if !strings.Contains(res.SetupUrl, fragment) {
+			t.Fatalf("setup url missing %q: %s", fragment, res.SetupUrl)
+		}
+	}
+	if got, want := len(repo.joinTokens), 1; got != want {
+		t.Fatalf("join token count = %d, want %d", got, want)
+	}
+	for _, token := range repo.joinTokens {
+		if token.WorkspaceID != "workspace-1" || token.PoolName != "aws-cpu" || token.CreatedByTokenID != "owner-token" {
+			t.Fatalf("join token identity = %+v, want workspace/pool/owner", token)
+		}
+		if time.Until(token.ExpiresAt) < 29*24*time.Hour {
+			t.Fatalf("join token expiry = %s, want roughly 30 days", token.ExpiresAt)
+		}
+	}
+	stored := repo.pools["workspace-1"][0]
+	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.ResourceName {
+		t.Fatalf("stored BYOC metadata = %+v, want aws account/region/resource", stored.BYOC)
+	}
+	for key, want := range map[string]string{
+		"instance_type":      "i4i.xlarge",
+		"desired_nodes":      "2",
+		"max_nodes":          "4",
+		"target_sandboxes":   "40",
+		"sandboxes_per_node": "20",
+	} {
+		if got := stored.BYOC.Labels[key]; got != want {
+			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestCreateBYOCPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "viewer-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "existing", CreatedByTokenID: "owner-token", Status: "active"},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:  "aws",
+		PoolName:  "existing",
+		AccountId: "123456789012",
+	})
+	if err != nil {
+		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
+	}
+	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWS},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {
+				{
+					WorkspaceID:     "workspace-1",
+					PoolName:        "aws-cpu",
+					MachineID:       "machine-1",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Minute),
+					LastHeartbeatAt: now,
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.GetBYOCPoolOnboardingStatus(ctx, &pb.GetBYOCPoolOnboardingStatusRequest{PoolName: "aws-cpu"})
+	if err != nil {
+		t.Fatalf("GetBYOCPoolOnboardingStatus() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("GetBYOCPoolOnboardingStatus() not ok: %s", res.ErrMsg)
+	}
+	if !res.Ready {
+		t.Fatal("expected pool to be ready")
+	}
+	if got, want := res.ReadyMachineCount, uint32(1); got != want {
+		t.Fatalf("ready machines = %d, want %d", got, want)
+	}
+}
+
+func TestGetBYOCPoolResourceReturnsAWSResourceAction(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Regions: []string{"us-west-2"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+					},
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.GetBYOCPoolResource(ctx, &pb.GetBYOCPoolResourceRequest{PoolName: "aws-cpu"})
+	if err != nil {
+		t.Fatalf("GetBYOCPoolResource() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("GetBYOCPoolResource() not ok: %s", res.ErrMsg)
+	}
+	if got, want := res.Provider, "aws"; got != want {
+		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if got, want := res.InstanceType, "i4i.xlarge"; got != want {
+		t.Fatalf("instance type = %q, want %q", got, want)
+	}
+	if got, want := res.DesiredNodes, uint32(1); got != want {
+		t.Fatalf("desired nodes = %d, want %d", got, want)
+	}
+	if got, want := res.MaxNodes, uint32(1); got != want {
+		t.Fatalf("max nodes = %d, want %d", got, want)
+	}
+	if got, want := res.TargetSandboxes, uint32(20); got != want {
+		t.Fatalf("target sandboxes = %d, want %d", got, want)
+	}
+	if got, want := res.SandboxesPerNode, uint32(20); got != want {
+		t.Fatalf("sandboxes per node = %d, want %d", got, want)
+	}
+	if got, want := res.AccountId, "123456789012"; got != want {
+		t.Fatalf("account id = %q, want %q", got, want)
+	}
+	if got, want := res.Region, "us-east-1"; got != want {
+		t.Fatalf("region = %q, want %q", got, want)
+	}
+	if !strings.Contains(res.ResourceUrl, "beam-aws-cpu-test") || res.DestroyUrl != res.ResourceUrl {
+		t.Fatalf("resource urls = resource %q destroy %q, want resource name and matching destroy url", res.ResourceUrl, res.DestroyUrl)
+	}
+}
+
+func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	machineA := &model.AgentTokenState{
+		WorkspaceID:      "workspace-1",
+		PoolName:         "aws-cpu",
+		MachineID:        "machine-a",
+		Schedulable:      true,
+		LastJoinAt:       now,
+		LastHeartbeatAt:  now,
+		LastDisconnectAt: time.Time{},
+	}
+	machineB := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "aws-cpu",
+		MachineID:       "machine-b",
+		Schedulable:     true,
+		LastJoinAt:      now,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWS},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {machineA, machineB},
+		},
+	}
+	containerRepo := &fakeContainerRepo{}
+	service := &Service{computeRepo: repo, containerRepo: containerRepo}
+
+	res, err := service.DeletePool(ctx, &pb.DeletePoolRequest{Name: "aws-cpu"})
+	if err != nil {
+		t.Fatalf("DeletePool() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("DeletePool() not ok: %s", res.ErrMsg)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 0 {
+		t.Fatalf("machine count after pool release = %d, want 0", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("pool count after pool release = %d, want 0", got)
+	}
+	if machineA.Schedulable || machineB.Schedulable {
+		t.Fatal("DeletePool() did not mark BYOC machines unschedulable before deleting them")
+	}
+	if got, want := containerRepo.deletedRoutes, []string{"workspace-1/aws-cpu/machine-a", "workspace-1/aws-cpu/machine-b"}; !sameStrings(got, want) {
+		t.Fatalf("deleted machine routes = %v, want %v", got, want)
+	}
+}
+
+func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
+	template := AWSBYOCTemplate()
+	if !strings.Contains(template, "NoEcho: true") {
+		t.Fatal("template should mark BeamJoinToken NoEcho")
+	}
+	if strings.Contains(template, "sk_") || strings.Contains(template, "test-secret-token") {
+		t.Fatalf("template appears to contain an embedded secret: %s", template)
+	}
+	if !strings.Contains(template, "AWS::AutoScaling::AutoScalingGroup") {
+		t.Fatal("template should create an auto scaling group")
+	}
+	if !strings.Contains(template, "FromPort: 41641") {
+		t.Fatal("template should allow Tailscale direct WireGuard UDP")
+	}
+	for _, fragment := range []string{
+		"BeamWorkerImage:",
+		"--worker-image '${BeamWorkerImage}'",
+		"Default: i4i.xlarge",
+		"AllowedValues:",
+		"- i4i.large",
+		"- i4i.xlarge",
+		"- i4i.4xlarge",
+		"nvme-Amazon_EC2_NVMe_Instance_Storage",
+		"BEAM_AGENT_INSTALL_DOCKER=1",
+		"--state-dir \"$BEAM_STATE_DIR\"",
+		"/etc/docker/daemon.json",
+		"NetworkSlots:",
+		"Default: 128",
+		"--network-slots '${NetworkSlots}'",
+		"RootVolumeSizeGB:",
+		"VolumeSize: !Ref RootVolumeSizeGB",
+		"VolumeType: gp3",
+		"ContainerStartConcurrency:",
+		"--container-start-concurrency '${ContainerStartConcurrency}'",
+		"NodeSecurityGroupSelfIngress:",
+		"IpProtocol: -1",
+		"SourceSecurityGroupId: !Ref NodeSecurityGroup",
+		"Description: Beam BYOC node-to-node private traffic",
+		"NodeSecurityGroupVpcIngress:",
+		"CidrIp: !Ref VpcCidr",
+		"Description: Beam BYOC private VPC traffic",
+		"TargetAWSAccountID:",
+		"TargetAccountMustMatch:",
+		"!Equals [!Ref TargetAWSAccountID, !Ref \"AWS::AccountId\"]",
+	} {
+		if !strings.Contains(template, fragment) {
+			t.Fatalf("template missing %q", fragment)
+		}
+	}
+}
+
 func TestValidatePrivatePoolGPURequestAllowsWorkloadPreferenceList(t *testing.T) {
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
@@ -2634,6 +2959,18 @@ func (r *fakeComputeRepo) ListAllPoolStates(ctx context.Context, limit int) ([]*
 }
 
 func (r *fakeComputeRepo) DeletePoolState(ctx context.Context, workspaceID, name string) error {
+	states := r.pools[workspaceID]
+	kept := states[:0]
+	for _, state := range states {
+		if state == nil || state.Name != name {
+			kept = append(kept, state)
+		}
+	}
+	if len(kept) == 0 {
+		delete(r.pools, workspaceID)
+		return nil
+	}
+	r.pools[workspaceID] = kept
 	return nil
 }
 
@@ -2833,8 +3170,9 @@ func (r *fakeWorkerRepo) UpdateWorkerStatus(workerID string, status types.Worker
 
 type fakeContainerRepo struct {
 	repository.ContainerRepository
-	containers []types.ContainerState
-	stopped    []string
+	containers    []types.ContainerState
+	stopped       []string
+	deletedRoutes []string
 }
 
 func (r *fakeContainerRepo) GetActiveContainersByWorkerId(string) ([]types.ContainerState, error) {
@@ -2845,5 +3183,10 @@ func (r *fakeContainerRepo) UpdateContainerStatus(containerID string, status typ
 	if status == types.ContainerStatusStopping {
 		r.stopped = append(r.stopped, containerID)
 	}
+	return nil
+}
+
+func (r *fakeContainerRepo) DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
+	r.deletedRoutes = append(r.deletedRoutes, workspaceID+"/"+poolName+"/"+machineID)
 	return nil
 }

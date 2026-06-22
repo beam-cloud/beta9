@@ -352,8 +352,11 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	controllers := []WorkerPoolController{}
 
 	if request.PoolSelector != "" {
-		wp, ok := s.workerPoolManager.GetPool(request.PoolSelector)
-		if !ok {
+		wp, err := s.ensureAgentPoolForRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		if wp == nil {
 			return nil, errors.New("no controller found for request")
 		}
 		controllers = append(controllers, wp.Controller)
@@ -870,7 +873,8 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)      // Filter workers by pool selector
+	filteredWorkers := filterWorkersByPoolSelector(workers, request) // Filter workers by pool selector
+	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
 	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
 	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
@@ -895,6 +899,51 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if len(workers) == 0 || s == nil || request == nil || request.PoolSelector == "" || request.WorkspaceId == "" || s.workerPoolManager == nil || s.computeRepo == nil {
+		return workers
+	}
+
+	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
+	if !ok || pool.Controller == nil || pool.Controller.Mode() != types.PoolModePrivate {
+		return workers
+	}
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state, err := s.agentPoolStateForRequest(request)
+	if err != nil || state == nil {
+		return workers
+	}
+	poolName := firstNonEmpty(state.Name, state.Selector, request.PoolSelector)
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, request.WorkspaceId, poolName)
+	if err != nil {
+		return workers
+	}
+
+	liveWorkers := make(map[string]struct{}, len(machines))
+	now := time.Now()
+	for _, machine := range machines {
+		if machine == nil || machine.WorkspaceID != request.WorkspaceId || machine.PoolName != poolName || machine.Executor != types.DefaultAgentWorkerContainerMode || !compute.AgentMachineConnected(machine, now) {
+			continue
+		}
+		liveWorkers[compute.AgentMachineWorkerID(machine.MachineID)] = struct{}{}
+	}
+
+	filteredWorkers := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		if _, ok := liveWorkers[worker.Id]; ok {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
 }
 
 func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest) int32 {
@@ -958,18 +1007,94 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 }
 
 func (s *Scheduler) pushBacklog(request *types.ContainerRequest, delay time.Duration) error {
-	if s.privateBacklogRequest(request) {
+	private, err := s.privateBacklogRequest(request)
+	if err != nil {
+		return err
+	}
+	if private {
 		request = request.PrivateWorkerRequest()
 	}
 	return s.requestBacklog.PushAfter(request, delay)
 }
 
-func (s *Scheduler) privateBacklogRequest(request *types.ContainerRequest) bool {
+func (s *Scheduler) privateBacklogRequest(request *types.ContainerRequest) (bool, error) {
 	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
+		return false, nil
+	}
+	pool, err := s.ensureAgentPoolForRequest(request)
+	if err != nil {
+		return false, err
+	}
+	return pool != nil && pool.Config.Mode == types.PoolModePrivate, nil
+}
+
+func (s *Scheduler) ensureAgentPoolForRequest(request *types.ContainerRequest) (*WorkerPool, error) {
+	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
+		return nil, nil
+	}
+	if pool, ok := s.workerPoolManager.GetPool(request.PoolSelector); ok {
+		return pool, nil
+	}
+
+	state, err := s.agentPoolStateForRequest(request)
+	if err != nil || state == nil {
+		return nil, err
+	}
+	if err := s.RegisterAgentPool(request.WorkspaceId, state); err != nil {
+		return nil, err
+	}
+	if pool, ok := s.workerPoolManager.GetPool(request.PoolSelector); ok {
+		return pool, nil
+	}
+	if name := firstNonEmpty(state.Selector, state.Name); name != request.PoolSelector {
+		if pool, ok := s.workerPoolManager.GetPool(name); ok {
+			return pool, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *Scheduler) agentPoolStateForRequest(request *types.ContainerRequest) (*compute.PoolState, error) {
+	if s == nil || request == nil || request.WorkspaceId == "" || request.PoolSelector == "" || s.computeRepo == nil {
+		return nil, nil
+	}
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	selector := request.PoolSelector
+	state, err := s.computeRepo.GetPoolState(ctx, request.WorkspaceId, selector)
+	if err != nil {
+		return nil, err
+	}
+	if poolStateMatchesSelector(state, selector) {
+		return state, nil
+	}
+
+	states, err := s.computeRepo.ListPoolStates(ctx, request.WorkspaceId, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, state := range states {
+		if poolStateMatchesSelector(state, selector) {
+			return state, nil
+		}
+	}
+	return nil, nil
+}
+
+func poolStateMatchesSelector(state *compute.PoolState, selector string) bool {
+	if state == nil || selector == "" {
 		return false
 	}
-	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
-	return ok && pool.Config.Mode == types.PoolModePrivate
+	if state.Name == selector || state.Selector == selector {
+		return true
+	}
+	if state.Config == nil {
+		return false
+	}
+	return state.Config.Name == selector || state.Config.Selector == selector
 }
 
 func calculateBackoffDelay(retryCount int) time.Duration {

@@ -222,17 +222,30 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 		}
 		routes, err := s.agentRoutesForMachine(ctx, agentState)
 		if err != nil {
-			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+			return err
 		}
 		slots, err := s.agentSlotsForMachine(ctx, agentState)
 		if err != nil {
-			return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+			return err
 		}
 		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots})
 	}
 
-	if err := sendSnapshot(); err != nil {
-		return err
+	for {
+		if err := sendSnapshot(); err != nil {
+			if !isAgentSnapshotTransient(err) {
+				return err
+			}
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+				continue
+			}
+		}
+		break
 	}
 
 	events := make(chan common.KeyEvent, 32)
@@ -258,6 +271,9 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 		case <-events:
 			coalesceAgentStreamEvents(ctx, events)
 			if err := sendSnapshot(); err != nil {
+				if isAgentSnapshotTransient(err) {
+					continue
+				}
 				return err
 			}
 		case <-heartbeat.C:
@@ -266,10 +282,17 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 			}
 		case <-ticker.C:
 			if err := sendSnapshot(); err != nil {
+				if isAgentSnapshotTransient(err) {
+					continue
+				}
 				return err
 			}
 		}
 	}
+}
+
+func isAgentSnapshotTransient(err error) bool {
+	return common.IsRedisLockNotObtained(err)
 }
 
 // touchAgentHeartbeat refreshes the machine's liveness timestamp without

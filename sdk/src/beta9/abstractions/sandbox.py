@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .. import terminal
-from ..abstractions.base import unset_channel
+from ..abstractions.base import set_channel, unset_channel
 from ..abstractions.base.runner import (
     SANDBOX_STUB_TYPE,
     BaseAbstraction,
@@ -55,6 +55,7 @@ from ..clients.pod import (
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
+from ..config import ConfigContext
 from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias, Pool
@@ -65,12 +66,15 @@ SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS = 5
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 SANDBOX_EXEC_READY_TIMEOUT_SECONDS = 90
-SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.5
+SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS = 0.05
 SANDBOX_EXEC_READINESS_ERRORS = (
     "failed to connect to sandbox",
     "process manager not ready",
     "sandbox process manager is not ready",
     "process manager failed to become ready",
+    "sandbox process manager client not ready",
+    "deadline exceeded while waiting for connections to become ready",
+    "context deadline exceeded while waiting for connections to become ready",
 )
 SANDBOX_TERMINAL_STATUSES = {
     "complete",
@@ -84,11 +88,27 @@ SANDBOX_TERMINAL_STATUSES = {
 DOCKER_SANDBOX_NETWORK_MODE = "host"
 DOCKER_SANDBOX_PID_MODE = "host"
 DOCKER_COMPOSE_OVERRIDE_PATH = "/tmp/.docker-compose-override.yml"
+SANDBOX_IDLE_ENTRYPOINT = ["tail", "-f", "/dev/null"]
 
 
 def _is_sandbox_exec_readiness_error(error_msg: str) -> bool:
     normalized = (error_msg or "").lower()
     return any(marker in normalized for marker in SANDBOX_EXEC_READINESS_ERRORS)
+
+
+def _call_with_sandbox_readiness_retry(do_call):
+    deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
+
+    while True:
+        response = retry_on_transient_error(do_call)
+        if response.ok:
+            return response
+        if not _is_sandbox_exec_readiness_error(response.error_msg):
+            return response
+        if time.monotonic() >= deadline:
+            return response
+
+        time.sleep(SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS)
 
 
 def _sandbox_docker_namespace_args() -> List[str]:
@@ -226,9 +246,12 @@ class Sandbox(Pod):
         docker_enabled: bool = False,
         ports: Optional[List[int]] = [],
         pool: Optional[Union[str, Pool]] = None,
+        context: Optional[ConfigContext] = None,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
+        if context is not None:
+            set_channel(context=context)
 
         super().__init__(
             cpu=cpu,
@@ -247,7 +270,10 @@ class Sandbox(Pod):
             docker_enabled=docker_enabled,
             ports=ports,
             pool=pool,
+            entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),
         )
+        if context is not None:
+            self.config_context = context
 
     def debug(self):
         """
@@ -359,8 +385,6 @@ class Sandbox(Pod):
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
-
-        self.entrypoint = ["tail", "-f", "/dev/null"]
 
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,
@@ -835,6 +859,21 @@ class SandboxProcessResponse:
         self.exit_code = exit_code
         self.result: str = stdout.read() + stderr.read()
 
+    @classmethod
+    def from_output(
+        cls,
+        *,
+        pid: int,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+    ) -> "SandboxProcessResponse":
+        response = cls.__new__(cls)
+        response.pid = pid
+        response.exit_code = exit_code
+        response.result = stdout + stderr
+        return response
+
 
 class SandboxProcessManager:
     """
@@ -906,9 +945,17 @@ class SandboxProcessManager:
             process.wait()
             ```
         """
-        process = self._exec("python3", "-c", code, cwd=cwd, env=env)
+        process = self._exec("python3", "-c", code, cwd=cwd, env=env, wait=blocking)
 
         if blocking:
+            if process.exit_code >= 0:
+                return SandboxProcessResponse.from_output(
+                    pid=process.pid,
+                    exit_code=process.exit_code,
+                    stdout=process._inline_stdout,
+                    stderr=process._inline_stderr,
+                )
+
             process.wait()
 
             return SandboxProcessResponse(
@@ -960,6 +1007,7 @@ class SandboxProcessManager:
         *args,
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
+        wait: bool = False,
     ) -> "SandboxProcess":
         """
         Internal method to execute commands in the sandbox.
@@ -989,6 +1037,7 @@ class SandboxProcessManager:
                     command=shell_command,
                     cwd=cwd,
                     env=env,
+                    wait=wait,
                 ),
                 timeout=SANDBOX_EXEC_RPC_TIMEOUT_SECONDS,
             )
@@ -998,12 +1047,16 @@ class SandboxProcessManager:
         if not response.ok or response.pid <= 0:
             raise SandboxProcessError(response.error_msg)
 
+        done = getattr(response, "done", False)
         process = SandboxProcess(
             self.sandbox_instance,
             pid=response.pid,
             cwd=cwd,
             args=command,
             env=env,
+            exit_code=getattr(response, "exit_code", -1) if done else -1,
+            inline_stdout=getattr(response, "stdout", "") if done else "",
+            inline_stderr=getattr(response, "stderr", "") if done else "",
         )
         self.processes[response.pid] = process
         return process
@@ -1012,18 +1065,7 @@ class SandboxProcessManager:
         self,
         do_exec: Callable[[], PodSandboxExecResponse],
     ) -> PodSandboxExecResponse:
-        deadline = time.monotonic() + SANDBOX_EXEC_READY_TIMEOUT_SECONDS
-
-        while True:
-            response = retry_on_transient_error(do_exec)
-            if response.ok and response.pid > 0:
-                return response
-            if not _is_sandbox_exec_readiness_error(response.error_msg):
-                return response
-            if time.monotonic() >= deadline:
-                return response
-
-            time.sleep(SANDBOX_EXEC_READY_RETRY_DELAY_SECONDS)
+        return _call_with_sandbox_readiness_retry(do_exec)
 
     def list_processes(self) -> Dict[int, "SandboxProcess"]:
         """
@@ -1206,11 +1248,14 @@ class SandboxProcessStream:
         """
         data = self._buffer
         self._buffer = ""
+        process_exited = getattr(self.process, "exit_code", -1) >= 0
 
         while True:
             chunk = self._fetch_next_chunk()
             if chunk:
                 data += chunk
+                if process_exited:
+                    break
             else:
                 break
 
@@ -1260,6 +1305,8 @@ class SandboxProcess:
         args: List[str],
         env: Dict[str, str],
         exit_code: int = -1,
+        inline_stdout: str = "",
+        inline_stderr: str = "",
     ):
         self.sandbox_instance = sandbox_instance
         self.pid = pid
@@ -1268,6 +1315,8 @@ class SandboxProcess:
         self.cwd = cwd
         self.args = args
         self.env = env
+        self._inline_stdout = inline_stdout
+        self._inline_stderr = inline_stderr
 
     def wait(self, timeout: Optional[float] = None) -> int:
         """
@@ -1367,7 +1416,7 @@ class SandboxProcess:
                 timeout=SANDBOX_STATUS_RPC_TIMEOUT_SECONDS,
             )
 
-        response = retry_on_transient_error(_get_status)
+        response = _call_with_sandbox_readiness_retry(_get_status)
 
         if not response.ok:
             raise SandboxProcessError(response.error_msg)

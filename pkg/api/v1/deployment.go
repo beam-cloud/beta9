@@ -230,11 +230,6 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 		return HTTPBadRequest("Deployment not found")
 	}
 
-	// Delete deployment
-	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
-		return HTTPInternalServerError("Failed to delete deployment")
-	}
-
 	// Stop deployment
 	if err := stopDeployments(ctx.Request().Context(), []types.DeploymentWithRelated{*deploymentWithRelated}, CommonClients{
 		containerRepo: g.containerRepo,
@@ -243,6 +238,11 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 		redisClient:   g.redisClient,
 	}); err != nil {
 		return HTTPInternalServerError("Failed to stop deployment")
+	}
+
+	// Delete deployment
+	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
+		return HTTPInternalServerError("Failed to delete deployment")
 	}
 
 	return ctx.NoContent(http.StatusOK)

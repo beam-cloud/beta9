@@ -4,6 +4,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/labstack/echo/v4"
@@ -28,6 +29,8 @@ func registerPodGroup(g *echo.Group, ps *GenericPodService) *podGroup {
 	g.Any("/:deploymentName/v:version/:port/:subPath", auth.WithAuth(group.PodRequest))
 	g.Any("/public/:stubId/:port", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
 	g.Any("/public/:stubId/:port/:subPath", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
+	g.Any("/container/:stubId/:containerId/:port", auth.WithAssumedStubAuth(group.SandboxContainerRequest, group.ps.IsPublic))
+	g.Any("/container/:stubId/:containerId/:port/:subPath", auth.WithAssumedStubAuth(group.SandboxContainerRequest, group.ps.IsPublic))
 	g.POST("/run/:stubId", auth.WithAuth(group.PodRun))
 
 	return group
@@ -51,6 +54,18 @@ func (g *podGroup) PodRequest(ctx echo.Context) error {
 	}
 
 	return g.ps.forwardRequest(ctx, stubId)
+}
+
+func (g *podGroup) SandboxContainerRequest(ctx echo.Context) error {
+	stubId := ctx.Param("stubId")
+	containerId := ctx.Param("containerId")
+
+	containerStubId, err := common.ExtractStubIdFromContainerId(containerId)
+	if err != nil || containerStubId != stubId {
+		return apiv1.HTTPBadRequest("Invalid sandbox container")
+	}
+
+	return g.ps.forwardContainerRequest(ctx, stubId, containerId)
 }
 
 func (g *podGroup) PodRun(ctx echo.Context) error {

@@ -404,7 +404,7 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,
 		gpuCount:             machine.GPUCount,
-		poolName:             wpc.poolName(),
+		poolName:             wpc.name,
 		machineID:            machine.MachineID,
 		requiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
 		priority:             wpc.workerPoolConfig.Priority,

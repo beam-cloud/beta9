@@ -177,12 +177,17 @@ message PodSandboxExecRequest {
   string command = 2;
   string cwd = 3;
   map<string, string> env = 4;
+  bool wait = 5;
 }
 
 message PodSandboxExecResponse {
   bool ok = 1;
   string error_msg = 2;
   int32 pid = 3;
+  bool done = 4;
+  int32 exit_code = 5;
+  string stdout = 6;
+  string stderr = 7;
 }
 
 message PodSandboxStatusRequest {

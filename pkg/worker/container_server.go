@@ -43,6 +43,8 @@ const (
 	sandboxProcessManagerClientTimeout  = 10 * time.Second
 	sandboxProcessManagerReadyTimeout   = 10 * time.Second
 	sandboxProcessManagerReadyPollDelay = 25 * time.Millisecond
+	sandboxExecInlineWaitTimeout        = 750 * time.Millisecond
+	sandboxExecInlineWaitPollDelay      = 20 * time.Millisecond
 )
 
 // ContainerRuntimeServer is a runtime-agnostic container server that works with any OCI runtime
@@ -641,7 +643,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	pid, err := s.execSandboxProcess(ctx, in.ContainerId, instance, cmd, cwd, env)
+	resp, err := s.execSandboxProcess(ctx, in.ContainerId, instance, cmd, cwd, env, in.Wait)
 	if err != nil {
 		log.Warn().
 			Str("container_id", in.ContainerId).
@@ -658,17 +660,76 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 		s.containerInstances.Set(in.ContainerId, instance)
 	}
 
-	return &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}, nil
+	return resp, nil
 }
 
-func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
+func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string, wait bool) (*pb.ContainerSandboxExecResponse, error) {
 	client, err := s.newSandboxProcessManagerClient(ctx, containerId, instance)
 	if err != nil {
-		return -1, err
+		return nil, err
 	}
 	defer client.Cleanup()
 
-	return client.Exec(cmd, cwd, env, false)
+	pid, err := client.Exec(cmd, cwd, env, false)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}
+	if !wait {
+		return resp, nil
+	}
+
+	exitCode, done, err := s.waitForSandboxProcessInline(ctx, client, containerId, int32(pid))
+	if err != nil {
+		return nil, err
+	}
+	if !done {
+		return resp, nil
+	}
+
+	stdout, err := client.Stdout(pid)
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := client.Stderr(pid)
+	if err != nil {
+		return nil, err
+	}
+
+	resp.Done = true
+	resp.ExitCode = int32(exitCode)
+	resp.Stdout = stdout
+	resp.Stderr = stderr
+	return resp, nil
+}
+
+func (s *ContainerRuntimeServer) waitForSandboxProcessInline(ctx context.Context, client *goproc.GoProcClient, containerId string, pid int32) (int, bool, error) {
+	deadline := time.Now().Add(sandboxExecInlineWaitTimeout)
+	for {
+		exitCode, err := client.Status(int(pid))
+		if err != nil {
+			return -1, false, err
+		}
+		if exitCode >= 0 {
+			s.clearSandboxProcessExited(containerId, pid)
+			return exitCode, true, nil
+		}
+		if s.sandboxProcessMarkedExited(containerId, pid) {
+			return sandboxMissingProcessExitCode, true, nil
+		}
+		if time.Now().Add(sandboxExecInlineWaitPollDelay).After(deadline) {
+			return -1, false, nil
+		}
+
+		timer := time.NewTimer(sandboxExecInlineWaitPollDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return -1, false, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *ContainerRuntimeServer) newSandboxProcessManagerClient(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, error) {
@@ -734,7 +795,13 @@ func sandboxProcessManagerClientTimeoutError(lastErr error) error {
 }
 
 func isProcessManagerDialFailure(err error) bool {
-	if err == nil || status.Code(err) != codes.Unavailable {
+	if err == nil {
+		return false
+	}
+	if status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	if status.Code(err) != codes.Unavailable {
 		return false
 	}
 

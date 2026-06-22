@@ -48,6 +48,7 @@ class PodSandboxExecRequest(betterproto.Message):
     env: Dict[str, str] = betterproto.map_field(
         4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
     )
+    wait: bool = betterproto.bool_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -55,6 +56,10 @@ class PodSandboxExecResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
     pid: int = betterproto.int32_field(3)
+    done: bool = betterproto.bool_field(4)
+    exit_code: int = betterproto.int32_field(5)
+    stdout: str = betterproto.string_field(6)
+    stderr: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)

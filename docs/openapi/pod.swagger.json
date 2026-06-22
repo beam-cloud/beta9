@@ -897,6 +897,9 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "wait": {
+          "type": "boolean"
         }
       }
     },
@@ -1115,6 +1118,19 @@
         "pid": {
           "type": "integer",
           "format": "int32"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "exitCode": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
         }
       }
     },

@@ -19,6 +19,8 @@ import (
 const (
 	containerClientSandboxExecTimeout   = 15 * time.Second
 	containerClientSandboxStatusTimeout = 5 * time.Second
+	containerClientSandboxOutputTimeout = 5 * time.Second
+	containerClientExistingConnTimeout  = 1 * time.Second
 )
 
 type ContainerClient struct {
@@ -71,8 +73,19 @@ func (c *ContainerClient) connect() error {
 			))
 	}
 
-	conn, err := grpc.Dial(c.ServiceUrl, dialOpts...)
+	dialCtx := context.Background()
+	cancel := func() {}
+	if c.existingConn != nil {
+		dialOpts = append(dialOpts, grpc.WithBlock())
+		dialCtx, cancel = context.WithTimeout(dialCtx, containerClientExistingConnTimeout)
+	}
+	defer cancel()
+
+	conn, err := grpc.DialContext(dialCtx, c.ServiceUrl, dialOpts...)
 	if err != nil {
+		if c.existingConn != nil {
+			_ = c.existingConn.Close()
+		}
 		return err
 	}
 
@@ -102,14 +115,14 @@ func (c *ContainerClient) Exec(containerId, cmd string, env []string) (*pb.Conta
 }
 
 func (c *ContainerClient) SandboxExec(containerId, cmd string, env map[string]string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	return c.SandboxExecContext(context.Background(), containerId, cmd, env, cwd)
+	return c.SandboxExecContext(context.Background(), containerId, cmd, env, cwd, false)
 }
 
-func (c *ContainerClient) SandboxExecContext(ctx context.Context, containerId, cmd string, env map[string]string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
+func (c *ContainerClient) SandboxExecContext(ctx context.Context, containerId, cmd string, env map[string]string, cwd string, wait bool) (*pb.ContainerSandboxExecResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxExecTimeout)
 	defer cancel()
 
-	resp, err := c.client.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd})
+	resp, err := c.client.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd, Wait: wait})
 	if err != nil {
 		return resp, err
 	}
@@ -148,7 +161,14 @@ func (c *ContainerClient) SandboxStatusContext(ctx context.Context, containerId 
 }
 
 func (c *ContainerClient) SandboxStdout(containerId string, pid int32) (*pb.ContainerSandboxStdoutResponse, error) {
-	resp, err := c.client.ContainerSandboxStdout(context.TODO(), &pb.ContainerSandboxStdoutRequest{ContainerId: containerId, Pid: pid})
+	return c.SandboxStdoutContext(context.Background(), containerId, pid)
+}
+
+func (c *ContainerClient) SandboxStdoutContext(ctx context.Context, containerId string, pid int32) (*pb.ContainerSandboxStdoutResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxOutputTimeout)
+	defer cancel()
+
+	resp, err := c.client.ContainerSandboxStdout(ctx, &pb.ContainerSandboxStdoutRequest{ContainerId: containerId, Pid: pid})
 	if err != nil {
 		return resp, err
 	}
@@ -156,7 +176,14 @@ func (c *ContainerClient) SandboxStdout(containerId string, pid int32) (*pb.Cont
 }
 
 func (c *ContainerClient) SandboxStderr(containerId string, pid int32) (*pb.ContainerSandboxStderrResponse, error) {
-	resp, err := c.client.ContainerSandboxStderr(context.TODO(), &pb.ContainerSandboxStderrRequest{ContainerId: containerId, Pid: pid})
+	return c.SandboxStderrContext(context.Background(), containerId, pid)
+}
+
+func (c *ContainerClient) SandboxStderrContext(ctx context.Context, containerId string, pid int32) (*pb.ContainerSandboxStderrResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxOutputTimeout)
+	defer cancel()
+
+	resp, err := c.client.ContainerSandboxStderr(ctx, &pb.ContainerSandboxStderrRequest{ContainerId: containerId, Pid: pid})
 	if err != nil {
 		return resp, err
 	}

@@ -33,6 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
+	completedRequestRetryTimeout   time.Duration = 30 * time.Second
+	completedRequestRetryInterval  time.Duration = 200 * time.Millisecond
 	workerEventStreamReconnectMin  time.Duration = time.Second
 	workerEventStreamReconnectMax  time.Duration = 5 * time.Second
 	defaultRuncStartConcurrency    int           = types.DefaultRuncStartConcurrency
@@ -359,7 +361,7 @@ func NewWorker() (_ *Worker, err error) {
 		cancel()
 		return nil, err
 	}
-	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport)
+	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport, routeLocalTargetHost)
 
 	worker := &Worker{
 		ctx:                     ctx,
@@ -470,19 +472,30 @@ containerRequestStream:
 				break
 			}
 
+			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("worker container request stream failed to connect")
 			time.Sleep(containerRequestStreamInterval)
 			continue
 		}
+		log.Info().Str("worker_id", s.workerId).Msg("worker container request stream connected")
 
 		for {
 			response, err := stream.Recv()
 			if err != nil {
+				if s.ctx.Err() == nil {
+					log.Warn().Err(err).Str("worker_id", s.workerId).Msg("worker container request stream disconnected")
+				}
+				break
+			}
+			if !response.Ok {
+				log.Warn().Str("worker_id", s.workerId).Str("error", response.ErrorMsg).Msg("worker container request stream returned error")
+				time.Sleep(containerRequestStreamInterval)
 				break
 			}
 
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				log.Info().Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("worker received container request")
 				if !request.Timestamp.IsZero() {
 					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
 						"worker_id": s.workerId,
@@ -936,16 +949,36 @@ func (s *Worker) manageWorkerCapacity() {
 }
 
 func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error {
-	_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(context.Background(), &pb.UpdateWorkerCapacityRequest{
-		WorkerId:         s.workerId,
-		CapacityChange:   int64(types.AddCapacity),
-		ContainerRequest: request.ToProto(),
-	}))
-	if err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(s.ctx, completedRequestRetryTimeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(ctx, &pb.UpdateWorkerCapacityRequest{
+			WorkerId:         s.workerId,
+			CapacityChange:   int64(types.AddCapacity),
+			ContainerRequest: request.ToProto(),
+		}))
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !common.IsRedisLockNotObtained(err) {
+			return err
+		}
+
+		timer := time.NewTimer(completedRequestRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
-	return nil
 }
 
 func (s *Worker) keepalive() {

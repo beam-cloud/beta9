@@ -17,6 +17,18 @@ import (
 )
 
 const (
+	containerStateLockTTL      = 10
+	containerStateLockRetries  = 20
+	containerStateLockInterval = 50 * time.Millisecond
+)
+
+var containerStateLockOptions = common.RedisLockOptions{
+	TtlS:          containerStateLockTTL,
+	Retries:       containerStateLockRetries,
+	RetryInterval: containerStateLockInterval,
+}
+
+const (
 	concurrencyCounterInitialized      = "1"
 	concurrencyCounterRepairing        = "repairing"
 	concurrencyReservationOK           = "ok"
@@ -131,7 +143,7 @@ func NewContainerRedisRepository(r *common.RedisClient) ContainerRepository {
 }
 
 func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*types.ContainerState, error) {
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 2})
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +169,7 @@ func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*type
 }
 
 func (cr *ContainerRedisRepository) SetContainerState(containerId string, state *types.ContainerState) error {
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 5})
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
 	if err != nil {
 		return err
 	}
@@ -223,7 +235,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("invalid status: %s", status)
 	}
 
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 5})
+	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
 	if err != nil {
 		return err
 	}

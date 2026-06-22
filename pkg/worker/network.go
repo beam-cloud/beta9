@@ -91,6 +91,7 @@ type ContainerNetworkManager struct {
 	freeSlots           []*containerNetworkSlot
 	containerSlots      map[string]*containerNetworkSlot
 	portExposures       map[int]*containerPortExposure
+	forcePortProxy      bool
 	totalSlots          int
 	slotFillRunning     bool
 	slotPoolClosed      bool
@@ -503,7 +504,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	go m.cleanupOrphanedNamespaces()
 	if m.slotPoolSize > 0 {
 		if err := m.cleanupStaleNetworkSlots(); err != nil {
-			if isRedisLockNotObtained(err) {
+			if common.IsRedisLockNotObtained(err) {
 				log.Debug().Err(err).Msg("skipped stale preallocated network slot cleanup because another worker holds the cleanup lock")
 			} else {
 				log.Warn().Err(err).Msg("failed to clean up stale preallocated network slots")
@@ -538,10 +539,6 @@ func (m *ContainerNetworkManager) lockContainerNetwork(containerId string) func(
 			m.containerLocks.Delete(containerId)
 		}
 	}
-}
-
-func isRedisLockNotObtained(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "redislock: not obtained")
 }
 
 func isMissingNetworkReservation(err error) bool {
@@ -2352,6 +2349,14 @@ func (m *ContainerNetworkManager) runContainerPortExposure(exposure *containerPo
 		nativeReady := containerPortTargetReachable(exposure.ctx, native, containerPortProxyDialTimeout)
 		fallbackReady := containerPortTargetReachable(exposure.ctx, fallback, containerPortProxyDialTimeout)
 		if nativeReady || (family == addressFamilyUnknown && fallbackReady) {
+			if m.forcePortProxy {
+				target := native
+				if !nativeReady {
+					target = fallback
+				}
+				exposure.startProxy(family, []string{target})
+				return
+			}
 			if err := m.exposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); err != nil {
 				log.Warn().
 					Err(err).

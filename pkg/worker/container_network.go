@@ -63,8 +63,9 @@ func joinHostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
-func newContainerNetwork(base *ContainerNetworkManager, podAddr string, persistent bool, machineID, transport string) ContainerNetwork {
+func newContainerNetwork(base *ContainerNetworkManager, podAddr string, persistent bool, machineID, transport, routeLocalTargetHost string) ContainerNetwork {
 	base.podAddr = podAddr
+	base.forcePortProxy = hostRequiresPortProxy(podAddr) || hostRequiresPortProxy(routeLocalTargetHost)
 	local := &localContainerNetwork{
 		ContainerNetworkManager: base,
 		podAddr:                 podAddr,
@@ -73,4 +74,19 @@ func newContainerNetwork(base *ContainerNetworkManager, podAddr string, persiste
 		return &agentContainerNetwork{localContainerNetwork: local}
 	}
 	return local
+}
+
+func hostRequiresPortProxy(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

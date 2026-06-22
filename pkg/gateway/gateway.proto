@@ -156,6 +156,25 @@ service GatewayService {
       get : "/pools/private"
     };
   }
+  rpc CreateBYOCPoolOnboarding(CreateBYOCPoolOnboardingRequest)
+      returns (CreateBYOCPoolOnboardingResponse) {
+    option (google.api.http) = {
+      post : "/pools/byoc/onboarding"
+      body : "*"
+    };
+  }
+  rpc GetBYOCPoolOnboardingStatus(GetBYOCPoolOnboardingStatusRequest)
+      returns (GetBYOCPoolOnboardingStatusResponse) {
+    option (google.api.http) = {
+      get : "/pools/{pool_name}/byoc/onboarding-status"
+    };
+  }
+  rpc GetBYOCPoolResource(GetBYOCPoolResourceRequest)
+      returns (GetBYOCPoolResourceResponse) {
+    option (google.api.http) = {
+      get : "/pools/{pool_name}/byoc/resource"
+    };
+  }
   rpc CreatePool(CreatePoolRequest)
       returns (CreatePoolResponse) {
     option (google.api.http) = {
@@ -763,6 +782,58 @@ message ListPrivatePoolsResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated PrivatePool pools = 3;
+}
+
+message CreateBYOCPoolOnboardingRequest {
+  string provider = 1;
+  string pool_name = 2;
+  string region = 3;
+  string instance_type = 4;
+  uint32 desired_nodes = 5;
+  uint32 max_nodes = 6;
+  string account_id = 7;
+}
+
+message CreateBYOCPoolOnboardingResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+  string setup_url = 4;
+  string resource_name = 5;
+  string resource_url = 6;
+}
+
+message GetBYOCPoolOnboardingStatusRequest {
+  string pool_name = 1;
+}
+
+message GetBYOCPoolOnboardingStatusResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PrivatePool pool = 3;
+  bool ready = 4;
+  uint32 ready_machine_count = 5;
+  uint32 machine_count = 6;
+}
+
+message GetBYOCPoolResourceRequest {
+  string pool_name = 1;
+}
+
+message GetBYOCPoolResourceResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string provider = 3;
+  string account_id = 4;
+  string region = 5;
+  string resource_name = 6;
+  string resource_url = 7;
+  string destroy_url = 8;
+  string instance_type = 9;
+  uint32 desired_nodes = 10;
+  uint32 max_nodes = 11;
+  uint32 target_sandboxes = 12;
+  uint32 sandboxes_per_node = 13;
 }
 
 message CreatePoolRequest { PoolConfig pool = 1; }

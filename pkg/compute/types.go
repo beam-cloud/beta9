@@ -11,6 +11,7 @@ const (
 	SourceCLIReservation = types.ComputeSourceCLIReservation
 	SourceAttached       = types.ComputeSourceAttached
 	SourceManual         = types.ComputeSourceManual
+	SourceAWS            = types.ComputeSourceAWS
 
 	ReservationPending     = types.ComputeReservationPending
 	ReservationActive      = types.ComputeReservationActive

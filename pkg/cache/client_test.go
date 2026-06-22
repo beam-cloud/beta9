@@ -831,6 +831,36 @@ func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
 	require.Equal(t, "miss", trace.Result)
 }
 
+func TestReadContentIntoSkipsGRPCWhenRawHostUnreachable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	host := &Host{HostId: "unreachable-host", PrivateAddr: "127.0.0.1:1"}
+	client := &Client{
+		ctx:          ctx,
+		clientConfig: ClientConfig{NTopHosts: 1, ReadTransport: ClientReadTransportConfig{Enabled: true}},
+		globalConfig: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+		grpcClients: map[string]proto.CacheClient{
+			host.HostId: nil,
+		},
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	defer client.Cleanup()
+
+	dst := make([]byte, 16)
+	_, trace, err := client.ReadContentIntoWithTrace(ctx, strings.Repeat("a", sha256.Size*2), 0, dst, ClientOptions{})
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+	require.Len(t, trace.Attempts, 1)
+	require.Equal(t, "raw", trace.Attempts[0].Source)
+	require.Equal(t, "unavailable", trace.Attempts[0].Result)
+	require.Equal(t, ErrUnableToReachHost.Error(), trace.Attempts[0].Error)
+}
+
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")

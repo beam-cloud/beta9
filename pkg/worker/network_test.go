@@ -222,15 +222,6 @@ func TestReleasePreallocatedNetworkSlotUsesFreshCleanupContext(t *testing.T) {
 	}
 }
 
-func TestIsRedisLockNotObtained(t *testing.T) {
-	if !isRedisLockNotObtained(errors.New("redislock: not obtained")) {
-		t.Fatal("expected redislock not obtained error to match")
-	}
-	if isRedisLockNotObtained(errors.New("other error")) {
-		t.Fatal("did not expect unrelated error to match")
-	}
-}
-
 func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 	workerExists := func(workerID string) (bool, error) {
 		switch workerID {

@@ -418,6 +418,54 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	}
 }
 
+func TestDeleteBackendRoutesByContainerIDKeepsSiblingContainerRoutesOnSameMachine(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	routeA := types.BackendRoute{
+		RouteID:     types.BackendRouteID("machine-one", "worker-one", "container-a", types.BackendRouteKindContainer, 8765),
+		WorkspaceID: "workspace-one",
+		PoolName:    "pool-one",
+		MachineID:   "machine-one",
+		WorkerID:    "worker-one",
+		ContainerID: "container-a",
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8765,
+		Transport:   types.BackendRouteTransportTSNet,
+		ProxyTarget: "machine-one.tailnet:29443",
+		State:       types.BackendRouteStateReady,
+	}
+	routeB := routeA
+	routeB.RouteID = types.BackendRouteID("machine-one", "worker-one", "container-b", types.BackendRouteKindContainer, 8765)
+	routeB.ContainerID = "container-b"
+
+	if err := repo.SetBackendRoute(ctx, routeA); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetBackendRoute(ctx, routeB); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteBackendRoutesByContainerID(ctx, routeA.ContainerID); err != nil {
+		t.Fatal(err)
+	}
+
+	routes, err := repo.ListBackendRoutesByMachine(ctx, "workspace-one", "pool-one", "machine-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 || routes[0].RouteID != routeB.RouteID {
+		t.Fatalf("routes after deleting container-a = %#v, want only %s", routes, routeB.RouteID)
+	}
+	if _, err := repo.GetBackendRoute(ctx, routeB.RouteID); err != nil {
+		t.Fatalf("sibling route was removed: %v", err)
+	}
+}
+
 func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFailure(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

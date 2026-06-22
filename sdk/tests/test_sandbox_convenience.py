@@ -1,6 +1,11 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from beta9.abstractions.sandbox import SandboxFileSystem, SandboxInstance
+from beta9.abstractions.base.runner import SANDBOX_STUB_TYPE
+from beta9.abstractions.image import ImageBuildResult
+from beta9.abstractions.sandbox import Sandbox, SandboxFileSystem, SandboxInstance
+from beta9.clients.gateway import GetOrCreateStubResponse
+from beta9.sync import FileSyncResult
 
 
 class FakeSandboxStub:
@@ -94,3 +99,23 @@ def test_sandbox_instance_poll_defaults_terminal_exit_code():
 
     stub.statuses = [SimpleNamespace(ok=True, error_msg="", exit_code=-1, status="terminated")]
     assert instance.poll() == 137
+
+
+def test_sandbox_prepare_runtime_uses_idle_entrypoint():
+    sandbox = Sandbox()
+    sandbox.image.build = MagicMock(
+        return_value=ImageBuildResult(success=True, image_id="image-id", python_version="python3.11")
+    )
+    sandbox.syncer.sync = MagicMock(return_value=FileSyncResult(success=True, object_id="object-id"))
+    sandbox.gateway_stub.get_or_create_stub = MagicMock(
+        return_value=GetOrCreateStubResponse(ok=True, stub_id="stub-id")
+    )
+
+    assert sandbox.prepare_runtime(
+        stub_type=SANDBOX_STUB_TYPE,
+        force_create_stub=True,
+        ignore_patterns=["*"],
+    )
+
+    request = sandbox.gateway_stub.get_or_create_stub.call_args.args[0]
+    assert request.entrypoint == ["tail", "-f", "/dev/null"]

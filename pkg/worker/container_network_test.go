@@ -8,10 +8,12 @@ import (
 )
 
 func TestNewContainerNetworkUsesLocalImplementationByDefault(t *testing.T) {
-	network := newContainerNetwork(&ContainerNetworkManager{}, "10.0.0.2", false, "", "")
+	base := &ContainerNetworkManager{}
+	network := newContainerNetwork(base, "10.0.0.2", false, "", "", "")
 
 	_, ok := network.(*localContainerNetwork)
 	require.True(t, ok)
+	require.False(t, base.forcePortProxy)
 
 	address, err := network.ContainerPortAddress("container-one", PortBinding{HostPort: 32000, ContainerPort: 8001})
 	require.NoError(t, err)
@@ -29,7 +31,7 @@ func TestNewContainerNetworkUsesLocalImplementationByDefault(t *testing.T) {
 }
 
 func TestNewContainerNetworkFormatsBracketedIPv6PodAddress(t *testing.T) {
-	network := newContainerNetwork(&ContainerNetworkManager{}, "[2600:1f18:37a4:c02::7286]", false, "", "")
+	network := newContainerNetwork(&ContainerNetworkManager{}, "[2600:1f18:37a4:c02::7286]", false, "", "", "")
 
 	address, err := network.ContainerPortAddress("container-one", PortBinding{HostPort: 32000, ContainerPort: 8001})
 	require.NoError(t, err)
@@ -54,10 +56,12 @@ func TestNewContainerNetworkUsesExposedHostPortForPersistentMachine(t *testing.T
 		ContainerIp: "192.168.0.44",
 	})
 
-	network := newContainerNetwork(&ContainerNetworkManager{containerInstances: containerInstances}, "127.0.0.1", true, "machine-one", "tsnet_restricted")
+	base := &ContainerNetworkManager{containerInstances: containerInstances}
+	network := newContainerNetwork(base, "127.0.0.1", true, "machine-one", "tsnet_restricted", "")
 
 	_, ok := network.(*agentContainerNetwork)
 	require.True(t, ok)
+	require.True(t, base.forcePortProxy)
 
 	address, err := network.ContainerPortAddress(containerID, PortBinding{HostPort: 32000, ContainerPort: 8001})
 	require.NoError(t, err)
@@ -82,7 +86,9 @@ func TestNewContainerNetworkFormatsPersistentIPv6HostAddress(t *testing.T) {
 		ContainerIp: "fd00:abcd::3f",
 	})
 
-	network := newContainerNetwork(&ContainerNetworkManager{containerInstances: containerInstances}, "[::1]", true, "machine-one", "tsnet_restricted")
+	base := &ContainerNetworkManager{containerInstances: containerInstances}
+	network := newContainerNetwork(base, "[::1]", true, "machine-one", "tsnet_restricted", "")
+	require.True(t, base.forcePortProxy)
 
 	address, err := network.ContainerPortAddress(containerID, PortBinding{HostPort: 32000, ContainerPort: 8001})
 	require.NoError(t, err)
@@ -97,4 +103,13 @@ func TestNewContainerNetworkFormatsPersistentIPv6HostAddress(t *testing.T) {
 		8001: "[::1]:32000",
 		2222: "[::1]:32001",
 	}, addressMap)
+}
+
+func TestNewContainerNetworkForcesProxyForLoopbackRouteTarget(t *testing.T) {
+	base := &ContainerNetworkManager{}
+	network := newContainerNetwork(base, "10.0.0.2", true, "machine-one", "tsnet_restricted", "localhost")
+
+	_, ok := network.(*agentContainerNetwork)
+	require.True(t, ok)
+	require.True(t, base.forcePortProxy)
 }

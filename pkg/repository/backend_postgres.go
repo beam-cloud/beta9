@@ -1837,7 +1837,7 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 	query := `
 	UPDATE deployment
 	SET name = $3, active = $4, version = $5, updated_at = CURRENT_TIMESTAMP
-	WHERE id = $1 OR external_id = $2 and deleted_at IS NULL
+	WHERE (id = $1 OR external_id = $2) AND deleted_at IS NULL
 	RETURNING id, external_id, name, active, version, workspace_id, stub_id, stub_type, created_at, updated_at;
 	`
 
