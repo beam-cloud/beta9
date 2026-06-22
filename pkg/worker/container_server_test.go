@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -57,25 +56,6 @@ func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.
 func TestProcessManagerDialFailureRetriesReadyDeadline(t *testing.T) {
 	err := status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready")
 	require.True(t, isProcessManagerDialFailure(err))
-}
-
-func TestSandboxProcessManagerClientReusesReadyClient(t *testing.T) {
-	containerId := "sandbox-test"
-	readyClient := &goproc.GoProcClient{}
-	server := &ContainerRuntimeServer{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-	}
-	server.containerInstances.Set(containerId, &ContainerInstance{
-		Id:                         containerId,
-		SandboxProcessManager:      readyClient,
-		SandboxProcessManagerReady: true,
-	})
-
-	got, cleanup, err := server.sandboxProcessManagerClient(context.Background(), containerId, &ContainerInstance{Id: containerId})
-
-	require.NoError(t, err)
-	require.Same(t, readyClient, got)
-	require.False(t, cleanup)
 }
 
 func TestSandboxKilledProcessMarksPersistUntilExpiryOrClear(t *testing.T) {

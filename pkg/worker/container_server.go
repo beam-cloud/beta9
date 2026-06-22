@@ -674,11 +674,6 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 }
 
 func (s *ContainerRuntimeServer) sandboxProcessManagerClient(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, bool, error) {
-	instance = s.refreshContainerInstance(containerId, instance)
-	if instance != nil && instance.SandboxProcessManagerReady && instance.SandboxProcessManager != nil {
-		return instance.SandboxProcessManager, false, nil
-	}
-
 	client, err := s.newSandboxProcessManagerClient(ctx, containerId, instance)
 	return client, client != nil, err
 }
