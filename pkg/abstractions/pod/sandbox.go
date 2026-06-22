@@ -66,7 +66,7 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 	if err != nil {
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to execute command",
+			ErrorMsg: sandboxExecFailureMessage(err),
 		}, nil
 	}
 
@@ -817,6 +817,13 @@ func (s *GenericPodService) evictClient(cacheKey string) {
 
 func sandboxConnectErrorMessage(_ error) string {
 	return "Failed to connect to sandbox"
+}
+
+func sandboxExecFailureMessage(err error) string {
+	if isTransientSandboxConnectFailure(err) {
+		return sandboxConnectErrorMessage(err)
+	}
+	return "Failed to execute command"
 }
 
 func logSandboxConnectFailure(err error, containerId string) {

@@ -18,6 +18,20 @@ func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {
 	}
 }
 
+func TestSandboxExecFailureMessageKeepsTransientErrorsRetryable(t *testing.T) {
+	got := sandboxExecFailureMessage(status.Error(codes.Unavailable, "transport is closing"))
+	if got != "Failed to connect to sandbox" {
+		t.Fatalf("transient exec error message = %q, want retryable connect message", got)
+	}
+}
+
+func TestSandboxExecFailureMessageKeepsCommandErrorsGeneric(t *testing.T) {
+	got := sandboxExecFailureMessage(errors.New("permission denied"))
+	if got != "Failed to execute command" {
+		t.Fatalf("command exec error message = %q, want generic command failure", got)
+	}
+}
+
 func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 	tests := []struct {
 		name     string
