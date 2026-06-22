@@ -295,10 +295,15 @@ func TestPodBackendTransportReusesTransportForSameTarget(t *testing.T) {
 	pb := &PodProxyBuffer{}
 	target := types.BackendRouteAddress("machine:worker:container:container:8001")
 
-	first := pb.backendTransport(target)
-	second := pb.backendTransport(target)
+	first := pb.backendTransport(target, containerDialTimeoutDurationS)
+	second := pb.backendTransport(target, containerDialTimeoutDurationS)
 	if first != second {
 		t.Fatal("expected pod backend transport to be reused for same target")
+	}
+
+	pinned := pb.backendTransport(target, containerPinnedDialTimeout)
+	if pinned == first {
+		t.Fatal("expected pinned sandbox transport to be isolated from default pod transport")
 	}
 }
 
