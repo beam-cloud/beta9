@@ -39,6 +39,41 @@ func TestSandboxExecFailureMessageKeepsConnectErrorsRetryable(t *testing.T) {
 	}
 }
 
+func TestSandboxClientCacheKeyUsesStableWorkerRouteTarget(t *testing.T) {
+	routeA := &types.BackendRoute{
+		RouteID:     "route-a",
+		Kind:        types.BackendRouteKindWorker,
+		Transport:   types.BackendRouteTransportTSNet,
+		ProxyTarget: "beam-agent-machine:29443",
+	}
+	routeB := &types.BackendRoute{
+		RouteID:     "route-b",
+		Kind:        types.BackendRouteKindWorker,
+		Transport:   types.BackendRouteTransportTSNet,
+		ProxyTarget: "beam-agent-machine:29443",
+	}
+
+	keyA := sandboxClientCacheKeyForRoute(routeA, "route://route-a", "token")
+	keyB := sandboxClientCacheKeyForRoute(routeB, "route://route-b", "token")
+	if keyA != keyB {
+		t.Fatalf("worker route cache keys differ: %q != %q", keyA, keyB)
+	}
+}
+
+func TestSandboxClientCacheKeyKeepsContainerRoutesDistinct(t *testing.T) {
+	route := &types.BackendRoute{
+		RouteID:     "route-a",
+		Kind:        types.BackendRouteKindContainer,
+		Transport:   types.BackendRouteTransportTSNet,
+		ProxyTarget: "beam-agent-machine:29443",
+	}
+
+	got := sandboxClientCacheKeyForRoute(route, "route://route-a", "token")
+	if got != "route://route-a:token" {
+		t.Fatalf("container route cache key = %q, want address scoped key", got)
+	}
+}
+
 func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -139,9 +139,7 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 		return resp, nil
 	}
 
-	cacheKey := sandboxClientCacheKey(in.ContainerId, authInfo.Token.Key)
-
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, cacheKey, err := s.getClientWithCacheKey(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxStatusResponse{
 			Ok:       false,
@@ -201,9 +199,7 @@ func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containe
 }
 
 func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
-	cacheKey := sandboxClientCacheKey(containerId, authInfo.Token.Key)
-
-	client, _, err := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, cacheKey, err := s.getClientWithCacheKey(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return sandboxStatus("pending"), nil
 	}
@@ -816,7 +812,7 @@ func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, container
 	}
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
-	cacheKey := sandboxClientCacheKey(hostname, token)
+	cacheKey := s.sandboxClientCacheKey(ctx, hostname, token)
 	if cached, ok := s.clientCache.Load(cacheKey); ok {
 		if client, ok := cached.(*common.ContainerClient); ok {
 			metrics.RecordSandboxConnectPhase("client_cache", workspaceId, container.StubId, string(container.Status), "", true, 0)
@@ -846,7 +842,32 @@ func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, container
 	return client, container, cacheKey, nil
 }
 
-func sandboxClientCacheKey(workerAddress, token string) string {
+func (s *GenericPodService) sandboxClientCacheKey(ctx context.Context, workerAddress, token string) string {
+	return sandboxClientCacheKeyForRoute(s.backendRouteForAddress(ctx, workerAddress), workerAddress, token)
+}
+
+func (s *GenericPodService) backendRouteForAddress(ctx context.Context, address string) *types.BackendRoute {
+	if s == nil || s.containerRepo == nil {
+		return nil
+	}
+	routeID, ok := types.ParseBackendRouteAddress(address)
+	if !ok {
+		return nil
+	}
+	route, err := s.containerRepo.GetBackendRoute(ctx, routeID)
+	if err != nil {
+		return nil
+	}
+	return route
+}
+
+func sandboxClientCacheKeyForRoute(route *types.BackendRoute, workerAddress, token string) string {
+	if route != nil &&
+		route.Kind == types.BackendRouteKindWorker &&
+		route.Transport == types.BackendRouteTransportTSNet &&
+		route.ProxyTarget != "" {
+		return route.Transport + ":" + route.ProxyTarget + ":" + token
+	}
 	return workerAddress + ":" + token
 }
 
