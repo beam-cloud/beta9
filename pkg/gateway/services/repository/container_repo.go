@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -155,6 +156,7 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 	if route.LocalTarget == "" {
 		return "", fmt.Errorf("backend route local target is required for port %d", route.Port)
 	}
+	seedReadyAgentWorkerRoute(&route)
 	if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
 		return "", err
 	}
@@ -192,4 +194,21 @@ func backendRouteFromProto(in *pb.BackendRoute) types.BackendRoute {
 		route.State = types.BackendRouteStateOpening
 	}
 	return route
+}
+
+func seedReadyAgentWorkerRoute(route *types.BackendRoute) {
+	if route == nil ||
+		route.Kind != types.BackendRouteKindWorker ||
+		route.Transport != types.BackendRouteTransportTSNet ||
+		route.MachineID == "" {
+		return
+	}
+
+	if route.ProxyTarget == "" {
+		route.ProxyTarget = fmt.Sprintf("beam-agent-%s:%d", route.MachineID, types.DefaultAgentTSNetRouteProxyPort)
+	}
+	if route.State == "" || route.State == types.BackendRouteStateOpening {
+		route.State = types.BackendRouteStateReady
+		route.UpdatedAt = time.Now().Unix()
+	}
 }
