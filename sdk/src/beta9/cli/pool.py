@@ -19,10 +19,13 @@ from ..clients.gateway import (
     DeletePoolRequest,
     ExtendPoolCapacityRequest,
     GetPoolJoinCommandRequest,
+    LaunchPoolCapacityRequest,
     Machine,
+    ListPoolOffersRequest,
     ListPoolMachinesRequest,
     ListPoolsRequest,
     ListPrivatePoolsRequest,
+    PoolOffer,
     Pool as ControlPlanePool,
     PoolConfig,
     PrivatePool,
@@ -74,6 +77,31 @@ def _pool_config(
         fallback=fallback,
         priority=priority,
     )
+
+
+def _managed_pool_config(
+    name: str,
+    provider: Tuple[str, ...],
+    region: Tuple[str, ...],
+    gpu: Tuple[str, ...],
+    nodes: int,
+    ttl: str,
+    max_spend: float,
+    min_reliability: float,
+    offer_id: str = "",
+) -> PoolConfig:
+    pool = _pool_config(
+        name=name,
+        gpu=gpu,
+        nodes=nodes,
+        ttl=ttl,
+        max_spend=max_spend,
+        provider=provider,
+        region=region,
+        min_reliability=min_reliability,
+    )
+    pool.offer_id = offer_id
+    return pool
 
 
 def _get_pool_renderable(
@@ -224,6 +252,44 @@ def _control_plane_pool_details(pool: ControlPlanePool) -> str:
     return "/".join(parts) if parts else "-"
 
 
+def _pool_offer_table(offers: List[PoolOffer]) -> Table:
+    table = Table(
+        Column("Provider"),
+        Column("Region"),
+        Column("Instance"),
+        Column("Nodes", justify="right"),
+        Column("Compute"),
+        Column("$/hr", justify="right"),
+        Column("Available", justify="right"),
+        box=box.SIMPLE,
+    )
+    for offer in offers:
+        compute = []
+        if offer.gpu:
+            compute.append(f"{offer.gpu_count}x {offer.gpu}")
+        if offer.cpu_millicores:
+            compute.append(format_cpu(offer.cpu_millicores))
+        if offer.memory_mb:
+            compute.append(format_memory(offer.memory_mb))
+        table.add_row(
+            offer.provider,
+            offer.region_display_name or offer.region,
+            offer.display_name or offer.instance_type,
+            str(offer.node_count or 1),
+            ", ".join(compute) if compute else "-",
+            f"${offer.hourly_cost_micros / 1_000_000:.4f}",
+            str(offer.available),
+        )
+    table.add_section()
+    table.add_row(f"[bold]{len(offers)} items")
+    return table
+
+
+def _pool_capacity_summary(pool: PrivatePool) -> str:
+    reserved = pool.reserved_nodes or sum(_reservation_node_count(r) for r in pool.reservations)
+    return f"{pool.ready_machine_count}/{pool.machine_count} ready, {reserved} reserved"
+
+
 @management.command(
     name="list",
     help="List compute pools.",
@@ -325,8 +391,14 @@ def list_pools(
     epilog="""
     Examples:
 
-      # Create a private GPU pool that prefers attached H100 machines
-      {cli_name} pool create private-gpu --mode private --gpu H100 --priority 1000
+      # Create a private pool for machines you attach yourself
+      {cli_name} pool create web-cpu
+
+      # Add this machine to the pool
+      {cli_name} pool join web-cpu
+
+      # Reserve managed Hetzner nodes for the pool
+      {cli_name} pool scale web-cpu --provider hetzner --nodes 2 --ttl 6h --max-spend 5
       \b
     """,
 )
@@ -373,6 +445,103 @@ def create(
     if not res.ok:
         return terminal.error(res.err_msg)
     terminal.success(f"Created private pool '{res.pool.name}'")
+
+
+@management.command(
+    name="offers",
+    help="List managed node offers for a private pool.",
+    epilog="""
+    Examples:
+
+      # Show CPU offers from Hetzner
+      {cli_name} pool offers --provider hetzner
+
+      # Show offers for a 2-node L4 pool
+      {cli_name} pool offers --gpu L4 --nodes 2 --ttl 6h --max-spend 20
+      \b
+    """,
+)
+@click.option("--provider", "provider", multiple=True, help="Provider to search.")
+@click.option("--region", "region", multiple=True, help="Provider region to search.")
+@click.option("--gpu", "gpu", multiple=True, help="GPU type required by the pool.")
+@click.option("--nodes", type=click.IntRange(1), default=1, show_default=True)
+@click.option("--ttl", default="1h", show_default=True, help="Reservation duration.")
+@click.option("--max-spend", type=float, default=1, show_default=True, help="Maximum spend in USD.")
+@click.option("--min-reliability", type=click.FloatRange(0, 1), default=0)
+@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.pass_service_client
+def offers(
+    service: ServiceClient,
+    provider: Tuple[str, ...],
+    region: Tuple[str, ...],
+    gpu: Tuple[str, ...],
+    nodes: int,
+    ttl: str,
+    max_spend: float,
+    min_reliability: float,
+    format: str,
+):
+    pool = _managed_pool_config("", provider, region, gpu, nodes, ttl, max_spend, min_reliability)
+    res = service.gateway.list_pool_offers(ListPoolOffersRequest(pool=pool))
+    if not res.ok:
+        return terminal.error(res.err_msg)
+    if format == "json":
+        terminal.print_json({"offers": [o.to_dict(casing=Casing.SNAKE) for o in res.offers]})
+        return
+    terminal.print(_pool_offer_table(list(res.offers)))
+
+
+@management.command(
+    name="scale",
+    help="Reserve managed nodes for a private pool.",
+    epilog="""
+    Examples:
+
+      # Reserve two Hetzner CPU nodes for six hours
+      {cli_name} pool scale web-cpu --provider hetzner --nodes 2 --ttl 6h --max-spend 5
+
+      # Reserve one GPU node and route a service to it
+      {cli_name} pool scale gpu-api --provider shadeform --gpu L4 --nodes 1 --ttl 2h --max-spend 4
+      {cli_name} deploy --name api --dockerfile Dockerfile --pool gpu-api
+      \b
+    """,
+)
+@click.argument("name")
+@click.option("--provider", "provider", multiple=True, help="Provider to reserve from.")
+@click.option("--region", "region", multiple=True, help="Provider region to reserve in.")
+@click.option("--gpu", "gpu", multiple=True, help="GPU type required by the pool.")
+@click.option("--nodes", type=click.IntRange(1), default=1, show_default=True)
+@click.option("--ttl", required=True, help="Reservation duration, for example 1h or 6h.")
+@click.option("--max-spend", type=float, required=True, help="Maximum spend in USD.")
+@click.option("--min-reliability", type=click.FloatRange(0, 1), default=0)
+@click.option("--offer-id", default="", help="Reserve a specific offer returned by pool offers.")
+@extraclick.pass_service_client
+def scale(
+    service: ServiceClient,
+    name: str,
+    provider: Tuple[str, ...],
+    region: Tuple[str, ...],
+    gpu: Tuple[str, ...],
+    nodes: int,
+    ttl: str,
+    max_spend: float,
+    min_reliability: float,
+    offer_id: str,
+):
+    pool = _managed_pool_config(
+        name, provider, region, gpu, nodes, ttl, max_spend, min_reliability, offer_id
+    )
+    res = service.gateway.launch_pool_capacity(LaunchPoolCapacityRequest(pool=pool, nodes=nodes))
+    if not res.ok:
+        msg = res.err_msg
+        if res.required_cents or res.available_cents:
+            msg = (
+                f"{msg} "
+                f"(required ${res.required_cents / 100:.2f}, "
+                f"available ${res.available_cents / 100:.2f})"
+            )
+        return terminal.error(msg)
+    terminal.success(f"Scaled private pool '{res.pool.name}' ({_pool_capacity_summary(res.pool)})")
 
 
 @management.command(name="private", help="List private compute pools.", hidden=True)

@@ -63,6 +63,60 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 	}
 }
 
+func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	state := &types.ContainerState{
+		ContainerId: "pod-test-stub-indexed",
+		StubId:      "test-stub",
+		WorkspaceId: "test-workspace",
+		Status:      types.ContainerStatusPending,
+		ScheduledAt: time.Now().Unix(),
+		Cpu:         100,
+		Memory:      128,
+	}
+
+	if err := repo.SetContainerState(state.ContainerId, state); err != nil {
+		t.Fatal(err)
+	}
+
+	stateKey := common.RedisKeys.SchedulerContainerState(state.ContainerId)
+	stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
+	workspaceIndexKey := common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId)
+
+	if ok, err := rdb.SIsMember(context.Background(), stubIndexKey, stateKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("expected state key to be present in stub index")
+	}
+
+	if ok, err := rdb.SIsMember(context.Background(), workspaceIndexKey, stateKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("expected state key to be present in workspace index")
+	}
+
+	byStub, err := repo.GetActiveContainersByStubId(state.StubId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byStub) != 1 || byStub[0].ContainerId != state.ContainerId {
+		t.Fatalf("expected stub index to return container %q, got %+v", state.ContainerId, byStub)
+	}
+
+	byWorkspace, err := repo.GetActiveContainersByWorkspaceId(state.WorkspaceId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byWorkspace) != 1 || byWorkspace[0].ContainerId != state.ContainerId {
+		t.Fatalf("expected workspace index to return container %q, got %+v", state.ContainerId, byWorkspace)
+	}
+}
+
 func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -693,6 +747,165 @@ func TestGetWorkerAddressReturnsScheduleFailureWhenRequestFailed(t *testing.T) {
 	_, err = repo.GetWorkerAddress(context.Background(), containerId)
 	if err == nil || !strings.Contains(err.Error(), "failed to schedule") {
 		t.Fatalf("expected scheduler failure, got %v", err)
+	}
+}
+
+func TestEndpointRequestTokensCapConcurrentAcquireAcrossRepositories(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo1 := NewContainerRedisRepositoryForTest(rdb)
+	repo2 := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	const maxTokens = 5
+	const attempts = 25
+
+	var acquired atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		repo := repo1
+		if i%2 == 1 {
+			repo = repo2
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := repo.AcquireEndpointRequestToken(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+			if err != nil {
+				t.Errorf("acquire endpoint request token: %v", err)
+				return
+			}
+			if ok {
+				acquired.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := acquired.Load(); got != maxTokens {
+		t.Fatalf("acquired tokens = %d, want %d", got, maxTokens)
+	}
+
+	tokens, err := repo1.GetEndpointRequestTokens(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 0 {
+		t.Fatalf("remaining tokens = %d, want 0", tokens)
+	}
+}
+
+func TestEndpointRequestTokenReleaseIsIdempotentAcrossRepositories(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo1 := NewContainerRedisRepositoryForTest(rdb)
+	repo2 := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	const maxTokens = 2
+
+	for _, repo := range []ContainerRepository{repo1, repo2} {
+		ok, err := repo.AcquireEndpointRequestToken(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatal("expected request token acquire")
+		}
+	}
+
+	if err := repo1.ReleaseEndpointRequestToken(ctx, "workspace", "stub", "container-1", "task-1", maxTokens, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo1.ReleaseEndpointRequestToken(ctx, "workspace", "stub", "container-1", "task-1", maxTokens, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	tokens, err := repo1.GetEndpointRequestTokens(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 1 {
+		t.Fatalf("tokens after duplicate release = %d, want 1", tokens)
+	}
+
+	if err := repo2.ReleaseEndpointRequestToken(ctx, "workspace", "stub", "container-1", "task-2", maxTokens, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	tokens, err = repo1.GetEndpointRequestTokens(ctx, "workspace", "stub", "container-1", maxTokens, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != maxTokens {
+		t.Fatalf("tokens after second release = %d, want %d", tokens, maxTokens)
+	}
+}
+
+func TestContainerRepositoryKeepWarmLocksApplySharedSemantics(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+
+	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", 30); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("expected pod keep-warm lock")
+	}
+
+	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("expected pod keep-warm lock to be cleared")
+	}
+
+	if err := rdb.Set(ctx, podKeepWarmLockKey("workspace", "stub", "container-1"), 0, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("expected zero-valued pod keep-warm lock to be ignored")
+	}
+
+	if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", "container-1", -1); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = repo.PodKeepWarmLockExists(ctx, "workspace", "stub", "container-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("expected pod keep-warm lock")
+	}
+
+	ttl, err := rdb.TTL(ctx, podKeepWarmLockKey("workspace", "stub", "container-1")).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl != -1 {
+		t.Fatalf("pod keep-warm ttl = %s, want no expiration", ttl)
 	}
 }
 

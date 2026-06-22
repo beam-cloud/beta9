@@ -34,7 +34,7 @@ type Event struct {
 type RunOpts struct {
 	OutputWriter  OutputWriter
 	Started       chan<- int // PID channel
-	DockerEnabled bool       // Enable Docker-in-Docker (gVisor only)
+	DockerEnabled bool       // Enable Docker-in-Docker runtime options
 }
 
 // ExecOpts contains options for executing a command in a container

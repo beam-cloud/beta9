@@ -1,10 +1,13 @@
-from typing import Dict, List
+import os
+from typing import Dict, List, Optional
 
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import terminal
+from ..abstractions.image import Image
+from ..abstractions.service import Service, resolve_service_ports
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -25,6 +28,7 @@ from ..utils import load_module_spec
 from .extraclick import (
     ClickCommonGroup,
     ClickManagementGroup,
+    env_vars_to_dict,
     handle_config_override,
     override_config_options,
 )
@@ -38,16 +42,23 @@ def common(**_):
 @common.command(
     name="deploy",
     help="""
-    Deploy a new function.
+    Deploy a function, web service, or container.
 
-    HANDLER is in the format of "file:function".
+    HANDLER is in the format of "file:function". If no handler is supplied,
+    beta9 deploys a service from --dockerfile, --image, --command, or a local Dockerfile.
     """,
     epilog="""
       Examples:
 
         {cli_name} deploy --name my-app app.py:my_func
 
-        {cli_name} deploy -n my-app-2 app.py:my_func
+        {cli_name} deploy --name web --dockerfile Dockerfile
+
+        {cli_name} deploy --name api --dockerfile Dockerfile --pool web-cpu
+
+        {cli_name} deploy --name api --dockerfile Dockerfile --always-on
+
+        {cli_name} deploy --name worker --image ghcr.io/acme/worker:latest --command "npm start"
         \b
     """,
 )
@@ -74,6 +85,13 @@ def common(**_):
     default=None,
     help="The format of the output after a successful deployment.",
 )
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    default=False,
+    help="Output deployment details as JSON.",
+)
 @override_config_options
 @extraclick.config_context_option
 @click.pass_context
@@ -83,6 +101,7 @@ def deploy(
     handler: str,
     url_type: str,
     format: str,
+    json_output: bool,
     context: str = None,
     **kwargs,
 ):
@@ -91,7 +110,8 @@ def deploy(
         name=name,
         handler=handler,
         url_type=url_type,
-        format=format,
+        format="json" if json_output else format,
+        json_output=False,
         context=context,
         **kwargs,
     )
@@ -106,15 +126,76 @@ def management():
     pass
 
 
-def _generate_pod_module(name: str, entrypoint: str):
-    from beta9.abstractions.pod import Pod
+def _merge_port_options(kwargs: Dict) -> None:
+    ports = list(kwargs.get("ports") or [])
+    for port in kwargs.pop("port", ()) or ():
+        if port not in ports:
+            ports.append(port)
+    kwargs["ports"] = ports
 
-    pod = Pod(
-        name=name,
-        entrypoint=entrypoint,
+
+def _autodetect_dockerfile(kwargs: Dict) -> Optional[Image]:
+    if kwargs.get("dockerfile") is not None or kwargs.get("image") is not None:
+        return None
+
+    dockerfile = "Dockerfile"
+    if not os.path.exists(dockerfile):
+        return None
+
+    image = Image.from_dockerfile(dockerfile)
+    image.dockerfile_path = dockerfile
+    image.ignore_python = True
+    kwargs["dockerfile"] = image
+    return image
+
+
+def _service_image_option(kwargs: Dict) -> Optional[Image]:
+    dockerfile = kwargs.get("dockerfile")
+    if dockerfile is not None:
+        return dockerfile
+    return kwargs.get("image")
+
+
+def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
+    service_image = _service_image_option(kwargs)
+    ports = resolve_service_ports(
+        ports=kwargs.get("ports"),
+        image=service_image,
+        default=service_image is not None,
+    )
+    keep_warm_seconds = kwargs.get("keep_warm_seconds")
+
+    return Service(
+        name=name or os.path.basename(os.getcwd()),
+        entrypoint=kwargs.get("entrypoint") or [],
+        ports=ports,
+        image=service_image or Image(),
+        env=env_vars_to_dict(kwargs.get("env")),
+        keep_warm_seconds=0 if keep_warm_seconds is None else keep_warm_seconds,
+        min_replicas=kwargs.get("min_replicas") or 0,
+        max_replicas=kwargs.get("max_replicas"),
+        always_on=bool(kwargs.get("always_on")),
+        pool=kwargs.get("pool"),
     )
 
-    return pod
+
+def _release_deployment_grpc_refs(user_obj) -> None:
+    seen = set()
+
+    def clear(obj) -> None:
+        if obj is None or id(obj) in seen:
+            return
+
+        seen.add(id(obj))
+        attrs = getattr(obj, "__dict__", {})
+        for attr in ("syncer", "_gateway_stub", "_shell_stub", "_stub", "_pod_stub"):
+            if attr in attrs:
+                setattr(obj, attr, None)
+
+        clear(attrs.get("parent"))
+        clear(attrs.get("image"))
+
+    clear(user_obj)
 
 
 @management.command(
@@ -124,6 +205,12 @@ def _generate_pod_module(name: str, entrypoint: str):
       Examples:
 
         {cli_name} deploy --name my-app --entrypoint app.py:handler
+
+        {cli_name} deploy --name web --dockerfile Dockerfile
+
+        {cli_name} deploy --name web --dockerfile Dockerfile --pool web-cpu
+
+        {cli_name} deploy --name web --dockerfile Dockerfile --min-replicas 2 --max-replicas 4
         \b
     """,
 )
@@ -148,6 +235,13 @@ def _generate_pod_module(name: str, entrypoint: str):
     default=None,
     help="The format of the output after a successful deployment.",
 )
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    default=False,
+    help="Output deployment details as JSON.",
+)
 @override_config_options
 @extraclick.pass_service_client
 def create_deployment(
@@ -156,47 +250,55 @@ def create_deployment(
     handler: str,
     url_type: str,
     format: str,
+    json_output: bool,
     **kwargs,
 ):
-    module = None
+    if json_output:
+        format = "json"
+    _merge_port_options(kwargs)
     entrypoint = kwargs["entrypoint"]
 
     logs = []
+    user_obj = None
 
     with StoredStdoutInterceptor(capture_logs=format == "json") as capture_logs:
-        if handler:
-            user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
+        try:
+            if handler:
+                user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
 
-            if hasattr(user_obj, "set_handler"):
-                user_obj.set_handler(f"{module_name}:{obj_name}")
+                if hasattr(user_obj, "set_handler"):
+                    user_obj.set_handler(f"{module_name}:{obj_name}")
 
-        elif entrypoint:
-            user_obj = _generate_pod_module(name, entrypoint)
+            else:
+                _autodetect_dockerfile(kwargs)
+                if entrypoint or _service_image_option(kwargs) is not None:
+                    user_obj = _generate_service_module(name, kwargs)
+                else:
+                    terminal.error("No handler, entrypoint, image, or Dockerfile specified")
+                    return
 
-        else:
-            terminal.error("No handler or entrypoint specified")
-            return
+            if not handle_config_override(user_obj, kwargs):
+                return
 
-        if not handle_config_override(user_obj, kwargs):
-            return
+            if hasattr(user_obj, "generate_deployment_artifacts"):
+                user_obj.generate_deployment_artifacts(**kwargs)
 
-        if not module and hasattr(user_obj, "generate_deployment_artifacts"):
-            user_obj.generate_deployment_artifacts(**kwargs)
+            response, ok = user_obj.deploy(
+                name=name,
+                context=service._config,
+                url_type=url_type,
+            )
+            if not ok:
+                terminal.error("Deployment failed ☠️")
+                return
 
-        response, ok = user_obj.deploy(
-            name=name,
-            context=service._config,
-            url_type=url_type,
-        )
-        if not ok:
-            terminal.error("Deployment failed ☠️")
-            return
+            if hasattr(user_obj, "cleanup_deployment_artifacts"):
+                user_obj.cleanup_deployment_artifacts()
 
-        if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
-            user_obj.cleanup_deployment_artifacts()
-
-        if capture_logs.capture_logs:
-            logs.extend(capture_logs.logs)
+            if capture_logs.capture_logs:
+                logs.extend(capture_logs.logs)
+        finally:
+            _release_deployment_grpc_refs(user_obj)
 
     if format == "json":
         terminal.print_json(
@@ -387,8 +489,8 @@ def delete_deployment(service: ServiceClient, deployment_id: str):
     epilog="""
     Examples:
 
-        # Start a deployment
-        {cli_name} deployment scale 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572 --containers 2
+        # Keep two replicas running
+        {cli_name} deployment scale 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572 --replicas 2
         """,
 )
 @click.argument(
@@ -398,9 +500,11 @@ def delete_deployment(service: ServiceClient, deployment_id: str):
 )
 @click.option(
     "--containers",
-    type=click.INT,
+    "--replicas",
+    "containers",
+    type=click.IntRange(min=0),
     required=True,
-    help="The number of containers to scale to.",
+    help="The fixed replica count to run.",
 )
 @extraclick.pass_service_client
 def scale_deployment(service: ServiceClient, deployment_id: str, containers: int):
@@ -412,4 +516,4 @@ def scale_deployment(service: ServiceClient, deployment_id: str, containers: int
     if not res.ok:
         terminal.error(res.err_msg)
 
-    terminal.print(f"Scaled deployment {deployment_id} to {containers} containers")
+    terminal.print(f"Scaled deployment {deployment_id} to {containers} replicas")

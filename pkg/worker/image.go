@@ -21,6 +21,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
@@ -1155,7 +1156,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		}
 		return &sourceRegistry, nil
 	} else if err != nil {
-		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive cache unavailable, falling back to registry")
+		logEmbeddedImageCacheFallback(err, imageId, request)
 	}
 
 	// Download to temp file, then atomically rename
@@ -1187,7 +1188,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	if err != nil {
-		log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
+		logImageRegistryPullFailure(err, imageId, request)
 		return nil, err
 	}
 
@@ -1197,6 +1198,36 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	go c.publishImageArchiveToEmbeddedCache(archivePath, imageId)
 
 	return &sourceRegistry, nil
+}
+
+func logEmbeddedImageCacheFallback(err error, imageId string, request *types.ContainerRequest) {
+	if request != nil && request.IsBuildRequest() {
+		log.Debug().
+			Err(err).
+			Str("image_id", imageId).
+			Msg("embedded image archive cache unavailable for build image, continuing with build request path")
+		return
+	}
+
+	log.Warn().
+		Err(err).
+		Str("image_id", imageId).
+		Msg("embedded image archive cache unavailable, falling back to registry")
+}
+
+func logImageRegistryPullFailure(err error, imageId string, request *types.ContainerRequest) {
+	if request != nil && request.IsBuildRequest() {
+		log.Debug().
+			Err(err).
+			Str("image_id", imageId).
+			Msg("build image archive unavailable in registry, continuing with build request path")
+		return
+	}
+
+	log.Error().
+		Err(err).
+		Str("image_id", imageId).
+		Msg("failed to pull image from registry")
 }
 
 func (c *ImageClient) privateWorkerImageRequest(request *types.ContainerRequest) bool {
@@ -1684,20 +1715,79 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
-// setupBuildahDirs creates and returns optimal paths for buildah operations using /dev/shm
-// All paths use tmpfs (/dev/shm) for fast I/O and to avoid slow disk bottlenecks
-func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
-	// Use /dev/shm for all paths - tmpfs is fast and overlay can work here for builds
-	graphroot = filepath.Join("/dev/shm", "buildah-storage")
-	runroot = filepath.Join("/dev/shm", "buildah-run")
-	tmpdir = filepath.Join("/dev/shm", "buildah-tmp")
+// setupBuildahDirs creates paths for buildah operations. The graphroot is where
+// buildah keeps reusable Dockerfile layers, so use a cache-backed directory when
+// one is available and keep runroot/tmpdir ephemeral.
+func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string, cleanupGraphroot bool) {
+	cacheRoot := buildahLayerCacheRoot()
+	if cacheRoot != "" {
+		graphroot = filepath.Join(cacheRoot, "storage")
+		if err := ensureBuildahGraphroot(graphroot); err == nil {
+			runroot = mustMkdirTempBuildahDir("buildah-run-")
+			tmpdir = mustMkdirTempBuildahDir("buildah-tmp-")
+			return graphroot, runroot, tmpdir, false
+		} else {
+			log.Warn().Err(err).Str("path", graphroot).Msg("buildah layer cache unavailable")
+		}
+	}
 
-	// Create directories with proper permissions
-	_ = os.MkdirAll(graphroot, 0o700)
-	_ = os.MkdirAll(runroot, 0o700)
-	_ = os.MkdirAll(tmpdir, 0o700)
+	graphroot = mustMkdirTempBuildahDir("buildah-storage-")
+	runroot = mustMkdirTempBuildahDir("buildah-run-")
+	tmpdir = mustMkdirTempBuildahDir("buildah-tmp-")
+	return graphroot, runroot, tmpdir, true
+}
 
-	return
+func buildahLayerCacheRoot() string {
+	if dir := strings.TrimSpace(os.Getenv(types.AgentBuildCacheDirEnv)); dir != "" {
+		return filepath.Join(dir, "buildah")
+	}
+
+	cacheRoot := filepath.Join(types.AgentCachePath, "buildah")
+	if err := os.MkdirAll(cacheRoot, 0o700); err == nil {
+		return cacheRoot
+	}
+
+	return ""
+}
+
+func ensureBuildahGraphroot(graphroot string) error {
+	overlayDir := filepath.Join(graphroot, "overlay")
+	if err := os.MkdirAll(overlayDir, 0o700); err != nil {
+		return err
+	}
+
+	// Buildah probes this marker under the overlay graphroot. Some mounted
+	// cache filesystems do not support that write, so validate it before using
+	// the directory as persistent layer cache.
+	marker := filepath.Join(overlayDir, ".has-mount-program")
+	if err := os.WriteFile(marker, []byte("false"), 0o600); err != nil {
+		return err
+	}
+	return os.Remove(marker)
+}
+
+func buildahStorageDriver(graphroot string) string {
+	const overlayFSMagic = 0x794c7630
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(graphroot, &stat); err == nil && uint64(stat.Type) == overlayFSMagic {
+		log.Warn().Str("path", graphroot).Msg("buildah graphroot is overlayfs, using vfs storage driver")
+		return "vfs"
+	}
+
+	return "overlay"
+}
+
+func mustMkdirTempBuildahDir(pattern string) string {
+	for _, parent := range []string{"/dev/shm", ""} {
+		dir, err := os.MkdirTemp(parent, pattern)
+		if err == nil {
+			return dir
+		}
+	}
+	fallback := filepath.Join(os.TempDir(), pattern+fmt.Sprintf("%d", time.Now().UnixNano()))
+	_ = os.MkdirAll(fallback, 0o700)
+	return fallback
 }
 
 // writeStorageConf creates a containers/storage configuration file
@@ -1899,6 +1989,44 @@ func (w *activeOutputWriter) Write(p []byte) (int, error) {
 }
 
 const buildOutputHeartbeatInterval = 15 * time.Second
+const buildahCancelGracePeriod = 2 * time.Second
+
+func newBuildahCommand(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "buildah", args...)
+	cmd.Env = env
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = buildahCancelGracePeriod
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return terminateBuildahProcessGroup(cmd.Process.Pid)
+	}
+	return cmd
+}
+
+func terminateBuildahProcessGroup(pid int) error {
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+
+	time.Sleep(buildahCancelGracePeriod)
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+
+	return nil
+}
 
 // startSilentOutputHeartbeat emits a user-facing heartbeat only when the
 // wrapped command has produced no output for a while. This keeps noisy phases
@@ -2016,17 +2144,18 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	defer os.RemoveAll(buildPath)
 
 	// Set up paths for buildah operations - use /dev/shm (ram disk) for all storage we can
-	graphroot, runroot, tmpdir := c.setupBuildahDirs()
-	defer os.RemoveAll(graphroot)
+	graphroot, runroot, tmpdir, cleanupGraphroot := c.setupBuildahDirs()
+	if cleanupGraphroot {
+		defer os.RemoveAll(graphroot)
+	}
 	defer os.RemoveAll(runroot)
 	defer os.RemoveAll(tmpdir)
 
-	storageDriver := "overlay"
+	storageDriver := buildahStorageDriver(graphroot)
 	storageConf, err := c.writeStorageConf(graphroot, runroot, storageDriver)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
+		log.Warn().Err(err).Str("storage_driver", storageDriver).Msg("failed to write buildah storage config, falling back to vfs")
 		storageDriver = "vfs"
-		// Write vfs config for fallback case
 		storageConf, err = c.writeStorageConf(graphroot, runroot, storageDriver)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to write vfs storage config")
@@ -2083,10 +2212,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			}
 
 			pullArgs = append(pullArgs, "docker://"+sourceImage)
-			cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
-			cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-			cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-			cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+			cmd := newBuildahCommand(
+				ctx,
+				pullArgs,
+				c.buildahEnv(runroot, tmpdir, storageConf),
+				&common.ExecWriter{Logger: outputLogger},
+				&common.ExecWriter{Logger: outputLogger},
+			)
 			if err := cmd.Run(); err != nil {
 				return err
 			}
@@ -2136,11 +2268,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		// Build w/ buildah
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
-		cmd := exec.CommandContext(ctx, "buildah", budArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		buildOutput := newActiveOutputWriter(outputLogger)
-		cmd.Stdout = buildOutput
-		cmd.Stderr = buildOutput
+		cmd := newBuildahCommand(ctx, budArgs, c.buildahEnv(runroot, tmpdir, storageConf), buildOutput, buildOutput)
 		buildStart := time.Now()
 		stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, buildStart, buildOutput, "Still building image...")
 		err = cmd.Run()
@@ -2172,11 +2301,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
-		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		pushOutput := newActiveOutputWriter(outputLogger)
-		cmd.Stdout = pushOutput
-		cmd.Stderr = pushOutput
+		cmd = newBuildahCommand(ctx, pushArgs, c.buildahEnv(runroot, tmpdir, storageConf), pushOutput, pushOutput)
 
 		// buildah push emits no progress for large blobs, so surface a
 		// heartbeat to the user while it runs
@@ -2207,10 +2333,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Clip v1: Build, push to OCI layout, then process locally
 	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
-	cmd := exec.CommandContext(ctx, "buildah", budArgs...)
-	cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+	cmd := newBuildahCommand(
+		ctx,
+		budArgs,
+		c.buildahEnv(runroot, tmpdir, storageConf),
+		&common.ExecWriter{Logger: outputLogger},
+		&common.ExecWriter{Logger: outputLogger},
+	)
 	err = cmd.Run()
 	if err != nil {
 		return err
@@ -2218,10 +2347,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Push to local OCI layout (v1 clip path)
 	v1PushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
-	cmd = exec.CommandContext(ctx, "buildah", v1PushArgs...)
-	cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
-	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+	cmd = newBuildahCommand(
+		ctx,
+		v1PushArgs,
+		c.buildahEnv(runroot, tmpdir, storageConf),
+		&common.ExecWriter{Logger: outputLogger},
+		&common.ExecWriter{Logger: outputLogger},
+	)
 	err = cmd.Run()
 	if err != nil {
 		return err
@@ -2476,9 +2608,16 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 
 	if request.StorageAvailable() {
-		// Overwrite the path if workspace storage is available
-		objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
 		buildCtxPath = path.Join(buildPath, "build-ctx")
+
+		if !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+			return "", fmt.Errorf("workspace storage credentials are required to download build context %q directly", *request.BuildOptions.BuildCtxObject)
+		}
+
+		objectPath = path.Join(buildPath, "build-ctx.zip")
+		if err := downloadWorkspaceBuildContext(ctx, request, *request.BuildOptions.BuildCtxObject, objectPath); err != nil {
+			return "", err
+		}
 	}
 
 	err := common.ExtractObjectFile(ctx, objectPath, buildCtxPath)
@@ -2487,4 +2626,29 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	}
 
 	return buildCtxPath, nil
+}
+
+func downloadWorkspaceBuildContext(ctx context.Context, request *types.ContainerRequest, objectID, destPath string) error {
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		return fmt.Errorf("create workspace storage client: %w", err)
+	}
+
+	reader, err := storageClient.DownloadWithReader(ctx, path.Join(types.DefaultObjectPrefix, objectID))
+	if err != nil {
+		return fmt.Errorf("download workspace build context: %w", err)
+	}
+	defer reader.Close()
+
+	file, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("create local build context archive: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(file, reader); err != nil {
+		return fmt.Errorf("write local build context archive: %w", err)
+	}
+
+	return nil
 }

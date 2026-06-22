@@ -75,7 +75,7 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 	bucket := s.config.BucketName
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := s.newWorkspaceStorageClientForPresign(ctx, authInfo.Workspace)
 		if err != nil {
 			return &pb.CreatePresignedURLResponse{
 				Ok:     false,

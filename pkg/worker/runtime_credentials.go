@@ -11,7 +11,11 @@ import (
 )
 
 func (s *Worker) hydrateRuntimeCredentials(ctx context.Context, request *types.ContainerRequest) error {
-	if !s.agentWorker() || request.IsBuildRequest() {
+	if request.IsBuildRequest() {
+		return s.hydrateBuildWorkspaceStorageCredentials(ctx, request)
+	}
+
+	if !s.agentWorker() {
 		return nil
 	}
 
@@ -29,6 +33,40 @@ func (s *Worker) hydrateRuntimeCredentials(ctx context.Context, request *types.C
 	}
 
 	applyRuntimeCredentials(request, resp)
+	return nil
+}
+
+func (s *Worker) hydrateBuildWorkspaceStorageCredentials(ctx context.Context, request *types.ContainerRequest) error {
+	if request == nil ||
+		request.BuildOptions.Dockerfile == nil ||
+		request.BuildOptions.BuildCtxObject == nil ||
+		!request.Workspace.StorageAvailable() ||
+		workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+		return nil
+	}
+	if s.workerRepoClient == nil {
+		return errors.New("worker repository client is required to hydrate build workspace storage credentials")
+	}
+
+	credentialRequest := &pb.GetContainerRuntimeCredentialsRequest{
+		WorkspaceId:      request.WorkspaceId,
+		StubId:           request.StubId,
+		ContainerId:      request.ContainerId,
+		WorkspaceStorage: true,
+	}
+
+	resp, err := handleGRPCResponse(s.workerRepoClient.GetContainerRuntimeCredentials(ctx, credentialRequest))
+	if err != nil {
+		return err
+	}
+	if !resp.Ok {
+		return errors.New(resp.ErrorMsg)
+	}
+
+	applyRuntimeCredentials(request, resp)
+	if !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+		return errors.New("workspace storage credentials are required to download build context directly")
+	}
 	return nil
 }
 

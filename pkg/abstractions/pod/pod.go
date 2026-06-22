@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -35,12 +34,11 @@ type PodServiceOpts struct {
 }
 
 const (
-	podContainerPrefix            string = "pod"
-	sandboxContainerPrefix        string = "sandbox"
-	podRoutePrefix                string = "/pod"
-	sandboxRoutePrefix            string = "/sandbox"
-	podContainerConnectionTimeout        = 600 * time.Second
-	podProxyBufferSize                   = 300
+	podContainerPrefix     string = "pod"
+	sandboxContainerPrefix string = "sandbox"
+	podRoutePrefix         string = "/pod"
+	sandboxRoutePrefix     string = "/sandbox"
+	podProxyBufferSize            = 300
 )
 
 type PodService interface {
@@ -100,7 +98,15 @@ func NewPodService(
 	eventManager.Listen()
 
 	// Initialize deployment manager
-	ps.controller = abstractions.NewInstanceController(ctx, ps.InstanceFactory, []string{types.StubTypePodDeployment}, opts.BackendRepo, opts.RedisClient)
+	ps.controller = abstractions.NewInstanceController(
+		ctx,
+		ps.InstanceFactory,
+		ps.GetInstance,
+		[]string{types.StubTypePodDeployment},
+		opts.BackendRepo,
+		opts.ContainerRepo,
+		opts.RedisClient,
+	)
 	err = ps.controller.Init()
 	if err != nil {
 		return nil, err
@@ -130,6 +136,14 @@ func (ps *GenericPodService) InstanceFactory(ctx context.Context, stubId string,
 	return ps.getOrCreatePodInstance(stubId)
 }
 
+func (ps *GenericPodService) GetInstance(stubId string) (abstractions.IAutoscaledInstance, bool) {
+	instance, exists := ps.podInstances.Get(stubId)
+	if !exists {
+		return nil, false
+	}
+	return instance, true
+}
+
 func (ps *GenericPodService) IsPublic(stubId string) (*types.Workspace, error) {
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
@@ -149,6 +163,12 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 		return err
 	}
 
+	if !instance.buffer.hasAvailableContainers() {
+		if err := instance.ensureReadyForRequest(); err != nil {
+			return err
+		}
+	}
+
 	return instance.buffer.ForwardRequest(ctx)
 }
 
@@ -156,6 +176,12 @@ func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string)
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return err
+	}
+
+	if !instance.buffer.hasAvailableContainers() {
+		if err := instance.ensureReadyForRequest(); err != nil {
+			return err
+		}
 	}
 
 	return instance.buffer.ForwardTCPRequest(tc)
@@ -309,13 +335,14 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		ports = stubConfig.Ports
 	}
 
-	ttl := time.Duration(stubConfig.KeepWarmSeconds) * time.Second
-	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId)
-	if ttl <= 0 {
-		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
-	} else {
-		s.rdb.SetEx(context.Background(), key, 1, ttl)
-	}
+	setPodKeepWarmLock(
+		context.Background(),
+		s.containerRepo,
+		authInfo.Workspace.Name,
+		stub.ExternalId,
+		containerId,
+		stubConfig.KeepWarmSeconds,
+	)
 
 	if imageId == nil {
 		imageId = &stubConfig.Runtime.ImageId

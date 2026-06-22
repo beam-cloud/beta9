@@ -191,6 +191,134 @@ func TestRenderV2Dockerfile_FromRegistryWithChainedCommands(t *testing.T) {
 	}
 }
 
+func TestPrepareBuildOptionsForImageID_V2ExistingImageAddsRuntimeRequirements(t *testing.T) {
+	cfg := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			ClipVersion:   uint32(types.ClipVersion2),
+			Runner: types.RunnerConfig{
+				BaseImageName:     "beta9-runner",
+				BaseImageRegistry: "registry.localhost:5000",
+				Tags: map[string]string{
+					"python3.10": "py310-latest",
+				},
+				PythonStandalone: types.PythonStandaloneConfig{
+					Versions: map[string]string{
+						"python3.10": "3.10.15",
+					},
+					InstallScriptTemplate: "install python {{.PythonVersion}}",
+				},
+			},
+		},
+	}
+	is := &ContainerImageService{
+		config: cfg,
+		builder: &Builder{
+			config: cfg,
+		},
+		baseImageDigests: newBaseImageDigestCache(),
+	}
+	req := &pb.VerifyImageBuildRequest{
+		PythonVersion:    "python3.10",
+		ExistingImageUri: "docker.io/library/python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+
+	opts, err := is.buildOptionsFromVerifyRequest(context.Background(), req)
+	assert.NoError(t, err)
+
+	err = is.prepareBuildOptionsForImageID(context.Background(), req, opts)
+	assert.NoError(t, err)
+
+	assert.Contains(t, opts.PythonPackages, "rich==13.7.0")
+	assert.Contains(t, opts.Dockerfile, "FROM docker.io/library/python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	assert.Contains(t, opts.Dockerfile, "python3.10 -m pip install")
+	assert.Contains(t, opts.Dockerfile, "rich==13.7.0")
+}
+
+func TestPrepareBuildOptionsForImageID_V2ExistingImageIgnorePythonSkipsRuntimeRequirements(t *testing.T) {
+	cfg := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			ClipVersion:   uint32(types.ClipVersion2),
+			Runner: types.RunnerConfig{
+				BaseImageName:     "beta9-runner",
+				BaseImageRegistry: "registry.localhost:5000",
+				Tags: map[string]string{
+					"python3.10": "py310-latest",
+				},
+			},
+		},
+	}
+	is := &ContainerImageService{
+		config: cfg,
+		builder: &Builder{
+			config: cfg,
+		},
+		baseImageDigests: newBaseImageDigestCache(),
+	}
+	req := &pb.VerifyImageBuildRequest{
+		PythonVersion:    "python3.10",
+		ExistingImageUri: "docker.io/library/node@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		IgnorePython:     true,
+	}
+
+	opts, err := is.buildOptionsFromVerifyRequest(context.Background(), req)
+	assert.NoError(t, err)
+
+	err = is.prepareBuildOptionsForImageID(context.Background(), req, opts)
+	assert.NoError(t, err)
+
+	assert.Empty(t, opts.PythonPackages)
+	assert.Empty(t, opts.Dockerfile)
+}
+
+func TestPrepareBuildOptionsForImageID_V2ExistingImageIgnorePythonKeepsUserPackagesOnly(t *testing.T) {
+	cfg := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			ClipVersion:   uint32(types.ClipVersion2),
+			Runner: types.RunnerConfig{
+				BaseImageName:     "beta9-runner",
+				BaseImageRegistry: "registry.localhost:5000",
+				Tags: map[string]string{
+					"python3.10": "py310-latest",
+				},
+				PythonStandalone: types.PythonStandaloneConfig{
+					Versions: map[string]string{
+						"python3.10": "3.10.15",
+					},
+					InstallScriptTemplate: "install python {{.PythonVersion}}",
+				},
+			},
+		},
+	}
+	is := &ContainerImageService{
+		config: cfg,
+		builder: &Builder{
+			config: cfg,
+		},
+		baseImageDigests: newBaseImageDigestCache(),
+	}
+	req := &pb.VerifyImageBuildRequest{
+		PythonVersion:    "python3.10",
+		PythonPackages:   []string{"numpy"},
+		ExistingImageUri: "docker.io/library/ubuntu@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		IgnorePython:     true,
+	}
+
+	opts, err := is.buildOptionsFromVerifyRequest(context.Background(), req)
+	assert.NoError(t, err)
+
+	err = is.prepareBuildOptionsForImageID(context.Background(), req, opts)
+	assert.NoError(t, err)
+
+	assert.Equal(t, []string{"numpy"}, opts.PythonPackages)
+	assert.Contains(t, opts.Dockerfile, "python3.10 -m pip install")
+	assert.Contains(t, opts.Dockerfile, "numpy")
+	assert.NotContains(t, opts.Dockerfile, "rich==13.7.0")
+	assert.NotContains(t, opts.Dockerfile, "betterproto-beta9")
+}
+
 // Test comprehensive chaining scenarios with all Image methods
 func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 	cfg := types.AppConfig{

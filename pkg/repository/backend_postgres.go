@@ -1061,11 +1061,22 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		queryGet := `
     SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id
     FROM stub
-    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
+    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb AND workspace_id = $5;
     `
-		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON))
+		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON), workspaceId)
 		if err == nil {
-			// Stub found, return it
+			queryTouch := `
+    UPDATE stub
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
+    `
+			if err := r.client.GetContext(ctx, &stub, queryTouch, stub.Id); err != nil {
+				return types.Stub{}, err
+			}
+			if err := r.updateAppActivity(ctx, appId); err != nil {
+				return stub, err
+			}
 			return stub, nil
 		}
 	}
@@ -2872,7 +2883,7 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	return &checkpoint, nil
 }
 
-func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error) {
+func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
@@ -2881,9 +2892,10 @@ func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, ac
 		INNER JOIN stub s ON c.stub_id = s.id
 		INNER JOIN workspace w ON s.workspace_id = w.id
 		WHERE c.deleted_at IS NULL
-		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]));`
+		  AND NOT ((w.external_id || '|' || s.external_id) = ANY($1::text[]))
+		  AND s.updated_at < $2;`
 
-	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys))
+	rows, err := r.client.QueryxContext(ctx, query, pq.Array(activeRecentStubKeys), stubLastUsedBefore)
 	if err != nil {
 		return nil, err
 	}

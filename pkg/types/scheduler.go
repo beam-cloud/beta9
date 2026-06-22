@@ -240,7 +240,7 @@ type ContainerRequest struct {
 	BuildRegistryCredentials string          `json:"build_registry_credentials"`
 	BlockNetwork             bool            `json:"block_network"`
 	AllowList                []string        `json:"allow_list"`
-	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker (gVisor only)
+	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
 }

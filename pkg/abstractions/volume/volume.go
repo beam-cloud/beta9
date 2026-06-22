@@ -34,9 +34,10 @@ type VolumeService interface {
 
 type GlobalVolumeService struct {
 	pb.UnimplementedVolumeServiceServer
-	config      types.FileServiceConfig
-	backendRepo repository.BackendRepository
-	rdb         *common.RedisClient
+	config                 types.FileServiceConfig
+	workspaceStorageConfig types.WorkspaceStorageConfig
+	backendRepo            repository.BackendRepository
+	rdb                    *common.RedisClient
 }
 
 type FileInfo struct {
@@ -53,11 +54,12 @@ type VolumePathTokenData struct {
 
 var volumeRoutePrefix string = "/volume"
 
-func NewGlobalVolumeService(config types.FileServiceConfig, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
+func NewGlobalVolumeService(config types.FileServiceConfig, workspaceStorageConfig types.WorkspaceStorageConfig, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
 	gvs := &GlobalVolumeService{
-		config:      config,
-		backendRepo: backendRepo,
-		rdb:         rdb,
+		config:                 config,
+		workspaceStorageConfig: workspaceStorageConfig,
+		backendRepo:            backendRepo,
+		rdb:                    rdb,
 	}
 
 	// Register HTTP routes
@@ -65,6 +67,15 @@ func NewGlobalVolumeService(config types.FileServiceConfig, backendRepo reposito
 	registerVolumeRoutes(routeGroup.Group(volumeRoutePrefix, authMiddleware), gvs)
 
 	return gvs, nil
+}
+
+func (vs *GlobalVolumeService) newWorkspaceStorageClientForPresign(ctx context.Context, workspace *types.Workspace) (*clients.WorkspaceStorageClient, error) {
+	return clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(
+		ctx,
+		workspace.Name,
+		workspace.Storage,
+		vs.workspaceStorageConfig,
+	)
 }
 
 func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.GetOrCreateVolumeRequest) (*pb.GetOrCreateVolumeResponse, error) {

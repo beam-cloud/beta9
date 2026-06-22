@@ -96,7 +96,15 @@ func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
 		return err
 	}
 
+	if isASGIHealthRequest(ctx) {
+		return g.es.forwardASGIHealthRequest(ctx, stubId)
+	}
+
 	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
+}
+
+func isASGIHealthRequest(ctx echo.Context) bool {
+	return ctx.Param("subPath") == "health"
 }
 
 func (g *endpointGroup) WarmUpEndpoint(ctx echo.Context) error {

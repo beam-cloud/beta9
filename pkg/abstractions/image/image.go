@@ -147,21 +147,17 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
+	buildErrChan := make(chan error, 1)
 
-	go is.builder.Build(ctx, buildOptions, outputChan)
+	go func() {
+		buildErrChan <- is.builder.Build(ctx, buildOptions, outputChan)
+	}()
 
-	var lastMessage common.OutputMsg
-	for o := range outputChan {
-		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
-			log.Error().Err(err).Msg("failed to complete build")
-			lastMessage = o
-			break
-		}
-
-		if o.Done {
-			lastMessage = o
-			break
-		}
+	lastMessage, err := streamImageBuildOutput(ctx, outputChan, buildErrChan, func(o common.OutputMsg) error {
+		return stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning})
+	})
+	if err != nil && !lastMessage.Success {
+		return err
 	}
 
 	if !lastMessage.Success {
@@ -182,6 +178,61 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 
 	log.Info().Msg("build completed successfully")
 	return nil
+}
+
+func streamImageBuildOutput(ctx context.Context, outputChan <-chan common.OutputMsg, buildErrChan <-chan error, send func(common.OutputMsg) error) (common.OutputMsg, error) {
+	var lastMessage common.OutputMsg
+
+	sendTerminalFailure := func(err error) (common.OutputMsg, error) {
+		msg := "Build failed\n"
+		if err != nil {
+			msg = err.Error() + "\n"
+		}
+
+		lastMessage = common.OutputMsg{
+			Msg:     msg,
+			Done:    true,
+			Success: false,
+		}
+		if sendErr := send(lastMessage); sendErr != nil {
+			log.Error().Err(sendErr).Msg("failed to complete build")
+			return lastMessage, sendErr
+		}
+
+		if err != nil {
+			return lastMessage, err
+		}
+		return lastMessage, errors.New("build failed")
+	}
+
+	for {
+		select {
+		case o := <-outputChan:
+			lastMessage = o
+			if err := send(o); err != nil {
+				log.Error().Err(err).Msg("failed to complete build")
+				return lastMessage, err
+			}
+
+			if o.Done {
+				select {
+				case err := <-buildErrChan:
+					return lastMessage, err
+				case <-ctx.Done():
+					return lastMessage, ctx.Err()
+				}
+			}
+
+		case err := <-buildErrChan:
+			if lastMessage.Done {
+				return lastMessage, err
+			}
+			return sendTerminalFailure(err)
+
+		case <-ctx.Done():
+			return lastMessage, ctx.Err()
+		}
+	}
 }
 
 func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {

@@ -25,14 +25,22 @@ func NewRingBuffer[T any](size int) *RingBuffer[T] {
 // Push adds a new request to the buffer. If priority is true, it gets inserted at the front of the buffer.
 // It returns true when an existing item was overwritten.
 func (rb *RingBuffer[T]) Push(request T, priority bool) bool {
+	_, overwritten := rb.PushWithOverwrite(request, priority)
+	return overwritten
+}
+
+// PushWithOverwrite adds a new request to the buffer and returns the item that was displaced, if any.
+func (rb *RingBuffer[T]) PushWithOverwrite(request T, priority bool) (T, bool) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
+	var overwrittenRequest T
 	overwritten := false
 	if priority {
 		if rb.count == rb.size {
 			// Buffer is full, overwrite the oldest element at head without moving pointers
 			// No adjustment to head or tail, since the count remains the same
+			overwrittenRequest = rb.buffer[rb.head]
 			rb.buffer[rb.head] = request
 			overwritten = true
 		} else {
@@ -43,6 +51,9 @@ func (rb *RingBuffer[T]) Push(request T, priority bool) bool {
 		}
 	} else {
 		// Normal FIFO insert at tail
+		if rb.count == rb.size {
+			overwrittenRequest = rb.buffer[rb.tail]
+		}
 		rb.buffer[rb.tail] = request
 		rb.tail = (rb.tail + 1) % rb.size
 
@@ -59,7 +70,7 @@ func (rb *RingBuffer[T]) Push(request T, priority bool) bool {
 		atomic.AddUint64(&rb.overwrites, 1)
 	}
 
-	return overwritten
+	return overwrittenRequest, overwritten
 }
 
 // Pop retrieves and removes the oldest request from the buffer

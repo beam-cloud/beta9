@@ -77,6 +77,14 @@ type ContainerRepository interface {
 	DeleteStubState(stubId string) error
 	SetBuildContainerTTL(containerId string, ttl time.Duration) error
 	HasBuildContainerTTL(containerId string) bool
+	GetEndpointRequestTokens(ctx context.Context, workspaceName, stubId, containerId string, maxTokens int, ttl time.Duration) (int, error)
+	AcquireEndpointRequestToken(ctx context.Context, workspaceName, stubId, containerId string, maxTokens int, ttl time.Duration) (bool, error)
+	ReleaseEndpointRequestToken(ctx context.Context, workspaceName, stubId, containerId, taskId string, maxTokens int, ttl time.Duration) error
+	RefreshEndpointRequestTokenTTL(ctx context.Context, workspaceName, stubId, containerId string, ttl time.Duration) error
+	SetEndpointRequestHeartbeat(ctx context.Context, workspaceName, stubId, taskId, containerId string, ttl time.Duration) error
+	EndpointRequestHeartbeatExists(ctx context.Context, workspaceName, stubId, taskId, containerId string) (bool, error)
+	SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error
+	PodKeepWarmLockExists(ctx context.Context, workspaceName, stubId, containerId string) (bool, error)
 }
 
 type WorkerPoolRepository interface {
@@ -218,7 +226,7 @@ type BackendRepository interface {
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
 	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
 	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
-	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string) ([]types.Checkpoint, error)
+	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error)
 	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
 }
 

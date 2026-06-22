@@ -82,7 +82,7 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 // addPythonRequirements merges base Python requirements with user-specified packages,
 // ensuring no duplicates and base requirements take precedence
 func (o *BuildOpts) addPythonRequirements() {
-	if o.IgnorePython && len(o.PythonPackages) == 0 {
+	if o.IgnorePython {
 		return
 	}
 

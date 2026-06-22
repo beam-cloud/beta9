@@ -124,3 +124,16 @@ func TestPrivatePoolProjectionUsesBillableReservationCost(t *testing.T) {
 		t.Fatalf("reservation hourly cost = %d, want %d", got, want)
 	}
 }
+
+func TestFailedManagedReservationProjectionUsesReservationIDAsReleaseTarget(t *testing.T) {
+	reservation := model.Reservation{
+		ID:     "reservation-1",
+		Source: model.SourceCLIReservation,
+		Status: model.ReservationFailed,
+	}
+
+	instance := providerInstanceToProto(reservation, nil)
+	if got, want := instance.MachineId, "reservation-1"; got != want {
+		t.Fatalf("machine id = %q, want reservation release target %q", got, want)
+	}
+}

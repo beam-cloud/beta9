@@ -112,7 +112,15 @@ func NewHTTPEndpointService(
 	}
 	eventManager.Listen()
 
-	es.controller = abstractions.NewInstanceController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
+	es.controller = abstractions.NewInstanceController(
+		ctx,
+		es.InstanceFactory,
+		es.GetInstance,
+		[]string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment},
+		es.backendRepo,
+		es.containerRepo,
+		es.rdb,
+	)
 	err = es.controller.Init()
 	if err != nil {
 		return nil, err
@@ -197,8 +205,29 @@ func (es *HttpEndpointService) forwardRequest(
 	return task.Execute(ctx.Request().Context(), ctx, authInfo)
 }
 
+func (es *HttpEndpointService) forwardASGIHealthRequest(ctx echo.Context, stubId string) error {
+	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
+	if err != nil {
+		return err
+	}
+
+	if err := instance.ensureReadyForTasklessRequest(); err != nil {
+		return err
+	}
+
+	return instance.buffer.ForwardRequest(ctx, nil)
+}
+
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return es.getOrCreateEndpointInstance(ctx, stubId)
+}
+
+func (es *HttpEndpointService) GetInstance(stubId string) (abstractions.IAutoscaledInstance, bool) {
+	instance, exists := es.endpointInstances.Get(stubId)
+	if !exists {
+		return nil, false
+	}
+	return instance, true
 }
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
@@ -310,25 +339,22 @@ var Keys = &keys{}
 
 type keys struct{}
 
-var (
-	endpointKeepWarmLock     string = "endpoint:%s:%s:keep_warm_lock:%s"
-	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
-	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
-	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
-)
-
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointKeepWarmLock, workspaceName, stubId, containerId)
+	return common.RedisKeys.EndpointKeepWarmLock(workspaceName, stubId, containerId)
 }
 
 func (k *keys) endpointInstanceLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(endpointInstanceLock, workspaceName, stubId)
+	return common.RedisKeys.EndpointInstanceLock(workspaceName, stubId)
 }
 
 func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) string {
-	return fmt.Sprintf(endpointRequestTokens, workspaceName, stubId, containerId)
+	return common.RedisKeys.EndpointRequestTokens(workspaceName, stubId, containerId)
 }
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
-	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
+	return common.RedisKeys.EndpointRequestHeartbeat(workspaceName, stubId, taskId, containerId)
+}
+
+func (k *keys) endpointRequestRelease(workspaceName, stubId, taskId, containerId string) string {
+	return common.RedisKeys.EndpointRequestRelease(workspaceName, stubId, taskId, containerId)
 }

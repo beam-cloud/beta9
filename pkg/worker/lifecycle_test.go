@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -133,6 +134,38 @@ func TestCreateOverlayKeepsDefaultPathForNormalWorkers(t *testing.T) {
 	require.Equal(t, baseConfigPath, overlay.OverlayPath())
 }
 
+func TestSetupBuildahDirsUsesPersistentLayerCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv(types.AgentBuildCacheDirEnv, cacheDir)
+
+	graphroot, runroot, tmpdir, cleanupGraphroot := (&ImageClient{}).setupBuildahDirs()
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	require.False(t, cleanupGraphroot)
+	require.Equal(t, filepath.Join(cacheDir, "buildah", "storage"), graphroot)
+	require.DirExists(t, graphroot)
+	require.DirExists(t, runroot)
+	require.DirExists(t, tmpdir)
+}
+
+func TestSetupBuildahDirsFallsBackWhenLayerCacheUnavailable(t *testing.T) {
+	cacheFile := filepath.Join(t.TempDir(), "cache-file")
+	require.NoError(t, os.WriteFile(cacheFile, []byte("not a dir"), 0o600))
+	t.Setenv(types.AgentBuildCacheDirEnv, cacheFile)
+
+	graphroot, runroot, tmpdir, cleanupGraphroot := (&ImageClient{}).setupBuildahDirs()
+	defer os.RemoveAll(graphroot)
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	require.True(t, cleanupGraphroot)
+	require.DirExists(t, graphroot)
+	require.DirExists(t, runroot)
+	require.DirExists(t, tmpdir)
+	require.NotContains(t, graphroot, cacheFile)
+}
+
 func TestGetContainerEnvironmentUsesGatewayConfigFallback(t *testing.T) {
 	worker := &Worker{
 		podAddr: "127.0.0.1",
@@ -182,7 +215,9 @@ func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 		},
 		routeTransport:      types.BackendRouteTransportTSNet,
 		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
 	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
 
 	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
 		ContainerId: containerID,
@@ -203,6 +238,25 @@ func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	require.Len(t, repoClient.lastSetAddressMap.Routes, 2)
 	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddressMap.Routes[0].LocalTarget)
 	require.Equal(t, "192.168.0.44:2222", repoClient.lastSetAddressMap.Routes[1].LocalTarget)
+
+	instance, exists := worker.containerInstances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "192.168.0.44:8001", instance.containerAddress(8001))
+	require.Equal(t, "192.168.0.44:2222", instance.containerAddress(2222))
+}
+
+func TestCacheContainerAddressMapClonesInput(t *testing.T) {
+	containerID := "container-route"
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
+
+	addressMap := map[int32]string{8001: "192.168.0.44:8001"}
+	worker.cacheContainerAddressMap(containerID, addressMap)
+	addressMap[8001] = "changed"
+
+	instance, exists := worker.containerInstances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "192.168.0.44:8001", instance.containerAddress(8001))
 }
 
 func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
@@ -211,7 +265,9 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	worker := &Worker{
 		containerNetworkManager: &fakeContainerNetworkController{},
 		containerRepoClient:     repoClient,
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
 	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
 
 	err := worker.registerContainerPorts(context.Background(), &types.ContainerRequest{
 		ContainerId: containerID,
@@ -229,6 +285,37 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, "10.0.0.2:30002", repoClient.lastSetAddressMap.AddressMap[2222])
 	require.Empty(t, repoClient.lastSetAddressMap.Routes)
+
+	instance, exists := worker.containerInstances.Get(containerID)
+	require.True(t, exists)
+	require.Equal(t, "10.0.0.2:30001", instance.ContainerAddressMap[8001])
+	require.Equal(t, "10.0.0.2:30002", instance.ContainerAddressMap[2222])
+}
+
+func TestPublishContainerAddressesFormatsBracketedIPv6PodAddress(t *testing.T) {
+	containerID := "container-ipv6"
+	repoClient := &fakeContainerRepoClient{}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		podAddr:             "[2600:1f18:37a4:c02::7286]",
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{})
+
+	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
+		ContainerId: containerID,
+	}, []PortBinding{
+		{HostPort: 30001, ContainerPort: 8001},
+		{HostPort: 30002, ContainerPort: 2222},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, repoClient.lastSetAddress)
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddress.Address)
+
+	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30002", repoClient.lastSetAddressMap.AddressMap[2222])
 }
 
 func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
@@ -381,6 +468,31 @@ func TestSpecFromRequestRejectsUnsupportedEmptyEntrypoint(t *testing.T) {
 
 	require.Nil(t, spec)
 	require.ErrorContains(t, err, "empty process args")
+}
+
+func TestSpecFromRequestPreservesPodInitialSpecCwd(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		StubId:      "stub-1",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}, &ContainerOptions{
+		BindPorts: []int{8001},
+		InitialSpec: &specs.Spec{Process: &specs.Process{
+			Args: []string{"python", "app.py"},
+			Cwd:  "/app",
+			User: specs.User{UID: 1000, GID: 1000},
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"python", "app.py"}, spec.Process.Args)
+	require.Equal(t, "/app", spec.Process.Cwd)
+	require.Equal(t, uint32(1000), spec.Process.User.UID)
+	require.Equal(t, uint32(1000), spec.Process.User.GID)
 }
 
 func TestSpecFromRequestRejectsRunnerStubWithoutRunnerEnv(t *testing.T) {
@@ -601,6 +713,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	tmpDir := t.TempDir()
 	checkpointId := "checkpoint-1"
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
 
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	require.NoError(t, os.MkdirAll(bundleDir, 0755))
@@ -611,9 +724,16 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
 	}
 	backendRepoClient := &fakeBackendRepoClient{}
+	var stateCalls atomic.Int32
 	rt := &mockRuntime{
 		name:         "runc",
 		capabilities: runtime.Capabilities{CheckpointRestore: true},
+		state: func(context.Context, string) (runtime.State, error) {
+			if stateCalls.Add(1) == 1 {
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+			return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+		},
 	}
 	worker := &Worker{
 		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
@@ -652,14 +772,127 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
+	require.Equal(t, -1, exitCode)
 	require.Equal(t, 1, repoClient.setAddressCalls)
 	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddress.Address)
 	require.Equal(t, 1, repoClient.setAddressMapCalls)
 	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.Eventually(t, func() bool {
+		return backendRepoClient.updateCalls == 1 && backendRepoClient.lastUpdate.LastRestoredAt != nil
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+	tmpDir := t.TempDir()
+	checkpointId := "checkpoint-1"
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
+
+	bundleDir := filepath.Join(tmpDir, "bundle")
+	require.NoError(t, os.MkdirAll(bundleDir, 0755))
+	configPath := filepath.Join(bundleDir, specBaseName)
+	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
+
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+	}
+	backendRepoClient := &fakeBackendRepoClient{}
+	restoreStopped := make(chan struct{})
+	enteredWait := make(chan struct{}, 1)
+	rt := &mockRuntime{
+		name:         "gvisor",
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+		state: func(context.Context, string) (runtime.State, error) {
+			select {
+			case enteredWait <- struct{}{}:
+			default:
+			}
+			select {
+			case <-restoreStopped:
+				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+			default:
+				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
+			}
+		},
+	}
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         &startedCRIUManager{},
+		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient: repoClient,
+		backendRepoClient:   backendRepoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		ConfigPath:  configPath,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointId,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Runtime: rt,
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := worker.runContainer(
+			context.Background(),
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			time.Now(),
+			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		)
+		done <- err
+	}()
+
+	select {
+	case <-enteredWait:
+	case err := <-done:
+		t.Fatalf("runContainer returned before polling restored runtime state: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for restored runtime state polling")
+	}
+
+	select {
+	case err := <-done:
+		t.Fatalf("runContainer returned before restored runtime exited: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(restoreStopped)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(2 * restoredContainerPollInterval):
+		t.Fatal("runContainer did not return after restored runtime exited")
+	}
+}
+
+func TestWaitForRestoredContainerExitFailsBeforeRunningState(t *testing.T) {
+	rt := &mockRuntime{
+		state: func(context.Context, string) (runtime.State, error) {
+			return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-restore"}
+		},
+	}
+
+	exitCode, err := (&Worker{}).waitForRestoredContainerExit(context.Background(), rt, "container-restore", 0)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "restored container state unavailable")
+	require.Equal(t, -1, exitCode)
 }
 
 func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
@@ -702,6 +935,48 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
 	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+}
+
+func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
+	containerID := "container-restore-sandbox"
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
+
+	rt := &mockRuntime{name: "runc"}
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{
+		criuManager:        &startedCRIUManager{},
+		backendRepoClient:  backendRepoClient,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: rt,
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-sandbox-restore",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, restored, err := worker.attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+	)
+
+	require.NoError(t, err)
+	require.True(t, restored)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, rt.signals)
+	require.Empty(t, rt.killOpts)
+	require.Equal(t, 0, backendRepoClient.updateCalls)
 }
 
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
@@ -1074,6 +1349,31 @@ func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
 	assert.Equal(t, imageMetadata, got)
 }
 
+func TestBuildSpecFromCLIPMetadataDefaultsCwd(t *testing.T) {
+	worker := &Worker{}
+
+	spec := worker.buildSpecFromCLIPMetadata(&clipCommon.ImageMetadata{
+		Cmd: []string{"python", "-m", "http.server", "8000"},
+	})
+
+	require.NotNil(t, spec.Process)
+	assert.Equal(t, "/", spec.Process.Cwd)
+	assert.Equal(t, []string{"python", "-m", "http.server", "8000"}, spec.Process.Args)
+}
+
+func TestBuildSpecFromCLIPMetadataPreservesWorkingDir(t *testing.T) {
+	worker := &Worker{}
+
+	spec := worker.buildSpecFromCLIPMetadata(&clipCommon.ImageMetadata{
+		WorkingDir: "/app",
+		Cmd:        []string{"python", "app.py"},
+	})
+
+	require.NotNil(t, spec.Process)
+	assert.Equal(t, "/app", spec.Process.Cwd)
+	assert.Equal(t, []string{"python", "app.py"}, spec.Process.Args)
+}
+
 func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	imageId := "v2-pointer-metadata"
 	imageClient := &ImageClient{
@@ -1183,6 +1483,10 @@ func envListToMap(env []string) map[string]string {
 type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
+	state        func(context.Context, string) (runtime.State, error)
+	signals      []syscall.Signal
+	killOpts     []*runtime.KillOpts
+	killErr      error
 }
 
 func (m *mockRuntime) Name() string {
@@ -1206,7 +1510,12 @@ func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.P
 }
 
 func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
-	return nil
+	m.signals = append(m.signals, sig)
+	if opts == nil {
+		opts = &runtime.KillOpts{}
+	}
+	m.killOpts = append(m.killOpts, opts)
+	return m.killErr
 }
 
 func (m *mockRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
@@ -1214,6 +1523,9 @@ func (m *mockRuntime) Delete(ctx context.Context, containerID string, opts *runt
 }
 
 func (m *mockRuntime) State(ctx context.Context, containerID string) (runtime.State, error) {
+	if m.state != nil {
+		return m.state(ctx, containerID)
+	}
 	return runtime.State{}, nil
 }
 

@@ -59,7 +59,12 @@ func BuildPodURL(externalUrl, urlType string, stub *types.StubWithRelated, stubC
 	if urlType == InvokeUrlTypeHost {
 		url = fmt.Sprintf("%s://%s-%s.%s", parsedUrl.Scheme, stub.ExternalId, portPlaceholder, parsedUrl.Host)
 	} else {
-		url = fmt.Sprintf("%s://%s/%s/id/%s/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, portPlaceholder)
+		routeKind := "id"
+		if !stubConfig.Authorized {
+			routeKind = "public"
+		}
+
+		url = fmt.Sprintf("%s://%s/%s/%s/%s/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), routeKind, stub.ExternalId, portPlaceholder)
 	}
 
 	return url

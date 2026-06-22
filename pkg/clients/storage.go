@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -36,6 +37,15 @@ type WorkspaceStorageClient struct {
 
 func NewWorkspaceStorageClient(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage) (*WorkspaceStorageClient, error) {
 	return NewWorkspaceStorageClientWithPresignEndpoint(ctx, workspaceName, workspaceStorage, "")
+}
+
+func NewWorkspaceStorageClientWithDefaultPresignEndpoint(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage, storageConfig types.WorkspaceStorageConfig) (*WorkspaceStorageClient, error) {
+	return NewWorkspaceStorageClientWithPresignEndpoint(
+		ctx,
+		workspaceName,
+		workspaceStorage,
+		WorkspacePresignEndpointForDefaultStorage(workspaceStorage, storageConfig),
+	)
 }
 
 func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage, presignEndpointUrl string) (*WorkspaceStorageClient, error) {
@@ -121,6 +131,61 @@ func presignEndpointForStorage(storageEndpointUrl, presignEndpointUrl string) st
 	return firstNonEmpty(presignEndpointOverride(storageEndpointUrl, presignEndpointUrl), storageEndpointUrl)
 }
 
+func WorkspacePresignEndpointForDefaultStorage(workspaceStorage *types.WorkspaceStorage, storageConfig types.WorkspaceStorageConfig) string {
+	if workspaceStorage == nil || workspaceStorage.EndpointUrl == nil {
+		return ""
+	}
+
+	if storageConfig.DefaultPresignedEndpointUrl == "" {
+		return ""
+	}
+
+	if !sameStorageEndpoint(*workspaceStorage.EndpointUrl, storageConfig.DefaultEndpointUrl) {
+		return ""
+	}
+
+	return storageConfig.DefaultPresignedEndpointUrl
+}
+
+func sameStorageEndpoint(a, b string) bool {
+	a = strings.TrimRight(strings.TrimSpace(a), "/")
+	b = strings.TrimRight(strings.TrimSpace(b), "/")
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+
+	aURL, aErr := url.Parse(a)
+	bURL, bErr := url.Parse(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+
+	if !strings.EqualFold(aURL.Scheme, bURL.Scheme) {
+		return false
+	}
+
+	return strings.EqualFold(aURL.Hostname(), bURL.Hostname()) &&
+		effectiveURLPort(aURL) == effectiveURLPort(bURL)
+}
+
+func effectiveURLPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
 func presignEndpointOverride(storageEndpointUrl, presignEndpointUrl string) string {
 	presignEndpointUrl = strings.TrimSpace(presignEndpointUrl)
 	if presignEndpointUrl == "" {
@@ -191,6 +256,43 @@ func (c *StorageClient) CreateBucket(ctx context.Context, bucket string) error {
 		Bucket: aws.String(bucket),
 	})
 	return err
+}
+
+func (c *StorageClient) EnsureBucket(ctx context.Context, bucket string) error {
+	bucket = strings.TrimSpace(bucket)
+	if bucket == "" {
+		return fmt.Errorf("bucket name is empty")
+	}
+
+	_, err := c.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err == nil {
+		return nil
+	}
+
+	_, err = c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err == nil || isBucketAlreadyCreatedError(err) {
+		return nil
+	}
+
+	return err
+}
+
+func isBucketAlreadyCreatedError(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+
+	switch apiErr.ErrorCode() {
+	case "BucketAlreadyExists", "BucketAlreadyOwnedByYou":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *StorageClient) S3Client() *s3.Client {
@@ -511,6 +613,18 @@ func (c *WorkspaceStorageClient) PresignClient() *s3.PresignClient {
 
 func (c *WorkspaceStorageClient) BucketName() string {
 	return *c.WorkspaceStorage.BucketName
+}
+
+func (c *WorkspaceStorageClient) EnsureLocalBucket(ctx context.Context) error {
+	endpointUrl := ""
+	if c.WorkspaceStorage.EndpointUrl != nil {
+		endpointUrl = *c.WorkspaceStorage.EndpointUrl
+	}
+	if !isLocalS3DevEndpoint(endpointUrl) {
+		return nil
+	}
+
+	return c.StorageClient.EnsureBucket(ctx, c.BucketName())
 }
 
 func (c *WorkspaceStorageClient) Upload(ctx context.Context, key string, data []byte) error {

@@ -14,7 +14,11 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-const IgnoreScalingEventInterval = 10 * time.Second
+const (
+	IgnoreScalingEventInterval      = 10 * time.Second
+	containerEventChannelBufferSize = 1024
+	scaleEventChannelBufferSize     = 1
+)
 
 type IAutoscaledInstance interface {
 	ConsumeScaleResult(*AutoscalerResult)
@@ -123,8 +127,8 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		EventRepo:                cfg.EventRepo,
 		UsageMetricsRepo:         cfg.UsageMetricsRepo,
 		Containers:               make(map[string]bool),
-		ContainerEventChan:       make(chan types.ContainerEvent, 1),
-		ScaleEventChan:           make(chan int, 1),
+		ContainerEventChan:       make(chan types.ContainerEvent, containerEventChannelBufferSize),
+		ScaleEventChan:           make(chan int, scaleEventChannelBufferSize),
 		StartContainersFunc:      cfg.StartContainersFunc,
 		StopContainersFunc:       cfg.StopContainersFunc,
 		FailedContainerThreshold: failedContainerThreshold,
@@ -170,11 +174,44 @@ func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 		minContainers = 0
 	}
 
-	i.ScaleEventChan <- max(result.DesiredContainers, minContainers)
+	i.sendLatestScaleEvent(max(result.DesiredContainers, minContainers))
 }
 
 func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
-	i.ContainerEventChan <- event
+	select {
+	case i.ContainerEventChan <- event:
+	case <-i.Ctx.Done():
+	default:
+		go i.sendContainerEvent(event)
+	}
+}
+
+func (i *AutoscaledInstance) sendLatestScaleEvent(desiredContainers int) {
+	select {
+	case i.ScaleEventChan <- desiredContainers:
+		return
+	case <-i.Ctx.Done():
+		return
+	default:
+	}
+
+	select {
+	case <-i.ScaleEventChan:
+	default:
+	}
+
+	select {
+	case i.ScaleEventChan <- desiredContainers:
+	case <-i.Ctx.Done():
+	default:
+	}
+}
+
+func (i *AutoscaledInstance) sendContainerEvent(event types.ContainerEvent) {
+	select {
+	case i.ContainerEventChan <- event:
+	case <-i.Ctx.Done():
+	}
 }
 
 func (i *AutoscaledInstance) Monitor() error {
@@ -200,7 +237,7 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
-				log.Info().Str("instance_name", i.Name).Int("initial_count", initialContainerCount).Int("current_count", len(i.Containers)).Msg("scaled")
+				i.logScaleEvent(initialContainerCount, len(i.Containers))
 			}
 
 		case desiredContainers := <-i.ScaleEventChan:
@@ -221,6 +258,27 @@ func (i *AutoscaledInstance) Monitor() error {
 
 		}
 	}
+}
+
+func (i *AutoscaledInstance) logScaleEvent(initialTrackedCount, currentTrackedCount int) {
+	event := log.Info().
+		Str("instance_name", i.Name).
+		Int("initial_tracked_count", initialTrackedCount).
+		Int("current_tracked_count", currentTrackedCount)
+
+	state, err := i.State()
+	if err != nil {
+		event.Err(err).Msg("scaled")
+		return
+	}
+
+	event.
+		Int("running_count", state.RunningContainers).
+		Int("pending_count", state.PendingContainers).
+		Int("stopping_count", state.StoppingContainers).
+		Int("failed_count", len(state.FailedContainers)).
+		Int("active_count", state.RunningContainers+state.PendingContainers).
+		Msg("scaled")
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
@@ -300,8 +358,8 @@ func (i *AutoscaledInstance) Sync() error {
 			return err
 		}
 
-		if len(deployments) == 1 && !deployments[0].Active {
-			i.IsActive = false
+		if len(deployments) == 1 {
+			i.IsActive = deployments[0].Active
 		}
 
 		stubConfigRaw := deployments[0].Stub.Config
@@ -382,8 +440,10 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 type InstanceController struct {
 	ctx                 context.Context
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
+	getInstance         func(stubId string) (IAutoscaledInstance, bool)
 	stubTypes           []string
 	backendRepo         repository.BackendRepository
+	containerRepo       repository.ContainerRepository
 	redisClient         *common.RedisClient
 	eventBus            *common.EventBus
 }
@@ -391,15 +451,19 @@ type InstanceController struct {
 func NewInstanceController(
 	ctx context.Context,
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error),
+	getInstance func(stubId string) (IAutoscaledInstance, bool),
 	stubTypes []string,
 	backendRepo repository.BackendRepository,
+	containerRepo repository.ContainerRepository,
 	redisClient *common.RedisClient,
 ) *InstanceController {
 	return &InstanceController{
 		ctx:                 ctx,
 		getOrCreateInstance: getOrCreateInstance,
+		getInstance:         getInstance,
 		stubTypes:           stubTypes,
 		backendRepo:         backendRepo,
+		containerRepo:       containerRepo,
 		redisClient:         redisClient,
 		eventBus:            common.NewEventBus(redisClient),
 	}
@@ -477,13 +541,69 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 	}
 
 	for _, stub := range stubs {
+		if !stub.Active {
+			if err := c.deactivateInactiveDeployment(stub); err != nil {
+				log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to deactivate inactive deployment")
+			}
+			continue
+		}
+
 		instance, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
 		if err != nil {
 			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to get or create instance")
 			continue
 		}
-		instance.Sync()
+		if err := instance.Sync(); err != nil {
+			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to sync instance")
+			continue
+		}
 	}
 
 	return nil
+}
+
+func (c *InstanceController) deactivateInactiveDeployment(stub types.DeploymentWithRelated) error {
+	instance, exists := c.getExistingInstance(stub.Stub.ExternalId)
+	if !exists {
+		hasContainers, err := c.hasActiveContainers(stub.Stub.ExternalId)
+		if err != nil {
+			return err
+		}
+		if !hasContainers {
+			return nil
+		}
+
+		createdInstance, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
+		if err != nil {
+			return err
+		}
+		instance = createdInstance
+	}
+
+	if err := instance.Sync(); err != nil {
+		return err
+	}
+
+	return instance.HandleScalingEvent(0)
+}
+
+func (c *InstanceController) getExistingInstance(stubId string) (IAutoscaledInstance, bool) {
+	if c.getInstance == nil {
+		return nil, false
+	}
+
+	return c.getInstance(stubId)
+}
+
+func (c *InstanceController) hasActiveContainers(stubId string) (bool, error) {
+	if c.containerRepo == nil {
+		return true, nil
+	}
+
+	containers, err := c.containerRepo.GetActiveContainersByStubId(stubId)
+	if err != nil {
+		return false, err
+	}
+
+	return len(containers) > 0, nil
 }

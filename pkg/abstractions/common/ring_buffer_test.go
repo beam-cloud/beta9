@@ -167,3 +167,24 @@ func TestRingBuffer_OverwriteStats(t *testing.T) {
 		t.Errorf("expected 2 overwrites, got %d", rb.Overwrites())
 	}
 }
+
+func TestRingBuffer_PushWithOverwriteReturnsDisplacedItem(t *testing.T) {
+	rb := NewRingBuffer[int](2)
+
+	if displaced, overwritten := rb.PushWithOverwrite(1, false); overwritten || displaced != 0 {
+		t.Fatalf("first push displaced=%d overwritten=%v, want zero value and false", displaced, overwritten)
+	}
+	if displaced, overwritten := rb.PushWithOverwrite(2, false); overwritten || displaced != 0 {
+		t.Fatalf("second push displaced=%d overwritten=%v, want zero value and false", displaced, overwritten)
+	}
+
+	displaced, overwritten := rb.PushWithOverwrite(3, false)
+	if !overwritten || displaced != 1 {
+		t.Fatalf("normal overwrite displaced=%d overwritten=%v, want 1 and true", displaced, overwritten)
+	}
+
+	displaced, overwritten = rb.PushWithOverwrite(0, true)
+	if !overwritten || displaced != 2 {
+		t.Fatalf("priority overwrite displaced=%d overwritten=%v, want 2 and true", displaced, overwritten)
+	}
+}

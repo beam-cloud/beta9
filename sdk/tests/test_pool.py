@@ -2,10 +2,12 @@ import pytest
 
 from beta9 import Pool
 from beta9.abstractions.function import Function
+from beta9.abstractions.sandbox import Sandbox
 from beta9.cli.pool import (
     _agent_join_interrupted,
     _append_join_args,
     _get_pool_renderable,
+    _pool_capacity_summary,
     _private_pool_compute,
     _join_transport,
     management,
@@ -14,6 +16,7 @@ from beta9.clients.gateway import (
     ListPoolsResponse,
     ListPrivatePoolsResponse,
     PoolConfig,
+    ProviderInstance,
     PrivatePool,
 )
 from beta9.config import ConfigContext
@@ -50,6 +53,34 @@ def test_pool_string_routes_to_manual_pool():
 
     assert fn.pool_config.name == "manual-training"
     assert fn.pool_config.selector == "manual-training"
+
+
+def test_sandbox_pool_string_routes_to_manual_pool():
+    sandbox = Sandbox(pool="sandbox-cpu")
+
+    assert sandbox.pool_config.name == "sandbox-cpu"
+    assert sandbox.pool_config.selector == "sandbox-cpu"
+
+
+def test_sandbox_pool_config_serializes_managed_capacity_request():
+    sandbox = Sandbox(
+        pool=Pool(
+            name="sandbox-managed",
+            nodes=1,
+            ttl="1h",
+            max_spend=1,
+            providers=["hetzner"],
+            regions=["ash"],
+        )
+    )
+
+    assert sandbox.pool_config.name == "sandbox-managed"
+    assert sandbox.pool_config.selector == "sandbox-managed"
+    assert sandbox.pool_config.nodes == 1
+    assert sandbox.pool_config.ttl == "1h"
+    assert sandbox.pool_config.max_spend == 1
+    assert sandbox.pool_config.providers == ["hetzner"]
+    assert sandbox.pool_config.regions == ["ash"]
 
 
 def test_pool_requires_budget_and_ttl_for_reservation():
@@ -144,11 +175,21 @@ def test_pool_list_ignores_denied_control_plane_scope_for_default_view():
     assert "[red]" not in renderable.plain
 
 
-def test_pool_launch_command_is_not_exposed():
-    assert "launch" not in management.commands
-    assert "offers" not in management.commands
+def test_pool_managed_capacity_commands_are_exposed():
+    assert "scale" in management.commands
+    assert "offers" in management.commands
     assert "join" in management.commands
     assert "create" in management.commands
+
+
+def test_pool_capacity_summary_counts_reservations():
+    pool = PrivatePool(
+        machine_count=2,
+        ready_machine_count=1,
+        reservations=[ProviderInstance(node_count=2)],
+    )
+
+    assert _pool_capacity_summary(pool) == "1/2 ready, 2 reserved"
 
 
 def test_private_pool_compute_summarizes_nodes_with_gpu_attributes():

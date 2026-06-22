@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -33,6 +35,8 @@ const (
 	checkpointArchiveExtension = ".tar"
 	checkpointOriginPrefix     = "checkpoints"
 )
+
+var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
 
 type checkpointCacheMetadata struct {
 	hash        string
@@ -116,6 +120,10 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		return -1, false, fmt.Errorf("checkpoint not available")
 	}
 
+	if err := s.requireCRIUManager(); err != nil {
+		return -1, false, err
+	}
+
 	outputLogger.Info("Attempting to restore container from checkpoint...")
 	signalDir := checkpointSignalDir(request.ContainerId)
 	if err := os.MkdirAll(signalDir, 0755); err != nil {
@@ -154,12 +162,24 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 
 		return exitCode, false, err
 	}
-	if err := s.updateCheckpointRestored(checkpoint.CheckpointId); err != nil {
-		log.Warn().Err(err).Str("checkpoint_id", checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
+
+	return exitCode, true, nil
+}
+
+func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime) {
+	if request.Stub.Type.Kind() != types.StubTypeSandbox || rt == nil {
+		return
 	}
 
-	outputLogger.Info("Checkpoint found and restored")
-	return exitCode, true, nil
+	signalCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	if err := rt.Kill(signalCtx, request.ContainerId, syscall.SIGWINCH, &runtime.KillOpts{}); err != nil {
+		log.Debug().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Msg("failed to signal restored sandbox process manager")
+	}
 }
 
 type CreateCheckpointOpts struct {
@@ -177,6 +197,10 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	instance, exists := s.containerInstances.Get(opts.Request.ContainerId)
 	if !exists {
 		return fmt.Errorf("container instance not found")
+	}
+
+	if err := s.requireCRIUManager(); err != nil {
+		return err
 	}
 
 	if opts.CheckpointPIDChan != nil {
@@ -214,6 +238,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
 		return err
+	}
+	if !checkpointMaterialized(checkpointPath) {
+		return fmt.Errorf("checkpoint missing runtime or filesystem payload")
 	}
 
 	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
@@ -376,7 +403,7 @@ func materializeCheckpointArchive(archivePath, checkpointPath, checkpointID stri
 	}
 	extractedPath := filepath.Join(tmpRoot, checkpointID)
 	if !checkpointMaterialized(extractedPath) {
-		return fmt.Errorf("checkpoint archive missing filesystem payload")
+		return fmt.Errorf("checkpoint archive missing runtime or filesystem payload")
 	}
 	_ = os.RemoveAll(checkpointPath)
 	if err := os.Rename(extractedPath, checkpointPath); err != nil {
@@ -387,7 +414,53 @@ func materializeCheckpointArchive(archivePath, checkpointPath, checkpointID stri
 
 func checkpointMaterialized(checkpointPath string) bool {
 	info, err := os.Stat(filepath.Join(checkpointPath, checkpointFsDir))
-	return err == nil && info.IsDir()
+	if err != nil || !info.IsDir() {
+		return false
+	}
+
+	return checkpointHasRuntimePayload(checkpointPath)
+}
+
+func checkpointHasRuntimePayload(checkpointPath string) bool {
+	entries, err := os.ReadDir(checkpointPath)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if entry.Name() == checkpointFsDir {
+			continue
+		}
+
+		entryPath := filepath.Join(checkpointPath, entry.Name())
+		if entry.Type().IsRegular() {
+			return true
+		}
+		if entry.IsDir() && checkpointDirHasRegularFile(entryPath) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func checkpointDirHasRegularFile(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		entryPath := filepath.Join(dir, entry.Name())
+		if entry.Type().IsRegular() {
+			return true
+		}
+		if entry.IsDir() && checkpointDirHasRegularFile(entryPath) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Worker) writeCheckpointArchiveFromCache(ctx context.Context, archivePath string, checkpoint *types.Checkpoint) error {
@@ -561,13 +634,8 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
-	if s.criuManager == nil {
-		log.Warn().Msg("criu manager not initialized")
-		return false
-	}
-
-	if !s.criuManager.Available() {
-		log.Warn().Msg("criu manager not available")
+	if err := s.requireCRIUManager(); err != nil {
+		log.Warn().Err(err).Msg("C/R unavailable")
 		return false
 	}
 
@@ -584,6 +652,13 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	}
 
 	return pool.CRIUEnabled
+}
+
+func (s *Worker) requireCRIUManager() error {
+	if s.criuManager == nil || !s.criuManager.Available() {
+		return errCRIUManagerUnavailable
+	}
+	return nil
 }
 
 func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string) error {

@@ -24,6 +24,21 @@ const (
 	sandboxStatusMetadataTimeout       = 500 * time.Millisecond
 )
 
+func sandboxKillFailureMessage(resp *pb.ContainerSandboxKillResponse) string {
+	if resp != nil && resp.ErrorMsg != "" {
+		return resp.ErrorMsg
+	}
+	return "Failed to kill sandbox process"
+}
+
+func sandboxAuthInfoFromContext(ctx context.Context) (*auth.AuthInfo, bool) {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Workspace == nil {
+		return nil, false
+	}
+	return authInfo, true
+}
+
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	cacheKey := sandboxClientCacheKey(in.ContainerId, authInfo.Token.Key)
@@ -72,34 +87,15 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	if in.Pid == 0 {
-		container, err := s.getSandboxContainerStateForStatus(ctx, in.ContainerId)
-		if err != nil || container == nil {
+		resp, err := s.sandboxContainerStatus(ctx, in.ContainerId, authInfo)
+		if err != nil {
 			return &pb.PodSandboxStatusResponse{
 				Ok:       false,
 				ErrorMsg: "Failed to get sandbox status",
 			}, nil
 		}
 
-		if container.WorkspaceId != authInfo.Workspace.ExternalId {
-			return &pb.PodSandboxStatusResponse{
-				Ok:       false,
-				ErrorMsg: "Failed to get sandbox status",
-			}, nil
-		}
-
-		status := "pending"
-		switch container.Status {
-		case types.ContainerStatusRunning:
-			status = "running"
-		case types.ContainerStatusStopping:
-			status = "stopping"
-		}
-
-		return &pb.PodSandboxStatusResponse{
-			Ok:       true,
-			Status:   status,
-			ExitCode: -1,
-		}, nil
+		return resp, nil
 	}
 
 	cacheKey := sandboxClientCacheKey(in.ContainerId, authInfo.Token.Key)
@@ -141,6 +137,63 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 		Status:   resp.Status,
 		ExitCode: resp.ExitCode,
 	}, nil
+}
+
+func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
+	container, err := s.getSandboxContainerStateForStatus(ctx, containerId)
+	if err != nil || container == nil {
+		return nil, err
+	}
+
+	if container.WorkspaceId != authInfo.Workspace.ExternalId {
+		return nil, errors.New("invalid workspace")
+	}
+
+	switch container.Status {
+	case types.ContainerStatusRunning:
+		return s.sandboxRuntimeStatus(ctx, containerId, authInfo)
+	case types.ContainerStatusStopping:
+		return sandboxStatus("stopping"), nil
+	default:
+		return sandboxStatus("pending"), nil
+	}
+}
+
+func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
+	cacheKey := sandboxClientCacheKey(containerId, authInfo.Token.Key)
+
+	client, _, err := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return sandboxStatus("pending"), nil
+	}
+
+	resp, err := client.SandboxStatusContext(ctx, containerId, 0)
+	if err != nil && isTransientSandboxConnectFailure(err) {
+		s.evictClient(cacheKey)
+		client, _, retryErr := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+		if retryErr != nil {
+			err = retryErr
+		} else {
+			resp, err = client.SandboxStatusContext(ctx, containerId, 0)
+		}
+	}
+	if err != nil {
+		return sandboxStatus("pending"), nil
+	}
+
+	if !resp.Ok {
+		return nil, errors.New(resp.ErrorMsg)
+	}
+
+	return sandboxStatus(resp.Status), nil
+}
+
+func sandboxStatus(status string) *pb.PodSandboxStatusResponse {
+	return &pb.PodSandboxStatusResponse{
+		Ok:       true,
+		Status:   status,
+		ExitCode: -1,
+	}
 }
 
 func (s *GenericPodService) getSandboxContainerStateForStatus(ctx context.Context, containerId string) (*types.ContainerState, error) {
@@ -186,6 +239,12 @@ func (s *GenericPodService) SandboxStdout(ctx context.Context, in *pb.PodSandbox
 			ErrorMsg: "Failed to get sandbox stdout",
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxStdoutResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
 
 	return &pb.PodSandboxStdoutResponse{
 		Ok:     true,
@@ -208,7 +267,13 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 	if err != nil {
 		return &pb.PodSandboxStderrResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to get sandbox stdout",
+			ErrorMsg: "Failed to get sandbox stderr",
+		}, nil
+	}
+	if !resp.Ok {
+		return &pb.PodSandboxStderrResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 
@@ -219,7 +284,14 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 }
 
 func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKillRequest) (*pb.PodSandboxKillResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing sandbox kill request")
+	}
+
+	authInfo, ok := sandboxAuthInfoFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
+	}
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
@@ -233,14 +305,21 @@ func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKi
 	if err != nil {
 		return &pb.PodSandboxKillResponse{
 			Ok:       false,
-			ErrorMsg: resp.ErrorMsg,
+			ErrorMsg: sandboxKillFailureMessage(resp),
+		}, nil
+	}
+
+	if resp == nil {
+		return &pb.PodSandboxKillResponse{
+			Ok:       false,
+			ErrorMsg: sandboxKillFailureMessage(resp),
 		}, nil
 	}
 
 	if !resp.Ok {
 		return &pb.PodSandboxKillResponse{
 			Ok:       false,
-			ErrorMsg: resp.ErrorMsg,
+			ErrorMsg: sandboxKillFailureMessage(resp),
 		}, nil
 	}
 
@@ -528,6 +607,12 @@ func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSand
 			ErrorMsg: fmt.Sprintf("Failed to list files in '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxListFilesResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
 
 	files := make([]*pb.PodSandboxFileInfo, 0)
 	for _, file := range resp.Files {
@@ -761,12 +846,11 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 		return nil, err
 	}
 
-	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, instance.Stub.ExternalId, in.ContainerId)
+	keepWarmSeconds := int(in.Ttl)
 	if in.Ttl <= 0 {
-		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
-	} else {
-		s.rdb.SetEx(context.Background(), key, 1, time.Duration(in.Ttl)*time.Second)
+		keepWarmSeconds = -1
 	}
+	setPodKeepWarmLock(context.Background(), s.containerRepo, authInfo.Workspace.Name, instance.Stub.ExternalId, in.ContainerId, keepWarmSeconds)
 
 	return &pb.PodSandboxUpdateTTLResponse{
 		Ok: true,
@@ -833,6 +917,18 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 			ErrorMsg: err.Error(),
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+	if resp.CheckpointId == "" {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: "checkpoint response missing checkpoint ID",
+		}, nil
+	}
 
 	return &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,
@@ -874,6 +970,12 @@ func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandb
 			ErrorMsg: "Failed to list urls",
 		}, nil
 	}
+	if !resp.Ok {
+		return &pb.PodSandboxListUrlsResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
 
 	urls := make(map[int32]string)
 	for _, port := range resp.ExposedPorts {
@@ -902,6 +1004,12 @@ func (s *GenericPodService) SandboxListProcesses(ctx context.Context, in *pb.Pod
 		return &pb.PodSandboxListProcessesResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to list processes",
+		}, nil
+	}
+	if !resp.Ok {
+		return &pb.PodSandboxListProcessesResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 

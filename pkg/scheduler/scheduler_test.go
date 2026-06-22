@@ -91,6 +91,26 @@ func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
 	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "missing-pool"}))
 }
 
+func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
+	request := &types.ContainerRequest{DockerEnabled: true}
+
+	controllers := []WorkerPoolController{
+		&LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()},
+		&LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()},
+	}
+
+	filteredControllers := filterControllersByFlags(controllers, request)
+	assert.Equal(t, controllers, filteredControllers)
+
+	workers := []*types.Worker{
+		{Id: "runc-worker", Runtime: types.ContainerRuntimeRunc.String()},
+		{Id: "gvisor-worker", Runtime: types.ContainerRuntimeGvisor.String()},
+	}
+
+	filteredWorkers := filterWorkersByFlags(workers, request)
+	assert.Equal(t, workers, filteredWorkers)
+}
+
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string
@@ -102,6 +122,7 @@ type LocalWorkerPoolControllerForTest struct {
 	unblockAddWorker chan struct{}
 	addWorkerErr     error
 	requiresSelector bool
+	containerRuntime string
 	addWorkerMu      sync.Mutex
 	addWorkerCalls   int
 }
@@ -127,6 +148,9 @@ func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
+	if wpc.containerRuntime != "" {
+		return wpc.containerRuntime
+	}
 	return "runc"
 }
 

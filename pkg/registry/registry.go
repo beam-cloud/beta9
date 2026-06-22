@@ -413,7 +413,11 @@ func copyObjects(ctx context.Context, keys []string, sourceObjectStore, destinat
 
 		reader, err := sourceObjectStore.GetReader(ctx, key)
 		if err != nil {
-			log.Error().Err(err).Str("key", key).Msg("failed to get object from source object store")
+			if IsObjectNotFound(err) {
+				log.Debug().Err(err).Str("key", key).Msg("source object not found while copying registry object")
+			} else {
+				log.Error().Err(err).Str("key", key).Msg("failed to get object from source object store")
+			}
 			return err
 		}
 		defer reader.Close()
