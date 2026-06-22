@@ -662,13 +662,25 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 }
 
 func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, containerId string, instance *ContainerInstance, cmd []string, cwd string, env []string) (int, error) {
-	client, err := s.newSandboxProcessManagerClient(ctx, containerId, instance)
+	client, cleanup, err := s.sandboxProcessManagerClient(ctx, containerId, instance)
 	if err != nil {
 		return -1, err
 	}
-	defer client.Cleanup()
+	if cleanup {
+		defer client.Cleanup()
+	}
 
 	return client.Exec(cmd, cwd, env, false)
+}
+
+func (s *ContainerRuntimeServer) sandboxProcessManagerClient(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, bool, error) {
+	instance = s.refreshContainerInstance(containerId, instance)
+	if instance != nil && instance.SandboxProcessManagerReady && instance.SandboxProcessManager != nil {
+		return instance.SandboxProcessManager, false, nil
+	}
+
+	client, err := s.newSandboxProcessManagerClient(ctx, containerId, instance)
+	return client, client != nil, err
 }
 
 func (s *ContainerRuntimeServer) newSandboxProcessManagerClient(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, error) {
@@ -853,14 +865,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 		}, nil
 	}
 
-	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
+	client, cleanup, err := s.sandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxStatusResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
-	defer client.Cleanup()
+	if cleanup {
+		defer client.Cleanup()
+	}
 
 	exitCode, err := client.Status(int(in.Pid))
 	if err != nil {
@@ -903,14 +917,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxStdout(ctx context.Context, in 
 		}, nil
 	}
 
-	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
+	client, cleanup, err := s.sandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxStdoutResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
-	defer client.Cleanup()
+	if cleanup {
+		defer client.Cleanup()
+	}
 
 	stdout, err := client.Stdout(int(in.Pid))
 	if err != nil {
@@ -942,14 +958,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxStderr(ctx context.Context, in 
 		}, nil
 	}
 
-	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
+	client, cleanup, err := s.sandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxStderrResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
-	defer client.Cleanup()
+	if cleanup {
+		defer client.Cleanup()
+	}
 
 	stderr, err := client.Stderr(int(in.Pid))
 	if err != nil {
@@ -977,11 +995,13 @@ func (s *ContainerRuntimeServer) ContainerSandboxKill(ctx context.Context, in *p
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: "Sandbox process manager is not ready"}, nil
 	}
 
-	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
+	client, cleanup, err := s.sandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	defer client.Cleanup()
+	if cleanup {
+		defer client.Cleanup()
+	}
 
 	err = client.Kill(int(in.Pid))
 	if err != nil {
@@ -1040,11 +1060,13 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 	}
 
 	processes := make([]*pb.ProcessInfo, 0)
-	client, err := s.newSandboxProcessManagerClient(ctx, in.ContainerId, instance)
+	client, cleanup, err := s.sandboxProcessManagerClient(ctx, in.ContainerId, instance)
 	if err != nil {
 		return &pb.ContainerSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	defer client.Cleanup()
+	if cleanup {
+		defer client.Cleanup()
+	}
 
 	ps, err := client.ListProcesses()
 	if err != nil {
