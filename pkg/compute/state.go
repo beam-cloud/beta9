@@ -27,14 +27,18 @@ type PoolState struct {
 	ExpiresAt            time.Time      `json:"expires_at"`
 	// BillingDegradedSince marks when balance checks started failing;
 	// reservations terminate once the grace period is exceeded.
-	BillingDegradedSince time.Time     `json:"billing_degraded_since,omitempty"`
-	AWS                  *AWSBYOCState `json:"aws,omitempty"`
+	BillingDegradedSince time.Time          `json:"billing_degraded_since,omitempty"`
+	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
 }
 
-type AWSBYOCState struct {
-	AccountID string `json:"account_id,omitempty"`
-	Region    string `json:"region,omitempty"`
-	StackName string `json:"stack_name,omitempty"`
+type BYOCProviderState struct {
+	Provider     string            `json:"provider,omitempty"`
+	AccountID    string            `json:"account_id,omitempty"`
+	Region       string            `json:"region,omitempty"`
+	ResourceName string            `json:"resource_name,omitempty"`
+	ResourceURL  string            `json:"resource_url,omitempty"`
+	DestroyURL   string            `json:"destroy_url,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
 }
 
 type JoinTokenState struct {

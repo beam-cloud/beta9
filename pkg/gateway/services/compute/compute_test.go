@@ -279,8 +279,8 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		}
 	}
 	stored := repo.pools["workspace-1"][0]
-	if stored.AWS == nil || stored.AWS.AccountID != "123456789012" || stored.AWS.Region != "us-east-1" || stored.AWS.StackName != res.StackName {
-		t.Fatalf("stored AWS metadata = %+v, want account/region/stack", stored.AWS)
+	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.StackName {
+		t.Fatalf("stored BYOC metadata = %+v, want aws account/region/resource", stored.BYOC)
 	}
 }
 
@@ -358,10 +358,11 @@ func TestGetBYOCAWSStackReturnsStackAction(t *testing.T) {
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Regions: []string{"us-west-2"}},
-					AWS: &model.AWSBYOCState{
-						AccountID: "123456789012",
-						Region:    "us-east-1",
-						StackName: "beam-aws-cpu-test",
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
 					},
 				},
 			},
