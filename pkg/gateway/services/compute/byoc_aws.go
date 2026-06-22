@@ -33,6 +33,7 @@ var (
 	cloudFormationPartRe   = regexp.MustCompile(`[^a-z0-9-]+`)
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
 	awsBYOCInstanceTypes   = map[string]struct{}{
+		// Storage optimized instances with local NVMe for cache performance.
 		"i4i.large":   {},
 		"i4i.xlarge":  {},
 		"i4i.2xlarge": {},

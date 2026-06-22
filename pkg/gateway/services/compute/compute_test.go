@@ -498,6 +498,7 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"Default: i4i.xlarge",
 		"AllowedValues:",
 		"- i4i.large",
+		"- i4i.xlarge",
 		"- i4i.4xlarge",
 		"nvme-Amazon_EC2_NVMe_Instance_Storage",
 		"BEAM_AGENT_INSTALL_DOCKER=1",
