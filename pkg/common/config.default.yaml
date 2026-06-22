@@ -400,6 +400,7 @@ managedCompute:
   byoc:
     aws:
       templateUrl: ""
+      controlRolePrincipalArn: ""
   billing:
     mode: noop
     endpoint: ""

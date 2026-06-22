@@ -169,6 +169,9 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if err := authorizeOriginCredentialWorkspace(ctx, req.WorkspaceId); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	if err := s.authorizeOriginCredentialStub(ctx, req); err != nil {
+		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
@@ -198,6 +201,38 @@ func authorizeOriginCredentialWorkspace(ctx context.Context, workspaceID string)
 	}
 	if workspaceID == "" || workspaceID != authInfo.Workspace.ExternalId {
 		return fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
+	}
+	return nil
+}
+
+func (s *WorkerRepositoryService) authorizeOriginCredentialStub(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
+		return nil
+	}
+	if req.StubId == "" {
+		return fmt.Errorf("worker token credential request requires a stub")
+	}
+	if req.ImageId == "" {
+		return nil
+	}
+	if s.backendRepo == nil {
+		return fmt.Errorf("backend repository is unavailable")
+	}
+
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, req.StubId, types.QueryFilter{Field: "workspace_id", Value: req.WorkspaceId})
+	if err != nil {
+		return err
+	}
+	if stub == nil {
+		return fmt.Errorf("stub %q was not found in workspace %q", req.StubId, req.WorkspaceId)
+	}
+	config, err := stub.UnmarshalConfig()
+	if err != nil {
+		return err
+	}
+	if config == nil || config.Runtime.ImageId != req.ImageId {
+		return fmt.Errorf("worker token cannot request credentials for image %q on stub %q", req.ImageId, req.StubId)
 	}
 	return nil
 }

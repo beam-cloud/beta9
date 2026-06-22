@@ -205,7 +205,7 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 	}
 }
 
-func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
+func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	templateURL := "https://s3.us-east-1.amazonaws.com/beam-byoc-templates-test/aws/byoc-template.yaml"
@@ -228,7 +228,7 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 		},
 	}
 
-	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
 		Provider:     "aws",
 		PoolName:     "aws-cpu",
 		Region:       "us-east-1",
@@ -238,10 +238,10 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 		AccountId:    "123456789012",
 	})
 	if err != nil {
-		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCPool() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("CreateBYOCPoolOnboarding() not ok: %s", res.ErrMsg)
+		t.Fatalf("CreateBYOCPool() not ok: %s", res.ErrMsg)
 	}
 	if got, want := res.Pool.Name, "aws-cpu"; got != want {
 		t.Fatalf("pool name = %q, want %q", got, want)
@@ -300,19 +300,27 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 		t.Fatalf("stored BYOC join token hashes = %q, want %q", got, joinTokenHash)
 	}
 	for key, want := range map[string]string{
-		"instance_type":      "i4i.xlarge",
-		"desired_nodes":      "2",
-		"max_nodes":          "4",
-		"target_sandboxes":   "40",
-		"sandboxes_per_node": "20",
+		"instance_type":            "i4i.xlarge",
+		"desired_nodes":            "2",
+		"max_nodes":                "4",
+		"target_sandboxes":         "40",
+		"sandboxes_per_node":       "20",
+		"hourly_cost_micros":       "343000",
+		"total_hourly_cost_micros": "686000",
 	} {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
 		}
 	}
+	if got, want := res.GetByoc().GetHourlyCostMicros(), int64(343000); got != want {
+		t.Fatalf("BYOC hourly cost micros = %d, want %d", got, want)
+	}
+	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(686000); got != want {
+		t.Fatalf("BYOC total hourly cost micros = %d, want %d", got, want)
+	}
 }
 
-func TestCreateBYOCPoolOnboardingKeepsExistingBYOCBootstrapJoinTokens(t *testing.T) {
+func TestCreateBYOCPoolKeepsExistingBYOCBootstrapJoinTokens(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	service := &Service{
@@ -329,18 +337,18 @@ func TestCreateBYOCPoolOnboardingKeepsExistingBYOCBootstrapJoinTokens(t *testing
 		},
 	}
 
-	first, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+	first, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
 		Provider:     "aws",
 		PoolName:     "aws-cpu",
 		InstanceType: "i4i.xlarge",
 		AccountId:    "123456789012",
 	})
 	if err != nil || !first.Ok {
-		t.Fatalf("first CreateBYOCPoolOnboarding() = (%v, %v)", first, err)
+		t.Fatalf("first CreateBYOCPool() = (%v, %v)", first, err)
 	}
 	firstHash := repo.pools["workspace-1"][0].BYOC.Labels[byocBootstrapJoinTokenHashLabel]
 
-	second, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+	second, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
 		Provider:     "aws",
 		PoolName:     "aws-cpu",
 		InstanceType: "i4i.xlarge",
@@ -349,7 +357,7 @@ func TestCreateBYOCPoolOnboardingKeepsExistingBYOCBootstrapJoinTokens(t *testing
 		AccountId:    "123456789012",
 	})
 	if err != nil || !second.Ok {
-		t.Fatalf("second CreateBYOCPoolOnboarding() = (%v, %v)", second, err)
+		t.Fatalf("second CreateBYOCPool() = (%v, %v)", second, err)
 	}
 	secondHash := repo.pools["workspace-1"][0].BYOC.Labels[byocBootstrapJoinTokenHashLabel]
 	if firstHash == "" || secondHash == "" || firstHash == secondHash {
@@ -367,31 +375,31 @@ func TestCreateBYOCPoolOnboardingKeepsExistingBYOCBootstrapJoinTokens(t *testing
 	}
 }
 
-func TestCreateBYOCPoolOnboardingRejectsMissingAWSTemplateURL(t *testing.T) {
+func TestCreateBYOCPoolRejectsMissingAWSTemplateURL(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
 		Provider:  "aws",
 		PoolName:  "aws-cpu",
 		AccountId: "123456789012",
 	})
 	if err != nil {
-		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCPool() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
+		t.Fatal("CreateBYOCPool() unexpectedly succeeded")
 	}
 	if !strings.Contains(res.ErrMsg, "template URL is not configured") {
 		t.Fatalf("error = %q, want missing template URL", res.ErrMsg)
 	}
 	if len(repo.pools["workspace-1"]) != 0 || len(repo.joinTokens) != 0 {
-		t.Fatalf("misconfigured onboarding created state: pools=%d tokens=%d", len(repo.pools["workspace-1"]), len(repo.joinTokens))
+		t.Fatalf("misconfigured BYOC pool setup created state: pools=%d tokens=%d", len(repo.pools["workspace-1"]), len(repo.joinTokens))
 	}
 }
 
-func TestCreateBYOCPoolOnboardingRejectsNonS3AWSTemplateURL(t *testing.T) {
+func TestCreateBYOCPoolRejectsNonS3AWSTemplateURL(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	service := &Service{
 		computeRepo: &fakeComputeRepo{},
@@ -406,23 +414,23 @@ func TestCreateBYOCPoolOnboardingRejectsNonS3AWSTemplateURL(t *testing.T) {
 		},
 	}
 
-	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
 		Provider:  "aws",
 		PoolName:  "aws-cpu",
 		AccountId: "123456789012",
 	})
 	if err != nil {
-		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCPool() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
+		t.Fatal("CreateBYOCPool() unexpectedly succeeded")
 	}
 	if !strings.Contains(res.ErrMsg, "CloudFormation-supported S3 URL") {
 		t.Fatalf("error = %q, want unsupported URL", res.ErrMsg)
 	}
 }
 
-func TestCreateBYOCPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
+func TestCreateBYOCPoolRejectsPoolOwnedByAnotherToken(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
@@ -433,29 +441,42 @@ func TestCreateBYOCPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
 		Provider:  "aws",
 		PoolName:  "existing",
 		AccountId: "123456789012",
 	})
 	if err != nil {
-		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCPool() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
+		t.Fatal("CreateBYOCPool() unexpectedly succeeded")
 	}
 	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
 
-func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
+func TestGetBYOCPoolReportsReadiness(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "aws-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAWS},
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+					},
+				},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
@@ -473,12 +494,12 @@ func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.GetBYOCPoolOnboardingStatus(ctx, &pb.GetBYOCPoolOnboardingStatusRequest{PoolName: "aws-cpu"})
+	res, err := service.GetBYOCPool(ctx, &pb.GetBYOCPoolRequest{PoolName: "aws-cpu"})
 	if err != nil {
-		t.Fatalf("GetBYOCPoolOnboardingStatus() error = %v", err)
+		t.Fatalf("GetBYOCPool() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("GetBYOCPoolOnboardingStatus() not ok: %s", res.ErrMsg)
+		t.Fatalf("GetBYOCPool() not ok: %s", res.ErrMsg)
 	}
 	if !res.Ready {
 		t.Fatal("expected pool to be ready")
@@ -486,9 +507,13 @@ func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	if got, want := res.ReadyMachineCount, uint32(1); got != want {
 		t.Fatalf("ready machines = %d, want %d", got, want)
 	}
+	if got, want := res.Byoc.GetResourceUrl(), resourceURL; got != want {
+		t.Fatalf("BYOC resource url = %q, want %q", got, want)
+	}
 }
 
-func TestGetBYOCPoolResourceReturnsAWSResourceAction(t *testing.T) {
+func TestListPrivatePoolsIncludesBYOCState(t *testing.T) {
+	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "owner-token")
 	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
 	repo := &fakeComputeRepo{
@@ -498,7 +523,7 @@ func TestGetBYOCPoolResourceReturnsAWSResourceAction(t *testing.T) {
 					Name:             "aws-cpu",
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
-					Config:           &pb.PoolConfig{Regions: []string{"us-west-2"}},
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
 					BYOC: &model.BYOCProviderState{
 						Provider:     "aws",
 						AccountID:    "123456789012",
@@ -506,46 +531,233 @@ func TestGetBYOCPoolResourceReturnsAWSResourceAction(t *testing.T) {
 						ResourceName: "beam-aws-cpu-test",
 						ResourceURL:  resourceURL,
 						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":      "i4i.xlarge",
+							"desired_nodes":      "2",
+							"max_nodes":          "4",
+							"target_sandboxes":   "40",
+							"sandboxes_per_node": "20",
+						},
 					},
+				},
+				{Name: "attached-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAttached},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {
+				{
+					WorkspaceID:     "workspace-1",
+					PoolName:        "aws-cpu",
+					MachineID:       "machine-1",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Minute),
+					LastHeartbeatAt: now,
+				},
+				{
+					WorkspaceID: "workspace-1",
+					PoolName:    "aws-cpu",
+					MachineID:   "machine-2",
+					Schedulable: true,
 				},
 			},
 		},
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.GetBYOCPoolResource(ctx, &pb.GetBYOCPoolResourceRequest{PoolName: "aws-cpu"})
+	res, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
 	if err != nil {
-		t.Fatalf("GetBYOCPoolResource() error = %v", err)
+		t.Fatalf("ListPrivatePools() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("GetBYOCPoolResource() not ok: %s", res.ErrMsg)
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
 	}
-	if got, want := res.Provider, "aws"; got != want {
+	if got, want := len(res.Pools), 2; got != want {
+		t.Fatalf("pool count = %d, want %d", got, want)
+	}
+	var awsPool *pb.PrivatePool
+	for _, pool := range res.Pools {
+		if pool.GetName() == "aws-cpu" {
+			awsPool = pool
+		} else if pool.GetByoc() != nil {
+			t.Fatalf("non-BYOC pool %q unexpectedly has BYOC state", pool.GetName())
+		}
+	}
+	if awsPool == nil {
+		t.Fatal("aws-cpu pool not found")
+	}
+	byoc := awsPool.GetByoc()
+	if byoc == nil {
+		t.Fatal("aws-cpu pool missing BYOC state")
+	}
+	if got, want := byoc.Provider, "aws"; got != want {
 		t.Fatalf("provider = %q, want %q", got, want)
 	}
-	if got, want := res.InstanceType, "i4i.xlarge"; got != want {
-		t.Fatalf("instance type = %q, want %q", got, want)
-	}
-	if got, want := res.DesiredNodes, uint32(1); got != want {
-		t.Fatalf("desired nodes = %d, want %d", got, want)
-	}
-	if got, want := res.MaxNodes, uint32(1); got != want {
-		t.Fatalf("max nodes = %d, want %d", got, want)
-	}
-	if got, want := res.TargetSandboxes, uint32(20); got != want {
-		t.Fatalf("target sandboxes = %d, want %d", got, want)
-	}
-	if got, want := res.SandboxesPerNode, uint32(20); got != want {
-		t.Fatalf("sandboxes per node = %d, want %d", got, want)
-	}
-	if got, want := res.AccountId, "123456789012"; got != want {
+	if got, want := byoc.AccountId, "123456789012"; got != want {
 		t.Fatalf("account id = %q, want %q", got, want)
 	}
-	if got, want := res.Region, "us-east-1"; got != want {
-		t.Fatalf("region = %q, want %q", got, want)
+	if got, want := byoc.Phase, "partially_ready"; got != want {
+		t.Fatalf("phase = %q, want %q", got, want)
 	}
-	if !strings.Contains(res.ResourceUrl, "beam-aws-cpu-test") || res.DestroyUrl != res.ResourceUrl {
-		t.Fatalf("resource urls = resource %q destroy %q, want resource name and matching destroy url", res.ResourceUrl, res.DestroyUrl)
+	if got, want := byoc.MachineCount, uint32(2); got != want {
+		t.Fatalf("machine count = %d, want %d", got, want)
+	}
+	if got, want := byoc.ReadyMachineCount, uint32(1); got != want {
+		t.Fatalf("ready machine count = %d, want %d", got, want)
+	}
+	if got, want := byoc.DesiredNodes, uint32(2); got != want {
+		t.Fatalf("desired nodes = %d, want %d", got, want)
+	}
+	if got, want := byoc.TargetSandboxes, uint32(40); got != want {
+		t.Fatalf("target sandboxes = %d, want %d", got, want)
+	}
+	if got, want := byoc.HourlyCostMicros, int64(343000); got != want {
+		t.Fatalf("hourly cost micros = %d, want %d", got, want)
+	}
+	if got, want := byoc.TotalHourlyCostMicros, int64(686000); got != want {
+		t.Fatalf("total hourly cost micros = %d, want %d", got, want)
+	}
+}
+
+func TestListPrivatePoolsCleansDeletedBYOCPool(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	tokenHash := hashComputeToken("byoc-token")
+	machine := &model.AgentTokenState{
+		WorkspaceID:      "workspace-1",
+		PoolName:         "aws-cpu",
+		MachineID:        "machine-1",
+		TokenHash:        hashComputeToken("machine-token"),
+		Schedulable:      true,
+		LastJoinAt:       now.Add(-byocDeletedPoolRetention - time.Minute),
+		LastHeartbeatAt:  now.Add(-byocDeletedPoolRetention - time.Second),
+		LastDisconnectAt: now.Add(-byocDeletedPoolRetention),
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							byocBootstrapJoinTokenHashLabel:   tokenHash,
+							byocBootstrapJoinTokenHashesLabel: tokenHash,
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "1",
+							"max_nodes":                       "1",
+							"target_sandboxes":                "20",
+							"sandboxes_per_node":              "20",
+						},
+					},
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {machine},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			tokenHash: {
+				TokenHash:        tokenHash,
+				WorkspaceID:      "workspace-1",
+				PoolName:         "aws-cpu",
+				CreatedByTokenID: "owner-token",
+			},
+		},
+	}
+	containerRepo := &fakeContainerRepo{}
+	service := &Service{computeRepo: repo, containerRepo: containerRepo}
+
+	res, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 0 {
+		t.Fatalf("pool count = %d, want 0 after BYOC cleanup", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 0 {
+		t.Fatalf("stored machine count = %d, want 0", got)
+	}
+	if token := repo.joinTokens[tokenHash]; token == nil || !token.Revoked {
+		t.Fatalf("BYOC bootstrap token revoked = %v, want true", token != nil && token.Revoked)
+	}
+	if got, want := containerRepo.deletedRoutes, []string{"workspace-1/aws-cpu/machine-1"}; !sameStrings(got, want) {
+		t.Fatalf("deleted routes = %v, want %v", got, want)
+	}
+}
+
+func TestListPrivatePoolsKeepsRecentlyDisconnectedBYOCPool(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":      "i4i.xlarge",
+							"desired_nodes":      "1",
+							"max_nodes":          "1",
+							"target_sandboxes":   "20",
+							"sandboxes_per_node": "20",
+						},
+					},
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {
+				{
+					WorkspaceID:      "workspace-1",
+					PoolName:         "aws-cpu",
+					MachineID:        "machine-1",
+					Schedulable:      true,
+					LastJoinAt:       now.Add(-byocDeletedPoolRetention),
+					LastHeartbeatAt:  now.Add(-byocDeletedPoolRetention + time.Minute),
+					LastDisconnectAt: now.Add(-byocDeletedPoolRetention + time.Minute),
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 1 {
+		t.Fatalf("pool count = %d, want 1", got)
+	}
+	if got, want := res.Pools[0].GetByoc().GetPhase(), "nodes_booting"; got != want {
+		t.Fatalf("BYOC phase = %q, want %q", got, want)
 	}
 }
 
@@ -634,6 +846,141 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 	}
 }
 
+func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	roleARN := "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test"
+	externalID := "beam-byoc-test-external-id"
+	asgName := "beam-asg-aws-cpu-test"
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":                     "i4i.xlarge",
+							"desired_nodes":                     "1",
+							"max_nodes":                         "4",
+							"target_sandboxes":                  "20",
+							"sandboxes_per_node":                "20",
+							"hourly_cost_micros":                "343000",
+							"total_hourly_cost_micros":          "343000",
+							awsBYOCAutoScalingGroupNameLabel:    asgName,
+							awsBYOCControlRoleArnLabel:          roleARN,
+							awsBYOCControlRoleExternalIDLabel:   externalID,
+							awsBYOCControlRoleNameLabel:         "beam-control-aws-cpu-test",
+						},
+					},
+				},
+			},
+		},
+	}
+	var scaleInput awsBYOCScaleAutoScalingGroupInput
+	oldScaler := awsBYOCScaleAutoScalingGroup
+	awsBYOCScaleAutoScalingGroup = func(ctx context.Context, input awsBYOCScaleAutoScalingGroupInput) error {
+		scaleInput = input
+		return nil
+	}
+	defer func() {
+		awsBYOCScaleAutoScalingGroup = oldScaler
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ScaleBYOCPool(ctx, &pb.ScaleBYOCPoolRequest{
+		PoolName:     "aws-cpu",
+		DesiredNodes: 3,
+		MaxNodes:     5,
+	})
+	if err != nil {
+		t.Fatalf("ScaleBYOCPool() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ScaleBYOCPool() not ok: %s", res.ErrMsg)
+	}
+	if scaleInput.Region != "us-east-1" || scaleInput.RoleARN != roleARN || scaleInput.ExternalID != externalID || scaleInput.AutoScalingGroupName != asgName {
+		t.Fatalf("scale input metadata = %+v, want region/role/external/asg", scaleInput)
+	}
+	if scaleInput.DesiredNodes != 3 || scaleInput.MaxNodes != 5 {
+		t.Fatalf("scale input nodes = desired %d max %d, want 3/5", scaleInput.DesiredNodes, scaleInput.MaxNodes)
+	}
+	stored := repo.pools["workspace-1"][0]
+	for key, want := range map[string]string{
+		"desired_nodes":            "3",
+		"max_nodes":                "5",
+		"target_sandboxes":         "60",
+		"total_hourly_cost_micros": "1029000",
+	} {
+		if got := stored.BYOC.Labels[key]; got != want {
+			t.Fatalf("stored label %s = %q, want %q", key, got, want)
+		}
+	}
+	if !res.GetByoc().GetDirectScaleEnabled() {
+		t.Fatal("scaled BYOC pool should report direct scale enabled")
+	}
+	if got, want := res.GetByoc().GetDesiredNodes(), uint32(3); got != want {
+		t.Fatalf("response desired nodes = %d, want %d", got, want)
+	}
+}
+
+func TestScaleBYOCPoolRejectsStackWithoutControlRole(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":      "i4i.xlarge",
+							"desired_nodes":      "1",
+							"max_nodes":          "1",
+							"target_sandboxes":   "20",
+							"sandboxes_per_node": "20",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res, err := (&Service{computeRepo: repo}).ScaleBYOCPool(ctx, &pb.ScaleBYOCPoolRequest{
+		PoolName:     "aws-cpu",
+		DesiredNodes: 2,
+		MaxNodes:     2,
+	})
+	if err != nil {
+		t.Fatalf("ScaleBYOCPool() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("ScaleBYOCPool() unexpectedly succeeded without control role metadata")
+	}
+	if !strings.Contains(res.ErrMsg, "direct BYOC scaling is unavailable") {
+		t.Fatalf("error = %q, want direct scale unavailable", res.ErrMsg)
+	}
+	if got := repo.pools["workspace-1"][0].BYOC.Labels["desired_nodes"]; got != "1" {
+		t.Fatalf("desired_nodes changed to %q, want unchanged", got)
+	}
+}
+
 func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 	template := AWSBYOCTemplate()
 	if !strings.Contains(template, "NoEcho: true") {
@@ -678,6 +1025,12 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"TargetAWSAccountID:",
 		"TargetAccountMustMatch:",
 		"!Equals [!Ref TargetAWSAccountID, !Ref \"AWS::AccountId\"]",
+		"BeamControlRole:",
+		"BeamControlRolePrincipalArn:",
+		"sts:ExternalId: !Ref BeamControlExternalId",
+		"autoscaling:UpdateAutoScalingGroup",
+		"autoScalingGroupName/${BeamAutoScalingGroupName}",
+		"AutoScalingGroupName: !Ref BeamAutoScalingGroupName",
 	} {
 		if !strings.Contains(template, fragment) {
 			t.Fatalf("template missing %q", fragment)

@@ -193,7 +193,7 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		}
 	}
 	config := normalizePoolConfig(state.Config)
-	return &pb.PrivatePool{
+	pool := &pb.PrivatePool{
 		Name:                 state.Name,
 		Selector:             state.Selector,
 		Config:               config,
@@ -207,6 +207,8 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		ReadyMachineCount:    readyMachineCount,
 		ReservedNodes:        state.ReservedNodes,
 	}
+	pool.Byoc = byocPoolStateToProto(state, pool)
+	return pool
 }
 
 func timestampOrNil(t time.Time) *timestamppb.Timestamp {

@@ -656,14 +656,14 @@
         ]
       }
     },
-    "/pools/byoc/onboarding": {
+    "/pools/byoc": {
       "post": {
-        "operationId": "GatewayService_CreateBYOCPoolOnboarding",
+        "operationId": "GatewayService_CreateBYOCPool",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayCreateBYOCPoolOnboardingResponse"
+              "$ref": "#/definitions/gatewayCreateBYOCPoolResponse"
             }
           },
           "default": {
@@ -679,7 +679,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/gatewayCreateBYOCPoolOnboardingRequest"
+              "$ref": "#/definitions/gatewayCreateBYOCPoolRequest"
             }
           }
         ],
@@ -824,14 +824,14 @@
         ]
       }
     },
-    "/pools/{poolName}/byoc/onboarding-status": {
+    "/pools/{poolName}/byoc": {
       "get": {
-        "operationId": "GatewayService_GetBYOCPoolOnboardingStatus",
+        "operationId": "GatewayService_GetBYOCPool",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayGetBYOCPoolOnboardingStatusResponse"
+              "$ref": "#/definitions/gatewayGetBYOCPoolResponse"
             }
           },
           "default": {
@@ -854,14 +854,14 @@
         ]
       }
     },
-    "/pools/{poolName}/byoc/resource": {
-      "get": {
-        "operationId": "GatewayService_GetBYOCPoolResource",
+    "/pools/{poolName}/byoc/scale": {
+      "post": {
+        "operationId": "GatewayService_ScaleBYOCPool",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayGetBYOCPoolResourceResponse"
+              "$ref": "#/definitions/gatewayScaleBYOCPoolResponse"
             }
           },
           "default": {
@@ -877,6 +877,14 @@
             "in": "path",
             "required": true,
             "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceScaleBYOCPoolBody"
+            }
           }
         ],
         "tags": [
@@ -1585,6 +1593,19 @@
         }
       }
     },
+    "GatewayServiceScaleBYOCPoolBody": {
+      "type": "object",
+      "properties": {
+        "desiredNodes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "maxNodes": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
     "GatewayServiceScaleDeploymentBody": {
       "type": "object",
       "properties": {
@@ -1969,6 +1990,73 @@
         }
       }
     },
+    "gatewayBYOCPoolState": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "resourceName": {
+          "type": "string"
+        },
+        "resourceUrl": {
+          "type": "string"
+        },
+        "destroyUrl": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "desiredNodes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "maxNodes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "targetSandboxes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "sandboxesPerNode": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "machineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "message": {
+          "type": "string"
+        },
+        "hourlyCostMicros": {
+          "type": "string",
+          "format": "int64"
+        },
+        "totalHourlyCostMicros": {
+          "type": "string",
+          "format": "int64"
+        },
+        "directScaleEnabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "gatewayCheckpointContainerResponse": {
       "type": "object",
       "properties": {
@@ -1994,7 +2082,7 @@
         }
       }
     },
-    "gatewayCreateBYOCPoolOnboardingRequest": {
+    "gatewayCreateBYOCPoolRequest": {
       "type": "object",
       "properties": {
         "provider": {
@@ -2022,7 +2110,7 @@
         }
       }
     },
-    "gatewayCreateBYOCPoolOnboardingResponse": {
+    "gatewayCreateBYOCPoolResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -2042,6 +2130,9 @@
         },
         "resourceUrl": {
           "type": "string"
+        },
+        "byoc": {
+          "$ref": "#/definitions/gatewayBYOCPoolState"
         }
       }
     },
@@ -2381,7 +2472,7 @@
         }
       }
     },
-    "gatewayGetBYOCPoolOnboardingStatusResponse": {
+    "gatewayGetBYOCPoolResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -2403,54 +2494,9 @@
         "machineCount": {
           "type": "integer",
           "format": "int64"
-        }
-      }
-    },
-    "gatewayGetBYOCPoolResourceResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
         },
-        "errMsg": {
-          "type": "string"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "accountId": {
-          "type": "string"
-        },
-        "region": {
-          "type": "string"
-        },
-        "resourceName": {
-          "type": "string"
-        },
-        "resourceUrl": {
-          "type": "string"
-        },
-        "destroyUrl": {
-          "type": "string"
-        },
-        "instanceType": {
-          "type": "string"
-        },
-        "desiredNodes": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "maxNodes": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "targetSandboxes": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "sandboxesPerNode": {
-          "type": "integer",
-          "format": "int64"
+        "byoc": {
+          "$ref": "#/definitions/gatewayBYOCPoolState"
         }
       }
     },
@@ -3392,6 +3438,9 @@
         "reservedNodes": {
           "type": "integer",
           "format": "int64"
+        },
+        "byoc": {
+          "$ref": "#/definitions/gatewayBYOCPoolState"
         }
       }
     },
@@ -3536,6 +3585,23 @@
         },
         "errMsg": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayScaleBYOCPoolResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "pool": {
+          "$ref": "#/definitions/gatewayPrivatePool"
+        },
+        "byoc": {
+          "$ref": "#/definitions/gatewayBYOCPoolState"
         }
       }
     },

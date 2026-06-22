@@ -16,6 +16,26 @@ Parameters:
   BeamPoolName:
     Type: String
     Description: Beam pool name used for AWS resource tags.
+  BeamAutoScalingGroupName:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9._/-]{1,255}$'
+    Description: Deterministic name for the EC2 Auto Scaling Group backing this Beam pool.
+  BeamControlRolePrincipalArn:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^arn:[^:]+:iam::[0-9]{12}:(role/.+|root)$'
+    Description: Optional Beam AWS principal allowed to resize this pool from Beam.
+  BeamControlRoleName:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[A-Za-z0-9+=,.@_-]{1,64}$'
+    Description: Optional IAM role name for Beam to assume when resizing this pool.
+  BeamControlExternalId:
+    Type: String
+    Default: ""
+    NoEcho: true
+    AllowedPattern: '^$|^[A-Za-z0-9+=,.@:_/-]{16,256}$'
+    Description: External ID required when Beam assumes the optional control role.
   BeamWorkerImage:
     Type: String
     Default: public.ecr.aws/n4e0e1y0/beta9-worker:latest
@@ -81,6 +101,9 @@ Rules:
     Assertions:
       - Assert: !Equals [!Ref TargetAWSAccountID, !Ref "AWS::AccountId"]
         AssertDescription: This stack must be created in the AWS account ID entered in Beam.
+
+Conditions:
+  CreateBeamControlRole: !Not [!Equals [!Ref BeamControlRolePrincipalArn, ""]]
 
 Resources:
   VPC:
@@ -214,6 +237,39 @@ Resources:
       Roles:
         - !Ref NodeRole
 
+  BeamControlRole:
+    Type: AWS::IAM::Role
+    Condition: CreateBeamControlRole
+    Properties:
+      RoleName: !Ref BeamControlRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref BeamControlRolePrincipalArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref BeamControlExternalId
+      Policies:
+        - PolicyName: beam-byoc-scale
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:SetDesiredCapacity
+                  - autoscaling:UpdateAutoScalingGroup
+                Resource: !Sub arn:${AWS::Partition}:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${BeamAutoScalingGroupName}
+              - Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                Resource: "*"
+      Tags:
+        - Key: beam:pool
+          Value: !Ref BeamPoolName
+
   NodeLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -291,6 +347,7 @@ Resources:
   NodeAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
+      AutoScalingGroupName: !Ref BeamAutoScalingGroupName
       MinSize: !Ref MinSize
       MaxSize: !Ref MaxSize
       DesiredCapacity: !Ref DesiredCapacity
@@ -316,6 +373,10 @@ Outputs:
   AutoScalingGroupName:
     Description: EC2 Auto Scaling Group backing the Beam pool.
     Value: !Ref NodeAutoScalingGroup
+  BeamControlRoleArn:
+    Condition: CreateBeamControlRole
+    Description: IAM role Beam can assume to resize the pool.
+    Value: !GetAtt BeamControlRole.Arn
   VpcId:
     Description: VPC created for Beam BYOC nodes.
     Value: !Ref VPC

@@ -480,7 +480,7 @@ func cacheRequestStubID(request *types.ContainerRequest) string {
 // re-materializing the thousands of per-file entries in the v1 index).
 func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) (requiredContentReport, bool) {
 	if ociInfo, ok := ociStorageInfo(meta); ok && len(ociInfo.DecompressedHashByLayer) > 0 {
-		items := ociRequiredContentItems(ociInfo)
+		items := ociRequiredContentItems(request.ImageId, ociInfo)
 		if len(items) == 0 {
 			return requiredContentReport{}, false
 		}
@@ -497,7 +497,7 @@ func (c *ImageClient) imageRequiredContent(ctx context.Context, request *types.C
 // ociRequiredContentItems enumerates CLIP v2 decompressed layer hashes. The
 // non-secret source descriptor is the full OCI layer reference so the HRW owner
 // can fetch and decompress the layer from the source registry like the read path.
-func ociRequiredContentItems(ociInfo *clipCommon.OCIStorageInfo) []types.CacheRequiredContentItem {
+func ociRequiredContentItems(imageID string, ociInfo *clipCommon.OCIStorageInfo) []types.CacheRequiredContentItem {
 	items := make([]types.CacheRequiredContentItem, 0, len(ociInfo.DecompressedHashByLayer))
 	for layerDigest, hash := range ociInfo.DecompressedHashByLayer {
 		if !isSHA256HexDigest(hash) {
@@ -511,6 +511,7 @@ func ociRequiredContentItems(ociInfo *clipCommon.OCIStorageInfo) []types.CacheRe
 			Hash:         hash,
 			RoutingKey:   hash,
 			ExpectedHash: hash,
+			ImageID:      imageID,
 			Source:       source,
 			Kind:         types.CacheContentKindClipV2,
 		})
@@ -538,6 +539,7 @@ func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request 
 		RoutingKey:   cachePath,
 		ExpectedHash: metadata.Hash,
 		SizeBytes:    int64(metadata.Size),
+		ImageID:      request.ImageId,
 		// Origin source descriptor: the data archive's key in the image
 		// registry. This intentionally stays .clip even when the mounted
 		// metadata archive is .rclip.
@@ -956,8 +958,9 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 	return nil, false
 }
 
-// getCredentialProviderForImage determines the appropriate credentials for an image
-// Priority: runtime credentials > build registry credentials > source image credentials > ambient auth
+// getCredentialProviderForImage determines the appropriate credentials for an image.
+// Private workers are gateway-only: request-embedded credentials are stripped
+// before scheduling and ignored here as a second guardrail.
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
@@ -969,7 +972,17 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return nil
 	}
 
-	// Priority 1: Runtime credentials (from secret)
+	if c.privateWorkerImageRequest(request) {
+		if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
+			return provider
+		}
+		log.Warn().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Msg("private worker has no gateway-vended registry credentials; using anonymous auth and avoiding ambient keychain")
+		return privateWorkerAnonymousRegistryProvider{}
+	}
+
 	if request.ImageCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
 	}
@@ -978,7 +991,7 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return provider
 	}
 
-	// Priority 2: Build registry credentials (for images we built and pushed)
+	// Build registry credentials for images we built and pushed.
 	// This must come before source image credentials because when we build with a custom base image,
 	// the final image is in the build registry, not the source image registry
 	// We check both the registry domain AND the build repository name to avoid false positives
@@ -991,12 +1004,10 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
 	}
 
-	// Priority 3: Source image credentials (for external images pulled directly without building)
 	if request.BuildOptions.SourceImageCreds != "" {
 		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "source image")
 	}
 
-	// Priority 4: Ambient auth (IAM role, docker config, etc.)
 	return nil
 }
 
@@ -1171,8 +1182,10 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 			go c.publishImageArchiveToEmbeddedCache(archivePath, imageId)
 			return brokeredRegistry, nil
 		} else if err != nil {
-			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable, falling back to configured registry")
+			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable for private worker")
+			return nil, err
 		}
+		return nil, fmt.Errorf("gateway-brokered image archive origin is unavailable for private worker image %s", imageId)
 	}
 
 	err = c.registry.Pull(ctx, tempPath, imageId)

@@ -156,23 +156,24 @@ service GatewayService {
       get : "/pools/private"
     };
   }
-  rpc CreateBYOCPoolOnboarding(CreateBYOCPoolOnboardingRequest)
-      returns (CreateBYOCPoolOnboardingResponse) {
+  rpc CreateBYOCPool(CreateBYOCPoolRequest)
+      returns (CreateBYOCPoolResponse) {
     option (google.api.http) = {
-      post : "/pools/byoc/onboarding"
+      post : "/pools/byoc"
       body : "*"
     };
   }
-  rpc GetBYOCPoolOnboardingStatus(GetBYOCPoolOnboardingStatusRequest)
-      returns (GetBYOCPoolOnboardingStatusResponse) {
+  rpc GetBYOCPool(GetBYOCPoolRequest)
+      returns (GetBYOCPoolResponse) {
     option (google.api.http) = {
-      get : "/pools/{pool_name}/byoc/onboarding-status"
+      get : "/pools/{pool_name}/byoc"
     };
   }
-  rpc GetBYOCPoolResource(GetBYOCPoolResourceRequest)
-      returns (GetBYOCPoolResourceResponse) {
+  rpc ScaleBYOCPool(ScaleBYOCPoolRequest)
+      returns (ScaleBYOCPoolResponse) {
     option (google.api.http) = {
-      get : "/pools/{pool_name}/byoc/resource"
+      post : "/pools/{pool_name}/byoc/scale"
+      body : "*"
     };
   }
   rpc CreatePool(CreatePoolRequest)
@@ -749,6 +750,7 @@ message PrivatePool {
   uint32 machine_count = 11;
   uint32 ready_machine_count = 12;
   uint32 reserved_nodes = 13;
+  BYOCPoolState byoc = 14;
 }
 
 message ListPoolOffersRequest { PoolConfig pool = 1; }
@@ -784,7 +786,7 @@ message ListPrivatePoolsResponse {
   repeated PrivatePool pools = 3;
 }
 
-message CreateBYOCPoolOnboardingRequest {
+message CreateBYOCPoolRequest {
   string provider = 1;
   string pool_name = 2;
   string region = 3;
@@ -794,46 +796,62 @@ message CreateBYOCPoolOnboardingRequest {
   string account_id = 7;
 }
 
-message CreateBYOCPoolOnboardingResponse {
+message CreateBYOCPoolResponse {
   bool ok = 1;
   string err_msg = 2;
   PrivatePool pool = 3;
   string setup_url = 4;
   string resource_name = 5;
   string resource_url = 6;
+  BYOCPoolState byoc = 7;
 }
 
-message GetBYOCPoolOnboardingStatusRequest {
+message BYOCPoolState {
+  string provider = 1;
+  string account_id = 2;
+  string region = 3;
+  string resource_name = 4;
+  string resource_url = 5;
+  string destroy_url = 6;
+  string phase = 7;
+  uint32 desired_nodes = 8;
+  uint32 max_nodes = 9;
+  uint32 target_sandboxes = 10;
+  uint32 sandboxes_per_node = 11;
+  string instance_type = 12;
+  uint32 machine_count = 13;
+  uint32 ready_machine_count = 14;
+  string message = 15;
+  int64 hourly_cost_micros = 16;
+  int64 total_hourly_cost_micros = 17;
+  bool direct_scale_enabled = 18;
+}
+
+message GetBYOCPoolRequest {
   string pool_name = 1;
 }
 
-message GetBYOCPoolOnboardingStatusResponse {
+message GetBYOCPoolResponse {
   bool ok = 1;
   string err_msg = 2;
   PrivatePool pool = 3;
   bool ready = 4;
   uint32 ready_machine_count = 5;
   uint32 machine_count = 6;
+  BYOCPoolState byoc = 7;
 }
 
-message GetBYOCPoolResourceRequest {
+message ScaleBYOCPoolRequest {
   string pool_name = 1;
+  uint32 desired_nodes = 2;
+  uint32 max_nodes = 3;
 }
 
-message GetBYOCPoolResourceResponse {
+message ScaleBYOCPoolResponse {
   bool ok = 1;
   string err_msg = 2;
-  string provider = 3;
-  string account_id = 4;
-  string region = 5;
-  string resource_name = 6;
-  string resource_url = 7;
-  string destroy_url = 8;
-  string instance_type = 9;
-  uint32 desired_nodes = 10;
-  uint32 max_nodes = 11;
-  uint32 target_sandboxes = 12;
-  uint32 sandboxes_per_node = 13;
+  PrivatePool pool = 3;
+  BYOCPoolState byoc = 4;
 }
 
 message CreatePoolRequest { PoolConfig pool = 1; }

@@ -531,6 +531,7 @@ func TestMaterializeArchiveObjectUsesBrokeredDataURL(t *testing.T) {
 	item := types.CacheRequiredContentItem{
 		Hash:      hash,
 		SizeBytes: int64(len(content)),
+		ImageID:   "image-a",
 		Source:    "image-a." + registry.LocalImageFileExtension,
 		Kind:      types.CacheContentKindClipV1,
 	}
@@ -542,6 +543,34 @@ func TestMaterializeArchiveObjectUsesBrokeredDataURL(t *testing.T) {
 	require.NotEmpty(t, workerRepo.requests)
 	require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
 	require.Equal(t, "workspace-a", workerRepo.requests[0].WorkspaceId)
+}
+
+func TestMaterializeOCILayerPrivateWorkerRequiresGatewayRegistryCredentials(t *testing.T) {
+	workerRepo := &fakeImageCredentialWorkerRepo{
+		resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
+	}
+	manager := &WorkerCacheManager{
+		ctx:              context.Background(),
+		poolConfig:       types.WorkerPoolConfig{Mode: types.PoolModePrivate},
+		workerRepo:       workerRepo,
+		originCredsCache: make(map[string]*originCredentials),
+	}
+	stub := cache.RecentStub{WorkspaceID: "workspace-a", StubID: "stub-a"}
+	item := types.CacheRequiredContentItem{
+		Hash:    strings.Repeat("b", 64),
+		ImageID: "image-a",
+		Source:  "registry.example.com/team/image@sha256:" + strings.Repeat("a", 64),
+		Kind:    types.CacheContentKindClipV2,
+	}
+
+	status := manager.materializeOCILayer(context.Background(), nil, stub, item)
+
+	require.Equal(t, types.CacheAuditStatusOriginFailure, status)
+	require.Len(t, workerRepo.requests, 1)
+	require.Equal(t, "workspace-a", workerRepo.requests[0].WorkspaceId)
+	require.Equal(t, "stub-a", workerRepo.requests[0].StubId)
+	require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
+	require.Equal(t, "registry.example.com", workerRepo.requests[0].Registry)
 }
 
 func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T) {
@@ -791,7 +820,7 @@ func TestOCIRequiredContentItemsFromLayers(t *testing.T) {
 	ociInfo, ok := ociStorageInfo(meta)
 	require.True(t, ok)
 
-	items := ociRequiredContentItems(ociInfo)
+	items := ociRequiredContentItems("image-a", ociInfo)
 	require.Len(t, items, 2)
 
 	byHash := map[string]types.CacheRequiredContentItem{}
@@ -799,6 +828,7 @@ func TestOCIRequiredContentItemsFromLayers(t *testing.T) {
 		byHash[item.Hash] = item
 		require.Equal(t, item.Hash, item.RoutingKey)
 		require.Equal(t, item.Hash, item.ExpectedHash)
+		require.Equal(t, "image-a", item.ImageID)
 		require.Equal(t, types.CacheContentKindClipV2, item.Kind)
 		require.NotEmpty(t, item.Source)
 	}
@@ -816,12 +846,13 @@ func TestOCIRequiredContentItemsSkipsInvalidLayerMetadata(t *testing.T) {
 		},
 	}
 
-	items := ociRequiredContentItems(ociInfo)
+	items := ociRequiredContentItems("image-a", ociInfo)
 	require.Len(t, items, 1)
 	require.Equal(t, strings.Repeat("a", 64), items[0].Hash)
+	require.Equal(t, "image-a", items[0].ImageID)
 
 	ociInfo.Repository = ""
-	require.Empty(t, ociRequiredContentItems(ociInfo))
+	require.Empty(t, ociRequiredContentItems("image-a", ociInfo))
 }
 
 func testClipV2Metadata() *clipCommon.ClipArchiveMetadata {

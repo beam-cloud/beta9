@@ -88,6 +88,7 @@ type CacheRequiredContentItem struct {
 	RoutingKey   string           `json:"routing_key"`
 	SizeBytes    int64            `json:"size_bytes,omitempty"`
 	ExpectedHash string           `json:"expected_hash,omitempty"`
+	ImageID      string           `json:"image_id,omitempty"`
 	Source       string           `json:"source,omitempty"`
 	Kind         CacheContentKind `json:"kind,omitempty"`
 	CheckpointID string           `json:"checkpoint_id,omitempty"`
