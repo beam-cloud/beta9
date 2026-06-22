@@ -17,13 +17,17 @@ func (s *Worker) backendRouteFor(request *types.ContainerRequest, kind string, p
 		return nil
 	}
 	localTarget = s.agentRouteLocalTarget(localTarget)
+	routeContainerID := request.ContainerId
+	if kind == types.BackendRouteKindWorker {
+		routeContainerID = ""
+	}
 	return &pb.BackendRoute{
-		RouteId:     types.BackendRouteID(s.machineID, s.workerId, request.ContainerId, kind, port),
+		RouteId:     types.BackendRouteID(s.machineID, s.workerId, routeContainerID, kind, port),
 		WorkspaceId: request.WorkspaceId,
 		PoolName:    s.poolName,
 		MachineId:   s.machineID,
 		WorkerId:    s.workerId,
-		ContainerId: request.ContainerId,
+		ContainerId: routeContainerID,
 		Kind:        kind,
 		Port:        port,
 		Protocol:    types.BackendRouteProtocolTCP,

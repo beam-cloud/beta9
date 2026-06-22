@@ -149,7 +149,7 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 		return "", fmt.Errorf("backend route is required")
 	}
 	route := backendRouteFromProto(routeProto)
-	route.ContainerID = containerID
+	route.ContainerID = registeredRouteContainerID(containerID, route)
 	if route.LocalTarget == "" {
 		route.LocalTarget = defaultLocalTarget
 	}
@@ -194,6 +194,13 @@ func backendRouteFromProto(in *pb.BackendRoute) types.BackendRoute {
 		route.State = types.BackendRouteStateOpening
 	}
 	return route
+}
+
+func registeredRouteContainerID(containerID string, route types.BackendRoute) string {
+	if route.Kind == types.BackendRouteKindWorker && route.ContainerID == "" {
+		return ""
+	}
+	return containerID
 }
 
 func seedReadyAgentWorkerRoute(route *types.BackendRoute) {
