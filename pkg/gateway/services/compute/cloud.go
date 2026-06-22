@@ -21,7 +21,7 @@ const (
 	AWSBYOCTemplatePath = "/api/v1/gateway/pools/byoc/aws/template.yaml"
 
 	awsBYOCDefaultRegion       = "us-east-1"
-	awsBYOCDefaultInstanceType = "t3.large"
+	awsBYOCDefaultInstanceType = "i4i.xlarge"
 	awsBYOCDefaultDesiredNodes = uint32(1)
 	awsBYOCMaxNodesLimit       = uint32(100)
 	awsBYOCJoinTokenTTL        = 30 * 24 * time.Hour
@@ -36,6 +36,12 @@ var (
 	awsAccountIDPattern    = regexp.MustCompile(`^\d{12}$`)
 	cloudFormationPartRe   = regexp.MustCompile(`[^a-z0-9-]+`)
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
+	awsBYOCInstanceTypes   = map[string]struct{}{
+		"i4i.large":   {},
+		"i4i.xlarge":  {},
+		"i4i.2xlarge": {},
+		"i4i.4xlarge": {},
+	}
 )
 
 func (s *Service) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.CreateBYOCAWSPoolOnboardingRequest) (*pb.CreateBYOCAWSPoolOnboardingResponse, error) {
@@ -218,6 +224,9 @@ func normalizeBYOCAWSPoolOnboardingRequest(in *pb.CreateBYOCAWSPoolOnboardingReq
 	if !strings.Contains(req.instanceType, ".") || !awsInstanceTypePattern.MatchString(req.instanceType) {
 		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("invalid AWS instance type %q", req.instanceType)
 	}
+	if _, ok := awsBYOCInstanceTypes[req.instanceType]; !ok {
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("unsupported AWS instance type %q", req.instanceType)
+	}
 	if req.desiredNodes == 0 {
 		req.desiredNodes = awsBYOCDefaultDesiredNodes
 	}
@@ -398,8 +407,13 @@ Parameters:
     Description: Beam worker image to run on each BYOC node.
   NodeInstanceType:
     Type: String
-    Default: t3.large
-    Description: EC2 instance type for Beam CPU nodes.
+    Default: i4i.xlarge
+    AllowedValues:
+      - i4i.large
+      - i4i.xlarge
+      - i4i.2xlarge
+      - i4i.4xlarge
+    Description: EC2 storage-optimized instance type for Beam CPU nodes with local NVMe.
   RootVolumeSizeGB:
     Type: Number
     Default: 200
@@ -613,10 +627,39 @@ Resources:
           Fn::Base64: !Sub |
             #!/bin/bash
             set -euxo pipefail
+            BEAM_STATE_DIR=/var/lib/beam/agent
+            BEAM_NVME_ROOT=/mnt/beam-nvme
+            NVME_DEVICE=""
+            for link in /dev/disk/by-id/nvme-Amazon_EC2_NVMe_Instance_Storage*; do
+              if [ -e "$link" ]; then
+                NVME_DEVICE="$(readlink -f "$link")"
+                break
+              fi
+            done
+            if [ -n "$NVME_DEVICE" ]; then
+              if ! blkid "$NVME_DEVICE" >/dev/null 2>&1; then
+                mkfs.ext4 -F "$NVME_DEVICE"
+              fi
+              mkdir -p "$BEAM_NVME_ROOT"
+              if ! mountpoint -q "$BEAM_NVME_ROOT"; then
+                mount "$NVME_DEVICE" "$BEAM_NVME_ROOT"
+              fi
+              NVME_UUID="$(blkid -s UUID -o value "$NVME_DEVICE")"
+              if [ -n "$NVME_UUID" ] && ! grep -q "$NVME_UUID" /etc/fstab; then
+                echo "UUID=$NVME_UUID $BEAM_NVME_ROOT ext4 defaults,nofail,noatime 0 2" >> /etc/fstab
+              fi
+              BEAM_STATE_DIR="$BEAM_NVME_ROOT/beam/agent"
+              mkdir -p "$BEAM_NVME_ROOT/docker" "$BEAM_STATE_DIR"
+              mkdir -p /etc/docker
+              printf '{"data-root":"%s"}\n' "$BEAM_NVME_ROOT/docker" > /etc/docker/daemon.json
+            fi
+            mkdir -p "$BEAM_STATE_DIR"
+            export BEAM_AGENT_INSTALL_DOCKER=1
             curl -fsSL '${BeamGatewayURL}/install/agent' | sh -s -- \
               --gateway '${BeamGatewayURL}' \
               --join-token '${BeamJoinToken}' \
               --background \
+              --state-dir "$BEAM_STATE_DIR" \
               --transport tsnet_restricted \
               --executor worker-container \
               --worker-image '${BeamWorkerImage}' \

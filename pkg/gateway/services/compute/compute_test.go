@@ -224,7 +224,7 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 	res, err := service.CreateBYOCAWSPoolOnboarding(ctx, &pb.CreateBYOCAWSPoolOnboardingRequest{
 		PoolName:     "aws-cpu",
 		Region:       "us-east-1",
-		InstanceType: "t3.large",
+		InstanceType: "i4i.xlarge",
 		DesiredNodes: 2,
 		MaxNodes:     4,
 		AwsAccountId: "123456789012",
@@ -260,7 +260,7 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		"param_DesiredCapacity=2",
 		"param_MaxSize=4",
 		"param_NetworkSlots=128",
-		"param_NodeInstanceType=t3.large",
+		"param_NodeInstanceType=i4i.xlarge",
 		"param_RootVolumeSizeGB=200",
 	} {
 		if !strings.Contains(res.SetupUrl, fragment) {
@@ -461,6 +461,14 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 	for _, fragment := range []string{
 		"BeamWorkerImage:",
 		"--worker-image '${BeamWorkerImage}'",
+		"Default: i4i.xlarge",
+		"AllowedValues:",
+		"- i4i.large",
+		"- i4i.4xlarge",
+		"nvme-Amazon_EC2_NVMe_Instance_Storage",
+		"BEAM_AGENT_INSTALL_DOCKER=1",
+		"--state-dir \"$BEAM_STATE_DIR\"",
+		"/etc/docker/daemon.json",
 		"NetworkSlots:",
 		"Default: 128",
 		"--network-slots '${NetworkSlots}'",
