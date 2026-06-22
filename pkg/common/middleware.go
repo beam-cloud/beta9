@@ -16,6 +16,9 @@ var (
 	subdomainRegex = regexp.MustCompile(
 		`^` +
 			`(?:` +
+			// Container form: sandbox-<stub UUID>-<suffix> optional -port
+			`(?P<ContainerID>(?:sandbox|pod|endpoint|taskqueue)-[a-f0-9-]{36}-[a-zA-Z0-9]{8})` +
+			`|` +
 			// Deployment form: something-abcdefg optional -vN or -latest
 			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` +
 			// OR StubID form: 36-char (UUID)
@@ -31,11 +34,12 @@ var (
 )
 
 type SubdomainFields struct {
-	Name      string
-	Version   uint
-	StubId    string
-	Subdomain string
-	Port      uint32
+	Name        string
+	Version     uint
+	StubId      string
+	ContainerId string
+	Subdomain   string
+	Port        uint32
 }
 
 type SubdomainBackendRepo interface {
@@ -101,11 +105,20 @@ func ParseSubdomainFields(subdomain string) (*SubdomainFields, error) {
 		}
 	}
 
+	stubID := fields["StubID"]
+	containerID := fields["ContainerID"]
+	if containerID != "" {
+		if extracted, ok := ExtractStubIdFromStubScopedContainerId(containerID); ok {
+			stubID = extracted
+		}
+	}
+
 	return &SubdomainFields{
-		StubId:    fields["StubID"],
-		Subdomain: fields["Subdomain"],
-		Version:   ParseVersion(fields["Version"]),
-		Port:      portVal,
+		StubId:      stubID,
+		ContainerId: containerID,
+		Subdomain:   fields["Subdomain"],
+		Version:     ParseVersion(fields["Version"]),
+		Port:        portVal,
 	}, nil
 }
 
@@ -115,7 +128,9 @@ func ParseSubdomainFields(subdomain string) (*SubdomainFields, error) {
 func BuildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...string) string {
 	pathSegments := []string{"/" + stub.Type.Kind()}
 
-	if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
+	if fields != nil && fields.ContainerId != "" {
+		pathSegments = append(pathSegments, "container", fields.StubId, fields.ContainerId)
+	} else if stubConfig, err := stub.UnmarshalConfig(); err == nil && !stubConfig.Authorized {
 		pathSegments = append(pathSegments, "public", stub.ExternalId)
 	} else if fields.StubId != "" {
 		pathSegments = append(pathSegments, "id", fields.StubId)

@@ -70,10 +70,14 @@ func BuildPodURL(externalUrl, urlType string, stub *types.StubWithRelated, stubC
 	return url
 }
 
-func BuildSandboxURL(externalUrl string, stub *types.StubWithRelated, containerId string, port int32) string {
+func BuildSandboxURL(externalUrl, urlType string, stub *types.StubWithRelated, containerId string, port int32) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {
 		return ""
+	}
+
+	if urlType == InvokeUrlTypeHost {
+		return fmt.Sprintf("%s://%s-%d.%s", parsedUrl.Scheme, containerId, port, parsedUrl.Host)
 	}
 
 	return fmt.Sprintf("%s://%s/%s/container/%s/%s/%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, containerId, port)

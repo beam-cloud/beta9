@@ -168,6 +168,41 @@ func TestSubdomainMiddleware(t *testing.T) {
 	}
 }
 
+func TestSubdomainMiddlewareRoutesSandboxContainerHost(t *testing.T) {
+	redisClient, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+
+	stubID := "e9c29586-c465-4a67-9c9b-25293d1ce77b"
+	containerID := "sandbox-" + stubID + "-abc12345"
+	e := echo.New()
+	backendRepo := &middlewareRepoForTest{
+		stub: &types.Stub{
+			Type:       types.StubType(types.StubTypeSandbox),
+			ExternalId: stubID,
+		},
+	}
+
+	handler := func(ctx echo.Context) error {
+		assert.Equal(t, "/sandbox/container/"+stubID+"/"+containerID+"/8765", ctx.Request().URL.Path)
+		return ctx.String(http.StatusOK, "OK")
+	}
+
+	g := e.Group("/sandbox")
+	g.GET("/container/:stubId/:containerId/:port", handler)
+
+	mw := Subdomain("https://app.example.com", backendRepo, redisClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = containerID + "-8765.app.example.com"
+	rec := httptest.NewRecorder()
+
+	c := e.NewContext(req, rec)
+	h := mw(handler)
+	err = h(c)
+	assert.NoError(t, err)
+	e.Shutdown(context.Background())
+}
+
 func TestParseSubdomain(t *testing.T) {
 	tests := []struct {
 		host     string
@@ -193,6 +228,11 @@ func TestParseSubdomain(t *testing.T) {
 			host:     "task2-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3.app.example.com",
 			base:     "app.example.com",
 			expected: "task2-7a7db8c-8f32e485-2b2e-4238-9878-490eb9b0a9d3",
+		},
+		{
+			host:     "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345-8765.app.example.com",
+			base:     "app.example.com",
+			expected: "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345-8765",
 		},
 		{
 			host:     "task2-7a7db8c-v1.app.example.com",
@@ -244,6 +284,14 @@ func TestParseSubdomainFields(t *testing.T) {
 			subdomain: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			expected: &common.SubdomainFields{
 				StubId: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
+			},
+		},
+		{
+			subdomain: "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345-8765",
+			expected: &common.SubdomainFields{
+				StubId:      "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+				ContainerId: "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345",
+				Port:        8765,
 			},
 		},
 		{
@@ -306,6 +354,18 @@ func TestBuildHandlerPath(t *testing.T) {
 				StubId: "4ec446ce-3fd1-41a8-9f70-4d25b9224821",
 			},
 			expected: "/endpoint/id/4ec446ce-3fd1-41a8-9f70-4d25b9224821",
+		},
+		{
+			name: "sandbox-container-path",
+			stub: &types.Stub{
+				Type: types.StubType(types.StubTypeSandbox),
+			},
+			fields: &common.SubdomainFields{
+				StubId:      "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+				ContainerId: "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345",
+				Port:        8765,
+			},
+			expected: "/sandbox/container/e9c29586-c465-4a67-9c9b-25293d1ce77b/sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345/8765",
 		},
 		{
 			name: "name-and-version-path",
