@@ -23,6 +23,7 @@ const (
 	awsBYOCDefaultNetworkSlots = uint32(128)
 	awsBYOCDefaultStartLimit   = uint32(16)
 	awsBYOCDefaultRootVolumeGB = uint32(200)
+	awsBYOCSandboxesPerNode    = uint32(20)
 )
 
 var (
@@ -109,6 +110,7 @@ func (byocAWSProvider) PoolState(workspaceID string, req byocPoolOnboardingReque
 		ResourceName: stackName,
 		ResourceURL:  stackURL,
 		DestroyURL:   stackURL,
+		Labels:       awsBYOCCapacityLabels(req),
 	}
 }
 
@@ -130,6 +132,7 @@ func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*
 		"NetworkSlots":              strconv.FormatUint(uint64(awsBYOCDefaultNetworkSlots), 10),
 		"NodeInstanceType":          input.Request.instanceType,
 		"RootVolumeSizeGB":          strconv.FormatUint(uint64(awsBYOCDefaultRootVolumeGB), 10),
+		"TargetAWSAccountID":        input.Request.accountID,
 	})
 	return &byocProviderSetupResult{
 		SetupURL:     consoleURL,
@@ -155,12 +158,17 @@ func (byocAWSProvider) Resource(_ string, state *model.PoolState) (*byocProvider
 		return nil, fmt.Errorf("incomplete AWS BYOC resource metadata")
 	}
 	return &byocProviderResource{
-		Provider:     string(model.SourceAWS),
-		AccountID:    resource.AccountID,
-		Region:       resource.Region,
-		ResourceName: resource.ResourceName,
-		ResourceURL:  resource.ResourceURL,
-		DestroyURL:   resource.DestroyURL,
+		Provider:         string(model.SourceAWS),
+		AccountID:        resource.AccountID,
+		Region:           resource.Region,
+		ResourceName:     resource.ResourceName,
+		ResourceURL:      resource.ResourceURL,
+		DestroyURL:       resource.DestroyURL,
+		InstanceType:     awsBYOCLabelString(resource.Labels, "instance_type", awsBYOCDefaultInstanceType),
+		DesiredNodes:     awsBYOCLabelUint32(resource.Labels, "desired_nodes", awsBYOCDefaultDesiredNodes),
+		MaxNodes:         awsBYOCLabelUint32(resource.Labels, "max_nodes", awsBYOCDefaultDesiredNodes),
+		TargetSandboxes:  awsBYOCLabelUint32(resource.Labels, "target_sandboxes", awsBYOCDefaultDesiredNodes*awsBYOCSandboxesPerNode),
+		SandboxesPerNode: awsBYOCLabelUint32(resource.Labels, "sandboxes_per_node", awsBYOCSandboxesPerNode),
 	}, nil
 }
 
@@ -173,6 +181,41 @@ func (byocAWSProvider) ValidateExistingPool(existing *model.PoolState) error {
 
 func awsBYOCTemplateURL(gatewayURL string) string {
 	return strings.TrimRight(gatewayURL, "/") + AWSBYOCTemplatePath
+}
+
+func awsBYOCCapacityLabels(req byocPoolOnboardingRequest) map[string]string {
+	targetSandboxes := req.desiredNodes * awsBYOCSandboxesPerNode
+	return map[string]string{
+		"instance_type":       req.instanceType,
+		"desired_nodes":       strconv.FormatUint(uint64(req.desiredNodes), 10),
+		"max_nodes":           strconv.FormatUint(uint64(req.maxNodes), 10),
+		"target_sandboxes":    strconv.FormatUint(uint64(targetSandboxes), 10),
+		"sandboxes_per_node":  strconv.FormatUint(uint64(awsBYOCSandboxesPerNode), 10),
+		"capacity_unit":       "normal_sandbox",
+		"capacity_unit_label": "normal sandboxes",
+	}
+}
+
+func awsBYOCLabelString(labels map[string]string, key, fallback string) string {
+	if labels == nil {
+		return fallback
+	}
+	value := strings.TrimSpace(labels[key])
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func awsBYOCLabelUint32(labels map[string]string, key string, fallback uint32) uint32 {
+	if labels == nil {
+		return fallback
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(labels[key]), 10, 32)
+	if err != nil || value == 0 {
+		return fallback
+	}
+	return uint32(value)
 }
 
 func awsCloudFormationConsoleURL(region, stackName, templateURL string, params map[string]string) string {
@@ -218,6 +261,10 @@ const awsCloudFormationTemplate = `AWSTemplateFormatVersion: "2010-09-09"
 Description: Beam AWS BYOC CPU pool. Creates an EC2 Auto Scaling Group that joins a Beam private pool.
 
 Parameters:
+  TargetAWSAccountID:
+    Type: String
+    AllowedPattern: '^\d{12}$'
+    Description: AWS account ID entered in Beam. The stack validates this before creating resources.
   BeamGatewayURL:
     Type: String
     Description: Public Beam gateway HTTP URL.
@@ -287,6 +334,12 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+
+Rules:
+  TargetAccountMustMatch:
+    Assertions:
+      - Assert: !Equals [!Ref TargetAWSAccountID, !Ref "AWS::AccountId"]
+        AssertDescription: This stack must be created in the AWS account ID entered in Beam.
 
 Resources:
   VPC:

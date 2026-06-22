@@ -829,6 +829,11 @@ message GetBYOCPoolResourceResponse {
   string resource_name = 6;
   string resource_url = 7;
   string destroy_url = 8;
+  string instance_type = 9;
+  uint32 desired_nodes = 10;
+  uint32 max_nodes = 11;
+  uint32 target_sandboxes = 12;
+  uint32 sandboxes_per_node = 13;
 }
 
 message CreatePoolRequest { PoolConfig pool = 1; }

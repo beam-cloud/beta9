@@ -263,6 +263,7 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 		"param_NetworkSlots=128",
 		"param_NodeInstanceType=i4i.xlarge",
 		"param_RootVolumeSizeGB=200",
+		"param_TargetAWSAccountID=123456789012",
 	} {
 		if !strings.Contains(res.SetupUrl, fragment) {
 			t.Fatalf("setup url missing %q: %s", fragment, res.SetupUrl)
@@ -282,6 +283,17 @@ func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 	stored := repo.pools["workspace-1"][0]
 	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.ResourceName {
 		t.Fatalf("stored BYOC metadata = %+v, want aws account/region/resource", stored.BYOC)
+	}
+	for key, want := range map[string]string{
+		"instance_type":      "i4i.xlarge",
+		"desired_nodes":      "2",
+		"max_nodes":          "4",
+		"target_sandboxes":   "40",
+		"sandboxes_per_node": "20",
+	} {
+		if got := stored.BYOC.Labels[key]; got != want {
+			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
+		}
 	}
 }
 
@@ -385,6 +397,21 @@ func TestGetBYOCPoolResourceReturnsAWSResourceAction(t *testing.T) {
 	}
 	if got, want := res.Provider, "aws"; got != want {
 		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if got, want := res.InstanceType, "i4i.xlarge"; got != want {
+		t.Fatalf("instance type = %q, want %q", got, want)
+	}
+	if got, want := res.DesiredNodes, uint32(1); got != want {
+		t.Fatalf("desired nodes = %d, want %d", got, want)
+	}
+	if got, want := res.MaxNodes, uint32(1); got != want {
+		t.Fatalf("max nodes = %d, want %d", got, want)
+	}
+	if got, want := res.TargetSandboxes, uint32(20); got != want {
+		t.Fatalf("target sandboxes = %d, want %d", got, want)
+	}
+	if got, want := res.SandboxesPerNode, uint32(20); got != want {
+		t.Fatalf("sandboxes per node = %d, want %d", got, want)
 	}
 	if got, want := res.AccountId, "123456789012"; got != want {
 		t.Fatalf("account id = %q, want %q", got, want)
@@ -491,6 +518,9 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"NodeSecurityGroupVpcIngress:",
 		"CidrIp: !Ref VpcCidr",
 		"Description: Beam BYOC private VPC traffic",
+		"TargetAWSAccountID:",
+		"TargetAccountMustMatch:",
+		"!Equals [!Ref TargetAWSAccountID, !Ref \"AWS::AccountId\"]",
 	} {
 		if !strings.Contains(template, fragment) {
 			t.Fatalf("template missing %q", fragment)

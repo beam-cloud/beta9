@@ -2432,6 +2432,25 @@
         },
         "destroyUrl": {
           "type": "string"
+        },
+        "instanceType": {
+          "type": "string"
+        },
+        "desiredNodes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "maxNodes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "targetSandboxes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "sandboxesPerNode": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

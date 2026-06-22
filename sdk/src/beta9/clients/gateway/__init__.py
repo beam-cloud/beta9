@@ -657,6 +657,11 @@ class GetByocPoolResourceResponse(betterproto.Message):
     resource_name: str = betterproto.string_field(6)
     resource_url: str = betterproto.string_field(7)
     destroy_url: str = betterproto.string_field(8)
+    instance_type: str = betterproto.string_field(9)
+    desired_nodes: int = betterproto.uint32_field(10)
+    max_nodes: int = betterproto.uint32_field(11)
+    target_sandboxes: int = betterproto.uint32_field(12)
+    sandboxes_per_node: int = betterproto.uint32_field(13)
 
 
 @dataclass(eq=False, repr=False)

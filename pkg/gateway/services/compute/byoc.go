@@ -61,12 +61,17 @@ type byocProviderSetupResult struct {
 }
 
 type byocProviderResource struct {
-	Provider     string
-	AccountID    string
-	Region       string
-	ResourceName string
-	ResourceURL  string
-	DestroyURL   string
+	Provider         string
+	AccountID        string
+	Region           string
+	ResourceName     string
+	ResourceURL      string
+	DestroyURL       string
+	InstanceType     string
+	DesiredNodes     uint32
+	MaxNodes         uint32
+	TargetSandboxes  uint32
+	SandboxesPerNode uint32
 }
 
 type byocOnboardingResult struct {
@@ -129,13 +134,18 @@ func (s *Service) GetBYOCPoolResource(ctx context.Context, in *pb.GetBYOCPoolRes
 		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return &pb.GetBYOCPoolResourceResponse{
-		Ok:           true,
-		Provider:     resource.Provider,
-		AccountId:    resource.AccountID,
-		Region:       resource.Region,
-		ResourceName: resource.ResourceName,
-		ResourceUrl:  resource.ResourceURL,
-		DestroyUrl:   resource.DestroyURL,
+		Ok:               true,
+		Provider:         resource.Provider,
+		AccountId:        resource.AccountID,
+		Region:           resource.Region,
+		ResourceName:     resource.ResourceName,
+		ResourceUrl:      resource.ResourceURL,
+		DestroyUrl:       resource.DestroyURL,
+		InstanceType:     resource.InstanceType,
+		DesiredNodes:     resource.DesiredNodes,
+		MaxNodes:         resource.MaxNodes,
+		TargetSandboxes:  resource.TargetSandboxes,
+		SandboxesPerNode: resource.SandboxesPerNode,
 	}, nil
 }
 
