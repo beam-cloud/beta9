@@ -19,6 +19,7 @@ import (
 const (
 	containerClientSandboxExecTimeout   = 15 * time.Second
 	containerClientSandboxStatusTimeout = 5 * time.Second
+	containerClientSandboxOutputTimeout = 5 * time.Second
 	containerClientExistingConnTimeout  = 1 * time.Second
 )
 
@@ -160,7 +161,14 @@ func (c *ContainerClient) SandboxStatusContext(ctx context.Context, containerId 
 }
 
 func (c *ContainerClient) SandboxStdout(containerId string, pid int32) (*pb.ContainerSandboxStdoutResponse, error) {
-	resp, err := c.client.ContainerSandboxStdout(context.TODO(), &pb.ContainerSandboxStdoutRequest{ContainerId: containerId, Pid: pid})
+	return c.SandboxStdoutContext(context.Background(), containerId, pid)
+}
+
+func (c *ContainerClient) SandboxStdoutContext(ctx context.Context, containerId string, pid int32) (*pb.ContainerSandboxStdoutResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxOutputTimeout)
+	defer cancel()
+
+	resp, err := c.client.ContainerSandboxStdout(ctx, &pb.ContainerSandboxStdoutRequest{ContainerId: containerId, Pid: pid})
 	if err != nil {
 		return resp, err
 	}
@@ -168,7 +176,14 @@ func (c *ContainerClient) SandboxStdout(containerId string, pid int32) (*pb.Cont
 }
 
 func (c *ContainerClient) SandboxStderr(containerId string, pid int32) (*pb.ContainerSandboxStderrResponse, error) {
-	resp, err := c.client.ContainerSandboxStderr(context.TODO(), &pb.ContainerSandboxStderrRequest{ContainerId: containerId, Pid: pid})
+	return c.SandboxStderrContext(context.Background(), containerId, pid)
+}
+
+func (c *ContainerClient) SandboxStderrContext(ctx context.Context, containerId string, pid int32) (*pb.ContainerSandboxStderrResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxOutputTimeout)
+	defer cancel()
+
+	resp, err := c.client.ContainerSandboxStderr(ctx, &pb.ContainerSandboxStderrRequest{ContainerId: containerId, Pid: pid})
 	if err != nil {
 		return resp, err
 	}

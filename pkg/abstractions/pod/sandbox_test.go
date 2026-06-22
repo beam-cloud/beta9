@@ -39,67 +39,21 @@ func TestSandboxExecFailureMessageKeepsConnectErrorsRetryable(t *testing.T) {
 	}
 }
 
-func TestSandboxClientCacheKeyUsesStableWorkerRouteTarget(t *testing.T) {
-	routeA := &types.BackendRoute{
-		RouteID:     "route-a",
-		Kind:        types.BackendRouteKindWorker,
-		Transport:   types.BackendRouteTransportTSNet,
-		LocalTarget: "127.0.0.1:50051",
-		ProxyTarget: "beam-agent-machine:29443",
-		UpdatedAt:   123,
-	}
-	routeB := &types.BackendRoute{
-		RouteID:     "route-b",
-		Kind:        types.BackendRouteKindWorker,
-		Transport:   types.BackendRouteTransportTSNet,
-		LocalTarget: "127.0.0.1:50051",
-		ProxyTarget: "beam-agent-machine:29443",
-		UpdatedAt:   123,
-	}
+func TestSandboxClientCacheKeyUsesStableWorkerRouteAddress(t *testing.T) {
+	address := types.BackendRouteAddress(types.BackendRouteID("machine-a", "worker-a", "", types.BackendRouteKindWorker, 0))
 
-	keyA := sandboxClientCacheKeyForRoute(routeA, "route://route-a", "token")
-	keyB := sandboxClientCacheKeyForRoute(routeB, "route://route-b", "token")
+	keyA := sandboxClientCacheKey(address, "token")
+	keyB := sandboxClientCacheKey(address, "token")
 	if keyA != keyB {
 		t.Fatalf("worker route cache keys differ: %q != %q", keyA, keyB)
 	}
 }
 
-func TestSandboxClientCacheKeyRotatesWhenWorkerRouteTargetChanges(t *testing.T) {
-	routeA := &types.BackendRoute{
-		RouteID:     "route-a",
-		Kind:        types.BackendRouteKindWorker,
-		Transport:   types.BackendRouteTransportTSNet,
-		LocalTarget: "127.0.0.1:50051",
-		ProxyTarget: "beam-agent-machine:29443",
-		UpdatedAt:   123,
-	}
-	routeB := &types.BackendRoute{
-		RouteID:     "route-a",
-		Kind:        types.BackendRouteKindWorker,
-		Transport:   types.BackendRouteTransportTSNet,
-		LocalTarget: "127.0.0.1:50052",
-		ProxyTarget: "beam-agent-machine:29443",
-		UpdatedAt:   124,
-	}
-
-	keyA := sandboxClientCacheKeyForRoute(routeA, "route://route-a", "token")
-	keyB := sandboxClientCacheKeyForRoute(routeB, "route://route-a", "token")
+func TestSandboxClientCacheKeyKeepsDifferentWorkerAddressesDistinct(t *testing.T) {
+	keyA := sandboxClientCacheKey("route://worker-a", "token")
+	keyB := sandboxClientCacheKey("route://worker-b", "token")
 	if keyA == keyB {
-		t.Fatalf("worker route cache key did not rotate after route target changed: %q", keyA)
-	}
-}
-
-func TestSandboxClientCacheKeyKeepsContainerRoutesDistinct(t *testing.T) {
-	route := &types.BackendRoute{
-		RouteID:     "route-a",
-		Kind:        types.BackendRouteKindContainer,
-		Transport:   types.BackendRouteTransportTSNet,
-		ProxyTarget: "beam-agent-machine:29443",
-	}
-
-	got := sandboxClientCacheKeyForRoute(route, "route://route-a", "token")
-	if got != "route://route-a:token" {
-		t.Fatalf("container route cache key = %q, want address scoped key", got)
+		t.Fatalf("worker route cache keys unexpectedly matched: %q", keyA)
 	}
 }
 

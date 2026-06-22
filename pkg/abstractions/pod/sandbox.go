@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -270,7 +269,7 @@ func (s *GenericPodService) SandboxStdout(ctx context.Context, in *pb.PodSandbox
 		}, nil
 	}
 
-	resp, err := client.SandboxStdout(in.ContainerId, in.Pid)
+	resp, err := client.SandboxStdoutContext(ctx, in.ContainerId, in.Pid)
 	if err != nil {
 		return &pb.PodSandboxStdoutResponse{
 			Ok:       false,
@@ -301,7 +300,7 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 		}, nil
 	}
 
-	resp, err := client.SandboxStderr(in.ContainerId, in.Pid)
+	resp, err := client.SandboxStderrContext(ctx, in.ContainerId, in.Pid)
 	if err != nil {
 		return &pb.PodSandboxStderrResponse{
 			Ok:       false,
@@ -813,7 +812,7 @@ func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, container
 	}
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
-	cacheKey := s.sandboxClientCacheKey(ctx, hostname, token)
+	cacheKey := sandboxClientCacheKey(hostname, token)
 	if cached, ok := s.clientCache.Load(cacheKey); ok {
 		if client, ok := cached.(*common.ContainerClient); ok {
 			metrics.RecordSandboxConnectPhase("client_cache", workspaceId, container.StubId, string(container.Status), "", true, 0)
@@ -843,40 +842,7 @@ func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, container
 	return client, container, cacheKey, nil
 }
 
-func (s *GenericPodService) sandboxClientCacheKey(ctx context.Context, workerAddress, token string) string {
-	return sandboxClientCacheKeyForRoute(s.backendRouteForAddress(ctx, workerAddress), workerAddress, token)
-}
-
-func (s *GenericPodService) backendRouteForAddress(ctx context.Context, address string) *types.BackendRoute {
-	if s == nil || s.containerRepo == nil {
-		return nil
-	}
-	routeID, ok := types.ParseBackendRouteAddress(address)
-	if !ok {
-		return nil
-	}
-	route, err := s.containerRepo.GetBackendRoute(ctx, routeID)
-	if err != nil {
-		return nil
-	}
-	return route
-}
-
-func sandboxClientCacheKeyForRoute(route *types.BackendRoute, workerAddress, token string) string {
-	if route != nil &&
-		route.Kind == types.BackendRouteKindWorker &&
-		route.Transport == types.BackendRouteTransportTSNet &&
-		route.ProxyTarget != "" {
-		parts := []string{route.Transport, route.ProxyTarget}
-		if route.LocalTarget != "" {
-			parts = append(parts, route.LocalTarget)
-		}
-		if route.UpdatedAt != 0 {
-			parts = append(parts, strconv.FormatInt(route.UpdatedAt, 10))
-		}
-		parts = append(parts, token)
-		return strings.Join(parts, ":")
-	}
+func sandboxClientCacheKey(workerAddress, token string) string {
 	return workerAddress + ":" + token
 }
 
