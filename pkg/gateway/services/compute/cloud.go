@@ -465,11 +465,17 @@ Resources:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref NodeSecurityGroup
-      IpProtocol: tcp
-      FromPort: 0
-      ToPort: 65535
+      IpProtocol: -1
       SourceSecurityGroupId: !Ref NodeSecurityGroup
       Description: Beam BYOC node-to-node private traffic
+
+  NodeSecurityGroupVpcIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref NodeSecurityGroup
+      IpProtocol: -1
+      CidrIp: !Ref VpcCidr
+      Description: Beam BYOC private VPC traffic
 
   NodeRole:
     Type: AWS::IAM::Role

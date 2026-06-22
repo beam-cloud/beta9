@@ -420,8 +420,12 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"ContainerStartConcurrency:",
 		"--container-start-concurrency '${ContainerStartConcurrency}'",
 		"NodeSecurityGroupSelfIngress:",
+		"IpProtocol: -1",
 		"SourceSecurityGroupId: !Ref NodeSecurityGroup",
 		"Description: Beam BYOC node-to-node private traffic",
+		"NodeSecurityGroupVpcIngress:",
+		"CidrIp: !Ref VpcCidr",
+		"Description: Beam BYOC private VPC traffic",
 	} {
 		if !strings.Contains(template, fragment) {
 			t.Fatalf("template missing %q", fragment)
