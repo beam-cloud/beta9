@@ -824,6 +824,36 @@
         ]
       }
     },
+    "/pools/{poolName}/byoc/aws/stack": {
+      "get": {
+        "operationId": "GatewayService_GetBYOCAWSStack",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetBYOCAWSStackResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/pools/{poolName}/byoc/onboarding-status": {
       "get": {
         "operationId": "GatewayService_GetBYOCPoolOnboardingStatus",
@@ -1983,6 +2013,9 @@
         "maxNodes": {
           "type": "integer",
           "format": "int64"
+        },
+        "awsAccountId": {
+          "type": "string"
         }
       }
     },
@@ -1999,6 +2032,12 @@
           "$ref": "#/definitions/gatewayPrivatePool"
         },
         "setupUrl": {
+          "type": "string"
+        },
+        "stackName": {
+          "type": "string"
+        },
+        "stackUrl": {
           "type": "string"
         }
       }
@@ -2336,6 +2375,35 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
+        }
+      }
+    },
+    "gatewayGetBYOCAWSStackResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "stackName": {
+          "type": "string"
+        },
+        "stackUrl": {
+          "type": "string"
+        },
+        "destroyUrl": {
+          "type": "string"
         }
       }
     },

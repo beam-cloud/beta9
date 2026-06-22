@@ -613,6 +613,7 @@ class CreateByocawsPoolOnboardingRequest(betterproto.Message):
     instance_type: str = betterproto.string_field(3)
     desired_nodes: int = betterproto.uint32_field(4)
     max_nodes: int = betterproto.uint32_field(5)
+    aws_account_id: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -621,6 +622,8 @@ class CreateByocawsPoolOnboardingResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     pool: "PrivatePool" = betterproto.message_field(3)
     setup_url: str = betterproto.string_field(4)
+    stack_name: str = betterproto.string_field(5)
+    stack_url: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -636,6 +639,23 @@ class GetByocPoolOnboardingStatusResponse(betterproto.Message):
     ready: bool = betterproto.bool_field(4)
     ready_machine_count: int = betterproto.uint32_field(5)
     machine_count: int = betterproto.uint32_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class GetByocawsStackRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class GetByocawsStackResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    provider: str = betterproto.string_field(3)
+    account_id: str = betterproto.string_field(4)
+    region: str = betterproto.string_field(5)
+    stack_name: str = betterproto.string_field(6)
+    stack_url: str = betterproto.string_field(7)
+    destroy_url: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)
@@ -1401,6 +1421,15 @@ class GatewayServiceStub(SyncServiceStub):
             GetByocPoolOnboardingStatusRequest,
             GetByocPoolOnboardingStatusResponse,
         )(get_byoc_pool_onboarding_status_request)
+
+    def get_byocaws_stack(
+        self, get_byocaws_stack_request: "GetByocawsStackRequest"
+    ) -> "GetByocawsStackResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetBYOCAWSStack",
+            GetByocawsStackRequest,
+            GetByocawsStackResponse,
+        )(get_byocaws_stack_request)
 
     def create_pool(
         self, create_pool_request: "CreatePoolRequest"

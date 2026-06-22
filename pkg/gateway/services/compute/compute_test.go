@@ -227,6 +227,7 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		InstanceType: "t3.large",
 		DesiredNodes: 2,
 		MaxNodes:     4,
+		AwsAccountId: "123456789012",
 	})
 	if err != nil {
 		t.Fatalf("CreateBYOCAWSPoolOnboarding() error = %v", err)
@@ -242,6 +243,9 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 	}
 	if res.SetupUrl == "" {
 		t.Fatal("setup url is required")
+	}
+	if res.StackName == "" || !strings.Contains(res.StackUrl, res.StackName) {
+		t.Fatalf("stack response = name %q url %q, want stack URL containing stack name", res.StackName, res.StackUrl)
 	}
 	if !strings.Contains(res.SetupUrl, "templateURL=https%3A%2F%2Fapp.beam.cloud%2Fapi%2Fv1%2Fgateway%2Fpools%2Fbyoc%2Faws%2Ftemplate.yaml") {
 		t.Fatalf("setup url should reference the BYOC AWS template endpoint: %s", res.SetupUrl)
@@ -273,6 +277,10 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		if time.Until(token.ExpiresAt) < 29*24*time.Hour {
 			t.Fatalf("join token expiry = %s, want roughly 30 days", token.ExpiresAt)
 		}
+	}
+	stored := repo.pools["workspace-1"][0]
+	if stored.AWS == nil || stored.AWS.AccountID != "123456789012" || stored.AWS.Region != "us-east-1" || stored.AWS.StackName != res.StackName {
+		t.Fatalf("stored AWS metadata = %+v, want account/region/stack", stored.AWS)
 	}
 }
 
@@ -337,6 +345,48 @@ func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	}
 	if got, want := res.ReadyMachineCount, uint32(1); got != want {
 		t.Fatalf("ready machines = %d, want %d", got, want)
+	}
+}
+
+func TestGetBYOCAWSStackReturnsStackAction(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Regions: []string{"us-west-2"}},
+					AWS: &model.AWSBYOCState{
+						AccountID: "123456789012",
+						Region:    "us-east-1",
+						StackName: "beam-aws-cpu-test",
+					},
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.GetBYOCAWSStack(ctx, &pb.GetBYOCAWSStackRequest{PoolName: "aws-cpu"})
+	if err != nil {
+		t.Fatalf("GetBYOCAWSStack() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("GetBYOCAWSStack() not ok: %s", res.ErrMsg)
+	}
+	if got, want := res.Provider, "aws"; got != want {
+		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if got, want := res.AccountId, "123456789012"; got != want {
+		t.Fatalf("account id = %q, want %q", got, want)
+	}
+	if got, want := res.Region, "us-east-1"; got != want {
+		t.Fatalf("region = %q, want %q", got, want)
+	}
+	if !strings.Contains(res.StackUrl, "beam-aws-cpu-test") || res.DestroyUrl != res.StackUrl {
+		t.Fatalf("stack urls = stack %q destroy %q, want stack name and matching destroy url", res.StackUrl, res.DestroyUrl)
 	}
 }
 

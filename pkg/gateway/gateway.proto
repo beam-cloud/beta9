@@ -169,6 +169,12 @@ service GatewayService {
       get : "/pools/{pool_name}/byoc/onboarding-status"
     };
   }
+  rpc GetBYOCAWSStack(GetBYOCAWSStackRequest)
+      returns (GetBYOCAWSStackResponse) {
+    option (google.api.http) = {
+      get : "/pools/{pool_name}/byoc/aws/stack"
+    };
+  }
   rpc CreatePool(CreatePoolRequest)
       returns (CreatePoolResponse) {
     option (google.api.http) = {
@@ -784,6 +790,7 @@ message CreateBYOCAWSPoolOnboardingRequest {
   string instance_type = 3;
   uint32 desired_nodes = 4;
   uint32 max_nodes = 5;
+  string aws_account_id = 6;
 }
 
 message CreateBYOCAWSPoolOnboardingResponse {
@@ -791,6 +798,8 @@ message CreateBYOCAWSPoolOnboardingResponse {
   string err_msg = 2;
   PrivatePool pool = 3;
   string setup_url = 4;
+  string stack_name = 5;
+  string stack_url = 6;
 }
 
 message GetBYOCPoolOnboardingStatusRequest {
@@ -804,6 +813,21 @@ message GetBYOCPoolOnboardingStatusResponse {
   bool ready = 4;
   uint32 ready_machine_count = 5;
   uint32 machine_count = 6;
+}
+
+message GetBYOCAWSStackRequest {
+  string pool_name = 1;
+}
+
+message GetBYOCAWSStackResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string provider = 3;
+  string account_id = 4;
+  string region = 5;
+  string stack_name = 6;
+  string stack_url = 7;
+  string destroy_url = 8;
 }
 
 message CreatePoolRequest { PoolConfig pool = 1; }

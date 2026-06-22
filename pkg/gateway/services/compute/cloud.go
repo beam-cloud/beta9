@@ -33,6 +33,7 @@ const (
 var (
 	awsRegionPattern       = regexp.MustCompile(`^[a-z]{2}(-gov)?-[a-z0-9-]+-\d$`)
 	awsInstanceTypePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,63}$`)
+	awsAccountIDPattern    = regexp.MustCompile(`^\d{12}$`)
 	cloudFormationPartRe   = regexp.MustCompile(`[^a-z0-9-]+`)
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
 )
@@ -78,6 +79,7 @@ func (s *Service) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.Create
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
 	templateURL := awsBYOCTemplateURL(gatewayURL)
 	stackName := awsCloudFormationStackName(workspaceID, req.poolName)
+	stackURL := awsCloudFormationStackURL(req.region, stackName)
 	consoleURL := awsCloudFormationConsoleURL(req.region, stackName, templateURL, map[string]string{
 		"BeamGatewayURL":            gatewayURL,
 		"BeamJoinToken":             joinToken,
@@ -109,9 +111,11 @@ func (s *Service) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.Create
 	})
 
 	return &pb.CreateBYOCAWSPoolOnboardingResponse{
-		Ok:       true,
-		Pool:     s.privatePoolStateToProto(state),
-		SetupUrl: consoleURL,
+		Ok:        true,
+		Pool:      s.privatePoolStateToProto(state),
+		SetupUrl:  consoleURL,
+		StackName: stackName,
+		StackUrl:  stackURL,
 	}, nil
 }
 
@@ -144,12 +148,44 @@ func (s *Service) GetBYOCPoolOnboardingStatus(ctx context.Context, in *pb.GetBYO
 	}, nil
 }
 
+func (s *Service) GetBYOCAWSStack(ctx context.Context, in *pb.GetBYOCAWSStackRequest) (*pb.GetBYOCAWSStackResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	workspaceID := computeWorkspaceID(authInfo)
+	if workspaceID == "" {
+		return &pb.GetBYOCAWSStackResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+
+	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, strings.TrimSpace(in.PoolName))
+	if err != nil {
+		return &pb.GetBYOCAWSStackResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if state == nil {
+		return &pb.GetBYOCAWSStackResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	}
+	if state.Source.Canonical() != model.SourceAWS {
+		return &pb.GetBYOCAWSStackResponse{Ok: false, ErrMsg: "pool is not an AWS BYOC pool"}, nil
+	}
+
+	stack := awsBYOCStackState(workspaceID, state)
+	stackURL := awsCloudFormationStackURL(stack.Region, stack.StackName)
+	return &pb.GetBYOCAWSStackResponse{
+		Ok:         true,
+		Provider:   "aws",
+		AccountId:  stack.AccountID,
+		Region:     stack.Region,
+		StackName:  stack.StackName,
+		StackUrl:   stackURL,
+		DestroyUrl: stackURL,
+	}, nil
+}
+
 type byocAWSPoolOnboardingRequest struct {
 	poolName     string
 	region       string
 	instanceType string
 	desiredNodes uint32
 	maxNodes     uint32
+	accountID    string
 }
 
 func normalizeBYOCAWSPoolOnboardingRequest(in *pb.CreateBYOCAWSPoolOnboardingRequest) (byocAWSPoolOnboardingRequest, error) {
@@ -162,6 +198,7 @@ func normalizeBYOCAWSPoolOnboardingRequest(in *pb.CreateBYOCAWSPoolOnboardingReq
 		instanceType: strings.TrimSpace(in.InstanceType),
 		desiredNodes: in.DesiredNodes,
 		maxNodes:     in.MaxNodes,
+		accountID:    strings.TrimSpace(in.AwsAccountId),
 	}
 	if req.poolName == "" {
 		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("pool name is required")
@@ -195,6 +232,9 @@ func normalizeBYOCAWSPoolOnboardingRequest(in *pb.CreateBYOCAWSPoolOnboardingReq
 	}
 	if req.maxNodes > awsBYOCMaxNodesLimit {
 		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("max_nodes must be <= %d", awsBYOCMaxNodesLimit)
+	}
+	if req.accountID != "" && !awsAccountIDPattern.MatchString(req.accountID) {
+		return byocAWSPoolOnboardingRequest{}, fmt.Errorf("invalid AWS account ID")
 	}
 	return req, nil
 }
@@ -239,6 +279,11 @@ func (s *Service) createOrUpdateBYOCAWSPool(ctx context.Context, authInfo *auth.
 		CreatedByTokenID: ownerTokenID,
 		CreatedAt:        now,
 		UpdatedAt:        now,
+		AWS: &model.AWSBYOCState{
+			AccountID: req.accountID,
+			Region:    req.region,
+			StackName: awsCloudFormationStackName(workspaceID, req.poolName),
+		},
 	}
 	if existing != nil {
 		state.Reservations = existing.Reservations
@@ -247,6 +292,9 @@ func (s *Service) createOrUpdateBYOCAWSPool(ctx context.Context, authInfo *auth.
 		state.CreatedByTokenID = existing.CreatedByTokenID
 		state.CreatedAt = existing.CreatedAt
 		state.ExpiresAt = existing.ExpiresAt
+		if existing.AWS != nil && state.AWS != nil && state.AWS.AccountID == "" {
+			state.AWS.AccountID = existing.AWS.AccountID
+		}
 	}
 	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
 		return nil, err
@@ -273,6 +321,10 @@ func awsCloudFormationConsoleURL(region, stackName, templateURL string, params m
 	return fmt.Sprintf("https://console.aws.amazon.com/cloudformation/home?region=%s#/stacks/create/review?%s", url.QueryEscape(region), values.Encode())
 }
 
+func awsCloudFormationStackURL(region, stackName string) string {
+	return fmt.Sprintf("https://console.aws.amazon.com/cloudformation/home?region=%s#/stacks/stackinfo?stackId=%s", url.QueryEscape(region), url.QueryEscape(stackName))
+}
+
 func awsCloudFormationStackName(workspaceID, poolName string) string {
 	part := cloudFormationNamePart(poolName)
 	if part == "" {
@@ -285,6 +337,33 @@ func awsCloudFormationStackName(workspaceID, poolName string) string {
 		part = strings.Trim(part[:maxPart], "-")
 	}
 	return fmt.Sprintf("beam-%s-%s", part, suffix)
+}
+
+func awsBYOCStackState(workspaceID string, state *model.PoolState) *model.AWSBYOCState {
+	if state == nil {
+		return &model.AWSBYOCState{Region: awsBYOCDefaultRegion}
+	}
+	if state.AWS != nil {
+		stack := *state.AWS
+		if stack.Region == "" {
+			stack.Region = awsBYOCStateRegion(state)
+		}
+		if stack.StackName == "" {
+			stack.StackName = awsCloudFormationStackName(workspaceID, state.Name)
+		}
+		return &stack
+	}
+	return &model.AWSBYOCState{
+		Region:    awsBYOCStateRegion(state),
+		StackName: awsCloudFormationStackName(workspaceID, state.Name),
+	}
+}
+
+func awsBYOCStateRegion(state *model.PoolState) string {
+	if state != nil && state.Config != nil && len(state.Config.Regions) > 0 && strings.TrimSpace(state.Config.Regions[0]) != "" {
+		return strings.TrimSpace(state.Config.Regions[0])
+	}
+	return awsBYOCDefaultRegion
 }
 
 func cloudFormationNamePart(value string) string {

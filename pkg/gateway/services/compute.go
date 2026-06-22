@@ -18,6 +18,10 @@ func (gws *GatewayService) GetBYOCPoolOnboardingStatus(ctx context.Context, in *
 	return gws.computeService.GetBYOCPoolOnboardingStatus(ctx, in)
 }
 
+func (gws *GatewayService) GetBYOCAWSStack(ctx context.Context, in *pb.GetBYOCAWSStackRequest) (*pb.GetBYOCAWSStackResponse, error) {
+	return gws.computeService.GetBYOCAWSStack(ctx, in)
+}
+
 func (gws *GatewayService) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {
 	return gws.computeService.CreatePool(ctx, in)
 }
