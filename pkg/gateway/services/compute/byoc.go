@@ -76,6 +76,69 @@ type byocOnboardingResult struct {
 	ResourceURL  string
 }
 
+func (s *Service) CreateBYOCPoolOnboarding(ctx context.Context, in *pb.CreateBYOCPoolOnboardingRequest) (*pb.CreateBYOCPoolOnboardingResponse, error) {
+	if in == nil {
+		return &pb.CreateBYOCPoolOnboardingResponse{Ok: false, ErrMsg: "request is required"}, nil
+	}
+	provider, err := byocProviderForName(in.Provider)
+	if err != nil {
+		return &pb.CreateBYOCPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	result, err := s.createBYOCPoolOnboarding(ctx, provider, byocRawOnboardingRequest{
+		PoolName:     in.PoolName,
+		Region:       in.Region,
+		InstanceType: in.InstanceType,
+		DesiredNodes: in.DesiredNodes,
+		MaxNodes:     in.MaxNodes,
+		AccountID:    in.AccountId,
+	})
+	if err != nil {
+		return &pb.CreateBYOCPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.CreateBYOCPoolOnboardingResponse{
+		Ok:           true,
+		Pool:         s.privatePoolStateToProto(result.Pool),
+		SetupUrl:     result.SetupURL,
+		ResourceName: result.ResourceName,
+		ResourceUrl:  result.ResourceURL,
+	}, nil
+}
+
+func (s *Service) GetBYOCPoolResource(ctx context.Context, in *pb.GetBYOCPoolResourceRequest) (*pb.GetBYOCPoolResourceResponse, error) {
+	if in == nil {
+		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: "request is required"}, nil
+	}
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	workspaceID := computeWorkspaceID(authInfo)
+	if workspaceID == "" {
+		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, strings.TrimSpace(in.GetPoolName()))
+	if err != nil {
+		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if state == nil {
+		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	}
+	provider, err := byocProviderForName(string(state.Source.Canonical()))
+	if err != nil {
+		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	resource, err := provider.Resource(workspaceID, state)
+	if err != nil {
+		return &pb.GetBYOCPoolResourceResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.GetBYOCPoolResourceResponse{
+		Ok:           true,
+		Provider:     resource.Provider,
+		AccountId:    resource.AccountID,
+		Region:       resource.Region,
+		ResourceName: resource.ResourceName,
+		ResourceUrl:  resource.ResourceURL,
+		DestroyUrl:   resource.DestroyURL,
+	}, nil
+}
+
 func (s *Service) createBYOCPoolOnboarding(ctx context.Context, provider byocProvider, raw byocRawOnboardingRequest) (*byocOnboardingResult, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
@@ -154,6 +217,9 @@ func (s *Service) createBYOCPoolOnboarding(ctx context.Context, provider byocPro
 }
 
 func (s *Service) GetBYOCPoolOnboardingStatus(ctx context.Context, in *pb.GetBYOCPoolOnboardingStatusRequest) (*pb.GetBYOCPoolOnboardingStatusResponse, error) {
+	if in == nil {
+		return &pb.GetBYOCPoolOnboardingStatusResponse{Ok: false, ErrMsg: "request is required"}, nil
+	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
@@ -182,25 +248,6 @@ func (s *Service) GetBYOCPoolOnboardingStatus(ctx context.Context, in *pb.GetBYO
 	}, nil
 }
 
-func (s *Service) getBYOCProviderResource(ctx context.Context, authInfo *auth.AuthInfo, provider byocProvider, poolName string) (*byocProviderResource, error) {
-	workspaceID := computeWorkspaceID(authInfo)
-	if workspaceID == "" {
-		return nil, fmt.Errorf("missing workspace auth")
-	}
-
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, strings.TrimSpace(poolName))
-	if err != nil {
-		return nil, err
-	}
-	if state == nil {
-		return nil, fmt.Errorf("pool not found")
-	}
-	if state.Source.Canonical() != provider.Source() {
-		return nil, fmt.Errorf("pool is not a %s BYOC pool", provider.Source())
-	}
-	return provider.Resource(workspaceID, state)
-}
-
 func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.AuthInfo, provider byocProvider, req byocPoolOnboardingRequest) (*model.PoolState, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	ownerTokenID := computeOwnerTokenID(authInfo)
@@ -211,7 +258,7 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
 		return nil, fmt.Errorf("pool already exists in this workspace")
 	}
-	if existing != nil && existing.Source != "" && existing.Source.Canonical() != provider.Source() {
+	if existing != nil && existing.Source.Canonical() != provider.Source() {
 		return nil, fmt.Errorf("pool already exists with source %s", existing.Source)
 	}
 	if err := provider.ValidateExistingPool(existing); err != nil {
@@ -232,10 +279,6 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 
 	now := time.Now()
 	byocState := provider.PoolState(workspaceID, req)
-	if existing != nil {
-		mergeBYOCProviderState(byocState, existing.BYOC)
-	}
-
 	state := &model.PoolState{
 		Name:             config.Name,
 		Selector:         config.Selector,
@@ -270,26 +313,13 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 	return state, nil
 }
 
-func mergeBYOCProviderState(next, existing *model.BYOCProviderState) {
-	if next == nil || existing == nil {
-		return
-	}
-	if next.AccountID == "" {
-		next.AccountID = existing.AccountID
-	}
-	if next.Region == "" {
-		next.Region = existing.Region
-	}
-	if next.ResourceName == "" {
-		next.ResourceName = existing.ResourceName
-	}
-	if next.ResourceURL == "" {
-		next.ResourceURL = existing.ResourceURL
-	}
-	if next.DestroyURL == "" {
-		next.DestroyURL = existing.DestroyURL
-	}
-	if len(next.Labels) == 0 {
-		next.Labels = existing.Labels
+func byocProviderForName(name string) (byocProvider, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "":
+		return nil, fmt.Errorf("provider is required")
+	case string(model.SourceAWS):
+		return byocAWSProvider{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported BYOC provider %q", name)
 	}
 }

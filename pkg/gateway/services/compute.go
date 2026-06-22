@@ -10,16 +10,16 @@ func (gws *GatewayService) ListPrivatePools(ctx context.Context, in *pb.ListPriv
 	return gws.computeService.ListPrivatePools(ctx, in)
 }
 
-func (gws *GatewayService) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.CreateBYOCAWSPoolOnboardingRequest) (*pb.CreateBYOCAWSPoolOnboardingResponse, error) {
-	return gws.computeService.CreateBYOCAWSPoolOnboarding(ctx, in)
+func (gws *GatewayService) CreateBYOCPoolOnboarding(ctx context.Context, in *pb.CreateBYOCPoolOnboardingRequest) (*pb.CreateBYOCPoolOnboardingResponse, error) {
+	return gws.computeService.CreateBYOCPoolOnboarding(ctx, in)
 }
 
 func (gws *GatewayService) GetBYOCPoolOnboardingStatus(ctx context.Context, in *pb.GetBYOCPoolOnboardingStatusRequest) (*pb.GetBYOCPoolOnboardingStatusResponse, error) {
 	return gws.computeService.GetBYOCPoolOnboardingStatus(ctx, in)
 }
 
-func (gws *GatewayService) GetBYOCAWSStack(ctx context.Context, in *pb.GetBYOCAWSStackRequest) (*pb.GetBYOCAWSStackResponse, error) {
-	return gws.computeService.GetBYOCAWSStack(ctx, in)
+func (gws *GatewayService) GetBYOCPoolResource(ctx context.Context, in *pb.GetBYOCPoolResourceRequest) (*pb.GetBYOCPoolResourceResponse, error) {
+	return gws.computeService.GetBYOCPoolResource(ctx, in)
 }
 
 func (gws *GatewayService) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {

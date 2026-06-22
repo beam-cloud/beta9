@@ -156,10 +156,10 @@ service GatewayService {
       get : "/pools/private"
     };
   }
-  rpc CreateBYOCAWSPoolOnboarding(CreateBYOCAWSPoolOnboardingRequest)
-      returns (CreateBYOCAWSPoolOnboardingResponse) {
+  rpc CreateBYOCPoolOnboarding(CreateBYOCPoolOnboardingRequest)
+      returns (CreateBYOCPoolOnboardingResponse) {
     option (google.api.http) = {
-      post : "/pools/byoc/aws/onboarding"
+      post : "/pools/byoc/onboarding"
       body : "*"
     };
   }
@@ -169,10 +169,10 @@ service GatewayService {
       get : "/pools/{pool_name}/byoc/onboarding-status"
     };
   }
-  rpc GetBYOCAWSStack(GetBYOCAWSStackRequest)
-      returns (GetBYOCAWSStackResponse) {
+  rpc GetBYOCPoolResource(GetBYOCPoolResourceRequest)
+      returns (GetBYOCPoolResourceResponse) {
     option (google.api.http) = {
-      get : "/pools/{pool_name}/byoc/aws/stack"
+      get : "/pools/{pool_name}/byoc/resource"
     };
   }
   rpc CreatePool(CreatePoolRequest)
@@ -784,22 +784,23 @@ message ListPrivatePoolsResponse {
   repeated PrivatePool pools = 3;
 }
 
-message CreateBYOCAWSPoolOnboardingRequest {
-  string pool_name = 1;
-  string region = 2;
-  string instance_type = 3;
-  uint32 desired_nodes = 4;
-  uint32 max_nodes = 5;
-  string aws_account_id = 6;
+message CreateBYOCPoolOnboardingRequest {
+  string provider = 1;
+  string pool_name = 2;
+  string region = 3;
+  string instance_type = 4;
+  uint32 desired_nodes = 5;
+  uint32 max_nodes = 6;
+  string account_id = 7;
 }
 
-message CreateBYOCAWSPoolOnboardingResponse {
+message CreateBYOCPoolOnboardingResponse {
   bool ok = 1;
   string err_msg = 2;
   PrivatePool pool = 3;
   string setup_url = 4;
-  string stack_name = 5;
-  string stack_url = 6;
+  string resource_name = 5;
+  string resource_url = 6;
 }
 
 message GetBYOCPoolOnboardingStatusRequest {
@@ -815,18 +816,18 @@ message GetBYOCPoolOnboardingStatusResponse {
   uint32 machine_count = 6;
 }
 
-message GetBYOCAWSStackRequest {
+message GetBYOCPoolResourceRequest {
   string pool_name = 1;
 }
 
-message GetBYOCAWSStackResponse {
+message GetBYOCPoolResourceResponse {
   bool ok = 1;
   string err_msg = 2;
   string provider = 3;
   string account_id = 4;
   string region = 5;
-  string stack_name = 6;
-  string stack_url = 7;
+  string resource_name = 6;
+  string resource_url = 7;
   string destroy_url = 8;
 }
 

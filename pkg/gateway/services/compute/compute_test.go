@@ -204,7 +204,7 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 	}
 }
 
-func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
+func TestCreateBYOCPoolOnboardingCreatesAWSCPUPrivatePool(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	service := &Service{
@@ -221,19 +221,20 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		},
 	}
 
-	res, err := service.CreateBYOCAWSPoolOnboarding(ctx, &pb.CreateBYOCAWSPoolOnboardingRequest{
+	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:     "aws",
 		PoolName:     "aws-cpu",
 		Region:       "us-east-1",
 		InstanceType: "i4i.xlarge",
 		DesiredNodes: 2,
 		MaxNodes:     4,
-		AwsAccountId: "123456789012",
+		AccountId:    "123456789012",
 	})
 	if err != nil {
-		t.Fatalf("CreateBYOCAWSPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("CreateBYOCAWSPoolOnboarding() not ok: %s", res.ErrMsg)
+		t.Fatalf("CreateBYOCPoolOnboarding() not ok: %s", res.ErrMsg)
 	}
 	if got, want := res.Pool.Name, "aws-cpu"; got != want {
 		t.Fatalf("pool name = %q, want %q", got, want)
@@ -244,8 +245,8 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 	if res.SetupUrl == "" {
 		t.Fatal("setup url is required")
 	}
-	if res.StackName == "" || !strings.Contains(res.StackUrl, res.StackName) {
-		t.Fatalf("stack response = name %q url %q, want stack URL containing stack name", res.StackName, res.StackUrl)
+	if res.ResourceName == "" || !strings.Contains(res.ResourceUrl, res.ResourceName) {
+		t.Fatalf("resource response = name %q url %q, want URL containing resource name", res.ResourceName, res.ResourceUrl)
 	}
 	if !strings.Contains(res.SetupUrl, "templateURL=https%3A%2F%2Fapp.beam.cloud%2Fapi%2Fv1%2Fgateway%2Fpools%2Fbyoc%2Faws%2Ftemplate.yaml") {
 		t.Fatalf("setup url should reference the BYOC AWS template endpoint: %s", res.SetupUrl)
@@ -279,12 +280,12 @@ func TestCreateBYOCAWSPoolOnboardingCreatesCPUPrivatePool(t *testing.T) {
 		}
 	}
 	stored := repo.pools["workspace-1"][0]
-	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.StackName {
+	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.ResourceName {
 		t.Fatalf("stored BYOC metadata = %+v, want aws account/region/resource", stored.BYOC)
 	}
 }
 
-func TestCreateBYOCAWSPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
+func TestCreateBYOCPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
@@ -295,14 +296,16 @@ func TestCreateBYOCAWSPoolOnboardingRejectsPoolOwnedByAnotherToken(t *testing.T)
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.CreateBYOCAWSPoolOnboarding(ctx, &pb.CreateBYOCAWSPoolOnboardingRequest{
-		PoolName: "existing",
+	res, err := service.CreateBYOCPoolOnboarding(ctx, &pb.CreateBYOCPoolOnboardingRequest{
+		Provider:  "aws",
+		PoolName:  "existing",
+		AccountId: "123456789012",
 	})
 	if err != nil {
-		t.Fatalf("CreateBYOCAWSPoolOnboarding() error = %v", err)
+		t.Fatalf("CreateBYOCPoolOnboarding() error = %v", err)
 	}
 	if res.Ok {
-		t.Fatal("CreateBYOCAWSPoolOnboarding() unexpectedly succeeded")
+		t.Fatal("CreateBYOCPoolOnboarding() unexpectedly succeeded")
 	}
 	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
@@ -348,8 +351,9 @@ func TestGetBYOCPoolOnboardingStatusReportsReadiness(t *testing.T) {
 	}
 }
 
-func TestGetBYOCAWSStackReturnsStackAction(t *testing.T) {
+func TestGetBYOCPoolResourceReturnsAWSResourceAction(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
@@ -363,6 +367,8 @@ func TestGetBYOCAWSStackReturnsStackAction(t *testing.T) {
 						AccountID:    "123456789012",
 						Region:       "us-east-1",
 						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
 					},
 				},
 			},
@@ -370,12 +376,12 @@ func TestGetBYOCAWSStackReturnsStackAction(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	res, err := service.GetBYOCAWSStack(ctx, &pb.GetBYOCAWSStackRequest{PoolName: "aws-cpu"})
+	res, err := service.GetBYOCPoolResource(ctx, &pb.GetBYOCPoolResourceRequest{PoolName: "aws-cpu"})
 	if err != nil {
-		t.Fatalf("GetBYOCAWSStack() error = %v", err)
+		t.Fatalf("GetBYOCPoolResource() error = %v", err)
 	}
 	if !res.Ok {
-		t.Fatalf("GetBYOCAWSStack() not ok: %s", res.ErrMsg)
+		t.Fatalf("GetBYOCPoolResource() not ok: %s", res.ErrMsg)
 	}
 	if got, want := res.Provider, "aws"; got != want {
 		t.Fatalf("provider = %q, want %q", got, want)
@@ -386,8 +392,8 @@ func TestGetBYOCAWSStackReturnsStackAction(t *testing.T) {
 	if got, want := res.Region, "us-east-1"; got != want {
 		t.Fatalf("region = %q, want %q", got, want)
 	}
-	if !strings.Contains(res.StackUrl, "beam-aws-cpu-test") || res.DestroyUrl != res.StackUrl {
-		t.Fatalf("stack urls = stack %q destroy %q, want stack name and matching destroy url", res.StackUrl, res.DestroyUrl)
+	if !strings.Contains(res.ResourceUrl, "beam-aws-cpu-test") || res.DestroyUrl != res.ResourceUrl {
+		t.Fatalf("resource urls = resource %q destroy %q, want resource name and matching destroy url", res.ResourceUrl, res.DestroyUrl)
 	}
 }
 

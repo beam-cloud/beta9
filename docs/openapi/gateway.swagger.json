@@ -656,14 +656,14 @@
         ]
       }
     },
-    "/pools/byoc/aws/onboarding": {
+    "/pools/byoc/onboarding": {
       "post": {
-        "operationId": "GatewayService_CreateBYOCAWSPoolOnboarding",
+        "operationId": "GatewayService_CreateBYOCPoolOnboarding",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayCreateBYOCAWSPoolOnboardingResponse"
+              "$ref": "#/definitions/gatewayCreateBYOCPoolOnboardingResponse"
             }
           },
           "default": {
@@ -679,7 +679,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/gatewayCreateBYOCAWSPoolOnboardingRequest"
+              "$ref": "#/definitions/gatewayCreateBYOCPoolOnboardingRequest"
             }
           }
         ],
@@ -824,14 +824,14 @@
         ]
       }
     },
-    "/pools/{poolName}/byoc/aws/stack": {
+    "/pools/{poolName}/byoc/onboarding-status": {
       "get": {
-        "operationId": "GatewayService_GetBYOCAWSStack",
+        "operationId": "GatewayService_GetBYOCPoolOnboardingStatus",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayGetBYOCAWSStackResponse"
+              "$ref": "#/definitions/gatewayGetBYOCPoolOnboardingStatusResponse"
             }
           },
           "default": {
@@ -854,14 +854,14 @@
         ]
       }
     },
-    "/pools/{poolName}/byoc/onboarding-status": {
+    "/pools/{poolName}/byoc/resource": {
       "get": {
-        "operationId": "GatewayService_GetBYOCPoolOnboardingStatus",
+        "operationId": "GatewayService_GetBYOCPoolResource",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/gatewayGetBYOCPoolOnboardingStatusResponse"
+              "$ref": "#/definitions/gatewayGetBYOCPoolResourceResponse"
             }
           },
           "default": {
@@ -1994,9 +1994,12 @@
         }
       }
     },
-    "gatewayCreateBYOCAWSPoolOnboardingRequest": {
+    "gatewayCreateBYOCPoolOnboardingRequest": {
       "type": "object",
       "properties": {
+        "provider": {
+          "type": "string"
+        },
         "poolName": {
           "type": "string"
         },
@@ -2014,12 +2017,12 @@
           "type": "integer",
           "format": "int64"
         },
-        "awsAccountId": {
+        "accountId": {
           "type": "string"
         }
       }
     },
-    "gatewayCreateBYOCAWSPoolOnboardingResponse": {
+    "gatewayCreateBYOCPoolOnboardingResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -2034,10 +2037,10 @@
         "setupUrl": {
           "type": "string"
         },
-        "stackName": {
+        "resourceName": {
           "type": "string"
         },
-        "stackUrl": {
+        "resourceUrl": {
           "type": "string"
         }
       }
@@ -2378,35 +2381,6 @@
         }
       }
     },
-    "gatewayGetBYOCAWSStackResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "accountId": {
-          "type": "string"
-        },
-        "region": {
-          "type": "string"
-        },
-        "stackName": {
-          "type": "string"
-        },
-        "stackUrl": {
-          "type": "string"
-        },
-        "destroyUrl": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayGetBYOCPoolOnboardingStatusResponse": {
       "type": "object",
       "properties": {
@@ -2429,6 +2403,35 @@
         "machineCount": {
           "type": "integer",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayGetBYOCPoolResourceResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "accountId": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "resourceName": {
+          "type": "string"
+        },
+        "resourceUrl": {
+          "type": "string"
+        },
+        "destroyUrl": {
+          "type": "string"
         }
       }
     },

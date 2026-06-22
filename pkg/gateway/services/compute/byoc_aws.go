@@ -10,9 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
-	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -40,47 +38,6 @@ var (
 		"i4i.4xlarge": {},
 	}
 )
-
-func (s *Service) CreateBYOCAWSPoolOnboarding(ctx context.Context, in *pb.CreateBYOCAWSPoolOnboardingRequest) (*pb.CreateBYOCAWSPoolOnboardingResponse, error) {
-	if in == nil {
-		return &pb.CreateBYOCAWSPoolOnboardingResponse{Ok: false, ErrMsg: "request is required"}, nil
-	}
-	result, err := s.createBYOCPoolOnboarding(ctx, byocAWSProvider{}, byocRawOnboardingRequest{
-		PoolName:     in.PoolName,
-		Region:       in.Region,
-		InstanceType: in.InstanceType,
-		DesiredNodes: in.DesiredNodes,
-		MaxNodes:     in.MaxNodes,
-		AccountID:    in.AwsAccountId,
-	})
-	if err != nil {
-		return &pb.CreateBYOCAWSPoolOnboardingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	return &pb.CreateBYOCAWSPoolOnboardingResponse{
-		Ok:        true,
-		Pool:      s.privatePoolStateToProto(result.Pool),
-		SetupUrl:  result.SetupURL,
-		StackName: result.ResourceName,
-		StackUrl:  result.ResourceURL,
-	}, nil
-}
-
-func (s *Service) GetBYOCAWSStack(ctx context.Context, in *pb.GetBYOCAWSStackRequest) (*pb.GetBYOCAWSStackResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	stack, err := s.getBYOCProviderResource(ctx, authInfo, byocAWSProvider{}, in.GetPoolName())
-	if err != nil {
-		return &pb.GetBYOCAWSStackResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	return &pb.GetBYOCAWSStackResponse{
-		Ok:         true,
-		Provider:   stack.Provider,
-		AccountId:  stack.AccountID,
-		Region:     stack.Region,
-		StackName:  stack.ResourceName,
-		StackUrl:   stack.ResourceURL,
-		DestroyUrl: stack.DestroyURL,
-	}, nil
-}
 
 type byocAWSProvider struct{}
 
@@ -133,7 +90,10 @@ func (byocAWSProvider) NormalizeOnboarding(raw byocRawOnboardingRequest) (byocPo
 	if req.maxNodes > awsBYOCMaxNodesLimit {
 		return byocPoolOnboardingRequest{}, fmt.Errorf("max_nodes must be <= %d", awsBYOCMaxNodesLimit)
 	}
-	if req.accountID != "" && !awsAccountIDPattern.MatchString(req.accountID) {
+	if req.accountID == "" {
+		return byocPoolOnboardingRequest{}, fmt.Errorf("AWS account ID is required")
+	}
+	if !awsAccountIDPattern.MatchString(req.accountID) {
 		return byocPoolOnboardingRequest{}, fmt.Errorf("invalid AWS account ID")
 	}
 	return req, nil
@@ -153,13 +113,10 @@ func (byocAWSProvider) PoolState(workspaceID string, req byocPoolOnboardingReque
 }
 
 func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*byocProviderSetupResult, error) {
-	stackName := ""
-	if input.ProviderData != nil {
-		stackName = input.ProviderData.ResourceName
+	if input.ProviderData == nil || input.ProviderData.ResourceName == "" {
+		return nil, fmt.Errorf("missing AWS BYOC resource metadata")
 	}
-	if stackName == "" {
-		stackName = awsCloudFormationStackName(input.WorkspaceID, input.Request.poolName)
-	}
+	stackName := input.ProviderData.ResourceName
 	stackURL := awsCloudFormationStackURL(input.Request.region, stackName)
 	consoleURL := awsCloudFormationConsoleURL(input.Request.region, stackName, awsBYOCTemplateURL(input.GatewayURL), map[string]string{
 		"BeamGatewayURL":            input.GatewayURL,
@@ -186,23 +143,24 @@ func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*
 	}, nil
 }
 
-func (byocAWSProvider) Resource(workspaceID string, state *model.PoolState) (*byocProviderResource, error) {
-	stack := awsBYOCStackState(workspaceID, state)
-	stackURL := stack.ResourceURL
-	if stackURL == "" {
-		stackURL = awsCloudFormationStackURL(stack.Region, stack.ResourceName)
+func (byocAWSProvider) Resource(_ string, state *model.PoolState) (*byocProviderResource, error) {
+	if state == nil || state.BYOC == nil {
+		return nil, fmt.Errorf("missing AWS BYOC resource metadata")
 	}
-	destroyURL := stack.DestroyURL
-	if destroyURL == "" {
-		destroyURL = stackURL
+	resource := state.BYOC
+	if resource.Provider != string(model.SourceAWS) {
+		return nil, fmt.Errorf("pool is not an AWS BYOC pool")
+	}
+	if resource.Region == "" || resource.ResourceName == "" || resource.ResourceURL == "" || resource.DestroyURL == "" {
+		return nil, fmt.Errorf("incomplete AWS BYOC resource metadata")
 	}
 	return &byocProviderResource{
 		Provider:     string(model.SourceAWS),
-		AccountID:    stack.AccountID,
-		Region:       stack.Region,
-		ResourceName: stack.ResourceName,
-		ResourceURL:  stackURL,
-		DestroyURL:   destroyURL,
+		AccountID:    resource.AccountID,
+		Region:       resource.Region,
+		ResourceName: resource.ResourceName,
+		ResourceURL:  resource.ResourceURL,
+		DestroyURL:   resource.DestroyURL,
 	}, nil
 }
 
@@ -243,48 +201,6 @@ func awsCloudFormationStackName(workspaceID, poolName string) string {
 		part = strings.Trim(part[:maxPart], "-")
 	}
 	return fmt.Sprintf("beam-%s-%s", part, suffix)
-}
-
-func awsBYOCStackState(workspaceID string, state *model.PoolState) *model.BYOCProviderState {
-	if state == nil {
-		return &model.BYOCProviderState{Provider: string(model.SourceAWS), Region: awsBYOCDefaultRegion}
-	}
-	if state.BYOC != nil {
-		stack := *state.BYOC
-		if stack.Provider == "" {
-			stack.Provider = string(model.SourceAWS)
-		}
-		if stack.Region == "" {
-			stack.Region = awsBYOCStateRegion(state)
-		}
-		if stack.ResourceName == "" {
-			stack.ResourceName = awsCloudFormationStackName(workspaceID, state.Name)
-		}
-		if stack.ResourceURL == "" {
-			stack.ResourceURL = awsCloudFormationStackURL(stack.Region, stack.ResourceName)
-		}
-		if stack.DestroyURL == "" {
-			stack.DestroyURL = stack.ResourceURL
-		}
-		return &stack
-	}
-	region := awsBYOCStateRegion(state)
-	stackName := awsCloudFormationStackName(workspaceID, state.Name)
-	stackURL := awsCloudFormationStackURL(region, stackName)
-	return &model.BYOCProviderState{
-		Provider:     string(model.SourceAWS),
-		Region:       region,
-		ResourceName: stackName,
-		ResourceURL:  stackURL,
-		DestroyURL:   stackURL,
-	}
-}
-
-func awsBYOCStateRegion(state *model.PoolState) string {
-	if state != nil && state.Config != nil && len(state.Config.Regions) > 0 && strings.TrimSpace(state.Config.Regions[0]) != "" {
-		return strings.TrimSpace(state.Config.Regions[0])
-	}
-	return awsBYOCDefaultRegion
 }
 
 func cloudFormationNamePart(value string) string {
