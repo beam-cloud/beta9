@@ -853,6 +853,21 @@ class SandboxProcessResponse:
         self.exit_code = exit_code
         self.result: str = stdout.read() + stderr.read()
 
+    @classmethod
+    def from_output(
+        cls,
+        *,
+        pid: int,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+    ) -> "SandboxProcessResponse":
+        response = cls.__new__(cls)
+        response.pid = pid
+        response.exit_code = exit_code
+        response.result = stdout + stderr
+        return response
+
 
 class SandboxProcessManager:
     """
@@ -924,9 +939,17 @@ class SandboxProcessManager:
             process.wait()
             ```
         """
-        process = self._exec("python3", "-c", code, cwd=cwd, env=env)
+        process = self._exec("python3", "-c", code, cwd=cwd, env=env, wait=blocking)
 
         if blocking:
+            if process.exit_code >= 0:
+                return SandboxProcessResponse.from_output(
+                    pid=process.pid,
+                    exit_code=process.exit_code,
+                    stdout=process._inline_stdout,
+                    stderr=process._inline_stderr,
+                )
+
             process.wait()
 
             return SandboxProcessResponse(
@@ -978,6 +1001,7 @@ class SandboxProcessManager:
         *args,
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
+        wait: bool = False,
     ) -> "SandboxProcess":
         """
         Internal method to execute commands in the sandbox.
@@ -1007,6 +1031,7 @@ class SandboxProcessManager:
                     command=shell_command,
                     cwd=cwd,
                     env=env,
+                    wait=wait,
                 ),
                 timeout=SANDBOX_EXEC_RPC_TIMEOUT_SECONDS,
             )
@@ -1016,12 +1041,16 @@ class SandboxProcessManager:
         if not response.ok or response.pid <= 0:
             raise SandboxProcessError(response.error_msg)
 
+        done = getattr(response, "done", False)
         process = SandboxProcess(
             self.sandbox_instance,
             pid=response.pid,
             cwd=cwd,
             args=command,
             env=env,
+            exit_code=getattr(response, "exit_code", -1) if done else -1,
+            inline_stdout=getattr(response, "stdout", "") if done else "",
+            inline_stderr=getattr(response, "stderr", "") if done else "",
         )
         self.processes[response.pid] = process
         return process
@@ -1270,6 +1299,8 @@ class SandboxProcess:
         args: List[str],
         env: Dict[str, str],
         exit_code: int = -1,
+        inline_stdout: str = "",
+        inline_stderr: str = "",
     ):
         self.sandbox_instance = sandbox_instance
         self.pid = pid
@@ -1278,6 +1309,8 @@ class SandboxProcess:
         self.cwd = cwd
         self.args = args
         self.env = env
+        self._inline_stdout = inline_stdout
+        self._inline_stderr = inline_stderr
 
     def wait(self, timeout: Optional[float] = None) -> int:
         """

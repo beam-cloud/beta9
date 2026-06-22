@@ -60,8 +60,12 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 	}
 
 	return &pb.PodSandboxExecResponse{
-		Ok:  true,
-		Pid: resp.Pid,
+		Ok:       true,
+		Pid:      resp.Pid,
+		Done:     resp.Done,
+		ExitCode: resp.ExitCode,
+		Stdout:   resp.Stdout,
+		Stderr:   resp.Stderr,
 	}, nil
 }
 
@@ -84,7 +88,7 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 			lastErr = sandboxConnectionError{err: err}
 			retryable = isTransientSandboxConnectFailure(err)
 		} else {
-			resp, err := client.SandboxExecContext(ctx, in.ContainerId, in.Command, in.Env, in.Cwd)
+			resp, err := client.SandboxExecContext(ctx, in.ContainerId, in.Command, in.Env, in.Cwd, in.Wait)
 			if err == nil {
 				return resp, nil
 			}

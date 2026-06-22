@@ -115,14 +115,14 @@ func (c *ContainerClient) Exec(containerId, cmd string, env []string) (*pb.Conta
 }
 
 func (c *ContainerClient) SandboxExec(containerId, cmd string, env map[string]string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	return c.SandboxExecContext(context.Background(), containerId, cmd, env, cwd)
+	return c.SandboxExecContext(context.Background(), containerId, cmd, env, cwd, false)
 }
 
-func (c *ContainerClient) SandboxExecContext(ctx context.Context, containerId, cmd string, env map[string]string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
+func (c *ContainerClient) SandboxExecContext(ctx context.Context, containerId, cmd string, env map[string]string, cwd string, wait bool) (*pb.ContainerSandboxExecResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxExecTimeout)
 	defer cancel()
 
-	resp, err := c.client.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd})
+	resp, err := c.client.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd, Wait: wait})
 	if err != nil {
 		return resp, err
 	}

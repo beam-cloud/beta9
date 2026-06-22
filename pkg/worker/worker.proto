@@ -100,12 +100,17 @@ message ContainerSandboxExecRequest {
   string cwd = 3;
   map<string, string> env = 4;
   bool interactive = 5;
+  bool wait = 6;
 }
 
 message ContainerSandboxExecResponse {
   bool ok = 1;
   string error_msg = 2;
   int32 pid = 3;
+  bool done = 4;
+  int32 exit_code = 5;
+  string stdout = 6;
+  string stderr = 7;
 }
 
 message ContainerSandboxStatusRequest {
