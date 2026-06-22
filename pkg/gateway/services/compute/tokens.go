@@ -48,7 +48,7 @@ func (s *Service) RevokePoolJoinToken(ctx context.Context, in *pb.RevokePoolJoin
 		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
 	}
 	state.Revoked = true
-	if err := s.saveComputeJoinTokenState(ctx, state, time.Until(state.ExpiresAt)); err != nil {
+	if err := s.saveComputeJoinTokenState(ctx, state, joinTokenStateTTL(state)); err != nil {
 		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	s.emitComputeEvent(types.EventComputeJoinToken, types.EventComputeSchema{
@@ -162,11 +162,38 @@ func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, worksp
 		return "", time.Time{}, fmt.Errorf("join token ttl must be positive")
 	}
 
-	token, err := generateComputeToken()
+	token, tokenState, err := s.createPrivatePoolJoinTokenStateForOwner(ctx, workspaceID, ownerTokenID, poolName, ttl, machineID)
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	return token, tokenState.ExpiresAt, nil
+}
+
+func (s *Service) createPersistentPrivatePoolJoinTokenForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, machineID string) (string, *model.JoinTokenState, error) {
+	return s.createPrivatePoolJoinTokenStateForOwner(ctx, workspaceID, ownerTokenID, poolName, 0, machineID)
+}
+
+func (s *Service) createPrivatePoolJoinTokenStateForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName string, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
+	poolName = strings.TrimSpace(poolName)
+	if poolName == "" {
+		return "", nil, fmt.Errorf("pool name is required")
+	}
+	if workspaceID == "" || ownerTokenID == "" {
+		return "", nil, fmt.Errorf("missing workspace auth")
+	}
+	if ttl < 0 {
+		return "", nil, fmt.Errorf("join token ttl must be non-negative")
+	}
+
+	token, err := generateComputeToken()
+	if err != nil {
+		return "", nil, err
+	}
 	now := time.Now()
+	expiresAt := time.Time{}
+	if ttl > 0 {
+		expiresAt = now.Add(ttl)
+	}
 	tokenState := &model.JoinTokenState{
 		TokenHash:        hashComputeToken(token),
 		WorkspaceID:      workspaceID,
@@ -174,22 +201,57 @@ func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, worksp
 		MachineID:        strings.TrimSpace(machineID),
 		CreatedByTokenID: ownerTokenID,
 		CreatedAt:        now,
-		ExpiresAt:        now.Add(ttl),
+		ExpiresAt:        expiresAt,
 	}
 	if err := s.saveComputeJoinTokenState(ctx, tokenState, ttl); err != nil {
-		return "", time.Time{}, err
+		return "", nil, err
+	}
+	attrs := map[string]string{}
+	if tokenState.ExpiresAt.IsZero() {
+		attrs["persistent"] = "true"
+	} else {
+		attrs["expires_at"] = tokenState.ExpiresAt.UTC().Format(time.RFC3339)
+		attrs["ttl_seconds"] = fmt.Sprintf("%.0f", ttl.Seconds())
 	}
 	s.emitComputeEvent(types.EventComputeJoinToken, types.EventComputeSchema{
 		WorkspaceID: tokenState.WorkspaceID,
 		PoolName:    tokenState.PoolName,
 		Action:      types.EventComputeActionJoinTokenCreated,
 		Status:      "active",
-		Attrs: map[string]string{
-			"expires_at":  tokenState.ExpiresAt.UTC().Format(time.RFC3339),
-			"ttl_seconds": fmt.Sprintf("%.0f", ttl.Seconds()),
-		},
+		Attrs:       attrs,
 	})
-	return token, tokenState.ExpiresAt, nil
+	return token, tokenState, nil
+}
+
+func (s *Service) revokeComputeJoinTokenHash(ctx context.Context, tokenHash string) error {
+	tokenHash = strings.TrimSpace(tokenHash)
+	if s == nil || s.computeRepo == nil || tokenHash == "" {
+		return nil
+	}
+	state, err := s.computeRepo.GetJoinTokenState(ctx, tokenHash)
+	if err != nil || state == nil || state.Revoked {
+		return err
+	}
+	state.Revoked = true
+	return s.saveComputeJoinTokenState(ctx, state, joinTokenStateTTL(state))
+}
+
+func joinTokenExpired(state *model.JoinTokenState, now time.Time) bool {
+	if state == nil || state.ExpiresAt.IsZero() {
+		return false
+	}
+	return now.After(state.ExpiresAt)
+}
+
+func joinTokenStateTTL(state *model.JoinTokenState) time.Duration {
+	if state == nil || state.ExpiresAt.IsZero() {
+		return 0
+	}
+	ttl := time.Until(state.ExpiresAt)
+	if ttl <= 0 {
+		return time.Second
+	}
+	return ttl
 }
 
 func isLocalGatewayURL(rawURL string) bool {

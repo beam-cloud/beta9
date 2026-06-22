@@ -131,6 +131,9 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 	if err := s.releasePrivatePoolMachines(ctx, workspaceID, state.Name); err != nil {
 		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	if err := s.revokeBYOCBootstrapJoinTokens(ctx, state); err != nil {
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
 
 	vendors := s.computeVendors()
 	for _, reservation := range state.Reservations {

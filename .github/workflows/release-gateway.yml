@@ -47,6 +47,14 @@ jobs:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
           aws-region: us-east-1
 
+      - name: Publish AWS BYOC template
+        run: |
+          hack/publish_byoc_template.sh \
+            beam-byoc-templates-prod-187248174200-us-east-1 \
+            "${{ steps.set-version.outputs.app_version }}" \
+            byoc-template.yaml \
+            latest
+
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
         id: login-ecr

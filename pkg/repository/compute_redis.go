@@ -129,7 +129,7 @@ func (r *ComputeRedisRepository) DeletePoolState(ctx context.Context, workspaceI
 }
 
 func (r *ComputeRedisRepository) SaveJoinTokenState(ctx context.Context, state *compute.JoinTokenState, ttl time.Duration) error {
-	if ttl <= 0 {
+	if ttl < 0 {
 		ttl = time.Second
 	}
 	data, err := json.Marshal(state)

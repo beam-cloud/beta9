@@ -22,7 +22,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if tokenState == nil || tokenState.Revoked || time.Now().After(tokenState.ExpiresAt) {
+	if tokenState == nil || tokenState.Revoked || joinTokenExpired(tokenState, time.Now()) {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 	if err := s.bindJoinTokenFingerprint(ctx, tokenState, in.MachineFingerprint); err != nil {
@@ -142,11 +142,7 @@ func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *mode
 	}
 	if tokenState.BoundFingerprint == "" {
 		tokenState.BoundFingerprint = fingerprint
-		ttl := time.Until(tokenState.ExpiresAt)
-		if ttl <= 0 {
-			ttl = time.Second
-		}
-		return s.saveComputeJoinTokenState(ctx, tokenState, ttl)
+		return s.saveComputeJoinTokenState(ctx, tokenState, joinTokenStateTTL(tokenState))
 	}
 	if tokenState.BoundFingerprint != fingerprint {
 		return fmt.Errorf("join token is already bound to another machine")

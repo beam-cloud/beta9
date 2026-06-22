@@ -12,13 +12,17 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-const byocJoinTokenTTL = 30 * 24 * time.Hour
+const (
+	byocBootstrapJoinTokenHashLabel   = "join_token_hash"
+	byocBootstrapJoinTokenHashesLabel = "join_token_hashes"
+)
 
 // byocProvider owns provider-specific validation and setup links; the service
 // owns auth, pool state, join tokens, events, and scheduler registration.
 type byocProvider interface {
 	Source() model.CapacitySource
 	NormalizeOnboarding(byocRawOnboardingRequest) (byocPoolOnboardingRequest, error)
+	ValidateSetupConfig(types.ManagedComputeConfig) error
 	PoolState(workspaceID string, req byocPoolOnboardingRequest) *model.BYOCProviderState
 	Setup(context.Context, byocProviderSetupInput) (*byocProviderSetupResult, error)
 	Resource(workspaceID string, state *model.PoolState) (*byocProviderResource, error)
@@ -48,6 +52,7 @@ type byocProviderSetupInput struct {
 	GatewayURL   string
 	JoinToken    string
 	WorkerImage  string
+	Config       types.ManagedComputeConfig
 	Request      byocPoolOnboardingRequest
 	Pool         *model.PoolState
 	ProviderData *model.BYOCProviderState
@@ -175,16 +180,22 @@ func (s *Service) createBYOCPoolOnboarding(ctx context.Context, provider byocPro
 		return nil, lockErr
 	}
 
-	joinToken, _, err := s.createPrivatePoolJoinTokenForOwner(
+	joinToken, tokenState, err := s.createPersistentPrivatePoolJoinTokenForOwner(
 		ctx,
 		workspaceID,
 		ownerTokenID,
 		req.poolName,
-		byocJoinTokenTTL.String(),
 		"",
 	)
 	if err != nil {
 		return nil, err
+	}
+	if state.BYOC != nil {
+		recordBYOCBootstrapJoinTokenHash(state.BYOC, tokenState.TokenHash)
+		if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+			_ = s.revokeComputeJoinTokenHash(ctx, tokenState.TokenHash)
+			return nil, err
+		}
 	}
 
 	setup, err := provider.Setup(ctx, byocProviderSetupInput{
@@ -192,6 +203,7 @@ func (s *Service) createBYOCPoolOnboarding(ctx context.Context, provider byocPro
 		GatewayURL:   strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/"),
 		JoinToken:    joinToken,
 		WorkerImage:  agentWorkerImage(s.appConfig),
+		Config:       s.appConfig.ManagedCompute,
 		Request:      req,
 		Pool:         state,
 		ProviderData: state.BYOC,
@@ -274,6 +286,9 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 	if err := provider.ValidateExistingPool(existing); err != nil {
 		return nil, err
 	}
+	if err := provider.ValidateSetupConfig(s.appConfig.ManagedCompute); err != nil {
+		return nil, err
+	}
 
 	config := normalizePoolConfig(&pb.PoolConfig{
 		Name:      req.poolName,
@@ -289,6 +304,18 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 
 	now := time.Now()
 	byocState := provider.PoolState(workspaceID, req)
+	if existing != nil {
+		for _, label := range []string{byocBootstrapJoinTokenHashLabel, byocBootstrapJoinTokenHashesLabel} {
+			value := byocLabelValue(existing.BYOC, label)
+			if value == "" {
+				continue
+			}
+			if byocState.Labels == nil {
+				byocState.Labels = map[string]string{}
+			}
+			byocState.Labels[label] = value
+		}
+	}
 	state := &model.PoolState{
 		Name:             config.Name,
 		Selector:         config.Selector,
@@ -321,6 +348,66 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 		}
 	}
 	return state, nil
+}
+
+func (s *Service) revokeBYOCBootstrapJoinTokens(ctx context.Context, state *model.PoolState) error {
+	for _, tokenHash := range byocBootstrapJoinTokenHashes(state) {
+		if err := s.revokeComputeJoinTokenHash(ctx, tokenHash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func recordBYOCBootstrapJoinTokenHash(state *model.BYOCProviderState, tokenHash string) {
+	tokenHash = strings.TrimSpace(tokenHash)
+	if state == nil || tokenHash == "" {
+		return
+	}
+	if state.Labels == nil {
+		state.Labels = map[string]string{}
+	}
+	hashes := appendUniqueTokenHash(byocBootstrapJoinTokenHashesFromLabels(state.Labels), tokenHash)
+	state.Labels[byocBootstrapJoinTokenHashLabel] = tokenHash
+	state.Labels[byocBootstrapJoinTokenHashesLabel] = strings.Join(hashes, ",")
+}
+
+func byocBootstrapJoinTokenHashes(state *model.PoolState) []string {
+	if state == nil || state.BYOC == nil {
+		return nil
+	}
+	return byocBootstrapJoinTokenHashesFromLabels(state.BYOC.Labels)
+}
+
+func byocBootstrapJoinTokenHashesFromLabels(labels map[string]string) []string {
+	if labels == nil {
+		return nil
+	}
+	hashes := make([]string, 0, 2)
+	for _, tokenHash := range strings.Split(labels[byocBootstrapJoinTokenHashesLabel], ",") {
+		hashes = appendUniqueTokenHash(hashes, tokenHash)
+	}
+	return appendUniqueTokenHash(hashes, labels[byocBootstrapJoinTokenHashLabel])
+}
+
+func appendUniqueTokenHash(hashes []string, tokenHash string) []string {
+	tokenHash = strings.TrimSpace(tokenHash)
+	if tokenHash == "" {
+		return hashes
+	}
+	for _, existing := range hashes {
+		if existing == tokenHash {
+			return hashes
+		}
+	}
+	return append(hashes, tokenHash)
+}
+
+func byocLabelValue(state *model.BYOCProviderState, key string) string {
+	if state == nil || state.Labels == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.Labels[key])
 }
 
 func byocProviderForName(name string) (byocProvider, error) {
