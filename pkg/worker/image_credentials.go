@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/rs/zerolog/log"
 )
 
@@ -88,6 +89,19 @@ func registryFromImageRef(imageRef string) string {
 		return ""
 	}
 	return registry
+}
+
+type privateWorkerAnonymousRegistryProvider struct{}
+
+func (privateWorkerAnonymousRegistryProvider) GetCredentials(context.Context, string, string) (*authn.AuthConfig, error) {
+	// Return an explicit empty auth config instead of ErrNoCredentials. CLIP
+	// treats ErrNoCredentials as permission to use the default keychain, but
+	// private workers must not use ambient node credentials.
+	return &authn.AuthConfig{}, nil
+}
+
+func (privateWorkerAnonymousRegistryProvider) Name() string {
+	return "private-worker-anonymous"
 }
 
 func imageArchiveRegistryConfig(creds *pb.CacheWorkspaceStorageCredentials) types.S3ImageRegistryConfig {

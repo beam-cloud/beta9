@@ -23,6 +23,9 @@ const (
 )
 
 func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsRequest) (*pb.ListPrivatePoolsResponse, error) {
+	if in == nil {
+		in = &pb.ListPrivatePoolsRequest{}
+	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
@@ -32,17 +35,25 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 	if err != nil {
 		return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if limit := int(in.Limit); limit > 0 && len(states) > limit {
-		states = states[:limit]
-	}
+	limit := int(in.Limit)
 	out := make([]*pb.PrivatePool, 0, len(states))
 	for _, state := range states {
 		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
+		deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, time.Now().UTC())
+		if err != nil {
+			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		if deleted {
+			continue
+		}
 		pool := s.privatePoolStateToProtoWithMachines(state, machines)
 		out = append(out, pool)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 	}
 	return &pb.ListPrivatePoolsResponse{Ok: true, Pools: out}, nil
 }

@@ -882,6 +882,7 @@ func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostI
 		Str("logical_host", localHostID).
 		Str("workspace_id", stub.WorkspaceID).
 		Str("stub_id", stub.StubID).
+		Str("image_id", item.ImageID).
 		Str("hash", item.Hash).
 		Str("kind", string(item.Kind))
 }
@@ -936,7 +937,11 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 	if m.config.ImageService.RegistryStore == reg.S3ImageRegistryStore {
 		s3 := m.config.ImageService.Registries.S3
 		if s3.BucketName == "" || s3.AccessKey == "" || s3.SecretKey == "" {
-			creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", imageIDFromArchiveSource(item.Source))
+			imageID := item.ImageID
+			if imageID == "" {
+				imageID = imageIDFromArchiveSource(item.Source)
+			}
+			creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", imageID)
 			if creds != nil && creds.imageArchiveStorage != nil {
 				s3 = imageArchiveRegistryConfig(creds.imageArchiveStorage)
 			} else if creds != nil && creds.imageArchiveDataURL != "" {
@@ -1107,10 +1112,18 @@ func (m *WorkerCacheManager) materializeOCILayer(ctx context.Context, server *ca
 	}
 
 	authOption := remote.WithAuthFromKeychain(authn.DefaultKeychain)
-	if creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, ref.Context().RegistryStr(), ""); creds != nil && creds.registryCredentials != "" {
+	if creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, ref.Context().RegistryStr(), item.ImageID); creds != nil && creds.registryCredentials != "" {
 		if authenticator := registryAuthenticator(ctx, ref, creds.registryCredentials); authenticator != nil {
 			authOption = remote.WithAuth(authenticator)
 		}
+	} else if m.poolConfig.Mode == types.PoolModePrivate {
+		log.Debug().
+			Str("source", item.Source).
+			Str("workspace_id", stub.WorkspaceID).
+			Str("stub_id", stub.StubID).
+			Str("image_id", item.ImageID).
+			Msg("private worker has no gateway-vended registry credentials for oci layer")
+		return types.CacheAuditStatusOriginFailure
 	}
 
 	layer, err := remote.Layer(ref, remote.WithContext(ctx), authOption)

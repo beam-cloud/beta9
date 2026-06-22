@@ -68,11 +68,13 @@ func (r *pruneCheckpointBackendRepo) GetWorkspace(ctx context.Context, workspace
 type originCredentialsBackendRepo struct {
 	repository.BackendRepository
 	workspace                 *types.Workspace
+	stub                      *types.StubWithRelated
 	secretName                string
 	secret                    *types.Secret
 	workspaceByExternalCalls  int
 	workspaceWithSigningCalls int
 	workspaceCalls            int
+	stubCalls                 int
 }
 
 func (r *originCredentialsBackendRepo) GetImageCredentialSecret(ctx context.Context, imageID string) (string, string, error) {
@@ -107,6 +109,19 @@ func (r *originCredentialsBackendRepo) GetWorkspace(ctx context.Context, workspa
 	workspace := *r.workspace
 	workspace.Id = workspaceID
 	return &workspace, nil
+}
+
+func (r *originCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, externalID string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
+	r.stubCalls++
+	if r.stub != nil {
+		return r.stub, nil
+	}
+	return &types.StubWithRelated{
+		Stub: types.Stub{
+			ExternalId: externalID,
+			Config:     `{"runtime":{"image_id":"image-id"}}`,
+		},
+	}, nil
 }
 
 func (r *originCredentialsBackendRepo) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
@@ -573,6 +588,49 @@ func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "workspace")
+}
+
+func TestGetCacheOriginCredentialsRejectsPrivateWorkerMissingStub(t *testing.T) {
+	service := &WorkerRepositoryService{}
+
+	resp, err := service.GetCacheOriginCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetCacheOriginCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			ImageId:     "image-id",
+		},
+	)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "stub")
+}
+
+func TestGetCacheOriginCredentialsRejectsPrivateWorkerImageMismatch(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo: &originCredentialsBackendRepo{
+			stub: &types.StubWithRelated{
+				Stub: types.Stub{
+					ExternalId: "stub-id",
+					Config:     `{"runtime":{"image_id":"image-id"}}`,
+				},
+			},
+		},
+	}
+
+	resp, err := service.GetCacheOriginCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetCacheOriginCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ImageId:     "other-image",
+			Registry:    "registry.example.com",
+		},
+	)
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "image")
 }
 
 func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {

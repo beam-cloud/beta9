@@ -682,7 +682,8 @@ type ManagedComputeBYOCConfig struct {
 }
 
 type ManagedComputeBYOCAWSConfig struct {
-	TemplateURL string `key:"templateUrl" json:"template_url"`
+	TemplateURL             string `key:"templateUrl" json:"template_url"`
+	ControlRolePrincipalARN string `key:"controlRolePrincipalArn" json:"control_role_principal_arn"`
 }
 
 type ManagedComputeBillingConfig struct {

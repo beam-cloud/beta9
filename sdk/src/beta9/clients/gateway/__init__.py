@@ -561,6 +561,7 @@ class PrivatePool(betterproto.Message):
     machine_count: int = betterproto.uint32_field(11)
     ready_machine_count: int = betterproto.uint32_field(12)
     reserved_nodes: int = betterproto.uint32_field(13)
+    byoc: "ByocPoolState" = betterproto.message_field(14)
 
 
 @dataclass(eq=False, repr=False)
@@ -607,7 +608,7 @@ class ListPrivatePoolsResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class CreateByocPoolOnboardingRequest(betterproto.Message):
+class CreateByocPoolRequest(betterproto.Message):
     provider: str = betterproto.string_field(1)
     pool_name: str = betterproto.string_field(2)
     region: str = betterproto.string_field(3)
@@ -618,50 +619,67 @@ class CreateByocPoolOnboardingRequest(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class CreateByocPoolOnboardingResponse(betterproto.Message):
+class CreateByocPoolResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     pool: "PrivatePool" = betterproto.message_field(3)
     setup_url: str = betterproto.string_field(4)
     resource_name: str = betterproto.string_field(5)
     resource_url: str = betterproto.string_field(6)
+    byoc: "ByocPoolState" = betterproto.message_field(7)
 
 
 @dataclass(eq=False, repr=False)
-class GetByocPoolOnboardingStatusRequest(betterproto.Message):
+class ByocPoolState(betterproto.Message):
+    provider: str = betterproto.string_field(1)
+    account_id: str = betterproto.string_field(2)
+    region: str = betterproto.string_field(3)
+    resource_name: str = betterproto.string_field(4)
+    resource_url: str = betterproto.string_field(5)
+    destroy_url: str = betterproto.string_field(6)
+    phase: str = betterproto.string_field(7)
+    desired_nodes: int = betterproto.uint32_field(8)
+    max_nodes: int = betterproto.uint32_field(9)
+    target_sandboxes: int = betterproto.uint32_field(10)
+    sandboxes_per_node: int = betterproto.uint32_field(11)
+    instance_type: str = betterproto.string_field(12)
+    machine_count: int = betterproto.uint32_field(13)
+    ready_machine_count: int = betterproto.uint32_field(14)
+    message: str = betterproto.string_field(15)
+    hourly_cost_micros: int = betterproto.int64_field(16)
+    total_hourly_cost_micros: int = betterproto.int64_field(17)
+    direct_scale_enabled: bool = betterproto.bool_field(18)
+
+
+@dataclass(eq=False, repr=False)
+class GetByocPoolRequest(betterproto.Message):
     pool_name: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class GetByocPoolOnboardingStatusResponse(betterproto.Message):
+class GetByocPoolResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     pool: "PrivatePool" = betterproto.message_field(3)
     ready: bool = betterproto.bool_field(4)
     ready_machine_count: int = betterproto.uint32_field(5)
     machine_count: int = betterproto.uint32_field(6)
+    byoc: "ByocPoolState" = betterproto.message_field(7)
 
 
 @dataclass(eq=False, repr=False)
-class GetByocPoolResourceRequest(betterproto.Message):
+class ScaleByocPoolRequest(betterproto.Message):
     pool_name: str = betterproto.string_field(1)
+    desired_nodes: int = betterproto.uint32_field(2)
+    max_nodes: int = betterproto.uint32_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class GetByocPoolResourceResponse(betterproto.Message):
+class ScaleByocPoolResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    provider: str = betterproto.string_field(3)
-    account_id: str = betterproto.string_field(4)
-    region: str = betterproto.string_field(5)
-    resource_name: str = betterproto.string_field(6)
-    resource_url: str = betterproto.string_field(7)
-    destroy_url: str = betterproto.string_field(8)
-    instance_type: str = betterproto.string_field(9)
-    desired_nodes: int = betterproto.uint32_field(10)
-    max_nodes: int = betterproto.uint32_field(11)
-    target_sandboxes: int = betterproto.uint32_field(12)
-    sandboxes_per_node: int = betterproto.uint32_field(13)
+    pool: "PrivatePool" = betterproto.message_field(3)
+    byoc: "ByocPoolState" = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -1408,33 +1426,32 @@ class GatewayServiceStub(SyncServiceStub):
             ListPrivatePoolsResponse,
         )(list_private_pools_request)
 
-    def create_byoc_pool_onboarding(
-        self, create_byoc_pool_onboarding_request: "CreateByocPoolOnboardingRequest"
-    ) -> "CreateByocPoolOnboardingResponse":
+    def create_byoc_pool(
+        self, create_byoc_pool_request: "CreateByocPoolRequest"
+    ) -> "CreateByocPoolResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/CreateBYOCPoolOnboarding",
-            CreateByocPoolOnboardingRequest,
-            CreateByocPoolOnboardingResponse,
-        )(create_byoc_pool_onboarding_request)
+            "/gateway.GatewayService/CreateBYOCPool",
+            CreateByocPoolRequest,
+            CreateByocPoolResponse,
+        )(create_byoc_pool_request)
 
-    def get_byoc_pool_onboarding_status(
-        self,
-        get_byoc_pool_onboarding_status_request: "GetByocPoolOnboardingStatusRequest",
-    ) -> "GetByocPoolOnboardingStatusResponse":
+    def get_byoc_pool(
+        self, get_byoc_pool_request: "GetByocPoolRequest"
+    ) -> "GetByocPoolResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/GetBYOCPoolOnboardingStatus",
-            GetByocPoolOnboardingStatusRequest,
-            GetByocPoolOnboardingStatusResponse,
-        )(get_byoc_pool_onboarding_status_request)
+            "/gateway.GatewayService/GetBYOCPool",
+            GetByocPoolRequest,
+            GetByocPoolResponse,
+        )(get_byoc_pool_request)
 
-    def get_byoc_pool_resource(
-        self, get_byoc_pool_resource_request: "GetByocPoolResourceRequest"
-    ) -> "GetByocPoolResourceResponse":
+    def scale_byoc_pool(
+        self, scale_byoc_pool_request: "ScaleByocPoolRequest"
+    ) -> "ScaleByocPoolResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/GetBYOCPoolResource",
-            GetByocPoolResourceRequest,
-            GetByocPoolResourceResponse,
-        )(get_byoc_pool_resource_request)
+            "/gateway.GatewayService/ScaleBYOCPool",
+            ScaleByocPoolRequest,
+            ScaleByocPoolResponse,
+        )(scale_byoc_pool_request)
 
     def create_pool(
         self, create_pool_request: "CreatePoolRequest"

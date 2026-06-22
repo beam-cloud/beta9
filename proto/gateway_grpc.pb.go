@@ -44,9 +44,9 @@ const (
 	GatewayService_ListPoolOffers_FullMethodName                  = "/gateway.GatewayService/ListPoolOffers"
 	GatewayService_LaunchPoolCapacity_FullMethodName              = "/gateway.GatewayService/LaunchPoolCapacity"
 	GatewayService_ListPrivatePools_FullMethodName                = "/gateway.GatewayService/ListPrivatePools"
-	GatewayService_CreateBYOCPoolOnboarding_FullMethodName        = "/gateway.GatewayService/CreateBYOCPoolOnboarding"
-	GatewayService_GetBYOCPoolOnboardingStatus_FullMethodName     = "/gateway.GatewayService/GetBYOCPoolOnboardingStatus"
-	GatewayService_GetBYOCPoolResource_FullMethodName             = "/gateway.GatewayService/GetBYOCPoolResource"
+	GatewayService_CreateBYOCPool_FullMethodName                  = "/gateway.GatewayService/CreateBYOCPool"
+	GatewayService_GetBYOCPool_FullMethodName                     = "/gateway.GatewayService/GetBYOCPool"
+	GatewayService_ScaleBYOCPool_FullMethodName                   = "/gateway.GatewayService/ScaleBYOCPool"
 	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
 	GatewayService_DeletePool_FullMethodName                      = "/gateway.GatewayService/DeletePool"
 	GatewayService_ExtendPoolCapacity_FullMethodName              = "/gateway.GatewayService/ExtendPoolCapacity"
@@ -111,9 +111,9 @@ type GatewayServiceClient interface {
 	ListPoolOffers(ctx context.Context, in *ListPoolOffersRequest, opts ...grpc.CallOption) (*ListPoolOffersResponse, error)
 	LaunchPoolCapacity(ctx context.Context, in *LaunchPoolCapacityRequest, opts ...grpc.CallOption) (*LaunchPoolCapacityResponse, error)
 	ListPrivatePools(ctx context.Context, in *ListPrivatePoolsRequest, opts ...grpc.CallOption) (*ListPrivatePoolsResponse, error)
-	CreateBYOCPoolOnboarding(ctx context.Context, in *CreateBYOCPoolOnboardingRequest, opts ...grpc.CallOption) (*CreateBYOCPoolOnboardingResponse, error)
-	GetBYOCPoolOnboardingStatus(ctx context.Context, in *GetBYOCPoolOnboardingStatusRequest, opts ...grpc.CallOption) (*GetBYOCPoolOnboardingStatusResponse, error)
-	GetBYOCPoolResource(ctx context.Context, in *GetBYOCPoolResourceRequest, opts ...grpc.CallOption) (*GetBYOCPoolResourceResponse, error)
+	CreateBYOCPool(ctx context.Context, in *CreateBYOCPoolRequest, opts ...grpc.CallOption) (*CreateBYOCPoolResponse, error)
+	GetBYOCPool(ctx context.Context, in *GetBYOCPoolRequest, opts ...grpc.CallOption) (*GetBYOCPoolResponse, error)
+	ScaleBYOCPool(ctx context.Context, in *ScaleBYOCPoolRequest, opts ...grpc.CallOption) (*ScaleBYOCPoolResponse, error)
 	CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error)
 	DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error)
 	ExtendPoolCapacity(ctx context.Context, in *ExtendPoolCapacityRequest, opts ...grpc.CallOption) (*ExtendPoolCapacityResponse, error)
@@ -425,27 +425,27 @@ func (c *gatewayServiceClient) ListPrivatePools(ctx context.Context, in *ListPri
 	return out, nil
 }
 
-func (c *gatewayServiceClient) CreateBYOCPoolOnboarding(ctx context.Context, in *CreateBYOCPoolOnboardingRequest, opts ...grpc.CallOption) (*CreateBYOCPoolOnboardingResponse, error) {
-	out := new(CreateBYOCPoolOnboardingResponse)
-	err := c.cc.Invoke(ctx, GatewayService_CreateBYOCPoolOnboarding_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) CreateBYOCPool(ctx context.Context, in *CreateBYOCPoolRequest, opts ...grpc.CallOption) (*CreateBYOCPoolResponse, error) {
+	out := new(CreateBYOCPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateBYOCPool_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) GetBYOCPoolOnboardingStatus(ctx context.Context, in *GetBYOCPoolOnboardingStatusRequest, opts ...grpc.CallOption) (*GetBYOCPoolOnboardingStatusResponse, error) {
-	out := new(GetBYOCPoolOnboardingStatusResponse)
-	err := c.cc.Invoke(ctx, GatewayService_GetBYOCPoolOnboardingStatus_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) GetBYOCPool(ctx context.Context, in *GetBYOCPoolRequest, opts ...grpc.CallOption) (*GetBYOCPoolResponse, error) {
+	out := new(GetBYOCPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetBYOCPool_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *gatewayServiceClient) GetBYOCPoolResource(ctx context.Context, in *GetBYOCPoolResourceRequest, opts ...grpc.CallOption) (*GetBYOCPoolResourceResponse, error) {
-	out := new(GetBYOCPoolResourceResponse)
-	err := c.cc.Invoke(ctx, GatewayService_GetBYOCPoolResource_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) ScaleBYOCPool(ctx context.Context, in *ScaleBYOCPoolRequest, opts ...grpc.CallOption) (*ScaleBYOCPoolResponse, error) {
+	out := new(ScaleBYOCPoolResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ScaleBYOCPool_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -762,9 +762,9 @@ type GatewayServiceServer interface {
 	ListPoolOffers(context.Context, *ListPoolOffersRequest) (*ListPoolOffersResponse, error)
 	LaunchPoolCapacity(context.Context, *LaunchPoolCapacityRequest) (*LaunchPoolCapacityResponse, error)
 	ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error)
-	CreateBYOCPoolOnboarding(context.Context, *CreateBYOCPoolOnboardingRequest) (*CreateBYOCPoolOnboardingResponse, error)
-	GetBYOCPoolOnboardingStatus(context.Context, *GetBYOCPoolOnboardingStatusRequest) (*GetBYOCPoolOnboardingStatusResponse, error)
-	GetBYOCPoolResource(context.Context, *GetBYOCPoolResourceRequest) (*GetBYOCPoolResourceResponse, error)
+	CreateBYOCPool(context.Context, *CreateBYOCPoolRequest) (*CreateBYOCPoolResponse, error)
+	GetBYOCPool(context.Context, *GetBYOCPoolRequest) (*GetBYOCPoolResponse, error)
+	ScaleBYOCPool(context.Context, *ScaleBYOCPoolRequest) (*ScaleBYOCPoolResponse, error)
 	CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error)
 	DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error)
 	ExtendPoolCapacity(context.Context, *ExtendPoolCapacityRequest) (*ExtendPoolCapacityResponse, error)
@@ -876,14 +876,14 @@ func (UnimplementedGatewayServiceServer) LaunchPoolCapacity(context.Context, *La
 func (UnimplementedGatewayServiceServer) ListPrivatePools(context.Context, *ListPrivatePoolsRequest) (*ListPrivatePoolsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPrivatePools not implemented")
 }
-func (UnimplementedGatewayServiceServer) CreateBYOCPoolOnboarding(context.Context, *CreateBYOCPoolOnboardingRequest) (*CreateBYOCPoolOnboardingResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateBYOCPoolOnboarding not implemented")
+func (UnimplementedGatewayServiceServer) CreateBYOCPool(context.Context, *CreateBYOCPoolRequest) (*CreateBYOCPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateBYOCPool not implemented")
 }
-func (UnimplementedGatewayServiceServer) GetBYOCPoolOnboardingStatus(context.Context, *GetBYOCPoolOnboardingStatusRequest) (*GetBYOCPoolOnboardingStatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetBYOCPoolOnboardingStatus not implemented")
+func (UnimplementedGatewayServiceServer) GetBYOCPool(context.Context, *GetBYOCPoolRequest) (*GetBYOCPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBYOCPool not implemented")
 }
-func (UnimplementedGatewayServiceServer) GetBYOCPoolResource(context.Context, *GetBYOCPoolResourceRequest) (*GetBYOCPoolResourceResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetBYOCPoolResource not implemented")
+func (UnimplementedGatewayServiceServer) ScaleBYOCPool(context.Context, *ScaleBYOCPoolRequest) (*ScaleBYOCPoolResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ScaleBYOCPool not implemented")
 }
 func (UnimplementedGatewayServiceServer) CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePool not implemented")
@@ -1439,56 +1439,56 @@ func _GatewayService_ListPrivatePools_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_CreateBYOCPoolOnboarding_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateBYOCPoolOnboardingRequest)
+func _GatewayService_CreateBYOCPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateBYOCPoolRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).CreateBYOCPoolOnboarding(ctx, in)
+		return srv.(GatewayServiceServer).CreateBYOCPool(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_CreateBYOCPoolOnboarding_FullMethodName,
+		FullMethod: GatewayService_CreateBYOCPool_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).CreateBYOCPoolOnboarding(ctx, req.(*CreateBYOCPoolOnboardingRequest))
+		return srv.(GatewayServiceServer).CreateBYOCPool(ctx, req.(*CreateBYOCPoolRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_GetBYOCPoolOnboardingStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetBYOCPoolOnboardingStatusRequest)
+func _GatewayService_GetBYOCPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBYOCPoolRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).GetBYOCPoolOnboardingStatus(ctx, in)
+		return srv.(GatewayServiceServer).GetBYOCPool(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_GetBYOCPoolOnboardingStatus_FullMethodName,
+		FullMethod: GatewayService_GetBYOCPool_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).GetBYOCPoolOnboardingStatus(ctx, req.(*GetBYOCPoolOnboardingStatusRequest))
+		return srv.(GatewayServiceServer).GetBYOCPool(ctx, req.(*GetBYOCPoolRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_GetBYOCPoolResource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetBYOCPoolResourceRequest)
+func _GatewayService_ScaleBYOCPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ScaleBYOCPoolRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).GetBYOCPoolResource(ctx, in)
+		return srv.(GatewayServiceServer).ScaleBYOCPool(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_GetBYOCPoolResource_FullMethodName,
+		FullMethod: GatewayService_ScaleBYOCPool_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).GetBYOCPoolResource(ctx, req.(*GetBYOCPoolResourceRequest))
+		return srv.(GatewayServiceServer).ScaleBYOCPool(ctx, req.(*ScaleBYOCPoolRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2054,16 +2054,16 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_ListPrivatePools_Handler,
 		},
 		{
-			MethodName: "CreateBYOCPoolOnboarding",
-			Handler:    _GatewayService_CreateBYOCPoolOnboarding_Handler,
+			MethodName: "CreateBYOCPool",
+			Handler:    _GatewayService_CreateBYOCPool_Handler,
 		},
 		{
-			MethodName: "GetBYOCPoolOnboardingStatus",
-			Handler:    _GatewayService_GetBYOCPoolOnboardingStatus_Handler,
+			MethodName: "GetBYOCPool",
+			Handler:    _GatewayService_GetBYOCPool_Handler,
 		},
 		{
-			MethodName: "GetBYOCPoolResource",
-			Handler:    _GatewayService_GetBYOCPoolResource_Handler,
+			MethodName: "ScaleBYOCPool",
+			Handler:    _GatewayService_ScaleBYOCPool_Handler,
 		},
 		{
 			MethodName: "CreatePool",
