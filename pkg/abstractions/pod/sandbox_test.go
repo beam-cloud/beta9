@@ -32,6 +32,13 @@ func TestSandboxExecFailureMessageKeepsCommandErrorsGeneric(t *testing.T) {
 	}
 }
 
+func TestSandboxExecFailureMessageKeepsConnectErrorsRetryable(t *testing.T) {
+	got := sandboxExecFailureMessage(sandboxConnectionError{err: errors.New("container not found")})
+	if got != "Failed to connect to sandbox" {
+		t.Fatalf("connect error message = %q, want retryable connect message", got)
+	}
+}
+
 func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 	tests := []struct {
 		name     string

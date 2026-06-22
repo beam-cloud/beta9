@@ -19,6 +19,7 @@ import (
 const (
 	containerClientSandboxExecTimeout   = 15 * time.Second
 	containerClientSandboxStatusTimeout = 5 * time.Second
+	containerClientExistingConnTimeout  = 1 * time.Second
 )
 
 type ContainerClient struct {
@@ -71,8 +72,19 @@ func (c *ContainerClient) connect() error {
 			))
 	}
 
-	conn, err := grpc.Dial(c.ServiceUrl, dialOpts...)
+	dialCtx := context.Background()
+	cancel := func() {}
+	if c.existingConn != nil {
+		dialOpts = append(dialOpts, grpc.WithBlock())
+		dialCtx, cancel = context.WithTimeout(dialCtx, containerClientExistingConnTimeout)
+	}
+	defer cancel()
+
+	conn, err := grpc.DialContext(dialCtx, c.ServiceUrl, dialOpts...)
 	if err != nil {
+		if c.existingConn != nil {
+			_ = c.existingConn.Close()
+		}
 		return err
 	}
 
