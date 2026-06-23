@@ -34,11 +34,11 @@ type byocProvider interface {
 	ValidateSetupConfig(types.ManagedComputeConfig) error
 	PoolState(workspaceID string, req byocPoolRequest, config types.ManagedComputeConfig) *model.BYOCProviderState
 	Setup(context.Context, byocProviderSetupInput) (*byocProviderSetupResult, error)
-	Resource(workspaceID string, state *model.PoolState) (*byocProviderResource, error)
+	Resource(workspaceID string, state *model.PoolState, config types.ManagedComputeConfig) (*byocProviderResource, error)
 	Scale(context.Context, byocProviderScaleInput) error
 	ResourceDeleted(context.Context, byocProviderResourceInput) (bool, error)
 	ReleaseMachine(context.Context, byocProviderReleaseMachineInput) error
-	UpdateScaleState(*model.PoolState, byocPoolRequest) error
+	UpdateScaleState(*model.PoolState, byocPoolRequest, types.ManagedComputeConfig) error
 	ValidateExistingPool(*model.PoolState, byocPoolRequest) error
 }
 
@@ -319,7 +319,7 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
-		resource, err := provider.Resource(workspaceID, state)
+		resource, err := provider.Resource(workspaceID, state, s.appConfig.ManagedCompute)
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -348,7 +348,7 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
-		if err := provider.UpdateScaleState(state, req); err != nil {
+		if err := provider.UpdateScaleState(state, req, s.appConfig.ManagedCompute); err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
@@ -385,7 +385,7 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 	return response, nil
 }
 
-func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool) *pb.BYOCPoolState {
+func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool, config types.ManagedComputeConfig) *pb.BYOCPoolState {
 	if state == nil || state.BYOC == nil {
 		return nil
 	}
@@ -393,7 +393,7 @@ func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool) *pb.BYOC
 	if err != nil {
 		return nil
 	}
-	resource, err := provider.Resource(state.WorkspaceID, state)
+	resource, err := provider.Resource(state.WorkspaceID, state, config)
 	if err != nil {
 		return nil
 	}
@@ -470,7 +470,7 @@ func (s *Service) pruneBYOCPoolMachinesAboveDesired(ctx context.Context, workspa
 	if err != nil {
 		return machines, err
 	}
-	resource, err := provider.Resource(workspaceID, state)
+	resource, err := provider.Resource(workspaceID, state, s.appConfig.ManagedCompute)
 	if err != nil {
 		return machines, err
 	}

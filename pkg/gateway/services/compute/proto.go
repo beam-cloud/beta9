@@ -174,10 +174,10 @@ func (s *Service) privatePoolStateToProto(state *model.PoolState) *pb.PrivatePoo
 }
 
 func (s *Service) privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState) *pb.PrivatePool {
-	return privatePoolStateToProtoWithMachines(state, machines, s.billableMicros)
+	return privatePoolStateToProtoWithMachines(state, machines, s.billableMicros, s.appConfig.ManagedCompute)
 }
 
-func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState, projectCost computeCostProjector) *pb.PrivatePool {
+func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState, projectCost computeCostProjector, managedCompute types.ManagedComputeConfig) *pb.PrivatePool {
 	if state == nil {
 		return nil
 	}
@@ -207,7 +207,7 @@ func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*mod
 		ReadyMachineCount:    readyMachineCount,
 		ReservedNodes:        state.ReservedNodes,
 	}
-	pool.Byoc = byocPoolStateToProto(state, pool)
+	pool.Byoc = byocPoolStateToProto(state, pool, managedCompute)
 	return pool
 }
 

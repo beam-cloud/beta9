@@ -4,14 +4,10 @@ import (
 	"math"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const microRoundingEpsilon = 1e-6
-
-const (
-	managedBYOCMemoryHourlyMicrosPerGB = int64(9_000)
-	managedBYOCCPUHourlyMicrosPerVCPU  = int64(19_000)
-)
 
 func (s *Service) billableMicros(providerMicros int64) int64 {
 	return billableMicros(providerMicros, s.appConfig.ManagedCompute.BillableMarginPctOrDefault())
@@ -51,9 +47,10 @@ func costMultiplier(marginPct float64) float64 {
 	return 1 + marginPct
 }
 
-func managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB int64) int64 {
-	return ceilDivInt64(cpuMillicores*managedBYOCCPUHourlyMicrosPerVCPU, 1000) +
-		ceilDivInt64(memoryMB*managedBYOCMemoryHourlyMicrosPerGB, 1024)
+func managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB int64, config types.ManagedComputeConfig) int64 {
+	pricing := config.BYOC.Pricing
+	return ceilDivInt64(cpuMillicores*pricing.CPUHourlyMicrosPerVCPUOrDefault(), 1000) +
+		ceilDivInt64(memoryMB*pricing.MemoryHourlyMicrosPerGBOrDefault(), 1024)
 }
 
 func ceilDivInt64(numerator, denominator int64) int64 {

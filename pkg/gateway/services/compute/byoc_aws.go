@@ -179,7 +179,7 @@ func normalizeAWSBYOCGPURequest(req *byocPoolRequest, instance awsBYOCInstanceTy
 func (byocAWSProvider) PoolState(workspaceID string, req byocPoolRequest, config types.ManagedComputeConfig) *model.BYOCProviderState {
 	stackName := awsCloudFormationStackName(workspaceID, req.poolName)
 	stackURL := awsCloudFormationStackURL(req.region, stackName)
-	labels := awsBYOCCapacityLabels(req)
+	labels := awsBYOCCapacityLabels(req, config)
 	labels[awsBYOCAutoScalingGroupNameLabel] = awsBYOCAutoScalingGroupName(workspaceID, req.poolName)
 	if strings.TrimSpace(config.BYOC.AWS.ControlRolePrincipalARN) != "" {
 		roleName := awsBYOCControlRoleName(workspaceID, req.poolName)
@@ -252,7 +252,7 @@ func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*
 	}, nil
 }
 
-func (byocAWSProvider) Resource(_ string, state *model.PoolState) (*byocProviderResource, error) {
+func (byocAWSProvider) Resource(_ string, state *model.PoolState, config types.ManagedComputeConfig) (*byocProviderResource, error) {
 	if state == nil || state.BYOC == nil {
 		return nil, fmt.Errorf("missing AWS BYOC resource metadata")
 	}
@@ -268,7 +268,7 @@ func (byocAWSProvider) Resource(_ string, state *model.PoolState) (*byocProvider
 	gpu := awsBYOCLabelString(resource.Labels, "gpu", instance.GPU)
 	gpuCount := awsBYOCLabelUint32(resource.Labels, "gpu_count", instance.GPUCount)
 	desiredNodes := awsBYOCLabelUint32(resource.Labels, "desired_nodes", awsBYOCDefaultDesiredNodes)
-	hourlyCostMicros := awsBYOCInstanceHourlyCostMicros(instanceType)
+	hourlyCostMicros := awsBYOCInstanceHourlyCostMicros(instanceType, config)
 	totalHourlyMicros := hourlyCostMicros * int64(desiredNodes)
 	return &byocProviderResource{
 		Provider:          string(model.SourceAWS),
@@ -341,14 +341,14 @@ func (byocAWSProvider) ReleaseMachine(ctx context.Context, input byocProviderRel
 	})
 }
 
-func (byocAWSProvider) UpdateScaleState(state *model.PoolState, req byocPoolRequest) error {
+func (byocAWSProvider) UpdateScaleState(state *model.PoolState, req byocPoolRequest, config types.ManagedComputeConfig) error {
 	if state == nil || state.BYOC == nil {
 		return fmt.Errorf("missing AWS BYOC resource metadata")
 	}
 	if state.BYOC.Labels == nil {
 		state.BYOC.Labels = map[string]string{}
 	}
-	for key, value := range awsBYOCCapacityLabels(req) {
+	for key, value := range awsBYOCCapacityLabels(req, config) {
 		state.BYOC.Labels[key] = value
 	}
 	if state.Config != nil {
@@ -390,9 +390,9 @@ func awsBYOCTemplateURL(raw string) (string, error) {
 	return templateURL, nil
 }
 
-func awsBYOCCapacityLabels(req byocPoolRequest) map[string]string {
+func awsBYOCCapacityLabels(req byocPoolRequest, config types.ManagedComputeConfig) map[string]string {
 	targetSandboxes := req.desiredNodes * awsBYOCSandboxesPerNode
-	hourlyCostMicros := awsBYOCInstanceHourlyCostMicros(req.instanceType)
+	hourlyCostMicros := awsBYOCInstanceHourlyCostMicros(req.instanceType, config)
 	totalHourlyMicros := hourlyCostMicros * int64(req.desiredNodes)
 	capacityUnit := "concurrent_sandbox"
 	capacityUnitLabel := "concurrent sandboxes"
@@ -418,12 +418,12 @@ func awsBYOCCapacityLabels(req byocPoolRequest) map[string]string {
 	return labels
 }
 
-func awsBYOCInstanceHourlyCostMicros(instanceType string) int64 {
+func awsBYOCInstanceHourlyCostMicros(instanceType string, config types.ManagedComputeConfig) int64 {
 	instance, ok := awsBYOCInstanceCatalog[instanceType]
 	if !ok {
 		return 0
 	}
-	return managedBYOCNodeHourlyCostMicros(instance.CPUMillicores, instance.MemoryMB)
+	return managedBYOCNodeHourlyCostMicros(instance.CPUMillicores, instance.MemoryMB, config)
 }
 
 func awsBYOCLabelString(labels map[string]string, key, fallback string) string {

@@ -372,7 +372,7 @@ func (s *Service) recordBYOCManagedUsage(ctx context.Context, workspaceID string
 			continue
 		}
 		duration := end.Sub(start)
-		hourlyCostMicros := byocMachineHourlyCostMicros(machine)
+		hourlyCostMicros := byocMachineHourlyCostMicros(machine, s.appConfig.ManagedCompute)
 		costCents := managedCostCents(hourlyCostMicros, duration)
 		end, duration, costCents = byocManagedUsageBillableWindow(start, end, duration, costCents, force, now)
 		if !managedBYOCUsageRecordable(force, costCents) {
@@ -464,13 +464,13 @@ func managedBYOCUsageRecordable(force bool, costCents float64) bool {
 	return costCents >= minManagedUsageRecordCents
 }
 
-func byocMachineHourlyCostMicros(machine *model.AgentTokenState) int64 {
+func byocMachineHourlyCostMicros(machine *model.AgentTokenState, config types.ManagedComputeConfig) int64 {
 	if machine == nil {
 		return 0
 	}
 	cpuMillicores := firstNonZeroInt64(machine.CPUMillicores, int64(machine.CPUCount)*1000)
 	memoryMB := int64(firstNonZeroUint64(machine.MemoryMB, machine.Metrics.MemoryTotalMB))
-	return managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB)
+	return managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB, config)
 }
 
 func byocManagedUsage(workspaceID string, state *model.PoolState, machine *model.AgentTokenState, hourlyCostMicros int64, duration time.Duration, costCents float64, start, end time.Time) managedUsage {

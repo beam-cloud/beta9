@@ -2180,15 +2180,30 @@ func TestManagedBYOCNodeHourlyCostMicros(t *testing.T) {
 		name          string
 		cpuMillicores int64
 		memoryMB      int64
+		config        types.ManagedComputeConfig
 		want          int64
 	}{
 		{name: "i4i xlarge shape", cpuMillicores: 4_000, memoryMB: 32 * 1024, want: 364_000},
 		{name: "single gpu xlarge shape", cpuMillicores: 4_000, memoryMB: 16 * 1024, want: 220_000},
 		{name: "fractional resources round up", cpuMillicores: 250, memoryMB: 512, want: 9_250},
+		{
+			name:          "configured rate card",
+			cpuMillicores: 4_000,
+			memoryMB:      32 * 1024,
+			config: types.ManagedComputeConfig{
+				BYOC: types.ManagedComputeBYOCConfig{
+					Pricing: types.ManagedComputeBYOCPricingConfig{
+						CPUHourlyMicrosPerVCPU:  20_000,
+						MemoryHourlyMicrosPerGB: 10_000,
+					},
+				},
+			},
+			want: 400_000,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := managedBYOCNodeHourlyCostMicros(tt.cpuMillicores, tt.memoryMB); got != tt.want {
+			if got := managedBYOCNodeHourlyCostMicros(tt.cpuMillicores, tt.memoryMB, tt.config); got != tt.want {
 				t.Fatalf("managedBYOCNodeHourlyCostMicros() = %d, want %d", got, tt.want)
 			}
 		})
