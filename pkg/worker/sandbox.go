@@ -445,8 +445,9 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		}
 
 		stats.TCPAttempts++
-		tcp := probeProcessManager(ctx, instance)
-		if tcp.Connected {
+		stats.ReadyAttempts++
+		client, err := newProcessManagerClient(ctx, instance)
+		if err == nil {
 			if !tcpReadyRecorded {
 				stats.FirstTCPReadyAfter = time.Since(start)
 				s.recordContainerLifecycle(ctx, instance.Request, containerLifecycleFromDuration(
@@ -459,27 +460,6 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 				))
 				tcpReadyRecorded = true
 			}
-		} else {
-			lastErr = tcp.Err
-			stats.TCPFailures++
-			stats.LastTCPFailureClass = tcp.Class
-			stats.TCPFailureClasses[tcp.Class]++
-			if tcp.Err != nil {
-				stats.LastError = tcp.Err.Error()
-			}
-
-			if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
-				stats.LastError = ctx.Err().Error()
-				return nil, false, stats
-			}
-
-			backoff = nextProcessManagerBackoff(backoff)
-			continue
-		}
-
-		stats.ReadyAttempts++
-		client, err := newProcessManagerClient(ctx, instance)
-		if err == nil {
 			log.Info().
 				Str("container_id", containerId).
 				Dur("wait_time", time.Since(start)).
@@ -494,6 +474,9 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 		stats.LastError = err.Error()
 		stats.LastReadyClass = classifyProcessManagerReadyError(err)
 		stats.ReadyFailureClasses[stats.LastReadyClass]++
+		stats.TCPFailures++
+		stats.LastTCPFailureClass = stats.LastReadyClass
+		stats.TCPFailureClasses[stats.LastTCPFailureClass]++
 
 		if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
 			stats.LastError = ctx.Err().Error()
