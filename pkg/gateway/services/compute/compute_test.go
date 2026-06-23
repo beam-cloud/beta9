@@ -270,6 +270,7 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 		"param_DesiredCapacity=2",
 		"param_MaxSize=4",
 		"param_NetworkSlots=128",
+		"param_NodeGPUCount=0",
 		"param_NodeInstanceType=i4i.xlarge",
 		"param_RootVolumeSizeGB=200",
 		"param_TargetAWSAccountID=123456789012",
@@ -295,6 +296,9 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 	if stored.BYOC == nil || stored.BYOC.Provider != "aws" || stored.BYOC.AccountID != "123456789012" || stored.BYOC.Region != "us-east-1" || stored.BYOC.ResourceName != res.ResourceName {
 		t.Fatalf("stored BYOC metadata = %+v, want aws account/region/resource", stored.BYOC)
 	}
+	if len(stored.Config.GetGpu()) != 0 {
+		t.Fatalf("stored CPU pool GPU config = %v, want none", stored.Config.GetGpu())
+	}
 	if got := stored.BYOC.Labels[byocBootstrapJoinTokenHashLabel]; got == "" || got != joinTokenHash {
 		t.Fatalf("stored BYOC join token hash = %q, want %q", got, joinTokenHash)
 	}
@@ -307,18 +311,145 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 		"max_nodes":                "4",
 		"target_sandboxes":         "40",
 		"sandboxes_per_node":       "20",
-		"hourly_cost_micros":       "343000",
-		"total_hourly_cost_micros": "686000",
+		"hourly_cost_micros":       "364000",
+		"total_hourly_cost_micros": "728000",
 	} {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
 		}
 	}
-	if got, want := res.GetByoc().GetHourlyCostMicros(), int64(343000); got != want {
+	if got, want := res.GetByoc().GetHourlyCostMicros(), int64(364000); got != want {
 		t.Fatalf("BYOC hourly cost micros = %d, want %d", got, want)
 	}
-	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(686000); got != want {
+	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(728000); got != want {
 		t.Fatalf("BYOC total hourly cost micros = %d, want %d", got, want)
+	}
+	if res.GetByoc().GetGpu() != "" || res.GetByoc().GetGpuCount() != 0 {
+		t.Fatalf("CPU BYOC gpu = %q/%d, want none", res.GetByoc().GetGpu(), res.GetByoc().GetGpuCount())
+	}
+}
+
+func TestCreateBYOCPoolCreatesAWSGPUPrivatePool(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	templateURL := "https://s3.us-east-1.amazonaws.com/beam-byoc-templates-test/aws/byoc-template.yaml"
+	service := &Service{
+		computeRepo: repo,
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				BYOC: types.ManagedComputeBYOCConfig{
+					AWS: types.ManagedComputeBYOCAWSConfig{TemplateURL: templateURL},
+				},
+			},
+		},
+	}
+
+	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
+		Provider:     "aws",
+		PoolName:     "aws-gpu",
+		Region:       "us-east-1",
+		InstanceType: "g6.xlarge",
+		DesiredNodes: 2,
+		MaxNodes:     2,
+		AccountId:    "123456789012",
+		Gpu:          "L4",
+		GpuCount:     1,
+	})
+	if err != nil {
+		t.Fatalf("CreateBYOCPool() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("CreateBYOCPool() not ok: %s", res.ErrMsg)
+	}
+	if got, want := res.Pool.GetConfig().GetGpu(), []string{"L4"}; !sameStrings(got, want) {
+		t.Fatalf("pool GPU config = %v, want %v", got, want)
+	}
+	for _, fragment := range []string{
+		"param_NodeInstanceType=g6.xlarge",
+		"param_NodeGPUCount=1",
+		"param_DesiredCapacity=2",
+	} {
+		if !strings.Contains(res.SetupUrl, fragment) {
+			t.Fatalf("setup url missing %q: %s", fragment, res.SetupUrl)
+		}
+	}
+	stored := repo.pools["workspace-1"][0]
+	for key, want := range map[string]string{
+		"instance_type":            "g6.xlarge",
+		"gpu":                      "L4",
+		"gpu_count":                "1",
+		"capacity_unit":            "gpu",
+		"capacity_unit_label":      "GPUs",
+		"hourly_cost_micros":       "220000",
+		"total_hourly_cost_micros": "440000",
+	} {
+		if got := stored.BYOC.Labels[key]; got != want {
+			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
+		}
+	}
+	if got, want := res.GetByoc().GetGpu(), "L4"; got != want {
+		t.Fatalf("BYOC gpu = %q, want %q", got, want)
+	}
+	if got, want := res.GetByoc().GetGpuCount(), uint32(1); got != want {
+		t.Fatalf("BYOC gpu count = %d, want %d", got, want)
+	}
+	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(440000); got != want {
+		t.Fatalf("BYOC total hourly cost micros = %d, want %d", got, want)
+	}
+}
+
+func TestCreateBYOCPoolRejectsChangingExistingAWSHardwareClass(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{
+		computeRepo: repo,
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			ManagedCompute: types.ManagedComputeConfig{
+				BYOC: types.ManagedComputeBYOCConfig{
+					AWS: types.ManagedComputeBYOCAWSConfig{
+						TemplateURL: "https://s3.us-east-1.amazonaws.com/beam-byoc-templates-test/aws/byoc-template.yaml",
+					},
+				},
+			},
+		},
+	}
+
+	first, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
+		Provider:     "aws",
+		PoolName:     "aws-cpu",
+		Region:       "us-east-1",
+		InstanceType: "i4i.xlarge",
+		DesiredNodes: 1,
+		AccountId:    "123456789012",
+	})
+	if err != nil || !first.Ok {
+		t.Fatalf("first CreateBYOCPool() = (%v, %v)", first, err)
+	}
+
+	second, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
+		Provider:     "aws",
+		PoolName:     "aws-cpu",
+		Region:       "us-east-1",
+		InstanceType: "g6.xlarge",
+		DesiredNodes: 1,
+		AccountId:    "123456789012",
+		Gpu:          "L4",
+		GpuCount:     1,
+	})
+	if err != nil {
+		t.Fatalf("second CreateBYOCPool() error = %v", err)
+	}
+	if second.Ok {
+		t.Fatal("CreateBYOCPool() unexpectedly allowed changing an existing AWS pool from CPU to GPU")
+	}
+	if !strings.Contains(second.ErrMsg, "create a new pool") {
+		t.Fatalf("error = %q, want create a new pool guidance", second.ErrMsg)
 	}
 }
 
@@ -612,10 +743,10 @@ func TestListPrivatePoolsIncludesBYOCState(t *testing.T) {
 	if got, want := byoc.TargetSandboxes, uint32(40); got != want {
 		t.Fatalf("target sandboxes = %d, want %d", got, want)
 	}
-	if got, want := byoc.HourlyCostMicros, int64(343000); got != want {
+	if got, want := byoc.HourlyCostMicros, int64(364000); got != want {
 		t.Fatalf("hourly cost micros = %d, want %d", got, want)
 	}
-	if got, want := byoc.TotalHourlyCostMicros, int64(686000); got != want {
+	if got, want := byoc.TotalHourlyCostMicros, int64(728000); got != want {
 		t.Fatalf("total hourly cost micros = %d, want %d", got, want)
 	}
 }
@@ -1029,6 +1160,79 @@ func TestListPrivatePoolsKeepsRecentlyDisconnectedBYOCPool(t *testing.T) {
 	}
 }
 
+func TestListPrivatePoolsCleansBYOCWhenProviderUnavailableAndMachinesDisconnected(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "1",
+							"max_nodes":                       "1",
+							"target_sandboxes":                "20",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+							awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+							awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+						},
+					},
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {
+				{
+					WorkspaceID:      "workspace-1",
+					PoolName:         "aws-cpu",
+					MachineID:        "machine-1",
+					Schedulable:      true,
+					LastJoinAt:       now.Add(-time.Minute),
+					LastHeartbeatAt:  now.Add(-30 * time.Second),
+					LastDisconnectAt: now,
+				},
+			},
+		},
+	}
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		return false, errBYOCProviderControlUnavailable
+	}
+	defer func() {
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 0 {
+		t.Fatalf("pool count = %d, want 0 after provider-unavailable BYOC cleanup", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 0 {
+		t.Fatalf("stored machine count = %d, want 0", got)
+	}
+}
+
 func TestReleasePrivateMachineTerminatesAWSBYOCNode(t *testing.T) {
 	now := time.Now().UTC()
 	roleARN := "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test"
@@ -1096,8 +1300,9 @@ func TestReleasePrivateMachineKeepsLocalStateWhenAWSBYOCTerminationFails(t *test
 		Name:        "aws-cpu",
 		Source:      model.SourceAWS,
 		BYOC: &model.BYOCProviderState{
-			Provider: string(model.SourceAWS),
-			Region:   "us-east-1",
+			Provider:     string(model.SourceAWS),
+			Region:       "us-east-1",
+			ResourceName: "beam-aws-cpu-test",
 			Labels: map[string]string{
 				awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
 				awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
@@ -1133,6 +1338,60 @@ func TestReleasePrivateMachineKeepsLocalStateWhenAWSBYOCTerminationFails(t *test
 	}
 	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 1 {
 		t.Fatalf("machine count after failed release = %d, want 1", got)
+	}
+}
+
+func TestReleasePrivateMachineCleansDisconnectedAWSBYOCWhenProviderControlUnavailable(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "aws-cpu",
+		Source:      model.SourceAWS,
+		BYOC: &model.BYOCProviderState{
+			Provider:     string(model.SourceAWS),
+			Region:       "us-east-1",
+			ResourceName: "beam-aws-cpu-test",
+			Labels: map[string]string{
+				awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+				awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+				awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:      "workspace-1",
+		PoolName:         "aws-cpu",
+		MachineID:        "machine-1",
+		Schedulable:      true,
+		LastJoinAt:       now.Add(-time.Minute),
+		LastHeartbeatAt:  now.Add(-30 * time.Second),
+		LastDisconnectAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "aws-cpu"): {machine}},
+	}
+	oldReleaseMachine := awsBYOCReleaseMachine
+	awsBYOCReleaseMachine = func(context.Context, awsBYOCReleaseMachineInput) error {
+		return errBYOCProviderControlUnavailable
+	}
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		return false, errBYOCProviderControlUnavailable
+	}
+	defer func() {
+		awsBYOCReleaseMachine = oldReleaseMachine
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	if err := (&Service{computeRepo: repo}).releasePrivateMachine(context.Background(), machine); err != nil {
+		t.Fatalf("releasePrivateMachine() error = %v", err)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 0 {
+		t.Fatalf("stored machine count = %d, want 0", got)
 	}
 }
 
@@ -1248,8 +1507,8 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 							"max_nodes":                       "4",
 							"target_sandboxes":                "20",
 							"sandboxes_per_node":              "20",
-							"hourly_cost_micros":              "343000",
-							"total_hourly_cost_micros":        "343000",
+							"hourly_cost_micros":              "364000",
+							"total_hourly_cost_micros":        "364000",
 							awsBYOCAutoScalingGroupNameLabel:  asgName,
 							awsBYOCControlRoleArnLabel:        roleARN,
 							awsBYOCControlRoleExternalIDLabel: externalID,
@@ -1292,7 +1551,7 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 		"desired_nodes":            "3",
 		"max_nodes":                "5",
 		"target_sandboxes":         "60",
-		"total_hourly_cost_micros": "1029000",
+		"total_hourly_cost_micros": "1092000",
 	} {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored label %s = %q, want %q", key, got, want)
@@ -1303,6 +1562,94 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 	}
 	if got, want := res.GetByoc().GetDesiredNodes(), uint32(3); got != want {
 		t.Fatalf("response desired nodes = %d, want %d", got, want)
+	}
+}
+
+func TestScaleBYOCPoolPrunesDisconnectedMachinesAboveDesired(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	roleARN := "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test"
+	externalID := "beam-byoc-test-external-id"
+	asgName := "beam-asg-aws-cpu-test"
+	connected := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "aws-cpu",
+		MachineID:       "machine-connected",
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now,
+	}
+	disconnected := &model.AgentTokenState{
+		WorkspaceID:      "workspace-1",
+		PoolName:         "aws-cpu",
+		MachineID:        "machine-disconnected",
+		Schedulable:      true,
+		LastJoinAt:       now.Add(-time.Minute),
+		LastHeartbeatAt:  now.Add(-30 * time.Second),
+		LastDisconnectAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "2",
+							"max_nodes":                       "2",
+							"target_sandboxes":                "40",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  asgName,
+							awsBYOCControlRoleArnLabel:        roleARN,
+							awsBYOCControlRoleExternalIDLabel: externalID,
+						},
+					},
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {connected, disconnected},
+		},
+	}
+	oldScaler := awsBYOCScaleAutoScalingGroup
+	awsBYOCScaleAutoScalingGroup = func(context.Context, awsBYOCScaleAutoScalingGroupInput) error {
+		return nil
+	}
+	defer func() {
+		awsBYOCScaleAutoScalingGroup = oldScaler
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ScaleBYOCPool(ctx, &pb.ScaleBYOCPoolRequest{
+		PoolName:     "aws-cpu",
+		DesiredNodes: 1,
+		MaxNodes:     1,
+	})
+	if err != nil {
+		t.Fatalf("ScaleBYOCPool() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ScaleBYOCPool() not ok: %s", res.ErrMsg)
+	}
+	machines := repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]
+	if got := len(machines); got != 1 {
+		t.Fatalf("stored machine count = %d, want 1", got)
+	}
+	if got := machines[0].MachineID; got != "machine-connected" {
+		t.Fatalf("remaining machine = %q, want connected machine", got)
+	}
+	if got, want := res.GetByoc().GetMachineCount(), uint32(1); got != want {
+		t.Fatalf("response machine count = %d, want %d", got, want)
 	}
 }
 
@@ -1378,8 +1725,18 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"- i4i.large",
 		"- i4i.xlarge",
 		"- i4i.4xlarge",
+		"- g6.xlarge",
+		"- g5.xlarge",
+		"NodeGPUCount:",
+		"LatestGPUAmiId:",
+		"/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id",
+		"UseGPUAMI:",
+		"ImageId: !If [UseGPUAMI, !Ref LatestGPUAmiId, !Ref LatestCPUAmiId]",
 		"nvme-Amazon_EC2_NVMe_Instance_Storage",
 		"BEAM_AGENT_INSTALL_DOCKER=1",
+		"nvidia-ctk runtime configure --runtime=docker",
+		"GPU_ARGS=\"--max-gpus ${NodeGPUCount}\"",
+		"$GPU_ARGS",
 		"--state-dir \"$BEAM_STATE_DIR\"",
 		"/etc/docker/daemon.json",
 		"NetworkSlots:",
@@ -1813,6 +2170,26 @@ func TestManagedComputeBillableMicros(t *testing.T) {
 			}
 			if got := providerBudgetMicros(tt.provider, tt.margin); got != tt.wantBudget {
 				t.Fatalf("providerBudgetMicros() = %d, want %d", got, tt.wantBudget)
+			}
+		})
+	}
+}
+
+func TestManagedBYOCNodeHourlyCostMicros(t *testing.T) {
+	tests := []struct {
+		name          string
+		cpuMillicores int64
+		memoryMB      int64
+		want          int64
+	}{
+		{name: "i4i xlarge shape", cpuMillicores: 4_000, memoryMB: 32 * 1024, want: 364_000},
+		{name: "single gpu xlarge shape", cpuMillicores: 4_000, memoryMB: 16 * 1024, want: 220_000},
+		{name: "fractional resources round up", cpuMillicores: 250, memoryMB: 512, want: 9_250},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := managedBYOCNodeHourlyCostMicros(tt.cpuMillicores, tt.memoryMB); got != tt.want {
+				t.Fatalf("managedBYOCNodeHourlyCostMicros() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -2857,6 +3234,83 @@ func TestRecordManagedUsageSkipsActiveSubCentWindow(t *testing.T) {
 	}
 }
 
+func TestRecordManagedUsageRecordsBYOCMachineWithManagedRates(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	cursor := now.Add(-2 * time.Minute)
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "aws-cpu",
+		Source:      model.SourceAWS,
+		BYOC: &model.BYOCProviderState{
+			Provider: "aws",
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:        "workspace-1",
+		PoolName:           "aws-cpu",
+		MachineID:          "machine-1",
+		MachineFingerprint: "i-0123456789abcdef0",
+		CPUMillicores:      4_000,
+		MemoryMB:           32 * 1024,
+		GPUs:               []string{"A10G"},
+		GPUCount:           1,
+		CreatedAt:          now.Add(-2 * time.Hour),
+		LastJoinAt:         now.Add(-2 * time.Hour),
+		LastHeartbeatAt:    now,
+		BillingCursorAt:    cursor,
+		Schedulable:        true,
+	}
+	billing := &fakeManagedBilling{}
+	usageRepo := &fakeUsageMetricsRepo{}
+	repo := &fakeComputeRepo{
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {machine},
+		},
+	}
+	service := &Service{billing: billing, usageMetricsRepo: usageRepo, computeRepo: repo}
+
+	if !service.recordManagedUsage(context.Background(), "workspace-1", state, now, false) {
+		t.Fatal("recordManagedUsage() did not report a state change")
+	}
+	if got, want := len(billing.usage), 1; got != want {
+		t.Fatalf("billing usage count = %d, want %d", got, want)
+	}
+	usage := billing.usage[0]
+	if got, want := usage.ReservationID, "byoc:machine-1"; got != want {
+		t.Fatalf("reservation id = %q, want %q", got, want)
+	}
+	if got, want := usage.Provider, "byoc"; got != want {
+		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if got, want := usage.Cloud, "aws"; got != want {
+		t.Fatalf("cloud = %q, want %q", got, want)
+	}
+	if got, want := usage.HourlyCostMicros, int64(364_000); got != want {
+		t.Fatalf("hourly cost micros = %d, want %d", got, want)
+	}
+	if got, want := usage.CostCents, 1.0; got < want-0.001 || got > want+0.001 {
+		t.Fatalf("cost cents = %f, want about %f", got, want)
+	}
+	if got, want := usage.DurationSeconds, float64(98); got != want {
+		t.Fatalf("duration seconds = %f, want %f", got, want)
+	}
+	if got, want := usage.CPUMillicores, int64(4_000); got != want {
+		t.Fatalf("cpu millicores = %d, want %d", got, want)
+	}
+	if got, want := usage.MemoryMB, int64(32*1024); got != want {
+		t.Fatalf("memory mb = %d, want %d", got, want)
+	}
+	if got, want := usage.GPU, "A10G"; got != want {
+		t.Fatalf("gpu = %q, want %q", got, want)
+	}
+	if want := cursor.Add(98 * time.Second); !machine.BillingCursorAt.Equal(want) {
+		t.Fatalf("machine billing cursor = %s, want %s", machine.BillingCursorAt, want)
+	}
+	if got, want := len(usageRepo.counters), 2; got != want {
+		t.Fatalf("usage counter count = %d, want %d", got, want)
+	}
+}
+
 func TestRecordManagedUsageBillsClosedSubCentWindow(t *testing.T) {
 	now := time.Now().UTC()
 	cursor := now.Add(-5 * time.Second)
@@ -3509,6 +3963,62 @@ func TestDeletePoolMachineReleasesManagedReservationID(t *testing.T) {
 	}
 	if !strings.Contains(state.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
 		t.Fatalf("reservation last error = %q, want missing vendor error", state.Reservations[0].LastError)
+	}
+}
+
+func TestDeletePoolMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "1",
+							"max_nodes":                       "1",
+							"target_sandboxes":                "20",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+							awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+							awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+						},
+					},
+				},
+			},
+		},
+	}
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		return true, nil
+	}
+	defer func() {
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	_, res, err := (&Service{computeRepo: repo}).DeletePoolMachine(
+		ctx,
+		&pb.DeleteMachineRequest{PoolName: "aws-cpu", MachineId: "machine-already-gone"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
 	}
 }
 

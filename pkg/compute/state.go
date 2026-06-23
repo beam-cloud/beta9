@@ -82,6 +82,7 @@ type AgentTokenState struct {
 	LastJoinAt                time.Time             `json:"last_join_at"`
 	LastHeartbeatAt           time.Time             `json:"last_heartbeat_at"`
 	LastDisconnectAt          time.Time             `json:"last_disconnect_at"`
+	BillingCursorAt           time.Time             `json:"billing_cursor_at,omitempty"`
 }
 
 type AgentMachineMetrics struct {

@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,6 +17,13 @@ func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.Agen
 		return nil
 	}
 	if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil {
+		reconciled, reconcileErr := s.reconcileBYOCMachineReleaseFailure(ctx, machine, err)
+		if reconcileErr != nil {
+			return reconcileErr
+		}
+		if reconciled {
+			return nil
+		}
 		return err
 	}
 	if err := s.releaseManagedMachineReservation(ctx, machine); err != nil {
@@ -44,10 +52,38 @@ func (s *Service) releaseBYOCProviderMachine(ctx context.Context, machine *model
 	})
 }
 
+func (s *Service) reconcileBYOCMachineReleaseFailure(ctx context.Context, machine *model.AgentTokenState, releaseErr error) (bool, error) {
+	if machine == nil || !byocReleaseErrorAllowsLocalReconcile(releaseErr) {
+		return false, nil
+	}
+	state, err := s.getPrivatePoolState(ctx, machine.WorkspaceID, machine.PoolName)
+	if err != nil || state == nil || state.BYOC == nil {
+		return false, err
+	}
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, machine.WorkspaceID, machine.PoolName)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, machine.WorkspaceID, state, machines, time.Now().UTC())
+	if err != nil || deleted {
+		return deleted, err
+	}
+	if model.AgentMachineConnected(machine, time.Now().UTC()) {
+		return false, nil
+	}
+	return true, s.removePrivateMachine(ctx, machine)
+}
+
+func byocReleaseErrorAllowsLocalReconcile(err error) bool {
+	return errors.Is(err, errBYOCProviderResourceNotFound) ||
+		errors.Is(err, errBYOCProviderControlUnavailable)
+}
+
 func (s *Service) removePrivateMachine(ctx context.Context, machine *model.AgentTokenState) error {
 	if machine == nil {
 		return nil
 	}
+	s.flushBYOCMachineManagedUsage(ctx, machine)
 	if err := s.markPrivateMachineUnschedulable(ctx, machine); err != nil {
 		return err
 	}
@@ -75,6 +111,17 @@ func (s *Service) removePrivateMachine(ctx context.Context, machine *model.Agent
 		Message:     machineReleasedMessage,
 	})
 	return nil
+}
+
+func (s *Service) flushBYOCMachineManagedUsage(ctx context.Context, machine *model.AgentTokenState) {
+	if s == nil || s.billing == nil || machine == nil {
+		return
+	}
+	state, err := s.getPrivatePoolState(ctx, machine.WorkspaceID, machine.PoolName)
+	if err != nil || state == nil || state.BYOC == nil {
+		return
+	}
+	s.recordBYOCManagedUsage(ctx, machine.WorkspaceID, state, time.Now().UTC().Truncate(time.Second), true)
 }
 
 func (s *Service) markPrivateMachineUnschedulable(ctx context.Context, machine *model.AgentTokenState) error {

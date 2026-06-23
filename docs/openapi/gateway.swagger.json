@@ -2054,6 +2054,13 @@
         },
         "directScaleEnabled": {
           "type": "boolean"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -2107,6 +2114,13 @@
         },
         "accountId": {
           "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

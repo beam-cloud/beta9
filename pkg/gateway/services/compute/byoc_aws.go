@@ -53,21 +53,31 @@ var (
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
 	awsBYOCInstanceCatalog = map[string]awsBYOCInstanceType{
 		// Storage optimized instances with local NVMe for cache performance.
-		// Prices are us-east-1 Linux On-Demand USD/hr, in micros.
-		"i4i.large":   {HourlyCostMicros: 172_000},
-		"i4i.xlarge":  {HourlyCostMicros: 343_000},
-		"i4i.2xlarge": {HourlyCostMicros: 686_000},
-		"i4i.4xlarge": {HourlyCostMicros: 1_373_000},
+		"i4i.large":   {CPUMillicores: 2_000, MemoryMB: 16 * 1024},
+		"i4i.xlarge":  {CPUMillicores: 4_000, MemoryMB: 32 * 1024},
+		"i4i.2xlarge": {CPUMillicores: 8_000, MemoryMB: 64 * 1024},
+		"i4i.4xlarge": {CPUMillicores: 16_000, MemoryMB: 128 * 1024},
+
+		// Single-GPU nodes. These families include local NVMe and run on the
+		// GPU AMI so Docker can expose NVIDIA devices to worker containers.
+		"g6.xlarge":  {CPUMillicores: 4_000, MemoryMB: 16 * 1024, GPU: string(types.GPU_L4), GPUCount: 1},
+		"g6.2xlarge": {CPUMillicores: 8_000, MemoryMB: 32 * 1024, GPU: string(types.GPU_L4), GPUCount: 1},
+		"g5.xlarge":  {CPUMillicores: 4_000, MemoryMB: 16 * 1024, GPU: string(types.GPU_A10G), GPUCount: 1},
+		"g5.2xlarge": {CPUMillicores: 8_000, MemoryMB: 32 * 1024, GPU: string(types.GPU_A10G), GPUCount: 1},
 	}
 )
 
 var errBYOCDirectScaleUnavailable = errors.New("direct BYOC scaling is unavailable for this pool; recreate the AWS stack from Beam to enable one-click resizing")
 var errAWSBYOCResourceNotFound = errors.New("AWS BYOC resource not found")
+var errAWSBYOCMachineNotFound = errors.New("AWS BYOC machine not found")
 
 type byocAWSProvider struct{}
 
 type awsBYOCInstanceType struct {
-	HourlyCostMicros int64
+	CPUMillicores int64
+	MemoryMB      int64
+	GPU           string
+	GPUCount      uint32
 }
 
 func (byocAWSProvider) Source() model.CapacitySource {
@@ -82,6 +92,8 @@ func (byocAWSProvider) NormalizePoolRequest(raw byocRawPoolRequest) (byocPoolReq
 		desiredNodes: raw.DesiredNodes,
 		maxNodes:     raw.MaxNodes,
 		accountID:    strings.TrimSpace(raw.AccountID),
+		gpu:          strings.TrimSpace(raw.GPU),
+		gpuCount:     raw.GPUCount,
 	}
 	if req.poolName == "" {
 		return byocPoolRequest{}, fmt.Errorf("pool name is required")
@@ -101,8 +113,12 @@ func (byocAWSProvider) NormalizePoolRequest(raw byocRawPoolRequest) (byocPoolReq
 	if !strings.Contains(req.instanceType, ".") || !awsInstanceTypePattern.MatchString(req.instanceType) {
 		return byocPoolRequest{}, fmt.Errorf("invalid AWS instance type %q", req.instanceType)
 	}
-	if _, ok := awsBYOCInstanceCatalog[req.instanceType]; !ok {
+	instance, ok := awsBYOCInstanceCatalog[req.instanceType]
+	if !ok {
 		return byocPoolRequest{}, fmt.Errorf("unsupported AWS instance type %q", req.instanceType)
+	}
+	if err := normalizeAWSBYOCGPURequest(&req, instance); err != nil {
+		return byocPoolRequest{}, err
 	}
 	if req.desiredNodes == 0 {
 		req.desiredNodes = awsBYOCDefaultDesiredNodes
@@ -126,6 +142,38 @@ func (byocAWSProvider) NormalizePoolRequest(raw byocRawPoolRequest) (byocPoolReq
 		return byocPoolRequest{}, fmt.Errorf("invalid AWS account ID")
 	}
 	return req, nil
+}
+
+func normalizeAWSBYOCGPURequest(req *byocPoolRequest, instance awsBYOCInstanceType) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+	requestedGPU := types.NormalizeGPUType(req.gpu)
+	if requestedGPU == types.NO_GPU {
+		requestedGPU = ""
+	}
+	catalogGPU := types.NormalizeGPUType(instance.GPU)
+	if catalogGPU == types.NO_GPU {
+		catalogGPU = ""
+	}
+
+	if catalogGPU == "" || instance.GPUCount == 0 {
+		if requestedGPU != "" || req.gpuCount > 0 {
+			return fmt.Errorf("AWS instance type %q does not provide GPUs", req.instanceType)
+		}
+		req.gpu = ""
+		req.gpuCount = 0
+		return nil
+	}
+	if requestedGPU != "" && requestedGPU != catalogGPU {
+		return fmt.Errorf("AWS instance type %q provides %s GPUs, not %s", req.instanceType, catalogGPU, requestedGPU)
+	}
+	if req.gpuCount > 0 && req.gpuCount != instance.GPUCount {
+		return fmt.Errorf("AWS instance type %q provides %d GPU(s), not %d", req.instanceType, instance.GPUCount, req.gpuCount)
+	}
+	req.gpu = catalogGPU.String()
+	req.gpuCount = instance.GPUCount
+	return nil
 }
 
 func (byocAWSProvider) PoolState(workspaceID string, req byocPoolRequest, config types.ManagedComputeConfig) *model.BYOCProviderState {
@@ -185,6 +233,7 @@ func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*
 		"MaxSize":                     strconv.FormatUint(uint64(input.Request.maxNodes), 10),
 		"MinSize":                     strconv.FormatUint(uint64(input.Request.desiredNodes), 10),
 		"NetworkSlots":                strconv.FormatUint(uint64(awsBYOCDefaultNetworkSlots), 10),
+		"NodeGPUCount":                strconv.FormatUint(uint64(input.Request.gpuCount), 10),
 		"NodeInstanceType":            input.Request.instanceType,
 		"RootVolumeSizeGB":            strconv.FormatUint(uint64(awsBYOCDefaultRootVolumeGB), 10),
 		"TargetAWSAccountID":          input.Request.accountID,
@@ -197,6 +246,8 @@ func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*
 			"cloud":         string(model.SourceAWS),
 			"region":        input.Request.region,
 			"instance_type": input.Request.instanceType,
+			"gpu":           input.Request.gpu,
+			"gpu_count":     strconv.FormatUint(uint64(input.Request.gpuCount), 10),
 		},
 	}, nil
 }
@@ -213,9 +264,12 @@ func (byocAWSProvider) Resource(_ string, state *model.PoolState) (*byocProvider
 		return nil, fmt.Errorf("incomplete AWS BYOC resource metadata")
 	}
 	instanceType := awsBYOCLabelString(resource.Labels, "instance_type", awsBYOCDefaultInstanceType)
+	instance := awsBYOCInstanceCatalog[instanceType]
+	gpu := awsBYOCLabelString(resource.Labels, "gpu", instance.GPU)
+	gpuCount := awsBYOCLabelUint32(resource.Labels, "gpu_count", instance.GPUCount)
 	desiredNodes := awsBYOCLabelUint32(resource.Labels, "desired_nodes", awsBYOCDefaultDesiredNodes)
-	hourlyCostMicros := awsBYOCLabelInt64(resource.Labels, "hourly_cost_micros", awsBYOCInstanceHourlyCostMicros(instanceType))
-	totalHourlyMicros := awsBYOCLabelInt64(resource.Labels, "total_hourly_cost_micros", hourlyCostMicros*int64(desiredNodes))
+	hourlyCostMicros := awsBYOCInstanceHourlyCostMicros(instanceType)
+	totalHourlyMicros := hourlyCostMicros * int64(desiredNodes)
 	return &byocProviderResource{
 		Provider:          string(model.SourceAWS),
 		AccountID:         resource.AccountID,
@@ -224,6 +278,8 @@ func (byocAWSProvider) Resource(_ string, state *model.PoolState) (*byocProvider
 		ResourceURL:       resource.ResourceURL,
 		DestroyURL:        resource.DestroyURL,
 		InstanceType:      instanceType,
+		GPU:               gpu,
+		GPUCount:          gpuCount,
 		DesiredNodes:      desiredNodes,
 		MaxNodes:          awsBYOCLabelUint32(resource.Labels, "max_nodes", awsBYOCDefaultDesiredNodes),
 		TargetSandboxes:   awsBYOCLabelUint32(resource.Labels, "target_sandboxes", awsBYOCDefaultDesiredNodes*awsBYOCSandboxesPerNode),
@@ -301,9 +357,20 @@ func (byocAWSProvider) UpdateScaleState(state *model.PoolState, req byocPoolRequ
 	return nil
 }
 
-func (byocAWSProvider) ValidateExistingPool(existing *model.PoolState) error {
-	if existing != nil && configuredPoolGPU(existing) != "" {
-		return fmt.Errorf("AWS BYOC currently supports CPU pools only")
+func (byocAWSProvider) ValidateExistingPool(existing *model.PoolState, req byocPoolRequest) error {
+	if existing == nil || existing.BYOC == nil {
+		return nil
+	}
+	existingInstanceType := awsBYOCLabelString(existing.BYOC.Labels, "instance_type", "")
+	if existingInstanceType != "" && existingInstanceType != req.instanceType {
+		return fmt.Errorf("pool already exists with AWS instance type %q; create a new pool for %q", existingInstanceType, req.instanceType)
+	}
+	existingGPU := configuredPoolGPU(existing)
+	if existingGPU == "" && req.gpu == "" {
+		return nil
+	}
+	if existingGPU != req.gpu {
+		return fmt.Errorf("pool already exists with GPU type %q; create a new pool for %q", firstNonEmpty(existingGPU, "none"), firstNonEmpty(req.gpu, "none"))
 	}
 	return nil
 }
@@ -327,7 +394,13 @@ func awsBYOCCapacityLabels(req byocPoolRequest) map[string]string {
 	targetSandboxes := req.desiredNodes * awsBYOCSandboxesPerNode
 	hourlyCostMicros := awsBYOCInstanceHourlyCostMicros(req.instanceType)
 	totalHourlyMicros := hourlyCostMicros * int64(req.desiredNodes)
-	return map[string]string{
+	capacityUnit := "concurrent_sandbox"
+	capacityUnitLabel := "concurrent sandboxes"
+	if req.gpuCount > 0 {
+		capacityUnit = "gpu"
+		capacityUnitLabel = "GPUs"
+	}
+	labels := map[string]string{
 		"instance_type":            req.instanceType,
 		"desired_nodes":            strconv.FormatUint(uint64(req.desiredNodes), 10),
 		"max_nodes":                strconv.FormatUint(uint64(req.maxNodes), 10),
@@ -335,9 +408,14 @@ func awsBYOCCapacityLabels(req byocPoolRequest) map[string]string {
 		"sandboxes_per_node":       strconv.FormatUint(uint64(awsBYOCSandboxesPerNode), 10),
 		"hourly_cost_micros":       strconv.FormatInt(hourlyCostMicros, 10),
 		"total_hourly_cost_micros": strconv.FormatInt(totalHourlyMicros, 10),
-		"capacity_unit":            "concurrent_sandbox",
-		"capacity_unit_label":      "concurrent sandboxes",
+		"capacity_unit":            capacityUnit,
+		"capacity_unit_label":      capacityUnitLabel,
 	}
+	if req.gpu != "" && req.gpuCount > 0 {
+		labels["gpu"] = req.gpu
+		labels["gpu_count"] = strconv.FormatUint(uint64(req.gpuCount), 10)
+	}
+	return labels
 }
 
 func awsBYOCInstanceHourlyCostMicros(instanceType string) int64 {
@@ -345,7 +423,7 @@ func awsBYOCInstanceHourlyCostMicros(instanceType string) int64 {
 	if !ok {
 		return 0
 	}
-	return instance.HourlyCostMicros
+	return managedBYOCNodeHourlyCostMicros(instance.CPUMillicores, instance.MemoryMB)
 }
 
 func awsBYOCLabelString(labels map[string]string, key, fallback string) string {
@@ -511,8 +589,14 @@ func realAWSBYOCReleaseMachine(ctx context.Context, input awsBYOCReleaseMachineI
 	}
 	instanceID, err := awsBYOCResolveMachineInstanceID(ctx, cfg, input)
 	if err != nil {
-		if errors.Is(err, errAWSBYOCResourceNotFound) {
+		if errors.Is(err, errAWSBYOCMachineNotFound) {
 			return nil
+		}
+		if errors.Is(err, errAWSBYOCResourceNotFound) {
+			return errBYOCProviderResourceNotFound
+		}
+		if awsBYOCControlRoleUnavailable(err) {
+			return errBYOCProviderControlUnavailable
 		}
 		return err
 	}
@@ -521,6 +605,12 @@ func realAWSBYOCReleaseMachine(ctx context.Context, input awsBYOCReleaseMachineI
 		ShouldDecrementDesiredCapacity: aws.Bool(false),
 	})
 	if err != nil {
+		if awsBYOCAutoScalingInstanceAlreadyGone(err) {
+			return nil
+		}
+		if awsBYOCControlRoleUnavailable(err) {
+			return errBYOCProviderControlUnavailable
+		}
 		return fmt.Errorf("terminate AWS BYOC node %s: %w", instanceID, err)
 	}
 	return nil
@@ -545,7 +635,7 @@ func awsBYOCResolveMachineInstanceID(ctx context.Context, cfg aws.Config, input 
 		return "", err
 	}
 	if len(instanceIDs) == 0 {
-		return "", errAWSBYOCResourceNotFound
+		return "", errAWSBYOCMachineNotFound
 	}
 
 	candidateIDs := awsBYOCMachineInstanceIDCandidates(input.Machine)
@@ -555,13 +645,16 @@ func awsBYOCResolveMachineInstanceID(ctx context.Context, cfg aws.Config, input 
 		}
 	}
 	if len(candidateIDs) > 0 {
-		return "", errAWSBYOCResourceNotFound
+		return "", errAWSBYOCMachineNotFound
 	}
 
 	out, err := ec2.NewFromConfig(cfg).DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: instanceIDs,
 	})
 	if err != nil {
+		if awsBYOCEC2InstanceNotFound(err) {
+			return "", errAWSBYOCMachineNotFound
+		}
 		return "", fmt.Errorf("describe AWS BYOC nodes: %w", err)
 	}
 	for _, reservation := range out.Reservations {
@@ -575,7 +668,7 @@ func awsBYOCResolveMachineInstanceID(ctx context.Context, cfg aws.Config, input 
 	if input.Machine != nil {
 		machineID = input.Machine.MachineID
 	}
-	return "", fmt.Errorf("unable to find AWS BYOC instance for machine %q in Auto Scaling Group %q", machineID, input.AutoScalingGroupName)
+	return "", fmt.Errorf("%w: unable to find AWS BYOC instance for machine %q in Auto Scaling Group %q", errAWSBYOCMachineNotFound, machineID, input.AutoScalingGroupName)
 }
 
 func awsBYOCAutoScalingGroupInstanceIDs(ctx context.Context, cfg aws.Config, asgName string) ([]string, error) {
@@ -583,6 +676,9 @@ func awsBYOCAutoScalingGroupInstanceIDs(ctx context.Context, cfg aws.Config, asg
 		AutoScalingGroupNames: []string{asgName},
 	})
 	if err != nil {
+		if awsBYOCAutoScalingGroupNotFound(err) {
+			return nil, errAWSBYOCResourceNotFound
+		}
 		return nil, fmt.Errorf("describe AWS BYOC Auto Scaling Group: %w", err)
 	}
 	if len(out.AutoScalingGroups) == 0 {
@@ -683,6 +779,48 @@ func awsBYOCCloudFormationStackNotFound(err error) bool {
 		return false
 	}
 	return strings.EqualFold(apiErr.ErrorCode(), "ValidationError") && strings.Contains(strings.ToLower(apiErr.ErrorMessage()), "does not exist")
+}
+
+func awsBYOCAutoScalingGroupNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if !strings.EqualFold(apiErr.ErrorCode(), "ValidationError") {
+		return false
+	}
+	msg := strings.ToLower(apiErr.ErrorMessage())
+	return strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "not exist")
+}
+
+func awsBYOCAutoScalingInstanceAlreadyGone(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	code := strings.ToLower(apiErr.ErrorCode())
+	if code != "validationerror" && code != "invalidinstanceid.notfound" {
+		return false
+	}
+	msg := strings.ToLower(apiErr.ErrorMessage())
+	return strings.Contains(msg, "instance") &&
+		(strings.Contains(msg, "not found") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "not part"))
+}
+
+func awsBYOCEC2InstanceNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	code := strings.ToLower(apiErr.ErrorCode())
+	if code == "invalidinstanceid.notfound" || code == "invalidinstanceid.malformed" {
+		return true
+	}
+	msg := strings.ToLower(apiErr.ErrorMessage())
+	return strings.Contains(msg, "instance") &&
+		(strings.Contains(msg, "does not exist") || strings.Contains(msg, "not found"))
 }
 
 func awsBYOCControlRoleUnavailable(err error) bool {

@@ -616,6 +616,8 @@ class CreateByocPoolRequest(betterproto.Message):
     desired_nodes: int = betterproto.uint32_field(5)
     max_nodes: int = betterproto.uint32_field(6)
     account_id: str = betterproto.string_field(7)
+    gpu: str = betterproto.string_field(8)
+    gpu_count: int = betterproto.uint32_field(9)
 
 
 @dataclass(eq=False, repr=False)
@@ -649,6 +651,8 @@ class ByocPoolState(betterproto.Message):
     hourly_cost_micros: int = betterproto.int64_field(16)
     total_hourly_cost_micros: int = betterproto.int64_field(17)
     direct_scale_enabled: bool = betterproto.bool_field(18)
+    gpu: str = betterproto.string_field(19)
+    gpu_count: int = betterproto.uint32_field(20)
 
 
 @dataclass(eq=False, repr=False)

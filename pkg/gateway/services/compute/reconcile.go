@@ -3,6 +3,8 @@ package compute
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
@@ -143,6 +145,9 @@ func advanceBillingRenewal(reservation *model.Reservation, now time.Time) bool {
 }
 
 func (s *Service) poolNeedsManagedBilling(state *model.PoolState, now time.Time) bool {
+	if state != nil && state.BYOC != nil {
+		return true
+	}
 	for _, reservation := range state.Reservations {
 		if reservation.Managed() && reservation.ActiveAt(now) {
 			return true
@@ -343,7 +348,167 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 		}
 		changed = true
 	}
+	changed = s.recordBYOCManagedUsage(ctx, workspaceID, state, now, force) || changed
 	return changed
+}
+
+func (s *Service) recordBYOCManagedUsage(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time, force bool) bool {
+	if state == nil || state.BYOC == nil || s.computeRepo == nil {
+		return false
+	}
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("workspace_id", workspaceID).
+			Str("pool_name", state.Name).
+			Msg("failed to list BYOC machines for billing")
+		return false
+	}
+	changed := false
+	for _, machine := range machines {
+		start, end, ok := byocMachineBillingWindow(machine, now, force)
+		if !ok {
+			continue
+		}
+		duration := end.Sub(start)
+		hourlyCostMicros := byocMachineHourlyCostMicros(machine)
+		costCents := managedCostCents(hourlyCostMicros, duration)
+		end, duration, costCents = byocManagedUsageBillableWindow(start, end, duration, costCents, force, now)
+		if !managedBYOCUsageRecordable(force, costCents) {
+			continue
+		}
+		usage := byocManagedUsage(workspaceID, state, machine, hourlyCostMicros, duration, costCents, start, end)
+		if err := s.billing.RecordManagedUsage(ctx, usage); err != nil {
+			log.Warn().
+				Err(err).
+				Str("workspace_id", workspaceID).
+				Str("pool_name", state.Name).
+				Str("machine_id", machine.MachineID).
+				Msg("failed to record BYOC managed usage")
+			continue
+		}
+		machine.BillingCursorAt = end
+		if err := s.saveComputeAgentTokenState(ctx, machine); err != nil {
+			log.Warn().
+				Err(err).
+				Str("workspace_id", workspaceID).
+				Str("pool_name", state.Name).
+				Str("machine_id", machine.MachineID).
+				Msg("failed to advance BYOC managed billing cursor")
+			continue
+		}
+		if err := s.recordManagedUsageMetrics(usage); err != nil {
+			log.Warn().
+				Err(err).
+				Str("workspace_id", workspaceID).
+				Str("pool_name", state.Name).
+				Str("machine_id", machine.MachineID).
+				Msg("failed to record BYOC managed usage metrics")
+		}
+		changed = true
+	}
+	return changed
+}
+
+func byocMachineBillingWindow(machine *model.AgentTokenState, now time.Time, force bool) (time.Time, time.Time, bool) {
+	if machine == nil {
+		return time.Time{}, time.Time{}, false
+	}
+	start := machine.BillingCursorAt
+	if start.IsZero() || (!machine.CreatedAt.IsZero() && start.Before(machine.CreatedAt)) {
+		start = machine.CreatedAt
+	}
+	if start.IsZero() || (!machine.LastJoinAt.IsZero() && start.Before(machine.LastJoinAt)) {
+		start = machine.LastJoinAt
+	}
+	if start.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+
+	end := model.AgentMachineLastSeen(machine)
+	if model.AgentMachineConnected(machine, now) || (force && machine.LastDisconnectAt.IsZero()) {
+		end = now
+	}
+	if end.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	if end.After(now) {
+		end = now
+	}
+	if !end.After(start) {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
+}
+
+func byocManagedUsageBillableWindow(start, end time.Time, duration time.Duration, costCents float64, force bool, now time.Time) (time.Time, time.Duration, float64) {
+	if force || end.Before(now) || costCents < minManagedUsageRecordCents {
+		return end, duration, costCents
+	}
+	wholeCents := math.Floor(costCents)
+	if wholeCents < minManagedUsageRecordCents {
+		return end, duration, 0
+	}
+	billableDuration := time.Duration(float64(duration) * (wholeCents / costCents)).Truncate(time.Second)
+	if billableDuration <= 0 {
+		return end, duration, 0
+	}
+	return start.Add(billableDuration), billableDuration, wholeCents
+}
+
+func managedBYOCUsageRecordable(force bool, costCents float64) bool {
+	if force {
+		return costCents > 0
+	}
+	return costCents >= minManagedUsageRecordCents
+}
+
+func byocMachineHourlyCostMicros(machine *model.AgentTokenState) int64 {
+	if machine == nil {
+		return 0
+	}
+	cpuMillicores := firstNonZeroInt64(machine.CPUMillicores, int64(machine.CPUCount)*1000)
+	memoryMB := int64(firstNonZeroUint64(machine.MemoryMB, machine.Metrics.MemoryTotalMB))
+	return managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB)
+}
+
+func byocManagedUsage(workspaceID string, state *model.PoolState, machine *model.AgentTokenState, hourlyCostMicros int64, duration time.Duration, costCents float64, start, end time.Time) managedUsage {
+	provider := "byoc"
+	cloud := ""
+	poolName := ""
+	if state != nil && state.BYOC != nil {
+		cloud = state.BYOC.Provider
+	}
+	if cloud == "" && state != nil {
+		cloud = string(state.Source.Canonical())
+	}
+	if state != nil {
+		poolName = state.Name
+	}
+	if machine == nil {
+		machine = &model.AgentTokenState{}
+	}
+	return managedUsage{
+		WorkspaceID:        workspaceID,
+		PoolName:           poolName,
+		ReservationID:      "byoc:" + machine.MachineID,
+		Provider:           provider,
+		Cloud:              cloud,
+		ProviderInstanceID: firstNonEmpty(machine.MachineFingerprint, machine.Hostname, machine.MachineID),
+		MachineID:          machine.MachineID,
+		GPU:                strings.Join(machine.GPUs, ","),
+		GPUCount:           machine.GPUCount,
+		NodeCount:          1,
+		CPUMillicores:      firstNonZeroInt64(machine.CPUMillicores, int64(machine.CPUCount)*1000),
+		MemoryMB:           int64(firstNonZeroUint64(machine.MemoryMB, machine.Metrics.MemoryTotalMB)),
+		StorageMB:          int64(machine.Metrics.DiskTotalMB),
+		HourlyCostMicros:   hourlyCostMicros,
+		DurationSeconds:    duration.Seconds(),
+		CostCents:          costCents,
+		StartAt:            start,
+		EndAt:              end,
+	}
 }
 
 func managedUsageRecordedEvent(workspaceID string, state *model.PoolState, reservation model.Reservation, usage managedUsage) types.EventComputeSchema {

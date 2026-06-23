@@ -8,6 +8,11 @@ import (
 
 const microRoundingEpsilon = 1e-6
 
+const (
+	managedBYOCMemoryHourlyMicrosPerGB = int64(9_000)
+	managedBYOCCPUHourlyMicrosPerVCPU  = int64(19_000)
+)
+
 func (s *Service) billableMicros(providerMicros int64) int64 {
 	return billableMicros(providerMicros, s.appConfig.ManagedCompute.BillableMarginPctOrDefault())
 }
@@ -44,4 +49,16 @@ func costMultiplier(marginPct float64) float64 {
 		return 1
 	}
 	return 1 + marginPct
+}
+
+func managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB int64) int64 {
+	return ceilDivInt64(cpuMillicores*managedBYOCCPUHourlyMicrosPerVCPU, 1000) +
+		ceilDivInt64(memoryMB*managedBYOCMemoryHourlyMicrosPerGB, 1024)
+}
+
+func ceilDivInt64(numerator, denominator int64) int64 {
+	if numerator <= 0 || denominator <= 0 {
+		return 0
+	}
+	return (numerator + denominator - 1) / denominator
 }

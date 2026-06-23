@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ type byocProvider interface {
 	ResourceDeleted(context.Context, byocProviderResourceInput) (bool, error)
 	ReleaseMachine(context.Context, byocProviderReleaseMachineInput) error
 	UpdateScaleState(*model.PoolState, byocPoolRequest) error
-	ValidateExistingPool(*model.PoolState) error
+	ValidateExistingPool(*model.PoolState, byocPoolRequest) error
 }
 
 type byocRawPoolRequest struct {
@@ -48,6 +49,8 @@ type byocRawPoolRequest struct {
 	DesiredNodes uint32
 	MaxNodes     uint32
 	AccountID    string
+	GPU          string
+	GPUCount     uint32
 }
 
 type byocPoolRequest struct {
@@ -57,6 +60,8 @@ type byocPoolRequest struct {
 	desiredNodes uint32
 	maxNodes     uint32
 	accountID    string
+	gpu          string
+	gpuCount     uint32
 }
 
 type byocProviderSetupInput struct {
@@ -106,6 +111,8 @@ type byocProviderResource struct {
 	ResourceURL       string
 	DestroyURL        string
 	InstanceType      string
+	GPU               string
+	GPUCount          uint32
 	DesiredNodes      uint32
 	MaxNodes          uint32
 	TargetSandboxes   uint32
@@ -137,6 +144,8 @@ func (s *Service) CreateBYOCPool(ctx context.Context, in *pb.CreateBYOCPoolReque
 		DesiredNodes: in.DesiredNodes,
 		MaxNodes:     in.MaxNodes,
 		AccountID:    in.AccountId,
+		GPU:          in.Gpu,
+		GPUCount:     in.GpuCount,
 	})
 	if err != nil {
 		return &pb.CreateBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -258,7 +267,7 @@ func (s *Service) GetBYOCPool(ctx context.Context, in *pb.GetBYOCPoolRequest) (*
 	if err != nil {
 		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, time.Now().UTC())
+	machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
 	if err != nil {
 		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -322,6 +331,8 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 			DesiredNodes: in.GetDesiredNodes(),
 			MaxNodes:     firstNonZeroUint32(in.GetMaxNodes(), in.GetDesiredNodes()),
 			AccountID:    resource.AccountID,
+			GPU:          resource.GPU,
+			GPUCount:     resource.GPUCount,
 		})
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
@@ -347,6 +358,11 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 			return nil
 		}
 		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+		if err != nil {
+			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
+			return nil
+		}
+		machines, err = s.pruneBYOCPoolMachinesAboveDesired(ctx, workspaceID, state, machines, time.Now().UTC())
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -395,6 +411,8 @@ func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool) *pb.BYOC
 		TargetSandboxes:       resource.TargetSandboxes,
 		SandboxesPerNode:      resource.SandboxesPerNode,
 		InstanceType:          resource.InstanceType,
+		Gpu:                   resource.GPU,
+		GpuCount:              resource.GPUCount,
 		MachineCount:          pool.MachineCount,
 		ReadyMachineCount:     pool.ReadyMachineCount,
 		Message:               message,
@@ -402,6 +420,13 @@ func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool) *pb.BYOC
 		TotalHourlyCostMicros: resource.TotalHourlyMicros,
 		DirectScaleEnabled:    resource.DirectScale,
 	}
+}
+
+func byocPoolGPUs(req byocPoolRequest) []string {
+	if req.gpu == "" || req.gpuCount == 0 {
+		return nil
+	}
+	return []string{req.gpu}
 }
 
 func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) (bool, error) {
@@ -426,6 +451,88 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 		return s.deleteBYOCPoolLocalState(ctx, workspaceID, fresh, freshMachines, "cloud_resource_deleted")
 	})
 	return deleted, err
+}
+
+func (s *Service) reconcileBYOCPoolMachinesForRead(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) ([]*model.AgentTokenState, bool, error) {
+	deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, now)
+	if err != nil || deleted {
+		return nil, deleted, err
+	}
+	machines, err = s.pruneBYOCPoolMachinesAboveDesired(ctx, workspaceID, state, machines, now)
+	return machines, false, err
+}
+
+func (s *Service) pruneBYOCPoolMachinesAboveDesired(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) ([]*model.AgentTokenState, error) {
+	if state == nil || state.BYOC == nil || len(machines) == 0 {
+		return machines, nil
+	}
+	provider, err := byocProviderForState(state)
+	if err != nil {
+		return machines, err
+	}
+	resource, err := provider.Resource(workspaceID, state)
+	if err != nil {
+		return machines, err
+	}
+	desiredNodes := int(resource.DesiredNodes)
+	if desiredNodes < 1 || len(machines) <= desiredNodes {
+		return machines, nil
+	}
+
+	stale := staleBYOCMachinesAboveDesired(machines, desiredNodes, now)
+	if len(stale) == 0 {
+		return machines, nil
+	}
+	remove := map[string]bool{}
+	for _, machine := range stale {
+		if err := s.removePrivateMachine(ctx, machine); err != nil {
+			return machines, err
+		}
+		remove[machine.MachineID] = true
+	}
+	kept := machines[:0]
+	for _, machine := range machines {
+		if machine == nil || remove[machine.MachineID] {
+			continue
+		}
+		kept = append(kept, machine)
+	}
+	return kept, nil
+}
+
+func staleBYOCMachinesAboveDesired(machines []*model.AgentTokenState, desiredNodes int, now time.Time) []*model.AgentTokenState {
+	excess := len(machines) - desiredNodes
+	if excess <= 0 {
+		return nil
+	}
+	candidates := make([]*model.AgentTokenState, 0, excess)
+	for _, machine := range machines {
+		if machine == nil || model.AgentMachineConnected(machine, now) {
+			continue
+		}
+		candidates = append(candidates, machine)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := model.AgentMachineLastSeen(candidates[i])
+		right := model.AgentMachineLastSeen(candidates[j])
+		if left.Equal(right) {
+			return candidates[i].MachineID < candidates[j].MachineID
+		}
+		if left.IsZero() {
+			return false
+		}
+		if right.IsZero() {
+			return true
+		}
+		return left.Before(right)
+	})
+	if len(candidates) > excess {
+		candidates = candidates[:excess]
+	}
+	return candidates
 }
 
 func (s *Service) byocPoolDeletedForCleanup(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
@@ -468,6 +575,9 @@ func (s *Service) byocProviderResourceDeleted(ctx context.Context, workspaceID s
 }
 
 func byocProviderResourceUnavailableLooksDeleted(state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
+	if byocPoolMachinesAllDisconnected(machines, now) {
+		return true
+	}
 	if byocPoolLooksDeleted(state, machines, now) {
 		return true
 	}
@@ -478,6 +588,18 @@ func byocProviderResourceUnavailableLooksDeleted(state *model.PoolState, machine
 		now = time.Now().UTC()
 	}
 	return now.Sub(state.CreatedAt) >= byocProviderControlUnavailableCleanupGrace
+}
+
+func byocPoolMachinesAllDisconnected(machines []*model.AgentTokenState, now time.Time) bool {
+	if len(machines) == 0 {
+		return false
+	}
+	for _, machine := range machines {
+		if machine == nil || model.AgentMachineConnected(machine, now) || machine.LastDisconnectAt.IsZero() {
+			return false
+		}
+	}
+	return true
 }
 
 // Without provider credentials, external stack deletion is observable as all
@@ -540,7 +662,7 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 	if existing != nil && existing.Source.Canonical() != provider.Source() {
 		return nil, fmt.Errorf("pool already exists with source %s", existing.Source)
 	}
-	if err := provider.ValidateExistingPool(existing); err != nil {
+	if err := provider.ValidateExistingPool(existing, req); err != nil {
 		return nil, err
 	}
 	if err := provider.ValidateSetupConfig(s.appConfig.ManagedCompute); err != nil {
@@ -550,6 +672,7 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 	config := normalizePoolConfig(&pb.PoolConfig{
 		Name:      req.poolName,
 		Regions:   []string{req.region},
+		Gpu:       byocPoolGPUs(req),
 		Mode:      string(types.PoolModePrivate),
 		Transport: defaultPrivateTransport,
 		Fallback:  defaultPrivateFallback,
