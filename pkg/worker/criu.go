@@ -254,6 +254,33 @@ func deleteFailedRestoreRuntimeContainer(ctx context.Context, rt runtime.Runtime
 	return nil
 }
 
+func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config []byte) error {
+	if request == nil || request.ConfigPath == "" || len(config) == 0 {
+		return nil
+	}
+
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if exists && instance.Overlay != nil {
+		upperDir := filepath.Join(filepath.Dir(instance.Overlay.TopLayerPath()), "upper")
+		entries, err := os.ReadDir(upperDir)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		for _, entry := range entries {
+			if err := os.RemoveAll(filepath.Join(upperDir, entry.Name())); err != nil {
+				return err
+			}
+		}
+		for _, dir := range []string{"workspace", "volumes"} {
+			if err := os.MkdirAll(filepath.Join(upperDir, dir), 0755); err != nil {
+				return err
+			}
+		}
+	}
+
+	return os.WriteFile(request.ConfigPath, config, 0644)
+}
+
 func runtimeContainerNotFound(err error) bool {
 	if err == nil {
 		return false

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	runcRestoreStateTimeout      = 2 * time.Second
+	runcRestoreStateTimeout      = 30 * time.Second
 	runcRestoreStatePollInterval = 25 * time.Millisecond
 )
 
