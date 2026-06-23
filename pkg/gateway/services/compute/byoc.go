@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,9 +14,15 @@ import (
 )
 
 const (
-	byocBootstrapJoinTokenHashLabel   = "join_token_hash"
-	byocBootstrapJoinTokenHashesLabel = "join_token_hashes"
-	byocDeletedPoolRetention          = 5 * time.Minute
+	byocBootstrapJoinTokenHashLabel            = "join_token_hash"
+	byocBootstrapJoinTokenHashesLabel          = "join_token_hashes"
+	byocDeletedPoolRetention                   = 5 * time.Minute
+	byocProviderControlUnavailableCleanupGrace = 30 * time.Minute
+)
+
+var (
+	errBYOCProviderControlUnavailable = errors.New("BYOC provider control plane is unavailable")
+	errBYOCProviderResourceNotFound   = errors.New("BYOC provider resource not found")
 )
 
 // byocProvider owns provider-specific validation and setup links; the service
@@ -398,8 +405,7 @@ func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool) *pb.BYOC
 }
 
 func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) (bool, error) {
-	resourceDeleted, _ := s.byocProviderResourceDeleted(ctx, workspaceID, state)
-	if !resourceDeleted && !byocPoolLooksDeleted(state, machines, now) {
+	if !s.byocPoolDeletedForCleanup(ctx, workspaceID, state, machines, now) && !byocPoolLooksDeleted(state, machines, now) {
 		return false, nil
 	}
 
@@ -413,14 +419,37 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 		if err != nil {
 			return err
 		}
-		freshResourceDeleted, _ := s.byocProviderResourceDeleted(ctx, workspaceID, fresh)
-		if !freshResourceDeleted && !byocPoolLooksDeleted(fresh, freshMachines, now) {
+		if !s.byocPoolDeletedForCleanup(ctx, workspaceID, fresh, freshMachines, now) && !byocPoolLooksDeleted(fresh, freshMachines, now) {
 			return nil
 		}
 		deleted = true
 		return s.deleteBYOCPoolLocalState(ctx, workspaceID, fresh, freshMachines, "cloud_resource_deleted")
 	})
 	return deleted, err
+}
+
+func (s *Service) byocPoolDeletedForCleanup(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
+	resourceDeleted, err := s.byocProviderResourceDeleted(ctx, workspaceID, state)
+	if resourceDeleted {
+		return true
+	}
+	if !errors.Is(err, errBYOCProviderControlUnavailable) && !errors.Is(err, errBYOCProviderResourceNotFound) {
+		return false
+	}
+	return byocProviderResourceUnavailableLooksDeleted(state, machines, now)
+}
+
+func byocPoolInProvisioningGrace(state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
+	if state == nil || state.BYOC == nil || len(machines) > 0 {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if state.CreatedAt.IsZero() {
+		return false
+	}
+	return now.Sub(state.CreatedAt) < byocProviderControlUnavailableCleanupGrace
 }
 
 func (s *Service) byocProviderResourceDeleted(ctx context.Context, workspaceID string, state *model.PoolState) (bool, error) {
@@ -436,6 +465,19 @@ func (s *Service) byocProviderResourceDeleted(ctx context.Context, workspaceID s
 		Pool:         state,
 		ProviderData: state.BYOC,
 	})
+}
+
+func byocProviderResourceUnavailableLooksDeleted(state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
+	if byocPoolLooksDeleted(state, machines, now) {
+		return true
+	}
+	if byocPoolInProvisioningGrace(state, machines, now) || state == nil || state.BYOC == nil || len(machines) > 0 || state.CreatedAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return now.Sub(state.CreatedAt) >= byocProviderControlUnavailableCleanupGrace
 }
 
 // Without provider credentials, external stack deletion is observable as all

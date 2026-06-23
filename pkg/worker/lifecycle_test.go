@@ -954,7 +954,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 			capabilities: runtime.Capabilities{CheckpointRestore: true},
 		},
 	}
-	criuManager := &observingRestoreErrorCRIUManager{err: restoreErr}
+	criuManager := &observingRestoreErrorCRIUManager{err: restoreErr, removeConfig: true}
 	backendRepoClient := &fakeBackendRepoClient{}
 	repoClient := &fakeContainerRepoClient{
 		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
@@ -974,9 +974,13 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		Id:      containerID,
 		Runtime: rt,
 	})
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	configContents := []byte(runtime.GetBaseConfig("runc"))
+	require.NoError(t, os.WriteFile(configPath, configContents, 0644))
+	rt.runConfigPath = configPath
 	request := &types.ContainerRequest{
 		ContainerId:       containerID,
-		ConfigPath:        filepath.Join(t.TempDir(), "config.json"),
+		ConfigPath:        configPath,
 		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
 		CheckpointEnabled: true,
 		Checkpoint: &types.Checkpoint{
@@ -1008,6 +1012,8 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 	require.True(t, request.CheckpointEnabled)
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
+	require.Contains(t, string(rt.runConfigContents), `"ociVersion"`)
+	require.Contains(t, string(rt.runConfigContents), "CHECKPOINT_ENABLED=true")
 }
 
 func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
@@ -1738,6 +1744,7 @@ type observingRestoreErrorCRIUManager struct {
 	err                  error
 	deleteCallsAtRestore int
 	restoreCalls         int
+	removeConfig         bool
 }
 
 func (m *observingRestoreErrorCRIUManager) Available() bool {
@@ -1754,14 +1761,19 @@ func (m *observingRestoreErrorCRIUManager) RestoreCheckpoint(ctx context.Context
 		m.deleteCallsAtRestore = cleanupRuntime.deleteCalls
 	}
 	opts.started <- 4321
+	if m.removeConfig {
+		_ = os.Remove(opts.configPath)
+	}
 	return -1, m.err
 }
 
 type restoreFallbackRuntime struct {
 	mockRuntime
-	deleteCalls      int
-	deleteCallsAtRun int
-	runCalled        bool
+	deleteCalls       int
+	deleteCallsAtRun  int
+	runCalled         bool
+	runConfigPath     string
+	runConfigContents []byte
 }
 
 func (m *restoreFallbackRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
@@ -1772,6 +1784,9 @@ func (m *restoreFallbackRuntime) Delete(ctx context.Context, containerID string,
 func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
 	m.runCalled = true
 	m.deleteCallsAtRun = m.deleteCalls
+	if m.runConfigPath != "" {
+		m.runConfigContents, _ = os.ReadFile(m.runConfigPath)
+	}
 	if opts != nil && opts.Started != nil {
 		opts.Started <- 1234
 	}

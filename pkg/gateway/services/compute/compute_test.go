@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
@@ -779,6 +780,194 @@ func TestListPrivatePoolsCleansDeletedBYOCPoolWithoutMachinesWhenProviderResourc
 	}
 }
 
+func TestListPrivatePoolsKeepsFreshBYOCPoolWhenProviderControlUnavailable(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					CreatedAt:        time.Now().UTC(),
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "2",
+							"max_nodes":                       "2",
+							"target_sandboxes":                "40",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+							awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+							awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+						},
+					},
+				},
+			},
+		},
+	}
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		return false, errBYOCProviderControlUnavailable
+	}
+	defer func() {
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 1 {
+		t.Fatalf("pool count = %d, want fresh creating BYOC pool to remain visible", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 1 {
+		t.Fatalf("stored pool count = %d, want 1", got)
+	}
+	if got, want := res.Pools[0].GetByoc().GetPhase(), "waiting_for_provider"; got != want {
+		t.Fatalf("BYOC phase = %q, want %q", got, want)
+	}
+}
+
+func TestListPrivatePoolsKeepsFreshBYOCPoolDuringProviderNotFoundRace(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					CreatedAt:        time.Now().UTC(),
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "2",
+							"max_nodes":                       "2",
+							"target_sandboxes":                "40",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+							awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+							awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+						},
+					},
+				},
+			},
+		},
+	}
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		return false, errBYOCProviderResourceNotFound
+	}
+	defer func() {
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 1 {
+		t.Fatalf("pool count = %d, want fresh creating BYOC pool to remain visible", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 1 {
+		t.Fatalf("stored pool count = %d, want 1", got)
+	}
+}
+
+func TestListPrivatePoolsCleansOldNeverJoinedBYOCPoolWhenProviderControlUnavailable(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	tokenHash := hashComputeToken("byoc-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					CreatedAt:        time.Now().UTC().Add(-byocProviderControlUnavailableCleanupGrace - time.Minute),
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							byocBootstrapJoinTokenHashLabel:   tokenHash,
+							byocBootstrapJoinTokenHashesLabel: tokenHash,
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "2",
+							"max_nodes":                       "2",
+							"target_sandboxes":                "40",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+							awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+							awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+						},
+					},
+				},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			tokenHash: {
+				TokenHash:        tokenHash,
+				WorkspaceID:      "workspace-1",
+				PoolName:         "aws-cpu",
+				CreatedByTokenID: "owner-token",
+			},
+		},
+	}
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		return false, errBYOCProviderControlUnavailable
+	}
+	defer func() {
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 0 {
+		t.Fatalf("pool count = %d, want stale never-joined BYOC pool cleaned up", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if token := repo.joinTokens[tokenHash]; token == nil || !token.Revoked {
+		t.Fatalf("BYOC bootstrap token revoked = %v, want true", token != nil && token.Revoked)
+	}
+}
+
 func TestListPrivatePoolsKeepsRecentlyDisconnectedBYOCPool(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "owner-token")
@@ -1235,7 +1424,7 @@ func TestAWSBYOCStackDeletionErrorClassification(t *testing.T) {
 		Message: "Stack with id beam-aws-cpu-test does not exist",
 	}
 	if !awsBYOCCloudFormationStackNotFound(stackMissing) {
-		t.Fatal("CloudFormation missing-stack validation error should be treated as deleted")
+		t.Fatal("CloudFormation missing-stack validation error should be recognized as not found")
 	}
 
 	assumeRoleDenied := &smithy.OperationError{
@@ -1260,6 +1449,15 @@ func TestAWSBYOCStackDeletionErrorClassification(t *testing.T) {
 	}
 	if awsBYOCControlRoleUnavailable(cloudFormationDenied) {
 		t.Fatal("CloudFormation authorization errors should not be treated as stack deletion")
+	}
+	if !awsBYOCStackStatusCreating(cftypes.StackStatusCreateInProgress) {
+		t.Fatal("CREATE_IN_PROGRESS should be treated as creating")
+	}
+	if awsBYOCStackStatusDeleted(cftypes.StackStatusCreateInProgress) {
+		t.Fatal("CREATE_IN_PROGRESS should not be treated as deleted")
+	}
+	if !awsBYOCStackStatusDeleted(cftypes.StackStatusDeleteInProgress) {
+		t.Fatal("DELETE_IN_PROGRESS should be treated as deleted")
 	}
 }
 

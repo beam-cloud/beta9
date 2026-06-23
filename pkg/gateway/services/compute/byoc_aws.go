@@ -335,8 +335,8 @@ func awsBYOCCapacityLabels(req byocPoolRequest) map[string]string {
 		"sandboxes_per_node":       strconv.FormatUint(uint64(awsBYOCSandboxesPerNode), 10),
 		"hourly_cost_micros":       strconv.FormatInt(hourlyCostMicros, 10),
 		"total_hourly_cost_micros": strconv.FormatInt(totalHourlyMicros, 10),
-		"capacity_unit":            "normal_sandbox",
-		"capacity_unit_label":      "normal sandboxes",
+		"capacity_unit":            "concurrent_sandbox",
+		"capacity_unit_label":      "concurrent sandboxes",
 	}
 }
 
@@ -458,19 +458,46 @@ func realAWSBYOCResourceDeleted(ctx context.Context, input awsBYOCResourceDelete
 		StackName: aws.String(input.StackName),
 	})
 	if err != nil {
-		if awsBYOCCloudFormationStackNotFound(err) || awsBYOCControlRoleUnavailable(err) {
-			return true, nil
+		if awsBYOCCloudFormationStackNotFound(err) {
+			return false, errBYOCProviderResourceNotFound
+		}
+		if awsBYOCControlRoleUnavailable(err) {
+			return false, errBYOCProviderControlUnavailable
 		}
 		return false, fmt.Errorf("describe AWS BYOC stack: %w", err)
 	}
 	if len(out.Stacks) == 0 {
+		return false, errBYOCProviderResourceNotFound
+	}
+	status := out.Stacks[0].StackStatus
+	if awsBYOCStackStatusCreating(status) {
+		return false, nil
+	}
+	if awsBYOCStackStatusDeleted(status) {
 		return true, nil
 	}
-	switch out.Stacks[0].StackStatus {
-	case cftypes.StackStatusDeleteInProgress, cftypes.StackStatusDeleteComplete:
-		return true, nil
+	return false, nil
+}
+
+func awsBYOCStackStatusCreating(status cftypes.StackStatus) bool {
+	switch status {
+	case cftypes.StackStatusReviewInProgress,
+		cftypes.StackStatusCreateInProgress,
+		cftypes.StackStatusImportInProgress,
+		cftypes.StackStatusUpdateInProgress,
+		cftypes.StackStatusUpdateCompleteCleanupInProgress:
+		return true
 	default:
-		return false, nil
+		return false
+	}
+}
+
+func awsBYOCStackStatusDeleted(status cftypes.StackStatus) bool {
+	switch status {
+	case cftypes.StackStatusDeleteInProgress, cftypes.StackStatusDeleteComplete:
+		return true
+	default:
+		return false
 	}
 }
 

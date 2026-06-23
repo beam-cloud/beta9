@@ -1406,6 +1406,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
 	restoringCheckpoint := supportsCheckpoint && request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable)
+	bundlePath := filepath.Dir(request.ConfigPath)
+	originalConfig, originalConfigErr := os.ReadFile(request.ConfigPath)
+	if originalConfigErr != nil {
+		log.Warn().Err(originalConfigErr).Str("container_id", request.ContainerId).Msg("failed to snapshot container config before checkpoint restore")
+	}
 	var checkpointRestoredOnce sync.Once
 	markCheckpointRestored := func() {
 		if !restoringCheckpoint {
@@ -1427,6 +1432,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	fallbackFromCheckpoint := func(startCheckpoint bool) {
 		restoringCheckpoint = false
 		request.Checkpoint = nil
+		if err := s.prepareRestoreFallback(request, originalConfig); err != nil {
+			log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to prepare checkpoint restore fallback")
+		}
 		if startCheckpoint {
 			startAutoCheckpoint()
 		}
@@ -1436,7 +1444,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		startAutoCheckpoint()
 	}
 
-	bundlePath := filepath.Dir(request.ConfigPath)
 	runtimeStartedChan := make(chan int, 1)
 	runtimeStartedDone := make(chan struct{})
 	runtimeStartedHandled := make(chan struct{})
