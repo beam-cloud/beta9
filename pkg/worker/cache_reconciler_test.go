@@ -655,7 +655,6 @@ func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T
 	require.Error(t, err)
 	require.Len(t, worker.cacheManager.reconcileNow, 1)
 
-	reporter.flush()
 	require.Equal(t, 1, metadata.recent)
 	require.Len(t, fake.pushed, 1)
 	require.Equal(t, types.CacheContentKindCheckpoint, fake.pushed[0].Kind)
@@ -699,7 +698,6 @@ func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T)
 	require.Equal(t, filepath.Join(checkpointRoot, checkpointID), path)
 	require.Empty(t, worker.cacheManager.reconcileNow)
 
-	reporter.flush()
 	require.Equal(t, 1, metadata.recent)
 	require.Len(t, fake.pushed, 1)
 	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
@@ -748,7 +746,6 @@ func TestEnsureCheckpointMaterializedRestoresFromEmbeddedCache(t *testing.T) {
 	require.True(t, checkpointMaterialized(path))
 	require.Len(t, worker.cacheManager.reconcileNow, 1)
 
-	reporter.flush()
 	require.Len(t, fake.pushed, 1)
 	require.Equal(t, types.CacheContentKindCheckpoint, fake.pushed[0].Kind)
 	require.Equal(t, hash, fake.pushed[0].Items[0].Hash)
