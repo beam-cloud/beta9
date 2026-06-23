@@ -339,6 +339,142 @@ func TestCacheMetadataScopesWorkerLocalityByWorkspace(t *testing.T) {
 	require.Len(t, listA.Stubs, 1)
 	require.Equal(t, "workspace-a", listA.Stubs[0].WorkspaceId)
 	require.Equal(t, "stub-a", listA.Stubs[0].StubId)
+
+	listB, err := service.ListRecentCacheStubs(cacheRepositoryWorkspaceAuthContext("workspace-b"), &pb.ListRecentCacheStubsRequest{
+		Locality:   "shared-pool",
+		TtlSeconds: 3600,
+		Limit:      10,
+	})
+	require.NoError(t, err)
+	require.True(t, listB.Ok, listB.ErrorMsg)
+	require.Len(t, listB.Stubs, 1)
+	require.Equal(t, "workspace-b", listB.Stubs[0].WorkspaceId)
+	require.Equal(t, "stub-b", listB.Stubs[0].StubId)
+}
+
+func TestCacheMetadataScopesPrivateWorkerLocksAndMarkersByWorkspace(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	service := &WorkerRepositoryService{
+		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
+	}
+	ctxA := cacheRepositoryWorkspaceAuthContext("workspace-a")
+	ctxB := cacheRepositoryWorkspaceAuthContext("workspace-b")
+
+	markedA, err := service.MarkCacheStubReported(ctxA, &pb.MarkCacheStubReportedRequest{
+		Locality:   "shared-pool",
+		StubId:     "stub",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, markedA.Ok, markedA.ErrorMsg)
+	require.True(t, markedA.Claimed)
+
+	markedB, err := service.MarkCacheStubReported(ctxB, &pb.MarkCacheStubReportedRequest{
+		Locality:   "shared-pool",
+		StubId:     "stub",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, markedB.Ok, markedB.ErrorMsg)
+	require.True(t, markedB.Claimed)
+
+	markedAAgain, err := service.MarkCacheStubReported(ctxA, &pb.MarkCacheStubReportedRequest{
+		Locality:   "shared-pool",
+		StubId:     "stub",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, markedAAgain.Ok, markedAAgain.ErrorMsg)
+	require.False(t, markedAAgain.Claimed)
+
+	lockA, err := service.AcquireCacheReconcileLock(ctxA, &pb.AcquireCacheReconcileLockRequest{
+		Locality:    "shared-pool",
+		LogicalHost: "logical-host",
+		Hash:        "hash",
+		TtlSeconds:  300,
+	})
+	require.NoError(t, err)
+	require.True(t, lockA.Ok, lockA.ErrorMsg)
+	require.True(t, lockA.Acquired)
+
+	lockB, err := service.AcquireCacheReconcileLock(ctxB, &pb.AcquireCacheReconcileLockRequest{
+		Locality:    "shared-pool",
+		LogicalHost: "logical-host",
+		Hash:        "hash",
+		TtlSeconds:  300,
+	})
+	require.NoError(t, err)
+	require.True(t, lockB.Ok, lockB.ErrorMsg)
+	require.True(t, lockB.Acquired)
+
+	lockAAgain, err := service.AcquireCacheReconcileLock(ctxA, &pb.AcquireCacheReconcileLockRequest{
+		Locality:    "shared-pool",
+		LogicalHost: "logical-host",
+		Hash:        "hash",
+		TtlSeconds:  300,
+	})
+	require.NoError(t, err)
+	require.True(t, lockAAgain.Ok, lockAAgain.ErrorMsg)
+	require.False(t, lockAAgain.Acquired)
+
+	storeA, err := service.SetCacheStoreFromContentLock(ctxA, &pb.SetCacheStoreFromContentLockRequest{
+		Locality:   "shared-pool",
+		SourcePath: "/images/image.clip",
+	})
+	require.NoError(t, err)
+	require.True(t, storeA.Ok, storeA.ErrorMsg)
+
+	storeB, err := service.SetCacheStoreFromContentLock(ctxB, &pb.SetCacheStoreFromContentLockRequest{
+		Locality:   "shared-pool",
+		SourcePath: "/images/image.clip",
+	})
+	require.NoError(t, err)
+	require.True(t, storeB.Ok, storeB.ErrorMsg)
+
+	storeAAgain, err := service.SetCacheStoreFromContentLock(ctxA, &pb.SetCacheStoreFromContentLockRequest{
+		Locality:   "shared-pool",
+		SourcePath: "/images/image.clip",
+	})
+	require.NoError(t, err)
+	require.False(t, storeAAgain.Ok)
+}
+
+func TestCacheMetadataKeepsClusterWorkerMarkersUnscoped(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	service := &WorkerRepositoryService{
+		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
+	}
+	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
+
+	first, err := service.MarkCacheStubReported(ctx, &pb.MarkCacheStubReportedRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, first.Ok, first.ErrorMsg)
+	require.True(t, first.Claimed)
+
+	second, err := service.MarkCacheStubReported(ctx, &pb.MarkCacheStubReportedRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, second.Ok, second.ErrorMsg)
+	require.False(t, second.Claimed)
 }
 
 func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T) {

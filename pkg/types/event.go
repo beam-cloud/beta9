@@ -79,10 +79,10 @@ const (
 var EventStubCacheRequiredContentSchemaVersion = "1.0"
 var EventPlatformCacheSchemaVersion = "1.0"
 
-// CacheRequiredContentItem describes a single piece of content a stub needs
-// warm in a locality. Source is a non-secret descriptor (OCI layer identity or
-// workspace object path) used to resolve an origin fetch; it never carries
-// credentials.
+// CacheRequiredContentItem describes a single piece of content a stub needs.
+// Locality-scoped recent-stub indexes decide where it is kept warm. Source is a
+// non-secret descriptor (OCI layer identity or workspace object path) used to
+// resolve an origin fetch; it never carries credentials.
 type CacheRequiredContentItem struct {
 	Hash         string           `json:"hash"`
 	RoutingKey   string           `json:"routing_key"`
@@ -96,7 +96,9 @@ type CacheRequiredContentItem struct {
 }
 
 // EventStubCacheRequiredContentSchema is the coalesced required-content report
-// for a stub within a locality, persisted to the stub cache stream in S2.
+// for a stub, persisted to the stub cache stream in S2. Locality records where
+// the content was observed; the reconciler uses the locality-scoped recent-stub
+// index to decide where to materialize it.
 type EventStubCacheRequiredContentSchema struct {
 	WorkspaceID string                     `json:"workspace_id"`
 	StubID      string                     `json:"stub_id"`

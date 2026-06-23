@@ -13,6 +13,7 @@ import (
 
 func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs) []string {
 	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
+	cacheLocality := agentCacheLocality(bootstrap, slot)
 	args := []string{
 		"run", "--rm",
 		"--name", name,
@@ -89,7 +90,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		types.WorkerPodHostEnv:        types.LoopbackHost,
 		types.WorkerPodIPEnv:          types.LoopbackHost,
 		types.WorkerNetworkPrefixEnv:  slot.NetworkPrefix,
-		types.CacheLocalityEnv:        slot.PoolName,
+		types.CacheLocalityEnv:        cacheLocality,
 		types.CacheNodeEnv:            slot.MachineId,
 		types.CacheHostNetworkEnv:     "true",
 		types.WorkerPersistentEnv:     "true",

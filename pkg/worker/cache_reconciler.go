@@ -520,7 +520,7 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		if m.requiredContentComplete(server, item, routingKey) {
 			continue
 		}
-		if m.reconcileRecentlySucceeded(item.Hash, routingKey) {
+		if reconcileSuccessBackoffApplies(item) && m.reconcileRecentlySucceeded(item.Hash, routingKey) {
 			continue
 		}
 
@@ -681,7 +681,11 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	switch {
 	case status == types.CacheAuditStatusMaterialized:
 		m.clearReconcileFailure(item.Hash, routingKey)
-		m.recordReconcileSuccess(item.Hash, routingKey)
+		if reconcileSuccessBackoffApplies(item) {
+			m.recordReconcileSuccess(item.Hash, routingKey)
+		} else {
+			m.clearReconcileSuccess(item.Hash, routingKey)
+		}
 		m.reconcileLogFields(log.Info(), localHostID, stub, item).
 			Str("status", status).Dur("duration", elapsed).
 			Msg("cache content reconciled")
@@ -714,6 +718,13 @@ func reconcileStatusIsFailure(status string) bool {
 	default:
 		return false
 	}
+}
+
+// Success backoff is only valid when the cache blob is the complete materialized
+// state. Checkpoints also require an extracted runtime/filesystem payload, which
+// can be pruned independently of the archive blob.
+func reconcileSuccessBackoffApplies(item types.CacheRequiredContentItem) bool {
+	return item.Kind != types.CacheContentKindCheckpoint
 }
 
 // reconcileBackingOff reports whether an item failed to materialize recently and
@@ -792,6 +803,13 @@ func (m *WorkerCacheManager) recordReconcileSuccess(hash, routingKey string) {
 		m.reconcileSuccesses = make(map[string]time.Time)
 	}
 	m.reconcileSuccesses[key] = time.Now()
+	m.reconcileSuccessesMu.Unlock()
+}
+
+func (m *WorkerCacheManager) clearReconcileSuccess(hash, routingKey string) {
+	key := reconcileItemKey(hash, routingKey)
+	m.reconcileSuccessesMu.Lock()
+	delete(m.reconcileSuccesses, key)
 	m.reconcileSuccessesMu.Unlock()
 }
 
