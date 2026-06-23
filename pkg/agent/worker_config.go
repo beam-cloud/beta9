@@ -185,6 +185,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	cache := agentDiskCacheConfig()
 	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
 	cacheFSEnabled := !envBool(types.AgentInContainerEnv)
+	cacheLocality := agentCacheLocality(bootstrap, slot)
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
@@ -267,10 +268,10 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			Disk:    cache.Disk,
 			Memory:  &agentConfigCacheMemory{Enabled: false},
 			Global: &agentConfigCacheGlobal{
-				DefaultLocality: firstNonEmpty(slot.PoolName, types.DefaultAgentName),
+				DefaultLocality: cacheLocality,
 			},
 			Server: &agentConfigCacheServer{
-				DiskCacheDir: pathpkg.Join(types.AgentCachePath, sanitizeDockerName(slot.PoolName), sanitizeDockerName(slot.MachineId)),
+				DiskCacheDir: pathpkg.Join(types.AgentCachePath, sanitizeDockerName(cacheLocality), sanitizeDockerName(slot.MachineId)),
 			},
 			Client: &agentConfigCacheClient{
 				CacheFS: agentConfigCacheFS{
@@ -280,6 +281,17 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			},
 		},
 	}
+}
+
+func agentCacheLocality(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) string {
+	poolName := firstNonEmpty(bootstrap.PoolName, types.DefaultAgentName)
+	if slot != nil && slot.PoolName != "" {
+		poolName = slot.PoolName
+	}
+	if bootstrap.WorkspaceID != "" {
+		return bootstrap.WorkspaceID + "/" + poolName
+	}
+	return poolName
 }
 
 func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {

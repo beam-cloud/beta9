@@ -68,6 +68,21 @@ func TestNormalizeCacheConfigDefaultsTopHostsToThree(t *testing.T) {
 	require.Equal(t, 3, got.Client.NTopHosts)
 }
 
+func TestCacheLocalityUsesEnvThenPoolGroupThenDefault(t *testing.T) {
+	config := types.AppConfig{
+		Cache: cache.Config{
+			Global: cache.GlobalConfig{DefaultLocality: "managed-default"},
+		},
+	}
+
+	require.Equal(t, "pool-group", cacheLocality(config, types.WorkerPoolConfig{ConfigGroup: "pool-group"}))
+	require.Equal(t, "managed-default", cacheLocality(config, types.WorkerPoolConfig{}))
+	require.Equal(t, cacheDefaultLocality, cacheLocality(types.AppConfig{}, types.WorkerPoolConfig{}))
+
+	t.Setenv(types.CacheLocalityEnv, "workspace-a/byoc-pool")
+	require.Equal(t, "workspace-a/byoc-pool", cacheLocality(config, types.WorkerPoolConfig{ConfigGroup: "pool-group"}))
+}
+
 func TestWorkerCacheManagerDisabledWhenPoolDiskCacheDisabled(t *testing.T) {
 	disabled := false
 	manager := &WorkerCacheManager{
@@ -336,6 +351,17 @@ func TestCacheLogicalHostIDIgnoresWorkerPool(t *testing.T) {
 	buildPool := cacheLogicalHostID("default", "node-a", filepath.Join(types.AgentCachePath, "default", "node-a"))
 
 	require.Equal(t, defaultPool, buildPool)
+}
+
+func TestCacheLogicalHostIDSeparatesWorkspaceScopedLocalities(t *testing.T) {
+	identityPath := filepath.Join(types.AgentCachePath, "aws-cpu-pool", "node-a")
+
+	workspaceA := cacheLogicalHostID("workspace-a/aws-cpu-pool", "node-a", identityPath)
+	workspaceB := cacheLogicalHostID("workspace-b/aws-cpu-pool", "node-a", identityPath)
+
+	require.NotEqual(t, workspaceA, workspaceB)
+	require.Contains(t, workspaceA, "workspace-a-aws-cpu-pool")
+	require.Contains(t, workspaceB, "workspace-b-aws-cpu-pool")
 }
 
 func TestCachePlacementIdentityUsesHostPathForDefaultDiskDir(t *testing.T) {

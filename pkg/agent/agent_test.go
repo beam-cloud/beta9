@@ -204,6 +204,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
 		GatewayGRPCHost: "host.docker.internal",
 		GatewayGRPCPort: 1993,
+		WorkspaceID:     "workspace-one",
 	}, &pb.AgentWorkerSlot{
 		WorkerId:                  "worker-one",
 		WorkerToken:               "token",
@@ -224,7 +225,8 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		t.Fatalf("expected worker platform in docker args: %#v", args)
 	}
 	for _, want := range []string{
-		types.CacheLocalityEnv + "=private",
+		types.WorkerPoolEnv + "=private",
+		types.CacheLocalityEnv + "=workspace-one/private",
 		types.CacheNodeEnv + "=machine",
 		types.CacheHostNetworkEnv + "=true",
 		types.AgentGatewayURLEnv + "=http://host.docker.internal:1994",
@@ -275,6 +277,23 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		if !containsArg(args, "--add-host", want) {
 			t.Fatalf("expected %s host alias in docker args: %#v", want, args)
 		}
+	}
+}
+
+func TestAgentCacheLocalityScopesPoolByWorkspace(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{PoolName: "aws-cpu-pool"}
+
+	if got := agentCacheLocality(bootstrapConfig{WorkspaceID: "workspace-a"}, slot); got != "workspace-a/aws-cpu-pool" {
+		t.Fatalf("cache locality = %q, want workspace-scoped pool", got)
+	}
+	if got := agentCacheLocality(bootstrapConfig{WorkspaceID: "workspace-b"}, slot); got != "workspace-b/aws-cpu-pool" {
+		t.Fatalf("cache locality = %q, want workspace-scoped pool", got)
+	}
+	if got := agentCacheLocality(bootstrapConfig{}, slot); got != "aws-cpu-pool" {
+		t.Fatalf("cache locality = %q, want raw pool fallback without workspace", got)
+	}
+	if got := agentCacheLocality(bootstrapConfig{WorkspaceID: "workspace-a", PoolName: "bootstrap-pool"}, nil); got != "workspace-a/bootstrap-pool" {
+		t.Fatalf("cache locality = %q, want bootstrap pool fallback", got)
 	}
 }
 
@@ -700,6 +719,7 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 		ImageRegistryStore:     reg.S3ImageRegistryStore,
 		ImageClipVersion:       1,
 		ImageLocalCacheEnabled: true,
+		WorkspaceID:            "workspace-one",
 	}, slot); err != nil {
 		t.Fatal(err)
 	}
@@ -780,6 +800,7 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 
 	cacheConfig := config["cache"].(map[string]any)
 	cacheDisk := cacheConfig["disk"].(map[string]any)
+	cacheGlobal := cacheConfig["global"].(map[string]any)
 	cacheServer := cacheConfig["server"].(map[string]any)
 	cacheClient := cacheConfig["client"].(map[string]any)
 	cacheFS := cacheClient["cachefs"].(map[string]any)
@@ -789,7 +810,10 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := cacheDisk["mountPath"]; got != types.AgentCachePath {
 		t.Fatalf("cache disk mount path = %v, want %q", got, types.AgentCachePath)
 	}
-	if got := cacheServer["diskCacheDir"]; got != filepath.Join(types.AgentCachePath, "private-dev", "machine-a") {
+	if got := cacheGlobal["defaultLocality"]; got != "workspace-one/private-dev" {
+		t.Fatalf("cache default locality = %v, want workspace-scoped private pool", got)
+	}
+	if got := cacheServer["diskCacheDir"]; got != filepath.Join(types.AgentCachePath, "workspace-one-private-dev", "machine-a") {
 		t.Fatalf("cache disk dir = %v, want machine-scoped persistent path", got)
 	}
 	if got := cacheFS["mountPoint"]; got != types.AgentCacheFSMountPath {
