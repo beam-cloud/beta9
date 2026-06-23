@@ -290,13 +290,17 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	if !podRunnableStub(stub.Type) {
 		return "", fmt.Errorf("stub type <%s> cannot be run through pods", stub.Type)
 	}
+	workspace, err := podRunWorkspace(authInfo, stub)
+	if err != nil {
+		return "", err
+	}
 
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return "", err
 	}
 
-	secrets, err := abstractions.ConfigureContainerRequestSecrets(authInfo.Workspace, stubConfig)
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(workspace, stubConfig)
 	if err != nil {
 		return "", err
 	}
@@ -306,7 +310,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
 		stub.Object.ExternalId,
-		authInfo.Workspace,
+		workspace,
 		stubConfig,
 		stub.ExternalId,
 	)
@@ -347,7 +351,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	setPodKeepWarmLock(
 		context.Background(),
 		s.containerRepo,
-		authInfo.Workspace.Name,
+		workspace.Name,
 		stub.ExternalId,
 		containerId,
 		stubConfig.KeepWarmSeconds,
@@ -373,8 +377,8 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		Mounts:            mounts,
 		Stub:              *stub,
 		ImageId:           *imageId,
-		WorkspaceId:       authInfo.Workspace.ExternalId,
-		Workspace:         *authInfo.Workspace,
+		WorkspaceId:       workspace.ExternalId,
+		Workspace:         *workspace,
 		EntryPoint:        stubConfig.EntryPoint,
 		Ports:             ports,
 		CheckpointEnabled: checkpointEnabled,
@@ -391,11 +395,27 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	}
 
 	go s.eventRepo.PushRunStubEvent(
-		authInfo.Workspace.ExternalId,
+		workspace.ExternalId,
 		&stub.Stub,
 	)
 
 	return containerId, nil
+}
+
+func podRunWorkspace(authInfo *auth.AuthInfo, stub *types.StubWithRelated) (*types.Workspace, error) {
+	if authInfo == nil || authInfo.Workspace == nil {
+		return nil, fmt.Errorf("missing workspace auth")
+	}
+	if stub == nil {
+		return nil, fmt.Errorf("missing stub")
+	}
+	if stub.Workspace.ExternalId != "" && stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return nil, fmt.Errorf("stub does not belong to workspace")
+	}
+	if stub.Workspace.ExternalId != "" {
+		return &stub.Workspace, nil
+	}
+	return authInfo.Workspace, nil
 }
 
 func podRunnableStub(stubType types.StubType) bool {

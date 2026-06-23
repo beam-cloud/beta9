@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc/codes"
@@ -77,6 +78,39 @@ func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 				t.Fatalf("podRunnableStub(%q) = %t, want %t", tt.stubType, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPodRunWorkspacePrefersStubWorkspace(t *testing.T) {
+	storageID := uint(2)
+	authWorkspace := &types.Workspace{ExternalId: "workspace-id", Name: "auth"}
+	stub := &types.StubWithRelated{
+		Workspace: types.Workspace{
+			ExternalId: "workspace-id",
+			Name:       "stub",
+			Storage:    &types.WorkspaceStorage{Id: &storageID},
+		},
+	}
+
+	got, err := podRunWorkspace(&auth.AuthInfo{Workspace: authWorkspace}, stub)
+	if err != nil {
+		t.Fatalf("podRunWorkspace returned error: %v", err)
+	}
+	if got != &stub.Workspace {
+		t.Fatalf("podRunWorkspace did not return stub workspace")
+	}
+	if !got.StorageAvailable() {
+		t.Fatalf("podRunWorkspace returned workspace without storage")
+	}
+}
+
+func TestPodRunWorkspaceRejectsWorkspaceMismatch(t *testing.T) {
+	_, err := podRunWorkspace(
+		&auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "auth-workspace"}},
+		&types.StubWithRelated{Workspace: types.Workspace{ExternalId: "other-workspace"}},
+	)
+	if err == nil {
+		t.Fatal("podRunWorkspace returned nil error for workspace mismatch")
 	}
 }
 
