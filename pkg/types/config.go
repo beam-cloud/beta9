@@ -660,8 +660,8 @@ const (
 	ManagedComputeDefaultMinimumCreditCents int64   = 2500
 	ManagedComputeDefaultBillableMarginPct  float64 = 0.10
 
-	ManagedComputeDefaultBYOCMemoryHourlyMicrosPerGB int64 = 9_000
-	ManagedComputeDefaultBYOCCPUHourlyMicrosPerVCPU  int64 = 19_000
+	ManagedComputeDefaultBYOCMemoryHourlyMicrosPerGB int64 = 4_500
+	ManagedComputeDefaultBYOCCPUHourlyMicrosPerVCPU  int64 = 9_500
 )
 
 type ManagedComputeConfig struct {

@@ -311,17 +311,17 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 		"max_nodes":                "4",
 		"target_sandboxes":         "40",
 		"sandboxes_per_node":       "20",
-		"hourly_cost_micros":       "364000",
-		"total_hourly_cost_micros": "728000",
+		"hourly_cost_micros":       "182000",
+		"total_hourly_cost_micros": "364000",
 	} {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
 		}
 	}
-	if got, want := res.GetByoc().GetHourlyCostMicros(), int64(364000); got != want {
+	if got, want := res.GetByoc().GetHourlyCostMicros(), int64(182000); got != want {
 		t.Fatalf("BYOC hourly cost micros = %d, want %d", got, want)
 	}
-	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(728000); got != want {
+	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(364000); got != want {
 		t.Fatalf("BYOC total hourly cost micros = %d, want %d", got, want)
 	}
 	if res.GetByoc().GetGpu() != "" || res.GetByoc().GetGpuCount() != 0 {
@@ -383,8 +383,8 @@ func TestCreateBYOCPoolCreatesAWSGPUPrivatePool(t *testing.T) {
 		"gpu_count":                "1",
 		"capacity_unit":            "gpu",
 		"capacity_unit_label":      "GPUs",
-		"hourly_cost_micros":       "220000",
-		"total_hourly_cost_micros": "440000",
+		"hourly_cost_micros":       "110000",
+		"total_hourly_cost_micros": "220000",
 	} {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored BYOC label %s = %q, want %q", key, got, want)
@@ -396,7 +396,7 @@ func TestCreateBYOCPoolCreatesAWSGPUPrivatePool(t *testing.T) {
 	if got, want := res.GetByoc().GetGpuCount(), uint32(1); got != want {
 		t.Fatalf("BYOC gpu count = %d, want %d", got, want)
 	}
-	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(440000); got != want {
+	if got, want := res.GetByoc().GetTotalHourlyCostMicros(), int64(220000); got != want {
 		t.Fatalf("BYOC total hourly cost micros = %d, want %d", got, want)
 	}
 }
@@ -743,10 +743,10 @@ func TestListPrivatePoolsIncludesBYOCState(t *testing.T) {
 	if got, want := byoc.TargetSandboxes, uint32(40); got != want {
 		t.Fatalf("target sandboxes = %d, want %d", got, want)
 	}
-	if got, want := byoc.HourlyCostMicros, int64(364000); got != want {
+	if got, want := byoc.HourlyCostMicros, int64(182000); got != want {
 		t.Fatalf("hourly cost micros = %d, want %d", got, want)
 	}
-	if got, want := byoc.TotalHourlyCostMicros, int64(728000); got != want {
+	if got, want := byoc.TotalHourlyCostMicros, int64(364000); got != want {
 		t.Fatalf("total hourly cost micros = %d, want %d", got, want)
 	}
 }
@@ -1520,8 +1520,8 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 							"max_nodes":                       "4",
 							"target_sandboxes":                "20",
 							"sandboxes_per_node":              "20",
-							"hourly_cost_micros":              "364000",
-							"total_hourly_cost_micros":        "364000",
+							"hourly_cost_micros":              "182000",
+							"total_hourly_cost_micros":        "182000",
 							awsBYOCAutoScalingGroupNameLabel:  asgName,
 							awsBYOCControlRoleArnLabel:        roleARN,
 							awsBYOCControlRoleExternalIDLabel: externalID,
@@ -1564,7 +1564,7 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 		"desired_nodes":            "3",
 		"max_nodes":                "5",
 		"target_sandboxes":         "60",
-		"total_hourly_cost_micros": "1092000",
+		"total_hourly_cost_micros": "546000",
 	} {
 		if got := stored.BYOC.Labels[key]; got != want {
 			t.Fatalf("stored label %s = %q, want %q", key, got, want)
@@ -2196,9 +2196,9 @@ func TestManagedBYOCNodeHourlyCostMicros(t *testing.T) {
 		config        types.ManagedComputeConfig
 		want          int64
 	}{
-		{name: "i4i xlarge shape", cpuMillicores: 4_000, memoryMB: 32 * 1024, want: 364_000},
-		{name: "single gpu xlarge shape", cpuMillicores: 4_000, memoryMB: 16 * 1024, want: 220_000},
-		{name: "fractional resources round up", cpuMillicores: 250, memoryMB: 512, want: 9_250},
+		{name: "i4i xlarge shape", cpuMillicores: 4_000, memoryMB: 32 * 1024, want: 182_000},
+		{name: "single gpu xlarge shape", cpuMillicores: 4_000, memoryMB: 16 * 1024, want: 110_000},
+		{name: "fractional resources round up", cpuMillicores: 250, memoryMB: 512, want: 4_625},
 		{
 			name:          "configured rate card",
 			cpuMillicores: 4_000,
@@ -3269,7 +3269,8 @@ func TestRecordManagedUsageSkipsActiveSubCentWindow(t *testing.T) {
 
 func TestRecordManagedUsageRecordsBYOCMachineWithManagedRates(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	cursor := now.Add(-2 * time.Minute)
+	activeWindow := 4 * time.Minute
+	cursor := now.Add(-activeWindow)
 	state := &model.PoolState{
 		WorkspaceID: "workspace-1",
 		Name:        "aws-cpu",
@@ -3318,13 +3319,14 @@ func TestRecordManagedUsageRecordsBYOCMachineWithManagedRates(t *testing.T) {
 	if got, want := usage.Cloud, "aws"; got != want {
 		t.Fatalf("cloud = %q, want %q", got, want)
 	}
-	if got, want := usage.HourlyCostMicros, int64(364_000); got != want {
+	if got, want := usage.HourlyCostMicros, int64(182_000); got != want {
 		t.Fatalf("hourly cost micros = %d, want %d", got, want)
 	}
 	if got, want := usage.CostCents, 1.0; got < want-0.001 || got > want+0.001 {
 		t.Fatalf("cost cents = %f, want about %f", got, want)
 	}
-	if got, want := usage.DurationSeconds, float64(98); got != want {
+	wantBillableDuration := time.Duration(float64(activeWindow) * (1.0 / managedCostCents(182_000, activeWindow))).Truncate(time.Second)
+	if got, want := usage.DurationSeconds, wantBillableDuration.Seconds(); got != want {
 		t.Fatalf("duration seconds = %f, want %f", got, want)
 	}
 	if got, want := usage.CPUMillicores, int64(4_000); got != want {
@@ -3336,7 +3338,7 @@ func TestRecordManagedUsageRecordsBYOCMachineWithManagedRates(t *testing.T) {
 	if got, want := usage.GPU, "A10G"; got != want {
 		t.Fatalf("gpu = %q, want %q", got, want)
 	}
-	if want := cursor.Add(98 * time.Second); !machine.BillingCursorAt.Equal(want) {
+	if want := cursor.Add(wantBillableDuration); !machine.BillingCursorAt.Equal(want) {
 		t.Fatalf("machine billing cursor = %s, want %s", machine.BillingCursorAt, want)
 	}
 	if got, want := len(usageRepo.counters), 2; got != want {
