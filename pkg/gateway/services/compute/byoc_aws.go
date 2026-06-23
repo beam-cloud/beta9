@@ -16,7 +16,12 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -43,6 +48,7 @@ var (
 	awsAccountIDPattern    = regexp.MustCompile(`^\d{12}$`)
 	awsPrincipalARNPattern = regexp.MustCompile(`^arn:[^:]+:iam::\d{12}:(role/.+|root)$`)
 	awsS3TemplateHostRe    = regexp.MustCompile(`^(?:s3[.-][a-z0-9-]+|[a-z0-9][a-z0-9.-]*\.s3[.-][a-z0-9-]+)\.amazonaws\.com$`)
+	awsEC2InstanceIDRe     = regexp.MustCompile(`^i-[a-f0-9]{8,17}$`)
 	cloudFormationPartRe   = regexp.MustCompile(`[^a-z0-9-]+`)
 	cloudFormationDashRe   = regexp.MustCompile(`-+`)
 	awsBYOCInstanceCatalog = map[string]awsBYOCInstanceType{
@@ -56,6 +62,7 @@ var (
 )
 
 var errBYOCDirectScaleUnavailable = errors.New("direct BYOC scaling is unavailable for this pool; recreate the AWS stack from Beam to enable one-click resizing")
+var errAWSBYOCResourceNotFound = errors.New("AWS BYOC resource not found")
 
 type byocAWSProvider struct{}
 
@@ -231,10 +238,7 @@ func (byocAWSProvider) Scale(ctx context.Context, input byocProviderScaleInput) 
 	if input.ProviderData == nil {
 		return fmt.Errorf("missing AWS BYOC resource metadata")
 	}
-	labels := input.ProviderData.Labels
-	roleARN := awsBYOCLabelString(labels, awsBYOCControlRoleArnLabel, "")
-	externalID := awsBYOCLabelString(labels, awsBYOCControlRoleExternalIDLabel, "")
-	asgName := awsBYOCLabelString(labels, awsBYOCAutoScalingGroupNameLabel, "")
+	roleARN, externalID, asgName := awsBYOCControlMetadata(input.ProviderData.Labels)
 	if roleARN == "" || externalID == "" || asgName == "" {
 		return errBYOCDirectScaleUnavailable
 	}
@@ -245,6 +249,39 @@ func (byocAWSProvider) Scale(ctx context.Context, input byocProviderScaleInput) 
 		AutoScalingGroupName: asgName,
 		DesiredNodes:         input.Request.desiredNodes,
 		MaxNodes:             input.Request.maxNodes,
+	})
+}
+
+func (byocAWSProvider) ResourceDeleted(ctx context.Context, input byocProviderResourceInput) (bool, error) {
+	if input.ProviderData == nil {
+		return false, fmt.Errorf("missing AWS BYOC resource metadata")
+	}
+	roleARN, externalID, _ := awsBYOCControlMetadata(input.ProviderData.Labels)
+	if roleARN == "" || externalID == "" || input.ProviderData.ResourceName == "" {
+		return false, errBYOCDirectScaleUnavailable
+	}
+	return awsBYOCResourceDeleted(ctx, awsBYOCResourceDeletedInput{
+		Region:     input.ProviderData.Region,
+		RoleARN:    roleARN,
+		ExternalID: externalID,
+		StackName:  input.ProviderData.ResourceName,
+	})
+}
+
+func (byocAWSProvider) ReleaseMachine(ctx context.Context, input byocProviderReleaseMachineInput) error {
+	if input.ProviderData == nil {
+		return fmt.Errorf("missing AWS BYOC resource metadata")
+	}
+	roleARN, externalID, asgName := awsBYOCControlMetadata(input.ProviderData.Labels)
+	if roleARN == "" || externalID == "" || asgName == "" {
+		return errBYOCDirectScaleUnavailable
+	}
+	return awsBYOCReleaseMachine(ctx, awsBYOCReleaseMachineInput{
+		Region:               input.ProviderData.Region,
+		RoleARN:              roleARN,
+		ExternalID:           externalID,
+		AutoScalingGroupName: asgName,
+		Machine:              input.Machine,
 	})
 }
 
@@ -350,6 +387,12 @@ func awsBYOCDirectScaleEnabled(labels map[string]string) bool {
 		awsBYOCLabelString(labels, awsBYOCAutoScalingGroupNameLabel, "") != ""
 }
 
+func awsBYOCControlMetadata(labels map[string]string) (roleARN, externalID, asgName string) {
+	return awsBYOCLabelString(labels, awsBYOCControlRoleArnLabel, ""),
+		awsBYOCLabelString(labels, awsBYOCControlRoleExternalIDLabel, ""),
+		awsBYOCLabelString(labels, awsBYOCAutoScalingGroupNameLabel, "")
+}
+
 type awsBYOCScaleAutoScalingGroupInput struct {
 	Region               string
 	RoleARN              string
@@ -360,20 +403,32 @@ type awsBYOCScaleAutoScalingGroupInput struct {
 }
 
 var awsBYOCScaleAutoScalingGroup = realAWSBYOCScaleAutoScalingGroup
+var awsBYOCResourceDeleted = realAWSBYOCResourceDeleted
+var awsBYOCReleaseMachine = realAWSBYOCReleaseMachine
+
+type awsBYOCResourceDeletedInput struct {
+	Region     string
+	RoleARN    string
+	ExternalID string
+	StackName  string
+}
+
+type awsBYOCReleaseMachineInput struct {
+	Region               string
+	RoleARN              string
+	ExternalID           string
+	AutoScalingGroupName string
+	Machine              *model.AgentTokenState
+}
 
 func realAWSBYOCScaleAutoScalingGroup(ctx context.Context, input awsBYOCScaleAutoScalingGroupInput) error {
 	if input.Region == "" || input.RoleARN == "" || input.ExternalID == "" || input.AutoScalingGroupName == "" {
 		return errBYOCDirectScaleUnavailable
 	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(input.Region))
+	cfg, err := awsBYOCControlConfig(ctx, input.Region, input.RoleARN, input.ExternalID, "beam-byoc-scale")
 	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
+		return err
 	}
-	provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), input.RoleARN, func(options *stscreds.AssumeRoleOptions) {
-		options.ExternalID = aws.String(input.ExternalID)
-		options.RoleSessionName = "beam-byoc-scale"
-	})
-	cfg.Credentials = aws.NewCredentialsCache(provider)
 	client := autoscaling.NewFromConfig(cfg)
 	if input.MaxNodes < input.DesiredNodes {
 		input.MaxNodes = input.DesiredNodes
@@ -388,6 +443,240 @@ func realAWSBYOCScaleAutoScalingGroup(ctx context.Context, input awsBYOCScaleAut
 		return fmt.Errorf("update AWS BYOC node group: %w", err)
 	}
 	return nil
+}
+
+func realAWSBYOCResourceDeleted(ctx context.Context, input awsBYOCResourceDeletedInput) (bool, error) {
+	if input.Region == "" || input.RoleARN == "" || input.ExternalID == "" || input.StackName == "" {
+		return false, errBYOCDirectScaleUnavailable
+	}
+	cfg, err := awsBYOCControlConfig(ctx, input.Region, input.RoleARN, input.ExternalID, "beam-byoc-stack-check")
+	if err != nil {
+		return false, err
+	}
+	client := cloudformation.NewFromConfig(cfg)
+	out, err := client.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{
+		StackName: aws.String(input.StackName),
+	})
+	if err != nil {
+		if awsBYOCCloudFormationStackNotFound(err) || awsBYOCControlRoleUnavailable(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("describe AWS BYOC stack: %w", err)
+	}
+	if len(out.Stacks) == 0 {
+		return true, nil
+	}
+	switch out.Stacks[0].StackStatus {
+	case cftypes.StackStatusDeleteInProgress, cftypes.StackStatusDeleteComplete:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func realAWSBYOCReleaseMachine(ctx context.Context, input awsBYOCReleaseMachineInput) error {
+	if input.Region == "" || input.RoleARN == "" || input.ExternalID == "" || input.AutoScalingGroupName == "" {
+		return errBYOCDirectScaleUnavailable
+	}
+	cfg, err := awsBYOCControlConfig(ctx, input.Region, input.RoleARN, input.ExternalID, "beam-byoc-release")
+	if err != nil {
+		return err
+	}
+	instanceID, err := awsBYOCResolveMachineInstanceID(ctx, cfg, input)
+	if err != nil {
+		if errors.Is(err, errAWSBYOCResourceNotFound) {
+			return nil
+		}
+		return err
+	}
+	_, err = autoscaling.NewFromConfig(cfg).TerminateInstanceInAutoScalingGroup(ctx, &autoscaling.TerminateInstanceInAutoScalingGroupInput{
+		InstanceId:                     aws.String(instanceID),
+		ShouldDecrementDesiredCapacity: aws.Bool(false),
+	})
+	if err != nil {
+		return fmt.Errorf("terminate AWS BYOC node %s: %w", instanceID, err)
+	}
+	return nil
+}
+
+func awsBYOCControlConfig(ctx context.Context, region, roleARN, externalID, sessionName string) (aws.Config, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("load AWS config: %w", err)
+	}
+	provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), roleARN, func(options *stscreds.AssumeRoleOptions) {
+		options.ExternalID = aws.String(externalID)
+		options.RoleSessionName = sessionName
+	})
+	cfg.Credentials = aws.NewCredentialsCache(provider)
+	return cfg, nil
+}
+
+func awsBYOCResolveMachineInstanceID(ctx context.Context, cfg aws.Config, input awsBYOCReleaseMachineInput) (string, error) {
+	instanceIDs, err := awsBYOCAutoScalingGroupInstanceIDs(ctx, cfg, input.AutoScalingGroupName)
+	if err != nil {
+		return "", err
+	}
+	if len(instanceIDs) == 0 {
+		return "", errAWSBYOCResourceNotFound
+	}
+
+	candidateIDs := awsBYOCMachineInstanceIDCandidates(input.Machine)
+	for _, instanceID := range instanceIDs {
+		if candidateIDs[instanceID] {
+			return instanceID, nil
+		}
+	}
+	if len(candidateIDs) > 0 {
+		return "", errAWSBYOCResourceNotFound
+	}
+
+	out, err := ec2.NewFromConfig(cfg).DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: instanceIDs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("describe AWS BYOC nodes: %w", err)
+	}
+	for _, reservation := range out.Reservations {
+		for _, instance := range reservation.Instances {
+			if awsBYOCMachineMatchesInstance(input.Machine, instance) && instance.InstanceId != nil {
+				return *instance.InstanceId, nil
+			}
+		}
+	}
+	machineID := ""
+	if input.Machine != nil {
+		machineID = input.Machine.MachineID
+	}
+	return "", fmt.Errorf("unable to find AWS BYOC instance for machine %q in Auto Scaling Group %q", machineID, input.AutoScalingGroupName)
+}
+
+func awsBYOCAutoScalingGroupInstanceIDs(ctx context.Context, cfg aws.Config, asgName string) ([]string, error) {
+	out, err := autoscaling.NewFromConfig(cfg).DescribeAutoScalingGroups(ctx, &autoscaling.DescribeAutoScalingGroupsInput{
+		AutoScalingGroupNames: []string{asgName},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("describe AWS BYOC Auto Scaling Group: %w", err)
+	}
+	if len(out.AutoScalingGroups) == 0 {
+		return nil, errAWSBYOCResourceNotFound
+	}
+	instanceIDs := make([]string, 0, len(out.AutoScalingGroups[0].Instances))
+	for _, instance := range out.AutoScalingGroups[0].Instances {
+		if instance.InstanceId == nil || *instance.InstanceId == "" {
+			continue
+		}
+		instanceIDs = append(instanceIDs, *instance.InstanceId)
+	}
+	return instanceIDs, nil
+}
+
+func awsBYOCMachineInstanceIDCandidates(machine *model.AgentTokenState) map[string]bool {
+	candidates := map[string]bool{}
+	if machine == nil {
+		return candidates
+	}
+	for _, value := range []string{machine.MachineFingerprint, machine.Hostname, machine.MachineID} {
+		value = strings.TrimSpace(value)
+		if awsEC2InstanceIDRe.MatchString(value) {
+			candidates[value] = true
+		}
+	}
+	return candidates
+}
+
+func awsBYOCMachineMatchesInstance(machine *model.AgentTokenState, instance ec2types.Instance) bool {
+	if machine == nil {
+		return false
+	}
+	candidates := awsBYOCMachineHostCandidates(machine)
+	for _, value := range []string{
+		aws.ToString(instance.PrivateDnsName),
+		aws.ToString(instance.PublicDnsName),
+		aws.ToString(instance.PrivateIpAddress),
+		aws.ToString(instance.InstanceId),
+	} {
+		for _, candidate := range normalizedAWSBYOCIdentityValues(value) {
+			if candidates[candidate] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func awsBYOCMachineHostCandidates(machine *model.AgentTokenState) map[string]bool {
+	candidates := map[string]bool{}
+	if machine == nil {
+		return candidates
+	}
+	for _, value := range []string{machine.Hostname, machine.MachineFingerprint} {
+		for _, candidate := range normalizedAWSBYOCIdentityValues(value) {
+			candidates[candidate] = true
+		}
+	}
+	return candidates
+}
+
+func normalizedAWSBYOCIdentityValues(value string) []string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return nil
+	}
+	values := []string{value}
+	if host, _, ok := strings.Cut(value, "."); ok && host != "" {
+		values = append(values, host)
+	}
+	if ip := awsBYOCPrivateDNSHostIP(value); ip != "" {
+		values = append(values, ip)
+	}
+	return values
+}
+
+func awsBYOCPrivateDNSHostIP(hostname string) string {
+	host, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	if !strings.HasPrefix(host, "ip-") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(host, "ip-"), "-")
+	if len(parts) != 4 {
+		return ""
+	}
+	for _, part := range parts {
+		if _, err := strconv.Atoi(part); err != nil {
+			return ""
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+func awsBYOCCloudFormationStackNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return strings.EqualFold(apiErr.ErrorCode(), "ValidationError") && strings.Contains(strings.ToLower(apiErr.ErrorMessage()), "does not exist")
+}
+
+func awsBYOCControlRoleUnavailable(err error) bool {
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "sts:assumerole") && !strings.Contains(msg, "assume role") && !strings.Contains(msg, "assumerole") {
+		return false
+	}
+
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := strings.ToLower(apiErr.ErrorCode())
+		switch code {
+		case "accessdenied", "accessdeniedexception", "nosuchentity", "validationerror":
+			return true
+		}
+	}
+
+	return strings.Contains(msg, "not authorized") ||
+		strings.Contains(msg, "cannot be assumed") ||
+		strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "not found")
 }
 
 func awsCloudFormationConsoleURL(region, stackName, templateURL string, params map[string]string) string {

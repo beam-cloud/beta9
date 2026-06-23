@@ -114,6 +114,7 @@ require (
 	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
 	github.com/aws/aws-sdk-go v1.55.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/autoscaling v1.44.4 // indirect
+	github.com/aws/aws-sdk-go-v2/service/cloudformation v1.45.0 // indirect
 	github.com/containerd/console v1.0.4 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.16.3 // indirect
 	github.com/dimchansky/utfbom v1.1.1 // indirect

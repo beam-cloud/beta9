@@ -919,7 +919,7 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 		},
 	}
 
-	exitCode, restored, err := worker.attemptRestoreCheckpoint(
+	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
 		context.Background(),
 		request,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -930,11 +930,167 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 
 	require.ErrorIs(t, err, restoreErr)
 	require.False(t, restored)
+	require.False(t, started)
 	require.Equal(t, 17, exitCode)
 	require.Equal(t, 1, backendRepoClient.updateCalls)
 	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
 	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+}
+
+func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+
+	restoreErr := assert.AnError
+	containerID := "container-restore-fallback"
+	checkpointID := "checkpoint-restore-fallback"
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointID, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointID, "inventory.img"), []byte("runtime payload"), 0644))
+
+	rt := &restoreFallbackRuntime{
+		mockRuntime: mockRuntime{
+			name:         "runc",
+			capabilities: runtime.Capabilities{CheckpointRestore: true},
+		},
+	}
+	criuManager := &observingRestoreErrorCRIUManager{err: restoreErr}
+	backendRepoClient := &fakeBackendRepoClient{}
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+	}
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         criuManager,
+		containerRepoClient: repoClient,
+		backendRepoClient:   backendRepoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: rt,
+	})
+	request := &types.ContainerRequest{
+		ContainerId:       containerID,
+		ConfigPath:        filepath.Join(t.TempDir(), "config.json"),
+		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
+		CheckpointEnabled: true,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointID,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, err := worker.runContainer(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+		time.Now(),
+		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	require.True(t, rt.runCalled)
+	require.Equal(t, 0, criuManager.deleteCallsAtRestore)
+	require.Equal(t, 1, rt.deleteCallsAtRun)
+	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+	require.Nil(t, request.Checkpoint)
+	require.True(t, request.CheckpointEnabled)
+	require.Equal(t, 1, repoClient.updateStatusCalls)
+	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
+}
+
+func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+
+	containerID := "container-materialize-fallback"
+	rt := &restoreFallbackRuntime{
+		mockRuntime: mockRuntime{
+			name:         "runc",
+			capabilities: runtime.Capabilities{CheckpointRestore: true},
+		},
+	}
+	criuManager := &observingRestoreErrorCRIUManager{err: assert.AnError}
+	backendRepoClient := &fakeBackendRepoClient{}
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+	}
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:             "10.42.0.10",
+		criuManager:         criuManager,
+		containerRepoClient: repoClient,
+		backendRepoClient:   backendRepoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: rt,
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-missing-payload",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+
+	exitCode, err := worker.runContainer(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+		time.Now(),
+		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode)
+	require.True(t, rt.runCalled)
+	require.Equal(t, 0, criuManager.restoreCalls)
+	require.Equal(t, 1, backendRepoClient.updateCalls)
+	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+	require.Nil(t, request.Checkpoint)
+}
+
+func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		criuManager: &startedCRIUManager{},
+	}
+	request := &types.ContainerRequest{
+		CheckpointEnabled: true,
+		GpuCount:          0,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-failed",
+			Status:       string(types.CheckpointStatusRestoreFailed),
+		},
+	}
+
+	require.True(t, worker.shouldCreateCheckpoint(request))
+
+	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
+	require.False(t, worker.shouldCreateCheckpoint(request))
 }
 
 func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
@@ -962,7 +1118,7 @@ func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
 		},
 	}
 
-	exitCode, restored, err := worker.attemptRestoreCheckpoint(
+	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
 		context.Background(),
 		request,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -973,6 +1129,7 @@ func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, restored)
+	require.True(t, started)
 	require.Equal(t, 0, exitCode)
 	require.Empty(t, rt.signals)
 	require.Empty(t, rt.killOpts)
@@ -1575,6 +1732,50 @@ func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runti
 
 func (m *restoreErrorCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	return m.exitCode, m.err
+}
+
+type observingRestoreErrorCRIUManager struct {
+	err                  error
+	deleteCallsAtRestore int
+	restoreCalls         int
+}
+
+func (m *observingRestoreErrorCRIUManager) Available() bool {
+	return true
+}
+
+func (m *observingRestoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+	return "", assert.AnError
+}
+
+func (m *observingRestoreErrorCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
+	m.restoreCalls++
+	if cleanupRuntime, ok := rt.(*restoreFallbackRuntime); ok {
+		m.deleteCallsAtRestore = cleanupRuntime.deleteCalls
+	}
+	opts.started <- 4321
+	return -1, m.err
+}
+
+type restoreFallbackRuntime struct {
+	mockRuntime
+	deleteCalls      int
+	deleteCallsAtRun int
+	runCalled        bool
+}
+
+func (m *restoreFallbackRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
+	m.deleteCalls++
+	return nil
+}
+
+func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
+	m.runCalled = true
+	m.deleteCallsAtRun = m.deleteCalls
+	if opts != nil && opts.Started != nil {
+		opts.Started <- 1234
+	}
+	return 0, nil
 }
 
 type fakeBackendRepoClient struct {

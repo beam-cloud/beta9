@@ -21,6 +21,7 @@ const (
 	minNvidiaDriverVersion     = 570
 	gvisorCheckpointAttempts   = 4
 	gvisorCheckpointRetryDelay = 250 * time.Millisecond
+	maxRestoreStderrBytes      = 4096
 )
 
 type ErrCRIURestoreFailed struct {
@@ -177,7 +178,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 			return -1, &ErrCRIURestoreFailed{Stderr: stderr}
 		}
 
-		return exitCode, fmt.Errorf("restore failed for runtime %s: %w", rt.Name(), err)
+		return exitCode, restoreFailureError(rt.Name(), err, stderr)
 	}
 
 	log.Info().
@@ -188,6 +189,17 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		Msg("checkpoint restored successfully")
 
 	return exitCode, nil
+}
+
+func restoreFailureError(runtimeName string, err error, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" || strings.Contains(err.Error(), "stderr:") {
+		return fmt.Errorf("restore failed for runtime %s: %w", runtimeName, err)
+	}
+	if len(stderr) > maxRestoreStderrBytes {
+		stderr = stderr[:maxRestoreStderrBytes] + "...[truncated]"
+	}
+	return fmt.Errorf("restore failed for runtime %s: %w (stderr: %s)", runtimeName, err, stderr)
 }
 
 func (c *NvidiaCRIUManager) Available() bool {

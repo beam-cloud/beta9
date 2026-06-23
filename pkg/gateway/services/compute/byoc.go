@@ -28,6 +28,8 @@ type byocProvider interface {
 	Setup(context.Context, byocProviderSetupInput) (*byocProviderSetupResult, error)
 	Resource(workspaceID string, state *model.PoolState) (*byocProviderResource, error)
 	Scale(context.Context, byocProviderScaleInput) error
+	ResourceDeleted(context.Context, byocProviderResourceInput) (bool, error)
+	ReleaseMachine(context.Context, byocProviderReleaseMachineInput) error
 	UpdateScaleState(*model.PoolState, byocPoolRequest) error
 	ValidateExistingPool(*model.PoolState) error
 }
@@ -74,6 +76,19 @@ type byocProviderScaleInput struct {
 	Request      byocPoolRequest
 	Pool         *model.PoolState
 	ProviderData *model.BYOCProviderState
+}
+
+type byocProviderResourceInput struct {
+	WorkspaceID  string
+	Pool         *model.PoolState
+	ProviderData *model.BYOCProviderState
+}
+
+type byocProviderReleaseMachineInput struct {
+	WorkspaceID  string
+	Pool         *model.PoolState
+	ProviderData *model.BYOCProviderState
+	Machine      *model.AgentTokenState
 }
 
 type byocProviderResource struct {
@@ -383,7 +398,8 @@ func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool) *pb.BYOC
 }
 
 func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) (bool, error) {
-	if !byocPoolLooksDeleted(state, machines, now) {
+	resourceDeleted, _ := s.byocProviderResourceDeleted(ctx, workspaceID, state)
+	if !resourceDeleted && !byocPoolLooksDeleted(state, machines, now) {
 		return false, nil
 	}
 
@@ -397,13 +413,29 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 		if err != nil {
 			return err
 		}
-		if !byocPoolLooksDeleted(fresh, freshMachines, now) {
+		freshResourceDeleted, _ := s.byocProviderResourceDeleted(ctx, workspaceID, fresh)
+		if !freshResourceDeleted && !byocPoolLooksDeleted(fresh, freshMachines, now) {
 			return nil
 		}
 		deleted = true
 		return s.deleteBYOCPoolLocalState(ctx, workspaceID, fresh, freshMachines, "cloud_resource_deleted")
 	})
 	return deleted, err
+}
+
+func (s *Service) byocProviderResourceDeleted(ctx context.Context, workspaceID string, state *model.PoolState) (bool, error) {
+	if state == nil || state.BYOC == nil {
+		return false, nil
+	}
+	provider, err := byocProviderForState(state)
+	if err != nil {
+		return false, err
+	}
+	return provider.ResourceDeleted(ctx, byocProviderResourceInput{
+		WorkspaceID:  workspaceID,
+		Pool:         state,
+		ProviderData: state.BYOC,
+	})
 }
 
 // Without provider credentials, external stack deletion is observable as all

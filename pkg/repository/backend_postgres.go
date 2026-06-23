@@ -2842,13 +2842,13 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
-		WHERE s.external_id = $1 AND c.deleted_at IS NULL
+		WHERE s.external_id = $1 AND c.deleted_at IS NULL AND c.status = $2
 		ORDER BY c.created_at DESC
 		LIMIT 1;`
 
 	var checkpoint types.Checkpoint
 	var exposedPortsInt32 []int32
-	err := r.client.QueryRowxContext(ctx, query, stubExternalId).Scan(
+	err := r.client.QueryRowxContext(ctx, query, stubExternalId, string(types.CheckpointStatusAvailable)).Scan(
 		&checkpoint.CheckpointId,
 		&checkpoint.ExternalId,
 		&checkpoint.SourceContainerId,

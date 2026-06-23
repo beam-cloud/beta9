@@ -15,10 +15,33 @@ func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.Agen
 	if machine == nil {
 		return nil
 	}
+	if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil {
+		return err
+	}
 	if err := s.releaseManagedMachineReservation(ctx, machine); err != nil {
 		return err
 	}
 	return s.removePrivateMachine(ctx, machine)
+}
+
+func (s *Service) releaseBYOCProviderMachine(ctx context.Context, machine *model.AgentTokenState) error {
+	if machine == nil {
+		return nil
+	}
+	state, err := s.getPrivatePoolState(ctx, machine.WorkspaceID, machine.PoolName)
+	if err != nil || state == nil || state.BYOC == nil {
+		return err
+	}
+	provider, err := byocProviderForState(state)
+	if err != nil {
+		return err
+	}
+	return provider.ReleaseMachine(ctx, byocProviderReleaseMachineInput{
+		WorkspaceID:  machine.WorkspaceID,
+		Pool:         state,
+		ProviderData: state.BYOC,
+		Machine:      machine,
+	})
 }
 
 func (s *Service) removePrivateMachine(ctx context.Context, machine *model.AgentTokenState) error {

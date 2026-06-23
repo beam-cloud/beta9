@@ -284,6 +284,63 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+	createdAt := time.Now().Add(-time.Minute)
+	restoredAt := time.Now()
+
+	mock.ExpectQuery(`c\.status = \$2`).
+		WithArgs("stub-123", string(types.CheckpointStatusAvailable)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"checkpoint_id",
+			"external_id",
+			"source_container_id",
+			"container_ip",
+			"status",
+			"remote_key",
+			"workspace_id",
+			"stub_id",
+			"stub_type",
+			"app_id",
+			"exposed_ports",
+			"created_at",
+			"last_restored_at",
+			"cache_hash",
+			"cache_size_bytes",
+			"origin_key",
+			"locality",
+			"accelerator",
+		}).AddRow(
+			"checkpoint-available",
+			"external-available",
+			"container-available",
+			"10.0.0.12",
+			string(types.CheckpointStatusAvailable),
+			"checkpoint-available",
+			uint(1),
+			uint(2),
+			types.StubTypeASGI,
+			uint(3),
+			"{8001}",
+			createdAt,
+			restoredAt,
+			"sha256-cache",
+			int64(128),
+			"checkpoints/checkpoint-available.tar",
+			"default",
+			"cpu",
+		))
+
+	checkpoint, err := postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123")
+
+	require.NoError(t, err)
+	require.Equal(t, "checkpoint-available", checkpoint.CheckpointId)
+	require.Equal(t, string(types.CheckpointStatusAvailable), checkpoint.Status)
+	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func expectTaskWithRelatedQuery(mock sqlmock.Sqlmock, taskSnapshot types.Task, dbStatus types.TaskStatus) {
 	mock.ExpectQuery("SELECT").
 		WithArgs(taskSnapshot.ExternalId).
