@@ -18,8 +18,8 @@ config:
     billableMarginPct: 0.10
     byoc:
       pricing:
-        memoryHourlyMicrosPerGB: 9000
-        cpuHourlyMicrosPerVCPU: 19000
+        memoryHourlyMicrosPerGB: 4500
+        cpuHourlyMicrosPerVCPU: 9500
       aws:
         templateUrl: ""
     billing:
