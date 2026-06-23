@@ -659,6 +659,9 @@ type MonitoringConfig struct {
 const (
 	ManagedComputeDefaultMinimumCreditCents int64   = 2500
 	ManagedComputeDefaultBillableMarginPct  float64 = 0.10
+
+	ManagedComputeDefaultBYOCMemoryHourlyMicrosPerGB int64 = 9_000
+	ManagedComputeDefaultBYOCCPUHourlyMicrosPerVCPU  int64 = 19_000
 )
 
 type ManagedComputeConfig struct {
@@ -678,7 +681,27 @@ func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {
 }
 
 type ManagedComputeBYOCConfig struct {
-	AWS ManagedComputeBYOCAWSConfig `key:"aws" json:"aws"`
+	Pricing ManagedComputeBYOCPricingConfig `key:"pricing" json:"pricing"`
+	AWS     ManagedComputeBYOCAWSConfig     `key:"aws" json:"aws"`
+}
+
+type ManagedComputeBYOCPricingConfig struct {
+	MemoryHourlyMicrosPerGB int64 `key:"memoryHourlyMicrosPerGB" json:"memory_hourly_micros_per_gb"`
+	CPUHourlyMicrosPerVCPU  int64 `key:"cpuHourlyMicrosPerVCPU" json:"cpu_hourly_micros_per_vcpu"`
+}
+
+func (c ManagedComputeBYOCPricingConfig) MemoryHourlyMicrosPerGBOrDefault() int64 {
+	if c.MemoryHourlyMicrosPerGB > 0 {
+		return c.MemoryHourlyMicrosPerGB
+	}
+	return ManagedComputeDefaultBYOCMemoryHourlyMicrosPerGB
+}
+
+func (c ManagedComputeBYOCPricingConfig) CPUHourlyMicrosPerVCPUOrDefault() int64 {
+	if c.CPUHourlyMicrosPerVCPU > 0 {
+		return c.CPUHourlyMicrosPerVCPU
+	}
+	return ManagedComputeDefaultBYOCCPUHourlyMicrosPerVCPU
 }
 
 type ManagedComputeBYOCAWSConfig struct {

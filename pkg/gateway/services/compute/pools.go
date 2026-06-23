@@ -42,7 +42,7 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, time.Now().UTC())
+		machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
@@ -275,6 +275,13 @@ func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesR
 	if err != nil {
 		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
+	if err != nil {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if deleted {
+		return &pb.ListPoolMachinesResponse{Ok: true, Machines: nil}, nil
+	}
 	if limit := int(in.Limit); limit > 0 && len(machines) > limit {
 		machines = machines[:limit]
 	}
@@ -299,6 +306,13 @@ func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineReq
 	}
 	if machine == nil {
 		if handled {
+			reconciled, err := s.reconcileMissingBYOCMachineForDelete(ctx, authInfo, workspaceID, in.PoolName)
+			if err != nil {
+				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+			}
+			if reconciled {
+				return true, &pb.DeleteMachineResponse{Ok: true}, nil
+			}
 			released, err := s.releasePrivateReservationForDelete(ctx, authInfo, workspaceID, in.PoolName, in.MachineId)
 			if err != nil {
 				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -315,6 +329,24 @@ func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineReq
 		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return true, &pb.DeleteMachineResponse{Ok: true}, nil
+}
+
+func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName string) (bool, error) {
+	if poolName == "" {
+		return false, nil
+	}
+	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	if err != nil || state == nil || state.BYOC == nil {
+		return false, err
+	}
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+	if err != nil {
+		return false, err
+	}
+	if _, _, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC()); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, targetID string) (bool, error) {

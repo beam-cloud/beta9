@@ -794,6 +794,8 @@ message CreateBYOCPoolRequest {
   uint32 desired_nodes = 5;
   uint32 max_nodes = 6;
   string account_id = 7;
+  string gpu = 8;
+  uint32 gpu_count = 9;
 }
 
 message CreateBYOCPoolResponse {
@@ -825,6 +827,8 @@ message BYOCPoolState {
   int64 hourly_cost_micros = 16;
   int64 total_hourly_cost_micros = 17;
   bool direct_scale_enabled = 18;
+  string gpu = 19;
+  uint32 gpu_count = 20;
 }
 
 message GetBYOCPoolRequest {
