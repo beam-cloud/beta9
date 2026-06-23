@@ -774,6 +774,7 @@ func (s *Worker) reportCheckpointRequiredContent(request *types.ContainerRequest
 		CheckpointID: checkpointId,
 		Accelerator:  metadata.accelerator,
 	}})
+	reporter.flush()
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
