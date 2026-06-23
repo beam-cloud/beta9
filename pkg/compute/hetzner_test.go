@@ -189,6 +189,23 @@ func TestHetznerCreateGetDeleteReservation(t *testing.T) {
 	require.True(t, sawDelete)
 }
 
+func TestHetznerDeleteReservationIsIdempotentWhenServerIsGone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer hetzner-token", r.Header.Get("Authorization"))
+		require.Equal(t, http.MethodDelete, r.Method)
+		require.Equal(t, "/servers/42", r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewHetzner(HetznerConfig{
+		APIToken: "hetzner-token",
+		BaseURL:  server.URL,
+	})
+
+	require.NoError(t, client.DeleteReservation(context.Background(), "42"))
+}
+
 func TestHetznerCreateReservationRequiresPrivateNetworkSubnetInNetworkZone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "Bearer hetzner-token", r.Header.Get("Authorization"))

@@ -2,8 +2,10 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
 	"time"
 
@@ -728,7 +730,7 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 		reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
 		return true
 	}
-	if err := vendor.DeleteReservation(ctx, computeReservationInstanceID(*reservation)); err != nil {
+	if err := vendor.DeleteReservation(ctx, computeReservationInstanceID(*reservation)); err != nil && !managedReservationDeleteAlreadyGone(err) {
 		reservation.Status = model.ReservationTerminating
 		reservation.TerminatingReason = reason
 		reservation.LastError = err.Error()
@@ -740,6 +742,11 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 	reservation.LastError = ""
 	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationTerminating, reason))
 	return true
+}
+
+func managedReservationDeleteAlreadyGone(err error) bool {
+	var statusErr *model.HTTPStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound
 }
 
 func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) bool {

@@ -1480,6 +1480,19 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 	}
 }
 
+func TestDeletePoolIsIdempotentWhenPoolAlreadyGone(t *testing.T) {
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{}}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.DeletePool(testAuthContext("workspace-1", "owner-token"), &pb.DeletePoolRequest{Name: "codex-hetzner-latency"})
+	if err != nil {
+		t.Fatalf("DeletePool() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePool() response = %#v", res)
+	}
+}
+
 func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
@@ -2751,7 +2764,9 @@ func TestValidatePoolLaunchCompatibleRejectsGPUMismatch(t *testing.T) {
 }
 
 type fakeVendor struct {
-	extended map[string]time.Time
+	extended  map[string]time.Time
+	deleted   []string
+	deleteErr error
 }
 
 func (v *fakeVendor) Name() string { return "shadeform" }
@@ -2771,7 +2786,10 @@ func (v *fakeVendor) ExtendReservation(_ context.Context, id string, expiresAt t
 	v.extended[id] = expiresAt
 	return nil
 }
-func (v *fakeVendor) DeleteReservation(context.Context, string) error { return nil }
+func (v *fakeVendor) DeleteReservation(_ context.Context, id string) error {
+	v.deleted = append(v.deleted, id)
+	return v.deleteErr
+}
 
 func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
 	now := time.Now().UTC()
@@ -3826,6 +3844,54 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	}
 	if token := repo.joinTokens["join-token-hash"]; token == nil || !token.Revoked {
 		t.Fatal("releasePrivateMachine() did not revoke the reservation join token")
+	}
+}
+
+func TestTerminateReservationTreatsProviderNotFoundAsDeleted(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "codex-hetzner-latency",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "hetzner",
+				InstanceID:       "42",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	vendor := &fakeVendor{deleteErr: &model.HTTPStatusError{
+		Method:     http.MethodDelete,
+		Path:       "/servers/42",
+		StatusCode: http.StatusNotFound,
+		Body:       "not found",
+	}}
+	service := &Service{}
+
+	if !service.terminateReservation(
+		context.Background(),
+		"workspace-1",
+		state,
+		&state.Reservations[0],
+		map[string]model.Vendor{"hetzner": vendor},
+		reconcileReasonMachineReleased,
+		machineReleasedMessage,
+	) {
+		t.Fatal("terminateReservation() did not report a change")
+	}
+	if got, want := state.Reservations[0].Status, model.ReservationDeleted; got != want {
+		t.Fatalf("reservation status = %q, want %q", got, want)
+	}
+	if got := state.Reservations[0].LastError; got != "" {
+		t.Fatalf("reservation last error = %q, want empty", got)
+	}
+	if got, want := vendor.deleted, []string{"42"}; !sameStrings(got, want) {
+		t.Fatalf("deleted reservations = %v, want %v", got, want)
 	}
 }
 

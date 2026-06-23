@@ -136,7 +136,7 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if state == nil {
-		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return &pb.DeletePoolResponse{Ok: true}, nil
 	}
 
 	if err := s.releasePrivatePoolMachines(ctx, workspaceID, state.Name); err != nil {
