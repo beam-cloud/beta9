@@ -60,6 +60,11 @@ type CRIUManager interface {
 	RestoreCheckpoint(ctx context.Context, runtime runtime.Runtime, opts *RestoreOpts) (int, error)
 }
 
+type restoreCheckpointResult struct {
+	exitCode int
+	err      error
+}
+
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers.
 func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, checkpointRoot string) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
@@ -114,56 +119,174 @@ func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.Conta
 	}
 }
 
-func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int) (exitCode int, restored bool, err error) {
+func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int) (exitCode int, restored bool, started bool, err error) {
 	checkpoint := request.Checkpoint
 	if checkpoint.Status != string(types.CheckpointStatusAvailable) {
-		return -1, false, fmt.Errorf("checkpoint not available")
+		return -1, false, false, fmt.Errorf("checkpoint not available")
 	}
 
 	if err := s.requireCRIUManager(); err != nil {
-		return -1, false, err
+		return -1, false, false, err
 	}
 
 	outputLogger.Info("Attempting to restore container from checkpoint...")
 	signalDir := checkpointSignalDir(request.ContainerId)
 	if err := os.MkdirAll(signalDir, 0755); err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to create checkpoint signal dir: %v", err)
-		return -1, false, err
+		return -1, false, false, err
 	}
 
 	f, err := os.Create(filepath.Join(signalDir, checkpointCompleteFileName))
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to create checkpoint complete file: %v", err)
-		return -1, false, err
+		return -1, false, false, err
 	}
 	defer f.Close()
 
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
-		return -1, false, fmt.Errorf("container instance not found")
+		return -1, false, false, fmt.Errorf("container instance not found")
 	}
 
-	exitCode, err = s.criuManager.RestoreCheckpoint(ctx, instance.Runtime, &RestoreOpts{
-		request:      request,
-		checkpoint:   checkpoint,
-		outputWriter: outputWriter,
-		started:      startedChan,
-		configPath:   request.ConfigPath,
-	})
+	restoreStarted := make(chan int, 1)
+	restoreDone := make(chan restoreCheckpointResult, 1)
+	go func() {
+		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, instance.Runtime, &RestoreOpts{
+			request:      request,
+			checkpoint:   checkpoint,
+			outputWriter: outputWriter,
+			started:      restoreStarted,
+			configPath:   request.ConfigPath,
+		})
+		restoreDone <- restoreCheckpointResult{exitCode: exitCode, err: err}
+	}()
+
+	restoreStartedChan := (<-chan int)(restoreStarted)
+	for restoreDone != nil {
+		select {
+		case pid := <-restoreStartedChan:
+			started = true
+			restoreStartedChan = nil
+			if err := forwardRestoreStarted(ctx, startedChan, pid); err != nil {
+				return -1, false, started, err
+			}
+		case result := <-restoreDone:
+			exitCode, err = result.exitCode, result.err
+			restoreDone = nil
+			if !started {
+				if pid, ok := restoreStartedPID(restoreStarted); ok {
+					started = true
+					if err == nil {
+						if forwardErr := forwardRestoreStarted(ctx, startedChan, pid); forwardErr != nil {
+							return -1, false, started, forwardErr
+						}
+					}
+				}
+			}
+		case <-ctx.Done():
+			return -1, false, started, ctx.Err()
+		}
+	}
+
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to restore checkpoint: %v", err)
 
 		outputLogger.Info("Failed to restore checkpoint")
-
-		updateStateErr := s.updateCheckpointState(checkpoint.CheckpointId, request, types.CheckpointStatusRestoreFailed)
-		if updateStateErr != nil {
-			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+		if cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, instance.Runtime, request.ContainerId); cleanupErr != nil {
+			log.Warn().
+				Err(cleanupErr).
+				Str("container_id", request.ContainerId).
+				Str("checkpoint_id", checkpoint.CheckpointId).
+				Msg("failed to clean up runtime container after checkpoint restore failure")
 		}
+		s.markCheckpointRestoreFailed(request, checkpoint)
 
-		return exitCode, false, err
+		return exitCode, false, started, err
 	}
 
-	return exitCode, true, nil
+	if !started {
+		err := fmt.Errorf("checkpoint restore completed without runtime start")
+		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msg(err.Error())
+		s.markCheckpointRestoreFailed(request, checkpoint)
+		return -1, false, false, err
+	}
+
+	return exitCode, true, started, nil
+}
+
+func forwardRestoreStarted(ctx context.Context, startedChan chan int, pid int) error {
+	if startedChan == nil {
+		return nil
+	}
+
+	select {
+	case startedChan <- pid:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func restoreStartedPID(started <-chan int) (int, bool) {
+	select {
+	case pid := <-started:
+		return pid, true
+	default:
+		return 0, false
+	}
+}
+
+func deleteFailedRestoreRuntimeContainer(ctx context.Context, rt runtime.Runtime, containerId string) error {
+	if rt == nil || containerId == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtimeDeleteTimeout)
+	defer cancel()
+
+	err := rt.Delete(cleanupCtx, containerId, &runtime.DeleteOpts{Force: true})
+	if err != nil && !runtimeContainerNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func runtimeContainerNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var notFoundValue runtime.ErrContainerNotFound
+	if errors.As(err, &notFoundValue) {
+		return true
+	}
+
+	var notFound *runtime.ErrContainerNotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no such container")
+}
+
+func (s *Worker) markCheckpointRestoreFailed(request *types.ContainerRequest, checkpoint *types.Checkpoint) {
+	if request == nil || checkpoint == nil || checkpoint.CheckpointId == "" {
+		return
+	}
+
+	if err := s.updateCheckpointState(checkpoint.CheckpointId, request, types.CheckpointStatusRestoreFailed); err != nil {
+		log.Error().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Str("checkpoint_id", checkpoint.CheckpointId).
+			Msg("failed to update checkpoint state")
+	}
 }
 
 func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime) {
@@ -364,13 +487,16 @@ func (s *Worker) ensureCheckpointMaterialized(ctx context.Context, request *type
 	if checkpointPath == "" {
 		return "", fmt.Errorf("checkpoint path is unavailable")
 	}
+	metadataComplete := checkpoint.CacheHash != "" && checkpoint.CacheSizeBytes > 0 && checkpoint.OriginKey != ""
+	if metadataComplete {
+		s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
+	}
 	if checkpointMaterialized(checkpointPath) {
 		return checkpointPath, nil
 	}
-	if checkpoint.CacheHash == "" || checkpoint.CacheSizeBytes <= 0 || checkpoint.OriginKey == "" {
+	if !metadataComplete {
 		return "", fmt.Errorf("checkpoint cache metadata is incomplete")
 	}
-	s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
 	s.cacheManager.requestReconcile()
 
 	archivePath := s.checkpointArchivePath(checkpoint.CheckpointId)
@@ -476,6 +602,10 @@ func writeCacheContentFile(ctx context.Context, client *cache.Client, filePath, 
 	}
 	tmpPath := filePath + ".tmp"
 	_ = os.Remove(tmpPath)
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return err
+	}
 
 	f, err := os.Create(tmpPath)
 	if err != nil {
@@ -626,7 +756,7 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 		return false
 	}
 
-	if request.Checkpoint != nil {
+	if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
 		return false
 	}
 

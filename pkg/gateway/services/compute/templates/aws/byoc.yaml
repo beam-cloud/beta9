@@ -260,11 +260,14 @@ Resources:
               - Effect: Allow
                 Action:
                   - autoscaling:SetDesiredCapacity
+                  - autoscaling:TerminateInstanceInAutoScalingGroup
                   - autoscaling:UpdateAutoScalingGroup
                 Resource: !Sub arn:${AWS::Partition}:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${BeamAutoScalingGroupName}
               - Effect: Allow
                 Action:
                   - autoscaling:DescribeAutoScalingGroups
+                  - cloudformation:DescribeStacks
+                  - ec2:DescribeInstances
                 Resource: "*"
       Tags:
         - Key: beam:pool
@@ -332,6 +335,17 @@ Resources:
               printf '{"data-root":"%s"}\n' "$BEAM_NVME_ROOT/docker" > /etc/docker/daemon.json
             fi
             mkdir -p "$BEAM_STATE_DIR"
+            IMDS_TOKEN="$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token || true)"
+            INSTANCE_ID=""
+            if [ -n "$IMDS_TOKEN" ]; then
+              INSTANCE_ID="$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id || true)"
+            else
+              INSTANCE_ID="$(curl -fsS http://169.254.169.254/latest/meta-data/instance-id || true)"
+            fi
+            if [ -n "$INSTANCE_ID" ]; then
+              export BEAM_AGENT_MACHINE_FINGERPRINT="$INSTANCE_ID"
+              export BEAM_AGENT_HOSTNAME="$INSTANCE_ID"
+            fi
             export BEAM_AGENT_INSTALL_DOCKER=1
             curl -fsSL '${BeamGatewayURL}/install/agent' | sh -s -- \
               --gateway '${BeamGatewayURL}' \

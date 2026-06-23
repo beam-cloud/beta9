@@ -81,6 +81,61 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 	}
 }
 
+func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server, *cache.Client) {
+	t.Helper()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	metadataStore := cache.NewMockCacheMetadataStore()
+	server, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(metadataStore), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	host := server.Host()
+	require.NotNil(t, host)
+	host.Addr = addr
+	host.PrivateAddr = addr
+
+	client, err := cache.NewClientWithHostDirectory(ctx, cfg, metadataStore, testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{host}, nil
+	}), "test")
+	require.NoError(t, err)
+	client.AttachLocalServer(server)
+
+	require.Eventually(t, func() bool {
+		_, err := client.PrimaryReadHost("checkpoint-test-probe")
+		return err == nil
+	}, 3*time.Second, 20*time.Millisecond)
+
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	return server, client
+}
+
+func createMaterializedCheckpointForTest(t *testing.T, checkpointPath string) {
+	t.Helper()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFsDir, "state.txt"), []byte("filesystem payload"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime payload"), 0644))
+}
+
+func createCheckpointArchiveForTest(t *testing.T, checkpointID string) (archivePath, hash string, size int64) {
+	t.Helper()
+
+	root := t.TempDir()
+	checkpointPath := filepath.Join(root, checkpointID)
+	createMaterializedCheckpointForTest(t, checkpointPath)
+
+	archivePath = filepath.Join(t.TempDir(), checkpointID+checkpointArchiveExtension)
+	require.NoError(t, createTar(checkpointPath, archivePath))
+
+	hash, size, err := fileSHA256(archivePath)
+	require.NoError(t, err)
+	return archivePath, hash, size
+}
+
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
 	claimed bool
@@ -609,6 +664,130 @@ func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T
 	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
 	require.Equal(t, checkpoint.CheckpointId, fake.pushed[0].Items[0].CheckpointID)
 	require.Equal(t, checkpoint.Accelerator, fake.pushed[0].Items[0].Accelerator)
+}
+
+func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T) {
+	fake := &fakeEventRepo{}
+	metadata := &claimedMetadataStore{}
+	reporter := newTestReporter(fake)
+	reporter.metadata = metadata
+
+	checkpointID := "checkpoint-local"
+	checkpointRoot := t.TempDir()
+	createMaterializedCheckpointForTest(t, filepath.Join(checkpointRoot, checkpointID))
+	worker := &Worker{
+		cacheManager: &WorkerCacheManager{
+			checkpointRoot: checkpointRoot,
+			reporter:       reporter,
+			reconcileNow:   make(chan struct{}, 1),
+		},
+	}
+	checkpoint := &types.Checkpoint{
+		CheckpointId:   checkpointID,
+		CacheHash:      strings.Repeat("c", 64),
+		CacheSizeBytes: 128,
+		OriginKey:      "checkpoints/checkpoint-local.tar",
+		Accelerator:    "CPU",
+	}
+
+	path, err := worker.ensureCheckpointMaterialized(context.Background(), &types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}, checkpoint)
+
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(checkpointRoot, checkpointID), path)
+	require.Empty(t, worker.cacheManager.reconcileNow)
+
+	reporter.flush()
+	require.Equal(t, 1, metadata.recent)
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
+	require.Equal(t, checkpoint.CheckpointId, fake.pushed[0].Items[0].CheckpointID)
+	require.Equal(t, checkpoint.OriginKey, fake.pushed[0].Items[0].Source)
+}
+
+func TestEnsureCheckpointMaterializedRestoresFromEmbeddedCache(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, client := newCheckpointCacheForTest(t, ctx)
+	checkpointID := "checkpoint-cache-hit"
+	archivePath, hash, size := createCheckpointArchiveForTest(t, checkpointID)
+	_, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      archivePath,
+		CachePath: "checkpoints/" + checkpointID + checkpointArchiveExtension,
+	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
+	require.NoError(t, err)
+	require.True(t, server.HasCompleteContent(hash, size))
+
+	fake := &fakeEventRepo{}
+	reporter := newTestReporter(fake)
+	reporter.metadata = &claimedMetadataStore{}
+	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
+	worker := &Worker{
+		cacheManager: &WorkerCacheManager{
+			client:         client,
+			checkpointRoot: checkpointRoot,
+			reporter:       reporter,
+			reconcileNow:   make(chan struct{}, 1),
+		},
+	}
+
+	path, err := worker.ensureCheckpointMaterialized(context.Background(), &types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}, &types.Checkpoint{
+		CheckpointId:   checkpointID,
+		CacheHash:      hash,
+		CacheSizeBytes: size,
+		OriginKey:      "checkpoints/" + checkpointID + checkpointArchiveExtension,
+	})
+
+	require.NoError(t, err)
+	require.True(t, checkpointMaterialized(path))
+	require.Len(t, worker.cacheManager.reconcileNow, 1)
+
+	reporter.flush()
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, types.CacheContentKindCheckpoint, fake.pushed[0].Kind)
+	require.Equal(t, hash, fake.pushed[0].Items[0].Hash)
+	require.Equal(t, hash, fake.pushed[0].Items[0].RoutingKey)
+	require.Equal(t, checkpointID, fake.pushed[0].Items[0].CheckpointID)
+}
+
+func TestReconcileCheckpointExtractsEmbeddedCacheArchive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, client := newCheckpointCacheForTest(t, ctx)
+	checkpointID := "checkpoint-reconcile"
+	archivePath, hash, size := createCheckpointArchiveForTest(t, checkpointID)
+	_, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      archivePath,
+		CachePath: "checkpoints/" + checkpointID + checkpointArchiveExtension,
+	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
+	require.NoError(t, err)
+
+	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
+	manager := &WorkerCacheManager{
+		ctx:            ctx,
+		client:         client,
+		checkpointRoot: checkpointRoot,
+	}
+	status := manager.materializeCheckpoint(ctx, server, cache.RecentStub{
+		WorkspaceID: "workspace",
+		StubID:      "stub",
+	}, types.CacheRequiredContentItem{
+		Kind:         types.CacheContentKindCheckpoint,
+		Hash:         hash,
+		RoutingKey:   hash,
+		SizeBytes:    size,
+		CheckpointID: checkpointID,
+	}, hash)
+
+	require.Equal(t, types.CacheAuditStatusMaterialized, status)
+	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
 }
 
 func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {

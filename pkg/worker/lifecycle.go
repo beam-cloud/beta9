@@ -1419,16 +1419,34 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		})
 	}
 
-	// Handle automatic checkpoint creation if applicable
-	// (This occurs when checkpoint_enabled is true and an existing checkpoint is not available)
-	if supportsCheckpoint && request.CheckpointEnabled {
-		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	startAutoCheckpoint := func() {
+		if supportsCheckpoint && request.CheckpointEnabled {
+			go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+		}
+	}
+	fallbackFromCheckpoint := func(startCheckpoint bool) {
+		restoringCheckpoint = false
+		request.Checkpoint = nil
+		if startCheckpoint {
+			startAutoCheckpoint()
+		}
+	}
+
+	if !restoringCheckpoint {
+		startAutoCheckpoint()
 	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)
 	runtimeStartedChan := make(chan int, 1)
 	runtimeStartedDone := make(chan struct{})
 	runtimeStartedHandled := make(chan struct{})
+	var runtimeStartedOnce sync.Once
+	finishRuntimeStarted := func() {
+		runtimeStartedOnce.Do(func() {
+			close(runtimeStartedDone)
+			<-runtimeStartedHandled
+		})
+	}
 	runtimeStart := time.Now()
 
 	handleRuntimeStarted := func(pid int) {
@@ -1460,7 +1478,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			return
 		}
 		s.markContainerRunning(ctx, request, startupStartedAt)
-		markCheckpointRestored()
 	}
 
 	go func() {
@@ -1469,41 +1486,47 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}()
 
 	// Handle restore from checkpoint if available
-	if supportsCheckpoint && request.Checkpoint != nil {
-		if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
-			checkpointPath, err := s.ensureCheckpointMaterialized(ctx, request, request.Checkpoint)
+	if restoringCheckpoint {
+		checkpointPath, err := s.ensureCheckpointMaterialized(ctx, request, request.Checkpoint)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to materialize checkpoint: %v", err)
+		} else {
+			err = copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
 			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to materialize checkpoint: %v", err)
-			} else {
-				err = copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
-			}
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to copy checkpoint directory: %v", err)
+				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to copy checkpoint directory: %v", err)
 			}
 		}
+		if err != nil {
+			s.markCheckpointRestoreFailed(request, request.Checkpoint)
+			if !request.Stub.Type.IsDeployment() {
+				finishRuntimeStarted()
+				return -1, err
+			}
+			fallbackFromCheckpoint(true)
+		} else {
+			runtimeStart = time.Now()
+			exitCode, restored, restoreStarted, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
+			if restored {
+				finishRuntimeStarted()
+				markCheckpointRestored()
+				if runtimeRestoreWaitsForExit(instance.Runtime) {
+					return exitCode, err
+				}
+				if err != nil {
+					return exitCode, err
+				}
+				return s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
+			}
 
-		runtimeStart = time.Now()
-		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
-		if restored {
-			close(runtimeStartedDone)
-			<-runtimeStartedHandled
-			if runtimeRestoreWaitsForExit(instance.Runtime) {
+			// If this is not a deployment stub, don't fall back to running the container
+			if !restored && !request.Stub.Type.IsDeployment() {
+				finishRuntimeStarted()
 				return exitCode, err
 			}
-			if err != nil {
-				return exitCode, err
+			if restoreStarted {
+				finishRuntimeStarted()
 			}
-			return s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
-		}
-
-		// If this is not a deployment stub, don't fall back to running the container
-		if !restored && !request.Stub.Type.IsDeployment() {
-			close(runtimeStartedDone)
-			<-runtimeStartedHandled
-			return exitCode, err
-		} else if !restored {
-			// Disable checkpoint flag if the restore fails
-			request.CheckpointEnabled = false
+			fallbackFromCheckpoint(!restoreStarted)
 		}
 	}
 
@@ -1527,8 +1550,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
-	close(runtimeStartedDone)
-	<-runtimeStartedHandled
+	finishRuntimeStarted()
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}

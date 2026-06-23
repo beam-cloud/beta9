@@ -599,6 +599,11 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	if got := workerConfig["useHostResolvConf"]; got != true {
 		t.Fatalf("useHostResolvConf = %v, want true", got)
 	}
+	poolsConfig := workerConfig["pools"].(map[string]any)
+	poolConfig := poolsConfig["private-dev"].(map[string]any)
+	if got := poolConfig["criuEnabled"]; got != true {
+		t.Fatalf("private pool criuEnabled = %v, want true", got)
+	}
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
@@ -818,6 +823,16 @@ func TestWriteWorkerConfigClearsDefaultRegistryCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := configManager.GetConfig()
+	pool, ok := config.Worker.Pools["private-dev"]
+	if !ok {
+		t.Fatal("private-dev pool missing from effective worker config")
+	}
+	if !pool.CRIUEnabled {
+		t.Fatal("private-dev pool should enable CRIU")
+	}
+	if config.Worker.CRIU.Mode != types.CRIUConfigModeNvidia {
+		t.Fatalf("worker CRIU mode = %q, want %q", config.Worker.CRIU.Mode, types.CRIUConfigModeNvidia)
+	}
 
 	s3 := config.ImageService.Registries.S3
 	if s3.BucketName != "" || s3.AccessKey != "" || s3.SecretKey != "" || s3.Endpoint != "" || s3.Region != "" {

@@ -254,7 +254,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),
 					RequiresPoolSelector:      true,
 					Priority:                  1000,
-					CRIUEnabled:               false,
+					CRIUEnabled:               true,
 					TmpSizeLimit:              types.AgentTmpSizeLimit,
 					StorageMode:               workspaceStorageMode,
 					CheckpointPath:            types.AgentCheckpointPath,
@@ -291,7 +291,7 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 	c.Worker.CacheEnabled = true
 	for name, pool := range c.Worker.Pools {
 		pool.Mode = string(types.PoolModePrivate)
-		pool.CRIUEnabled = false
+		pool.CRIUEnabled = true
 		pool.RequiresPoolSelector = true
 		pool.Cache.Enabled = true
 		pool.Cache.Disk.Enabled = true

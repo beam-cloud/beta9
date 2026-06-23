@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -700,6 +701,84 @@ func TestListPrivatePoolsCleansDeletedBYOCPool(t *testing.T) {
 	}
 }
 
+func TestListPrivatePoolsCleansDeletedBYOCPoolWithoutMachinesWhenProviderResourceGone(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	tokenHash := hashComputeToken("byoc-token")
+	roleARN := "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test"
+	externalID := "beam-byoc-test-external-id"
+	asgName := "beam-asg-aws-cpu-test"
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "aws-cpu",
+					CreatedByTokenID: "owner-token",
+					Source:           model.SourceAWS,
+					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+					BYOC: &model.BYOCProviderState{
+						Provider:     "aws",
+						AccountID:    "123456789012",
+						Region:       "us-east-1",
+						ResourceName: "beam-aws-cpu-test",
+						ResourceURL:  resourceURL,
+						DestroyURL:   resourceURL,
+						Labels: map[string]string{
+							byocBootstrapJoinTokenHashLabel:   tokenHash,
+							byocBootstrapJoinTokenHashesLabel: tokenHash,
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "2",
+							"max_nodes":                       "2",
+							"target_sandboxes":                "40",
+							"sandboxes_per_node":              "20",
+							awsBYOCAutoScalingGroupNameLabel:  asgName,
+							awsBYOCControlRoleArnLabel:        roleARN,
+							awsBYOCControlRoleExternalIDLabel: externalID,
+						},
+					},
+				},
+			},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			tokenHash: {
+				TokenHash:        tokenHash,
+				WorkspaceID:      "workspace-1",
+				PoolName:         "aws-cpu",
+				CreatedByTokenID: "owner-token",
+			},
+		},
+	}
+	var stackCheck awsBYOCResourceDeletedInput
+	oldResourceDeleted := awsBYOCResourceDeleted
+	awsBYOCResourceDeleted = func(ctx context.Context, input awsBYOCResourceDeletedInput) (bool, error) {
+		stackCheck = input
+		return true, nil
+	}
+	defer func() {
+		awsBYOCResourceDeleted = oldResourceDeleted
+	}()
+
+	res, err := (&Service{computeRepo: repo}).ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil {
+		t.Fatalf("ListPrivatePools() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListPrivatePools() not ok: %s", res.ErrMsg)
+	}
+	if got := len(res.Pools); got != 0 {
+		t.Fatalf("pool count = %d, want 0 after provider-deleted BYOC cleanup", got)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if token := repo.joinTokens[tokenHash]; token == nil || !token.Revoked {
+		t.Fatalf("BYOC bootstrap token revoked = %v, want true", token != nil && token.Revoked)
+	}
+	if stackCheck.Region != "us-east-1" || stackCheck.RoleARN != roleARN || stackCheck.ExternalID != externalID || stackCheck.StackName != "beam-aws-cpu-test" {
+		t.Fatalf("stack check input = %+v, want AWS control metadata", stackCheck)
+	}
+}
+
 func TestListPrivatePoolsKeepsRecentlyDisconnectedBYOCPool(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "owner-token")
@@ -758,6 +837,113 @@ func TestListPrivatePoolsKeepsRecentlyDisconnectedBYOCPool(t *testing.T) {
 	}
 	if got, want := res.Pools[0].GetByoc().GetPhase(), "nodes_booting"; got != want {
 		t.Fatalf("BYOC phase = %q, want %q", got, want)
+	}
+}
+
+func TestReleasePrivateMachineTerminatesAWSBYOCNode(t *testing.T) {
+	now := time.Now().UTC()
+	roleARN := "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test"
+	externalID := "beam-byoc-test-external-id"
+	asgName := "beam-asg-aws-cpu-test"
+	state := &model.PoolState{
+		WorkspaceID:      "workspace-1",
+		Name:             "aws-cpu",
+		CreatedByTokenID: "owner-token",
+		Source:           model.SourceAWS,
+		BYOC: &model.BYOCProviderState{
+			Provider: string(model.SourceAWS),
+			Region:   "us-east-1",
+			Labels: map[string]string{
+				awsBYOCAutoScalingGroupNameLabel:  asgName,
+				awsBYOCControlRoleArnLabel:        roleARN,
+				awsBYOCControlRoleExternalIDLabel: externalID,
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:        "workspace-1",
+		PoolName:           "aws-cpu",
+		MachineID:          "machine-1",
+		MachineFingerprint: "i-0123456789abcdef0",
+		Hostname:           "i-0123456789abcdef0",
+		Schedulable:        true,
+		LastHeartbeatAt:    now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "aws-cpu"): {machine}},
+	}
+	var releaseInput awsBYOCReleaseMachineInput
+	oldReleaseMachine := awsBYOCReleaseMachine
+	awsBYOCReleaseMachine = func(ctx context.Context, input awsBYOCReleaseMachineInput) error {
+		releaseInput = input
+		return nil
+	}
+	defer func() {
+		awsBYOCReleaseMachine = oldReleaseMachine
+	}()
+
+	if err := (&Service{computeRepo: repo}).releasePrivateMachine(context.Background(), machine); err != nil {
+		t.Fatalf("releasePrivateMachine() error = %v", err)
+	}
+	if releaseInput.Region != "us-east-1" || releaseInput.RoleARN != roleARN || releaseInput.ExternalID != externalID || releaseInput.AutoScalingGroupName != asgName {
+		t.Fatalf("release input = %+v, want AWS control metadata", releaseInput)
+	}
+	if releaseInput.Machine != machine {
+		t.Fatal("release did not pass the machine to the AWS provider")
+	}
+	if machine.Schedulable {
+		t.Fatal("releasePrivateMachine() did not mark the machine unschedulable")
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 0 {
+		t.Fatalf("machine count after release = %d, want 0", got)
+	}
+}
+
+func TestReleasePrivateMachineKeepsLocalStateWhenAWSBYOCTerminationFails(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "aws-cpu",
+		Source:      model.SourceAWS,
+		BYOC: &model.BYOCProviderState{
+			Provider: string(model.SourceAWS),
+			Region:   "us-east-1",
+			Labels: map[string]string{
+				awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+				awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+				awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "aws-cpu",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "aws-cpu"): {machine}},
+	}
+	oldReleaseMachine := awsBYOCReleaseMachine
+	awsBYOCReleaseMachine = func(context.Context, awsBYOCReleaseMachineInput) error {
+		return errors.New("aws failed")
+	}
+	defer func() {
+		awsBYOCReleaseMachine = oldReleaseMachine
+	}()
+
+	err := (&Service{computeRepo: repo}).releasePrivateMachine(context.Background(), machine)
+	if err == nil || !strings.Contains(err.Error(), "aws failed") {
+		t.Fatalf("releasePrivateMachine() error = %v, want AWS failure", err)
+	}
+	if !machine.Schedulable {
+		t.Fatal("failed release should not mark the machine unschedulable")
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "aws-cpu")]); got != 1 {
+		t.Fatalf("machine count after failed release = %d, want 1", got)
 	}
 }
 
@@ -868,17 +1054,17 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 						ResourceURL:  resourceURL,
 						DestroyURL:   resourceURL,
 						Labels: map[string]string{
-							"instance_type":                     "i4i.xlarge",
-							"desired_nodes":                     "1",
-							"max_nodes":                         "4",
-							"target_sandboxes":                  "20",
-							"sandboxes_per_node":                "20",
-							"hourly_cost_micros":                "343000",
-							"total_hourly_cost_micros":          "343000",
-							awsBYOCAutoScalingGroupNameLabel:    asgName,
-							awsBYOCControlRoleArnLabel:          roleARN,
-							awsBYOCControlRoleExternalIDLabel:   externalID,
-							awsBYOCControlRoleNameLabel:         "beam-control-aws-cpu-test",
+							"instance_type":                   "i4i.xlarge",
+							"desired_nodes":                   "1",
+							"max_nodes":                       "4",
+							"target_sandboxes":                "20",
+							"sandboxes_per_node":              "20",
+							"hourly_cost_micros":              "343000",
+							"total_hourly_cost_micros":        "343000",
+							awsBYOCAutoScalingGroupNameLabel:  asgName,
+							awsBYOCControlRoleArnLabel:        roleARN,
+							awsBYOCControlRoleExternalIDLabel: externalID,
+							awsBYOCControlRoleNameLabel:       "beam-control-aws-cpu-test",
 						},
 					},
 				},
@@ -1029,12 +1215,51 @@ func TestAWSBYOCTemplateDoesNotEmbedSecrets(t *testing.T) {
 		"BeamControlRolePrincipalArn:",
 		"sts:ExternalId: !Ref BeamControlExternalId",
 		"autoscaling:UpdateAutoScalingGroup",
+		"autoscaling:TerminateInstanceInAutoScalingGroup",
+		"cloudformation:DescribeStacks",
+		"ec2:DescribeInstances",
 		"autoScalingGroupName/${BeamAutoScalingGroupName}",
 		"AutoScalingGroupName: !Ref BeamAutoScalingGroupName",
+		"BEAM_AGENT_MACHINE_FINGERPRINT=\"$INSTANCE_ID\"",
+		"BEAM_AGENT_HOSTNAME=\"$INSTANCE_ID\"",
 	} {
 		if !strings.Contains(template, fragment) {
 			t.Fatalf("template missing %q", fragment)
 		}
+	}
+}
+
+func TestAWSBYOCStackDeletionErrorClassification(t *testing.T) {
+	stackMissing := &smithy.GenericAPIError{
+		Code:    "ValidationError",
+		Message: "Stack with id beam-aws-cpu-test does not exist",
+	}
+	if !awsBYOCCloudFormationStackNotFound(stackMissing) {
+		t.Fatal("CloudFormation missing-stack validation error should be treated as deleted")
+	}
+
+	assumeRoleDenied := &smithy.OperationError{
+		ServiceID:     "STS",
+		OperationName: "AssumeRole",
+		Err: &smithy.GenericAPIError{
+			Code:    "AccessDenied",
+			Message: "User is not authorized to perform: sts:AssumeRole",
+		},
+	}
+	if !awsBYOCControlRoleUnavailable(fmt.Errorf("get credentials: %w", assumeRoleDenied)) {
+		t.Fatal("STS assume-role denial should be treated as the BYOC control role being unavailable")
+	}
+
+	cloudFormationDenied := &smithy.OperationError{
+		ServiceID:     "CloudFormation",
+		OperationName: "DescribeStacks",
+		Err: &smithy.GenericAPIError{
+			Code:    "AccessDenied",
+			Message: "User is not authorized to perform: cloudformation:DescribeStacks",
+		},
+	}
+	if awsBYOCControlRoleUnavailable(cloudFormationDenied) {
+		t.Fatal("CloudFormation authorization errors should not be treated as stack deletion")
 	}
 }
 

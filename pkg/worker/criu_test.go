@@ -439,7 +439,7 @@ func TestAttemptRestoreCheckpointRequiresCRIUManager(t *testing.T) {
 		},
 	}
 
-	exitCode, restored, err := (&Worker{}).attemptRestoreCheckpoint(
+	exitCode, restored, started, err := (&Worker{}).attemptRestoreCheckpoint(
 		context.Background(),
 		request,
 		nil,
@@ -452,6 +452,9 @@ func TestAttemptRestoreCheckpointRequiresCRIUManager(t *testing.T) {
 	}
 	if restored {
 		t.Fatal("attemptRestoreCheckpoint restored with unavailable CRIU manager")
+	}
+	if started {
+		t.Fatal("attemptRestoreCheckpoint started with unavailable CRIU manager")
 	}
 	if exitCode != -1 {
 		t.Fatalf("attemptRestoreCheckpoint exitCode = %d, want -1", exitCode)
