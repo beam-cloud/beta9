@@ -34,6 +34,7 @@ type fakeEventRepo struct {
 	pushed      []types.EventStubCacheRequiredContentSchema
 	cacheEvents []types.EventPlatformCacheSchema
 	items       []types.CacheRequiredContentItem
+	itemsByStub map[string]map[string]types.CacheRequiredContentItem
 	readKeys    []string
 	err         error
 	readErr     error
@@ -44,6 +45,24 @@ func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCache
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
+	}
+	if f.itemsByStub == nil {
+		f.itemsByStub = map[string]map[string]types.CacheRequiredContentItem{}
+	}
+	stubKey := schema.WorkspaceID + "|" + schema.StubID
+	bucket := f.itemsByStub[stubKey]
+	if bucket == nil {
+		bucket = map[string]types.CacheRequiredContentItem{}
+		f.itemsByStub[stubKey] = bucket
+	}
+	for _, item := range schema.Items {
+		if item.Hash == "" {
+			continue
+		}
+		if item.Kind == "" {
+			item.Kind = schema.Kind
+		}
+		bucket[item.Hash+"\x00"+item.RoutingKey] = item
 	}
 	f.pushed = append(f.pushed, schema)
 	return nil
@@ -62,6 +81,15 @@ func (f *fakeEventRepo) ReadStubCacheRequiredContent(ctx context.Context, worksp
 		return nil, f.readErr
 	}
 	f.readKeys = append(f.readKeys, workspaceID+"|"+stubID)
+	if f.itemsByStub != nil {
+		if bucket := f.itemsByStub[workspaceID+"|"+stubID]; len(bucket) > 0 {
+			items := make([]types.CacheRequiredContentItem, 0, len(bucket))
+			for _, item := range bucket {
+				items = append(items, item)
+			}
+			return items, nil
+		}
+	}
 	return append([]types.CacheRequiredContentItem(nil), f.items...), nil
 }
 
@@ -147,13 +175,39 @@ type claimedMetadataStore struct {
 
 type localityRecentMetadataStore struct {
 	*cache.MockCacheMetadataStore
+	mu     sync.Mutex
 	stubs  map[string][]cache.RecentStub
 	listed []string
 }
 
-func (m *localityRecentMetadataStore) ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]cache.RecentStub, error) {
+func (m *localityRecentMetadataStore) AddRecentStub(_ context.Context, locality, workspaceID, stubID string, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stubs == nil {
+		m.stubs = map[string][]cache.RecentStub{}
+	}
+	stubs := m.stubs[locality]
+	now := time.Now()
+	for i := range stubs {
+		if stubs[i].WorkspaceID == workspaceID && stubs[i].StubID == stubID {
+			stubs[i].LastSeen = now
+			m.stubs[locality] = stubs
+			return nil
+		}
+	}
+	m.stubs[locality] = append(stubs, cache.RecentStub{WorkspaceID: workspaceID, StubID: stubID, LastSeen: now})
+	return nil
+}
+
+func (m *localityRecentMetadataStore) ListRecentStubs(_ context.Context, locality string, _ time.Duration, limit int) ([]cache.RecentStub, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.listed = append(m.listed, locality)
-	return append([]cache.RecentStub(nil), m.stubs[locality]...), nil
+	stubs := append([]cache.RecentStub(nil), m.stubs[locality]...)
+	if limit > 0 && len(stubs) > limit {
+		stubs = stubs[:limit]
+	}
+	return stubs, nil
 }
 
 func (m *claimedMetadataStore) MarkStubReported(_ context.Context, locality, _ string, _ time.Duration) (bool, error) {
@@ -841,6 +895,127 @@ func TestReconcileCheckpointIgnoresSuccessBackoffWhenExtractedPayloadMissing(t *
 	require.Len(t, fake.cacheEvents, 1)
 	require.Equal(t, types.CacheAuditStatusMaterialized, fake.cacheEvents[0].Status)
 	require.False(t, manager.reconcileRecentlySucceeded(hash, hash))
+}
+
+func TestRequiredContentReportedByOneWorkerReconcilesCheckpointOnPeerInLocality(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Client.NTopHosts = 2
+	metadata := &localityRecentMetadataStore{
+		MockCacheMetadataStore: cache.NewMockCacheMetadataStore(),
+		stubs:                  map[string][]cache.RecentStub{},
+	}
+	newServer := func(hostID string) (*cache.Server, *cache.Host) {
+		t.Helper()
+		serverCfg := cfg
+		serverCfg.Server.DiskCacheDir = t.TempDir()
+		server, err := cache.NewServerWithOptions(ctx, serverCfg, "locality-a", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID(hostID))
+		require.NoError(t, err)
+		addr, err := server.Serve("127.0.0.1:0", "")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+		host := server.Host()
+		require.NotNil(t, host)
+		host.Addr = addr
+		host.PrivateAddr = addr
+		return server, host
+	}
+
+	sourceServer, sourceHost := newServer("source-host")
+	destinationServer, destinationHost := newServer("destination-host")
+
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	destinationClient, err := cache.NewClientWithHostDirectory(ctx, clientCfg, metadata, testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{sourceHost, destinationHost}, nil
+	}), "locality-a")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, destinationClient.Cleanup()) })
+	destinationClient.AttachLocalServer(destinationServer)
+	require.Eventually(t, func() bool {
+		return len(destinationClient.RankedReadHosts("probe")) == 2
+	}, 3*time.Second, 20*time.Millisecond)
+
+	checkpointID := ""
+	archivePath := ""
+	hash := ""
+	size := int64(0)
+	for i := 0; i < 32; i++ {
+		candidateID := fmt.Sprintf("checkpoint-peer-reconcile-%d", i)
+		candidateArchive, candidateHash, candidateSize := createCheckpointArchiveForTest(t, candidateID)
+		ranked := destinationClient.RankedReadHosts(candidateHash)
+		if len(ranked) > 0 && ranked[0].HostId == sourceHost.HostId {
+			checkpointID = candidateID
+			archivePath = candidateArchive
+			hash = candidateHash
+			size = candidateSize
+			break
+		}
+	}
+	require.NotEmpty(t, checkpointID, "expected a checkpoint hash that reads from the source host first")
+
+	archive, err := os.Open(archivePath)
+	require.NoError(t, err)
+	_, _, err = sourceServer.StoreReader(ctx, archive, hash)
+	require.NoError(t, err)
+	require.NoError(t, archive.Close())
+	require.True(t, sourceServer.HasCompleteContent(hash, size))
+	require.False(t, destinationServer.HasCompleteContent(hash, size))
+
+	events := &fakeEventRepo{}
+	reporter := newTestReporter(events)
+	reporter.metadata = metadata
+	reporter.locality = "locality-a"
+	reporter.recentStubTTL = time.Hour
+	workerA := &Worker{cacheManager: &WorkerCacheManager{reporter: reporter}}
+	workerA.reportCheckpointRequiredContent(&types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}, checkpointID, &checkpointCacheMetadata{
+		hash:        hash,
+		sizeBytes:   size,
+		originKey:   "checkpoints/" + checkpointID + checkpointArchiveExtension,
+		locality:    "locality-a",
+		accelerator: "CPU",
+	})
+
+	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
+	managerB := &WorkerCacheManager{
+		ctx:                ctx,
+		config:             types.AppConfig{Cache: cfg},
+		locality:           "locality-a",
+		accelerator:        "CPU",
+		metadataStore:      metadata,
+		eventRepo:          events,
+		client:             destinationClient,
+		server:             destinationServer,
+		checkpointRoot:     checkpointRoot,
+		reconcileFailures:  make(map[string]time.Time),
+		reconcileSuccesses: make(map[string]time.Time),
+	}
+
+	managerB.reconcileOnce()
+
+	require.True(t, destinationServer.HasCompleteContent(hash, size))
+	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
+	require.Equal(t, []string{"locality-a"}, metadata.listed)
+
+	events.mu.Lock()
+	pushed := append([]types.EventStubCacheRequiredContentSchema(nil), events.pushed...)
+	cacheEvents := append([]types.EventPlatformCacheSchema(nil), events.cacheEvents...)
+	readKeys := append([]string(nil), events.readKeys...)
+	events.mu.Unlock()
+
+	require.Len(t, pushed, 1)
+	require.Equal(t, "locality-a", pushed[0].Locality)
+	require.Equal(t, []string{"workspace|stub"}, readKeys)
+	require.Len(t, cacheEvents, 1)
+	require.Equal(t, "locality-a", cacheEvents[0].Locality)
+	require.Equal(t, destinationHost.HostId, cacheEvents[0].LogicalHost)
+	require.Equal(t, types.CacheAuditStatusMaterialized, cacheEvents[0].Status)
 }
 
 func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
