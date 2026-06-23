@@ -319,7 +319,13 @@ func (c *HetznerClient) DeleteReservation(ctx context.Context, id string) error 
 	if err := c.validate(); err != nil {
 		return err
 	}
-	return c.api.Do(ctx, http.MethodDelete, "/servers/"+id, nil, nil)
+	if err := c.api.Do(ctx, http.MethodDelete, "/servers/"+id, nil, nil); err != nil {
+		if statusErr, ok := err.(*HTTPStatusError); ok && statusErr.StatusCode == http.StatusNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *HetznerClient) validate() error {
