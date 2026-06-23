@@ -138,9 +138,11 @@ func createCheckpointArchiveForTest(t *testing.T, checkpointID string) (archiveP
 
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
-	claimed bool
-	marked  int
-	recent  int
+	claimed          bool
+	marked           int
+	recent           int
+	markedLocalities []string
+	recentLocalities []string
 }
 
 type localityRecentMetadataStore struct {
@@ -154,13 +156,15 @@ func (m *localityRecentMetadataStore) ListRecentStubs(ctx context.Context, local
 	return append([]cache.RecentStub(nil), m.stubs[locality]...), nil
 }
 
-func (m *claimedMetadataStore) MarkStubReported(context.Context, string, string, time.Duration) (bool, error) {
+func (m *claimedMetadataStore) MarkStubReported(_ context.Context, locality, _ string, _ time.Duration) (bool, error) {
 	m.marked++
+	m.markedLocalities = append(m.markedLocalities, locality)
 	return m.claimed, nil
 }
 
-func (m *claimedMetadataStore) AddRecentStub(context.Context, string, string, string, time.Duration) error {
+func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ string, _ time.Duration) error {
 	m.recent++
+	m.recentLocalities = append(m.recentLocalities, locality)
 	return nil
 }
 
@@ -224,6 +228,7 @@ func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 	metadata := &claimedMetadataStore{claimed: true}
 	r := newTestReporter(fake)
 	r.metadata = metadata
+	r.locality = "locality-a"
 
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	require.Zero(t, metadata.marked)
@@ -231,6 +236,9 @@ func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 	r.flush()
 	require.Len(t, fake.pushed, 1)
 	require.Equal(t, 1, metadata.marked)
+	require.Equal(t, []string{"locality-a"}, metadata.recentLocalities)
+	require.Equal(t, []string{"locality-a"}, metadata.markedLocalities)
+	require.Equal(t, "locality-a", fake.pushed[0].Locality)
 }
 
 func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
@@ -656,7 +664,9 @@ func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T
 	require.Len(t, worker.cacheManager.reconcileNow, 1)
 
 	require.Equal(t, 1, metadata.recent)
+	require.Equal(t, []string{"default"}, metadata.recentLocalities)
 	require.Len(t, fake.pushed, 1)
+	require.Equal(t, "default", fake.pushed[0].Locality)
 	require.Equal(t, types.CacheContentKindCheckpoint, fake.pushed[0].Kind)
 	require.Equal(t, "workspace", fake.pushed[0].WorkspaceID)
 	require.Equal(t, "stub", fake.pushed[0].StubID)
@@ -699,7 +709,9 @@ func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T)
 	require.Empty(t, worker.cacheManager.reconcileNow)
 
 	require.Equal(t, 1, metadata.recent)
+	require.Equal(t, []string{"default"}, metadata.recentLocalities)
 	require.Len(t, fake.pushed, 1)
+	require.Equal(t, "default", fake.pushed[0].Locality)
 	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
 	require.Equal(t, checkpoint.CheckpointId, fake.pushed[0].Items[0].CheckpointID)
 	require.Equal(t, checkpoint.OriginKey, fake.pushed[0].Items[0].Source)
@@ -785,6 +797,50 @@ func TestReconcileCheckpointExtractsEmbeddedCacheArchive(t *testing.T) {
 
 	require.Equal(t, types.CacheAuditStatusMaterialized, status)
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
+}
+
+func TestReconcileCheckpointIgnoresSuccessBackoffWhenExtractedPayloadMissing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, client := newCheckpointCacheForTest(t, ctx)
+	checkpointID := "checkpoint-success-backoff"
+	archivePath, hash, size := createCheckpointArchiveForTest(t, checkpointID)
+	_, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
+		Path:      archivePath,
+		CachePath: "checkpoints/" + checkpointID + checkpointArchiveExtension,
+	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
+	require.NoError(t, err)
+
+	fake := &fakeEventRepo{items: []types.CacheRequiredContentItem{{
+		Kind:         types.CacheContentKindCheckpoint,
+		Hash:         hash,
+		RoutingKey:   hash,
+		SizeBytes:    size,
+		CheckpointID: checkpointID,
+		Accelerator:  "CPU",
+	}}}
+	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
+	manager := &WorkerCacheManager{
+		ctx:            ctx,
+		locality:       "test",
+		accelerator:    "CPU",
+		metadataStore:  cache.NewMockCacheMetadataStore(),
+		eventRepo:      fake,
+		client:         client,
+		checkpointRoot: checkpointRoot,
+	}
+	manager.recordReconcileSuccess(hash, hash)
+
+	manager.reconcileStub(server, "local-host", cache.RecentStub{
+		WorkspaceID: "workspace",
+		StubID:      "stub",
+	}, newReconcileBudget(10))
+
+	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
+	require.Len(t, fake.cacheEvents, 1)
+	require.Equal(t, types.CacheAuditStatusMaterialized, fake.cacheEvents[0].Status)
+	require.False(t, manager.reconcileRecentlySucceeded(hash, hash))
 }
 
 func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
