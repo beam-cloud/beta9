@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -19,19 +18,15 @@ import (
 )
 
 type WorkerRedisRepository struct {
-	rdb                   *common.RedisClient
-	lock                  *common.RedisLock
-	config                types.WorkerConfig
-	workerIndexRepairMu   sync.Mutex
-	lastWorkerIndexRepair time.Time
+	rdb    *common.RedisClient
+	lock   *common.RedisLock
+	config types.WorkerConfig
 }
 
 const (
 	schedulerWorkerLockTTL      = 10
 	schedulerWorkerLockRetries  = 20
 	schedulerWorkerLockInterval = 50 * time.Millisecond
-	workerIndexRepairLockTTL    = 30
-	workerIndexRepairInterval   = 30 * time.Second
 )
 
 var schedulerWorkerLockOptions = common.RedisLockOptions{
@@ -150,7 +145,8 @@ func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) 
 
 // AddWorker adds or updates a worker
 func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
+	ctx := context.TODO()
+	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
@@ -168,24 +164,23 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	}
 
 	worker.ResourceVersion = 0
-	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add worker state <%s>: %v", stateKey, err)
-	}
 
-	// Set TTL on state key
-	err = r.rdb.Expire(context.TODO(), stateKey, r.config.CleanupPendingWorkerAgeLimit).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
-	}
-
-	if err := r.addWorkerIndexEntries(context.TODO(), stateKey, worker); err != nil {
-		return err
+	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, common.ToSlice(worker))
+	pipe.Expire(ctx, stateKey, r.config.CleanupPendingWorkerAgeLimit)
+	for _, indexKey := range r.workerIndexKeys(worker) {
+		pipe.SAdd(ctx, indexKey, stateKey)
 	}
 	if oldWorker != nil {
-		if err := r.removeStaleWorkerPlacementIndexes(context.TODO(), stateKey, oldWorker, worker); err != nil {
-			return err
+		if oldWorker.PoolName != "" && oldWorker.PoolName != worker.PoolName {
+			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey)
 		}
+		if oldWorker.MachineId != "" && oldWorker.MachineId != worker.MachineId {
+			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldWorker.MachineId), stateKey)
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to add worker state and indexes <%s>: %w", stateKey, err)
 	}
 
 	return nil
@@ -513,15 +508,6 @@ func (r *WorkerRedisRepository) workerIndexKeys(worker *types.Worker) []string {
 	return keys
 }
 
-func (r *WorkerRedisRepository) addWorkerIndexEntries(ctx context.Context, stateKey string, worker *types.Worker) error {
-	for _, indexKey := range r.workerIndexKeys(worker) {
-		if err := r.rdb.SAdd(ctx, indexKey, stateKey).Err(); err != nil {
-			return fmt.Errorf("failed to add worker state key to index <%v>: %w", indexKey, err)
-		}
-	}
-	return nil
-}
-
 func (r *WorkerRedisRepository) removeWorkerIndexEntries(ctx context.Context, stateKey string, worker *types.Worker) error {
 	for _, indexKey := range r.workerIndexKeys(worker) {
 		if err := r.rdb.SRem(ctx, indexKey, stateKey).Err(); err != nil {
@@ -529,58 +515,6 @@ func (r *WorkerRedisRepository) removeWorkerIndexEntries(ctx context.Context, st
 		}
 	}
 	return nil
-}
-
-func (r *WorkerRedisRepository) removeStaleWorkerPlacementIndexes(ctx context.Context, stateKey string, oldWorker, newWorker *types.Worker) error {
-	if oldWorker.PoolName != "" && oldWorker.PoolName != newWorker.PoolName {
-		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey).Err(); err != nil {
-			return fmt.Errorf("failed to remove worker state key from old pool index: %w", err)
-		}
-	}
-	if oldWorker.MachineId != "" && oldWorker.MachineId != newWorker.MachineId {
-		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldWorker.MachineId), stateKey).Err(); err != nil {
-			return fmt.Errorf("failed to remove worker state key from old machine index: %w", err)
-		}
-	}
-	return nil
-}
-
-func (r *WorkerRedisRepository) maybeRepairWorkerSecondaryIndexes(ctx context.Context) {
-	r.workerIndexRepairMu.Lock()
-	if time.Since(r.lastWorkerIndexRepair) < workerIndexRepairInterval {
-		r.workerIndexRepairMu.Unlock()
-		return
-	}
-	r.lastWorkerIndexRepair = time.Now()
-	r.workerIndexRepairMu.Unlock()
-
-	r.repairWorkerSecondaryIndexes(ctx)
-}
-
-func (r *WorkerRedisRepository) repairWorkerSecondaryIndexes(ctx context.Context) {
-	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerIndexRepairLock(), common.RedisLockOptions{TtlS: workerIndexRepairLockTTL, Retries: 0})
-	if err != nil {
-		return
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerIndexRepairLock())
-
-	keys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerWorkerIndex()).Result()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list workers for index repair")
-		return
-	}
-
-	workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to load workers for index repair")
-		return
-	}
-	for _, worker := range workers {
-		stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
-		if err := r.addWorkerIndexEntries(ctx, stateKey, worker); err != nil {
-			log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to repair worker index")
-		}
-	}
 }
 
 // getWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
@@ -834,8 +768,6 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
-	r.maybeRepairWorkerSecondaryIndexes(context.TODO())
-
 	indexKey := common.RedisKeys.SchedulerWorkerPoolIndex(poolName)
 	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
@@ -872,8 +804,6 @@ func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) e
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
-	r.maybeRepairWorkerSecondaryIndexes(context.TODO())
-
 	indexKey := common.RedisKeys.SchedulerWorkerMachineIndex(machineId)
 	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {

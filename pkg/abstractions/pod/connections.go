@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	connectionSyncInterval time.Duration = 100 * time.Millisecond
-	connectionSnapshotTTL  time.Duration = 2 * time.Second
+	connectionSyncInterval      time.Duration = 100 * time.Millisecond
+	connectionSnapshotTTL       time.Duration = 2 * time.Second
+	connectionIndexRefreshEvery time.Duration = connectionSnapshotTTL / 2
 )
 
 func (pb *PodProxyBuffer) incrementTotalConnections() (int64, error) {
@@ -25,7 +26,9 @@ func (pb *PodProxyBuffer) incrementTotalConnections() (int64, error) {
 }
 
 func (pb *PodProxyBuffer) decrementTotalConnections() error {
-	decrementCounter(&pb.totalConnections)
+	if decrementCounter(&pb.totalConnections) == 0 {
+		pb.idleSnapshotUntil.Store(time.Now().Add(connectionSnapshotTTL).UnixNano())
+	}
 	return nil
 }
 
@@ -107,25 +110,39 @@ func (pb *PodProxyBuffer) flushConnectionState() {
 		return
 	}
 
+	now := time.Now()
+	total := pb.totalConnections.Load()
+	hasContainerSnapshots := false
+	pb.containerConnections.Range(func(_, _ any) bool {
+		hasContainerSnapshots = true
+		return true
+	})
+	if total == 0 && !hasContainerSnapshots && now.UnixNano() > pb.idleSnapshotUntil.Load() {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	pipe := pb.rdb.Pipeline()
-	pb.queueProxyConnectionIndex(ctx, pipe)
-	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), pb.totalConnections.Load(), connectionSnapshotTTL)
+	refreshingIndex := pb.queueProxyConnectionIndex(ctx, pipe)
+	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), total, connectionSnapshotTTL)
 	pb.containerConnections.Range(func(key, value any) bool {
 		containerId, ok := key.(string)
 		if !ok {
 			return true
 		}
 		count := value.(*atomic.Int64).Load()
+		pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL)
 		if count == 0 {
 			pb.containerConnections.Delete(key)
 		}
-		pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL)
 		return true
 	})
 	if _, err := pipe.Exec(ctx); err != nil {
+		if refreshingIndex {
+			pb.proxyIndexRefreshAfter.Store(0)
+		}
 		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to publish pod connection snapshot")
 	}
 }
@@ -139,9 +156,12 @@ func (pb *PodProxyBuffer) publishContainerConnectionSnapshot(containerId string,
 	defer cancel()
 
 	pipe := pb.rdb.Pipeline()
-	pb.queueProxyConnectionIndex(ctx, pipe)
+	refreshingIndex := pb.queueProxyConnectionIndex(ctx, pipe)
 	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
+		if refreshingIndex {
+			pb.proxyIndexRefreshAfter.Store(0)
+		}
 		log.Debug().Err(err).Str("stub_id", pb.stubId).Str("container_id", containerId).Msg("failed to publish pod container busy snapshot")
 	}
 }
@@ -155,17 +175,38 @@ func (pb *PodProxyBuffer) publishTotalConnectionSnapshot(count int64) {
 	defer cancel()
 
 	pipe := pb.rdb.Pipeline()
-	pb.queueProxyConnectionIndex(ctx, pipe)
+	refreshingIndex := pb.queueProxyConnectionIndex(ctx, pipe)
 	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), count, connectionSnapshotTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
+		if refreshingIndex {
+			pb.proxyIndexRefreshAfter.Store(0)
+		}
 		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to publish pod total busy snapshot")
 	}
 }
 
-func (pb *PodProxyBuffer) queueProxyConnectionIndex(ctx context.Context, pipe redis.Pipeliner) {
+func (pb *PodProxyBuffer) queueProxyConnectionIndex(ctx context.Context, pipe redis.Pipeliner) bool {
+	if !pb.shouldRefreshProxyConnectionIndex(time.Now()) {
+		return false
+	}
+
 	indexKey := Keys.podProxyConnectionIndex(pb.workspace.Name, pb.stubId)
 	pipe.SAdd(ctx, indexKey, pb.proxyId)
 	pipe.Expire(ctx, indexKey, connectionSnapshotTTL)
+	return true
+}
+
+func (pb *PodProxyBuffer) shouldRefreshProxyConnectionIndex(now time.Time) bool {
+	nowNS := now.UnixNano()
+	for {
+		next := pb.proxyIndexRefreshAfter.Load()
+		if next > nowNS {
+			return false
+		}
+		if pb.proxyIndexRefreshAfter.CompareAndSwap(next, now.Add(connectionIndexRefreshEvery).UnixNano()) {
+			return true
+		}
+	}
 }
 
 func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
@@ -183,14 +224,15 @@ func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
 	setPodKeepWarmLock(ctx, pb.containerRepo, pb.workspace.Name, pb.stubId, containerID, pb.stubConfig.KeepWarmSeconds)
 }
 
-func decrementCounter(counter *atomic.Int64) {
+func decrementCounter(counter *atomic.Int64) int64 {
 	for {
 		current := counter.Load()
 		if current <= 0 {
-			return
+			return 0
 		}
-		if counter.CompareAndSwap(current, current-1) {
-			return
+		next := current - 1
+		if counter.CompareAndSwap(current, next) {
+			return next
 		}
 	}
 }

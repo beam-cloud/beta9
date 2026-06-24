@@ -12,7 +12,6 @@ var (
 	schedulerWorkerIndex             string = "scheduler:worker:worker_index"
 	schedulerWorkerPoolIndex         string = "scheduler:worker:pool_index:%s"
 	schedulerWorkerMachineIndex      string = "scheduler:worker:machine_index:%s"
-	schedulerWorkerIndexRepairLock   string = "scheduler:worker:index_repair:lock"
 	schedulerWorkerState             string = "scheduler:worker:state:%s"
 	schedulerContainerConfig         string = "scheduler:container:config:%s"
 	schedulerContainerState          string = "scheduler:container:state:%s"
@@ -153,10 +152,6 @@ func (rk *redisKeys) SchedulerWorkerPoolIndex(poolName string) string {
 
 func (rk *redisKeys) SchedulerWorkerMachineIndex(machineId string) string {
 	return fmt.Sprintf(schedulerWorkerMachineIndex, machineId)
-}
-
-func (rk *redisKeys) SchedulerWorkerIndexRepairLock() string {
-	return schedulerWorkerIndexRepairLock
 }
 
 func (rk *redisKeys) SchedulerContainerRequests() string {

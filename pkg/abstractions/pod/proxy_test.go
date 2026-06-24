@@ -745,6 +745,46 @@ func TestFlushConnectionStatePublishesSnapshots(t *testing.T) {
 	}
 }
 
+func TestFlushConnectionStateSkipsIdleSnapshots(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	pb := newPodProxyConnectionTestBuffer(rdb)
+
+	pb.flushConnectionState()
+
+	totalSnapshotKey := Keys.podProxyConnections("workspace", "stub", pb.proxyId, "total")
+	if exists, err := rdb.Exists(context.Background(), totalSnapshotKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if exists != 0 {
+		t.Fatalf("idle snapshot exists = %d, want absent", exists)
+	}
+
+	if _, err := pb.incrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pb.decrementTotalConnections(); err != nil {
+		t.Fatal(err)
+	}
+	pb.flushConnectionState()
+	if got := redisInt64(t, rdb, totalSnapshotKey); got != 0 {
+		t.Fatalf("idle transition snapshot = %d, want 0", got)
+	}
+}
+
+func TestProxyConnectionIndexRefreshIsThrottled(t *testing.T) {
+	pb := &PodProxyBuffer{}
+	now := time.Unix(0, 100)
+
+	if !pb.shouldRefreshProxyConnectionIndex(now) {
+		t.Fatal("expected first index refresh to publish")
+	}
+	if pb.shouldRefreshProxyConnectionIndex(now.Add(connectionIndexRefreshEvery / 2)) {
+		t.Fatal("expected index refresh to be throttled before refresh interval")
+	}
+	if !pb.shouldRefreshProxyConnectionIndex(now.Add(connectionIndexRefreshEvery + time.Nanosecond)) {
+		t.Fatal("expected index refresh after interval")
+	}
+}
+
 func newPodProxyTestRedis(t *testing.T) *common.RedisClient {
 	t.Helper()
 
