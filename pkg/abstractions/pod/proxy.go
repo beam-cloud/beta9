@@ -83,6 +83,8 @@ type PodProxyBuffer struct {
 	availableContainersLock sync.RWMutex
 	totalConnections        atomic.Int64
 	containerConnections    sync.Map
+	idleSnapshotUntil       atomic.Int64
+	proxyIndexRefreshAfter  atomic.Int64
 	buffer                  *abstractions.RingBuffer[*connection]
 	workReady               chan struct{}
 }

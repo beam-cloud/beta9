@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -19,19 +18,15 @@ import (
 )
 
 type WorkerRedisRepository struct {
-	rdb                   *common.RedisClient
-	lock                  *common.RedisLock
-	config                types.WorkerConfig
-	workerIndexRepairMu   sync.Mutex
-	lastWorkerIndexRepair time.Time
+	rdb    *common.RedisClient
+	lock   *common.RedisLock
+	config types.WorkerConfig
 }
 
 const (
 	schedulerWorkerLockTTL      = 10
 	schedulerWorkerLockRetries  = 20
 	schedulerWorkerLockInterval = 50 * time.Millisecond
-	workerIndexRepairLockTTL    = 30
-	workerIndexRepairInterval   = 30 * time.Second
 )
 
 var schedulerWorkerLockOptions = common.RedisLockOptions{
@@ -545,44 +540,6 @@ func (r *WorkerRedisRepository) removeStaleWorkerPlacementIndexes(ctx context.Co
 	return nil
 }
 
-func (r *WorkerRedisRepository) maybeRepairWorkerSecondaryIndexes(ctx context.Context) {
-	r.workerIndexRepairMu.Lock()
-	if time.Since(r.lastWorkerIndexRepair) < workerIndexRepairInterval {
-		r.workerIndexRepairMu.Unlock()
-		return
-	}
-	r.lastWorkerIndexRepair = time.Now()
-	r.workerIndexRepairMu.Unlock()
-
-	r.repairWorkerSecondaryIndexes(ctx)
-}
-
-func (r *WorkerRedisRepository) repairWorkerSecondaryIndexes(ctx context.Context) {
-	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerIndexRepairLock(), common.RedisLockOptions{TtlS: workerIndexRepairLockTTL, Retries: 0})
-	if err != nil {
-		return
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerIndexRepairLock())
-
-	keys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerWorkerIndex()).Result()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list workers for index repair")
-		return
-	}
-
-	workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to load workers for index repair")
-		return
-	}
-	for _, worker := range workers {
-		stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
-		if err := r.addWorkerIndexEntries(ctx, stateKey, worker); err != nil {
-			log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to repair worker index")
-		}
-	}
-}
-
 // getWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
 // If useLock is set to true, a lock will be acquired for each worker and released after retrieval.
 // If you can afford to not have the most up-to-date worker information, you can set useLock to false.
@@ -834,8 +791,6 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
-	r.maybeRepairWorkerSecondaryIndexes(context.TODO())
-
 	indexKey := common.RedisKeys.SchedulerWorkerPoolIndex(poolName)
 	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
@@ -872,8 +827,6 @@ func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) e
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
-	r.maybeRepairWorkerSecondaryIndexes(context.TODO())
-
 	indexKey := common.RedisKeys.SchedulerWorkerMachineIndex(machineId)
 	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
