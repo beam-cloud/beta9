@@ -12,7 +12,7 @@ var (
 	podContainerConnections string = "pod:%s:%s:container_connections:%s"
 	podTotalConnections     string = "pod:%s:%s:total_connections"
 	podProxyConnections     string = "pod:%s:%s:proxy_connections:%s:%s"
-	podProxyConnectionsScan string = "pod:%s:%s:proxy_connections:*:%s"
+	podProxyConnectionIndex string = "pod:%s:%s:proxy_connection_proxies"
 )
 
 var Keys = &keys{}
@@ -39,6 +39,6 @@ func (k *keys) podProxyConnections(workspaceName, stubId, proxyId, target string
 	return fmt.Sprintf(podProxyConnections, workspaceName, stubId, proxyId, target)
 }
 
-func (k *keys) podProxyConnectionsScan(workspaceName, stubId, target string) string {
-	return fmt.Sprintf(podProxyConnectionsScan, workspaceName, stubId, target)
+func (k *keys) podProxyConnectionIndex(workspaceName, stubId string) string {
+	return fmt.Sprintf(podProxyConnectionIndex, workspaceName, stubId)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -18,15 +19,19 @@ import (
 )
 
 type WorkerRedisRepository struct {
-	rdb    *common.RedisClient
-	lock   *common.RedisLock
-	config types.WorkerConfig
+	rdb                   *common.RedisClient
+	lock                  *common.RedisLock
+	config                types.WorkerConfig
+	workerIndexRepairMu   sync.Mutex
+	lastWorkerIndexRepair time.Time
 }
 
 const (
 	schedulerWorkerLockTTL      = 10
 	schedulerWorkerLockRetries  = 20
 	schedulerWorkerLockInterval = 50 * time.Millisecond
+	workerIndexRepairLockTTL    = 30
+	workerIndexRepairInterval   = 30 * time.Second
 )
 
 var schedulerWorkerLockOptions = common.RedisLockOptions{
@@ -152,12 +157,14 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
 
 	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
-	indexKey := common.RedisKeys.SchedulerWorkerIndex()
-
-	// Cache worker state key in index so we don't have to scan for it
-	err = r.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add worker state key to index <%v>: %w", indexKey, err)
+	var oldWorker *types.Worker
+	if existingWorker, err := r.getWorkerFromKey(stateKey); err == nil {
+		oldWorker = existingWorker
+	} else {
+		var notFound *types.ErrWorkerNotFound
+		if !errors.As(err, &notFound) {
+			return err
+		}
 	}
 
 	worker.ResourceVersion = 0
@@ -170,6 +177,15 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	err = r.rdb.Expire(context.TODO(), stateKey, r.config.CleanupPendingWorkerAgeLimit).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
+	}
+
+	if err := r.addWorkerIndexEntries(context.TODO(), stateKey, worker); err != nil {
+		return err
+	}
+	if oldWorker != nil {
+		if err := r.removeStaleWorkerPlacementIndexes(context.TODO(), stateKey, oldWorker, worker); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -194,16 +210,18 @@ func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
 		return &types.ErrWorkerNotFound{WorkerId: workerId}
 	}
 
+	worker, err := r.getWorkerFromKey(stateKey)
+	if err != nil {
+		return err
+	}
+
 	requeued, err := r.requeueWorkerRequests(ctx, workerId)
 	if err != nil {
 		return err
 	}
 
-	// Remove worker state from index
-	indexKey := common.RedisKeys.SchedulerWorkerIndex()
-	err = r.rdb.SRem(ctx, indexKey, stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove worker state key from index <%v>: %w", indexKey, err)
+	if err := r.removeWorkerIndexEntries(ctx, stateKey, worker); err != nil {
+		return err
 	}
 
 	err = r.rdb.Del(ctx, stateKey).Err()
@@ -481,6 +499,90 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
 	return r.updateWorkerStatus(workerId, types.WorkerStatusAvailable, true)
 }
 
+func (r *WorkerRedisRepository) workerIndexKeys(worker *types.Worker) []string {
+	keys := []string{common.RedisKeys.SchedulerWorkerIndex()}
+	if worker == nil {
+		return keys
+	}
+	if worker.PoolName != "" {
+		keys = append(keys, common.RedisKeys.SchedulerWorkerPoolIndex(worker.PoolName))
+	}
+	if worker.MachineId != "" {
+		keys = append(keys, common.RedisKeys.SchedulerWorkerMachineIndex(worker.MachineId))
+	}
+	return keys
+}
+
+func (r *WorkerRedisRepository) addWorkerIndexEntries(ctx context.Context, stateKey string, worker *types.Worker) error {
+	for _, indexKey := range r.workerIndexKeys(worker) {
+		if err := r.rdb.SAdd(ctx, indexKey, stateKey).Err(); err != nil {
+			return fmt.Errorf("failed to add worker state key to index <%v>: %w", indexKey, err)
+		}
+	}
+	return nil
+}
+
+func (r *WorkerRedisRepository) removeWorkerIndexEntries(ctx context.Context, stateKey string, worker *types.Worker) error {
+	for _, indexKey := range r.workerIndexKeys(worker) {
+		if err := r.rdb.SRem(ctx, indexKey, stateKey).Err(); err != nil {
+			return fmt.Errorf("failed to remove worker state key from index <%v>: %w", indexKey, err)
+		}
+	}
+	return nil
+}
+
+func (r *WorkerRedisRepository) removeStaleWorkerPlacementIndexes(ctx context.Context, stateKey string, oldWorker, newWorker *types.Worker) error {
+	if oldWorker.PoolName != "" && oldWorker.PoolName != newWorker.PoolName {
+		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey).Err(); err != nil {
+			return fmt.Errorf("failed to remove worker state key from old pool index: %w", err)
+		}
+	}
+	if oldWorker.MachineId != "" && oldWorker.MachineId != newWorker.MachineId {
+		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldWorker.MachineId), stateKey).Err(); err != nil {
+			return fmt.Errorf("failed to remove worker state key from old machine index: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *WorkerRedisRepository) maybeRepairWorkerSecondaryIndexes(ctx context.Context) {
+	r.workerIndexRepairMu.Lock()
+	if time.Since(r.lastWorkerIndexRepair) < workerIndexRepairInterval {
+		r.workerIndexRepairMu.Unlock()
+		return
+	}
+	r.lastWorkerIndexRepair = time.Now()
+	r.workerIndexRepairMu.Unlock()
+
+	r.repairWorkerSecondaryIndexes(ctx)
+}
+
+func (r *WorkerRedisRepository) repairWorkerSecondaryIndexes(ctx context.Context) {
+	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerIndexRepairLock(), common.RedisLockOptions{TtlS: workerIndexRepairLockTTL, Retries: 0})
+	if err != nil {
+		return
+	}
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerIndexRepairLock())
+
+	keys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerWorkerIndex()).Result()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list workers for index repair")
+		return
+	}
+
+	workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load workers for index repair")
+		return
+	}
+	for _, worker := range workers {
+		stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
+		if err := r.addWorkerIndexEntries(ctx, stateKey, worker); err != nil {
+			log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to repair worker index")
+		}
+	}
+}
+
 // getWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
 // If useLock is set to true, a lock will be acquired for each worker and released after retrieval.
 // If you can afford to not have the most up-to-date worker information, you can set useLock to false.
@@ -493,7 +595,7 @@ func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error
 	}
 
 	if !useLock {
-		workers, err := r.getWorkersFromKeys(keys)
+		workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
 		if err != nil {
 			return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
 		}
@@ -543,7 +645,11 @@ func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, e
 	return r.getWorkerFromKey(key)
 }
 
-func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Worker, error) {
+func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string, cleanupIndexKeys ...string) ([]*types.Worker, error) {
+	if len(keys) == 0 {
+		return []*types.Worker{}, nil
+	}
+
 	pipe := r.rdb.Pipeline()
 	cmds := make([]*redis.MapStringStringCmd, len(keys))
 
@@ -561,9 +667,7 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 	for i, cmd := range cmds {
 		res, err := cmd.Result()
 		if err != nil || len(res) == 0 {
-			// If there is an error or the result is empty, remove the key from the index
-			indexKey := common.RedisKeys.SchedulerWorkerIndex()
-			r.rdb.SRem(context.TODO(), indexKey, keys[i]).Err()
+			r.removeMissingWorkerFromIndexes(context.TODO(), keys[i], cleanupIndexKeys...)
 			continue
 		}
 
@@ -578,6 +682,30 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string) ([]*types.Work
 	}
 
 	return workers, nil
+}
+
+func (r *WorkerRedisRepository) removeMissingWorkerFromIndexes(ctx context.Context, stateKey string, indexKeys ...string) {
+	indexSet := map[string]struct{}{common.RedisKeys.SchedulerWorkerIndex(): {}}
+	for _, indexKey := range indexKeys {
+		if indexKey != "" {
+			indexSet[indexKey] = struct{}{}
+		}
+	}
+	for indexKey := range indexSet {
+		_ = r.rdb.SRem(ctx, indexKey, stateKey).Err()
+	}
+}
+
+func (r *WorkerRedisRepository) filterIndexedWorkers(ctx context.Context, workers []*types.Worker, indexKey string, keep func(*types.Worker) bool) []*types.Worker {
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if keep(worker) {
+			filtered = append(filtered, worker)
+			continue
+		}
+		_ = r.rdb.SRem(ctx, indexKey, common.RedisKeys.SchedulerWorkerState(worker.Id)).Err()
+	}
+	return filtered
 }
 
 func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, error) {
@@ -706,19 +834,21 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
-	workers, err := r.getWorkers(false)
+	r.maybeRepairWorkerSecondaryIndexes(context.TODO())
+
+	indexKey := common.RedisKeys.SchedulerWorkerPoolIndex(poolName)
+	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to retrieve worker pool index <%s>: %w", indexKey, err)
 	}
 
-	poolWorkers := []*types.Worker{}
-	for _, w := range workers {
-		if w.PoolName == poolName {
-			poolWorkers = append(poolWorkers, w)
-		}
+	workers, err := r.getWorkersFromKeys(keys, indexKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve worker state keys from pool index <%s>: %w", indexKey, err)
 	}
-
-	return poolWorkers, nil
+	return r.filterIndexedWorkers(context.TODO(), workers, indexKey, func(worker *types.Worker) bool {
+		return worker.PoolName == poolName
+	}), nil
 }
 
 func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) error {
@@ -742,19 +872,21 @@ func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) e
 }
 
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
-	workers, err := r.getWorkers(false)
+	r.maybeRepairWorkerSecondaryIndexes(context.TODO())
+
+	indexKey := common.RedisKeys.SchedulerWorkerMachineIndex(machineId)
+	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to retrieve worker machine index <%s>: %w", indexKey, err)
 	}
 
-	machineWorkers := []*types.Worker{}
-	for _, w := range workers {
-		if w.MachineId == machineId {
-			machineWorkers = append(machineWorkers, w)
-		}
+	workers, err := r.getWorkersFromKeys(keys, indexKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve worker state keys from machine index <%s>: %w", indexKey, err)
 	}
-
-	return machineWorkers, nil
+	return r.filterIndexedWorkers(context.TODO(), workers, indexKey, func(worker *types.Worker) bool {
+		return worker.MachineId == machineId
+	}), nil
 }
 
 func capacityMemoryForRequest(request *types.ContainerRequest) int64 {

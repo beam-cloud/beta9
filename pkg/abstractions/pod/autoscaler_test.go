@@ -94,6 +94,9 @@ func TestPodAutoscalerSampleUsesSharedConnectionSnapshots(t *testing.T) {
 	if err := rdb.Set(ctx, Keys.podProxyConnections(workspace.Name, stub.ExternalId, "proxy-1", "total"), 2, connectionSnapshotTTL).Err(); err != nil {
 		t.Fatal(err)
 	}
+	if err := rdb.SAdd(ctx, Keys.podProxyConnectionIndex(workspace.Name, stub.ExternalId), "proxy-1").Err(); err != nil {
+		t.Fatal(err)
+	}
 
 	instance := &podInstance{
 		AutoscaledInstance: &abstractions.AutoscaledInstance{

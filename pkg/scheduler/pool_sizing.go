@@ -64,6 +64,14 @@ func (s *WorkerPoolSizer) Start() {
 		}
 
 		func() {
+			if err := s.workerPoolRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
+				if !errors.Is(err, redislock.ErrNotObtained) {
+					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to acquire worker pool sizing lock")
+				}
+				return
+			}
+			defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
+
 			nextState, err := s.controller.State() // Get the current state of the pool
 			if err != nil {
 				return
@@ -99,8 +107,8 @@ func (s *WorkerPoolSizer) Start() {
 
 			// Handle case where we want to make sure all available manually provisioned nodes have available workers
 			if s.workerPoolConfig.Mode == types.PoolModeExternal {
-				err := s.occupyAvailableMachines()
-				if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
+				err := s.occupyAvailableMachinesLocked()
+				if err != nil {
 					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to list machines in external pool")
 				}
 			}
@@ -117,6 +125,10 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 	}
 	defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
 
+	return s.occupyAvailableMachinesLocked()
+}
+
+func (s *WorkerPoolSizer) occupyAvailableMachinesLocked() error {
 	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
 	if err != nil {
 		return err

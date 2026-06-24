@@ -111,6 +111,7 @@ func (pb *PodProxyBuffer) flushConnectionState() {
 	defer cancel()
 
 	pipe := pb.rdb.Pipeline()
+	pb.queueProxyConnectionIndex(ctx, pipe)
 	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), pb.totalConnections.Load(), connectionSnapshotTTL)
 	pb.containerConnections.Range(func(key, value any) bool {
 		containerId, ok := key.(string)
@@ -137,7 +138,10 @@ func (pb *PodProxyBuffer) publishContainerConnectionSnapshot(containerId string,
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if err := pb.rdb.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL).Err(); err != nil {
+	pipe := pb.rdb.Pipeline()
+	pb.queueProxyConnectionIndex(ctx, pipe)
+	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, containerId), count, connectionSnapshotTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
 		log.Debug().Err(err).Str("stub_id", pb.stubId).Str("container_id", containerId).Msg("failed to publish pod container busy snapshot")
 	}
 }
@@ -150,9 +154,18 @@ func (pb *PodProxyBuffer) publishTotalConnectionSnapshot(count int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	if err := pb.rdb.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), count, connectionSnapshotTTL).Err(); err != nil {
+	pipe := pb.rdb.Pipeline()
+	pb.queueProxyConnectionIndex(ctx, pipe)
+	pipe.Set(ctx, Keys.podProxyConnections(pb.workspace.Name, pb.stubId, pb.proxyId, "total"), count, connectionSnapshotTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
 		log.Debug().Err(err).Str("stub_id", pb.stubId).Msg("failed to publish pod total busy snapshot")
 	}
+}
+
+func (pb *PodProxyBuffer) queueProxyConnectionIndex(ctx context.Context, pipe redis.Pipeliner) {
+	indexKey := Keys.podProxyConnectionIndex(pb.workspace.Name, pb.stubId)
+	pipe.SAdd(ctx, indexKey, pb.proxyId)
+	pipe.Expire(ctx, indexKey, connectionSnapshotTTL)
 }
 
 func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
@@ -187,7 +200,9 @@ func sharedPodTotalConnections(ctx context.Context, rdb *common.RedisClient, wor
 		return 0, nil
 	}
 
-	total, _, err := sumRedisIntKeys(ctx, rdb, Keys.podProxyConnectionsScan(workspaceName, stubId, "total"))
+	total, _, err := sumRedisIntKeys(ctx, rdb, Keys.podProxyConnectionIndex(workspaceName, stubId), func(proxyId string) string {
+		return Keys.podProxyConnections(workspaceName, stubId, proxyId, "total")
+	}, true)
 	return total, err
 }
 
@@ -196,21 +211,29 @@ func sharedPodContainerConnections(ctx context.Context, rdb *common.RedisClient,
 		return 0, nil
 	}
 
-	total, _, err := sumRedisIntKeys(ctx, rdb, Keys.podProxyConnectionsScan(workspaceName, stubId, containerId))
+	total, _, err := sumRedisIntKeys(ctx, rdb, Keys.podProxyConnectionIndex(workspaceName, stubId), func(proxyId string) string {
+		return Keys.podProxyConnections(workspaceName, stubId, proxyId, containerId)
+	}, false)
 	return total, err
 }
 
-func sumRedisIntKeys(ctx context.Context, rdb *common.RedisClient, pattern string) (int64, bool, error) {
+func sumRedisIntKeys(ctx context.Context, rdb *common.RedisClient, indexKey string, keyForProxy func(string) string, pruneMissing bool) (int64, bool, error) {
 	var total int64
 
-	keys, err := rdb.Scan(ctx, pattern)
+	proxyIds, err := rdb.SMembers(ctx, indexKey).Result()
 	if err != nil {
 		return 0, false, err
 	}
+	if len(proxyIds) == 0 {
+		return 0, false, nil
+	}
 
-	for _, key := range keys {
-		value, err := rdb.Get(ctx, key).Int64()
+	for _, proxyId := range proxyIds {
+		value, err := rdb.Get(ctx, keyForProxy(proxyId)).Int64()
 		if err == redis.Nil {
+			if pruneMissing {
+				_ = rdb.SRem(ctx, indexKey, proxyId).Err()
+			}
 			continue
 		}
 		if err != nil {
@@ -221,5 +244,5 @@ func sumRedisIntKeys(ctx context.Context, rdb *common.RedisClient, pattern strin
 		}
 	}
 
-	return total, len(keys) > 0, nil
+	return total, true, nil
 }
