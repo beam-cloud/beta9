@@ -145,7 +145,8 @@ func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) 
 
 // AddWorker adds or updates a worker
 func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
+	ctx := context.TODO()
+	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
@@ -163,24 +164,23 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	}
 
 	worker.ResourceVersion = 0
-	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add worker state <%s>: %v", stateKey, err)
-	}
 
-	// Set TTL on state key
-	err = r.rdb.Expire(context.TODO(), stateKey, r.config.CleanupPendingWorkerAgeLimit).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
-	}
-
-	if err := r.addWorkerIndexEntries(context.TODO(), stateKey, worker); err != nil {
-		return err
+	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, common.ToSlice(worker))
+	pipe.Expire(ctx, stateKey, r.config.CleanupPendingWorkerAgeLimit)
+	for _, indexKey := range r.workerIndexKeys(worker) {
+		pipe.SAdd(ctx, indexKey, stateKey)
 	}
 	if oldWorker != nil {
-		if err := r.removeStaleWorkerPlacementIndexes(context.TODO(), stateKey, oldWorker, worker); err != nil {
-			return err
+		if oldWorker.PoolName != "" && oldWorker.PoolName != worker.PoolName {
+			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey)
 		}
+		if oldWorker.MachineId != "" && oldWorker.MachineId != worker.MachineId {
+			pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldWorker.MachineId), stateKey)
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to add worker state and indexes <%s>: %w", stateKey, err)
 	}
 
 	return nil
@@ -508,33 +508,10 @@ func (r *WorkerRedisRepository) workerIndexKeys(worker *types.Worker) []string {
 	return keys
 }
 
-func (r *WorkerRedisRepository) addWorkerIndexEntries(ctx context.Context, stateKey string, worker *types.Worker) error {
-	for _, indexKey := range r.workerIndexKeys(worker) {
-		if err := r.rdb.SAdd(ctx, indexKey, stateKey).Err(); err != nil {
-			return fmt.Errorf("failed to add worker state key to index <%v>: %w", indexKey, err)
-		}
-	}
-	return nil
-}
-
 func (r *WorkerRedisRepository) removeWorkerIndexEntries(ctx context.Context, stateKey string, worker *types.Worker) error {
 	for _, indexKey := range r.workerIndexKeys(worker) {
 		if err := r.rdb.SRem(ctx, indexKey, stateKey).Err(); err != nil {
 			return fmt.Errorf("failed to remove worker state key from index <%v>: %w", indexKey, err)
-		}
-	}
-	return nil
-}
-
-func (r *WorkerRedisRepository) removeStaleWorkerPlacementIndexes(ctx context.Context, stateKey string, oldWorker, newWorker *types.Worker) error {
-	if oldWorker.PoolName != "" && oldWorker.PoolName != newWorker.PoolName {
-		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerWorkerPoolIndex(oldWorker.PoolName), stateKey).Err(); err != nil {
-			return fmt.Errorf("failed to remove worker state key from old pool index: %w", err)
-		}
-	}
-	if oldWorker.MachineId != "" && oldWorker.MachineId != newWorker.MachineId {
-		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldWorker.MachineId), stateKey).Err(); err != nil {
-			return fmt.Errorf("failed to remove worker state key from old machine index: %w", err)
 		}
 	}
 	return nil
