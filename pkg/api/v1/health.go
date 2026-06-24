@@ -14,17 +14,31 @@ type HealthGroup struct {
 	redisClient *common.RedisClient
 	backendRepo repository.BackendRepository
 	routerGroup *echo.Group
+	ready       func() bool
 }
 
-func NewHealthGroup(g *echo.Group, rdb *common.RedisClient, backendRepo repository.BackendRepository) *HealthGroup {
-	group := &HealthGroup{routerGroup: g, redisClient: rdb, backendRepo: backendRepo}
+func NewHealthGroup(g *echo.Group, rdb *common.RedisClient, backendRepo repository.BackendRepository, ready func() bool) *HealthGroup {
+	group := &HealthGroup{routerGroup: g, redisClient: rdb, backendRepo: backendRepo, ready: ready}
 
 	g.GET("", group.HealthCheck)
+	g.GET("/live", group.Live)
 
 	return group
 }
 
+func (h *HealthGroup) Live(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]string{
+		"status": "ok",
+	})
+}
+
 func (h *HealthGroup) HealthCheck(c echo.Context) error {
+	if h.ready != nil && !h.ready() {
+		return c.JSON(http.StatusServiceUnavailable, map[string]string{
+			"status": "draining",
+		})
+	}
+
 	g, ctx := errgroup.WithContext(c.Request().Context())
 
 	g.Go(func() error {

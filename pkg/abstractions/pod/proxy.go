@@ -49,6 +49,7 @@ type connection struct {
 	ctx         echo.Context
 	tc          *tcpConnection
 	done        chan struct{}
+	finishOnce  sync.Once
 	enqueuedAt  time.Time
 	dialTimeout time.Duration
 }
@@ -67,6 +68,7 @@ func (c *connection) backendDialTimeout() time.Duration {
 
 type PodProxyBuffer struct {
 	ctx                     context.Context
+	drainCtx                context.Context
 	rdb                     *common.RedisClient
 	workspace               *types.Workspace
 	stubId                  string
@@ -89,7 +91,7 @@ type PodProxyBuffer struct {
 	workReady               chan struct{}
 }
 
-func NewPodProxyBuffer(ctx context.Context,
+func NewPodProxyBuffer(ctx, drainCtx context.Context,
 	rdb *common.RedisClient,
 	workspace *types.Workspace,
 	stubId string,
@@ -100,8 +102,13 @@ func NewPodProxyBuffer(ctx context.Context,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
 ) *PodProxyBuffer {
+	if drainCtx == nil {
+		drainCtx = context.Background()
+	}
+
 	pb := &PodProxyBuffer{
 		ctx:                     ctx,
+		drainCtx:                drainCtx,
 		rdb:                     rdb,
 		workspace:               workspace,
 		stubId:                  stubId,
@@ -128,6 +135,10 @@ func NewPodProxyBuffer(ctx context.Context,
 
 func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	ctx.Set("stubId", pb.stubId)
+
+	if pb.isDraining() {
+		return pb.failDrainingRequest(ctx)
+	}
 
 	if _, err := pb.incrementTotalConnections(); err != nil {
 		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
@@ -167,6 +178,10 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId string) error {
 	ctx.Set("stubId", pb.stubId)
 
+	if pb.isDraining() {
+		return pb.failDrainingRequest(ctx)
+	}
+
 	if _, err := pb.incrementTotalConnections(); err != nil {
 		return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 	}
@@ -203,6 +218,9 @@ func (pb *PodProxyBuffer) waitForConnection(ctx echo.Context, conn *connection) 
 		select {
 		case <-pb.ctx.Done():
 			return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+		case <-pb.drainDone():
+			pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining")
+			return nil
 		case <-conn.done:
 			return nil
 		case <-ctx.Request().Context().Done():
@@ -212,6 +230,11 @@ func (pb *PodProxyBuffer) waitForConnection(ctx echo.Context, conn *connection) 
 }
 
 func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
+	if pb.isDraining() {
+		tc.Conn.Close()
+		return nil
+	}
+
 	if _, err := pb.incrementTotalConnections(); err != nil {
 		tc.Conn.Close()
 		return err
@@ -242,6 +265,9 @@ func (pb *PodProxyBuffer) processBuffer() {
 		select {
 		case <-pb.ctx.Done():
 			return
+		case <-pb.drainDone():
+			pb.failQueuedConnections(http.StatusServiceUnavailable, "Service is draining")
+			return
 		case <-pb.workReady:
 			for {
 				conn, ok := pb.buffer.Pop()
@@ -251,6 +277,10 @@ func (pb *PodProxyBuffer) processBuffer() {
 				pb.recordBufferOccupancy()
 
 				if conn.tc != nil {
+					if pb.isDraining() {
+						pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining")
+						continue
+					}
 					port := int32(conn.tc.Fields.Port)
 					container, ok, hasContainers, hasPort := pb.reserveContainerForPort(port)
 					if !ok {
@@ -258,7 +288,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 							pb.requeueConnection(conn)
 							break
 						} else {
-							close(conn.done)
+							conn.finish()
 							conn.tc.Conn.Close()
 						}
 						continue
@@ -269,14 +299,18 @@ func (pb *PodProxyBuffer) processBuffer() {
 				}
 
 				if conn.ctx.Request().Context().Err() != nil {
-					close(conn.done)
+					conn.finish()
+					continue
+				}
+				if pb.isDraining() {
+					pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining")
 					continue
 				}
 
 				port, err := strconv.Atoi(conn.ctx.Param("port"))
 				if err != nil {
 					conn.ctx.String(http.StatusBadRequest, "Invalid port")
-					close(conn.done)
+					conn.finish()
 					continue
 				}
 
@@ -287,7 +321,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 						break
 					} else {
 						conn.ctx.String(http.StatusServiceUnavailable, "Port not available")
-						close(conn.done)
+						conn.finish()
 					}
 					continue
 				}
@@ -323,11 +357,51 @@ func (pb *PodProxyBuffer) failQueuedConnection(conn *connection, status int, mes
 	if conn.tc != nil {
 		conn.tc.Conn.Close()
 	} else if conn.ctx != nil && !conn.ctx.Response().Committed {
+		conn.ctx.Response().Header().Set(echo.HeaderConnection, "close")
 		_ = conn.ctx.String(status, message)
 	}
-	if conn.done != nil {
-		close(conn.done)
+	conn.finish()
+}
+
+func (pb *PodProxyBuffer) failQueuedConnections(status int, message string) {
+	for {
+		conn, ok := pb.buffer.Pop()
+		if !ok {
+			break
+		}
+		pb.failQueuedConnection(conn, status, message)
 	}
+	pb.recordBufferOccupancy()
+}
+
+func (pb *PodProxyBuffer) failDrainingRequest(ctx echo.Context) error {
+	ctx.Response().Header().Set(echo.HeaderConnection, "close")
+	return ctx.String(http.StatusServiceUnavailable, "Service is draining")
+}
+
+func (pb *PodProxyBuffer) isDraining() bool {
+	select {
+	case <-pb.drainDone():
+		return true
+	default:
+		return false
+	}
+}
+
+func (pb *PodProxyBuffer) drainDone() <-chan struct{} {
+	if pb == nil || pb.drainCtx == nil {
+		return nil
+	}
+	return pb.drainCtx.Done()
+}
+
+func (c *connection) finish() {
+	if c == nil || c.done == nil {
+		return
+	}
+	c.finishOnce.Do(func() {
+		close(c.done)
+	})
 }
 
 func (pb *PodProxyBuffer) availableContainerSnapshot() []container {
@@ -439,7 +513,7 @@ func (pb *PodProxyBuffer) requeueConnection(conn *connection) {
 }
 
 func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container container) {
-	defer close(conn.done)
+	defer conn.finish()
 	defer pb.decrementContainerConnections(container.id)
 
 	tc := conn.tc
@@ -510,7 +584,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection, container container, port int32) {
-	defer close(conn.done)
+	defer conn.finish()
 	defer pb.decrementContainerConnections(container.id)
 	pb.recordQueuedRequestWait(conn, "http")
 
@@ -722,6 +796,8 @@ func (pb *PodProxyBuffer) discoverContainers() {
 	for {
 		select {
 		case <-pb.ctx.Done():
+			return
+		case <-pb.drainDone():
 			return
 		default:
 			containerStates, err := pb.containerRepo.GetActiveContainersByStubId(pb.stubId)

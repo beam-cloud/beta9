@@ -36,7 +36,7 @@
 
 ## ✨ Features
 
-- **Fast Image Builds**: Launch containers in under a second using a custom container runtime
+- **Fast Cold Starts**: Launch containers in under a second using a custom container runtime, scheduler, and embedded caching
 - **Parallelization and Concurrency**: Fan out workloads to 100s of containers
 - **First-Class Developer Experience**: Hot-reloading, webhooks, and scheduled jobs
 - **Scale-to-Zero**: Workloads are serverless by default

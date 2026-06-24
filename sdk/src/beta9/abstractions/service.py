@@ -1,5 +1,6 @@
+import json
 import os
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from ..type import GpuType, GpuTypeAlias, Pool, QueueDepthAutoscaler
 from .base.container import Container
@@ -9,16 +10,69 @@ from .pod import Pod, PodInstance
 DEFAULT_SERVICE_PORT = 8000
 
 
+def _strip_dockerfile_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    escaped = False
+
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if char == "#" and not in_single and not in_double:
+            if index == 0 or line[index - 1].isspace():
+                return line[:index].rstrip()
+
+    return line
+
+
+def dockerfile_instructions(dockerfile: str) -> List[Tuple[str, str]]:
+    instructions: List[Tuple[str, str]] = []
+    continued = ""
+
+    for raw_line in dockerfile.splitlines():
+        line = _strip_dockerfile_comment(raw_line.rstrip())
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+
+        if continued:
+            line = continued + line.lstrip()
+
+        if line.endswith("\\"):
+            continued = line[:-1].rstrip() + " "
+            continue
+
+        continued = ""
+        instruction, _, value = line.strip().partition(" ")
+        if instruction and value:
+            instructions.append((instruction.upper(), value.strip()))
+
+    if continued.strip():
+        instruction, _, value = continued.strip().partition(" ")
+        if instruction and value:
+            instructions.append((instruction.upper(), value.strip()))
+
+    return instructions
+
+
 def ports_from_dockerfile(image: Optional[Image]) -> List[int]:
     dockerfile = getattr(image, "dockerfile", "") or ""
     ports: List[int] = []
 
-    for raw_line in dockerfile.splitlines():
-        line = raw_line.split("#", 1)[0].strip()
-        if not line.upper().startswith("EXPOSE "):
+    for instruction, value in dockerfile_instructions(dockerfile):
+        if instruction != "EXPOSE":
             continue
 
-        for token in line.split()[1:]:
+        for token in value.split():
             port_text = token.split("/", 1)[0]
             if not port_text.isdigit():
                 continue
@@ -28,6 +82,41 @@ def ports_from_dockerfile(image: Optional[Image]) -> List[int]:
                 ports.append(port)
 
     return ports
+
+
+def _dockerfile_process_args(value: str) -> List[str]:
+    if value.startswith("["):
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise ValueError(
+                "Dockerfile exec-form CMD/ENTRYPOINT must be a JSON string array"
+            ) from exc
+        if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+            raise ValueError("Dockerfile exec-form command must be a JSON string array")
+        return parsed
+
+    return ["sh", "-lc", value]
+
+
+def command_from_dockerfile(image: Optional[Image]) -> List[str]:
+    dockerfile = getattr(image, "dockerfile", "") or ""
+    entrypoint: List[str] = []
+    cmd: List[str] = []
+    entrypoint_shell_form = False
+
+    for instruction, value in dockerfile_instructions(dockerfile):
+        if instruction == "ENTRYPOINT":
+            entrypoint = _dockerfile_process_args(value)
+            entrypoint_shell_form = not value.startswith("[")
+        elif instruction == "CMD":
+            cmd = _dockerfile_process_args(value)
+
+    if entrypoint_shell_form:
+        return entrypoint
+    if entrypoint:
+        return entrypoint + cmd
+    return cmd
 
 
 def resolve_service_ports(
@@ -98,6 +187,10 @@ class Service(Pod):
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
 
+        service_entrypoint = entrypoint
+        if command is None and not service_entrypoint:
+            service_entrypoint = command_from_dockerfile(image)
+
         service_ports = resolve_service_ports(
             port=port,
             ports=ports,
@@ -111,7 +204,7 @@ class Service(Pod):
 
         super().__init__(
             app=app,
-            entrypoint=entrypoint or self._command_to_entrypoint(command),
+            entrypoint=service_entrypoint or self._command_to_entrypoint(command),
             ports=service_ports,
             name=name,
             cpu=cpu,

@@ -1,6 +1,8 @@
 import inspect
 import json
+import math
 import os
+import re
 import threading
 from typing import Callable, Dict, List, Optional, Union
 
@@ -268,19 +270,34 @@ class RunnerAbstraction(BaseAbstraction):
         return res
 
     def parse_memory(self, memory_str: str) -> int:
+        """Parse memory strings into megabytes."""
         if not isinstance(memory_str, str):
             return memory_str
 
-        """Parse memory str (with units) to megabytes."""
-
-        if memory_str.lower().endswith("mi"):
-            return int(memory_str[:-2])
-        elif memory_str.lower().endswith("gb"):
-            return int(memory_str[:-2]) * 1000
-        elif memory_str.lower().endswith("gi"):
-            return int(memory_str[:-2]) * 1024
-        else:
+        memory = memory_str.strip().lower()
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)([a-z]*)", memory)
+        if not match:
             raise ValueError("Unsupported memory format")
+
+        amount = float(match.group(1))
+        unit = match.group(2) or "mb"
+        units = {
+            "m": 1,
+            "mb": 1,
+            "mi": 1,
+            "mib": 1,
+            "g": 1000,
+            "gb": 1000,
+            "gi": 1024,
+            "gib": 1024,
+        }
+        if unit not in units:
+            raise ValueError("Unsupported memory format")
+
+        memory_mb = math.ceil(amount * units[unit])
+        if memory_mb <= 0:
+            raise ValueError("memory must be greater than 0")
+        return memory_mb
 
     @property
     def gateway_stub(self) -> GatewayServiceStub:

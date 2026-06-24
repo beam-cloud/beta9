@@ -420,7 +420,7 @@ class Image(BaseAbstraction):
             return image
 
         if not context_dir:
-            context_dir = os.path.dirname(path)
+            context_dir = os.path.dirname(path) or "."
 
         image.sync_files(context_dir)
 

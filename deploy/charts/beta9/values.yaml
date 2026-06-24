@@ -73,6 +73,9 @@ controllers:
     annotations: {}
     labels: {}
     replicas: 1
+    pod:
+      # 180s gateway shutdownTimeout + 10s readiness propagation + 5s buffer.
+      terminationGracePeriodSeconds: "195"
     strategy: Recreate # Can be Recreate or RollingUpdate
     rollingUpdate:
       unavailable:

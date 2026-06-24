@@ -14,6 +14,7 @@ from ..abstractions import base as base_abstraction
 from ..abstractions.image import Image
 from ..channel import ServiceClient, with_grpc_error_handling
 from ..clients.gateway import (
+    SecretVar,
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
@@ -262,10 +263,17 @@ class DockerfileParser(click.ParamType):
             terminal.error(f"Dockerfile not found: {value}")
             return None
 
-        image = Image.from_dockerfile(value)
-        image.dockerfile_path = value
-        image.ignore_python = True
-        return image
+        return value
+
+
+def image_from_dockerfile_option(value) -> Image:
+    if isinstance(value, Image):
+        return value
+
+    image = Image.from_dockerfile(str(value))
+    image.dockerfile_path = str(value)
+    image.ignore_python = True
+    return image
 
 
 class ShlexParser(click.ParamType):
@@ -428,6 +436,15 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
                     )
                     continue
 
+                if key == "secrets":
+                    secrets = [value] if isinstance(value, str) else value
+                    setattr(
+                        config_class_instance,
+                        "secrets",
+                        [SecretVar(name=str(secret)) for secret in secrets],
+                    )
+                    continue
+
                 if key == "pool" and hasattr(config_class_instance, "parse_pool"):
                     setattr(config_class_instance, "pool", value)
                     setattr(
@@ -453,7 +470,9 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
             config_class_instance.configure_replicas(**replica_args)
 
         if kwargs.get("dockerfile") is not None:
-            config_class_instance.image = kwargs["dockerfile"]
+            image = image_from_dockerfile_option(kwargs["dockerfile"])
+            kwargs["dockerfile"] = image
+            config_class_instance.image = image
 
         return True
     except BaseException as e:

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -31,6 +32,7 @@ type PodServiceOpts struct {
 	RedisClient   *common.RedisClient
 	EventRepo     repository.EventRepository
 	RouteGroup    *echo.Group
+	DrainContext  context.Context
 }
 
 const (
@@ -63,6 +65,7 @@ type GenericPodService struct {
 	podInstances    *common.SafeMap[*podInstance]
 	clientCache     sync.Map
 	tcpServer       *PodTCPServer
+	drainCtx        context.Context
 }
 
 func NewPodService(
@@ -87,6 +90,10 @@ func NewPodService(
 		config:          opts.Config,
 		eventRepo:       opts.EventRepo,
 		podInstances:    common.NewSafeMap[*podInstance](),
+		drainCtx:        opts.DrainContext,
+	}
+	if ps.drainCtx == nil {
+		ps.drainCtx = context.Background()
 	}
 
 	// Listen for container events with a certain prefix
@@ -157,7 +164,28 @@ func (ps *GenericPodService) IsPublic(stubId string) (*types.Workspace, error) {
 	return instance.Workspace, nil
 }
 
+func (ps *GenericPodService) isDraining() bool {
+	if ps == nil || ps.drainCtx == nil {
+		return false
+	}
+	select {
+	case <-ps.drainCtx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+func (ps *GenericPodService) rejectDrainingRequest(ctx echo.Context) error {
+	ctx.Response().Header().Set(echo.HeaderConnection, "close")
+	return ctx.String(http.StatusServiceUnavailable, "Service is draining")
+}
+
 func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) error {
+	if ps.isDraining() {
+		return ps.rejectDrainingRequest(ctx)
+	}
+
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return err
@@ -173,6 +201,10 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 }
 
 func (ps *GenericPodService) forwardContainerRequest(ctx echo.Context, stubId, containerId string) error {
+	if ps.isDraining() {
+		return ps.rejectDrainingRequest(ctx)
+	}
+
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return err
@@ -182,6 +214,11 @@ func (ps *GenericPodService) forwardContainerRequest(ctx echo.Context, stubId, c
 }
 
 func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string) error {
+	if ps.isDraining() {
+		tc.Conn.Close()
+		return nil
+	}
+
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return err
@@ -256,7 +293,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 		return nil, err
 	}
 
-	instance.buffer = NewPodProxyBuffer(autoscaledInstance.Ctx, ps.rdb, &stub.Workspace, stubId, podProxyBufferSize, ps.containerRepo, ps.keyEventManager, stubConfig, ps.tailscale, ps.config.Tailscale)
+	instance.buffer = NewPodProxyBuffer(autoscaledInstance.Ctx, ps.drainCtx, ps.rdb, &stub.Workspace, stubId, podProxyBufferSize, ps.containerRepo, ps.keyEventManager, stubConfig, ps.tailscale, ps.config.Tailscale)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
