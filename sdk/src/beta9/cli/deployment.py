@@ -30,6 +30,7 @@ from .extraclick import (
     ClickManagementGroup,
     env_vars_to_dict,
     handle_config_override,
+    image_from_dockerfile_option,
     override_config_options,
 )
 
@@ -134,25 +135,34 @@ def _merge_port_options(kwargs: Dict) -> None:
     kwargs["ports"] = ports
 
 
-def _autodetect_dockerfile(kwargs: Dict) -> Optional[Image]:
+def _autodetect_dockerfile(kwargs: Dict) -> None:
     if kwargs.get("dockerfile") is not None or kwargs.get("image") is not None:
-        return None
+        return
 
     dockerfile = "Dockerfile"
     if not os.path.exists(dockerfile):
+        return
+
+    kwargs["dockerfile"] = dockerfile
+
+
+def _materialize_dockerfile_image(kwargs: Dict) -> Optional[Image]:
+    dockerfile = kwargs.get("dockerfile")
+    if dockerfile is None:
         return None
 
-    image = Image.from_dockerfile(dockerfile)
-    image.dockerfile_path = dockerfile
-    image.ignore_python = True
+    image = image_from_dockerfile_option(dockerfile)
     kwargs["dockerfile"] = image
     return image
 
 
 def _service_image_option(kwargs: Dict) -> Optional[Image]:
-    dockerfile = kwargs.get("dockerfile")
-    if dockerfile is not None:
-        return dockerfile
+    if kwargs.get("dockerfile") is not None and kwargs.get("image") is not None:
+        raise ValueError("Specify either --dockerfile or --image, not both.")
+
+    dockerfile_image = _materialize_dockerfile_image(kwargs)
+    if dockerfile_image is not None:
+        return dockerfile_image
     return kwargs.get("image")
 
 
@@ -164,19 +174,25 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         default=service_image is not None,
     )
     keep_warm_seconds = kwargs.get("keep_warm_seconds")
+    service_kwargs = {
+        "name": name or os.path.basename(os.getcwd()),
+        "entrypoint": kwargs.get("entrypoint"),
+        "ports": ports,
+        "image": service_image or Image(),
+        "env": env_vars_to_dict(kwargs.get("env")),
+        "keep_warm_seconds": 0 if keep_warm_seconds is None else keep_warm_seconds,
+        "min_replicas": kwargs.get("min_replicas") or 0,
+        "max_replicas": kwargs.get("max_replicas"),
+        "always_on": bool(kwargs.get("always_on")),
+        "pool": kwargs.get("pool"),
+        "tcp": bool(kwargs.get("tcp")),
+    }
+    for key in ("cpu", "memory", "gpu", "gpu_count", "secrets"):
+        value = kwargs.get(key)
+        if value is not None:
+            service_kwargs[key] = value
 
-    return Service(
-        name=name or os.path.basename(os.getcwd()),
-        entrypoint=kwargs.get("entrypoint") or [],
-        ports=ports,
-        image=service_image or Image(),
-        env=env_vars_to_dict(kwargs.get("env")),
-        keep_warm_seconds=0 if keep_warm_seconds is None else keep_warm_seconds,
-        min_replicas=kwargs.get("min_replicas") or 0,
-        max_replicas=kwargs.get("max_replicas"),
-        always_on=bool(kwargs.get("always_on")),
-        pool=kwargs.get("pool"),
-    )
+    return Service(**service_kwargs)
 
 
 def _release_deployment_grpc_refs(user_obj) -> None:
@@ -270,11 +286,19 @@ def create_deployment(
                     user_obj.set_handler(f"{module_name}:{obj_name}")
 
             else:
-                _autodetect_dockerfile(kwargs)
-                if entrypoint or _service_image_option(kwargs) is not None:
-                    user_obj = _generate_service_module(name, kwargs)
-                else:
-                    terminal.error("No handler, entrypoint, image, or Dockerfile specified")
+                try:
+                    _autodetect_dockerfile(kwargs)
+                    if (
+                        entrypoint
+                        or kwargs.get("dockerfile") is not None
+                        or kwargs.get("image") is not None
+                    ):
+                        user_obj = _generate_service_module(name, kwargs)
+                    else:
+                        terminal.error("No handler, entrypoint, image, or Dockerfile specified")
+                        return
+                except (OSError, ValueError) as exc:
+                    terminal.error(f"Invalid service configuration: {exc}")
                     return
 
             if not handle_config_override(user_obj, kwargs):

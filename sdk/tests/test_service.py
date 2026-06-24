@@ -1,14 +1,24 @@
+import os
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
-from pathlib import Path
 
 from beta9 import Image, Service
-from beta9.abstractions.service import ports_from_dockerfile, service_image_implies_default_port
+from beta9.abstractions.service import (
+    command_from_dockerfile,
+    ports_from_dockerfile,
+    service_image_implies_default_port,
+)
 from beta9.cli.deployment import (
     _generate_service_module,
     _merge_port_options,
+    _service_image_option,
 )
-from beta9.cli.extraclick import handle_config_override
+from beta9.cli.extraclick import (
+    DockerfileParser,
+    handle_config_override,
+    image_from_dockerfile_option,
+)
 
 
 class TestService(TestCase):
@@ -37,6 +47,22 @@ class TestService(TestCase):
 
         self.assertEqual(service.ports, [3000])
         self.assertIn("PORT=9000", service.env)
+
+    def test_bare_memory_string_is_megabytes(self):
+        service = Service(command="npm run start", port=3000, memory="512")
+
+        self.assertEqual(service.memory, 512)
+
+    def test_memory_string_accepts_common_units(self):
+        self.assertEqual(Service(command="x", memory="512MB").memory, 512)
+        self.assertEqual(Service(command="x", memory="512m").memory, 512)
+        self.assertEqual(Service(command="x", memory="512Mi").memory, 512)
+        self.assertEqual(Service(command="x", memory="512MiB").memory, 512)
+        self.assertEqual(Service(command="x", memory="0.5Gi").memory, 512)
+        self.assertEqual(Service(command="x", memory="1GB").memory, 1000)
+        self.assertEqual(Service(command="x", memory="1g").memory, 1000)
+        self.assertEqual(Service(command="x", memory="1Gi").memory, 1024)
+        self.assertEqual(Service(command="x", memory="1GiB").memory, 1024)
 
     def test_image_entrypoint_can_be_used_without_command(self):
         service = Service(image=Image.from_id("img-123"), ports=[8080])
@@ -127,6 +153,27 @@ class TestService(TestCase):
         self.assertEqual(service.ports, [8000])
         self.assertIn("PORT=8000", service.env)
 
+    def test_generate_service_module_applies_resource_options(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": None,
+            "image": image,
+            "entrypoint": None,
+            "ports": [8080],
+            "env": (),
+            "cpu": 0.25,
+            "memory": "0.5Gi",
+            "secrets": ["API_TOKEN"],
+            "tcp": True,
+        }
+
+        service = _generate_service_module("image-app", kwargs)
+
+        self.assertEqual(service.cpu, 250)
+        self.assertEqual(service.memory, 512)
+        self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
+        self.assertTrue(service.tcp)
+
     def test_empty_cli_port_override_preserves_inferred_service_port(self):
         image = Image.from_id("img-123")
         kwargs = {
@@ -152,6 +199,28 @@ class TestService(TestCase):
         self.assertEqual(service.autoscaler.min_containers, 2)
         self.assertEqual(service.autoscaler.max_containers, 3)
 
+    def test_cli_secret_override_keeps_gateway_secret_shape(self):
+        service = Service(image=Image.from_id("img-123"), ports=[8080])
+        kwargs = {"secrets": ["API_TOKEN"]}
+
+        self.assertTrue(handle_config_override(service, kwargs))
+
+        self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
+
+    def test_cli_secret_override_accepts_single_secret_string(self):
+        service = Service(image=Image.from_id("img-123"), ports=[8080])
+        kwargs = {"secrets": "API_TOKEN"}
+
+        self.assertTrue(handle_config_override(service, kwargs))
+
+        self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
+
+    def test_service_image_option_rejects_image_and_dockerfile_together(self):
+        kwargs = {"dockerfile": "Dockerfile", "image": Image.from_id("img-123")}
+
+        with self.assertRaisesRegex(ValueError, "either --dockerfile or --image"):
+            _service_image_option(kwargs)
+
     def test_generate_service_module_infers_dockerfile_exposed_port(self):
         image = Image()
         image.dockerfile = "FROM python:3.12-slim\nEXPOSE 5000/tcp 9000\n"
@@ -167,6 +236,91 @@ class TestService(TestCase):
 
         self.assertEqual(service.ports, [5000, 9000])
         self.assertIn("PORT=7000", service.env)
+
+    def test_service_infers_exec_form_dockerfile_cmd(self):
+        image = Image()
+        image.dockerfile = 'FROM node:20-alpine\nEXPOSE 8080\nCMD ["node", "server.js"]\n'
+
+        service = Service(image=image)
+
+        self.assertEqual(service.entrypoint, ["node", "server.js"])
+        self.assertEqual(service.ports, [8080])
+        self.assertIn("PORT=8080", service.env)
+
+    def test_service_infers_shell_form_dockerfile_cmd(self):
+        image = Image()
+        image.dockerfile = "FROM node:20-alpine\nCMD npm start\n"
+
+        service = Service(image=image)
+
+        self.assertEqual(service.entrypoint, ["sh", "-lc", "npm start"])
+
+    def test_dockerfile_entrypoint_and_cmd_are_combined(self):
+        image = Image()
+        image.dockerfile = 'ENTRYPOINT ["node"]\nCMD ["server.js"]\n'
+
+        self.assertEqual(command_from_dockerfile(image), ["node", "server.js"])
+
+    def test_dockerfile_exec_form_errors_are_actionable(self):
+        image = Image()
+        image.dockerfile = 'CMD ["node",]\n'
+
+        with self.assertRaisesRegex(ValueError, "JSON string array"):
+            command_from_dockerfile(image)
+
+    def test_dockerfile_command_parser_ignores_comments_outside_quotes(self):
+        image = Image()
+        image.dockerfile = 'CMD ["node", "server#prod.js"] # inline comment\n'
+
+        self.assertEqual(command_from_dockerfile(image), ["node", "server#prod.js"])
+
+    @mock.patch("beta9.abstractions.image.Image.sync_files")
+    def test_generate_service_module_materializes_dockerfile_path_and_infers_command(
+        self, sync_files_mock
+    ):
+        with TemporaryDirectory() as tmpdir:
+            dockerfile = Path(tmpdir) / "Dockerfile"
+            dockerfile.write_text('FROM node:20-alpine\nEXPOSE 8080\nCMD ["node", "server.js"]\n')
+            kwargs = {
+                "dockerfile": str(dockerfile),
+                "image": None,
+                "entrypoint": None,
+                "ports": [],
+                "env": (),
+            }
+
+            service = _generate_service_module("dockerfile-app", kwargs)
+
+        self.assertIsInstance(kwargs["dockerfile"], Image)
+        self.assertEqual(service.entrypoint, ["node", "server.js"])
+        self.assertEqual(service.ports, [8080])
+        self.assertIn("PORT=8080", service.env)
+        sync_files_mock.assert_called_once_with(str(Path(tmpdir)))
+
+    def test_dockerfile_parser_does_not_sync_during_click_parsing(self):
+        with TemporaryDirectory() as tmpdir:
+            dockerfile = Path(tmpdir) / "Dockerfile"
+            dockerfile.write_text("FROM node:20-alpine\n")
+
+            with mock.patch("beta9.abstractions.image.Image.from_dockerfile") as from_dockerfile:
+                parsed = DockerfileParser().convert(str(dockerfile), None, None)
+
+        self.assertEqual(parsed, str(dockerfile))
+        from_dockerfile.assert_not_called()
+
+    @mock.patch("beta9.abstractions.image.Image.sync_files")
+    def test_dockerfile_option_uses_current_directory_for_root_dockerfile(self, sync_files_mock):
+        with TemporaryDirectory() as tmpdir:
+            dockerfile = Path(tmpdir) / "Dockerfile"
+            dockerfile.write_text("FROM node:20-alpine\n")
+            previous_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                image_from_dockerfile_option("Dockerfile")
+            finally:
+                os.chdir(previous_cwd)
+
+        sync_files_mock.assert_called_once_with(".")
 
     def test_ports_from_dockerfile_ignores_comments_and_protocols(self):
         image = Image()

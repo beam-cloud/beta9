@@ -22,7 +22,8 @@ spec:
         app.kubernetes.io/name: beta9
     spec:
       automountServiceAccountToken: true
-      terminationGracePeriodSeconds: 185
+      # 180s gateway shutdownTimeout + 10s readiness propagation + 5s buffer.
+      terminationGracePeriodSeconds: 195
       initContainers:
       - name: wait-on-backends
         image: busybox:1.37.0

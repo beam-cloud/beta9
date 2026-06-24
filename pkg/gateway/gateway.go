@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -62,6 +63,7 @@ type Gateway struct {
 	Config               types.AppConfig
 	httpServer           *http.Server
 	grpcServer           *grpc.Server
+	healthServer         *health.Server
 	RedisClient          *common.RedisClient
 	TaskDispatcher       *task.Dispatcher
 	TaskRepo             repository.TaskRepository
@@ -79,9 +81,17 @@ type Gateway struct {
 	Scheduler            *scheduler.Scheduler
 	ctx                  context.Context
 	cancelFunc           context.CancelFunc
+	drainCtx             context.Context
+	drainCancelFunc      context.CancelFunc
 	baseRouteGroup       *echo.Group
 	rootRouteGroup       *echo.Group
+	draining             atomic.Bool
 }
+
+const (
+	gatewayDrainPropagationDelay = 10 * time.Second
+	gatewayGRPCShutdownMaxWait   = 5 * time.Second
+)
 
 func NewGateway() (*Gateway, error) {
 	configManager, err := common.NewConfigManager[types.AppConfig]()
@@ -108,11 +118,14 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	drainCtx, drainCancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
-		RedisClient: redisClient,
-		ctx:         ctx,
-		cancelFunc:  cancel,
-		Storage:     storage,
+		RedisClient:     redisClient,
+		ctx:             ctx,
+		cancelFunc:      cancel,
+		drainCtx:        drainCtx,
+		drainCancelFunc: drainCancel,
+		Storage:         storage,
 	}
 
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
@@ -210,6 +223,8 @@ func (g *Gateway) initHttp() error {
 		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
 		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
 	}))
+	// Subdomain middleware can dispatch requests directly, so drain handling must run first.
+	e.Use(g.drainMiddleware)
 	e.Use(gatewaymiddleware.Subdomain(g.Config.GatewayService.HTTP.GetExternalURL(), g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
 	e.GET("/install/agent", agentInstallScriptHandler())
@@ -225,7 +240,7 @@ func (g *Gateway) initHttp() error {
 	g.baseRouteGroup = e.Group(apiv1.HttpServerBaseRoute)
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
-	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo)
+	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo, g.isReady)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
@@ -429,6 +444,7 @@ func (g *Gateway) registerServices() error {
 			EventRepo:     g.EventRepo,
 			RouteGroup:    g.rootRouteGroup,
 			WorkspaceRepo: g.WorkspaceRepo,
+			DrainContext:  g.drainCtx,
 		},
 	)
 	if err != nil {
@@ -523,6 +539,7 @@ func (g *Gateway) registerServices() error {
 	// Register health service
 	hs := health.NewServer()
 	hs.Resume()
+	g.healthServer = hs
 	go func() {
 		<-g.ctx.Done()
 		hs.Shutdown()
@@ -573,7 +590,7 @@ func (g *Gateway) Start() error {
 			log.Fatal().Err(err).Msg("failed to listen")
 		}
 
-		if err := g.grpcServer.Serve(lis); err != nil {
+		if err := g.grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
 			log.Fatal().Err(err).Msg("failed to start grpc server")
 		}
 	}()
@@ -594,17 +611,70 @@ func (g *Gateway) Start() error {
 
 	terminationSignal := make(chan os.Signal, 1)
 	signal.Notify(terminationSignal, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(terminationSignal)
 	<-terminationSignal
 	log.Info().Msg("termination signal received. shutting down...")
+	g.startDraining()
+	waitForDrainPropagation(g.ctx)
 	g.shutdown()
 
 	return nil
 }
 
+func (g *Gateway) isReady() bool {
+	return !g.draining.Load()
+}
+
+func (g *Gateway) drainMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		c.Response().Before(func() {
+			if g.draining.Load() {
+				c.Response().Header().Set(echo.HeaderConnection, "close")
+			}
+		})
+		return next(c)
+	}
+}
+
+func (g *Gateway) startDraining() {
+	if !g.draining.CompareAndSwap(false, true) {
+		return
+	}
+
+	if g.httpServer != nil {
+		g.httpServer.SetKeepAlivesEnabled(false)
+	}
+	if g.healthServer != nil {
+		g.healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	}
+	if g.drainCancelFunc != nil {
+		g.drainCancelFunc()
+	}
+	log.Info().Msg("gateway entering drain mode")
+}
+
+func waitForDrainPropagation(ctx context.Context) {
+	timer := time.NewTimer(gatewayDrainPropagationDelay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
+func grpcGracefulStopTimeout(shutdownTimeout time.Duration) time.Duration {
+	if shutdownTimeout <= 0 || shutdownTimeout > gatewayGRPCShutdownMaxWait {
+		return gatewayGRPCShutdownMaxWait
+	}
+	return shutdownTimeout
+}
+
 // Shutdown gracefully shuts down the gateway.
 // This function is blocking and will only return when the gateway has been shut down.
 func (g *Gateway) shutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), g.Config.GatewayService.ShutdownTimeout)
+	timeout := g.Config.GatewayService.ShutdownTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	eg, ctx := errgroup.WithContext(ctx)
@@ -620,18 +690,24 @@ func (g *Gateway) shutdown() {
 			close(done)
 		}()
 
+		timer := time.NewTimer(grpcGracefulStopTimeout(timeout))
+		defer timer.Stop()
+
 		select {
+		case <-timer.C:
+			g.grpcServer.Stop()
+			return nil
 		case <-ctx.Done():
 			g.grpcServer.Stop()
-			return ctx.Err()
+			return nil
 		case <-done:
 			return nil
 		}
 	})
 
-	g.cancelFunc()
-
 	if err := eg.Wait(); err != nil {
-		log.Fatal().Err(err).Msg("failed to shutdown gateway")
+		log.Warn().Err(err).Msg("gateway shutdown completed with errors")
 	}
+
+	g.cancelFunc()
 }

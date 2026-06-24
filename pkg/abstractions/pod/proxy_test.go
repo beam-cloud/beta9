@@ -176,6 +176,96 @@ func TestForwardRequestProxiesReadyBackendWithoutQueueing(t *testing.T) {
 	}
 }
 
+func TestForwardRequestRejectsImmediatelyWhenDraining(t *testing.T) {
+	drainCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("port")
+	ctx.SetParamValues("8000")
+
+	pb := &PodProxyBuffer{
+		ctx:      context.Background(),
+		drainCtx: drainCtx,
+		stubId:   "stub",
+	}
+
+	if err := pb.ForwardRequest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got := rec.Header().Get(echo.HeaderConnection); got != "close" {
+		t.Fatalf("Connection header = %q, want close", got)
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want drain rejection before accounting", got)
+	}
+}
+
+func TestForwardRequestFailsQueuedRequestWhenDraining(t *testing.T) {
+	drainCtx, cancelDrain := context.WithCancel(context.Background())
+	defer cancelDrain()
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("port")
+	ctx.SetParamValues("8000")
+
+	pb := &PodProxyBuffer{
+		ctx:        parentCtx,
+		drainCtx:   drainCtx,
+		workspace:  &types.Workspace{Name: "workspace"},
+		stubId:     "stub",
+		stubConfig: &types.StubConfigV1{},
+		buffer:     abstractions.NewRingBuffer[*connection](1),
+		workReady:  make(chan struct{}, 1),
+	}
+
+	go pb.processBuffer()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pb.ForwardRequest(ctx)
+	}()
+
+	waitForCondition(t, 50*time.Millisecond, func() bool {
+		return pb.buffer.Len() == 1
+	})
+	cancelDrain()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("queued request was not released during drain")
+	}
+
+	waitForCondition(t, 50*time.Millisecond, func() bool {
+		return pb.buffer.Len() == 0
+	})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got := rec.Header().Get(echo.HeaderConnection); got != "close" {
+		t.Fatalf("Connection header = %q, want close", got)
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want released after drain", got)
+	}
+}
+
 func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.String() != "/health?probe=1" {
@@ -221,6 +311,37 @@ func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing
 	}
 	if got := pb.containerConnectionCount(containerId); got != 0 {
 		t.Fatalf("container connections = %d, want released", got)
+	}
+}
+
+func TestForwardContainerRequestRejectsImmediatelyWhenDraining(t *testing.T) {
+	drainCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("port")
+	ctx.SetParamValues("8765")
+
+	pb := &PodProxyBuffer{
+		ctx:      context.Background(),
+		drainCtx: drainCtx,
+		stubId:   "stub",
+	}
+
+	if err := pb.ForwardContainerRequest(ctx, "container-1"); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if got := rec.Header().Get(echo.HeaderConnection); got != "close" {
+		t.Fatalf("Connection header = %q, want close", got)
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want drain rejection before accounting", got)
 	}
 }
 
