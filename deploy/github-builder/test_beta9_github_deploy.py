@@ -137,6 +137,33 @@ class GithubBuilderEntrypointTest(unittest.TestCase):
         self.assertIn("--served-model-name", service.entrypoint)
         self.assertEqual(service.concurrent_requests, 16)
 
+    def test_model_service_uses_any_gpu_for_pool_backed_custom_gpu(self):
+        config = {
+            "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+            "engine": "vllm",
+            "port": 8000,
+            "served_model_name": "qwen",
+            "context_length": 4096,
+            "base_image": "vllm/vllm-openai:latest",
+            "env_vars": {},
+            "app_name": "qwen",
+            "cpu": 4,
+            "memory": "32768",
+            "gpu": "L4",
+            "keep_warm_seconds": 300,
+            "min_replicas": 1,
+            "max_replicas": 1,
+            "pool": "llm-pool",
+            "tokenizer": "",
+            "metrics_path": "/metrics",
+            "slo_tier": "standard",
+            "concurrent_requests": 16,
+        }
+
+        service = builder.build_model_service(config)
+
+        self.assertEqual(service.gpu, "any")
+
     def test_result_payload_maps_sdk_deploy_result(self):
         payload = builder.result_payload(
             {"app_name": "example"},

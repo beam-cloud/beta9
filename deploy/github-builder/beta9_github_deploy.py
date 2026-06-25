@@ -97,6 +97,14 @@ def parse_env_vars(raw: str) -> Dict[str, str]:
     return env_vars
 
 
+def service_gpu(config: Dict[str, object]) -> str:
+    gpu = str(config.get("gpu") or "")
+    pool = str(config.get("pool") or "")
+    if gpu and pool:
+        return "any"
+    return gpu
+
+
 def git_remote_url(repo_full_name: str) -> str:
     return f"https://github.com/{repo_full_name}.git"
 
@@ -175,7 +183,7 @@ def build_service(repo_dir: Path, config: Dict[str, object]) -> Service:
             ports=[int(config["port"])],
             cpu=config["cpu"],
             memory=str(config["memory"]),
-            gpu=str(config["gpu"]) if config["gpu"] else "",
+            gpu=service_gpu(config),
             env=env_vars,
             keep_warm_seconds=int(config["keep_warm_seconds"]),
             min_replicas=int(config["min_replicas"]),
@@ -225,7 +233,7 @@ def build_model_service(config: Dict[str, object]) -> Service:
             ports=[port],
             cpu=config["cpu"],
             memory=str(config["memory"]),
-            gpu=str(config["gpu"]) if config["gpu"] else "",
+            gpu=service_gpu(config),
             image=image,
             env=config["env_vars"],
             keep_warm_seconds=int(config["keep_warm_seconds"]),
