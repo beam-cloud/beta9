@@ -13,6 +13,10 @@ var (
 	podTotalConnections     string = "pod:%s:%s:total_connections"
 	podProxyConnections     string = "pod:%s:%s:proxy_connections:%s:%s"
 	podProxyConnectionIndex string = "pod:%s:%s:proxy_connection_proxies"
+	podLLMPressure          string = "pod:%s:%s:llm_pressure:%s"
+	podLLMEngineMetrics     string = "pod:%s:%s:llm_engine_metrics:%s"
+	podLLMAffinity          string = "pod:%s:%s:llm_affinity:%s"
+	podLLMPrefixAffinity    string = "pod:%s:%s:llm_prefix_affinity:%s"
 )
 
 var Keys = &keys{}
@@ -41,4 +45,20 @@ func (k *keys) podProxyConnections(workspaceName, stubId, proxyId, target string
 
 func (k *keys) podProxyConnectionIndex(workspaceName, stubId string) string {
 	return fmt.Sprintf(podProxyConnectionIndex, workspaceName, stubId)
+}
+
+func (k *keys) podLLMPressure(workspaceName, stubId, target string) string {
+	return fmt.Sprintf(podLLMPressure, workspaceName, stubId, target)
+}
+
+func (k *keys) podLLMEngineMetrics(workspaceName, stubId, target string) string {
+	return fmt.Sprintf(podLLMEngineMetrics, workspaceName, stubId, target)
+}
+
+func (k *keys) podLLMAffinity(workspaceName, stubId, affinityKey string) string {
+	return fmt.Sprintf(podLLMAffinity, workspaceName, stubId, affinityKey)
+}
+
+func (k *keys) podLLMPrefixAffinity(workspaceName, stubId, prefixKey string) string {
+	return fmt.Sprintf(podLLMPrefixAffinity, workspaceName, stubId, prefixKey)
 }

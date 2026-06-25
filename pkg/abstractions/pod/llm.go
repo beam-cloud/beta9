@@ -1,0 +1,509 @@
+package pod
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/beam-cloud/beta9/pkg/common"
+)
+
+const (
+	llmServingProtocolOpenAI = "openai"
+	llmPressureTargetTotal   = "total"
+
+	llmMaxInspectBytes            int64         = 128 * 1024
+	llmAffinityHashChars                        = 24
+	llmPrefixChars                              = 4096
+	llmPrefixBlockChars                         = 512
+	llmMaxPrefixBlocks                          = 8
+	llmDefaultContextLen                        = 4096
+	llmDefaultOutputTokens        int64         = 256
+	llmPressureTTL                time.Duration = 30 * time.Second
+	llmAffinityTTL                time.Duration = 10 * time.Minute
+	llmReadinessTimeout           time.Duration = 5 * time.Second
+	llmReadinessBodyLimit         int64         = 4 * 1024
+	llmMetricsTimeout             time.Duration = 750 * time.Millisecond
+	llmMetricsBodyLimit           int64         = 512 * 1024
+	llmMetricsTTL                 time.Duration = 30 * time.Second
+	llmMetricsStaleAfter          time.Duration = 5 * time.Second
+	llmMetricsRefreshEvery        time.Duration = 2 * time.Second
+	llmAffinityImbalanceThreshold               = 2
+	llmSpreadScoreMax             int64         = 128
+	llmConnectionWeight                         = 1000
+	llmActiveStreamWeight                       = 1000
+	llmTokenPressureWeight                      = 100
+	llmEngineRunningWeight                      = 1200
+	llmEngineWaitingWeight                      = 2500
+	llmEngineTTFTWeight                         = 2
+	llmEngineTPOTWeight                         = 2
+	llmEngineCachePressureWeight                = 4
+	llmEngineDecodeBonusCap                     = 500
+	llmEngineCacheHitBonusCap                   = 250
+	llmSessionAffinityBonus                     = 900
+	llmExactPrefixBonus                         = 700
+	llmPrefixBlockBonus                         = 250
+	llmMaxEventErrorChars                       = 512
+)
+
+var (
+	openAIPaths = []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+		"/v1/models",
+	}
+	llmSessionHeaders   = []string{"X-Beam-LLM-Session", "X-Beam-Session", "X-Session-ID"}
+	llmRequestIDHeaders = []string{"X-Request-ID", "X-Request-Id", "X-Amzn-Trace-Id", "Traceparent"}
+
+	llmEngineMetricRedisFields = []string{
+		"running_requests",
+		"waiting_requests",
+		"ttft_ms",
+		"tpot_ms",
+		"decode_tokens_per_second",
+		"prompt_tokens_per_second",
+		"gpu_cache_usage_milli",
+		"prefix_cache_hit_milli",
+		"generation_tokens_total",
+		"prompt_tokens_total",
+		"prefix_cache_hits_total",
+		"prefix_cache_queries_total",
+		"ttft_sum_seconds",
+		"ttft_count",
+		"tpot_sum_seconds",
+		"tpot_count",
+		"updated_at_ms",
+	}
+
+	llmMetricRunningRequests    = llmVLLMMetricAliases("num_requests_running")
+	llmMetricWaitingRequests    = llmVLLMMetricAliases("num_requests_waiting")
+	llmMetricGPUCacheUsage      = llmVLLMMetricAliases("kv_cache_usage_perc", "gpu_cache_usage_perc", "gpu_cache_usage")
+	llmMetricPrefixCacheHitRate = llmVLLMMetricAliases("gpu_prefix_cache_hit_rate", "prefix_cache_hit_rate")
+	llmMetricGenerationTokens   = llmVLLMMetricAliases("generation_tokens_total")
+	llmMetricPromptTokens       = llmVLLMMetricAliases("prompt_tokens_total", "prompt_tokens_processed_total")
+	llmMetricPrefixCacheHits    = llmVLLMMetricAliases("prefix_cache_hits_total", "gpu_prefix_cache_hits_total")
+	llmMetricPrefixCacheQueries = llmVLLMMetricAliases("prefix_cache_queries_total", "gpu_prefix_cache_queries_total")
+	llmMetricTTFTSumSeconds     = llmVLLMMetricAliases("time_to_first_token_seconds_sum")
+	llmMetricTTFTCount          = llmVLLMMetricAliases("time_to_first_token_seconds_count")
+	llmMetricTPOTSumSeconds     = llmVLLMMetricAliases("time_per_output_token_seconds_sum")
+	llmMetricTPOTCount          = llmVLLMMetricAliases("time_per_output_token_seconds_count")
+)
+
+func llmVLLMMetricAliases(names ...string) []string {
+	aliases := make([]string, 0, len(names)*2)
+	for _, name := range names {
+		aliases = append(aliases, "vllm:"+name, "vllm_"+name)
+	}
+	return aliases
+}
+
+type llmRequestInfo struct {
+	Enabled               bool
+	Method                string
+	Path                  string
+	RequestID             string
+	Model                 string
+	SessionKey            string
+	SessionHash           string
+	PrefixHash            string
+	PrefixBlocks          []string
+	AffinityKey           string
+	PromptTokens          int64
+	OutputTokens          int64
+	TokenPressure         int64
+	Stream                bool
+	RouteReason           string
+	RouteScore            int64
+	CandidateCount        int
+	ReadyContainerCount   int
+	PrefixCacheMatches    int
+	QueueWait             time.Duration
+	TotalPressureAtRoute  llmPressureSnapshot
+	TargetPressureAtRoute llmPressureSnapshot
+	EngineMetricsAtRoute  llmEngineMetricsSnapshot
+}
+
+type llmPressureSnapshot struct {
+	ActiveStreams int64
+	TokenPressure int64
+}
+
+type llmEngineMetricsSnapshot struct {
+	RunningRequests         int64
+	WaitingRequests         int64
+	TTFTMs                  int64
+	TPOTMs                  int64
+	DecodeTokensPerSecond   int64
+	PromptTokensPerSecond   int64
+	GPUCacheUsageMilli      int64
+	PrefixCacheHitMilli     int64
+	GenerationTokensTotal   float64
+	PromptTokensTotal       float64
+	PrefixCacheHitsTotal    float64
+	PrefixCacheQueriesTotal float64
+	TTFTSumSeconds          float64
+	TTFTCount               float64
+	TPOTSumSeconds          float64
+	TPOTCount               float64
+	UpdatedAtUnixMs         int64
+}
+
+func (pb *PodProxyBuffer) llmAdmissionDenied(info *llmRequestInfo) (bool, string) {
+	if info == nil || pb.rdb == nil || pb.workspace == nil || pb.stubConfig == nil {
+		return false, ""
+	}
+
+	snapshot, err := sharedPodLLMPressure(context.Background(), pb.rdb, pb.workspace.Name, pb.stubId)
+	if err != nil {
+		return false, ""
+	}
+	info.TotalPressureAtRoute = snapshot
+
+	maxActive := int64(pb.stubConfig.MaxPendingTasks)
+	if maxActive <= 0 {
+		maxActive = 100
+	}
+	if snapshot.ActiveStreams >= maxActive {
+		return true, "LLM service is at active stream capacity"
+	}
+
+	maxTokens := maxActive * llmContextLength(pb.stubConfig)
+	if maxTokens <= 0 {
+		maxTokens = maxActive * llmDefaultContextLen
+	}
+	if snapshot.TokenPressure+info.TokenPressure > maxTokens {
+		return true, "LLM service is at token capacity"
+	}
+	return false, ""
+}
+
+func (pb *PodProxyBuffer) reserveLLMContainerForPort(port int32, info *llmRequestInfo) (container, bool, bool, bool) {
+	containers := pb.availableContainerSnapshot()
+	if len(containers) == 0 {
+		return container{}, false, false, false
+	}
+
+	routeState := pb.llmRoutingState(info)
+	hasPort := false
+	readyCount := 0
+	candidates := make([]llmContainerCandidate, 0, len(containers))
+	for _, c := range containers {
+		if _, ok := c.addressMap[port]; !ok {
+			continue
+		}
+		hasPort = true
+		if _, ready := c.readyAddressMap[port]; !ready {
+			continue
+		}
+		readyCount++
+		candidates = append(candidates, pb.scoreLLMContainer(c, routeState, info, c.readyAddressMap[port]))
+	}
+	if len(candidates) == 0 {
+		return container{}, false, true, hasPort
+	}
+
+	selected := pb.selectLLMContainerCandidate(candidates, routeState, info)
+	if err := pb.incrementContainerConnections(selected.container.id); err != nil {
+		return container{}, false, true, hasPort
+	}
+	if info != nil {
+		info.RouteReason = selected.reason
+		info.RouteScore = selected.score
+		info.CandidateCount = len(candidates)
+		info.ReadyContainerCount = readyCount
+		info.PrefixCacheMatches = selected.prefixMatches
+		info.TargetPressureAtRoute = selected.pressure
+		info.EngineMetricsAtRoute = selected.engineMetrics
+	}
+	return selected.container, true, true, true
+}
+
+type llmRoutingState struct {
+	exactContainer string
+	exactIsSession bool
+	prefixMatches  map[string]int
+}
+
+type llmContainerCandidate struct {
+	container     container
+	score         int64
+	loadScore     int64
+	queueDepth    int64
+	reason        string
+	pressure      llmPressureSnapshot
+	engineMetrics llmEngineMetricsSnapshot
+	prefixMatches int
+}
+
+func (pb *PodProxyBuffer) scoreLLMContainer(c container, routeState llmRoutingState, info *llmRequestInfo, address string) llmContainerCandidate {
+	connections := int64(c.connections)
+	if sharedConnections, err := pb.sharedContainerConnectionCount(c.id); err == nil && int64(sharedConnections) > connections {
+		connections = int64(sharedConnections)
+	}
+
+	pressure, _ := pb.llmPressureSnapshot(c.id)
+	engineMetrics, _ := pb.llmEngineMetricsSnapshot(c.id)
+	if engineMetrics.Stale(time.Now()) {
+		pb.refreshLLMEngineMetricsAsync(c.id, address)
+	}
+	contextLen := llmContextLength(pb.stubConfig)
+	if contextLen <= 0 {
+		contextLen = llmDefaultContextLen
+	}
+	loadScore := connections*llmConnectionWeight +
+		pressure.ActiveStreams*llmActiveStreamWeight +
+		(pressure.TokenPressure*llmTokenPressureWeight)/contextLen +
+		llmEngineMetricsScore(engineMetrics)
+
+	score := loadScore + llmSpreadScore(c.id, info)
+	reason := "least_pressure"
+	prefixMatches := routeState.prefixMatches[c.id]
+	return llmContainerCandidate{
+		container:     c,
+		score:         score,
+		loadScore:     loadScore,
+		queueDepth:    llmCandidateQueueDepth(connections, pressure, engineMetrics),
+		reason:        reason,
+		pressure:      pressure,
+		engineMetrics: engineMetrics,
+		prefixMatches: prefixMatches,
+	}
+}
+
+func (pb *PodProxyBuffer) selectLLMContainerCandidate(candidates []llmContainerCandidate, routeState llmRoutingState, info *llmRequestInfo) llmContainerCandidate {
+	if len(candidates) == 1 {
+		return applyLLMAffinityScore(candidates[0], routeState)
+	}
+
+	if llmCandidatesBalanced(candidates) {
+		for i := range candidates {
+			candidates[i] = applyLLMAffinityScore(candidates[i], routeState)
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].score == candidates[j].score {
+				return candidates[i].container.id < candidates[j].container.id
+			}
+			return candidates[i].score < candidates[j].score
+		})
+		return candidates[0]
+	}
+
+	reason := "power_of_two_load"
+	if llmHasAffinitySignal(candidates, routeState) {
+		reason = "load_imbalance"
+	}
+	return pb.selectPowerOfTwoLLMContainer(candidates, info, reason)
+}
+
+func applyLLMAffinityScore(candidate llmContainerCandidate, routeState llmRoutingState) llmContainerCandidate {
+	if routeState.exactContainer != "" && routeState.exactContainer == candidate.container.id {
+		if routeState.exactIsSession {
+			candidate.score -= llmSessionAffinityBonus
+			candidate.reason = "session_affinity"
+		} else {
+			candidate.score -= llmExactPrefixBonus
+			candidate.reason = "prefix_affinity"
+		}
+	} else if candidate.prefixMatches > 0 {
+		candidate.score -= int64(candidate.prefixMatches) * llmPrefixBlockBonus
+		candidate.reason = "prefix_block_affinity"
+	}
+
+	return candidate
+}
+
+func llmCandidatesBalanced(candidates []llmContainerCandidate) bool {
+	if len(candidates) < 2 {
+		return true
+	}
+	minDepth, maxDepth := candidates[0].queueDepth, candidates[0].queueDepth
+	for _, candidate := range candidates[1:] {
+		if candidate.queueDepth < minDepth {
+			minDepth = candidate.queueDepth
+		}
+		if candidate.queueDepth > maxDepth {
+			maxDepth = candidate.queueDepth
+		}
+	}
+	return maxDepth-minDepth <= llmAffinityImbalanceThreshold
+}
+
+func llmHasAffinitySignal(candidates []llmContainerCandidate, routeState llmRoutingState) bool {
+	if routeState.exactContainer != "" {
+		return true
+	}
+	for _, candidate := range candidates {
+		if candidate.prefixMatches > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (pb *PodProxyBuffer) selectPowerOfTwoLLMContainer(candidates []llmContainerCandidate, info *llmRequestInfo, reason string) llmContainerCandidate {
+	if len(candidates) == 1 {
+		candidates[0].reason = reason
+		return candidates[0]
+	}
+
+	left, right := pb.llmPowerOfTwoIndices(len(candidates), info)
+	selected := candidates[left]
+	other := candidates[right]
+	if other.score < selected.score || (other.score == selected.score && other.container.id < selected.container.id) {
+		selected = other
+	}
+	selected.reason = reason
+	return selected
+}
+
+func (pb *PodProxyBuffer) llmPowerOfTwoIndices(count int, info *llmRequestInfo) (int, int) {
+	if count <= 1 {
+		return 0, 0
+	}
+
+	var counter uint64
+	if pb != nil {
+		counter = pb.llmRouteCounter.Add(1)
+	} else {
+		counter = uint64(time.Now().UnixNano())
+	}
+
+	key := ""
+	if info != nil {
+		key = strings.Join([]string{info.Model, info.Path, info.AffinityKey, info.RequestID}, "\n")
+	}
+	sum := sha256.Sum256([]byte(key + "\n" + strconv.FormatUint(counter, 10)))
+	left := int(binary.BigEndian.Uint64(sum[:8]) % uint64(count))
+	right := int(binary.BigEndian.Uint64(sum[8:16]) % uint64(count-1))
+	if right >= left {
+		right++
+	}
+	return left, right
+}
+
+func llmCandidateQueueDepth(connections int64, pressure llmPressureSnapshot, engineMetrics llmEngineMetricsSnapshot) int64 {
+	return connections + pressure.ActiveStreams + engineMetrics.RunningRequests + engineMetrics.WaitingRequests
+}
+
+func llmSpreadScore(containerID string, info *llmRequestInfo) int64 {
+	if containerID == "" || info == nil {
+		return 0
+	}
+
+	key := info.AffinityKey
+	if key == "" {
+		key = info.PrefixHash
+	}
+	if key == "" {
+		key = info.Model + ":" + info.Path
+	}
+
+	hash := sha256.Sum256([]byte(key + "\n" + containerID))
+	return int64(binary.BigEndian.Uint16(hash[:2])) % llmSpreadScoreMax
+}
+
+func (pb *PodProxyBuffer) preferredLLMContainer(info *llmRequestInfo) string {
+	if info == nil || info.AffinityKey == "" || pb.rdb == nil || pb.workspace == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	containerID, err := pb.rdb.Get(ctx, Keys.podLLMAffinity(pb.workspace.Name, pb.stubId, info.AffinityKey)).Result()
+	if err != nil {
+		return ""
+	}
+	return containerID
+}
+
+func (pb *PodProxyBuffer) llmRoutingState(info *llmRequestInfo) llmRoutingState {
+	state := llmRoutingState{}
+	if info == nil {
+		return state
+	}
+	state.exactContainer = pb.preferredLLMContainer(info)
+	state.exactIsSession = info.SessionHash != "" && info.AffinityKey == info.SessionHash
+	state.prefixMatches = pb.llmPrefixContainerMatches(info)
+	return state
+}
+
+func (pb *PodProxyBuffer) llmPrefixContainerMatches(info *llmRequestInfo) map[string]int {
+	matches := map[string]int{}
+	if info == nil || len(info.PrefixBlocks) == 0 || pb.rdb == nil || pb.workspace == nil {
+		return matches
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pipe := pb.rdb.Pipeline()
+	cmds := make([]interface{ Result() (string, error) }, 0, len(info.PrefixBlocks))
+	for _, block := range info.PrefixBlocks {
+		if block == "" {
+			continue
+		}
+		cmds = append(cmds, pipe.Get(ctx, Keys.podLLMPrefixAffinity(pb.workspace.Name, pb.stubId, block)))
+	}
+	if len(cmds) == 0 {
+		return matches
+	}
+	_, _ = pipe.Exec(ctx)
+	for _, cmd := range cmds {
+		containerID, err := cmd.Result()
+		if err != nil || containerID == "" {
+			continue
+		}
+		matches[containerID]++
+	}
+	return matches
+}
+
+func (pb *PodProxyBuffer) recordLLMAffinity(info *llmRequestInfo, containerID string) {
+	if info == nil || containerID == "" || pb.rdb == nil || pb.workspace == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	pipe := pb.rdb.Pipeline()
+	if info.AffinityKey != "" {
+		pipe.Set(ctx, Keys.podLLMAffinity(pb.workspace.Name, pb.stubId, info.AffinityKey), containerID, llmAffinityTTL)
+	}
+	for _, block := range info.PrefixBlocks {
+		if block == "" {
+			continue
+		}
+		pipe.Set(ctx, Keys.podLLMPrefixAffinity(pb.workspace.Name, pb.stubId, block), containerID, llmAffinityTTL)
+	}
+	_, _ = pipe.Exec(ctx)
+}
+
+func (pb *PodProxyBuffer) llmPressureSnapshot(target string) (llmPressureSnapshot, error) {
+	if pb.rdb == nil || pb.workspace == nil || target == "" {
+		return llmPressureSnapshot{}, nil
+	}
+	return readPodLLMPressure(context.Background(), pb.rdb, pb.workspace.Name, pb.stubId, target)
+}
+
+func readPodLLMPressure(ctx context.Context, rdb *common.RedisClient, workspaceName, stubId, target string) (llmPressureSnapshot, error) {
+	values, err := rdb.HMGet(ctx, Keys.podLLMPressure(workspaceName, stubId, target), "active_streams", "token_pressure").Result()
+	if err != nil {
+		return llmPressureSnapshot{}, err
+	}
+
+	return llmPressureSnapshot{
+		ActiveStreams: redisFieldInt64(values[0]),
+		TokenPressure: redisFieldInt64(values[1]),
+	}, nil
+}
+
+func sharedPodLLMPressure(ctx context.Context, rdb *common.RedisClient, workspaceName, stubId string) (llmPressureSnapshot, error) {
+	if rdb == nil || workspaceName == "" || stubId == "" {
+		return llmPressureSnapshot{}, nil
+	}
+	return readPodLLMPressure(ctx, rdb, workspaceName, stubId, llmPressureTargetTotal)
+}

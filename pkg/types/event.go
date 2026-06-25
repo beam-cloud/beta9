@@ -39,6 +39,7 @@ var (
 	EventWorkerPoolHealthy  = "workerpool.healthy"
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
+	EventLLMRoute              = "llm.route"
 
 	EventComputePool      = "compute.pool"
 	EventComputeJoinToken = "compute.join_token"
@@ -772,6 +773,51 @@ type EventPlatformLogSchema struct {
 	Level       string    `json:"level,omitempty"`
 	Stream      string    `json:"stream,omitempty"`
 	Line        string    `json:"line"`
+}
+
+var EventLLMRouteSchemaVersion = "1.0"
+
+type EventLLMRouteSchema struct {
+	Timestamp                time.Time `json:"timestamp"`
+	WorkspaceID              string    `json:"workspace_id,omitempty"`
+	AppID                    string    `json:"app_id,omitempty"`
+	StubID                   string    `json:"stub_id,omitempty"`
+	StubType                 string    `json:"stub_type,omitempty"`
+	ContainerID              string    `json:"container_id,omitempty"`
+	Method                   string    `json:"method,omitempty"`
+	Path                     string    `json:"path,omitempty"`
+	RequestID                string    `json:"request_id,omitempty"`
+	Model                    string    `json:"model,omitempty"`
+	Engine                   string    `json:"engine,omitempty"`
+	RouteReason              string    `json:"route_reason,omitempty"`
+	RouteScore               int64     `json:"route_score,omitempty"`
+	CandidateCount           int       `json:"candidate_count,omitempty"`
+	ReadyContainerCount      int       `json:"ready_container_count,omitempty"`
+	SessionHash              string    `json:"session_hash,omitempty"`
+	PrefixHash               string    `json:"prefix_hash,omitempty"`
+	PrefixBlockCount         int       `json:"prefix_block_count,omitempty"`
+	PrefixCacheMatches       int       `json:"prefix_cache_matches,omitempty"`
+	PromptTokens             int64     `json:"prompt_tokens,omitempty"`
+	OutputTokens             int64     `json:"output_tokens,omitempty"`
+	TokenPressure            int64     `json:"token_pressure,omitempty"`
+	Stream                   bool      `json:"stream,omitempty"`
+	TotalActiveStreams       int64     `json:"total_active_streams,omitempty"`
+	TotalTokenPressure       int64     `json:"total_token_pressure,omitempty"`
+	ContainerActiveStreams   int64     `json:"container_active_streams,omitempty"`
+	ContainerTokenPressure   int64     `json:"container_token_pressure,omitempty"`
+	EngineRunningRequests    int64     `json:"engine_running_requests,omitempty"`
+	EngineWaitingRequests    int64     `json:"engine_waiting_requests,omitempty"`
+	EngineTTFTMs             int64     `json:"engine_ttft_ms,omitempty"`
+	EngineTPOTMs             int64     `json:"engine_tpot_ms,omitempty"`
+	EngineDecodeTokensPerS   int64     `json:"engine_decode_tokens_per_s,omitempty"`
+	EngineGPUCacheUsageMilli int64     `json:"engine_gpu_cache_usage_milli,omitempty"`
+	EnginePrefixCacheMilli   int64     `json:"engine_prefix_cache_hit_milli,omitempty"`
+	QueueWaitMs              int64     `json:"queue_wait_ms,omitempty"`
+	FirstResponseMs          int64     `json:"first_response_ms,omitempty"`
+	DurationMs               int64     `json:"duration_ms,omitempty"`
+	StatusCode               int       `json:"status_code,omitempty"`
+	BackendError             bool      `json:"backend_error,omitempty"`
+	ErrorMessage             string    `json:"error_message,omitempty"`
 }
 
 type EventQuery struct {

@@ -38,6 +38,8 @@ from .client.deployment import Deployment
 from .client.task import Task
 from .type import (
     GpuType,
+    LLMConfig,
+    LLMTokenPressureAutoscaler,
     Pool,
     PricingPolicy,
     PricingPolicyCostModel,
@@ -61,6 +63,8 @@ __all__ = [
     "Container",
     "env",
     "GpuType",
+    "LLMConfig",
+    "LLMTokenPressureAutoscaler",
     "Pool",
     "PythonVersion",
     "Output",

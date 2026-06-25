@@ -3,13 +3,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from beta9 import Image, Service
+from beta9 import Image, LLMConfig, LLMTokenPressureAutoscaler, Pod, Service
 from beta9.abstractions.service import (
     command_from_dockerfile,
     ports_from_dockerfile,
     service_image_implies_default_port,
 )
 from beta9.cli.deployment import (
+    _apply_llm_metadata,
     _generate_service_module,
     _merge_port_options,
     _service_image_option,
@@ -173,6 +174,183 @@ class TestService(TestCase):
         self.assertEqual(service.memory, 512)
         self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
         self.assertTrue(service.tcp)
+
+    def test_generate_service_module_applies_llm_metadata(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": None,
+            "image": image,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "llm_enabled": True,
+            "llm_model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+            "llm_engine": "vllm",
+            "llm_served_model_name": "qwen",
+            "llm_context_length": 4096,
+            "llm_tokenizer": "qwen-tokenizer",
+            "llm_metrics_path": "/metrics",
+            "llm_slo_tier": "standard",
+        }
+
+        service = _generate_service_module("llm-app", kwargs)
+
+        self.assertEqual(service.app_kind, "llm_model")
+        self.assertEqual(service.serving_protocol, "openai")
+        self.assertEqual(service.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
+        self.assertEqual(service.llm.engine, "vllm")
+        self.assertEqual(service.llm.served_model_name, "qwen")
+        self.assertEqual(service.llm.context_length, 4096)
+        self.assertEqual(service.llm.tokenizer, "qwen-tokenizer")
+        self.assertEqual(service.llm.metrics_path, "/metrics")
+        self.assertEqual(service.llm.slo_tier, "standard")
+        self.assertIsInstance(service.autoscaler, LLMTokenPressureAutoscaler)
+
+    def test_llm_service_with_pool_defaults_to_any_gpu(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            pool="gpu-pool",
+            llm=LLMConfig(model_id="Qwen/Qwen2.5-0.5B-Instruct"),
+        )
+
+        self.assertEqual(service.gpu, "any")
+        self.assertEqual(service.gpu_count, 1)
+
+    def test_apply_llm_metadata_defaults_pool_pod_to_any_gpu(self):
+        pod = Pod(image=Image.from_id("img-123"), entrypoint=["vllm", "serve"], ports=[8000], pool="gpu-pool")
+
+        ok = _apply_llm_metadata(pod, {"llm_enabled": True})
+
+        self.assertTrue(ok)
+        self.assertEqual(pod.gpu, "any")
+        self.assertEqual(pod.gpu_count, 1)
+
+    def test_generate_service_module_infers_llm_metadata_from_vllm_dockerfile(self):
+        image = Image()
+        image.dockerfile = "\n".join(
+            [
+                "FROM vllm/vllm-openai:latest",
+                "ENV MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct",
+                'CMD ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--served-model-name", "qwen", "--max-model-len", "4096"]',
+            ]
+        )
+        kwargs = {
+            "dockerfile": image,
+            "image": None,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "llm_enabled": True,
+        }
+
+        service = _generate_service_module("llm-app", kwargs)
+
+        self.assertEqual(service.app_kind, "llm_model")
+        self.assertEqual(service.serving_protocol, "openai")
+        self.assertEqual(service.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
+        self.assertEqual(service.llm.engine, "vllm")
+        self.assertEqual(service.llm.served_model_name, "qwen")
+        self.assertEqual(service.llm.context_length, 4096)
+        self.assertEqual(service.llm.metrics_path, "/metrics")
+
+    def test_generate_service_module_does_not_require_vllm_model_metadata(self):
+        image = Image()
+        image.dockerfile = 'FROM python:3.12-slim\nCMD ["vllm", "serve", "meta-llama/Llama-3.2-1B-Instruct"]\n'
+        kwargs = {
+            "dockerfile": image,
+            "image": None,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "llm_enabled": True,
+        }
+
+        service = _generate_service_module("llm-app", kwargs)
+
+        self.assertEqual(service.llm.engine, "vllm")
+        self.assertEqual(service.llm.model_id, "")
+        self.assertEqual(service.llm.context_length, 0)
+
+    def test_generate_service_module_ignores_invalid_llm_context_hint(self):
+        image = Image()
+        image.dockerfile = "\n".join(
+            [
+                "FROM vllm/vllm-openai:latest",
+                'CMD ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--max-model-len", "4096tokens"]',
+            ]
+        )
+        kwargs = {
+            "dockerfile": image,
+            "image": None,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "llm_enabled": True,
+        }
+
+        service = _generate_service_module("llm-app", kwargs)
+
+        self.assertEqual(service.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
+        self.assertEqual(service.llm.context_length, 0)
+
+    def test_generate_service_module_allows_llm_without_inferred_model(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": None,
+            "image": image,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "llm_enabled": True,
+        }
+
+        service = _generate_service_module("llm-app", kwargs)
+
+        self.assertEqual(service.app_kind, "llm_model")
+        self.assertEqual(service.serving_protocol, "openai")
+        self.assertEqual(service.llm.model_id, "")
+        self.assertEqual(service.llm.context_length, 0)
+
+    def test_service_llm_config_defaults_metadata(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            llm=LLMConfig(model_id="Qwen/Qwen2.5-0.5B-Instruct"),
+        )
+        pod = Pod(
+            image=Image.from_id("img-123"),
+            entrypoint=["vllm", "serve"],
+            ports=[8000],
+            llm=LLMConfig(model_id="meta-llama/Llama-3.2-1B-Instruct"),
+        )
+
+        self.assertEqual(service.app_kind, "llm_model")
+        self.assertEqual(service.serving_protocol, "openai")
+        self.assertEqual(service.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
+        self.assertIsInstance(service.autoscaler, LLMTokenPressureAutoscaler)
+        self.assertEqual(pod.app_kind, "llm_model")
+        self.assertEqual(pod.serving_protocol, "openai")
+        self.assertEqual(pod.llm.model_id, "meta-llama/Llama-3.2-1B-Instruct")
+
+    def test_apply_llm_metadata_tags_existing_pod(self):
+        pod = Pod(image=Image.from_id("img-123"), entrypoint=["vllm", "serve"], ports=[8000])
+        ok = _apply_llm_metadata(
+            pod,
+            {
+                "llm_model_id": "meta-llama/Llama-3.2-1B-Instruct",
+                "llm_engine": "vllm",
+                "llm_context_length": 8192,
+            },
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(pod.app_kind, "llm_model")
+        self.assertEqual(pod.serving_protocol, "openai")
+        self.assertEqual(pod.llm.model_id, "meta-llama/Llama-3.2-1B-Instruct")
+        self.assertEqual(pod.llm.engine, "vllm")
+        self.assertEqual(pod.llm.context_length, 8192)
+        self.assertIsInstance(pod.autoscaler, LLMTokenPressureAutoscaler)
 
     def test_empty_cli_port_override_preserves_inferred_service_port(self):
         image = Image.from_id("img-123")

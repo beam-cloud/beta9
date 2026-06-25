@@ -285,6 +285,7 @@ class Pool:
 
 
 QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"
+LLM_TOKEN_PRESSURE_AUTOSCALER_TYPE = "llm_token_pressure"
 DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 DEFAULT_AUTOSCALER_MIN_CONTAINERS = 0
@@ -300,6 +301,22 @@ class Autoscaler:
 @dataclass
 class QueueDepthAutoscaler(Autoscaler):
     pass
+
+
+@dataclass
+class LLMTokenPressureAutoscaler(Autoscaler):
+    pass
+
+
+@dataclass
+class LLMConfig:
+    model_id: str = ""
+    engine: str = ""
+    served_model_name: str = ""
+    context_length: int = 0
+    tokenizer: str = ""
+    metrics_path: str = ""
+    slo_tier: str = ""
 
 
 @dataclass
@@ -338,4 +355,5 @@ class PricingPolicy:
 
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
+    LLMTokenPressureAutoscaler: LLM_TOKEN_PRESSURE_AUTOSCALER_TYPE,
 }

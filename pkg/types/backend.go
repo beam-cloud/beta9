@@ -541,7 +541,21 @@ type StubConfigV1 struct {
 	BlockNetwork       bool            `json:"block_network"`
 	AllowList          []string        `json:"allow_list"`
 	DockerEnabled      bool            `json:"docker_enabled"`
+	IsService          bool            `json:"is_service"`
+	AppKind            string          `json:"app_kind,omitempty"`
+	ServingProtocol    string          `json:"serving_protocol,omitempty"`
+	LLM                *LLMConfig      `json:"llm,omitempty"`
 	Pool               *PoolConfig     `json:"pool,omitempty"`
+}
+
+type LLMConfig struct {
+	ModelID         string `json:"model_id,omitempty" serializer:"model_id,omitempty"`
+	Engine          string `json:"engine,omitempty" serializer:"engine,omitempty"`
+	ServedModelName string `json:"served_model_name,omitempty" serializer:"served_model_name,omitempty"`
+	ContextLength   int    `json:"context_length,omitempty" serializer:"context_length,omitempty"`
+	Tokenizer       string `json:"tokenizer,omitempty" serializer:"tokenizer,omitempty"`
+	MetricsPath     string `json:"metrics_path,omitempty" serializer:"metrics_path,omitempty"`
+	SLOTier         string `json:"slo_tier,omitempty" serializer:"slo_tier,omitempty"`
 }
 
 type PoolConfig struct {
@@ -655,7 +669,8 @@ func (c *StubConfigV1) RequiresGPU() bool {
 type AutoscalerType string
 
 const (
-	QueueDepthAutoscaler AutoscalerType = "queue_depth"
+	QueueDepthAutoscaler       AutoscalerType = "queue_depth"
+	LLMTokenPressureAutoscaler AutoscalerType = "llm_token_pressure"
 )
 
 type Autoscaler struct {

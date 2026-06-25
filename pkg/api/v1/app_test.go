@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,25 @@ type appBackendRepo struct {
 	apps             repoCommon.CursorPaginationInfo[types.App]
 	deploymentsByApp map[string][]types.DeploymentWithRelated
 	stubsByApp       map[string][]types.StubWithRelated
+}
+
+type appContainerRepo struct {
+	repository.ContainerRepository
+	states []types.ContainerState
+}
+
+func (r *appContainerRepo) GetActiveContainersByWorkspaceId(_ string) ([]types.ContainerState, error) {
+	return r.states, nil
+}
+
+func (r *appContainerRepo) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
+	states := make([]types.ContainerState, 0)
+	for _, state := range r.states {
+		if state.StubId == stubId {
+			states = append(states, state)
+		}
+	}
+	return states, nil
 }
 
 func (r *appBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalId string) (types.Workspace, error) {
@@ -125,5 +145,167 @@ func TestListAppWithLatestActivityAllowsAppsWithoutActivity(t *testing.T) {
 
 	if !strings.Contains(body, appWithStub.ExternalId) {
 		t.Fatalf("expected response to include app with stub %q: %s", appWithStub.ExternalId, body)
+	}
+}
+
+func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
+	workspace := &types.Workspace{Id: 1, ExternalId: "workspace-1", Name: "Workspace 1"}
+	appWithDeployment := types.App{Id: 1, ExternalId: "app-deploy", Name: "App Deploy", WorkspaceId: workspace.Id}
+	appWithStub := types.App{Id: 2, ExternalId: "app-stub", Name: "App Stub", WorkspaceId: workspace.Id}
+
+	appGroup := &AppGroup{
+		backendRepo: &appBackendRepo{
+			workspace: workspace,
+			apps: repoCommon.CursorPaginationInfo[types.App]{
+				Data: []types.App{appWithDeployment, appWithStub},
+				Next: "",
+			},
+			deploymentsByApp: map[string][]types.DeploymentWithRelated{
+				appWithDeployment.ExternalId: {
+					{
+						Deployment: types.Deployment{
+							ExternalId:  "deployment-1",
+							Name:        "Deployment 1",
+							WorkspaceId: workspace.Id,
+							AppId:       appWithDeployment.Id,
+						},
+						Stub: types.Stub{
+							Id:          1,
+							ExternalId:  "stub-deploy",
+							Name:        "Stub Deploy",
+							Type:        types.StubType(types.StubTypePodDeployment),
+							Config:      `{"pool":{"name":"gpu-pool"},"is_service":true,"app_kind":"llm_model","serving_protocol":"openai","llm":{"model_id":"Qwen/Qwen2.5-0.5B-Instruct","engine":"vllm","served_model_name":"qwen-test","context_length":4096,"metrics_path":"/metrics","slo_tier":"standard"}}`,
+							WorkspaceId: workspace.Id,
+							AppId:       appWithDeployment.Id,
+						},
+						Workspace: *workspace,
+						App:       appWithDeployment,
+					},
+				},
+			},
+			stubsByApp: map[string][]types.StubWithRelated{
+				appWithStub.ExternalId: {
+					{
+						Stub: types.Stub{
+							Id:          2,
+							ExternalId:  "stub-latest",
+							Name:        "Stub Latest",
+							Type:        types.StubType(types.StubTypePodDeployment),
+							Config:      `{"pool":{"name":"cpu-pool"},"ports":[8080]}`,
+							WorkspaceId: workspace.Id,
+							AppId:       appWithStub.Id,
+						},
+						Workspace: *workspace,
+						App:       &appWithStub,
+					},
+				},
+			},
+		},
+		containerRepo: &appContainerRepo{
+			states: []types.ContainerState{
+				{StubId: "stub-deploy", Status: types.ContainerStatusRunning},
+				{StubId: "stub-deploy", Status: types.ContainerStatusRunning},
+				{StubId: "stub-deploy", Status: types.ContainerStatusPending},
+				{StubId: "stub-latest", Status: types.ContainerStatusRunning},
+				{StubId: "old-stub", Status: types.ContainerStatusRunning},
+			},
+		},
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/workspace-1/latest", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues(workspace.ExternalId)
+
+	err := appGroup.ListAppWithLatestActivity(&auth.HttpAuthContext{
+		Context: ctx,
+		AuthInfo: &auth.AuthInfo{
+			Workspace: workspace,
+			Token:     &types.Token{TokenType: types.TokenTypeWorkspacePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Data []struct {
+			ID                string `json:"id"`
+			PoolName          string `json:"pool_name"`
+			RunningContainers int    `json:"running_containers"`
+			IsService         bool   `json:"is_service"`
+			AppKind           string `json:"app_kind"`
+			ServingProtocol   string `json:"serving_protocol"`
+			LLM               struct {
+				ModelID         string `json:"model_id"`
+				Engine          string `json:"engine"`
+				ServedModelName string `json:"served_model_name"`
+				ContextLength   int    `json:"context_length"`
+				MetricsPath     string `json:"metrics_path"`
+				SLOTier         string `json:"slo_tier"`
+			} `json:"llm"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	byID := map[string]struct {
+		PoolName          string
+		RunningContainers int
+		IsService         bool
+		AppKind           string
+		ServingProtocol   string
+		LLM               struct {
+			ModelID         string `json:"model_id"`
+			Engine          string `json:"engine"`
+			ServedModelName string `json:"served_model_name"`
+			ContextLength   int    `json:"context_length"`
+			MetricsPath     string `json:"metrics_path"`
+			SLOTier         string `json:"slo_tier"`
+		}
+	}{}
+	for _, app := range response.Data {
+		byID[app.ID] = struct {
+			PoolName          string
+			RunningContainers int
+			IsService         bool
+			AppKind           string
+			ServingProtocol   string
+			LLM               struct {
+				ModelID         string `json:"model_id"`
+				Engine          string `json:"engine"`
+				ServedModelName string `json:"served_model_name"`
+				ContextLength   int    `json:"context_length"`
+				MetricsPath     string `json:"metrics_path"`
+				SLOTier         string `json:"slo_tier"`
+			}
+		}{
+			PoolName:          app.PoolName,
+			RunningContainers: app.RunningContainers,
+			IsService:         app.IsService,
+			AppKind:           app.AppKind,
+			ServingProtocol:   app.ServingProtocol,
+			LLM:               app.LLM,
+		}
+	}
+
+	deploymentApp := byID[appWithDeployment.ExternalId]
+	if deploymentApp.PoolName != "gpu-pool" || deploymentApp.RunningContainers != 2 || !deploymentApp.IsService {
+		t.Fatalf("unexpected deployment app enrichment: %+v", deploymentApp)
+	}
+	if deploymentApp.AppKind != "llm_model" || deploymentApp.ServingProtocol != "openai" || deploymentApp.LLM.ModelID != "Qwen/Qwen2.5-0.5B-Instruct" || deploymentApp.LLM.ContextLength != 4096 {
+		t.Fatalf("unexpected deployment app llm enrichment: %+v", deploymentApp)
+	}
+
+	stubApp := byID[appWithStub.ExternalId]
+	if stubApp.PoolName != "cpu-pool" || stubApp.RunningContainers != 1 || !stubApp.IsService {
+		t.Fatalf("unexpected stub app enrichment: %+v", stubApp)
 	}
 }

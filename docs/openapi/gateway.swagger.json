@@ -2666,6 +2666,18 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPoolConfig"
+        },
+        "isService": {
+          "type": "boolean"
+        },
+        "appKind": {
+          "type": "string"
+        },
+        "servingProtocol": {
+          "type": "string"
+        },
+        "llm": {
+          "$ref": "#/definitions/gatewayLLMConfig"
         }
       }
     },
@@ -2836,6 +2848,33 @@
         },
         "bootstrap": {
           "$ref": "#/definitions/gatewayAgentBootstrapConfig"
+        }
+      }
+    },
+    "gatewayLLMConfig": {
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "engine": {
+          "type": "string"
+        },
+        "servedModelName": {
+          "type": "string"
+        },
+        "contextLength": {
+          "type": "string",
+          "format": "int64"
+        },
+        "tokenizer": {
+          "type": "string"
+        },
+        "metricsPath": {
+          "type": "string"
+        },
+        "sloTier": {
+          "type": "string"
         }
       }
     },

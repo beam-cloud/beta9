@@ -8,6 +8,7 @@ import (
 type podAutoscalerSample struct {
 	CurrentContainers int
 	TotalConnections  int64
+	LLMPressure       llmPressureSnapshot
 }
 
 // podAutoscalerSampleFunc retrieves an autoscaling sample from the pod instance
@@ -30,9 +31,18 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 		totalConnections = i.buffer.totalConnectionCount()
 	}
 
+	var llmPressure llmPressureSnapshot
+	if i.Rdb != nil && i.Workspace != nil && i.Stub != nil {
+		llmPressure, err = sharedPodLLMPressure(i.Ctx, i.Rdb, i.Workspace.Name, i.Stub.ExternalId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	sample := &podAutoscalerSample{
 		CurrentContainers: currentContainers,
 		TotalConnections:  totalConnections,
+		LLMPressure:       llmPressure,
 	}
 
 	return sample, nil
@@ -51,11 +61,19 @@ func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.Autoscal
 	}
 
 	if i.Stub.Type == types.StubType(types.StubTypePodDeployment) {
-		desiredContainers = desiredPodDeploymentContainers(
-			i.StubConfig,
-			s.TotalConnections,
-			i.AppConfig.GatewayService.StubLimits.MaxReplicas,
-		)
+		if i.StubConfig != nil && i.StubConfig.Autoscaler != nil && i.StubConfig.Autoscaler.Type == types.LLMTokenPressureAutoscaler {
+			desiredContainers = desiredPodLLMDeploymentContainers(
+				i.StubConfig,
+				s,
+				i.AppConfig.GatewayService.StubLimits.MaxReplicas,
+			)
+		} else {
+			desiredContainers = desiredPodDeploymentContainers(
+				i.StubConfig,
+				s.TotalConnections,
+				i.AppConfig.GatewayService.StubLimits.MaxReplicas,
+			)
+		}
 	}
 
 	return &abstractions.AutoscalerResult{
@@ -64,7 +82,55 @@ func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.Autoscal
 	}
 }
 
+func desiredPodLLMDeploymentContainers(config *types.StubConfigV1, sample *podAutoscalerSample, maxReplicasLimit uint64) int {
+	if sample == nil {
+		return desiredPodDeploymentContainers(config, 0, maxReplicasLimit)
+	}
+
+	minContainers, maxContainers, tasksPerContainer := podAutoscalerBounds(config, maxReplicasLimit)
+	if sample.TotalConnections <= 0 && sample.LLMPressure.ActiveStreams <= 0 && sample.LLMPressure.TokenPressure <= 0 {
+		return minContainers
+	}
+
+	desiredByConnections := ceilDiv(maxInt64(sample.TotalConnections, sample.LLMPressure.ActiveStreams), tasksPerContainer)
+	tokensPerContainer := int64(llmDefaultContextLen) * tasksPerContainer
+	if config != nil && config.LLM != nil && config.LLM.ContextLength > 0 {
+		tokensPerContainer = int64(config.LLM.ContextLength) * tasksPerContainer
+	}
+	if tokensPerContainer <= 0 {
+		tokensPerContainer = int64(llmDefaultContextLen)
+	}
+	desiredByTokens := ceilDiv(sample.LLMPressure.TokenPressure, tokensPerContainer)
+	desiredContainers := int(maxInt64(desiredByConnections, desiredByTokens))
+
+	if desiredContainers < minContainers {
+		return minContainers
+	}
+	if desiredContainers > maxContainers {
+		return maxContainers
+	}
+	return desiredContainers
+}
+
 func desiredPodDeploymentContainers(config *types.StubConfigV1, totalConnections int64, maxReplicasLimit uint64) int {
+	minContainers, maxContainers, tasksPerContainer := podAutoscalerBounds(config, maxReplicasLimit)
+
+	if totalConnections <= 0 {
+		return minContainers
+	}
+
+	desiredContainers := int(ceilDiv(totalConnections, tasksPerContainer))
+
+	if desiredContainers < minContainers {
+		return minContainers
+	}
+	if desiredContainers > maxContainers {
+		return maxContainers
+	}
+	return desiredContainers
+}
+
+func podAutoscalerBounds(config *types.StubConfigV1, maxReplicasLimit uint64) (int, int, int64) {
 	minContainers := 0
 	maxContainers := 1
 	tasksPerContainer := int64(1)
@@ -83,21 +149,25 @@ func desiredPodDeploymentContainers(config *types.StubConfigV1, totalConnections
 	if minContainers > maxContainers {
 		minContainers = maxContainers
 	}
+	if tasksPerContainer <= 0 {
+		tasksPerContainer = 1
+	}
+	return minContainers, maxContainers, tasksPerContainer
+}
 
-	if totalConnections <= 0 {
-		return minContainers
+func ceilDiv(value, divisor int64) int64 {
+	if value <= 0 {
+		return 0
 	}
+	if divisor <= 0 {
+		divisor = 1
+	}
+	return (value + divisor - 1) / divisor
+}
 
-	desiredContainers := int(totalConnections / tasksPerContainer)
-	if totalConnections%tasksPerContainer > 0 {
-		desiredContainers++
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
 	}
-
-	if desiredContainers < minContainers {
-		return minContainers
-	}
-	if desiredContainers > maxContainers {
-		return maxContainers
-	}
-	return desiredContainers
+	return b
 }
