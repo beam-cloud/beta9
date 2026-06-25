@@ -32,6 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shared-prefix", default="Shared prefix for Beam LLM routing benchmark.")
     parser.add_argument("--prompt", default="Return one concise sentence confirming inference is healthy.")
     parser.add_argument("--session", default=f"llm-bench-{uuid.uuid4().hex[:12]}")
+    parser.add_argument(
+        "--session-mode",
+        choices=("fixed", "per-request", "none"),
+        default="fixed",
+        help="How to send the Beam LLM session header for locality tests.",
+    )
     parser.add_argument("--api-key", default=os.getenv("OPENAI_API_KEY", ""))
     parser.add_argument("--json-output", default="")
     parser.add_argument("--app-gateway", default=os.getenv("BEAM_APP_GATEWAY", "https://app.stage.beam.cloud"))
@@ -96,9 +102,12 @@ def request_json(
 
 def inference_headers(args: argparse.Namespace, run_index: int) -> dict[str, str]:
     headers = {
-        "X-Beam-LLM-Session": args.session,
         "X-Request-ID": f"{args.session}-{run_index}",
     }
+    if args.session_mode == "fixed":
+        headers["X-Beam-LLM-Session"] = args.session
+    elif args.session_mode == "per-request":
+        headers["X-Beam-LLM-Session"] = f"{args.session}-{run_index}"
     if args.api_key:
         headers["Authorization"] = f"Bearer {args.api_key}"
     return headers
@@ -372,6 +381,7 @@ def main() -> int:
         "endpoint": endpoint,
         "model": args.model,
         "session": args.session,
+        "session_mode": args.session_mode,
         "started_at": iso(start),
         "ended_at": iso(end),
         "summary": summarize_results(results, wall_seconds),
