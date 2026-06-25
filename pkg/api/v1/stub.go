@@ -674,7 +674,7 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	setFixedReplicaCount(&stubConfig, req.Containers)
+	stubConfig.SetFixedReplicaCount(req.Containers)
 
 	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to update stub config")
@@ -693,19 +693,6 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 		"ok":         true,
 		"containers": req.Containers,
 	})
-}
-
-func setFixedReplicaCount(config *types.StubConfigV1, containers uint) {
-	if config.Autoscaler == nil {
-		config.Autoscaler = &types.Autoscaler{
-			Type:              types.QueueDepthAutoscaler,
-			TasksPerContainer: 1,
-			MaxContainers:     1,
-			MinContainers:     0,
-		}
-	}
-	config.Autoscaler.MaxContainers = containers
-	config.Autoscaler.MinContainers = containers
 }
 
 func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {

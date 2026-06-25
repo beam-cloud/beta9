@@ -715,6 +715,23 @@ type Autoscaler struct {
 	MinContainers     uint           `json:"min_containers"`
 }
 
+func (c *StubConfigV1) SetFixedReplicaCount(containers uint) {
+	if c.Autoscaler == nil {
+		c.Autoscaler = &Autoscaler{
+			Type:              QueueDepthAutoscaler,
+			TasksPerContainer: 1,
+		}
+	}
+	if c.Autoscaler.Type == "" {
+		c.Autoscaler.Type = QueueDepthAutoscaler
+	}
+	if c.Autoscaler.TasksPerContainer == 0 {
+		c.Autoscaler.TasksPerContainer = 1
+	}
+	c.Autoscaler.MinContainers = containers
+	c.Autoscaler.MaxContainers = containers
+}
+
 // @go2proto
 type App struct {
 	Id          uint     `db:"id" json:"id" serializer:"id,source:external_id"`

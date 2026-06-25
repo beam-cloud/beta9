@@ -324,16 +324,7 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 		return err
 	}
 
-	if stubConfig.Autoscaler == nil {
-		stubConfig.Autoscaler = &types.Autoscaler{
-			Type:              types.QueueDepthAutoscaler,
-			TasksPerContainer: 1,
-			MaxContainers:     1,
-			MinContainers:     0,
-		}
-	}
-	stubConfig.Autoscaler.MaxContainers = containers
-	stubConfig.Autoscaler.MinContainers = containers
+	stubConfig.SetFixedReplicaCount(containers)
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {
