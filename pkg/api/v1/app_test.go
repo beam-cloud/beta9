@@ -174,7 +174,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 							ExternalId:  "stub-deploy",
 							Name:        "Stub Deploy",
 							Type:        types.StubType(types.StubTypePodDeployment),
-							Config:      `{"pool":{"name":"gpu-pool"},"is_service":true,"app_kind":"llm_model","serving_protocol":"openai","llm":{"model_id":"Qwen/Qwen2.5-0.5B-Instruct","engine":"vllm","served_model_name":"qwen-test","context_length":4096,"metrics_path":"/metrics","slo_tier":"standard"}}`,
+							Config:      `{"pool":{"name":"gpu-pool"},"is_service":true,"serving":{"app_kind":"llm_model","serving_protocol":"openai","llm":{"model_id":"Qwen/Qwen2.5-0.5B-Instruct","engine":"vllm","served_model_name":"qwen-test","context_length":4096,"metrics_path":"/metrics","slo_tier":"standard"}}}`,
 							WorkspaceId: workspace.Id,
 							AppId:       appWithDeployment.Id,
 						},

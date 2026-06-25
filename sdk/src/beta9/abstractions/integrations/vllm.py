@@ -13,7 +13,14 @@ from ...channel import with_grpc_error_handling
 from ...clients.endpoint import StartEndpointServeRequest, StartEndpointServeResponse
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
-from ...type import Autoscaler, GpuType, GpuTypeAlias, LLMConfig, QueueDepthAutoscaler
+from ...type import (
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    LLMConfig,
+    QueueDepthAutoscaler,
+    ServingConfig,
+)
 
 DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
 DEFAULT_VLLM_CACHE_ROOT = "./vllm_cache_root"
@@ -271,15 +278,18 @@ class VLLM(ASGI):
             autoscaler=autoscaler,
         )
 
-        self.app_kind = VLLM_APP_KIND
-        self.serving_protocol = VLLM_SERVING_PROTOCOL
-        self.llm = LLMConfig(
-            model_id=vllm_args.model,
-            engine="vllm",
-            served_model_name=_served_model_name(vllm_args.served_model_name) or vllm_args.model,
-            context_length=vllm_args.max_model_len or 0,
-            tokenizer=vllm_args.tokenizer or "",
-            metrics_path="/metrics",
+        self.serving = ServingConfig(
+            app_kind=VLLM_APP_KIND,
+            serving_protocol=VLLM_SERVING_PROTOCOL,
+            llm=LLMConfig(
+                model_id=vllm_args.model,
+                engine="vllm",
+                served_model_name=_served_model_name(vllm_args.served_model_name)
+                or vllm_args.model,
+                context_length=vllm_args.max_model_len or 0,
+                tokenizer=vllm_args.tokenizer or "",
+                metrics_path="/metrics",
+            ),
         )
         self.chat_template_url = vllm_args.chat_template_url
         self.engine_args = vllm_args

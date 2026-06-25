@@ -16,8 +16,8 @@ import (
 )
 
 func llmMetricsPath(config *types.StubConfigV1) string {
-	if config != nil && config.LLM != nil && strings.TrimSpace(config.LLM.MetricsPath) != "" {
-		return "/" + strings.TrimPrefix(strings.TrimSpace(config.LLM.MetricsPath), "/")
+	if llm := config.EffectiveLLMConfig(); llm != nil && strings.TrimSpace(llm.MetricsPath) != "" {
+		return "/" + strings.TrimPrefix(strings.TrimSpace(llm.MetricsPath), "/")
 	}
 	return "/metrics"
 }

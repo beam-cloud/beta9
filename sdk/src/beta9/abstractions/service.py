@@ -2,7 +2,15 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple, Union
 
-from ..type import GpuType, GpuTypeAlias, LLMConfig, LLMTokenPressureAutoscaler, Pool, QueueDepthAutoscaler
+from ..type import (
+    GpuType,
+    GpuTypeAlias,
+    LLMConfig,
+    LLMTokenPressureAutoscaler,
+    Pool,
+    QueueDepthAutoscaler,
+    ServingConfig,
+)
 from .base.container import Container
 from .image import Image
 from .pod import Pod, PodInstance
@@ -186,11 +194,13 @@ class Service(Pod):
         app_kind: str = "",
         serving_protocol: str = "",
         llm: Optional[LLMConfig] = None,
+        serving: Optional[ServingConfig] = None,
     ) -> None:
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
 
-        if llm is not None and pool and not gpu and gpu_count == 0:
+        requested_llm = llm or (serving.llm if serving else None)
+        if requested_llm is not None and pool and not gpu and gpu_count == 0:
             gpu = GpuType.Any
             gpu_count = 1
 
@@ -232,6 +242,7 @@ class Service(Pod):
             app_kind=app_kind,
             serving_protocol=serving_protocol,
             llm=llm,
+            serving=serving,
         )
         self.is_service = True
         self.configure_replicas(

@@ -302,6 +302,13 @@ class LlmConfig(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class ServingConfig(betterproto.Message):
+    app_kind: str = betterproto.string_field(1)
+    serving_protocol: str = betterproto.string_field(2)
+    llm: "LlmConfig" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class TaskPolicy(betterproto.Message):
     timeout: int = betterproto.int64_field(1)
     max_retries: int = betterproto.uint32_field(2)
@@ -367,6 +374,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     app_kind: str = betterproto.string_field(43)
     serving_protocol: str = betterproto.string_field(44)
     llm: "LlmConfig" = betterproto.message_field(45)
+    serving: "ServingConfig" = betterproto.message_field(46)
 
 
 @dataclass(eq=False, repr=False)

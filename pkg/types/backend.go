@@ -542,10 +542,20 @@ type StubConfigV1 struct {
 	AllowList          []string        `json:"allow_list"`
 	DockerEnabled      bool            `json:"docker_enabled"`
 	IsService          bool            `json:"is_service"`
-	AppKind            string          `json:"app_kind,omitempty"`
-	ServingProtocol    string          `json:"serving_protocol,omitempty"`
-	LLM                *LLMConfig      `json:"llm,omitempty"`
-	Pool               *PoolConfig     `json:"pool,omitempty"`
+	Serving            *ServingConfig  `json:"serving,omitempty"`
+	// Deprecated: use Serving.
+	AppKind string `json:"app_kind,omitempty"`
+	// Deprecated: use Serving.
+	ServingProtocol string `json:"serving_protocol,omitempty"`
+	// Deprecated: use Serving.
+	LLM  *LLMConfig  `json:"llm,omitempty"`
+	Pool *PoolConfig `json:"pool,omitempty"`
+}
+
+type ServingConfig struct {
+	AppKind         string     `json:"app_kind,omitempty" serializer:"app_kind,omitempty"`
+	ServingProtocol string     `json:"serving_protocol,omitempty" serializer:"serving_protocol,omitempty"`
+	LLM             *LLMConfig `json:"llm,omitempty" serializer:"llm,omitempty"`
 }
 
 type LLMConfig struct {
@@ -556,6 +566,51 @@ type LLMConfig struct {
 	Tokenizer       string `json:"tokenizer,omitempty" serializer:"tokenizer,omitempty"`
 	MetricsPath     string `json:"metrics_path,omitempty" serializer:"metrics_path,omitempty"`
 	SLOTier         string `json:"slo_tier,omitempty" serializer:"slo_tier,omitempty"`
+}
+
+func (c *StubConfigV1) EffectiveServingConfig() *ServingConfig {
+	if c == nil {
+		return nil
+	}
+
+	serving := ServingConfig{}
+	if c.Serving != nil {
+		serving = *c.Serving
+	}
+	if serving.AppKind == "" {
+		serving.AppKind = c.AppKind
+	}
+	if serving.ServingProtocol == "" {
+		serving.ServingProtocol = c.ServingProtocol
+	}
+	if serving.LLM == nil {
+		serving.LLM = c.LLM
+	}
+	if serving.AppKind == "" && serving.ServingProtocol == "" && serving.LLM == nil {
+		return nil
+	}
+	return &serving
+}
+
+func (c *StubConfigV1) EffectiveAppKind() string {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.AppKind
+	}
+	return ""
+}
+
+func (c *StubConfigV1) EffectiveServingProtocol() string {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.ServingProtocol
+	}
+	return ""
+}
+
+func (c *StubConfigV1) EffectiveLLMConfig() *LLMConfig {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.LLM
+	}
+	return nil
 }
 
 type PoolConfig struct {

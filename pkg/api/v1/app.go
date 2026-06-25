@@ -191,9 +191,9 @@ func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stu
 		app.PoolName = config.Pool.Name
 	}
 	app.IsService = config.IsService || isLegacyServiceStub(stub.Type, config)
-	app.AppKind = config.AppKind
-	app.ServingProtocol = config.ServingProtocol
-	app.LLM = config.LLM
+	app.AppKind = config.EffectiveAppKind()
+	app.ServingProtocol = config.EffectiveServingProtocol()
+	app.LLM = config.EffectiveLLMConfig()
 }
 
 func isLegacyServiceStub(stubType types.StubType, config *types.StubConfigV1) bool {

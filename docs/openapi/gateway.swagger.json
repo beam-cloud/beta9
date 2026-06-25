@@ -2678,6 +2678,9 @@
         },
         "llm": {
           "$ref": "#/definitions/gatewayLLMConfig"
+        },
+        "serving": {
+          "$ref": "#/definitions/gatewayServingConfig"
         }
       }
     },
@@ -3696,6 +3699,20 @@
       "properties": {
         "name": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayServingConfig": {
+      "type": "object",
+      "properties": {
+        "appKind": {
+          "type": "string"
+        },
+        "servingProtocol": {
+          "type": "string"
+        },
+        "llm": {
+          "$ref": "#/definitions/gatewayLLMConfig"
         }
       }
     },

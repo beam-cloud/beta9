@@ -250,8 +250,9 @@ func truncateEventError(message string) string {
 }
 
 func llmEngine(config *types.StubConfigV1) string {
-	if config == nil || config.LLM == nil {
+	llm := config.EffectiveLLMConfig()
+	if llm == nil {
 		return ""
 	}
-	return config.LLM.Engine
+	return llm.Engine
 }

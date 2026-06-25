@@ -14,30 +14,32 @@ func llmEnabled(config *types.StubConfigV1) bool {
 	if config == nil {
 		return false
 	}
-	return strings.EqualFold(config.ServingProtocol, llmServingProtocolOpenAI)
+	return strings.EqualFold(config.EffectiveServingProtocol(), llmServingProtocolOpenAI)
 }
 
 func llmConfiguredModel(config *types.StubConfigV1) string {
-	if config == nil || config.LLM == nil {
+	llm := config.EffectiveLLMConfig()
+	if llm == nil {
 		return ""
 	}
-	if config.LLM.ServedModelName != "" {
-		return config.LLM.ServedModelName
+	if llm.ServedModelName != "" {
+		return llm.ServedModelName
 	}
-	return config.LLM.ModelID
+	return llm.ModelID
 }
 
 func llmContextLength(config *types.StubConfigV1) int64 {
-	if config == nil || config.LLM == nil || config.LLM.ContextLength <= 0 {
+	llm := config.EffectiveLLMConfig()
+	if llm == nil || llm.ContextLength <= 0 {
 		return llmDefaultContextLen
 	}
-	return int64(config.LLM.ContextLength)
+	return int64(llm.ContextLength)
 }
 
 func llmReadinessProbePaths(config *types.StubConfigV1) []string {
 	paths := []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
-	if config != nil && config.LLM != nil && strings.TrimSpace(config.LLM.MetricsPath) != "" {
-		paths = append(paths, config.LLM.MetricsPath)
+	if llm := config.EffectiveLLMConfig(); llm != nil && strings.TrimSpace(llm.MetricsPath) != "" {
+		paths = append(paths, llm.MetricsPath)
 	}
 
 	seen := map[string]struct{}{}

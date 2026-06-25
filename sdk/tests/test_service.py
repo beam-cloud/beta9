@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from beta9 import Image, LLMConfig, LLMTokenPressureAutoscaler, Pod, Service
+from beta9 import Image, LLMConfig, LLMTokenPressureAutoscaler, Pod, Service, ServingConfig
 from beta9.abstractions.service import (
     command_from_dockerfile,
     ports_from_dockerfile,
@@ -218,7 +218,12 @@ class TestService(TestCase):
         self.assertEqual(service.gpu_count, 1)
 
     def test_apply_llm_metadata_defaults_pool_pod_to_any_gpu(self):
-        pod = Pod(image=Image.from_id("img-123"), entrypoint=["vllm", "serve"], ports=[8000], pool="gpu-pool")
+        pod = Pod(
+            image=Image.from_id("img-123"),
+            entrypoint=["vllm", "serve"],
+            ports=[8000],
+            pool="gpu-pool",
+        )
 
         ok = _apply_llm_metadata(pod, {"llm_enabled": True})
 
@@ -256,7 +261,9 @@ class TestService(TestCase):
 
     def test_generate_service_module_does_not_require_vllm_model_metadata(self):
         image = Image()
-        image.dockerfile = 'FROM python:3.12-slim\nCMD ["vllm", "serve", "meta-llama/Llama-3.2-1B-Instruct"]\n'
+        image.dockerfile = (
+            'FROM python:3.12-slim\nCMD ["vllm", "serve", "meta-llama/Llama-3.2-1B-Instruct"]\n'
+        )
         kwargs = {
             "dockerfile": image,
             "image": None,
@@ -332,6 +339,20 @@ class TestService(TestCase):
         self.assertEqual(pod.app_kind, "llm_model")
         self.assertEqual(pod.serving_protocol, "openai")
         self.assertEqual(pod.llm.model_id, "meta-llama/Llama-3.2-1B-Instruct")
+
+    def test_service_llm_config_serializes_as_serving_config(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            serving=ServingConfig(llm=LLMConfig(model_id="Qwen/Qwen2.5-0.5B-Instruct")),
+        )
+
+        proto = service._serving_config_proto()
+
+        self.assertIsNotNone(proto)
+        self.assertEqual(proto.app_kind, "llm_model")
+        self.assertEqual(proto.serving_protocol, "openai")
+        self.assertEqual(proto.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
 
     def test_apply_llm_metadata_tags_existing_pod(self):
         pod = Pod(image=Image.from_id("img-123"), entrypoint=["vllm", "serve"], ports=[8000])

@@ -93,10 +93,7 @@ func desiredPodLLMDeploymentContainers(config *types.StubConfigV1, sample *podAu
 	}
 
 	desiredByConnections := ceilDiv(maxInt64(sample.TotalConnections, sample.LLMPressure.ActiveStreams), tasksPerContainer)
-	tokensPerContainer := int64(llmDefaultContextLen) * tasksPerContainer
-	if config != nil && config.LLM != nil && config.LLM.ContextLength > 0 {
-		tokensPerContainer = int64(config.LLM.ContextLength) * tasksPerContainer
-	}
+	tokensPerContainer := llmContextLength(config) * tasksPerContainer
 	if tokensPerContainer <= 0 {
 		tokensPerContainer = int64(llmDefaultContextLen)
 	}

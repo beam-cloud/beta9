@@ -22,6 +22,7 @@ from ...clients.gateway import (
     GetUrlResponse,
     LlmConfig as LLMConfigProto,
     SecretVar,
+    ServingConfig as ServingConfigProto,
 )
 from ...clients.gateway import (
     Schema as SchemaProto,
@@ -45,6 +46,7 @@ from ...type import (
     Pool,
     PricingPolicy,
     QueueDepthAutoscaler,
+    ServingConfig,
     TaskPolicy,
     normalize_gpu_type,
 )
@@ -129,6 +131,7 @@ class RunnerAbstraction(BaseAbstraction):
         app_kind: str = "",
         serving_protocol: str = "",
         llm: Optional[LLMConfig] = None,
+        serving: Optional[ServingConfig] = None,
     ) -> None:
         super().__init__()
 
@@ -177,9 +180,14 @@ class RunnerAbstraction(BaseAbstraction):
         self.checkpoint_enabled = checkpoint_enabled
         self.docker_enabled = docker_enabled
         self.is_service = False
-        self.app_kind = app_kind or ("llm_model" if llm else "")
-        self.serving_protocol = serving_protocol or ("openai" if llm else "")
-        self.llm = llm
+        self.serving = serving or ServingConfig(
+            app_kind=app_kind or ("llm_model" if llm else ""),
+            serving_protocol=serving_protocol or ("openai" if llm else ""),
+            llm=llm,
+        )
+        if self.serving.llm:
+            self.serving.app_kind = self.serving.app_kind or "llm_model"
+            self.serving.serving_protocol = self.serving.serving_protocol or "openai"
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
@@ -218,6 +226,53 @@ class RunnerAbstraction(BaseAbstraction):
             return self.client
         self.client = Client(token=self.config_context.token) if self.config_context.token else None
         return self.client
+
+    @property
+    def app_kind(self) -> str:
+        return self.serving.app_kind
+
+    @app_kind.setter
+    def app_kind(self, value: str) -> None:
+        self.serving.app_kind = value or ""
+
+    @property
+    def serving_protocol(self) -> str:
+        return self.serving.serving_protocol
+
+    @serving_protocol.setter
+    def serving_protocol(self, value: str) -> None:
+        self.serving.serving_protocol = value or ""
+
+    @property
+    def llm(self) -> Optional[LLMConfig]:
+        return self.serving.llm
+
+    @llm.setter
+    def llm(self, value: Optional[LLMConfig]) -> None:
+        self.serving.llm = value
+
+    def _serving_config_proto(self) -> Optional[ServingConfigProto]:
+        if not self.serving or not (
+            self.serving.app_kind or self.serving.serving_protocol or self.serving.llm
+        ):
+            return None
+
+        llm = self.serving.llm
+        return ServingConfigProto(
+            app_kind=self.serving.app_kind,
+            serving_protocol=self.serving.serving_protocol,
+            llm=LLMConfigProto(
+                model_id=llm.model_id,
+                engine=llm.engine,
+                served_model_name=llm.served_model_name,
+                context_length=llm.context_length,
+                tokenizer=llm.tokenizer,
+                metrics_path=llm.metrics_path,
+                slo_tier=llm.slo_tier,
+            )
+            if llm
+            else None,
+        )
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -658,19 +713,7 @@ class RunnerAbstraction(BaseAbstraction):
             allow_list=self.allow_list,
             pool=self.pool_config,
             is_service=self.is_service,
-            app_kind=self.app_kind,
-            serving_protocol=self.serving_protocol,
-            llm=LLMConfigProto(
-                model_id=self.llm.model_id,
-                engine=self.llm.engine,
-                served_model_name=self.llm.served_model_name,
-                context_length=self.llm.context_length,
-                tokenizer=self.llm.tokenizer,
-                metrics_path=self.llm.metrics_path,
-                slo_tier=self.llm.slo_tier,
-            )
-            if self.llm
-            else None,
+            serving=self._serving_config_proto(),
         )
 
     def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:

@@ -6,7 +6,7 @@ from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.service import Service, command_from_dockerfile, dockerfile_instructions
-from ..type import GpuType, LLMConfig, LLMTokenPressureAutoscaler
+from ..type import GpuType, LLMConfig, LLMTokenPressureAutoscaler, ServingConfig
 from .extraclick import env_vars_to_dict
 
 LLM_APP_KIND = "llm_model"
@@ -224,9 +224,11 @@ def service_llm_metadata(
         return None
 
     return {
-        "app_kind": LLM_APP_KIND,
-        "serving_protocol": LLM_SERVING_PROTOCOL,
-        "llm": llm_config,
+        "serving": ServingConfig(
+            app_kind=LLM_APP_KIND,
+            serving_protocol=LLM_SERVING_PROTOCOL,
+            llm=llm_config,
+        ),
     }
 
 
@@ -270,9 +272,7 @@ def apply_llm_metadata(user_obj, kwargs: Dict) -> bool:
         terminal.error("--llm is only supported for Pod and Service deployments.", exit=False)
         return False
 
-    target.app_kind = metadata["app_kind"]
-    target.serving_protocol = metadata["serving_protocol"]
-    target.llm = metadata["llm"]
+    target.serving = metadata["serving"]
     _enable_llm_autoscaler(target)
     _ensure_llm_pool_gpu(target)
     return True

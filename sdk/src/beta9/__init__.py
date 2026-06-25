@@ -45,6 +45,7 @@ from .type import (
     PricingPolicyCostModel,
     PythonVersion,
     QueueDepthAutoscaler,
+    ServingConfig,
     TaskPolicy,
 )
 
@@ -69,6 +70,7 @@ __all__ = [
     "PythonVersion",
     "Output",
     "QueueDepthAutoscaler",
+    "ServingConfig",
     "experimental",
     "integrations",
     "schedule",

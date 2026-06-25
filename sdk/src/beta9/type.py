@@ -320,6 +320,13 @@ class LLMConfig:
 
 
 @dataclass
+class ServingConfig:
+    app_kind: str = ""
+    serving_protocol: str = ""
+    llm: Optional[LLMConfig] = None
+
+
+@dataclass
 class TaskPolicy:
     """
     Task policy for a function. This helps manages lifecycle of an individual task.

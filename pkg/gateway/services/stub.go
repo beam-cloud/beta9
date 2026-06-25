@@ -124,7 +124,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	if poolConfig != nil {
 		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
 	}
-	llmConfig := llmConfigFromProto(in.Llm)
+	servingConfig := servingConfigFromProto(in.Serving)
+	if servingConfig == nil {
+		servingConfig = servingConfigFromLegacyProto(in.AppKind, in.ServingProtocol, in.Llm)
+	}
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
@@ -162,9 +165,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
 		IsService:          in.IsService || isLegacyServiceRequest(in),
-		AppKind:            in.AppKind,
-		ServingProtocol:    in.ServingProtocol,
-		LLM:                llmConfig,
+		Serving:            servingConfig,
 		Pool:               poolConfig,
 	}
 
@@ -416,6 +417,36 @@ func llmConfigFromProto(in *pb.LLMConfig) *types.LLMConfig {
 		MetricsPath:     in.MetricsPath,
 		SLOTier:         in.SloTier,
 	}
+}
+
+func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
+	if in == nil {
+		return nil
+	}
+
+	return compactServingConfig(&types.ServingConfig{
+		AppKind:         in.AppKind,
+		ServingProtocol: in.ServingProtocol,
+		LLM:             llmConfigFromProto(in.Llm),
+	})
+}
+
+func servingConfigFromLegacyProto(appKind, servingProtocol string, llm *pb.LLMConfig) *types.ServingConfig {
+	return compactServingConfig(&types.ServingConfig{
+		AppKind:         appKind,
+		ServingProtocol: servingProtocol,
+		LLM:             llmConfigFromProto(llm),
+	})
+}
+
+func compactServingConfig(in *types.ServingConfig) *types.ServingConfig {
+	if in == nil {
+		return nil
+	}
+	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil {
+		return nil
+	}
+	return in
 }
 
 func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
