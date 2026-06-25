@@ -43,8 +43,12 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 
 type AppWithLatestStubOrDeployment struct {
 	types.App
-	Stub       *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
-	Deployment *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
+	Stub              *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
+	Deployment        *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
+	PoolName          string                       `json:"pool_name" serializer:"pool_name"`
+	RunningContainers int                          `json:"running_containers" serializer:"running_containers"`
+	IsService         bool                         `json:"is_service" serializer:"is_service"`
+	Serving           *types.ServingConfig         `json:"serving,omitempty" serializer:"serving"`
 }
 
 func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
@@ -97,11 +101,19 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to get apps")
 	}
 
+	latestStubIndexes := map[string][]int{}
 	for i := range apps.Data {
 		appsWithLatest.Data[i].App = apps.Data[i]
 
 		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
 			deploymentCopy := deployment
+			enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub)
+			if deploymentCopy.Stub.ExternalId != "" {
+				latestStubIndexes[deploymentCopy.Stub.ExternalId] = append(latestStubIndexes[deploymentCopy.Stub.ExternalId], i)
+			}
+			if err := deploymentCopy.Stub.SanitizeConfig(); err != nil {
+				return HTTPInternalServerError("Failed to sanitize stub config")
+			}
 			appsWithLatest.Data[i].Deployment = &deploymentCopy
 			continue
 		}
@@ -112,8 +124,27 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		stubCopy := stub
+		enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub)
+		if stubCopy.Stub.ExternalId != "" {
+			latestStubIndexes[stubCopy.Stub.ExternalId] = append(latestStubIndexes[stubCopy.Stub.ExternalId], i)
+		}
 		appsWithLatest.Data[i].Stub = &stubCopy
-		appsWithLatest.Data[i].Stub.SanitizeConfig()
+		if err := appsWithLatest.Data[i].Stub.SanitizeConfig(); err != nil {
+			return HTTPInternalServerError("Failed to sanitize stub config")
+		}
+	}
+
+	if a.containerRepo != nil && len(latestStubIndexes) > 0 {
+		runningByStubID, err := countRunningContainersByStubID(a.containerRepo, latestStubIndexes)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get running containers")
+		}
+
+		for stubID, indexes := range latestStubIndexes {
+			for _, index := range indexes {
+				appsWithLatest.Data[index].RunningContainers = runningByStubID[stubID]
+			}
+		}
 	}
 
 	serializedAppsWithLatest, err := serializer.Serialize(appsWithLatest)
@@ -125,6 +156,40 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		http.StatusOK,
 		serializedAppsWithLatest,
 	)
+}
+
+func countRunningContainersByStubID(containerRepo repository.ContainerRepository, latestStubIndexes map[string][]int) (map[string]int, error) {
+	runningByStubID := make(map[string]int, len(latestStubIndexes))
+	for stubID := range latestStubIndexes {
+		containers, err := containerRepo.GetActiveContainersByStubId(stubID)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, container := range containers {
+			if container.Status == types.ContainerStatusRunning {
+				runningByStubID[stubID]++
+			}
+		}
+	}
+	return runningByStubID, nil
+}
+
+func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stub) {
+	if stub == nil {
+		return
+	}
+
+	config, err := stub.UnmarshalConfig()
+	if err != nil || config == nil {
+		return
+	}
+
+	if config.Pool != nil {
+		app.PoolName = config.Pool.Name
+	}
+	app.IsService = config.IsService
+	app.Serving = config.EffectiveServingConfig()
 }
 
 func (a *AppGroup) ListApps(ctx echo.Context) error {

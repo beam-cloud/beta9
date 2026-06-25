@@ -3,6 +3,7 @@ package apiv1
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -65,6 +67,7 @@ func NewStubGroupForTest() *StubGroup {
 		backendRepo,
 		nil,
 		repository.NewEventClientRepo(config),
+		nil,
 		config,
 	)
 }
@@ -90,6 +93,7 @@ func NewStubGroupWithMockForTest() (*StubGroup, sqlmock.Sqlmock, *echo.Echo) {
 		backendRepo,
 		nil,
 		repository.NewEventClientRepo(config),
+		nil,
 		config,
 	)
 
@@ -509,9 +513,98 @@ func TestBuildSandboxRowsHydratesMissingTimingFromContainerStream(t *testing.T) 
 
 // generateMockStubRows creates mock database rows for stub queries
 func generateMockStubRows(id uint, externalID, name, config string, workspaceID uint) *sqlmock.Rows {
+	return generateMockStubRowsWithType(id, externalID, name, "deployment", config, workspaceID)
+}
+
+func generateMockStubRowsWithType(id uint, externalID, name, stubType, config string, workspaceID uint) *sqlmock.Rows {
 	now := time.Now()
 	return sqlmock.NewRows([]string{"id", "external_id", "name", "type", "config", "config_version", "object_id", "workspace_id", "created_at", "updated_at", "public", "app_id", "workspace.id", "workspace.external_id", "workspace.name", "workspace.created_at", "workspace.updated_at", "workspace.signing_key", "workspace.volume_cache_enabled", "workspace.multi_gpu_enabled", "object.id", "object.external_id", "object.hash", "object.size", "object.workspace_id", "object.created_at", "app.id", "app.external_id", "app.name", "workspace.storage.id", "workspace.storage.external_id", "workspace.storage.bucket_name", "workspace.storage.access_key", "workspace.storage.secret_key", "workspace.storage.endpoint_url", "workspace.storage.region", "workspace.storage.created_at", "workspace.storage.updated_at"}).
-		AddRow(id, externalID, name, "deployment", config, 1, 1, workspaceID, now, now, false, 1, workspaceID, fmt.Sprintf("workspace-%d", workspaceID), "Test Workspace", now, now, nil, false, false, 1, fmt.Sprintf("obj-%d", id), fmt.Sprintf("hash%d", id), 1000, workspaceID, now, 1, fmt.Sprintf("app-%d", id), "Test App", nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		AddRow(id, externalID, name, stubType, config, 1, 1, workspaceID, now, now, false, 1, workspaceID, fmt.Sprintf("workspace-%d", workspaceID), "Test Workspace", now, now, nil, false, false, 1, fmt.Sprintf("obj-%d", id), fmt.Sprintf("hash%d", id), 1000, workspaceID, now, 1, fmt.Sprintf("app-%d", id), "Test App", nil, nil, nil, nil, nil, nil, nil, nil, nil)
+}
+
+type stubConfigJSONArg struct {
+	check func(*types.StubConfigV1) bool
+}
+
+func (a stubConfigJSONArg) Match(value driver.Value) bool {
+	var raw string
+	switch v := value.(type) {
+	case string:
+		raw = v
+	case []byte:
+		raw = string(v)
+	default:
+		return false
+	}
+
+	var config types.StubConfigV1
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		return false
+	}
+	return a.check(&config)
+}
+
+func TestScaleStubEnablesScaleToZeroAndReloads(t *testing.T) {
+	stubGroup, mock, e := NewStubGroupWithMockForTest()
+	rdb, err := repository.NewRedisClientForTest()
+	if err != nil {
+		t.Fatalf("failed to create test redis: %v", err)
+	}
+	stubGroup.redisClient = rdb
+
+	stubID := "pod-service-stub"
+	config := `{"runtime":{"cpu":1000,"memory":1000},"autoscaler":{"type":"queue_depth","max_containers":2,"tasks_per_container":1,"min_containers":1}}`
+	rows := generateMockStubRowsWithType(11, stubID, "Pod Service", types.StubTypePodDeployment, config, 1)
+	mock.ExpectQuery("SELECT").WithArgs(stubID).WillReturnRows(rows)
+	mock.ExpectExec("UPDATE stub").WithArgs(stubConfigJSONArg{check: func(config *types.StubConfigV1) bool {
+		return config.Autoscaler != nil &&
+			config.Autoscaler.MinContainers == 0 &&
+			config.Autoscaler.MaxContainers == 1
+	}}, 11).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	body, _ := json.Marshal(ScaleStubRequest{Containers: 0})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("stubId")
+	c.SetParamValues(stubID)
+
+	authCtx := &auth.HttpAuthContext{
+		Context: c,
+		AuthInfo: &auth.AuthInfo{
+			Workspace: &types.Workspace{Id: 1},
+		},
+	}
+
+	if err := stubGroup.ScaleStub(authCtx); err != nil {
+		t.Fatalf("ScaleStub() error = %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("mock expectations were not met: %v", err)
+	}
+
+	keys, err := rdb.Scan(context.Background(), "event:*")
+	if err != nil {
+		t.Fatalf("failed to scan redis events: %v", err)
+	}
+	for _, key := range keys {
+		raw, err := rdb.Get(context.Background(), key).Bytes()
+		if err != nil {
+			continue
+		}
+		var event common.Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			continue
+		}
+		if event.Type == common.EventTypeReloadInstance && event.Args["stub_id"] == stubID {
+			return
+		}
+	}
+	t.Fatalf("missing reload event for stub %s; redis keys=%v", stubID, keys)
 }
 
 func TestProcessStubOverrides(t *testing.T) {

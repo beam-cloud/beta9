@@ -414,8 +414,9 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 			archive.storageMode = string(clipCommon.StorageModeLocal)
 		}
 	}
-
-	c.reportRequiredContent(ctx, request, meta)
+	if report, ok := c.imageRequiredContent(ctx, request, meta); ok {
+		c.publishRequiredContent(request, report)
+	}
 
 	return archive, nil
 }
@@ -424,7 +425,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 // it to the cache reconciliation reporter. It runs at image-load time (off the
 // read hot path) and is a no-op when reconciliation is disabled.
 func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
-	if c.contentReporter == nil || request == nil || meta == nil {
+	if request == nil || meta == nil {
 		return
 	}
 
@@ -432,6 +433,14 @@ func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.
 	if !ok {
 		// Nothing to report; do not claim the one-time generation so a later
 		// load that does yield content can still publish it.
+		return
+	}
+
+	c.publishRequiredContent(request, report)
+}
+
+func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, report requiredContentReport) {
+	if c.contentReporter == nil || request == nil {
 		return
 	}
 
@@ -444,6 +453,7 @@ func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.
 
 	workspaceID := cacheRequestWorkspaceID(request)
 	c.contentReporter.reportBatches(workspaceID, stubID, []requiredContentReport{report})
+	c.contentReporter.flush()
 
 	log.Debug().
 		Str("workspace_id", workspaceID).
@@ -2200,6 +2210,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
 	}
+	seedSourceImageAfterBuild := false
+	defer func() {
+		if seedSourceImageAfterBuild {
+			go c.seedBaseImageBlobsFromRegistry(request, sourceImage)
+		}
+	}()
 
 	dockerfile := *request.BuildOptions.Dockerfile
 	if sourceImage != "" {
@@ -2235,7 +2251,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			if err := cmd.Run(); err != nil {
 				return err
 			}
-			go c.seedBaseImageBlobsFromRegistry(request, sourceImage)
+			seedSourceImageAfterBuild = true
 		}
 	}
 

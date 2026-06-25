@@ -20,7 +20,9 @@ from ...clients.gateway import (
     GetOrCreateStubResponse,
     GetUrlRequest,
     GetUrlResponse,
+    LlmConfig as LLMConfigProto,
     SecretVar,
+    ServingConfig as ServingConfigProto,
 )
 from ...clients.gateway import (
     Schema as SchemaProto,
@@ -40,9 +42,11 @@ from ...type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    LLMConfig,
     Pool,
     PricingPolicy,
     QueueDepthAutoscaler,
+    ServingConfig,
     TaskPolicy,
     normalize_gpu_type,
 )
@@ -124,6 +128,10 @@ class RunnerAbstraction(BaseAbstraction):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
+        app_kind: str = "",
+        serving_protocol: str = "",
+        llm: Optional[LLMConfig] = None,
+        serving: Optional[ServingConfig] = None,
     ) -> None:
         super().__init__()
 
@@ -171,6 +179,13 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.checkpoint_enabled = checkpoint_enabled
         self.docker_enabled = docker_enabled
+        self.is_service = False
+        self.serving = ServingConfig.from_options(
+            app_kind=app_kind,
+            serving_protocol=serving_protocol,
+            llm=llm,
+            serving=serving,
+        )
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
@@ -209,6 +224,52 @@ class RunnerAbstraction(BaseAbstraction):
             return self.client
         self.client = Client(token=self.config_context.token) if self.config_context.token else None
         return self.client
+
+    @property
+    def app_kind(self) -> str:
+        return self.serving.app_kind
+
+    @app_kind.setter
+    def app_kind(self, value: str) -> None:
+        self.serving.app_kind = value or ""
+
+    @property
+    def serving_protocol(self) -> str:
+        return self.serving.serving_protocol
+
+    @serving_protocol.setter
+    def serving_protocol(self, value: str) -> None:
+        self.serving.serving_protocol = value or ""
+
+    @property
+    def llm(self) -> Optional[LLMConfig]:
+        return self.serving.llm
+
+    @llm.setter
+    def llm(self, value: Optional[LLMConfig]) -> None:
+        self.serving.llm = value
+        self.serving.normalize()
+
+    def _serving_config_proto(self) -> Optional[ServingConfigProto]:
+        if not self.serving or self.serving.is_empty():
+            return None
+
+        llm = self.serving.llm
+        return ServingConfigProto(
+            app_kind=self.serving.app_kind,
+            serving_protocol=self.serving.serving_protocol,
+            llm=LLMConfigProto(
+                model_id=llm.model_id,
+                engine=llm.engine,
+                served_model_name=llm.served_model_name,
+                context_length=llm.context_length,
+                tokenizer=llm.tokenizer,
+                metrics_path=llm.metrics_path,
+                slo_tier=llm.slo_tier,
+            )
+            if llm
+            else None,
+        )
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -648,6 +709,8 @@ class RunnerAbstraction(BaseAbstraction):
             block_network=self.block_network,
             allow_list=self.allow_list,
             pool=self.pool_config,
+            is_service=self.is_service,
+            serving=self._serving_config_proto(),
         )
 
     def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:

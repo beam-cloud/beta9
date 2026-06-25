@@ -811,6 +811,7 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	if filters.AppId != "" {
 		qb = qb.Join("app a ON s.app_id = a.id")
 		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
+		qb = qb.Where("a.deleted_at IS NULL")
 	}
 
 	return qb
@@ -1724,6 +1725,7 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 	if filters.AppId != "" {
 		qb = qb.Join("app a ON s.app_id = a.id")
 		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
+		qb = qb.Where("a.deleted_at IS NULL")
 	}
 
 	return qb
@@ -2407,7 +2409,7 @@ func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId ui
 
 func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error) {
 	var app types.App
-	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at, description, deleted_at FROM app WHERE external_id=$1 and workspace_id=$2;`
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at, description, deleted_at FROM app WHERE external_id=$1 and workspace_id=$2 and deleted_at is null;`
 	err := r.client.GetContext(ctx, &app, query, appId, workspaceId)
 	if err == nil {
 		return &app, nil
@@ -2428,7 +2430,7 @@ func (r *PostgresBackendRepository) DeleteApp(ctx context.Context, appId string)
 
 func (r *PostgresBackendRepository) RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error) {
 	var app types.App
-	query := `SELECT a.id, a.external_id, a.name, a.workspace_id, a.created_at, a.updated_at, a.description, a.deleted_at FROM app a JOIN stub s ON a.id = s.app_id WHERE s.external_id = $1;`
+	query := `SELECT a.id, a.external_id, a.name, a.workspace_id, a.created_at, a.updated_at, a.description, a.deleted_at FROM app a JOIN stub s ON a.id = s.app_id WHERE s.external_id = $1 and a.deleted_at is null;`
 	err := r.client.GetContext(ctx, &app, query, stubExternalId)
 	if err != nil {
 		return nil, err

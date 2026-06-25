@@ -541,7 +541,56 @@ type StubConfigV1 struct {
 	BlockNetwork       bool            `json:"block_network"`
 	AllowList          []string        `json:"allow_list"`
 	DockerEnabled      bool            `json:"docker_enabled"`
+	IsService          bool            `json:"is_service"`
+	Serving            *ServingConfig  `json:"serving,omitempty"`
 	Pool               *PoolConfig     `json:"pool,omitempty"`
+}
+
+type ServingConfig struct {
+	AppKind         string     `json:"app_kind,omitempty" serializer:"app_kind,omitempty"`
+	ServingProtocol string     `json:"serving_protocol,omitempty" serializer:"serving_protocol,omitempty"`
+	LLM             *LLMConfig `json:"llm,omitempty" serializer:"llm,omitempty"`
+}
+
+type LLMConfig struct {
+	ModelID         string `json:"model_id,omitempty" serializer:"model_id,omitempty"`
+	Engine          string `json:"engine,omitempty" serializer:"engine,omitempty"`
+	ServedModelName string `json:"served_model_name,omitempty" serializer:"served_model_name,omitempty"`
+	ContextLength   int    `json:"context_length,omitempty" serializer:"context_length,omitempty"`
+	Tokenizer       string `json:"tokenizer,omitempty" serializer:"tokenizer,omitempty"`
+	MetricsPath     string `json:"metrics_path,omitempty" serializer:"metrics_path,omitempty"`
+	SLOTier         string `json:"slo_tier,omitempty" serializer:"slo_tier,omitempty"`
+}
+
+func (c *StubConfigV1) EffectiveServingConfig() *ServingConfig {
+	if c == nil || c.Serving == nil {
+		return nil
+	}
+	if c.Serving.AppKind == "" && c.Serving.ServingProtocol == "" && c.Serving.LLM == nil {
+		return nil
+	}
+	return c.Serving
+}
+
+func (c *StubConfigV1) EffectiveAppKind() string {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.AppKind
+	}
+	return ""
+}
+
+func (c *StubConfigV1) EffectiveServingProtocol() string {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.ServingProtocol
+	}
+	return ""
+}
+
+func (c *StubConfigV1) EffectiveLLMConfig() *LLMConfig {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.LLM
+	}
+	return nil
 }
 
 type PoolConfig struct {
@@ -655,7 +704,8 @@ func (c *StubConfigV1) RequiresGPU() bool {
 type AutoscalerType string
 
 const (
-	QueueDepthAutoscaler AutoscalerType = "queue_depth"
+	QueueDepthAutoscaler       AutoscalerType = "queue_depth"
+	LLMTokenPressureAutoscaler AutoscalerType = "llm_token_pressure"
 )
 
 type Autoscaler struct {
@@ -663,6 +713,28 @@ type Autoscaler struct {
 	MaxContainers     uint           `json:"max_containers"`
 	TasksPerContainer uint           `json:"tasks_per_container"`
 	MinContainers     uint           `json:"min_containers"`
+}
+
+func (c *StubConfigV1) SetReplicaCount(containers uint) {
+	if c.Autoscaler == nil {
+		c.Autoscaler = &Autoscaler{
+			Type:              QueueDepthAutoscaler,
+			TasksPerContainer: 1,
+		}
+	}
+	if c.Autoscaler.Type == "" {
+		c.Autoscaler.Type = QueueDepthAutoscaler
+	}
+	if c.Autoscaler.TasksPerContainer == 0 {
+		c.Autoscaler.TasksPerContainer = 1
+	}
+	if containers == 0 {
+		c.Autoscaler.MinContainers = 0
+		c.Autoscaler.MaxContainers = 1
+		return
+	}
+	c.Autoscaler.MinContainers = containers
+	c.Autoscaler.MaxContainers = containers
 }
 
 // @go2proto

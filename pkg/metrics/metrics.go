@@ -53,6 +53,9 @@ const (
 	metricProxyTokenDenials         = "proxy_token_denials"
 	metricProxyQueuedRequestWait    = "proxy_queued_request_wait_ms"
 	metricProxyBackendDialLatency   = "proxy_backend_dial_latency_ms"
+	metricPodLLMRequestDuration     = "pod_llm_request_duration_ms"
+	metricPodLLMTimeToFirst         = "pod_llm_time_to_first_ms"
+	metricPodLLMEstimatedTokens     = "pod_llm_estimated_tokens"
 	metricSandboxConnectPhase       = "sandbox_connect_phase_duration_ms"
 	metricFunctionTaskPhase         = "function_task_phase_duration_ms"
 )
@@ -422,6 +425,69 @@ func RecordProxyBackendDialLatency(proxyName, workspaceName, stubId, protocol st
 		"success":   successLabel,
 	})
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+type PodLLMRequestSample struct {
+	WorkspaceName  string
+	StubID         string
+	Model          string
+	Engine         string
+	RouteReason    string
+	Stream         bool
+	StatusCode     int
+	BackendError   bool
+	PromptTokens   int64
+	OutputTokens   int64
+	TokenPressure  int64
+	Duration       time.Duration
+	TimeToFirst    time.Duration
+	ContainerIDSet bool
+}
+
+func RecordPodLLMRequest(sample PodLLMRequestSample) {
+	stream := "false"
+	if sample.Stream {
+		stream = "true"
+	}
+	backendError := "false"
+	if sample.BackendError {
+		backendError = "true"
+	}
+	containerIDSet := "false"
+	if sample.ContainerIDSet {
+		containerIDSet = "true"
+	}
+	labels := map[string]string{
+		"workspace":        sample.WorkspaceName,
+		"stub_id":          sample.StubID,
+		"engine":           firstNonEmpty(sample.Engine, "unknown"),
+		"route_reason":     firstNonEmpty(sample.RouteReason, "unknown"),
+		"stream":           stream,
+		"status_code":      fmt.Sprintf("%d", sample.StatusCode),
+		"backend_error":    backendError,
+		"container_routed": containerIDSet,
+	}
+
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricWithLabels(metricPodLLMRequestDuration, labels)).Update(float64(sample.Duration.Milliseconds()))
+	if sample.TimeToFirst > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricWithLabels(metricPodLLMTimeToFirst, labels)).Update(float64(sample.TimeToFirst.Milliseconds()))
+	}
+
+	tokenLabels := mergeLabels(labels, map[string]string{"kind": "prompt"})
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricWithLabels(metricPodLLMEstimatedTokens, tokenLabels)).Update(float64(sample.PromptTokens))
+	tokenLabels = mergeLabels(labels, map[string]string{"kind": "output"})
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricWithLabels(metricPodLLMEstimatedTokens, tokenLabels)).Update(float64(sample.OutputTokens))
+	tokenLabels = mergeLabels(labels, map[string]string{"kind": "pressure"})
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricWithLabels(metricPodLLMEstimatedTokens, tokenLabels)).Update(float64(sample.TokenPressure))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func RecordSandboxConnectPhase(phase, workspaceId, stubId, containerStatus, errorCode string, success bool, duration time.Duration) {

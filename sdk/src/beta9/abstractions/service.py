@@ -2,7 +2,14 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple, Union
 
-from ..type import GpuType, GpuTypeAlias, Pool, QueueDepthAutoscaler
+from ..type import (
+    GpuType,
+    GpuTypeAlias,
+    LLMConfig,
+    Pool,
+    QueueDepthAutoscaler,
+    ServingConfig,
+)
 from .base.container import Container
 from .image import Image
 from .pod import Pod, PodInstance
@@ -183,9 +190,18 @@ class Service(Pod):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
+        app_kind: str = "",
+        serving_protocol: str = "",
+        llm: Optional[LLMConfig] = None,
+        serving: Optional[ServingConfig] = None,
     ) -> None:
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
+
+        requested_llm = llm or (serving.llm if serving else None)
+        if requested_llm is not None and pool and not gpu and gpu_count == 0:
+            gpu = GpuType.Any
+            gpu_count = 1
 
         service_entrypoint = entrypoint
         if command is None and not service_entrypoint:
@@ -222,12 +238,28 @@ class Service(Pod):
             allow_list=allow_list,
             docker_enabled=docker_enabled,
             pool=pool,
+            app_kind=app_kind,
+            serving_protocol=serving_protocol,
+            llm=llm,
+            serving=serving,
         )
+        self.is_service = True
         self.configure_replicas(
             min_replicas=min_replicas,
             max_replicas=max_replicas,
             always_on=always_on,
         )
+        self.configure_serving_autoscaler()
+
+    def configure_serving_autoscaler(self) -> None:
+        autoscaler = self.serving.autoscaler_for_replicas(
+            min_containers=self.min_replicas,
+            max_containers=self.max_replicas,
+        )
+        if autoscaler is None:
+            return
+
+        self.autoscaler = autoscaler
 
     def configure_replicas(
         self,

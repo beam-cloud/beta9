@@ -7,7 +7,10 @@ from rich.table import Column, Table, box
 
 from .. import terminal
 from ..abstractions.image import Image
-from ..abstractions.service import Service, resolve_service_ports
+from ..abstractions.service import (
+    Service,
+    resolve_service_ports,
+)
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -34,7 +37,6 @@ from .extraclick import (
     override_config_options,
 )
 
-
 @click.group(cls=ClickCommonGroup)
 def common(**_):
     pass
@@ -60,6 +62,8 @@ def common(**_):
         {cli_name} deploy --name api --dockerfile Dockerfile --always-on
 
         {cli_name} deploy --name worker --image ghcr.io/acme/worker:latest --command "npm start"
+
+        {cli_name} deploy --name qwen --dockerfile Dockerfile --port 8000 --llm
         \b
     """,
 )
@@ -166,6 +170,31 @@ def _service_image_option(kwargs: Dict) -> Optional[Image]:
     return kwargs.get("image")
 
 
+def _llm_options_present(kwargs: Dict) -> bool:
+    return any(
+        key.startswith("llm_") and value not in (None, "", 0, False)
+        for key, value in kwargs.items()
+    )
+
+
+def _service_llm_metadata(kwargs: Dict, image: Optional[Image], entrypoint: Optional[List[str]]):
+    if not _llm_options_present(kwargs):
+        return None
+
+    from .llm import service_llm_metadata
+
+    return service_llm_metadata(kwargs, image=image, entrypoint=entrypoint)
+
+
+def _apply_llm_metadata_if_requested(user_obj, kwargs: Dict) -> bool:
+    if not _llm_options_present(kwargs):
+        return True
+
+    from .llm import apply_llm_metadata
+
+    return apply_llm_metadata(user_obj, kwargs)
+
+
 def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     service_image = _service_image_option(kwargs)
     ports = resolve_service_ports(
@@ -187,6 +216,14 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         "pool": kwargs.get("pool"),
         "tcp": bool(kwargs.get("tcp")),
     }
+    llm_metadata = _service_llm_metadata(
+        kwargs,
+        image=service_image,
+        entrypoint=service_kwargs["entrypoint"],
+    )
+    if llm_metadata is not None:
+        service_kwargs.update(llm_metadata)
+
     for key in ("cpu", "memory", "gpu", "gpu_count", "secrets"):
         value = kwargs.get(key)
         if value is not None:
@@ -302,6 +339,9 @@ def create_deployment(
                     return
 
             if not handle_config_override(user_obj, kwargs):
+                return
+
+            if not _apply_llm_metadata_if_requested(user_obj, kwargs):
                 return
 
             if hasattr(user_obj, "generate_deployment_artifacts"):

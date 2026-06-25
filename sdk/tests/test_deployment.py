@@ -241,6 +241,14 @@ class TestDeployment(TestCase):
             ),
         )
 
+        self.assertEqual(test_vllm.app_kind, "llm_model")
+        self.assertEqual(test_vllm.serving_protocol, "openai")
+        self.assertEqual(test_vllm.llm.model_id, PHI_VISION_INSTRUCT)
+        self.assertEqual(test_vllm.llm.engine, "vllm")
+        self.assertEqual(test_vllm.llm.served_model_name, PHI_VISION_INSTRUCT)
+        self.assertEqual(test_vllm.llm.context_length, 4096)
+        self.assertEqual(test_vllm.llm.metrics_path, "/metrics")
+
         resp, ok = test_vllm.deploy()
 
         self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)

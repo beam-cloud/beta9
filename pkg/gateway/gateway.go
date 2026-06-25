@@ -249,7 +249,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewLogGroup(g.baseRouteGroup.Group("/logs", authMiddleware), g.BackendRepo, g.ContainerRepo, repository.NewComputeRedisRepository(g.RedisClient), g.EventRepo)
 	apiv1.NewMetricsGroup(g.baseRouteGroup.Group("/metrics", authMiddleware), g.BackendRepo, g.EventRepo)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
-	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, g.Config)
+	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, g.RedisClient, g.Config)
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
 	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.RedisClient, g.Config)
 	apiv1.NewAppGroup(g.baseRouteGroup.Group("/app", authMiddleware), g.BackendRepo, g.Config, g.ContainerRepo, *g.Scheduler, g.RedisClient)

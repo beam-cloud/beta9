@@ -393,6 +393,56 @@ def override_config_options(func: click.Command):
         help="Keep at least one service replica running, or explicitly allow scale-to-zero.",
     )(f)
     f = click.option(
+        "--llm",
+        "--lm",
+        "llm_enabled",
+        is_flag=True,
+        default=False,
+        help="Tag this Pod or Service for OpenAI-compatible LLM routing and metrics.",
+    )(f)
+    f = click.option(
+        "--llm-model-id",
+        type=click.STRING,
+        help="Optional model identifier metadata for labels and routing estimates.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--llm-engine",
+        type=click.STRING,
+        help="Optional serving engine metadata, such as vllm, sglang, or tensorrt-llm.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--llm-served-model-name",
+        type=click.STRING,
+        help="Optional OpenAI served model name exposed by the container.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--llm-context-length",
+        type=click.IntRange(min=1),
+        help="Optional max context window for routing/admission estimates. Does not change the model.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--llm-tokenizer",
+        type=click.STRING,
+        help="Tokenizer hint for LLM metadata.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--llm-metrics-path",
+        type=click.STRING,
+        help="Container metrics path for best-effort engine telemetry. Defaults to /metrics in the gateway.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--llm-slo-tier",
+        type=click.STRING,
+        help="SLO tier label for LLM route metrics.",
+        required=False,
+    )(f)
+    f = click.option(
         "--tcp",
         help="Enable raw TCP-proxying [only available for Pods]",
         is_flag=True,

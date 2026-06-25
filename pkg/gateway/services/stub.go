@@ -32,19 +32,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	gpus := types.GPUTypesFromString(in.Gpu)
+	gpus := gpuTypesForStubRequest(in)
 
-	autoscaler := &types.Autoscaler{}
-	if in.Autoscaler.Type == "" {
-		autoscaler.Type = types.QueueDepthAutoscaler
-		autoscaler.MaxContainers = 1
-		autoscaler.TasksPerContainer = 1
-	} else {
-		autoscaler.Type = types.AutoscalerType(in.Autoscaler.Type)
-		autoscaler.MaxContainers = uint(in.Autoscaler.MaxContainers)
-		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
-		autoscaler.MinContainers = uint(in.Autoscaler.MinContainers)
-	}
+	autoscaler := autoscalerFromProto(in.Autoscaler)
 
 	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
 
@@ -134,6 +124,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	if poolConfig != nil {
 		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
 	}
+	servingConfig := servingConfigFromProto(in.Serving)
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
@@ -170,6 +161,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
+		IsService:          in.IsService,
+		Serving:            servingConfig,
 		Pool:               poolConfig,
 	}
 
@@ -318,6 +311,14 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}, nil
 }
 
+func gpuTypesForStubRequest(in *pb.GetOrCreateStubRequest) []types.GpuType {
+	gpus := types.GPUTypesFromString(in.Gpu)
+	if in.GpuCount > 0 && len(gpus) == 0 {
+		return []types.GpuType{types.GPU_ANY}
+	}
+	return gpus
+}
+
 func normalizeKeepWarmSeconds(raw float32, stubType types.StubType) int {
 	seconds := int(raw)
 	if seconds > 0 && seconds < 10 {
@@ -337,6 +338,23 @@ func stubTypeSupportsInfiniteKeepWarm(stubType types.StubType) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func autoscalerFromProto(in *pb.Autoscaler) *types.Autoscaler {
+	if in == nil || in.Type == "" {
+		return &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		}
+	}
+
+	return &types.Autoscaler{
+		Type:              types.AutoscalerType(in.Type),
+		MaxContainers:     uint(in.MaxContainers),
+		TasksPerContainer: uint(in.TasksPerContainer),
+		MinContainers:     uint(in.MinContainers),
 	}
 }
 
@@ -376,6 +394,44 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 		MinReliability: in.MinReliability,
 		Selector:       in.Selector,
 	}
+}
+
+func llmConfigFromProto(in *pb.LLMConfig) *types.LLMConfig {
+	if in == nil {
+		return nil
+	}
+
+	return &types.LLMConfig{
+		ModelID:         in.ModelId,
+		Engine:          in.Engine,
+		ServedModelName: in.ServedModelName,
+		ContextLength:   int(in.ContextLength),
+		Tokenizer:       in.Tokenizer,
+		MetricsPath:     in.MetricsPath,
+		SLOTier:         in.SloTier,
+	}
+}
+
+func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
+	if in == nil {
+		return nil
+	}
+
+	return compactServingConfig(&types.ServingConfig{
+		AppKind:         in.AppKind,
+		ServingProtocol: in.ServingProtocol,
+		LLM:             llmConfigFromProto(in.Llm),
+	})
+}
+
+func compactServingConfig(in *types.ServingConfig) *types.ServingConfig {
+	if in == nil {
+		return nil
+	}
+	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil {
+		return nil
+	}
+	return in
 }
 
 func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {

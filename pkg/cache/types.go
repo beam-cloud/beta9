@@ -31,8 +31,8 @@ type Config struct {
 }
 
 // ReconciliationConfig controls the async required-content reconciliation loop.
-// It is disabled by default; when off, workers do not report required content
-// and cache servers do not run the loop, preserving prior startup behavior.
+// When disabled, workers do not report required content and cache servers do
+// not run the loop, preserving prior startup behavior.
 type ReconciliationConfig struct {
 	Enabled               bool  `key:"enabled" json:"enabled"`
 	IntervalSeconds       int   `key:"intervalSeconds" json:"interval_seconds"`

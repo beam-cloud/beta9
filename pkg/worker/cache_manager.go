@@ -233,6 +233,7 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 		m.recentStubTTL(),
 		m.cacheVolumeReportMinBytes(),
 		m.activeStubsForWorkspace,
+		m.requestReconcile,
 	)
 
 	m.wg.Add(1)

@@ -123,6 +123,7 @@ type cacheContentReporter struct {
 	recentStubTTL  time.Duration
 	volumeMinBytes int64
 	activeStubs    func(workspaceID string) []string
+	reconcileNow   func()
 
 	mu       sync.Mutex
 	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
@@ -153,6 +154,7 @@ func newCacheContentReporter(
 	recentStubTTL time.Duration,
 	volumeMinBytes int64,
 	activeStubs func(workspaceID string) []string,
+	reconcileNow func(),
 ) *cacheContentReporter {
 	r := &cacheContentReporter{
 		ctx:            ctx,
@@ -162,6 +164,7 @@ func newCacheContentReporter(
 		recentStubTTL:  recentStubTTL,
 		volumeMinBytes: volumeMinBytes,
 		activeStubs:    activeStubs,
+		reconcileNow:   reconcileNow,
 		pending:        make(map[reporterKey]map[string]types.CacheRequiredContentItem),
 		reported:       make(map[string]struct{}),
 	}
@@ -274,6 +277,7 @@ func (r *cacheContentReporter) flush() {
 
 	failed := make(map[reporterKey]map[string]types.CacheRequiredContentItem)
 	stubOK := make(map[reporterStubKey]bool)
+	published := false
 	for key, bucket := range pending {
 		if len(bucket) == 0 {
 			continue
@@ -307,6 +311,7 @@ func (r *cacheContentReporter) flush() {
 			failed[key] = bucket
 			continue
 		}
+		published = true
 	}
 
 	for stubKey, ok := range stubOK {
@@ -317,6 +322,9 @@ func (r *cacheContentReporter) flush() {
 
 	if len(failed) > 0 {
 		r.requeue(failed)
+	}
+	if published && r.reconcileNow != nil {
+		r.reconcileNow()
 	}
 }
 

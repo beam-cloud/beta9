@@ -518,6 +518,22 @@ message Autoscaler {
   uint32 min_containers = 4;
 }
 
+message LLMConfig {
+  string model_id = 1;
+  string engine = 2;
+  string served_model_name = 3;
+  int64 context_length = 4;
+  string tokenizer = 5;
+  string metrics_path = 6;
+  string slo_tier = 7;
+}
+
+message ServingConfig {
+  string app_kind = 1;
+  string serving_protocol = 2;
+  LLMConfig llm = 3;
+}
+
 message TaskPolicy {
   int64 timeout = 1;
   uint32 max_retries = 2;
@@ -572,6 +588,8 @@ message GetOrCreateStubRequest {
   repeated string allow_list = 39;
   bool docker_enabled = 40;
   PoolConfig pool = 41;
+  bool is_service = 42;
+  ServingConfig serving = 43;
 }
 
 message GetOrCreateStubResponse {

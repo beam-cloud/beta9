@@ -13,10 +13,25 @@ from ...channel import with_grpc_error_handling
 from ...clients.endpoint import StartEndpointServeRequest, StartEndpointServeResponse
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
-from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import (
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    LLM_APP_KIND,
+    LLMConfig,
+    OPENAI_SERVING_PROTOCOL,
+    QueueDepthAutoscaler,
+    ServingConfig,
+)
 
 DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
 DEFAULT_VLLM_CACHE_ROOT = "./vllm_cache_root"
+
+
+def _served_model_name(value: Optional[Union[str, List[str]]]) -> str:
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value or ""
 
 
 # vllm/engine/arg_utils.py:EngineArgs
@@ -263,6 +278,19 @@ class VLLM(ASGI):
             autoscaler=autoscaler,
         )
 
+        self.serving = ServingConfig(
+            app_kind=LLM_APP_KIND,
+            serving_protocol=OPENAI_SERVING_PROTOCOL,
+            llm=LLMConfig(
+                model_id=vllm_args.model,
+                engine="vllm",
+                served_model_name=_served_model_name(vllm_args.served_model_name)
+                or vllm_args.model,
+                context_length=vllm_args.max_model_len or 0,
+                tokenizer=vllm_args.tokenizer or "",
+                metrics_path="/metrics",
+            ),
+        )
         self.chat_template_url = vllm_args.chat_template_url
         self.engine_args = vllm_args
         self.app_args = SimpleNamespace(

@@ -52,6 +52,7 @@ type connection struct {
 	finishOnce  sync.Once
 	enqueuedAt  time.Time
 	dialTimeout time.Duration
+	llm         *llmRequestInfo
 }
 
 type backendTransportKey struct {
@@ -77,6 +78,9 @@ type PodProxyBuffer struct {
 	containerRepo           repository.ContainerRepository
 	keyEventManager         *common.KeyEventManager
 	stubConfig              *types.StubConfigV1
+	stubType                string
+	appID                   string
+	eventRepo               llmRouteEventPusher
 	httpClient              *http.Client
 	backendTransports       sync.Map
 	tailscale               *network.Tailscale
@@ -85,6 +89,8 @@ type PodProxyBuffer struct {
 	availableContainersLock sync.RWMutex
 	totalConnections        atomic.Int64
 	containerConnections    sync.Map
+	llmMetricsRefreshAfter  sync.Map
+	llmRouteCounter         atomic.Uint64
 	idleSnapshotUntil       atomic.Int64
 	proxyIndexRefreshAfter  atomic.Int64
 	buffer                  *abstractions.RingBuffer[*connection]
@@ -99,6 +105,9 @@ func NewPodProxyBuffer(ctx, drainCtx context.Context,
 	containerRepo repository.ContainerRepository,
 	keyEventManager *common.KeyEventManager,
 	stubConfig *types.StubConfigV1,
+	stubType string,
+	appID string,
+	eventRepo llmRouteEventPusher,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
 ) *PodProxyBuffer {
@@ -118,6 +127,9 @@ func NewPodProxyBuffer(ctx, drainCtx context.Context,
 		keyEventManager:         keyEventManager,
 		httpClient:              &http.Client{},
 		stubConfig:              stubConfig,
+		stubType:                stubType,
+		appID:                   appID,
+		eventRepo:               eventRepo,
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
 		availableContainers:     []container{},
@@ -150,17 +162,28 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		return ctx.String(http.StatusBadRequest, "Invalid port")
 	}
 
+	llmInfo, err := pb.inspectLLMRequest(ctx)
+	if err != nil {
+		return ctx.String(http.StatusBadRequest, "Failed to inspect LLM request")
+	}
+	if denied, reason := pb.llmAdmissionDenied(llmInfo); denied {
+		ctx.Response().Header().Set(echo.HeaderRetryAfter, "1")
+		pb.pushRejectedLLMRouteEvent(llmInfo, http.StatusTooManyRequests, reason)
+		return ctx.String(http.StatusTooManyRequests, reason)
+	}
+
 	done := make(chan struct{})
 	conn := &connection{
 		ctx:  ctx,
 		done: done,
+		llm:  llmInfo,
 	}
 
 	if ctx.Request().Context().Err() != nil {
 		return nil
 	}
 
-	container, ok, hasContainers, hasPort := pb.reserveContainerForPort(int32(port))
+	container, ok, hasContainers, hasPort := pb.reserveContainerForRequest(int32(port), llmInfo)
 	if ok {
 		pb.handleConnection(conn, container, int32(port))
 		return nil
@@ -314,7 +337,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 					continue
 				}
 
-				container, ok, hasContainers, hasPort := pb.reserveContainerForPort(int32(port))
+				container, ok, hasContainers, hasPort := pb.reserveContainerForRequest(int32(port), conn.llm)
 				if !ok {
 					if !hasContainers || hasPort {
 						pb.requeueConnection(conn)
@@ -360,6 +383,7 @@ func (pb *PodProxyBuffer) failQueuedConnection(conn *connection, status int, mes
 		conn.ctx.Response().Header().Set(echo.HeaderConnection, "close")
 		_ = conn.ctx.String(status, message)
 	}
+	pb.recordFailedQueuedLLMRoute(conn, status, message)
 	conn.finish()
 }
 
@@ -444,6 +468,13 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 	}
 
 	return container{}, false, true, hasPort
+}
+
+func (pb *PodProxyBuffer) reserveContainerForRequest(port int32, llmInfo *llmRequestInfo) (container, bool, bool, bool) {
+	if llmInfo != nil && llmInfo.Enabled {
+		return pb.reserveLLMContainerForPort(port, llmInfo)
+	}
+	return pb.reserveContainerForPort(port)
 }
 
 func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, timeout time.Duration) bool {
@@ -595,6 +626,10 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		conn.ctx.String(http.StatusServiceUnavailable, "Port not available")
 		return
 	}
+	llmTracker := pb.startLLMRequest(conn.llm, container.id, targetHost)
+	if llmTracker != nil {
+		defer llmTracker.finish()
+	}
 
 	subPath := conn.ctx.Param("subPath")
 	if subPath != "" && subPath[0] != '/' {
@@ -624,6 +659,16 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
 		return
 	}
+	if llmTracker != nil {
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			llmTracker.markFirstResponse(resp.StatusCode)
+			return nil
+		}
+		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+			llmTracker.markError(err.Error())
+			http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
+		}
+	}
 	proxy.ServeHTTP(conn.ctx.Response(), request)
 }
 
@@ -631,7 +676,11 @@ func (pb *PodProxyBuffer) recordQueuedRequestWait(conn *connection, protocol str
 	if conn.enqueuedAt.IsZero() {
 		return
 	}
-	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, protocol, time.Since(conn.enqueuedAt))
+	wait := time.Since(conn.enqueuedAt)
+	if conn.llm != nil {
+		conn.llm.QueueWait = wait
+	}
+	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, protocol, wait)
 }
 
 func podBackendHost(address string) string {
@@ -875,7 +924,7 @@ func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32
 		wg.Add(1)
 		go func(port int32, address string) {
 			defer wg.Done()
-			if !pb.checkContainerAvailable(address) {
+			if !pb.checkContainerReady(address, containerAvailableTimeout) {
 				return
 			}
 

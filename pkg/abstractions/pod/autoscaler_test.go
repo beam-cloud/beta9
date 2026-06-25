@@ -73,6 +73,44 @@ func TestDesiredPodDeploymentContainersAppliesGlobalReplicaLimit(t *testing.T) {
 	}
 }
 
+func TestDesiredPodLLMDeploymentContainersScalesOnActiveStreams(t *testing.T) {
+	config := podLLMDeploymentConfig(1, 5, 2, 4096)
+	sample := &podAutoscalerSample{
+		TotalConnections: 1,
+		LLMPressure:      llmPressureSnapshot{ActiveStreams: 5, TokenPressure: 1024},
+	}
+
+	got := desiredPodLLMDeploymentContainers(config, sample, 0)
+
+	if got != 3 {
+		t.Fatalf("desired containers = %d, want 3", got)
+	}
+}
+
+func TestDesiredPodLLMDeploymentContainersScalesOnTokenPressure(t *testing.T) {
+	config := podLLMDeploymentConfig(0, 5, 1, 4096)
+	sample := &podAutoscalerSample{
+		TotalConnections: 1,
+		LLMPressure:      llmPressureSnapshot{ActiveStreams: 1, TokenPressure: 9000},
+	}
+
+	got := desiredPodLLMDeploymentContainers(config, sample, 0)
+
+	if got != 3 {
+		t.Fatalf("desired containers = %d, want 3", got)
+	}
+}
+
+func TestDesiredPodLLMDeploymentContainersUsesIdleMinimum(t *testing.T) {
+	config := podLLMDeploymentConfig(2, 5, 1, 4096)
+
+	got := desiredPodLLMDeploymentContainers(config, &podAutoscalerSample{}, 0)
+
+	if got != 2 {
+		t.Fatalf("desired containers = %d, want 2", got)
+	}
+}
+
 func TestPodAutoscalerSampleUsesSharedConnectionSnapshots(t *testing.T) {
 	server, err := miniredis.Run()
 	if err != nil {
@@ -127,4 +165,14 @@ func podDeploymentConfig(minContainers, maxContainers, tasksPerContainer uint) *
 			TasksPerContainer: tasksPerContainer,
 		},
 	}
+}
+
+func podLLMDeploymentConfig(minContainers, maxContainers, tasksPerContainer uint, contextLength int) *types.StubConfigV1 {
+	config := podDeploymentConfig(minContainers, maxContainers, tasksPerContainer)
+	config.Autoscaler.Type = types.LLMTokenPressureAutoscaler
+	config.Serving = &types.ServingConfig{
+		ServingProtocol: "openai",
+		LLM:             &types.LLMConfig{ContextLength: contextLength},
+	}
+	return config
 }

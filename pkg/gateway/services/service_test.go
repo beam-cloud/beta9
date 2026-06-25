@@ -76,6 +76,36 @@ func TestNormalizeKeepWarmSeconds(t *testing.T) {
 	}
 }
 
+func TestAutoscalerFromProtoDefaultsWhenOmitted(t *testing.T) {
+	autoscaler := autoscalerFromProto(nil)
+
+	if got, want := autoscaler.Type, types.QueueDepthAutoscaler; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := autoscaler.MaxContainers, uint(1); got != want {
+		t.Fatalf("max containers = %d, want %d", got, want)
+	}
+	if got, want := autoscaler.TasksPerContainer, uint(1); got != want {
+		t.Fatalf("tasks per container = %d, want %d", got, want)
+	}
+}
+
+func TestGpuTypesForStubRequestDefaultsCountOnlyToAnyGPU(t *testing.T) {
+	gpus := gpuTypesForStubRequest(&pb.GetOrCreateStubRequest{GpuCount: 1})
+
+	if len(gpus) != 1 || gpus[0] != types.GPU_ANY {
+		t.Fatalf("gpus = %#v, want any", gpus)
+	}
+}
+
+func TestGpuTypesForStubRequestPreservesExplicitGPU(t *testing.T) {
+	gpus := gpuTypesForStubRequest(&pb.GetOrCreateStubRequest{Gpu: "L4", GpuCount: 1})
+
+	if len(gpus) != 1 || gpus[0] != types.GPU_L4 {
+		t.Fatalf("gpus = %#v, want L4", gpus)
+	}
+}
+
 func TestConfigurePodDeploymentAutoscalerPreservesReplicaBounds(t *testing.T) {
 	autoscaler := &types.Autoscaler{
 		Type:              types.QueueDepthAutoscaler,

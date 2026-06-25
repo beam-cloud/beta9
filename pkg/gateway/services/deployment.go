@@ -74,6 +74,7 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 			WorkspaceName: deployment.Workspace.Name,
 			CreatedAt:     timestamppb.New(deployment.CreatedAt.Time),
 			UpdatedAt:     timestamppb.New(deployment.UpdatedAt.Time),
+			AppId:         deployment.App.ExternalId,
 		}
 	}
 
@@ -323,16 +324,7 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 		return err
 	}
 
-	if stubConfig.Autoscaler == nil {
-		stubConfig.Autoscaler = &types.Autoscaler{
-			Type:              types.QueueDepthAutoscaler,
-			TasksPerContainer: 1,
-			MaxContainers:     1,
-			MinContainers:     0,
-		}
-	}
-	stubConfig.Autoscaler.MaxContainers = containers
-	stubConfig.Autoscaler.MinContainers = containers
+	stubConfig.SetReplicaCount(containers)
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {

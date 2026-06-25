@@ -38,11 +38,14 @@ from .client.deployment import Deployment
 from .client.task import Task
 from .type import (
     GpuType,
+    LLMConfig,
+    LLMTokenPressureAutoscaler,
     Pool,
     PricingPolicy,
     PricingPolicyCostModel,
     PythonVersion,
     QueueDepthAutoscaler,
+    ServingConfig,
     TaskPolicy,
 )
 
@@ -61,10 +64,13 @@ __all__ = [
     "Container",
     "env",
     "GpuType",
+    "LLMConfig",
+    "LLMTokenPressureAutoscaler",
     "Pool",
     "PythonVersion",
     "Output",
     "QueueDepthAutoscaler",
+    "ServingConfig",
     "experimental",
     "integrations",
     "schedule",

@@ -139,3 +139,45 @@ func TestPoolConfigRequiresReservationDerivesFromFields(t *testing.T) {
 		})
 	}
 }
+
+func TestStubConfigSetReplicaCountInitializesAutoscaler(t *testing.T) {
+	config := &StubConfigV1{}
+
+	config.SetReplicaCount(0)
+
+	if config.Autoscaler == nil {
+		t.Fatal("expected autoscaler")
+	}
+	if config.Autoscaler.Type != QueueDepthAutoscaler {
+		t.Fatalf("autoscaler type = %q, want %q", config.Autoscaler.Type, QueueDepthAutoscaler)
+	}
+	if config.Autoscaler.TasksPerContainer != 1 {
+		t.Fatalf("tasks per container = %d, want 1", config.Autoscaler.TasksPerContainer)
+	}
+	if config.Autoscaler.MinContainers != 0 || config.Autoscaler.MaxContainers != 1 {
+		t.Fatalf("replica bounds = %d/%d, want 0/1", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
+	}
+}
+
+func TestStubConfigSetReplicaCountPreservesAutoscalerType(t *testing.T) {
+	config := &StubConfigV1{
+		Autoscaler: &Autoscaler{
+			Type:              LLMTokenPressureAutoscaler,
+			MinContainers:     1,
+			MaxContainers:     4,
+			TasksPerContainer: 8,
+		},
+	}
+
+	config.SetReplicaCount(2)
+
+	if config.Autoscaler.Type != LLMTokenPressureAutoscaler {
+		t.Fatalf("autoscaler type = %q, want %q", config.Autoscaler.Type, LLMTokenPressureAutoscaler)
+	}
+	if config.Autoscaler.TasksPerContainer != 8 {
+		t.Fatalf("tasks per container = %d, want 8", config.Autoscaler.TasksPerContainer)
+	}
+	if config.Autoscaler.MinContainers != 2 || config.Autoscaler.MaxContainers != 2 {
+		t.Fatalf("replica bounds = %d/%d, want 2/2", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
+	}
+}

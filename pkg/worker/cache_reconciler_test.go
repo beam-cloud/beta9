@@ -1343,6 +1343,26 @@ func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
 	require.Len(t, fake.pushed[0].Items, 2)
 }
 
+func TestReportRequiredContentFlushesAndRequestsReconcile(t *testing.T) {
+	fake := &fakeEventRepo{}
+	requested := false
+	reporter := newTestReporter(fake)
+	reporter.reconcileNow = func() { requested = true }
+	client := &ImageClient{contentReporter: reporter}
+	request := &types.ContainerRequest{
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+		ImageId:     "image",
+	}
+
+	client.reportRequiredContent(context.Background(), request, testClipV2Metadata())
+
+	require.True(t, requested)
+	require.Len(t, fake.pushed, 1)
+	require.Equal(t, types.CacheContentKindClipV2, fake.pushed[0].Kind)
+	require.Len(t, fake.pushed[0].Items, 2)
+}
+
 func TestActiveStubsForWorkspaceUsesNestedRequestIDs(t *testing.T) {
 	manager := &WorkerCacheManager{containerInstances: common.NewSafeMap[*ContainerInstance]()}
 	manager.containerInstances.Set("container", &ContainerInstance{
