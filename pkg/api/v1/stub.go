@@ -32,14 +32,20 @@ type StubGroup struct {
 	backendRepo   repository.BackendRepository
 	containerRepo repository.ContainerRepository
 	eventRepo     repository.EventRepository
+	redisClient   *common.RedisClient
 }
 
-func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, config types.AppConfig) *StubGroup {
+type ScaleStubRequest struct {
+	Containers uint `json:"containers"`
+}
+
+func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, redisClient *common.RedisClient, config types.AppConfig) *StubGroup {
 	group := &StubGroup{routerGroup: g,
 		backendRepo:   backendRepo,
 		containerRepo: containerRepo,
 		config:        config,
 		eventRepo:     eventRepo,
+		redisClient:   redisClient,
 	}
 
 	g.GET("/:workspaceId/sandboxes", auth.WithWorkspaceAuth(group.ListSandboxes))                       // Lists sandboxes (enriched with live container state) for a workspace
@@ -51,6 +57,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, conta
 	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))                            // Allows workspace admins to get the URL of a stub
 	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL))              // Allows workspace admins to get the URL of a stub by deployment Id
 	g.PATCH("/:workspaceId/:stubId/config", auth.WithStrictWorkspaceAuth(group.UpdateConfig))           // Allows workspace admins to update the config of a stub
+	g.POST("/:workspaceId/:stubId/scale", auth.WithStrictWorkspaceAuth(group.ScaleStub))                // Allows workspace admins to scale pod deployment stubs directly
 	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                                      // Allows users to clone a public stub
 	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                                  // Allows users to get the URL of a stub
 	g.GET("/:stubId/config", group.GetConfig)                                                           // Allows users to get the config of a stub
@@ -632,6 +639,73 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v", updatedFields),
 		"updated_fields": updatedFields,
 	})
+}
+
+func (g *StubGroup) ScaleStub(ctx echo.Context) error {
+	stubID := ctx.Param("stubId")
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve stub")
+	} else if stub == nil {
+		return HTTPNotFound()
+	}
+
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+		return HTTPNotFound()
+	}
+
+	if stub.Type != types.StubType(types.StubTypePodDeployment) {
+		return HTTPBadRequest("This type of stub cannot be scaled directly")
+	}
+
+	var req ScaleStubRequest
+	if err := ctx.Bind(&req); err != nil {
+		return HTTPBadRequest("Failed to decode request body")
+	}
+
+	if maxReplicas := g.config.GatewayService.StubLimits.MaxReplicas; maxReplicas > 0 && uint64(req.Containers) > maxReplicas {
+		return HTTPBadRequest(fmt.Sprintf("replicas must be %d or less", maxReplicas))
+	}
+
+	var stubConfig types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to decode stub config")
+	}
+
+	setFixedReplicaCount(&stubConfig, req.Containers)
+
+	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to update stub config")
+	}
+
+	if g.redisClient != nil {
+		eventBus := common.NewEventBus(g.redisClient)
+		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+			"stub_id":   stub.ExternalId,
+			"stub_type": stub.Type,
+			"timestamp": time.Now().Unix(),
+		}})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"ok":         true,
+		"containers": req.Containers,
+	})
+}
+
+func setFixedReplicaCount(config *types.StubConfigV1, containers uint) {
+	if config.Autoscaler == nil {
+		config.Autoscaler = &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			TasksPerContainer: 1,
+			MaxContainers:     1,
+			MinContainers:     0,
+		}
+	}
+	config.Autoscaler.MaxContainers = containers
+	config.Autoscaler.MinContainers = containers
 }
 
 func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
