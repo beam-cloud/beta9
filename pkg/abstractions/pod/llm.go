@@ -68,48 +68,7 @@ var (
 	}
 	llmSessionHeaders   = []string{"X-Beam-LLM-Session", "X-Beam-Session", "X-Session-ID"}
 	llmRequestIDHeaders = []string{"X-Request-ID", "X-Request-Id", "X-Amzn-Trace-Id", "Traceparent"}
-
-	llmEngineMetricRedisFields = []string{
-		"running_requests",
-		"waiting_requests",
-		"ttft_ms",
-		"tpot_ms",
-		"decode_tokens_per_second",
-		"prompt_tokens_per_second",
-		"gpu_cache_usage_milli",
-		"prefix_cache_hit_milli",
-		"generation_tokens_total",
-		"prompt_tokens_total",
-		"prefix_cache_hits_total",
-		"prefix_cache_queries_total",
-		"ttft_sum_seconds",
-		"ttft_count",
-		"tpot_sum_seconds",
-		"tpot_count",
-		"updated_at_ms",
-	}
-
-	llmMetricRunningRequests    = llmVLLMMetricAliases("num_requests_running")
-	llmMetricWaitingRequests    = llmVLLMMetricAliases("num_requests_waiting")
-	llmMetricGPUCacheUsage      = llmVLLMMetricAliases("kv_cache_usage_perc", "gpu_cache_usage_perc", "gpu_cache_usage")
-	llmMetricPrefixCacheHitRate = llmVLLMMetricAliases("gpu_prefix_cache_hit_rate", "prefix_cache_hit_rate")
-	llmMetricGenerationTokens   = llmVLLMMetricAliases("generation_tokens_total")
-	llmMetricPromptTokens       = llmVLLMMetricAliases("prompt_tokens_total", "prompt_tokens_processed_total")
-	llmMetricPrefixCacheHits    = llmVLLMMetricAliases("prefix_cache_hits_total", "gpu_prefix_cache_hits_total")
-	llmMetricPrefixCacheQueries = llmVLLMMetricAliases("prefix_cache_queries_total", "gpu_prefix_cache_queries_total")
-	llmMetricTTFTSumSeconds     = llmVLLMMetricAliases("time_to_first_token_seconds_sum")
-	llmMetricTTFTCount          = llmVLLMMetricAliases("time_to_first_token_seconds_count")
-	llmMetricTPOTSumSeconds     = llmVLLMMetricAliases("time_per_output_token_seconds_sum")
-	llmMetricTPOTCount          = llmVLLMMetricAliases("time_per_output_token_seconds_count")
 )
-
-func llmVLLMMetricAliases(names ...string) []string {
-	aliases := make([]string, 0, len(names)*2)
-	for _, name := range names {
-		aliases = append(aliases, "vllm:"+name, "vllm_"+name)
-	}
-	return aliases
-}
 
 type llmRequestInfo struct {
 	Enabled               bool

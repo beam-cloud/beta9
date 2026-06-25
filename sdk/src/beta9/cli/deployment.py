@@ -37,18 +37,6 @@ from .extraclick import (
     override_config_options,
 )
 
-_LLM_OPTION_KEYS = (
-    "llm_enabled",
-    "llm_model_id",
-    "llm_engine",
-    "llm_served_model_name",
-    "llm_context_length",
-    "llm_tokenizer",
-    "llm_metrics_path",
-    "llm_slo_tier",
-)
-
-
 @click.group(cls=ClickCommonGroup)
 def common(**_):
     pass
@@ -183,7 +171,10 @@ def _service_image_option(kwargs: Dict) -> Optional[Image]:
 
 
 def _llm_options_present(kwargs: Dict) -> bool:
-    return any(kwargs.get(key) not in (None, "", 0, False) for key in _LLM_OPTION_KEYS)
+    return any(
+        key.startswith("llm_") and value not in (None, "", 0, False)
+        for key, value in kwargs.items()
+    )
 
 
 def _service_llm_metadata(kwargs: Dict, image: Optional[Image], entrypoint: Optional[List[str]]):

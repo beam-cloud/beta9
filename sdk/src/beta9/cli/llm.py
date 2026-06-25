@@ -54,20 +54,9 @@ class LLMMetadataHints:
 
 
 def llm_requested(kwargs: Dict) -> bool:
-    if kwargs.get("llm_enabled"):
-        return True
-
     return any(
-        kwargs.get(key) not in (None, "", 0)
-        for key in (
-            "llm_model_id",
-            "llm_engine",
-            "llm_served_model_name",
-            "llm_context_length",
-            "llm_tokenizer",
-            "llm_metrics_path",
-            "llm_slo_tier",
-        )
+        key.startswith("llm_") and value not in (None, "", 0, False)
+        for key, value in kwargs.items()
     )
 
 

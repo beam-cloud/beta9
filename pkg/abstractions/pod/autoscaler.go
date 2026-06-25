@@ -107,9 +107,9 @@ func desiredPodLLMDeploymentContainers(config *types.StubConfigV1, sample *podAu
 		return bounds.min
 	}
 
-	desiredByRequests := ceilDiv(maxInt64(sample.TotalConnections, sample.LLMPressure.ActiveStreams), bounds.tasksPerContainer)
+	desiredByRequests := ceilDiv(max(sample.TotalConnections, sample.LLMPressure.ActiveStreams), bounds.tasksPerContainer)
 	desiredByTokens := ceilDiv(sample.LLMPressure.TokenPressure, llmTokensPerContainer(config, bounds.tasksPerContainer))
-	return bounds.clamp(int(maxInt64(desiredByRequests, desiredByTokens)))
+	return bounds.clamp(int(max(desiredByRequests, desiredByTokens)))
 }
 
 func desiredPodDeploymentContainers(config *types.StubConfigV1, totalConnections int64, maxReplicasLimit uint64) int {
@@ -178,11 +178,4 @@ func ceilDiv(value, divisor int64) int64 {
 		divisor = 1
 	}
 	return (value + divisor - 1) / divisor
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }

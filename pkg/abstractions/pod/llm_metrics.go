@@ -15,6 +15,49 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+var (
+	llmEngineMetricRedisFields = []string{
+		"running_requests",
+		"waiting_requests",
+		"ttft_ms",
+		"tpot_ms",
+		"decode_tokens_per_second",
+		"prompt_tokens_per_second",
+		"gpu_cache_usage_milli",
+		"prefix_cache_hit_milli",
+		"generation_tokens_total",
+		"prompt_tokens_total",
+		"prefix_cache_hits_total",
+		"prefix_cache_queries_total",
+		"ttft_sum_seconds",
+		"ttft_count",
+		"tpot_sum_seconds",
+		"tpot_count",
+		"updated_at_ms",
+	}
+
+	llmMetricRunningRequests    = llmVLLMMetricAliases("num_requests_running")
+	llmMetricWaitingRequests    = llmVLLMMetricAliases("num_requests_waiting")
+	llmMetricGPUCacheUsage      = llmVLLMMetricAliases("kv_cache_usage_perc", "gpu_cache_usage_perc", "gpu_cache_usage")
+	llmMetricPrefixCacheHitRate = llmVLLMMetricAliases("gpu_prefix_cache_hit_rate", "prefix_cache_hit_rate")
+	llmMetricGenerationTokens   = llmVLLMMetricAliases("generation_tokens_total")
+	llmMetricPromptTokens       = llmVLLMMetricAliases("prompt_tokens_total", "prompt_tokens_processed_total")
+	llmMetricPrefixCacheHits    = llmVLLMMetricAliases("prefix_cache_hits_total", "gpu_prefix_cache_hits_total")
+	llmMetricPrefixCacheQueries = llmVLLMMetricAliases("prefix_cache_queries_total", "gpu_prefix_cache_queries_total")
+	llmMetricTTFTSumSeconds     = llmVLLMMetricAliases("time_to_first_token_seconds_sum")
+	llmMetricTTFTCount          = llmVLLMMetricAliases("time_to_first_token_seconds_count")
+	llmMetricTPOTSumSeconds     = llmVLLMMetricAliases("time_per_output_token_seconds_sum")
+	llmMetricTPOTCount          = llmVLLMMetricAliases("time_per_output_token_seconds_count")
+)
+
+func llmVLLMMetricAliases(names ...string) []string {
+	aliases := make([]string, 0, len(names)*2)
+	for _, name := range names {
+		aliases = append(aliases, "vllm:"+name, "vllm_"+name)
+	}
+	return aliases
+}
+
 func llmMetricsPath(config *types.StubConfigV1) string {
 	if llm := config.EffectiveLLMConfig(); llm != nil && strings.TrimSpace(llm.MetricsPath) != "" {
 		return "/" + strings.TrimPrefix(strings.TrimSpace(llm.MetricsPath), "/")
@@ -30,20 +73,8 @@ func (s llmEngineMetricsSnapshot) Stale(now time.Time) bool {
 }
 
 func (s llmEngineMetricsSnapshot) HasData() bool {
-	return s.RunningRequests != 0 ||
-		s.WaitingRequests != 0 ||
-		s.TTFTMs != 0 ||
-		s.TPOTMs != 0 ||
-		s.DecodeTokensPerSecond != 0 ||
-		s.PromptTokensPerSecond != 0 ||
-		s.GPUCacheUsageMilli != 0 ||
-		s.PrefixCacheHitMilli != 0 ||
-		s.GenerationTokensTotal != 0 ||
-		s.PromptTokensTotal != 0 ||
-		s.PrefixCacheHitsTotal != 0 ||
-		s.PrefixCacheQueriesTotal != 0 ||
-		s.TTFTCount != 0 ||
-		s.TPOTCount != 0
+	s.UpdatedAtUnixMs = 0
+	return s != llmEngineMetricsSnapshot{}
 }
 
 func (pb *PodProxyBuffer) llmEngineMetricsSnapshot(containerID string) (llmEngineMetricsSnapshot, error) {
@@ -295,10 +326,10 @@ func llmEngineMetricsScore(snapshot llmEngineMetricsSnapshot) int64 {
 		score += (snapshot.GPUCacheUsageMilli - 850) * llmEngineCachePressureWeight
 	}
 	if snapshot.DecodeTokensPerSecond > 0 {
-		score -= minInt64(snapshot.DecodeTokensPerSecond, llmEngineDecodeBonusCap)
+		score -= min(snapshot.DecodeTokensPerSecond, llmEngineDecodeBonusCap)
 	}
 	if snapshot.PrefixCacheHitMilli > 0 {
-		score -= minInt64(snapshot.PrefixCacheHitMilli/4, llmEngineCacheHitBonusCap)
+		score -= min(snapshot.PrefixCacheHitMilli/4, llmEngineCacheHitBonusCap)
 	}
 	return score
 }
@@ -341,11 +372,4 @@ func redisFieldFloat64(value any) float64 {
 	default:
 		return 0
 	}
-}
-
-func minInt64(a, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
 }
