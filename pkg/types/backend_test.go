@@ -140,10 +140,10 @@ func TestPoolConfigRequiresReservationDerivesFromFields(t *testing.T) {
 	}
 }
 
-func TestStubConfigSetFixedReplicaCountInitializesAutoscaler(t *testing.T) {
+func TestStubConfigSetReplicaCountInitializesAutoscaler(t *testing.T) {
 	config := &StubConfigV1{}
 
-	config.SetFixedReplicaCount(0)
+	config.SetReplicaCount(0)
 
 	if config.Autoscaler == nil {
 		t.Fatal("expected autoscaler")
@@ -154,12 +154,12 @@ func TestStubConfigSetFixedReplicaCountInitializesAutoscaler(t *testing.T) {
 	if config.Autoscaler.TasksPerContainer != 1 {
 		t.Fatalf("tasks per container = %d, want 1", config.Autoscaler.TasksPerContainer)
 	}
-	if config.Autoscaler.MinContainers != 0 || config.Autoscaler.MaxContainers != 0 {
-		t.Fatalf("replica bounds = %d/%d, want 0/0", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
+	if config.Autoscaler.MinContainers != 0 || config.Autoscaler.MaxContainers != 1 {
+		t.Fatalf("replica bounds = %d/%d, want 0/1", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
 	}
 }
 
-func TestStubConfigSetFixedReplicaCountPreservesAutoscalerType(t *testing.T) {
+func TestStubConfigSetReplicaCountPreservesAutoscalerType(t *testing.T) {
 	config := &StubConfigV1{
 		Autoscaler: &Autoscaler{
 			Type:              LLMTokenPressureAutoscaler,
@@ -169,7 +169,7 @@ func TestStubConfigSetFixedReplicaCountPreservesAutoscalerType(t *testing.T) {
 		},
 	}
 
-	config.SetFixedReplicaCount(2)
+	config.SetReplicaCount(2)
 
 	if config.Autoscaler.Type != LLMTokenPressureAutoscaler {
 		t.Fatalf("autoscaler type = %q, want %q", config.Autoscaler.Type, LLMTokenPressureAutoscaler)

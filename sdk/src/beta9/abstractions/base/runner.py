@@ -180,14 +180,12 @@ class RunnerAbstraction(BaseAbstraction):
         self.checkpoint_enabled = checkpoint_enabled
         self.docker_enabled = docker_enabled
         self.is_service = False
-        self.serving = serving or ServingConfig(
-            app_kind=app_kind or ("llm_model" if llm else ""),
-            serving_protocol=serving_protocol or ("openai" if llm else ""),
+        self.serving = ServingConfig.from_options(
+            app_kind=app_kind,
+            serving_protocol=serving_protocol,
             llm=llm,
+            serving=serving,
         )
-        if self.serving.llm:
-            self.serving.app_kind = self.serving.app_kind or "llm_model"
-            self.serving.serving_protocol = self.serving.serving_protocol or "openai"
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
@@ -250,11 +248,10 @@ class RunnerAbstraction(BaseAbstraction):
     @llm.setter
     def llm(self, value: Optional[LLMConfig]) -> None:
         self.serving.llm = value
+        self.serving.normalize()
 
     def _serving_config_proto(self) -> Optional[ServingConfigProto]:
-        if not self.serving or not (
-            self.serving.app_kind or self.serving.serving_protocol or self.serving.llm
-        ):
+        if not self.serving or self.serving.is_empty():
             return None
 
         llm = self.serving.llm

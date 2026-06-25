@@ -715,7 +715,7 @@ type Autoscaler struct {
 	MinContainers     uint           `json:"min_containers"`
 }
 
-func (c *StubConfigV1) SetFixedReplicaCount(containers uint) {
+func (c *StubConfigV1) SetReplicaCount(containers uint) {
 	if c.Autoscaler == nil {
 		c.Autoscaler = &Autoscaler{
 			Type:              QueueDepthAutoscaler,
@@ -727,6 +727,11 @@ func (c *StubConfigV1) SetFixedReplicaCount(containers uint) {
 	}
 	if c.Autoscaler.TasksPerContainer == 0 {
 		c.Autoscaler.TasksPerContainer = 1
+	}
+	if containers == 0 {
+		c.Autoscaler.MinContainers = 0
+		c.Autoscaler.MaxContainers = 1
+		return
 	}
 	c.Autoscaler.MinContainers = containers
 	c.Autoscaler.MaxContainers = containers

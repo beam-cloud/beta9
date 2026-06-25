@@ -324,7 +324,7 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 		return err
 	}
 
-	stubConfig.SetFixedReplicaCount(containers)
+	stubConfig.SetReplicaCount(containers)
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {

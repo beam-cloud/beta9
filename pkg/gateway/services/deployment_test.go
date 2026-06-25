@@ -193,6 +193,20 @@ func TestScalePodDeploymentUpdatesFixedReplicaBounds(t *testing.T) {
 	require.Equal(t, uint(3), backend.stubConfigs[20].Autoscaler.MaxContainers)
 }
 
+func TestScalePodDeploymentZeroEnablesScaleToZero(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 0,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Equal(t, uint(0), backend.stubConfigs[20].Autoscaler.MinContainers)
+	require.Equal(t, uint(1), backend.stubConfigs[20].Autoscaler.MaxContainers)
+}
+
 func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
 	config := types.StubConfigV1{

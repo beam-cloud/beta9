@@ -674,7 +674,7 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	stubConfig.SetFixedReplicaCount(req.Containers)
+	stubConfig.SetReplicaCount(req.Containers)
 
 	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to update stub config")

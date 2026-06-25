@@ -544,7 +544,7 @@ func (a stubConfigJSONArg) Match(value driver.Value) bool {
 	return a.check(&config)
 }
 
-func TestScaleStubUpdatesPodDeploymentReplicasAndReloads(t *testing.T) {
+func TestScaleStubEnablesScaleToZeroAndReloads(t *testing.T) {
 	stubGroup, mock, e := NewStubGroupWithMockForTest()
 	rdb, err := repository.NewRedisClientForTest()
 	if err != nil {
@@ -559,7 +559,7 @@ func TestScaleStubUpdatesPodDeploymentReplicasAndReloads(t *testing.T) {
 	mock.ExpectExec("UPDATE stub").WithArgs(stubConfigJSONArg{check: func(config *types.StubConfigV1) bool {
 		return config.Autoscaler != nil &&
 			config.Autoscaler.MinContainers == 0 &&
-			config.Autoscaler.MaxContainers == 0
+			config.Autoscaler.MaxContainers == 1
 	}}, 11).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	body, _ := json.Marshal(ScaleStubRequest{Containers: 0})

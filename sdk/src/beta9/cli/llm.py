@@ -6,11 +6,10 @@ from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.service import Service, command_from_dockerfile, dockerfile_instructions
-from ..type import GpuType, LLMConfig, LLMTokenPressureAutoscaler, ServingConfig
+from ..type import GpuType, LLMConfig, ServingConfig
+from ..type import LLM_APP_KIND, OPENAI_SERVING_PROTOCOL
 from .extraclick import env_vars_to_dict
 
-LLM_APP_KIND = "llm_model"
-LLM_SERVING_PROTOCOL = "openai"
 LLM_DEFAULT_METRICS_PATH = "/metrics"
 
 LLM_MODEL_ENV_KEYS = (
@@ -215,7 +214,7 @@ def service_llm_metadata(
     return {
         "serving": ServingConfig(
             app_kind=LLM_APP_KIND,
-            serving_protocol=LLM_SERVING_PROTOCOL,
+            serving_protocol=OPENAI_SERVING_PROTOCOL,
             llm=llm_config,
         ),
     }
@@ -225,16 +224,19 @@ def _metadata_target(user_obj):
     return getattr(user_obj, "parent", user_obj)
 
 
-def _enable_llm_autoscaler(target) -> None:
+def _enable_serving_autoscaler(target) -> None:
     autoscaler = getattr(target, "autoscaler", None)
-    if autoscaler is None or isinstance(autoscaler, LLMTokenPressureAutoscaler):
+    if autoscaler is None:
         return
 
-    target.autoscaler = LLMTokenPressureAutoscaler(
+    serving_autoscaler = target.serving.autoscaler_for_replicas(
         min_containers=getattr(autoscaler, "min_containers", 0),
         max_containers=getattr(autoscaler, "max_containers", 1),
-        tasks_per_container=getattr(autoscaler, "tasks_per_container", 1),
     )
+    if serving_autoscaler is None or isinstance(autoscaler, serving_autoscaler.__class__):
+        return
+
+    target.autoscaler = serving_autoscaler
 
 
 def _ensure_llm_pool_gpu(target) -> None:
@@ -262,6 +264,6 @@ def apply_llm_metadata(user_obj, kwargs: Dict) -> bool:
         return False
 
     target.serving = metadata["serving"]
-    _enable_llm_autoscaler(target)
+    _enable_serving_autoscaler(target)
     _ensure_llm_pool_gpu(target)
     return True

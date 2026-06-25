@@ -6,7 +6,6 @@ from ..type import (
     GpuType,
     GpuTypeAlias,
     LLMConfig,
-    LLMTokenPressureAutoscaler,
     Pool,
     QueueDepthAutoscaler,
     ServingConfig,
@@ -250,11 +249,17 @@ class Service(Pod):
             max_replicas=max_replicas,
             always_on=always_on,
         )
-        if self.llm and self.serving_protocol == "openai":
-            self.autoscaler = LLMTokenPressureAutoscaler(
-                min_containers=self.min_replicas,
-                max_containers=self.max_replicas,
-            )
+        self.configure_serving_autoscaler()
+
+    def configure_serving_autoscaler(self) -> None:
+        autoscaler = self.serving.autoscaler_for_replicas(
+            min_containers=self.min_replicas,
+            max_containers=self.max_replicas,
+        )
+        if autoscaler is None:
+            return
+
+        self.autoscaler = autoscaler
 
     def configure_replicas(
         self,

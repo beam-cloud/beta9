@@ -17,15 +17,15 @@ from ...type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    LLM_APP_KIND,
     LLMConfig,
+    OPENAI_SERVING_PROTOCOL,
     QueueDepthAutoscaler,
     ServingConfig,
 )
 
 DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
 DEFAULT_VLLM_CACHE_ROOT = "./vllm_cache_root"
-VLLM_APP_KIND = "llm_model"
-VLLM_SERVING_PROTOCOL = "openai"
 
 
 def _served_model_name(value: Optional[Union[str, List[str]]]) -> str:
@@ -279,8 +279,8 @@ class VLLM(ASGI):
         )
 
         self.serving = ServingConfig(
-            app_kind=VLLM_APP_KIND,
-            serving_protocol=VLLM_SERVING_PROTOCOL,
+            app_kind=LLM_APP_KIND,
+            serving_protocol=OPENAI_SERVING_PROTOCOL,
             llm=LLMConfig(
                 model_id=vllm_args.model,
                 engine="vllm",

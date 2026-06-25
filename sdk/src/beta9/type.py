@@ -289,6 +289,8 @@ LLM_TOKEN_PRESSURE_AUTOSCALER_TYPE = "llm_token_pressure"
 DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 DEFAULT_AUTOSCALER_MIN_CONTAINERS = 0
+LLM_APP_KIND = "llm_model"
+OPENAI_SERVING_PROTOCOL = "openai"
 
 
 @dataclass
@@ -324,6 +326,45 @@ class ServingConfig:
     app_kind: str = ""
     serving_protocol: str = ""
     llm: Optional[LLMConfig] = None
+
+    @classmethod
+    def from_options(
+        cls,
+        *,
+        app_kind: str = "",
+        serving_protocol: str = "",
+        llm: Optional[LLMConfig] = None,
+        serving: Optional["ServingConfig"] = None,
+    ) -> "ServingConfig":
+        config = serving or cls(
+            app_kind=app_kind, serving_protocol=serving_protocol, llm=llm
+        )
+        return config.normalize()
+
+    def normalize(self) -> "ServingConfig":
+        self.app_kind = self.app_kind or ""
+        self.serving_protocol = self.serving_protocol or ""
+        if self.llm:
+            self.app_kind = self.app_kind or LLM_APP_KIND
+            self.serving_protocol = self.serving_protocol or OPENAI_SERVING_PROTOCOL
+        return self
+
+    def is_empty(self) -> bool:
+        return not (self.app_kind or self.serving_protocol or self.llm)
+
+    def uses_token_pressure_autoscaling(self) -> bool:
+        return bool(self.llm and self.serving_protocol == OPENAI_SERVING_PROTOCOL)
+
+    def autoscaler_for_replicas(
+        self, *, min_containers: int, max_containers: int
+    ) -> Optional[Autoscaler]:
+        if not self.uses_token_pressure_autoscaling():
+            return None
+
+        return LLMTokenPressureAutoscaler(
+            min_containers=min_containers,
+            max_containers=max_containers,
+        )
 
 
 @dataclass
