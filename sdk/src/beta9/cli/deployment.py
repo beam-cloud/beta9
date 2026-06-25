@@ -36,8 +36,17 @@ from .extraclick import (
     image_from_dockerfile_option,
     override_config_options,
 )
-from .llm import apply_llm_metadata as _apply_llm_metadata
-from .llm import service_llm_metadata as _service_llm_metadata
+
+_LLM_OPTION_KEYS = (
+    "llm_enabled",
+    "llm_model_id",
+    "llm_engine",
+    "llm_served_model_name",
+    "llm_context_length",
+    "llm_tokenizer",
+    "llm_metrics_path",
+    "llm_slo_tier",
+)
 
 
 @click.group(cls=ClickCommonGroup)
@@ -171,6 +180,28 @@ def _service_image_option(kwargs: Dict) -> Optional[Image]:
     if dockerfile_image is not None:
         return dockerfile_image
     return kwargs.get("image")
+
+
+def _llm_options_present(kwargs: Dict) -> bool:
+    return any(kwargs.get(key) not in (None, "", 0, False) for key in _LLM_OPTION_KEYS)
+
+
+def _service_llm_metadata(kwargs: Dict, image: Optional[Image], entrypoint: Optional[List[str]]):
+    if not _llm_options_present(kwargs):
+        return None
+
+    from .llm import service_llm_metadata
+
+    return service_llm_metadata(kwargs, image=image, entrypoint=entrypoint)
+
+
+def _apply_llm_metadata_if_requested(user_obj, kwargs: Dict) -> bool:
+    if not _llm_options_present(kwargs):
+        return True
+
+    from .llm import apply_llm_metadata
+
+    return apply_llm_metadata(user_obj, kwargs)
 
 
 def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
@@ -319,7 +350,7 @@ def create_deployment(
             if not handle_config_override(user_obj, kwargs):
                 return
 
-            if not _apply_llm_metadata(user_obj, kwargs):
+            if not _apply_llm_metadata_if_requested(user_obj, kwargs):
                 return
 
             if hasattr(user_obj, "generate_deployment_artifacts"):
