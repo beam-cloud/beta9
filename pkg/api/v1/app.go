@@ -48,9 +48,7 @@ type AppWithLatestStubOrDeployment struct {
 	PoolName          string                       `json:"pool_name" serializer:"pool_name"`
 	RunningContainers int                          `json:"running_containers" serializer:"running_containers"`
 	IsService         bool                         `json:"is_service" serializer:"is_service"`
-	AppKind           string                       `json:"app_kind" serializer:"app_kind"`
-	ServingProtocol   string                       `json:"serving_protocol" serializer:"serving_protocol"`
-	LLM               *types.LLMConfig             `json:"llm,omitempty" serializer:"llm"`
+	Serving           *types.ServingConfig         `json:"serving,omitempty" serializer:"serving"`
 }
 
 func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
@@ -191,9 +189,7 @@ func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stu
 		app.PoolName = config.Pool.Name
 	}
 	app.IsService = config.IsService
-	app.AppKind = config.EffectiveAppKind()
-	app.ServingProtocol = config.EffectiveServingProtocol()
-	app.LLM = config.EffectiveLLMConfig()
+	app.Serving = config.EffectiveServingConfig()
 }
 
 func (a *AppGroup) ListApps(ctx echo.Context) error {

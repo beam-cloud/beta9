@@ -240,9 +240,45 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 			PoolName          string `json:"pool_name"`
 			RunningContainers int    `json:"running_containers"`
 			IsService         bool   `json:"is_service"`
-			AppKind           string `json:"app_kind"`
-			ServingProtocol   string `json:"serving_protocol"`
-			LLM               struct {
+			Serving           struct {
+				AppKind         string `json:"app_kind"`
+				ServingProtocol string `json:"serving_protocol"`
+				LLM             struct {
+					ModelID         string `json:"model_id"`
+					Engine          string `json:"engine"`
+					ServedModelName string `json:"served_model_name"`
+					ContextLength   int    `json:"context_length"`
+					MetricsPath     string `json:"metrics_path"`
+					SLOTier         string `json:"slo_tier"`
+				} `json:"llm"`
+			} `json:"serving"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	var rawResponse struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawResponse); err != nil {
+		t.Fatalf("failed to parse raw response: %v", err)
+	}
+	for _, app := range rawResponse.Data {
+		for _, legacyField := range []string{"app_kind", "serving_protocol", "llm"} {
+			if _, ok := app[legacyField]; ok {
+				t.Fatalf("response contains legacy top-level field %q: %+v", legacyField, app)
+			}
+		}
+	}
+
+	byID := map[string]struct {
+		PoolName          string
+		RunningContainers int
+		IsService         bool
+		Serving           struct {
+			AppKind         string `json:"app_kind"`
+			ServingProtocol string `json:"serving_protocol"`
+			LLM             struct {
 				ModelID         string `json:"model_id"`
 				Engine          string `json:"engine"`
 				ServedModelName string `json:"served_model_name"`
@@ -250,25 +286,6 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 				MetricsPath     string `json:"metrics_path"`
 				SLOTier         string `json:"slo_tier"`
 			} `json:"llm"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	byID := map[string]struct {
-		PoolName          string
-		RunningContainers int
-		IsService         bool
-		AppKind           string
-		ServingProtocol   string
-		LLM               struct {
-			ModelID         string `json:"model_id"`
-			Engine          string `json:"engine"`
-			ServedModelName string `json:"served_model_name"`
-			ContextLength   int    `json:"context_length"`
-			MetricsPath     string `json:"metrics_path"`
-			SLOTier         string `json:"slo_tier"`
 		}
 	}{}
 	for _, app := range response.Data {
@@ -276,23 +293,23 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 			PoolName          string
 			RunningContainers int
 			IsService         bool
-			AppKind           string
-			ServingProtocol   string
-			LLM               struct {
-				ModelID         string `json:"model_id"`
-				Engine          string `json:"engine"`
-				ServedModelName string `json:"served_model_name"`
-				ContextLength   int    `json:"context_length"`
-				MetricsPath     string `json:"metrics_path"`
-				SLOTier         string `json:"slo_tier"`
+			Serving           struct {
+				AppKind         string `json:"app_kind"`
+				ServingProtocol string `json:"serving_protocol"`
+				LLM             struct {
+					ModelID         string `json:"model_id"`
+					Engine          string `json:"engine"`
+					ServedModelName string `json:"served_model_name"`
+					ContextLength   int    `json:"context_length"`
+					MetricsPath     string `json:"metrics_path"`
+					SLOTier         string `json:"slo_tier"`
+				} `json:"llm"`
 			}
 		}{
 			PoolName:          app.PoolName,
 			RunningContainers: app.RunningContainers,
 			IsService:         app.IsService,
-			AppKind:           app.AppKind,
-			ServingProtocol:   app.ServingProtocol,
-			LLM:               app.LLM,
+			Serving:           app.Serving,
 		}
 	}
 
@@ -300,7 +317,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 	if deploymentApp.PoolName != "gpu-pool" || deploymentApp.RunningContainers != 2 || !deploymentApp.IsService {
 		t.Fatalf("unexpected deployment app enrichment: %+v", deploymentApp)
 	}
-	if deploymentApp.AppKind != "llm_model" || deploymentApp.ServingProtocol != "openai" || deploymentApp.LLM.ModelID != "Qwen/Qwen2.5-0.5B-Instruct" || deploymentApp.LLM.ContextLength != 4096 {
+	if deploymentApp.Serving.AppKind != "llm_model" || deploymentApp.Serving.ServingProtocol != "openai" || deploymentApp.Serving.LLM.ModelID != "Qwen/Qwen2.5-0.5B-Instruct" || deploymentApp.Serving.LLM.ContextLength != 4096 {
 		t.Fatalf("unexpected deployment app llm enrichment: %+v", deploymentApp)
 	}
 
