@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -150,6 +151,43 @@ class GithubBuilderEntrypointTest(unittest.TestCase):
         self.assertEqual(payload["app_id"], "dep-123")
         self.assertEqual(payload["app_name"], "example")
         self.assertEqual(payload["endpoint_url"], "https://example.test")
+
+    def test_main_calls_service_deploy_not_pod_create(self):
+        class FakeService:
+            deploy_calls = []
+
+            def deploy(self, name=None):
+                self.deploy_calls.append(name)
+                return {
+                    "deployment_id": "dep-123",
+                    "deployment_name": "qwen",
+                    "invoke_url": "https://qwen.example",
+                    "version": 1,
+                }, True
+
+            def create(self, *args, **kwargs):
+                raise AssertionError("builder must deploy services, not create one-off pods")
+
+        fake_service = FakeService()
+
+        with (
+            mock.patch.object(
+                builder,
+                "load_config",
+                return_value={
+                    "mode": "model",
+                    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+                    "app_name": "qwen",
+                },
+            ),
+            mock.patch.object(builder, "build_model_service", return_value=fake_service),
+            mock.patch("sys.stdout", new_callable=StringIO) as stdout,
+        ):
+            exit_code = builder.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(fake_service.deploy_calls, ["qwen"])
+        self.assertIn(builder.RESULT_PREFIX, stdout.getvalue())
 
 
 if __name__ == "__main__":
