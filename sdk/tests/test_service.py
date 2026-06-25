@@ -10,7 +10,6 @@ from beta9.abstractions.service import (
     service_image_implies_default_port,
 )
 from beta9.cli.deployment import (
-    _apply_llm_metadata,
     _generate_service_module,
     _merge_port_options,
     _service_image_option,
@@ -20,6 +19,7 @@ from beta9.cli.extraclick import (
     handle_config_override,
     image_from_dockerfile_option,
 )
+from beta9.cli.llm import apply_llm_metadata as _apply_llm_metadata
 
 
 class TestService(TestCase):
