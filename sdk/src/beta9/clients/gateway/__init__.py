@@ -291,6 +291,17 @@ class Autoscaler(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class LlmConfig(betterproto.Message):
+    model_id: str = betterproto.string_field(1)
+    engine: str = betterproto.string_field(2)
+    served_model_name: str = betterproto.string_field(3)
+    context_length: int = betterproto.int64_field(4)
+    tokenizer: str = betterproto.string_field(5)
+    metrics_path: str = betterproto.string_field(6)
+    slo_tier: str = betterproto.string_field(7)
+
+
+@dataclass(eq=False, repr=False)
 class TaskPolicy(betterproto.Message):
     timeout: int = betterproto.int64_field(1)
     max_retries: int = betterproto.uint32_field(2)
@@ -352,6 +363,10 @@ class GetOrCreateStubRequest(betterproto.Message):
     allow_list: List[str] = betterproto.string_field(39)
     docker_enabled: bool = betterproto.bool_field(40)
     pool: "PoolConfig" = betterproto.message_field(41)
+    is_service: bool = betterproto.bool_field(42)
+    app_kind: str = betterproto.string_field(43)
+    serving_protocol: str = betterproto.string_field(44)
+    llm: "LlmConfig" = betterproto.message_field(45)
 
 
 @dataclass(eq=False, repr=False)

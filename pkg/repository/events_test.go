@@ -368,6 +368,54 @@ func TestPushComputeEventBuildsWorkspaceScopedCloudEvent(t *testing.T) {
 	}
 }
 
+func TestPushLLMRouteEventBuildsStubScopedCloudEvent(t *testing.T) {
+	sink := &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{sink}}
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+
+	repo.PushLLMRouteEvent(types.EventLLMRouteSchema{
+		Timestamp:   now,
+		WorkspaceID: "workspace-1",
+		AppID:       "app-1",
+		StubID:      "stub-1",
+		StubType:    types.StubTypePodDeployment,
+		ContainerID: "container-1",
+		Model:       "Qwen/Qwen2.5-0.5B-Instruct",
+		RouteReason: "prefix_block_affinity",
+		StatusCode:  http.StatusOK,
+	})
+
+	if got, want := len(sink.events), 1; got != want {
+		t.Fatalf("unexpected event count: got %d want %d", got, want)
+	}
+	if got, want := sink.events[0].Type(), types.EventLLMRoute; got != want {
+		t.Fatalf("unexpected cloud event type: got %q want %q", got, want)
+	}
+	if !sink.events[0].Time().Equal(now) {
+		t.Fatalf("unexpected event time: got %s want %s", sink.events[0].Time(), now)
+	}
+	if got, want := sink.events[0].Extensions()["workspaceid"], "workspace-1"; got != want {
+		t.Fatalf("unexpected workspace extension: got %q want %q", got, want)
+	}
+	if got, want := sink.events[0].Extensions()["stubid"], "stub-1"; got != want {
+		t.Fatalf("unexpected stub extension: got %q want %q", got, want)
+	}
+	if got, want := sink.events[0].Extensions()["containerid"], "container-1"; got != want {
+		t.Fatalf("unexpected container extension: got %q want %q", got, want)
+	}
+	if got, want := sink.events[0].Extensions()["appid"], "app-1"; got != want {
+		t.Fatalf("unexpected app extension: got %q want %q", got, want)
+	}
+
+	var event types.EventLLMRouteSchema
+	if err := json.Unmarshal(sink.events[0].Data(), &event); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := event.RouteReason, "prefix_block_affinity"; got != want {
+		t.Fatalf("unexpected route reason: got %q want %q", got, want)
+	}
+}
+
 func TestPushContainerTaskLifecycleSinceSkipsMissingTimestamp(t *testing.T) {
 	sink := &captureEventSink{}
 	repo := &EventClientRepo{storageSinks: []eventSink{sink}}

@@ -2,7 +2,7 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple, Union
 
-from ..type import GpuType, GpuTypeAlias, Pool, QueueDepthAutoscaler
+from ..type import GpuType, GpuTypeAlias, LLMConfig, LLMTokenPressureAutoscaler, Pool, QueueDepthAutoscaler
 from .base.container import Container
 from .image import Image
 from .pod import Pod, PodInstance
@@ -183,6 +183,9 @@ class Service(Pod):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
+        app_kind: str = "",
+        serving_protocol: str = "",
+        llm: Optional[LLMConfig] = None,
     ) -> None:
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
@@ -222,12 +225,21 @@ class Service(Pod):
             allow_list=allow_list,
             docker_enabled=docker_enabled,
             pool=pool,
+            app_kind=app_kind,
+            serving_protocol=serving_protocol,
+            llm=llm,
         )
+        self.is_service = True
         self.configure_replicas(
             min_replicas=min_replicas,
             max_replicas=max_replicas,
             always_on=always_on,
         )
+        if self.llm and self.serving_protocol == "openai":
+            self.autoscaler = LLMTokenPressureAutoscaler(
+                min_containers=self.min_replicas,
+                max_containers=self.max_replicas,
+            )
 
     def configure_replicas(
         self,

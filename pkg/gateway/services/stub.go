@@ -34,17 +34,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	gpus := types.GPUTypesFromString(in.Gpu)
 
-	autoscaler := &types.Autoscaler{}
-	if in.Autoscaler.Type == "" {
-		autoscaler.Type = types.QueueDepthAutoscaler
-		autoscaler.MaxContainers = 1
-		autoscaler.TasksPerContainer = 1
-	} else {
-		autoscaler.Type = types.AutoscalerType(in.Autoscaler.Type)
-		autoscaler.MaxContainers = uint(in.Autoscaler.MaxContainers)
-		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
-		autoscaler.MinContainers = uint(in.Autoscaler.MinContainers)
-	}
+	autoscaler := autoscalerFromProto(in.Autoscaler)
 
 	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
 
@@ -134,6 +124,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	if poolConfig != nil {
 		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
 	}
+	llmConfig := llmConfigFromProto(in.Llm)
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
@@ -170,6 +161,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
+		IsService:          in.IsService || isLegacyServiceRequest(in),
+		AppKind:            in.AppKind,
+		ServingProtocol:    in.ServingProtocol,
+		LLM:                llmConfig,
 		Pool:               poolConfig,
 	}
 
@@ -340,6 +335,23 @@ func stubTypeSupportsInfiniteKeepWarm(stubType types.StubType) bool {
 	}
 }
 
+func autoscalerFromProto(in *pb.Autoscaler) *types.Autoscaler {
+	if in == nil || in.Type == "" {
+		return &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		}
+	}
+
+	return &types.Autoscaler{
+		Type:              types.AutoscalerType(in.Type),
+		MaxContainers:     uint(in.MaxContainers),
+		TasksPerContainer: uint(in.TasksPerContainer),
+		MinContainers:     uint(in.MinContainers),
+	}
+}
+
 func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeconds int, maxReplicas uint64) error {
 	if autoscaler.MaxContainers == 0 {
 		autoscaler.MaxContainers = 1
@@ -360,6 +372,10 @@ func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeco
 	return nil
 }
 
+func isLegacyServiceRequest(in *pb.GetOrCreateStubRequest) bool {
+	return in.StubType == types.StubTypePodDeployment && len(in.Ports) > 0
+}
+
 func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 	if in == nil {
 		return nil
@@ -375,6 +391,22 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
 		Selector:       in.Selector,
+	}
+}
+
+func llmConfigFromProto(in *pb.LLMConfig) *types.LLMConfig {
+	if in == nil {
+		return nil
+	}
+
+	return &types.LLMConfig{
+		ModelID:         in.ModelId,
+		Engine:          in.Engine,
+		ServedModelName: in.ServedModelName,
+		ContextLength:   int(in.ContextLength),
+		Tokenizer:       in.Tokenizer,
+		MetricsPath:     in.MetricsPath,
+		SLOTier:         in.SloTier,
 	}
 }
 

@@ -76,6 +76,20 @@ func TestNormalizeKeepWarmSeconds(t *testing.T) {
 	}
 }
 
+func TestAutoscalerFromProtoDefaultsWhenOmitted(t *testing.T) {
+	autoscaler := autoscalerFromProto(nil)
+
+	if got, want := autoscaler.Type, types.QueueDepthAutoscaler; got != want {
+		t.Fatalf("type = %q, want %q", got, want)
+	}
+	if got, want := autoscaler.MaxContainers, uint(1); got != want {
+		t.Fatalf("max containers = %d, want %d", got, want)
+	}
+	if got, want := autoscaler.TasksPerContainer, uint(1); got != want {
+		t.Fatalf("tasks per container = %d, want %d", got, want)
+	}
+}
+
 func TestConfigurePodDeploymentAutoscalerPreservesReplicaBounds(t *testing.T) {
 	autoscaler := &types.Autoscaler{
 		Type:              types.QueueDepthAutoscaler,

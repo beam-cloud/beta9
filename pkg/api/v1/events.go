@@ -79,6 +79,41 @@ type ContainerEventSummary struct {
 	Error            string                       `json:"error,omitempty"`
 }
 
+type LLMRouteEventRecord struct {
+	SeqNum     uint64 `json:"seq_num"`
+	StoredAtNs uint64 `json:"stored_at_ns,omitempty"`
+	types.EventLLMRouteSchema
+}
+
+type LLMRouteAggregate struct {
+	Count              int     `json:"count"`
+	ErrorCount         int     `json:"error_count"`
+	BackendErrorCount  int     `json:"backend_error_count"`
+	PromptTokens       int64   `json:"prompt_tokens"`
+	OutputTokens       int64   `json:"output_tokens"`
+	TokenPressure      int64   `json:"token_pressure"`
+	QueueWaitMs        int64   `json:"queue_wait_ms"`
+	FirstResponseMs    int64   `json:"first_response_ms"`
+	DurationMs         int64   `json:"duration_ms"`
+	AvgQueueWaitMs     float64 `json:"avg_queue_wait_ms"`
+	AvgFirstResponseMs float64 `json:"avg_first_response_ms"`
+	AvgDurationMs      float64 `json:"avg_duration_ms"`
+}
+
+type LLMRouteSummary struct {
+	Total       LLMRouteAggregate            `json:"total"`
+	ByContainer map[string]LLMRouteAggregate `json:"by_container"`
+	ByReason    map[string]int               `json:"by_reason"`
+	ByStatus    map[string]int               `json:"by_status"`
+}
+
+type LLMRouteEventsResponse struct {
+	Count   int                   `json:"count"`
+	Events  []LLMRouteEventRecord `json:"events"`
+	Summary LLMRouteSummary       `json:"summary"`
+	Streams []string              `json:"streams,omitempty"`
+}
+
 type ContainerStageSummary struct {
 	ID          string `json:"id"`
 	Label       string `json:"label"`
@@ -189,6 +224,7 @@ func NewEventGroup(g *echo.Group, backendRepo repository.BackendRepository, cont
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId", auth.WithWorkspaceAuth(group.GetContainerEvents))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/stream", auth.WithWorkspaceAuth(group.StreamContainerEvents))
 	g.GET("/:workspaceId/stubs/:stubId/containers/:containerId/summary", auth.WithWorkspaceAuth(group.GetContainerEventSummary))
+	g.GET("/:workspaceId/stubs/:stubId/llm-routes", auth.WithWorkspaceAuth(group.GetLLMRouteEvents))
 	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubEvents))
 	g.GET("/:workspaceId/tasks/:taskId/stream", auth.WithWorkspaceAuth(group.StreamTaskEvents))
 	g.GET("/:workspaceId/apps/:appId/stream", auth.WithWorkspaceAuth(group.StreamAppNamespaceEvents))
@@ -485,6 +521,64 @@ func (g *EventGroup) GetEventHistory(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, response)
+}
+
+func (g *EventGroup) GetLLMRouteEvents(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := authInfoFromContext(cc)
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	stubID := strings.TrimSpace(ctx.Param("stubId"))
+	if stubID == "" {
+		return HTTPBadRequest("Missing stub ID")
+	}
+
+	query, err := eventHistoryQueryFromContext(ctx, authInfo)
+	if err != nil {
+		return err
+	}
+	if query.WorkspaceID == "" {
+		return HTTPNotFound()
+	}
+	query.StubID = stubID
+	query.EventTypes = []string{types.EventLLMRoute}
+
+	response, err := g.eventRepo.GetEventHistory(ctx.Request().Context(), query)
+	if err != nil {
+		if errors.Is(err, repository.ErrEventReadUnsupported) {
+			return NewHTTPError(http.StatusServiceUnavailable, "Event history reads are not configured")
+		}
+		if IsRequestCanceled(ctx, err) {
+			return HTTPClientClosedRequest(ctx)
+		}
+		log.Warn().Err(err).Str("workspace_id", query.WorkspaceID).Str("stub_id", query.StubID).Msg("failed to retrieve LLM route events")
+		return HTTPInternalServerError("Failed to retrieve LLM route events")
+	}
+
+	events := make([]LLMRouteEventRecord, 0, len(response.Events))
+	for _, record := range response.Events {
+		if record.Type != "" && record.Type != types.EventLLMRoute {
+			continue
+		}
+		var route types.EventLLMRouteSchema
+		if err := json.Unmarshal(record.Data, &route); err != nil {
+			continue
+		}
+		events = append(events, LLMRouteEventRecord{
+			SeqNum:              record.SeqNum,
+			StoredAtNs:          record.StoredAtNs,
+			EventLLMRouteSchema: route,
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, LLMRouteEventsResponse{
+		Count:   len(events),
+		Events:  events,
+		Summary: summarizeLLMRoutes(events),
+		Streams: response.Streams,
+	})
 }
 
 func (g *EventGroup) GetContainerEventSummary(ctx echo.Context) error {
@@ -1048,6 +1142,69 @@ func eventQueryTopLifecycle(ctx echo.Context) (int, error) {
 		top = 50
 	}
 	return top, nil
+}
+
+func summarizeLLMRoutes(events []LLMRouteEventRecord) LLMRouteSummary {
+	summary := LLMRouteSummary{
+		ByContainer: map[string]LLMRouteAggregate{},
+		ByReason:    map[string]int{},
+		ByStatus:    map[string]int{},
+	}
+	for _, event := range events {
+		addLLMRouteAggregate(&summary.Total, event.EventLLMRouteSchema)
+
+		containerID := event.ContainerID
+		if containerID == "" {
+			containerID = "_none"
+		}
+		containerAgg := summary.ByContainer[containerID]
+		addLLMRouteAggregate(&containerAgg, event.EventLLMRouteSchema)
+		summary.ByContainer[containerID] = containerAgg
+
+		reason := event.RouteReason
+		if reason == "" {
+			reason = "unknown"
+		}
+		summary.ByReason[reason]++
+
+		status := strconv.Itoa(event.StatusCode)
+		if event.StatusCode == 0 {
+			status = "unknown"
+		}
+		summary.ByStatus[status]++
+	}
+	finalizeLLMRouteAggregate(&summary.Total)
+	for containerID, aggregate := range summary.ByContainer {
+		finalizeLLMRouteAggregate(&aggregate)
+		summary.ByContainer[containerID] = aggregate
+	}
+	return summary
+}
+
+func addLLMRouteAggregate(aggregate *LLMRouteAggregate, event types.EventLLMRouteSchema) {
+	aggregate.Count++
+	if event.StatusCode >= http.StatusBadRequest {
+		aggregate.ErrorCount++
+	}
+	if event.BackendError {
+		aggregate.BackendErrorCount++
+	}
+	aggregate.PromptTokens += event.PromptTokens
+	aggregate.OutputTokens += event.OutputTokens
+	aggregate.TokenPressure += event.TokenPressure
+	aggregate.QueueWaitMs += event.QueueWaitMs
+	aggregate.FirstResponseMs += event.FirstResponseMs
+	aggregate.DurationMs += event.DurationMs
+}
+
+func finalizeLLMRouteAggregate(aggregate *LLMRouteAggregate) {
+	if aggregate.Count == 0 {
+		return
+	}
+	count := float64(aggregate.Count)
+	aggregate.AvgQueueWaitMs = float64(aggregate.QueueWaitMs) / count
+	aggregate.AvgFirstResponseMs = float64(aggregate.FirstResponseMs) / count
+	aggregate.AvgDurationMs = float64(aggregate.DurationMs) / count
 }
 
 func summarizeContainerEvents(events *types.ContainerEventsResponse, topLifecycle int, includeEvents bool) ContainerEventSummary {

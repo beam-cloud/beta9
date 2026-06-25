@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -268,10 +269,105 @@ func TestGetEventHistoryDoesNotReturn500ForCanceledReads(t *testing.T) {
 	}
 }
 
+func TestGetLLMRouteEventsReturnsRoutesAndSummary(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events/workspace-1/stubs/stub-1/llm-routes?limit=10", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId", "stubId")
+	ctx.SetParamValues("workspace-1", "stub-1")
+
+	repo := &captureLLMRouteHistoryRepo{
+		response: &types.EventHistoryResponse{
+			Events: []types.ContainerEventRecord{
+				llmRouteRecord(t, 1, types.EventLLMRouteSchema{
+					WorkspaceID:   "workspace-1",
+					StubID:        "stub-1",
+					ContainerID:   "container-a",
+					RouteReason:   "prefix_block_affinity",
+					StatusCode:    http.StatusOK,
+					PromptTokens:  10,
+					OutputTokens:  5,
+					TokenPressure: 15,
+					DurationMs:    100,
+				}),
+				llmRouteRecord(t, 2, types.EventLLMRouteSchema{
+					WorkspaceID:   "workspace-1",
+					StubID:        "stub-1",
+					ContainerID:   "container-b",
+					RouteReason:   "least_pressure",
+					StatusCode:    http.StatusBadGateway,
+					BackendError:  true,
+					PromptTokens:  20,
+					OutputTokens:  10,
+					TokenPressure: 30,
+					DurationMs:    200,
+				}),
+			},
+			Streams: []string{"stub/workspace-1/stub-1/events"},
+		},
+	}
+	group := &EventGroup{eventRepo: repo}
+
+	if err := group.GetLLMRouteEvents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if repo.query.StubID != "stub-1" {
+		t.Fatalf("stub query = %q, want stub-1", repo.query.StubID)
+	}
+	if len(repo.query.EventTypes) != 1 || repo.query.EventTypes[0] != types.EventLLMRoute {
+		t.Fatalf("event types = %#v, want llm.route", repo.query.EventTypes)
+	}
+
+	var out LLMRouteEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 2 || len(out.Events) != 2 {
+		t.Fatalf("unexpected response count: %+v", out)
+	}
+	if out.Summary.Total.Count != 2 || out.Summary.Total.BackendErrorCount != 1 {
+		t.Fatalf("bad total summary: %+v", out.Summary.Total)
+	}
+	if out.Summary.ByContainer["container-a"].Count != 1 || out.Summary.ByContainer["container-b"].Count != 1 {
+		t.Fatalf("bad container summary: %+v", out.Summary.ByContainer)
+	}
+	if out.Summary.ByReason["prefix_block_affinity"] != 1 || out.Summary.ByStatus["502"] != 1 {
+		t.Fatalf("bad route summary: %+v", out.Summary)
+	}
+}
+
 type canceledEventHistoryRepo struct {
 	repository.EventRepository
 }
 
 func (canceledEventHistoryRepo) GetEventHistory(context.Context, types.EventQuery) (*types.EventHistoryResponse, error) {
 	return nil, fmt.Errorf("read event history from s2 stream: %w", context.Canceled)
+}
+
+type captureLLMRouteHistoryRepo struct {
+	repository.EventRepository
+	query    types.EventQuery
+	response *types.EventHistoryResponse
+}
+
+func (r *captureLLMRouteHistoryRepo) GetEventHistory(_ context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	r.query = query
+	return r.response, nil
+}
+
+func llmRouteRecord(t *testing.T, seq uint64, event types.EventLLMRouteSchema) types.ContainerEventRecord {
+	t.Helper()
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.ContainerEventRecord{
+		SeqNum:      seq,
+		Type:        types.EventLLMRoute,
+		Data:        data,
+		ContainerID: event.ContainerID,
+		WorkspaceID: event.WorkspaceID,
+		StubID:      event.StubID,
+	}
 }

@@ -20,6 +20,7 @@ from ...clients.gateway import (
     GetOrCreateStubResponse,
     GetUrlRequest,
     GetUrlResponse,
+    LlmConfig as LLMConfigProto,
     SecretVar,
 )
 from ...clients.gateway import (
@@ -40,6 +41,7 @@ from ...type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    LLMConfig,
     Pool,
     PricingPolicy,
     QueueDepthAutoscaler,
@@ -124,6 +126,9 @@ class RunnerAbstraction(BaseAbstraction):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
+        app_kind: str = "",
+        serving_protocol: str = "",
+        llm: Optional[LLMConfig] = None,
     ) -> None:
         super().__init__()
 
@@ -171,6 +176,10 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.checkpoint_enabled = checkpoint_enabled
         self.docker_enabled = docker_enabled
+        self.is_service = False
+        self.app_kind = app_kind
+        self.serving_protocol = serving_protocol
+        self.llm = llm
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
@@ -648,6 +657,20 @@ class RunnerAbstraction(BaseAbstraction):
             block_network=self.block_network,
             allow_list=self.allow_list,
             pool=self.pool_config,
+            is_service=self.is_service,
+            app_kind=self.app_kind,
+            serving_protocol=self.serving_protocol,
+            llm=LLMConfigProto(
+                model_id=self.llm.model_id,
+                engine=self.llm.engine,
+                served_model_name=self.llm.served_model_name,
+                context_length=self.llm.context_length,
+                tokenizer=self.llm.tokenizer,
+                metrics_path=self.llm.metrics_path,
+                slo_tier=self.llm.slo_tier,
+            )
+            if self.llm
+            else None,
         )
 
     def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
