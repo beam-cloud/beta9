@@ -11,6 +11,12 @@ type podAutoscalerSample struct {
 	LLMPressure       llmPressureSnapshot
 }
 
+type podScaleBounds struct {
+	min               int
+	max               int
+	tasksPerContainer int64
+}
+
 // podAutoscalerSampleFunc retrieves an autoscaling sample from the pod instance
 func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 	currentContainers := 0
@@ -50,31 +56,7 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 
 // podScaleFunc scales based on the number of desired containers
 func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.AutoscalerResult {
-	desiredContainers := 1
-
-	if i.Stub.Type == types.StubType(types.StubTypePodRun) || i.Stub.Type == types.StubType(types.StubTypeSandbox) {
-		if s.CurrentContainers == 0 {
-			desiredContainers = 0
-		} else if s.CurrentContainers > 0 && i.StubConfig.KeepWarmSeconds >= 0 {
-			desiredContainers = 0
-		}
-	}
-
-	if i.Stub.Type == types.StubType(types.StubTypePodDeployment) {
-		if i.StubConfig != nil && i.StubConfig.Autoscaler != nil && i.StubConfig.Autoscaler.Type == types.LLMTokenPressureAutoscaler {
-			desiredContainers = desiredPodLLMDeploymentContainers(
-				i.StubConfig,
-				s,
-				i.AppConfig.GatewayService.StubLimits.MaxReplicas,
-			)
-		} else {
-			desiredContainers = desiredPodDeploymentContainers(
-				i.StubConfig,
-				s.TotalConnections,
-				i.AppConfig.GatewayService.StubLimits.MaxReplicas,
-			)
-		}
-	}
+	desiredContainers := desiredPodContainers(i, s)
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
@@ -82,74 +64,110 @@ func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.Autoscal
 	}
 }
 
+func desiredPodContainers(i *podInstance, s *podAutoscalerSample) int {
+	if s == nil {
+		s = &podAutoscalerSample{}
+	}
+
+	if i.Stub.Type == types.StubType(types.StubTypePodRun) || i.Stub.Type == types.StubType(types.StubTypeSandbox) {
+		if s.CurrentContainers == 0 {
+			return 0
+		}
+		if i.StubConfig.KeepWarmSeconds >= 0 {
+			return 0
+		}
+		return 1
+	}
+
+	if i.Stub.Type == types.StubType(types.StubTypePodDeployment) {
+		if i.StubConfig != nil && i.StubConfig.Autoscaler != nil && i.StubConfig.Autoscaler.Type == types.LLMTokenPressureAutoscaler {
+			return desiredPodLLMDeploymentContainers(
+				i.StubConfig,
+				s,
+				i.AppConfig.GatewayService.StubLimits.MaxReplicas,
+			)
+		}
+		return desiredPodDeploymentContainers(
+			i.StubConfig,
+			s.TotalConnections,
+			i.AppConfig.GatewayService.StubLimits.MaxReplicas,
+		)
+	}
+
+	return 1
+}
+
 func desiredPodLLMDeploymentContainers(config *types.StubConfigV1, sample *podAutoscalerSample, maxReplicasLimit uint64) int {
 	if sample == nil {
 		return desiredPodDeploymentContainers(config, 0, maxReplicasLimit)
 	}
 
-	minContainers, maxContainers, tasksPerContainer := podAutoscalerBounds(config, maxReplicasLimit)
-	if sample.TotalConnections <= 0 && sample.LLMPressure.ActiveStreams <= 0 && sample.LLMPressure.TokenPressure <= 0 {
-		return minContainers
+	bounds := podAutoscalerBounds(config, maxReplicasLimit)
+	if !sample.hasLLMLoad() {
+		return bounds.min
 	}
 
-	desiredByConnections := ceilDiv(maxInt64(sample.TotalConnections, sample.LLMPressure.ActiveStreams), tasksPerContainer)
-	tokensPerContainer := llmContextLength(config) * tasksPerContainer
-	if tokensPerContainer <= 0 {
-		tokensPerContainer = int64(llmDefaultContextLen)
-	}
-	desiredByTokens := ceilDiv(sample.LLMPressure.TokenPressure, tokensPerContainer)
-	desiredContainers := int(maxInt64(desiredByConnections, desiredByTokens))
-
-	if desiredContainers < minContainers {
-		return minContainers
-	}
-	if desiredContainers > maxContainers {
-		return maxContainers
-	}
-	return desiredContainers
+	desiredByRequests := ceilDiv(maxInt64(sample.TotalConnections, sample.LLMPressure.ActiveStreams), bounds.tasksPerContainer)
+	desiredByTokens := ceilDiv(sample.LLMPressure.TokenPressure, llmTokensPerContainer(config, bounds.tasksPerContainer))
+	return bounds.clamp(int(maxInt64(desiredByRequests, desiredByTokens)))
 }
 
 func desiredPodDeploymentContainers(config *types.StubConfigV1, totalConnections int64, maxReplicasLimit uint64) int {
-	minContainers, maxContainers, tasksPerContainer := podAutoscalerBounds(config, maxReplicasLimit)
-
+	bounds := podAutoscalerBounds(config, maxReplicasLimit)
 	if totalConnections <= 0 {
-		return minContainers
+		return bounds.min
 	}
-
-	desiredContainers := int(ceilDiv(totalConnections, tasksPerContainer))
-
-	if desiredContainers < minContainers {
-		return minContainers
-	}
-	if desiredContainers > maxContainers {
-		return maxContainers
-	}
-	return desiredContainers
+	return bounds.clamp(int(ceilDiv(totalConnections, bounds.tasksPerContainer)))
 }
 
-func podAutoscalerBounds(config *types.StubConfigV1, maxReplicasLimit uint64) (int, int, int64) {
-	minContainers := 0
-	maxContainers := 1
-	tasksPerContainer := int64(1)
+func (s *podAutoscalerSample) hasLLMLoad() bool {
+	return s != nil &&
+		(s.TotalConnections > 0 || s.LLMPressure.ActiveStreams > 0 || s.LLMPressure.TokenPressure > 0)
+}
+
+func llmTokensPerContainer(config *types.StubConfigV1, tasksPerContainer int64) int64 {
+	tokens := llmContextLength(config) * tasksPerContainer
+	if tokens <= 0 {
+		return int64(llmDefaultContextLen)
+	}
+	return tokens
+}
+
+func podAutoscalerBounds(config *types.StubConfigV1, maxReplicasLimit uint64) podScaleBounds {
+	bounds := podScaleBounds{
+		min:               0,
+		max:               1,
+		tasksPerContainer: 1,
+	}
 
 	if config != nil && config.Autoscaler != nil {
-		minContainers = int(config.Autoscaler.MinContainers)
-		maxContainers = int(config.Autoscaler.MaxContainers)
+		bounds.min = int(config.Autoscaler.MinContainers)
+		bounds.max = int(config.Autoscaler.MaxContainers)
 		if config.Autoscaler.TasksPerContainer > 0 {
-			tasksPerContainer = int64(config.Autoscaler.TasksPerContainer)
+			bounds.tasksPerContainer = int64(config.Autoscaler.TasksPerContainer)
 		}
 	}
 
-	if maxReplicasLimit > 0 && uint64(maxContainers) > maxReplicasLimit {
-		maxContainers = int(maxReplicasLimit)
+	if maxReplicasLimit > 0 && uint64(bounds.max) > maxReplicasLimit {
+		bounds.max = int(maxReplicasLimit)
 	}
-	if minContainers > maxContainers {
-		minContainers = maxContainers
+	if bounds.min > bounds.max {
+		bounds.min = bounds.max
 	}
-	if tasksPerContainer <= 0 {
-		tasksPerContainer = 1
+	if bounds.tasksPerContainer <= 0 {
+		bounds.tasksPerContainer = 1
 	}
-	return minContainers, maxContainers, tasksPerContainer
+	return bounds
+}
+
+func (b podScaleBounds) clamp(desired int) int {
+	if desired < b.min {
+		return b.min
+	}
+	if desired > b.max {
+		return b.max
+	}
+	return desired
 }
 
 func ceilDiv(value, divisor int64) int64 {

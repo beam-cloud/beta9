@@ -1,15 +1,24 @@
 package pod
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"math"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/labstack/echo/v4"
 )
 
 const (
@@ -506,4 +515,653 @@ func sharedPodLLMPressure(ctx context.Context, rdb *common.RedisClient, workspac
 		return llmPressureSnapshot{}, nil
 	}
 	return readPodLLMPressure(ctx, rdb, workspaceName, stubId, llmPressureTargetTotal)
+}
+
+func (pb *PodProxyBuffer) inspectLLMRequest(ctx echo.Context) (*llmRequestInfo, error) {
+	if !llmEnabled(pb.stubConfig) {
+		return nil, nil
+	}
+
+	path := llmRequestPath(ctx)
+	if !isOpenAIPath(path) {
+		return nil, nil
+	}
+
+	req := ctx.Request()
+	info := &llmRequestInfo{
+		Enabled:      true,
+		Method:       req.Method,
+		Path:         path,
+		RequestID:    llmRequestID(req),
+		Model:        llmConfiguredModel(pb.stubConfig),
+		OutputTokens: llmDefaultOutputTokens,
+		RouteReason:  "least_pressure",
+	}
+
+	if req.Body == nil || req.Method == http.MethodGet || req.Method == http.MethodHead {
+		info.PromptTokens = 1
+		info.TokenPressure = info.PromptTokens + info.OutputTokens
+		setLLMAffinity(info, path)
+		return info, nil
+	}
+
+	body, overflow, err := readAndRestoreRequestBody(req, llmMaxInspectBytes)
+	if err != nil {
+		return nil, err
+	}
+	if overflow {
+		finalizeLLMRequestInfo(info, string(body), "")
+		return info, nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		finalizeLLMRequestInfo(info, string(body), "")
+		return info, nil
+	}
+
+	if model, ok := payload["model"].(string); ok && strings.TrimSpace(model) != "" {
+		info.Model = strings.TrimSpace(model)
+	}
+	info.Stream = boolValue(payload["stream"])
+	info.OutputTokens = requestedOutputTokens(payload)
+	promptText := promptTextFromOpenAIPayload(payload)
+
+	info.SessionKey = llmSessionKey(req, payload)
+	if info.SessionKey != "" {
+		info.SessionHash = hashLLMPrefix(info.Model, "session:"+info.SessionKey)
+	}
+	finalizeLLMRequestInfo(info, promptText, string(body))
+	return info, nil
+}
+
+func finalizeLLMRequestInfo(info *llmRequestInfo, promptText, fallbackText string) {
+	if info == nil {
+		return
+	}
+	info.PromptTokens = estimateTokensFromText(promptText)
+	if info.PromptTokens == 0 {
+		info.PromptTokens = estimateTokensFromText(fallbackText)
+	}
+	info.TokenPressure = info.PromptTokens + info.OutputTokens
+	if info.TokenPressure <= 0 {
+		info.TokenPressure = 1
+	}
+	setLLMAffinity(info, promptText)
+}
+
+func llmRequestPath(ctx echo.Context) string {
+	subPath := ctx.Param("subPath")
+	if subPath == "" {
+		subPath = ctx.Request().URL.Path
+	}
+	if !strings.HasPrefix(subPath, "/") {
+		subPath = "/" + subPath
+	}
+	if openAIPath, ok := normalizedOpenAIPath(subPath); ok {
+		return openAIPath
+	}
+	return subPath
+}
+
+func isOpenAIPath(path string) bool {
+	_, ok := normalizedOpenAIPath(path)
+	return ok
+}
+
+func normalizedOpenAIPath(path string) (string, bool) {
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		path = "/"
+	}
+	for _, openAIPath := range openAIPaths {
+		if path == openAIPath || strings.HasSuffix(path, openAIPath) {
+			return openAIPath, true
+		}
+	}
+	return path, false
+}
+
+func readAndRestoreRequestBody(req *http.Request, maxBytes int64) ([]byte, bool, error) {
+	limited := io.LimitReader(req.Body, maxBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, false, err
+	}
+
+	overflow := int64(len(body)) > maxBytes
+	req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), req.Body))
+	if overflow {
+		return body[:int(maxBytes)], true, nil
+	}
+	return body, false, nil
+}
+
+func requestedOutputTokens(payload map[string]any) int64 {
+	for _, key := range []string{"max_tokens", "max_completion_tokens"} {
+		value := int64Value(payload[key])
+		if value > 0 {
+			return value
+		}
+	}
+	return llmDefaultOutputTokens
+}
+
+func promptTextFromOpenAIPayload(payload map[string]any) string {
+	var parts []string
+	appendText := func(value string) {
+		if strings.TrimSpace(value) != "" {
+			parts = append(parts, value)
+		}
+	}
+
+	switch messages := payload["messages"].(type) {
+	case []any:
+		for _, message := range messages {
+			m, ok := message.(map[string]any)
+			if !ok {
+				continue
+			}
+			appendText(openAIContentText(m["content"]))
+		}
+	}
+
+	switch prompt := payload["prompt"].(type) {
+	case string:
+		appendText(prompt)
+	case []any:
+		for _, item := range prompt {
+			if text, ok := item.(string); ok {
+				appendText(text)
+			}
+		}
+	}
+
+	switch input := payload["input"].(type) {
+	case string:
+		appendText(input)
+	case []any:
+		for _, item := range input {
+			if text, ok := item.(string); ok {
+				appendText(text)
+			}
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func openAIContentText(value any) string {
+	switch content := value.(type) {
+	case string:
+		return content
+	case []any:
+		var parts []string
+		for _, item := range content {
+			part, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := part["text"].(string); ok {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+func llmSessionKey(req *http.Request, payload map[string]any) string {
+	for _, header := range llmSessionHeaders {
+		if value := strings.TrimSpace(req.Header.Get(header)); value != "" {
+			return value
+		}
+	}
+	if user, ok := payload["user"].(string); ok {
+		return strings.TrimSpace(user)
+	}
+	return ""
+}
+
+func llmRequestID(req *http.Request) string {
+	for _, header := range llmRequestIDHeaders {
+		if value := strings.TrimSpace(req.Header.Get(header)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func estimateTokensFromText(text string) int64 {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	tokens := int64(math.Ceil(float64(len([]rune(text))) / 4.0))
+	if tokens < 1 {
+		return 1
+	}
+	return tokens
+}
+
+func setLLMAffinity(info *llmRequestInfo, promptText string) {
+	if info == nil {
+		return
+	}
+	info.PrefixHash = hashLLMPrefix(info.Model, promptText)
+	info.PrefixBlocks = llmPrefixBlockHashes(info.Model, promptText)
+	if info.SessionHash != "" {
+		info.AffinityKey = info.SessionHash
+		return
+	}
+	info.AffinityKey = info.PrefixHash
+}
+
+func hashLLMPrefix(model, text string) string {
+	normalized := truncateLLMText(normalizeLLMText(text), llmPrefixChars)
+	sum := sha256.Sum256([]byte(model + "\n" + normalized))
+	return hex.EncodeToString(sum[:])[:llmAffinityHashChars]
+}
+
+func llmPrefixBlockHashes(model, text string) []string {
+	normalized := truncateLLMText(normalizeLLMText(text), llmPrefixChars)
+	if normalized == "" {
+		return nil
+	}
+
+	runes := []rune(normalized)
+	hashes := make([]string, 0, min(len(runes)/llmPrefixBlockChars+1, llmMaxPrefixBlocks))
+	for end := llmPrefixBlockChars; end < len(runes) && len(hashes) < llmMaxPrefixBlocks; end += llmPrefixBlockChars {
+		hashes = append(hashes, hashLLMPrefix(model, "block:"+string(runes[:end])))
+	}
+	if len(hashes) < llmMaxPrefixBlocks {
+		hashes = append(hashes, hashLLMPrefix(model, "block:"+string(runes)))
+	}
+	return hashes
+}
+
+func normalizeLLMText(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func truncateLLMText(text string, maxChars int) string {
+	if maxChars <= 0 || text == "" {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxChars {
+		return text
+	}
+	return string(runes[:maxChars])
+}
+
+func boolValue(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		parsed, _ := strconv.ParseBool(v)
+		return parsed
+	default:
+		return false
+	}
+}
+
+func int64Value(value any) int64 {
+	switch v := value.(type) {
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case json.Number:
+		out, _ := v.Int64()
+		return out
+	case string:
+		out, _ := strconv.ParseInt(v, 10, 64)
+		return out
+	default:
+		return 0
+	}
+}
+
+type llmRequestTracker struct {
+	pb             *PodProxyBuffer
+	info           *llmRequestInfo
+	containerID    string
+	targetAddress  string
+	startedAt      time.Time
+	firstResponse  time.Time
+	statusCode     int
+	backendError   bool
+	errorMessage   string
+	pressureBooked bool
+}
+
+type llmRouteEventPusher interface {
+	PushLLMRouteEvent(event types.EventLLMRouteSchema)
+}
+
+func (pb *PodProxyBuffer) startLLMRequest(info *llmRequestInfo, containerID, targetAddress string) *llmRequestTracker {
+	if info == nil || !info.Enabled {
+		return nil
+	}
+
+	tracker := &llmRequestTracker{
+		pb:            pb,
+		info:          info,
+		containerID:   containerID,
+		targetAddress: targetAddress,
+		startedAt:     time.Now(),
+	}
+	pb.recordLLMAffinity(info, containerID)
+	tracker.incrementPressure()
+	return tracker
+}
+
+func (t *llmRequestTracker) incrementPressure() {
+	if t == nil || t.pb == nil || t.pb.rdb == nil || t.pb.workspace == nil {
+		return
+	}
+	if err := t.updatePressure(1, t.info.TokenPressure); err == nil {
+		t.pressureBooked = true
+	}
+}
+
+func (t *llmRequestTracker) markFirstResponse(statusCode int) {
+	if t == nil {
+		return
+	}
+	if t.firstResponse.IsZero() {
+		t.firstResponse = time.Now()
+	}
+	t.statusCode = statusCode
+}
+
+func (t *llmRequestTracker) markError(message string) {
+	if t == nil {
+		return
+	}
+	t.backendError = true
+	t.errorMessage = truncateEventError(message)
+	if t.statusCode == 0 {
+		t.statusCode = http.StatusBadGateway
+	}
+}
+
+func (t *llmRequestTracker) finish() {
+	if t == nil {
+		return
+	}
+	if t.statusCode == 0 {
+		t.statusCode = http.StatusOK
+	}
+	if t.pressureBooked {
+		t.decrementPressure()
+	}
+	duration := time.Since(t.startedAt)
+	metrics.RecordPodLLMRequest(metrics.PodLLMRequestSample{
+		WorkspaceName:  t.pb.workspaceName(),
+		StubID:         t.pb.stubId,
+		Model:          t.info.Model,
+		Engine:         llmEngine(t.pb.stubConfig),
+		RouteReason:    t.info.RouteReason,
+		Stream:         t.info.Stream,
+		StatusCode:     t.statusCode,
+		BackendError:   t.backendError,
+		PromptTokens:   t.info.PromptTokens,
+		OutputTokens:   t.info.OutputTokens,
+		TokenPressure:  t.info.TokenPressure,
+		Duration:       duration,
+		TimeToFirst:    t.timeToFirst(),
+		ContainerIDSet: t.containerID != "",
+	})
+	if !t.backendError && t.statusCode < http.StatusInternalServerError {
+		t.pb.refreshLLMEngineMetricsAsync(t.containerID, t.targetAddress)
+	}
+	t.pb.pushLLMRouteEvent(t.info, t.containerID, t.statusCode, t.backendError, t.errorMessage, t.startedAt, t.firstResponse, duration)
+}
+
+func (t *llmRequestTracker) decrementPressure() {
+	if t == nil {
+		return
+	}
+	_ = t.updatePressure(-1, -t.info.TokenPressure)
+}
+
+func (t *llmRequestTracker) updatePressure(activeStreamsDelta, tokenPressureDelta int64) error {
+	if t == nil || t.info == nil || t.pb == nil || t.pb.rdb == nil || t.pb.workspace == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pipe := t.pb.rdb.Pipeline()
+	for _, target := range []string{llmPressureTargetTotal, t.containerID} {
+		if target == "" {
+			continue
+		}
+		key := Keys.podLLMPressure(t.pb.workspace.Name, t.pb.stubId, target)
+		pipe.HIncrBy(ctx, key, "active_streams", activeStreamsDelta)
+		pipe.HIncrBy(ctx, key, "token_pressure", tokenPressureDelta)
+		pipe.Expire(ctx, key, llmPressureTTL)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (t *llmRequestTracker) timeToFirst() time.Duration {
+	if t.firstResponse.IsZero() {
+		return 0
+	}
+	return t.firstResponse.Sub(t.startedAt)
+}
+
+func (pb *PodProxyBuffer) pushLLMRouteEvent(info *llmRequestInfo, containerID string, statusCode int, backendError bool, errorMessage string, startedAt time.Time, firstResponse time.Time, duration time.Duration) {
+	if pb == nil || pb.eventRepo == nil || info == nil || !info.Enabled {
+		return
+	}
+	timestamp := time.Now().UTC()
+	if !startedAt.IsZero() {
+		timestamp = startedAt.UTC()
+	}
+	event := types.EventLLMRouteSchema{
+		Timestamp:                timestamp,
+		WorkspaceID:              pb.workspaceExternalID(),
+		AppID:                    pb.appID,
+		StubID:                   pb.stubId,
+		StubType:                 pb.stubType,
+		ContainerID:              containerID,
+		Method:                   info.Method,
+		Path:                     info.Path,
+		RequestID:                info.RequestID,
+		Model:                    info.Model,
+		Engine:                   llmEngine(pb.stubConfig),
+		RouteReason:              info.RouteReason,
+		RouteScore:               info.RouteScore,
+		CandidateCount:           info.CandidateCount,
+		ReadyContainerCount:      info.ReadyContainerCount,
+		SessionHash:              info.SessionHash,
+		PrefixHash:               info.PrefixHash,
+		PrefixBlockCount:         len(info.PrefixBlocks),
+		PrefixCacheMatches:       info.PrefixCacheMatches,
+		PromptTokens:             info.PromptTokens,
+		OutputTokens:             info.OutputTokens,
+		TokenPressure:            info.TokenPressure,
+		Stream:                   info.Stream,
+		TotalActiveStreams:       info.TotalPressureAtRoute.ActiveStreams,
+		TotalTokenPressure:       info.TotalPressureAtRoute.TokenPressure,
+		ContainerActiveStreams:   info.TargetPressureAtRoute.ActiveStreams,
+		ContainerTokenPressure:   info.TargetPressureAtRoute.TokenPressure,
+		EngineRunningRequests:    info.EngineMetricsAtRoute.RunningRequests,
+		EngineWaitingRequests:    info.EngineMetricsAtRoute.WaitingRequests,
+		EngineTTFTMs:             info.EngineMetricsAtRoute.TTFTMs,
+		EngineTPOTMs:             info.EngineMetricsAtRoute.TPOTMs,
+		EngineDecodeTokensPerS:   info.EngineMetricsAtRoute.DecodeTokensPerSecond,
+		EngineGPUCacheUsageMilli: info.EngineMetricsAtRoute.GPUCacheUsageMilli,
+		EnginePrefixCacheMilli:   info.EngineMetricsAtRoute.PrefixCacheHitMilli,
+		QueueWaitMs:              durationMillis(info.QueueWait),
+		DurationMs:               durationMillis(duration),
+		StatusCode:               statusCode,
+		BackendError:             backendError,
+		ErrorMessage:             truncateEventError(errorMessage),
+	}
+	if !firstResponse.IsZero() && !startedAt.IsZero() {
+		event.FirstResponseMs = durationMillis(firstResponse.Sub(startedAt))
+	}
+
+	go pb.eventRepo.PushLLMRouteEvent(event)
+}
+
+func (pb *PodProxyBuffer) pushRejectedLLMRouteEvent(info *llmRequestInfo, statusCode int, reason string) {
+	if info == nil || !info.Enabled {
+		return
+	}
+	info.RouteReason = "admission_denied"
+	pb.pushLLMRouteEvent(info, "", statusCode, false, reason, time.Now(), time.Time{}, 0)
+}
+
+func (pb *PodProxyBuffer) recordFailedQueuedLLMRoute(conn *connection, statusCode int, reason string) {
+	if conn == nil || conn.llm == nil || !conn.llm.Enabled {
+		return
+	}
+	startedAt := conn.enqueuedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	} else {
+		conn.llm.QueueWait = time.Since(startedAt)
+	}
+	conn.llm.RouteReason = "queue_failed"
+	pb.pushLLMRouteEvent(conn.llm, "", statusCode, false, reason, startedAt, time.Time{}, conn.llm.QueueWait)
+}
+
+func (pb *PodProxyBuffer) workspaceExternalID() string {
+	if pb == nil || pb.workspace == nil {
+		return ""
+	}
+	if pb.workspace.ExternalId != "" {
+		return pb.workspace.ExternalId
+	}
+	return pb.workspace.Name
+}
+
+func durationMillis(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return d.Milliseconds()
+}
+
+func truncateEventError(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	runes := []rune(message)
+	if len(runes) <= llmMaxEventErrorChars {
+		return message
+	}
+	return string(runes[:llmMaxEventErrorChars])
+}
+
+func llmEngine(config *types.StubConfigV1) string {
+	llm := config.EffectiveLLMConfig()
+	if llm == nil {
+		return ""
+	}
+	return llm.Engine
+}
+
+func llmEnabled(config *types.StubConfigV1) bool {
+	if config == nil {
+		return false
+	}
+	return strings.EqualFold(config.EffectiveServingProtocol(), llmServingProtocolOpenAI)
+}
+
+func llmConfiguredModel(config *types.StubConfigV1) string {
+	llm := config.EffectiveLLMConfig()
+	if llm == nil {
+		return ""
+	}
+	if llm.ServedModelName != "" {
+		return llm.ServedModelName
+	}
+	return llm.ModelID
+}
+
+func llmContextLength(config *types.StubConfigV1) int64 {
+	llm := config.EffectiveLLMConfig()
+	if llm == nil || llm.ContextLength <= 0 {
+		return llmDefaultContextLen
+	}
+	return int64(llm.ContextLength)
+}
+
+func llmReadinessProbePaths(config *types.StubConfigV1) []string {
+	paths := []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
+	if llm := config.EffectiveLLMConfig(); llm != nil && strings.TrimSpace(llm.MetricsPath) != "" {
+		paths = append(paths, llm.MetricsPath)
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = "/" + strings.TrimPrefix(strings.TrimSpace(path), "/")
+		if path == "/" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
+}
+
+func (pb *PodProxyBuffer) checkContainerReady(address string, timeout time.Duration) bool {
+	if llmEnabled(pb.stubConfig) {
+		return pb.checkLLMContainerReady(address, timeout)
+	}
+	return pb.checkContainerAvailableWithTimeout(address, timeout)
+}
+
+func (pb *PodProxyBuffer) checkLLMContainerReady(address string, timeout time.Duration) bool {
+	if address == "" {
+		return false
+	}
+	if timeout < llmReadinessTimeout {
+		timeout = llmReadinessTimeout
+	}
+
+	client := &http.Client{
+		Transport: pb.backendTransport(address, timeout),
+		Timeout:   timeout,
+	}
+	for _, path := range llmReadinessProbePaths(pb.stubConfig) {
+		ctx, cancel := context.WithTimeout(pb.baseContext(), timeout)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, podBackendURL("http", address, path, ""), nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, llmReadinessBodyLimit))
+		_ = resp.Body.Close()
+		cancel()
+
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return true
+		}
+	}
+	return false
 }
