@@ -24,8 +24,10 @@ func TestInspectLLMRequestParsesOpenAIChatAndRestoresBody(t *testing.T) {
 	body := `{"model":"zai-org/GLM-4.5-Air-FP8","user":"session-1","stream":true,"max_tokens":64,"messages":[{"role":"system","content":"You are terse."},{"role":"user","content":"Explain prefix caching for LLM serving."}]}`
 	pb := &PodProxyBuffer{
 		stubConfig: &types.StubConfigV1{
-			ServingProtocol: "openai",
-			LLM:             &types.LLMConfig{ModelID: "fallback-model"},
+			Serving: &types.ServingConfig{
+				ServingProtocol: "openai",
+				LLM:             &types.LLMConfig{ModelID: "fallback-model"},
+			},
 		},
 	}
 	ctx := newLLMEchoContext(http.MethodPost, "/v1/chat/completions", body)
@@ -65,7 +67,7 @@ func TestInspectLLMRequestParsesOpenAIChatAndRestoresBody(t *testing.T) {
 }
 
 func TestInspectLLMRequestNormalizesSubdomainRewrittenPodPath(t *testing.T) {
-	pb := &PodProxyBuffer{stubConfig: &types.StubConfigV1{ServingProtocol: "openai"}}
+	pb := &PodProxyBuffer{stubConfig: llmTestStubConfig()}
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/pod/public/stub-1/8000/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hello"}]}`))
 	rec := httptest.NewRecorder()
@@ -84,7 +86,7 @@ func TestInspectLLMRequestNormalizesSubdomainRewrittenPodPath(t *testing.T) {
 }
 
 func TestLLMRequestUsesHeaderSession(t *testing.T) {
-	pb := &PodProxyBuffer{stubConfig: &types.StubConfigV1{ServingProtocol: "openai"}}
+	pb := &PodProxyBuffer{stubConfig: llmTestStubConfig()}
 	ctx := newLLMEchoContext(http.MethodPost, "/v1/completions", `{"prompt":"hello"}`)
 	ctx.Request().Header.Set("X-Beam-LLM-Session", "thread-123")
 
@@ -783,7 +785,7 @@ func TestLLMReadyAddressMapRequiresOpenAIHTTPReadiness(t *testing.T) {
 
 	pb := &PodProxyBuffer{
 		ctx:        context.Background(),
-		stubConfig: &types.StubConfigV1{ServingProtocol: "openai"},
+		stubConfig: llmTestStubConfig(),
 	}
 	address := strings.TrimPrefix(backend.URL, "http://")
 	if got := pb.readyAddressMap(map[int32]string{8000: address}); len(got) != 0 {
@@ -798,7 +800,9 @@ func TestLLMReadyAddressMapRequiresOpenAIHTTPReadiness(t *testing.T) {
 
 func TestLLMReadinessProbePathsDedupesMetricsPath(t *testing.T) {
 	paths := llmReadinessProbePaths(&types.StubConfigV1{
-		LLM: &types.LLMConfig{MetricsPath: "/v1/models"},
+		Serving: &types.ServingConfig{
+			LLM: &types.LLMConfig{MetricsPath: "/v1/models"},
+		},
 	})
 	if len(paths) == 0 || paths[0] != "/v1/models" {
 		t.Fatalf("first readiness path = %v", paths)
@@ -844,9 +848,22 @@ func newLLMTestProxyBuffer(rdb *common.RedisClient) *PodProxyBuffer {
 		rdb:           rdb,
 		workspace:     &types.Workspace{Name: "workspace"},
 		stubId:        "stub",
-		stubConfig:    &types.StubConfigV1{ServingProtocol: "openai", MaxPendingTasks: 100},
+		stubConfig:    llmTestStubConfigWithMaxPendingTasks(100),
 		containerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
 		buffer:        abstractions.NewRingBuffer[*connection](1),
+	}
+}
+
+func llmTestStubConfig() *types.StubConfigV1 {
+	return llmTestStubConfigWithMaxPendingTasks(0)
+}
+
+func llmTestStubConfigWithMaxPendingTasks(maxPendingTasks uint) *types.StubConfigV1 {
+	return &types.StubConfigV1{
+		MaxPendingTasks: maxPendingTasks,
+		Serving: &types.ServingConfig{
+			ServingProtocol: "openai",
+		},
 	}
 }
 

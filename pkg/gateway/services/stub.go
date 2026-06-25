@@ -125,9 +125,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
 	}
 	servingConfig := servingConfigFromProto(in.Serving)
-	if servingConfig == nil {
-		servingConfig = servingConfigFromLegacyProto(in.AppKind, in.ServingProtocol, in.Llm)
-	}
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
@@ -164,7 +161,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
-		IsService:          in.IsService || isLegacyServiceRequest(in),
+		IsService:          in.IsService,
 		Serving:            servingConfig,
 		Pool:               poolConfig,
 	}
@@ -381,10 +378,6 @@ func configurePodDeploymentAutoscaler(autoscaler *types.Autoscaler, keepWarmSeco
 	return nil
 }
 
-func isLegacyServiceRequest(in *pb.GetOrCreateStubRequest) bool {
-	return in.StubType == types.StubTypePodDeployment && len(in.Ports) > 0
-}
-
 func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 	if in == nil {
 		return nil
@@ -428,14 +421,6 @@ func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
 		AppKind:         in.AppKind,
 		ServingProtocol: in.ServingProtocol,
 		LLM:             llmConfigFromProto(in.Llm),
-	})
-}
-
-func servingConfigFromLegacyProto(appKind, servingProtocol string, llm *pb.LLMConfig) *types.ServingConfig {
-	return compactServingConfig(&types.ServingConfig{
-		AppKind:         appKind,
-		ServingProtocol: servingProtocol,
-		LLM:             llmConfigFromProto(llm),
 	})
 }
 

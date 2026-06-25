@@ -191,7 +191,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 							ExternalId:  "stub-latest",
 							Name:        "Stub Latest",
 							Type:        types.StubType(types.StubTypePodDeployment),
-							Config:      `{"pool":{"name":"cpu-pool"},"ports":[8080]}`,
+							Config:      `{"pool":{"name":"cpu-pool"},"is_service":true,"ports":[8080]}`,
 							WorkspaceId: workspace.Id,
 							AppId:       appWithStub.Id,
 						},

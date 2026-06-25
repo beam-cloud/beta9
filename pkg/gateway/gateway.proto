@@ -589,10 +589,7 @@ message GetOrCreateStubRequest {
   bool docker_enabled = 40;
   PoolConfig pool = 41;
   bool is_service = 42;
-  string app_kind = 43;
-  string serving_protocol = 44;
-  LLMConfig llm = 45;
-  ServingConfig serving = 46;
+  ServingConfig serving = 43;
 }
 
 message GetOrCreateStubResponse {

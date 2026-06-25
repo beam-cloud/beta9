@@ -371,10 +371,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     docker_enabled: bool = betterproto.bool_field(40)
     pool: "PoolConfig" = betterproto.message_field(41)
     is_service: bool = betterproto.bool_field(42)
-    app_kind: str = betterproto.string_field(43)
-    serving_protocol: str = betterproto.string_field(44)
-    llm: "LlmConfig" = betterproto.message_field(45)
-    serving: "ServingConfig" = betterproto.message_field(46)
+    serving: "ServingConfig" = betterproto.message_field(43)
 
 
 @dataclass(eq=False, repr=False)

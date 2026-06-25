@@ -170,7 +170,9 @@ func podDeploymentConfig(minContainers, maxContainers, tasksPerContainer uint) *
 func podLLMDeploymentConfig(minContainers, maxContainers, tasksPerContainer uint, contextLength int) *types.StubConfigV1 {
 	config := podDeploymentConfig(minContainers, maxContainers, tasksPerContainer)
 	config.Autoscaler.Type = types.LLMTokenPressureAutoscaler
-	config.ServingProtocol = "openai"
-	config.LLM = &types.LLMConfig{ContextLength: contextLength}
+	config.Serving = &types.ServingConfig{
+		ServingProtocol: "openai",
+		LLM:             &types.LLMConfig{ContextLength: contextLength},
+	}
 	return config
 }

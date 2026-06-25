@@ -543,13 +543,7 @@ type StubConfigV1 struct {
 	DockerEnabled      bool            `json:"docker_enabled"`
 	IsService          bool            `json:"is_service"`
 	Serving            *ServingConfig  `json:"serving,omitempty"`
-	// Deprecated: use Serving.
-	AppKind string `json:"app_kind,omitempty"`
-	// Deprecated: use Serving.
-	ServingProtocol string `json:"serving_protocol,omitempty"`
-	// Deprecated: use Serving.
-	LLM  *LLMConfig  `json:"llm,omitempty"`
-	Pool *PoolConfig `json:"pool,omitempty"`
+	Pool               *PoolConfig     `json:"pool,omitempty"`
 }
 
 type ServingConfig struct {
@@ -569,27 +563,13 @@ type LLMConfig struct {
 }
 
 func (c *StubConfigV1) EffectiveServingConfig() *ServingConfig {
-	if c == nil {
+	if c == nil || c.Serving == nil {
 		return nil
 	}
-
-	serving := ServingConfig{}
-	if c.Serving != nil {
-		serving = *c.Serving
-	}
-	if serving.AppKind == "" {
-		serving.AppKind = c.AppKind
-	}
-	if serving.ServingProtocol == "" {
-		serving.ServingProtocol = c.ServingProtocol
-	}
-	if serving.LLM == nil {
-		serving.LLM = c.LLM
-	}
-	if serving.AppKind == "" && serving.ServingProtocol == "" && serving.LLM == nil {
+	if c.Serving.AppKind == "" && c.Serving.ServingProtocol == "" && c.Serving.LLM == nil {
 		return nil
 	}
-	return &serving
+	return c.Serving
 }
 
 func (c *StubConfigV1) EffectiveAppKind() string {

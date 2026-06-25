@@ -2670,15 +2670,6 @@
         "isService": {
           "type": "boolean"
         },
-        "appKind": {
-          "type": "string"
-        },
-        "servingProtocol": {
-          "type": "string"
-        },
-        "llm": {
-          "$ref": "#/definitions/gatewayLLMConfig"
-        },
         "serving": {
           "$ref": "#/definitions/gatewayServingConfig"
         }

@@ -190,14 +190,10 @@ func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stu
 	if config.Pool != nil {
 		app.PoolName = config.Pool.Name
 	}
-	app.IsService = config.IsService || isLegacyServiceStub(stub.Type, config)
+	app.IsService = config.IsService
 	app.AppKind = config.EffectiveAppKind()
 	app.ServingProtocol = config.EffectiveServingProtocol()
 	app.LLM = config.EffectiveLLMConfig()
-}
-
-func isLegacyServiceStub(stubType types.StubType, config *types.StubConfigV1) bool {
-	return string(stubType) == types.StubTypePodDeployment && config != nil && len(config.Ports) > 0
 }
 
 func (a *AppGroup) ListApps(ctx echo.Context) error {
