@@ -237,6 +237,78 @@ func TestInstanceControllerDeactivatesExistingInactiveDeployment(t *testing.T) {
 	}
 }
 
+func TestInstanceControllerSyncsActiveDeploymentAndQueuesScale(t *testing.T) {
+	controller, _ := newTestInstanceController(t, types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: true},
+		Stub:       types.Stub{ExternalId: "stub-active", Type: types.StubType(types.StubTypePodDeployment)},
+	})
+
+	if err := controller.Load(&types.DeploymentFilter{ShowDeleted: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if controller.created != 1 {
+		t.Fatalf("created instances = %d, want 1", controller.created)
+	}
+
+	instance := controller.instances["stub-active"]
+	if instance.syncs != 1 {
+		t.Fatalf("syncs = %d, want 1", instance.syncs)
+	}
+	if len(instance.scaleResults) != 1 || instance.scaleResults[0] != 0 {
+		t.Fatalf("scale results = %v, want [0]", instance.scaleResults)
+	}
+}
+
+func TestInstanceControllerScaleToZeroPreservesRunningDeploymentContainers(t *testing.T) {
+	config := &types.StubConfigV1{
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     2,
+			TasksPerContainer: 1,
+		},
+	}
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	controller, containerRepo := newTestInstanceController(t, types.DeploymentWithRelated{
+		Deployment: types.Deployment{Active: true},
+		Stub: types.Stub{
+			ExternalId: "stub-scale-to-zero",
+			Type:       types.StubType(types.StubTypePodDeployment),
+			Config:     string(configBytes),
+		},
+	})
+
+	for _, containerID := range []string{"pod-stub-scale-to-zero-00000000", "pod-stub-scale-to-zero-11111111"} {
+		state := &types.ContainerState{
+			ContainerId: containerID,
+			StubId:      "stub-scale-to-zero",
+			WorkspaceId: "workspace",
+			Status:      types.ContainerStatusRunning,
+			ScheduledAt: time.Now().Unix(),
+			StartedAt:   time.Now().Unix(),
+			Cpu:         100,
+			Memory:      128,
+		}
+		if err := containerRepo.SetContainerState(state.ContainerId, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := controller.Load(&types.DeploymentFilter{ShowDeleted: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	instance := controller.instances["stub-scale-to-zero"]
+	if len(instance.scaleResults) != 1 || instance.scaleResults[0] != 2 {
+		t.Fatalf("scale results = %v, want [2]", instance.scaleResults)
+	}
+}
+
 func TestInstanceControllerCreatesInactiveDeploymentOnlyForStaleContainers(t *testing.T) {
 	controller, containerRepo := newTestInstanceController(t, types.DeploymentWithRelated{
 		Deployment: types.Deployment{Active: false},
@@ -367,10 +439,13 @@ func (r *testInstanceControllerBackendRepo) ListDeploymentsWithRelated(ctx conte
 
 type testAutoscaledInstance struct {
 	syncs         int
+	scaleResults  []int
 	scalingEvents []int
 }
 
-func (i *testAutoscaledInstance) ConsumeScaleResult(*AutoscalerResult) {}
+func (i *testAutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
+	i.scaleResults = append(i.scaleResults, result.DesiredContainers)
+}
 
 func (i *testAutoscaledInstance) ConsumeContainerEvent(types.ContainerEvent) {}
 

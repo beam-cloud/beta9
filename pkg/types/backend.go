@@ -730,7 +730,9 @@ func (c *StubConfigV1) SetReplicaCount(containers uint) {
 	}
 	if containers == 0 {
 		c.Autoscaler.MinContainers = 0
-		c.Autoscaler.MaxContainers = 1
+		if c.Autoscaler.MaxContainers == 0 {
+			c.Autoscaler.MaxContainers = 1
+		}
 		return
 	}
 	c.Autoscaler.MinContainers = containers

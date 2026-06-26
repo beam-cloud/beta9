@@ -559,7 +559,7 @@ func TestScaleStubEnablesScaleToZeroAndReloads(t *testing.T) {
 	mock.ExpectExec("UPDATE stub").WithArgs(stubConfigJSONArg{check: func(config *types.StubConfigV1) bool {
 		return config.Autoscaler != nil &&
 			config.Autoscaler.MinContainers == 0 &&
-			config.Autoscaler.MaxContainers == 1
+			config.Autoscaler.MaxContainers == 2
 	}}, 11).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	body, _ := json.Marshal(ScaleStubRequest{Containers: 0})
