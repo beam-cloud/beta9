@@ -557,9 +557,40 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to sync instance")
 			continue
 		}
+		c.queuePostSyncScale(stub, instance)
 	}
 
 	return nil
+}
+
+func (c *InstanceController) queuePostSyncScale(stub types.DeploymentWithRelated, instance IAutoscaledInstance) {
+	// Manual scale changes update autoscaler bounds; queue a scale tick now so
+	// fixed replica counts converge without waiting for the next autoscaler sample.
+	instance.ConsumeScaleResult(&AutoscalerResult{DesiredContainers: c.postSyncDesiredContainers(stub.Stub), ResultValid: true})
+}
+
+func (c *InstanceController) postSyncDesiredContainers(stub types.Stub) int {
+	config, err := stub.UnmarshalConfig()
+	if err != nil || config == nil || config.Autoscaler == nil || config.Autoscaler.MinContainers > 0 {
+		return 0
+	}
+	if c.containerRepo == nil {
+		return 0
+	}
+
+	containers, err := c.containerRepo.GetActiveContainersByStubId(stub.ExternalId)
+	if err != nil {
+		log.Error().Str("stub_id", stub.ExternalId).Err(err).Msg("unable to count active containers")
+		return 0
+	}
+
+	count := 0
+	for _, container := range containers {
+		if container.Status == types.ContainerStatusRunning || container.Status == types.ContainerStatusPending {
+			count++
+		}
+	}
+	return count
 }
 
 func (c *InstanceController) deactivateInactiveDeployment(stub types.DeploymentWithRelated) error {

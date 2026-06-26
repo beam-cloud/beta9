@@ -181,3 +181,20 @@ func TestStubConfigSetReplicaCountPreservesAutoscalerType(t *testing.T) {
 		t.Fatalf("replica bounds = %d/%d, want 2/2", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
 	}
 }
+
+func TestStubConfigSetReplicaCountZeroPreservesAutoscalerCeiling(t *testing.T) {
+	config := &StubConfigV1{
+		Autoscaler: &Autoscaler{
+			Type:              QueueDepthAutoscaler,
+			MinContainers:     2,
+			MaxContainers:     4,
+			TasksPerContainer: 1,
+		},
+	}
+
+	config.SetReplicaCount(0)
+
+	if config.Autoscaler.MinContainers != 0 || config.Autoscaler.MaxContainers != 4 {
+		t.Fatalf("replica bounds = %d/%d, want 0/4", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
+	}
+}
