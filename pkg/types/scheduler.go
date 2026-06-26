@@ -243,6 +243,7 @@ type ContainerRequest struct {
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
+	TargetWorkerId           string          `json:"target_worker_id,omitempty"`
 }
 
 type ContainerNetworkPolicy string

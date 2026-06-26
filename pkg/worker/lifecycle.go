@@ -891,7 +891,8 @@ func requestStubConfig(request *types.ContainerRequest) *types.StubConfigV1 {
 func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) map[string]string {
 	volumeCacheMap := make(map[string]string)
 
-	for _, mount := range request.Mounts {
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
 		if !s.prepareRequestMount(request, mount, volumeCacheMap) {
 			continue
 		}
@@ -906,16 +907,28 @@ func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.S
 			Type:        "none",
 			Source:      mount.LocalPath,
 			Destination: mount.MountPath,
-			Options:     []string{"rbind", bindMountMode(mount)},
+			Options:     []string{"rbind", bindMountMode(*mount)},
 		})
 	}
 
 	return volumeCacheMap
 }
 
-func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount types.Mount, volumeCacheMap map[string]string) bool {
+func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *types.Mount, volumeCacheMap map[string]string) bool {
+	if mount == nil {
+		return false
+	}
+
 	if mount.MountType == storage.StorageModeMountPoint {
 		if _, err := os.Stat(mount.LocalPath); os.IsNotExist(err) {
+			return false
+		}
+		return true
+	}
+
+	if mount.MountType == storage.StorageModeDurableDisk {
+		if err := s.prepareDurableDiskMount(request, mount); err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare durable disk mount: %v", err)
 			return false
 		}
 		return true

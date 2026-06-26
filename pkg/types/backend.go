@@ -512,44 +512,60 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 }
 
 type StubConfigV1 struct {
-	Runtime            Runtime         `json:"runtime"`
-	Handler            string          `json:"handler"`
-	OnStart            string          `json:"on_start"`
-	OnDeploy           string          `json:"on_deploy"`
-	OnDeployStubId     string          `json:"on_deploy_stub_id"`
-	PythonVersion      string          `json:"python_version"`
-	KeepWarmSeconds    int             `json:"keep_warm_seconds"`
-	MaxPendingTasks    uint            `json:"max_pending_tasks"`
-	CallbackUrl        string          `json:"callback_url"`
-	TaskPolicy         TaskPolicy      `json:"task_policy"`
-	Workers            uint            `json:"workers"`
-	ConcurrentRequests uint            `json:"concurrent_requests"`
-	Authorized         bool            `json:"authorized"`
-	Volumes            []*pb.Volume    `json:"volumes"`
-	Secrets            []Secret        `json:"secrets,omitempty"`
-	Env                []string        `json:"env,omitempty"`
-	Autoscaler         *Autoscaler     `json:"autoscaler"`
-	Extra              json.RawMessage `json:"extra"`
-	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
-	WorkDir            string          `json:"work_dir"`
-	EntryPoint         []string        `json:"entry_point"`
-	Ports              []uint32        `json:"ports"`
-	Pricing            *PricingPolicy  `json:"pricing"`
-	Inputs             *Schema         `json:"inputs"`
-	Outputs            *Schema         `json:"outputs"`
-	TCP                bool            `json:"tcp"`
-	BlockNetwork       bool            `json:"block_network"`
-	AllowList          []string        `json:"allow_list"`
-	DockerEnabled      bool            `json:"docker_enabled"`
-	IsService          bool            `json:"is_service"`
-	Serving            *ServingConfig  `json:"serving,omitempty"`
-	Pool               *PoolConfig     `json:"pool,omitempty"`
+	Runtime            Runtime           `json:"runtime"`
+	Handler            string            `json:"handler"`
+	OnStart            string            `json:"on_start"`
+	OnDeploy           string            `json:"on_deploy"`
+	OnDeployStubId     string            `json:"on_deploy_stub_id"`
+	PythonVersion      string            `json:"python_version"`
+	KeepWarmSeconds    int               `json:"keep_warm_seconds"`
+	MaxPendingTasks    uint              `json:"max_pending_tasks"`
+	CallbackUrl        string            `json:"callback_url"`
+	TaskPolicy         TaskPolicy        `json:"task_policy"`
+	Workers            uint              `json:"workers"`
+	ConcurrentRequests uint              `json:"concurrent_requests"`
+	Authorized         bool              `json:"authorized"`
+	Volumes            []*pb.Volume      `json:"volumes"`
+	Secrets            []Secret          `json:"secrets,omitempty"`
+	Env                []string          `json:"env,omitempty"`
+	Autoscaler         *Autoscaler       `json:"autoscaler"`
+	Extra              json.RawMessage   `json:"extra"`
+	CheckpointEnabled  bool              `json:"checkpoint_enabled"`
+	WorkDir            string            `json:"work_dir"`
+	EntryPoint         []string          `json:"entry_point"`
+	Ports              []uint32          `json:"ports"`
+	Pricing            *PricingPolicy    `json:"pricing"`
+	Inputs             *Schema           `json:"inputs"`
+	Outputs            *Schema           `json:"outputs"`
+	TCP                bool              `json:"tcp"`
+	BlockNetwork       bool              `json:"block_network"`
+	AllowList          []string          `json:"allow_list"`
+	DockerEnabled      bool              `json:"docker_enabled"`
+	IsService          bool              `json:"is_service"`
+	Serving            *ServingConfig    `json:"serving,omitempty"`
+	Pool               *PoolConfig       `json:"pool,omitempty"`
+	Disks              []*pb.DurableDisk `json:"disks,omitempty"`
+	HostAliases        map[string]string `json:"host_aliases,omitempty"`
 }
 
 type ServingConfig struct {
-	AppKind         string     `json:"app_kind,omitempty" serializer:"app_kind,omitempty"`
-	ServingProtocol string     `json:"serving_protocol,omitempty" serializer:"serving_protocol,omitempty"`
-	LLM             *LLMConfig `json:"llm,omitempty" serializer:"llm,omitempty"`
+	AppKind         string                 `json:"app_kind,omitempty" serializer:"app_kind,omitempty"`
+	ServingProtocol string                 `json:"serving_protocol,omitempty" serializer:"serving_protocol,omitempty"`
+	LLM             *LLMConfig             `json:"llm,omitempty" serializer:"llm,omitempty"`
+	Database        *DatabaseServingConfig `json:"database,omitempty" serializer:"database,omitempty"`
+}
+
+type DatabaseServingConfig struct {
+	Kind                    string   `json:"kind,omitempty" serializer:"kind,omitempty"`
+	Port                    uint32   `json:"port,omitempty" serializer:"port,omitempty"`
+	ReadinessProbe          string   `json:"readiness_probe,omitempty" serializer:"readiness_probe,omitempty"`
+	ConnectionEnvName       string   `json:"connection_env_name,omitempty" serializer:"connection_env_name,omitempty"`
+	CredentialSecretNames   []string `json:"credential_secret_names,omitempty" serializer:"credential_secret_names,omitempty"`
+	DurabilityMode          string   `json:"durability_mode,omitempty" serializer:"durability_mode,omitempty"`
+	UsernameSecretName      string   `json:"username_secret_name,omitempty" serializer:"username_secret_name,omitempty"`
+	PasswordSecretName      string   `json:"password_secret_name,omitempty" serializer:"password_secret_name,omitempty"`
+	DatabaseSecretName      string   `json:"database_secret_name,omitempty" serializer:"database_secret_name,omitempty"`
+	ConnectionURLSecretName string   `json:"connection_url_secret_name,omitempty" serializer:"connection_url_secret_name,omitempty"`
 }
 
 type LLMConfig struct {
@@ -566,7 +582,7 @@ func (c *StubConfigV1) EffectiveServingConfig() *ServingConfig {
 	if c == nil || c.Serving == nil {
 		return nil
 	}
-	if c.Serving.AppKind == "" && c.Serving.ServingProtocol == "" && c.Serving.LLM == nil {
+	if c.Serving.AppKind == "" && c.Serving.ServingProtocol == "" && c.Serving.LLM == nil && c.Serving.Database == nil {
 		return nil
 	}
 	return c.Serving
@@ -589,6 +605,13 @@ func (c *StubConfigV1) EffectiveServingProtocol() string {
 func (c *StubConfigV1) EffectiveLLMConfig() *LLMConfig {
 	if serving := c.EffectiveServingConfig(); serving != nil {
 		return serving.LLM
+	}
+	return nil
+}
+
+func (c *StubConfigV1) EffectiveDatabaseConfig() *DatabaseServingConfig {
+	if serving := c.EffectiveServingConfig(); serving != nil {
+		return serving.Database
 	}
 	return nil
 }

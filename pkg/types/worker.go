@@ -50,12 +50,49 @@ type ContainerIpAssignment struct {
 
 // @go2proto
 type Mount struct {
-	LocalPath        string            `json:"local_path"`
-	MountPath        string            `json:"mount_path"`
-	LinkPath         string            `json:"link_path"`
-	ReadOnly         bool              `json:"read_only"`
-	MountType        string            `json:"mount_type"`
-	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
+	LocalPath        string                  `json:"local_path"`
+	MountPath        string                  `json:"mount_path"`
+	LinkPath         string                  `json:"link_path"`
+	ReadOnly         bool                    `json:"read_only"`
+	MountType        string                  `json:"mount_type"`
+	MountPointConfig *MountPointConfig       `json:"mountpoint_config"`
+	DurableDisk      *DurableDiskMountConfig `json:"durable_disk,omitempty"`
+}
+
+// @go2proto
+type DurableDiskMountConfig struct {
+	Name             string   `json:"name"`
+	Size             string   `json:"size"`
+	Filesystem       string   `json:"filesystem"`
+	Driver           string   `json:"driver"`
+	Replicas         uint32   `json:"replicas"`
+	Mode             string   `json:"mode"`
+	Quorum           string   `json:"quorum"`
+	PrimaryWorkerID  string   `json:"primary_worker_id"`
+	ReplicaWorkerIDs []string `json:"replica_worker_ids"`
+}
+
+func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountConfig {
+	if in == nil {
+		return nil
+	}
+
+	config := &DurableDiskMountConfig{
+		Name:       in.Name,
+		Size:       in.Size,
+		Filesystem: in.Filesystem,
+		Driver:     in.Driver,
+	}
+
+	if in.Replication != nil {
+		config.Replicas = in.Replication.Replicas
+		config.Mode = in.Replication.Mode
+		config.Quorum = in.Replication.Quorum
+		config.PrimaryWorkerID = in.Replication.PrimaryWorkerId
+		config.ReplicaWorkerIDs = append([]string(nil), in.Replication.ReplicaWorkerIds...)
+	}
+
+	return config
 }
 
 func (m *Mount) ToProto() *pb.Mount {

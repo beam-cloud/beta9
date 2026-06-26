@@ -29,7 +29,7 @@ from ..clients.pod import (
 from ..config import ConfigContext, get_settings
 from ..runner.common import USER_CODE_DIR
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias, LLMConfig, Pool, ServingConfig
+from ..type import DurableDisk, GpuType, GpuTypeAlias, LLMConfig, Pool, ServingConfig
 from ..utils import get_init_args_kwargs
 from .base import BaseAbstraction
 
@@ -133,6 +133,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         gpu_count: int = 0,
         image: Image = Image(),
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         keep_warm_seconds: int = 600,
@@ -154,6 +155,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             gpu_count=gpu_count,
             image=image,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             env=env,
             entrypoint=entrypoint,

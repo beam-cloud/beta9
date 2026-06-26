@@ -37,6 +37,9 @@ from .client.client import Client
 from .client.deployment import Deployment
 from .client.task import Task
 from .type import (
+    DatabaseServingConfig,
+    DiskReplication,
+    DurableDisk,
     GpuType,
     LLMConfig,
     LLMTokenPressureAutoscaler,
@@ -64,6 +67,9 @@ __all__ = [
     "Container",
     "env",
     "GpuType",
+    "DatabaseServingConfig",
+    "DiskReplication",
+    "DurableDisk",
     "LLMConfig",
     "LLMTokenPressureAutoscaler",
     "Pool",

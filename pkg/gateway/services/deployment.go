@@ -177,6 +177,91 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 	}, nil
 }
 
+func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRequest) (*pb.BindServiceResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.BindServiceResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
+	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
+	if err != nil {
+		return &pb.BindServiceResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+	if deploymentWithRelated == nil {
+		return &pb.BindServiceResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(deploymentWithRelated.Stub.Config), stubConfig); err != nil {
+		return &pb.BindServiceResponse{
+			Ok:     false,
+			ErrMsg: "Unable to parse deployment config",
+		}, nil
+	}
+
+	for key, value := range in.Env {
+		stubConfig.Env = mergeEnvVar(stubConfig.Env, key, value)
+	}
+
+	for _, secretName := range in.Secrets {
+		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
+		if err != nil {
+			return &pb.BindServiceResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Secret %q not found", secretName),
+			}, nil
+		}
+		stubConfig.Secrets = mergeSecret(stubConfig.Secrets, types.Secret{
+			Name:      secret.Name,
+			Value:     secret.Value,
+			CreatedAt: secret.CreatedAt,
+			UpdatedAt: secret.UpdatedAt,
+		})
+	}
+
+	for envName, secretName := range in.SecretEnv {
+		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
+		if err != nil {
+			return &pb.BindServiceResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Secret %q not found", secretName),
+			}, nil
+		}
+		stubConfig.Secrets = mergeSecret(stubConfig.Secrets, types.Secret{
+			Name:      envName,
+			Value:     secret.Value,
+			CreatedAt: secret.CreatedAt,
+			UpdatedAt: secret.UpdatedAt,
+		})
+	}
+
+	if err := gws.backendRepo.UpdateStubConfig(ctx, deploymentWithRelated.Stub.Id, stubConfig); err != nil {
+		return &pb.BindServiceResponse{
+			Ok:     false,
+			ErrMsg: "Unable to update deployment config",
+		}, nil
+	}
+
+	eventBus := common.NewEventBus(gws.redisClient)
+	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   deploymentWithRelated.Stub.ExternalId,
+		"stub_type": deploymentWithRelated.StubType,
+		"timestamp": time.Now().Unix(),
+	}})
+
+	return &pb.BindServiceResponse{Ok: true}, nil
+}
+
 func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -340,4 +425,26 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}})
 
 	return nil
+}
+
+func mergeEnvVar(env []string, key, value string) []string {
+	prefix := key + "="
+	next := key + "=" + value
+	for i, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			env[i] = next
+			return env
+		}
+	}
+	return append(env, next)
+}
+
+func mergeSecret(secrets []types.Secret, secret types.Secret) []types.Secret {
+	for i, existing := range secrets {
+		if existing.Name == secret.Name {
+			secrets[i] = secret
+			return secrets
+		}
+	}
+	return append(secrets, secret)
 }

@@ -15,6 +15,7 @@ from ...abstractions.volume import Volume
 from ...client.client import Client
 from ...clients.gateway import Autoscaler as AutoscalerProto
 from ...clients.gateway import (
+    DatabaseServingConfig as DatabaseServingConfigProto,
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
@@ -40,6 +41,7 @@ from ...sync import FileSyncer
 from ...type import (
     _AUTOSCALER_TYPES,
     Autoscaler,
+    DurableDisk,
     GpuType,
     GpuTypeAlias,
     LLMConfig,
@@ -132,6 +134,7 @@ class RunnerAbstraction(BaseAbstraction):
         serving_protocol: str = "",
         llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
+        disks: Optional[List[DurableDisk]] = None,
     ) -> None:
         super().__init__()
 
@@ -165,6 +168,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.pool = pool
         self.pool_config = self.parse_pool(pool)
         self.volumes = volumes or []
+        self.disks = disks or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
         self.env: List[str] = formatted_env
         self.workers = workers
@@ -258,6 +262,20 @@ class RunnerAbstraction(BaseAbstraction):
         return ServingConfigProto(
             app_kind=self.serving.app_kind,
             serving_protocol=self.serving.serving_protocol,
+            database=DatabaseServingConfigProto(
+                kind=self.serving.database.kind,
+                port=self.serving.database.port,
+                readiness_probe=self.serving.database.readiness_probe,
+                connection_env_name=self.serving.database.connection_env_name,
+                credential_secret_names=self.serving.database.credential_secret_names,
+                durability_mode=self.serving.database.durability_mode,
+                username_secret_name=self.serving.database.username_secret_name,
+                password_secret_name=self.serving.database.password_secret_name,
+                database_secret_name=self.serving.database.database_secret_name,
+                connection_url_secret_name=self.serving.database.connection_url_secret_name,
+            )
+            if self.serving.database
+            else None,
             llm=LLMConfigProto(
                 model_id=llm.model_id,
                 engine=llm.engine,
@@ -711,6 +729,7 @@ class RunnerAbstraction(BaseAbstraction):
             pool=self.pool_config,
             is_service=self.is_service,
             serving=self._serving_config_proto(),
+            disks=[disk.export() for disk in self.disks],
         )
 
     def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:

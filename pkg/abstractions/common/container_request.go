@@ -29,3 +29,17 @@ func ConfigureContainerRequestNetwork(request *types.ContainerRequest, stubConfi
 	request.DockerEnabled = stubConfig.DockerEnabled
 	return nil
 }
+
+func ConfigureContainerRequestDurableDiskPlacement(request *types.ContainerRequest, stubConfig types.StubConfigV1) {
+	if request == nil || request.TargetWorkerId != "" {
+		return
+	}
+
+	for _, disk := range stubConfig.Disks {
+		if disk == nil || disk.Replication == nil || disk.Replication.PrimaryWorkerId == "" {
+			continue
+		}
+		request.TargetWorkerId = disk.Replication.PrimaryWorkerId
+		return
+	}
+}

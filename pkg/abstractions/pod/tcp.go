@@ -1,9 +1,18 @@
 package pod
 
 import (
+	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/binary"
+	"encoding/pem"
 	"fmt"
+	"io"
+	"math/big"
 	"net"
 	"time"
 
@@ -59,20 +68,13 @@ func NewPodTCPServer(
 }
 
 func (pts *PodTCPServer) Start() error {
-	if pts.config.Abstractions.Pod.TCP.CertFile == "" || pts.config.Abstractions.Pod.TCP.KeyFile == "" {
-		return fmt.Errorf("TLS is enabled but certFile or keyFile is not specified")
-	}
-
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", pts.config.Abstractions.Pod.TCP.Port))
 	if err != nil {
 		return err
 	}
 	pts.listener = ln
 
-	cert, err := tls.LoadX509KeyPair(
-		pts.config.Abstractions.Pod.TCP.CertFile,
-		pts.config.Abstractions.Pod.TCP.KeyFile,
-	)
+	cert, err := pts.loadTLSCertificate()
 	if err != nil {
 		return fmt.Errorf("failed to load TLS certificate: %w", err)
 	}
@@ -84,6 +86,61 @@ func (pts *PodTCPServer) Start() error {
 	go pts.acceptConnections()
 
 	return nil
+}
+
+func (pts *PodTCPServer) loadTLSCertificate() (tls.Certificate, error) {
+	certFile := pts.config.Abstractions.Pod.TCP.CertFile
+	keyFile := pts.config.Abstractions.Pod.TCP.KeyFile
+	if certFile != "" && keyFile != "" {
+		return tls.LoadX509KeyPair(certFile, keyFile)
+	}
+
+	host := pts.config.Abstractions.Pod.TCP.ExternalHost
+	if host == "" {
+		host = "localhost"
+	}
+
+	cert, err := selfSignedCertificate(host)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	log.Warn().
+		Str("external_host", host).
+		Msg("pod tcp server using generated self-signed certificate")
+
+	return cert, nil
+}
+
+func selfSignedCertificate(host string) (tls.Certificate, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{
+			CommonName: host,
+		},
+		NotBefore: time.Now().Add(-time.Hour),
+		NotAfter:  time.Now().Add(24 * time.Hour),
+		DNSNames:  []string{host, "*." + host},
+		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageServerAuth,
+		},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+
+	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
 func (pts *PodTCPServer) Stop() error {
@@ -111,7 +168,13 @@ func (pts *PodTCPServer) acceptConnections() {
 }
 
 func (pts *PodTCPServer) handleConnection(conn net.Conn) {
-	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{pts.tlsCert}})
+	tlsReadyConn, err := preparePostgresAwareTLSConn(conn)
+	if err != nil {
+		conn.Close()
+		return
+	}
+
+	tlsConn := tls.Server(tlsReadyConn, &tls.Config{Certificates: []tls.Certificate{pts.tlsCert}})
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return
@@ -131,6 +194,52 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	if err := sniMiddleware(tlsConn); err != nil {
 		log.Error().Err(err).Msg("connection handler error")
 	}
+}
+
+const postgresSSLRequestCode uint32 = 80877103
+
+type bufferedReadConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedReadConn) Read(p []byte) (int, error) {
+	if c.reader != nil && c.reader.Buffered() > 0 {
+		return c.reader.Read(p)
+	}
+	return c.Conn.Read(p)
+}
+
+func preparePostgresAwareTLSConn(conn net.Conn) (net.Conn, error) {
+	reader := bufio.NewReader(conn)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetReadDeadline(time.Time{})
+
+	first, err := reader.Peek(1)
+	if err != nil {
+		return nil, err
+	}
+	if first[0] == 0x16 {
+		return &bufferedReadConn{Conn: conn, reader: reader}, nil
+	}
+
+	header, err := reader.Peek(8)
+	if err != nil {
+		return nil, err
+	}
+	if binary.BigEndian.Uint32(header[0:4]) != 8 ||
+		binary.BigEndian.Uint32(header[4:8]) != postgresSSLRequestCode {
+		return nil, fmt.Errorf("connection did not start with TLS or PostgreSQL SSLRequest")
+	}
+
+	if _, err := io.ReadFull(reader, make([]byte, 8)); err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write([]byte("S")); err != nil {
+		return nil, err
+	}
+
+	return &bufferedReadConn{Conn: conn, reader: reader}, nil
 }
 
 // createSNIMiddleware wraps a handler with SNI-based routing middleware

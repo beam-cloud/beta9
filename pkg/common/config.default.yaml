@@ -420,7 +420,7 @@ abstractions:
     sessionInactivityTimeoutS: 10
   pod:
     tcp:
-      enabled: false
+      enabled: true
       externalHost: localhost
       externalPort: 1995
       port: 1995

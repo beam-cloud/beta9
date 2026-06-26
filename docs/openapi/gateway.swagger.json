@@ -318,6 +318,44 @@
         ]
       }
     },
+    "/deployments/{id}/bind": {
+      "post": {
+        "operationId": "GatewayService_BindService",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayBindServiceResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceBindServiceBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/deployments/{id}/scale": {
       "post": {
         "operationId": "GatewayService_ScaleDeployment",
@@ -1565,6 +1603,29 @@
     }
   },
   "definitions": {
+    "GatewayServiceBindServiceBody": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secretEnv": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "GatewayServiceCreatePoolJoinTokenBody": {
       "type": "object",
       "properties": {
@@ -2064,6 +2125,17 @@
         }
       }
     },
+    "gatewayBindServiceResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayCheckpointContainerResponse": {
       "type": "object",
       "properties": {
@@ -2279,6 +2351,45 @@
         }
       }
     },
+    "gatewayDatabaseServingConfig": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "readinessProbe": {
+          "type": "string"
+        },
+        "connectionEnvName": {
+          "type": "string"
+        },
+        "credentialSecretNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "durabilityMode": {
+          "type": "string"
+        },
+        "usernameSecretName": {
+          "type": "string"
+        },
+        "passwordSecretName": {
+          "type": "string"
+        },
+        "databaseSecretName": {
+          "type": "string"
+        },
+        "connectionUrlSecretName": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayDeleteDeploymentResponse": {
       "type": "object",
       "properties": {
@@ -2396,6 +2507,30 @@
         }
       }
     },
+    "gatewayDiskReplication": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "quorum": {
+          "type": "string"
+        },
+        "replicaWorkerIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "primaryWorkerId": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayDrainWorkerResponse": {
       "type": "object",
       "properties": {
@@ -2404,6 +2539,32 @@
         },
         "errMsg": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayDurableDisk": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "filesystem": {
+          "type": "string"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "replication": {
+          "$ref": "#/definitions/gatewayDiskReplication"
+        },
+        "readOnly": {
+          "type": "boolean"
         }
       }
     },
@@ -2672,6 +2833,13 @@
         },
         "serving": {
           "$ref": "#/definitions/gatewayServingConfig"
+        },
+        "disks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayDurableDisk"
+          }
         }
       }
     },
@@ -3704,6 +3872,9 @@
         },
         "llm": {
           "$ref": "#/definitions/gatewayLLMConfig"
+        },
+        "database": {
+          "$ref": "#/definitions/gatewayDatabaseServingConfig"
         }
       }
     },

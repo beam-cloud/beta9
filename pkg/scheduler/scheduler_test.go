@@ -933,6 +933,39 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 }
 
+func TestSelectWorkerHonorsTargetWorkerId(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	target := &types.Worker{
+		Id:          "worker-target",
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    1000,
+		TotalMemory: 1024,
+		FreeCpu:     1000,
+		FreeMemory:  1024,
+		PoolName:    "beta9-cpu",
+	}
+	other := &types.Worker{
+		Id:          "worker-other",
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    4000,
+		TotalMemory: 4096,
+		FreeCpu:     4000,
+		FreeMemory:  4096,
+		PoolName:    "beta9-cpu",
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{other, target}, &types.ContainerRequest{
+		Cpu:            100,
+		Memory:         100,
+		TargetWorkerId: target.Id,
+	})
+
+	assert.Nil(t, err)
+	assert.Equal(t, target.Id, worker.Id)
+}
+
 func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)

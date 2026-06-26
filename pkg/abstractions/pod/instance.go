@@ -121,6 +121,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {
 			return err
 		}
+		abstractions.ConfigureContainerRequestDurableDiskPlacement(runRequest, *i.StubConfig)
 
 		setPodKeepWarmLock(
 			context.Background(),

@@ -3,7 +3,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from beta9 import Image, LLMConfig, LLMTokenPressureAutoscaler, Pod, Service, ServingConfig
+from beta9 import (
+    DatabaseServingConfig,
+    DiskReplication,
+    DurableDisk,
+    Image,
+    LLMConfig,
+    LLMTokenPressureAutoscaler,
+    Pod,
+    Service,
+    ServingConfig,
+)
 from beta9.abstractions.service import (
     command_from_dockerfile,
     ports_from_dockerfile,
@@ -79,6 +89,48 @@ class TestService(TestCase):
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8000])
         self.assertIn("PORT=8000", service.env)
+
+    def test_service_serializes_durable_disk_and_database_metadata(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[5432],
+            disks=[
+                DurableDisk(
+                    name="pg-data",
+                    size="10Gi",
+                    mount_path="/var/lib/postgresql/data",
+                    replication=DiskReplication(
+                        replicas=3,
+                        mode="sync",
+                        quorum="majority",
+                        primary_worker_id="worker-a",
+                    ),
+                )
+            ],
+            serving=ServingConfig(
+                database=DatabaseServingConfig(
+                    kind="postgres",
+                    port=5432,
+                    readiness_probe="pg_isready",
+                    connection_env_name="DATABASE_URL",
+                    credential_secret_names=["PG_PASSWORD"],
+                )
+            ),
+        )
+
+        req = service._stub_request(
+            stub_type="pod/deployment",
+            stub_name="pg",
+            force_create_stub=True,
+            autoscaler_type="queue_depth",
+            inputs=None,
+            outputs=None,
+        )
+
+        self.assertEqual(req.disks[0].name, "pg-data")
+        self.assertEqual(req.disks[0].replication.primary_worker_id, "worker-a")
+        self.assertEqual(req.serving.database.kind, "postgres")
+        self.assertEqual(req.serving.database.connection_env_name, "DATABASE_URL")
 
     def test_command_service_without_image_does_not_default_port(self):
         service = Service(command="python worker.py")

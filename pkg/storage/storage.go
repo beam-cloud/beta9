@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	StorageModeJuiceFS    string = types.StorageModeJuiceFS
-	StorageModeMountPoint string = types.StorageModeMountPoint
-	StorageModeGeese      string = types.StorageModeGeese
-	StorageModeAlluxio    string = types.StorageModeAlluxio
-	StorageModeLocal      string = types.StorageModeLocal
+	StorageModeJuiceFS     string = types.StorageModeJuiceFS
+	StorageModeMountPoint  string = types.StorageModeMountPoint
+	StorageModeGeese       string = types.StorageModeGeese
+	StorageModeAlluxio     string = types.StorageModeAlluxio
+	StorageModeLocal       string = types.StorageModeLocal
+	StorageModeDurableDisk string = types.StorageModeDurableDisk
 )
 
 type Storage interface {

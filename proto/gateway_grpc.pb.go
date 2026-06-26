@@ -39,6 +39,7 @@ const (
 	GatewayService_StopDeployment_FullMethodName                  = "/gateway.GatewayService/StopDeployment"
 	GatewayService_StartDeployment_FullMethodName                 = "/gateway.GatewayService/StartDeployment"
 	GatewayService_ScaleDeployment_FullMethodName                 = "/gateway.GatewayService/ScaleDeployment"
+	GatewayService_BindService_FullMethodName                     = "/gateway.GatewayService/BindService"
 	GatewayService_DeleteDeployment_FullMethodName                = "/gateway.GatewayService/DeleteDeployment"
 	GatewayService_ListPools_FullMethodName                       = "/gateway.GatewayService/ListPools"
 	GatewayService_ListPoolOffers_FullMethodName                  = "/gateway.GatewayService/ListPoolOffers"
@@ -104,6 +105,7 @@ type GatewayServiceClient interface {
 	StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error)
 	StartDeployment(ctx context.Context, in *StartDeploymentRequest, opts ...grpc.CallOption) (*StartDeploymentResponse, error)
 	ScaleDeployment(ctx context.Context, in *ScaleDeploymentRequest, opts ...grpc.CallOption) (*ScaleDeploymentResponse, error)
+	BindService(ctx context.Context, in *BindServiceRequest, opts ...grpc.CallOption) (*BindServiceResponse, error)
 	DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error)
@@ -374,6 +376,15 @@ func (c *gatewayServiceClient) StartDeployment(ctx context.Context, in *StartDep
 func (c *gatewayServiceClient) ScaleDeployment(ctx context.Context, in *ScaleDeploymentRequest, opts ...grpc.CallOption) (*ScaleDeploymentResponse, error) {
 	out := new(ScaleDeploymentResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ScaleDeployment_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) BindService(ctx context.Context, in *BindServiceRequest, opts ...grpc.CallOption) (*BindServiceResponse, error) {
+	out := new(BindServiceResponse)
+	err := c.cc.Invoke(ctx, GatewayService_BindService_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -755,6 +766,7 @@ type GatewayServiceServer interface {
 	StopDeployment(context.Context, *StopDeploymentRequest) (*StopDeploymentResponse, error)
 	StartDeployment(context.Context, *StartDeploymentRequest) (*StartDeploymentResponse, error)
 	ScaleDeployment(context.Context, *ScaleDeploymentRequest) (*ScaleDeploymentResponse, error)
+	BindService(context.Context, *BindServiceRequest) (*BindServiceResponse, error)
 	DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error)
 	// Pools
 	ListPools(context.Context, *ListPoolsRequest) (*ListPoolsResponse, error)
@@ -860,6 +872,9 @@ func (UnimplementedGatewayServiceServer) StartDeployment(context.Context, *Start
 }
 func (UnimplementedGatewayServiceServer) ScaleDeployment(context.Context, *ScaleDeploymentRequest) (*ScaleDeploymentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ScaleDeployment not implemented")
+}
+func (UnimplementedGatewayServiceServer) BindService(context.Context, *BindServiceRequest) (*BindServiceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BindService not implemented")
 }
 func (UnimplementedGatewayServiceServer) DeleteDeployment(context.Context, *DeleteDeploymentRequest) (*DeleteDeploymentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteDeployment not implemented")
@@ -1345,6 +1360,24 @@ func _GatewayService_ScaleDeployment_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GatewayServiceServer).ScaleDeployment(ctx, req.(*ScaleDeploymentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_BindService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).BindService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_BindService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).BindService(ctx, req.(*BindServiceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2032,6 +2065,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ScaleDeployment",
 			Handler:    _GatewayService_ScaleDeployment_Handler,
+		},
+		{
+			MethodName: "BindService",
+			Handler:    _GatewayService_BindService_Handler,
 		},
 		{
 			MethodName: "DeleteDeployment",

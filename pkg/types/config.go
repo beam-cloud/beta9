@@ -842,7 +842,7 @@ type PodConfig struct {
 
 func (p *PodTCPConfig) GetExternalURL() string {
 	baseUrl := "http"
-	if p.CertFile != "" && p.KeyFile != "" {
+	if p.Enabled {
 		baseUrl += "s"
 	}
 	baseUrl += "://" + p.ExternalHost

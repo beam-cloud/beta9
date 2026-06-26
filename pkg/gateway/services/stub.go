@@ -164,6 +164,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		IsService:          in.IsService,
 		Serving:            servingConfig,
 		Pool:               poolConfig,
+		Disks:              in.Disks,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -412,6 +413,25 @@ func llmConfigFromProto(in *pb.LLMConfig) *types.LLMConfig {
 	}
 }
 
+func databaseConfigFromProto(in *pb.DatabaseServingConfig) *types.DatabaseServingConfig {
+	if in == nil {
+		return nil
+	}
+
+	return &types.DatabaseServingConfig{
+		Kind:                    in.Kind,
+		Port:                    in.Port,
+		ReadinessProbe:          in.ReadinessProbe,
+		ConnectionEnvName:       in.ConnectionEnvName,
+		CredentialSecretNames:   append([]string(nil), in.CredentialSecretNames...),
+		DurabilityMode:          in.DurabilityMode,
+		UsernameSecretName:      in.UsernameSecretName,
+		PasswordSecretName:      in.PasswordSecretName,
+		DatabaseSecretName:      in.DatabaseSecretName,
+		ConnectionURLSecretName: in.ConnectionUrlSecretName,
+	}
+}
+
 func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
 	if in == nil {
 		return nil
@@ -421,6 +441,7 @@ func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
 		AppKind:         in.AppKind,
 		ServingProtocol: in.ServingProtocol,
 		LLM:             llmConfigFromProto(in.Llm),
+		Database:        databaseConfigFromProto(in.Database),
 	})
 }
 
@@ -428,7 +449,7 @@ func compactServingConfig(in *types.ServingConfig) *types.ServingConfig {
 	if in == nil {
 		return nil
 	}
-	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil {
+	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil && in.Database == nil {
 		return nil
 	}
 	return in

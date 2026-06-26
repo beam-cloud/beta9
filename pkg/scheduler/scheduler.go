@@ -875,6 +875,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 
 	filteredWorkers := filterWorkersByPoolSelector(workers, request) // Filter workers by pool selector
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
+	filteredWorkers = filterWorkersByTargetWorker(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
 	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
 	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
@@ -899,6 +900,20 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func filterWorkersByTargetWorker(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if request == nil || request.TargetWorkerId == "" {
+		return workers
+	}
+
+	filteredWorkers := make([]*types.Worker, 0, 1)
+	for _, worker := range workers {
+		if worker.Id == request.TargetWorkerId {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
 }
 
 func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {

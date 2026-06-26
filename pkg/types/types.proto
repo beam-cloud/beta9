@@ -100,6 +100,7 @@ message ContainerRequest {
   bool docker_enabled = 30;
   repeated string runtime_secret_names = 31;
   bool runtime_token_required = 32;
+  string target_worker_id = 33;
 }
 
 message ContainerState {
@@ -113,6 +114,18 @@ message ContainerState {
   int64 cpu = 8;
   int64 memory = 9;
   int64 started_at = 10;
+}
+
+message DurableDiskMountConfig {
+  string name = 1;
+  string size = 2;
+  string filesystem = 3;
+  string driver = 4;
+  uint32 replicas = 5;
+  string mode = 6;
+  string quorum = 7;
+  string primary_worker_id = 8;
+  repeated string replica_worker_i_ds = 9;
 }
 
 message FileInfo {
@@ -154,6 +167,7 @@ message Mount {
   bool read_only = 4;
   string mount_type = 5;
   MountPointConfig mount_point_config = 6;
+  DurableDiskMountConfig durable_disk = 7;
 }
 
 message MountPointConfig {
