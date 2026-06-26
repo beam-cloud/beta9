@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,7 @@ const (
 const (
 	hostResolvConfPath   = "/etc/resolv.conf"
 	workerResolvConfPath = "/workspace/etc/resolv.conf"
+	hostEtcHostsPath     = "/etc/hosts"
 )
 
 type containerResourceUpdater interface {
@@ -72,6 +74,55 @@ func resolvConfHasUsableNameserver(path string) bool {
 		}
 	}
 	return false
+}
+
+func containerHostsFileSource(containerId string, aliases map[string]string) (string, error) {
+	if len(aliases) == 0 {
+		return "", nil
+	}
+
+	lines := make([]string, 0, len(aliases))
+	validAliases := make(map[string]string, len(aliases))
+	hosts := make([]string, 0, len(aliases))
+	for host, ip := range aliases {
+		host = strings.TrimSpace(host)
+		ip = strings.TrimSpace(ip)
+		if host == "" || strings.ContainsAny(host, " \t\r\n/") {
+			continue
+		}
+		if parsed := net.ParseIP(ip); parsed == nil {
+			continue
+		}
+		validAliases[host] = ip
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	for _, host := range hosts {
+		lines = append(lines, fmt.Sprintf("%s\t%s", validAliases[host], host))
+	}
+	if len(lines) == 0 {
+		return "", nil
+	}
+
+	contents, err := os.ReadFile(hostEtcHostsPath)
+	if err != nil || len(contents) == 0 {
+		contents = []byte("127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n")
+	}
+	if !strings.HasSuffix(string(contents), "\n") {
+		contents = append(contents, '\n')
+	}
+	contents = append(contents, []byte("# beta9 service bindings\n"+strings.Join(lines, "\n")+"\n")...)
+
+	dir := filepath.Join(baseConfigPath, containerId)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "hosts")
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		return "", err
+	}
+
+	return path, nil
 }
 
 // handleStopContainerArgs queues a stop for a locally owned container.
@@ -156,6 +207,8 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
+	s.syncDurableDiskMounts(request)
+
 	s.containerLock.Lock()
 
 	// De-allocate GPU devices so they are available for new containers
@@ -786,7 +839,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
-	volumeCacheMap := s.addRequestMounts(request, spec)
+	volumeCacheMap, err := s.addRequestMounts(request, spec)
+	if err != nil {
+		return nil, err
+	}
 	s.enableVolumeCaching(request, volumeCacheMap, spec)
 
 	// Configure resolv.conf
@@ -805,6 +861,27 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
+
+	if stubConfig := requestStubConfig(request); stubConfig != nil {
+		hostsPath, err := containerHostsFileSource(request.ContainerId, stubConfig.HostAliases)
+		if err != nil {
+			log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("failed to prepare service binding hosts file")
+		} else if hostsPath != "" {
+			spec.Mounts = append(spec.Mounts, specs.Mount{
+				Type:        "none",
+				Source:      hostsPath,
+				Destination: hostEtcHostsPath,
+				Options: []string{
+					"ro",
+					"rbind",
+					"rprivate",
+					"nosuid",
+					"noexec",
+					"nodev",
+				},
+			})
+		}
+	}
 
 	// External mount for gVisor file uploads (external mounts bypass directory caching)
 	uploadsPath := filepath.Join(types.WorkerContainerUploadsHostPath, request.ContainerId)
@@ -888,12 +965,16 @@ func requestStubConfig(request *types.ContainerRequest) *types.StubConfigV1 {
 	return stubConfig
 }
 
-func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) map[string]string {
+func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) (map[string]string, error) {
 	volumeCacheMap := make(map[string]string)
 
 	for i := range request.Mounts {
 		mount := &request.Mounts[i]
-		if !s.prepareRequestMount(request, mount, volumeCacheMap) {
+		ok, err := s.prepareRequestMount(request, mount, volumeCacheMap)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			continue
 		}
 
@@ -911,27 +992,26 @@ func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.S
 		})
 	}
 
-	return volumeCacheMap
+	return volumeCacheMap, nil
 }
 
-func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *types.Mount, volumeCacheMap map[string]string) bool {
+func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *types.Mount, volumeCacheMap map[string]string) (bool, error) {
 	if mount == nil {
-		return false
+		return false, nil
 	}
 
 	if mount.MountType == storage.StorageModeMountPoint {
 		if _, err := os.Stat(mount.LocalPath); os.IsNotExist(err) {
-			return false
+			return false, nil
 		}
-		return true
+		return true, nil
 	}
 
 	if mount.MountType == storage.StorageModeDurableDisk {
 		if err := s.prepareDurableDiskMount(request, mount); err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare durable disk mount: %v", err)
-			return false
+			return false, fmt.Errorf("failed to prepare durable disk mount: %w", err)
 		}
-		return true
+		return true, nil
 	}
 
 	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) {
@@ -940,10 +1020,10 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 
 	if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-		return false
+		return false, nil
 	}
 
-	return true
+	return true, nil
 }
 
 func ensureBindMountSourceDirs(mounts []types.Mount) error {

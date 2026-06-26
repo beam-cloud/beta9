@@ -101,6 +101,21 @@ func (m *Mount) ToProto() *pb.Mount {
 		mountPointConfig = m.MountPointConfig.ToProto()
 	}
 
+	var durableDisk *pb.DurableDiskMountConfig
+	if m.DurableDisk != nil {
+		durableDisk = &pb.DurableDiskMountConfig{
+			Name:             m.DurableDisk.Name,
+			Size:             m.DurableDisk.Size,
+			Filesystem:       m.DurableDisk.Filesystem,
+			Driver:           m.DurableDisk.Driver,
+			Replicas:         m.DurableDisk.Replicas,
+			Mode:             m.DurableDisk.Mode,
+			Quorum:           m.DurableDisk.Quorum,
+			PrimaryWorkerId:  m.DurableDisk.PrimaryWorkerID,
+			ReplicaWorkerIDs: append([]string(nil), m.DurableDisk.ReplicaWorkerIDs...),
+		}
+	}
+
 	return &pb.Mount{
 		LocalPath:        m.LocalPath,
 		MountPath:        m.MountPath,
@@ -108,6 +123,7 @@ func (m *Mount) ToProto() *pb.Mount {
 		ReadOnly:         m.ReadOnly,
 		MountType:        m.MountType,
 		MountPointConfig: mountPointConfig,
+		DurableDisk:      durableDisk,
 	}
 }
 
@@ -117,6 +133,21 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 		mountPointConfig = NewMountPointConfigFromProto(in.MountPointConfig)
 	}
 
+	var durableDisk *DurableDiskMountConfig
+	if in.DurableDisk != nil {
+		durableDisk = &DurableDiskMountConfig{
+			Name:             in.DurableDisk.Name,
+			Size:             in.DurableDisk.Size,
+			Filesystem:       in.DurableDisk.Filesystem,
+			Driver:           in.DurableDisk.Driver,
+			Replicas:         in.DurableDisk.Replicas,
+			Mode:             in.DurableDisk.Mode,
+			Quorum:           in.DurableDisk.Quorum,
+			PrimaryWorkerID:  in.DurableDisk.PrimaryWorkerId,
+			ReplicaWorkerIDs: append([]string(nil), in.DurableDisk.ReplicaWorkerIDs...),
+		}
+	}
+
 	return &Mount{
 		LocalPath:        in.LocalPath,
 		MountPath:        in.MountPath,
@@ -124,6 +155,7 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 		ReadOnly:         in.ReadOnly,
 		MountType:        in.MountType,
 		MountPointConfig: mountPointConfig,
+		DurableDisk:      durableDisk,
 	}
 }
 

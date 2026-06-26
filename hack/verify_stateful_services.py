@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -145,6 +146,92 @@ def wait_http(url: str, timeout: int):
     raise RuntimeError(f"timed out waiting for {url}: {last}")
 
 
+def deployment_containers(cli_bin: str, context: str, deployment_ids):
+    wanted = set(deployment_ids)
+    output = run(cli([cli_bin, "container", "list", "--format", "json"], context))
+    containers = parse_last_json(output)
+    return [
+        c
+        for c in containers
+        if c.get("deployment_id") in wanted and c.get("container_id")
+    ]
+
+
+def stop_deployment_containers(cli_bin: str, context: str, deployment_ids, timeout: int):
+    deadline = time.time() + timeout
+    stopped = []
+
+    while time.time() < deadline:
+        matches = [c["container_id"] for c in deployment_containers(cli_bin, context, deployment_ids)]
+        if matches:
+            for container_id in matches:
+                run(cli([cli_bin, "container", "stop", container_id], context))
+                stopped.append(container_id)
+            return stopped
+        time.sleep(2)
+
+    raise RuntimeError(
+        f"timed out waiting for containers from deployments: {sorted(deployment_ids)}"
+    )
+
+
+def wait_for_no_deployment_containers(cli_bin: str, context: str, deployment_ids, timeout: int):
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        matches = deployment_containers(cli_bin, context, deployment_ids)
+        if not matches:
+            return
+        time.sleep(2)
+
+    raise RuntimeError(f"timed out waiting for deployment containers to drain: {deployment_ids}")
+
+
+def delete_dev_disk_primaries(kubectl: str, namespace: str, disk_names):
+    pod_data = json.loads(
+        subprocess.check_output(
+            [kubectl, "get", "pods", "-n", namespace, "-o", "json"],
+            text=True,
+        )
+    )
+    worker_pods = []
+    for pod in pod_data.get("items", []):
+        name = pod.get("metadata", {}).get("name", "")
+        if "worker-default" not in name:
+            continue
+        if pod.get("metadata", {}).get("deletionTimestamp"):
+            continue
+        if pod.get("status", {}).get("phase") != "Running":
+            continue
+        conditions = pod.get("status", {}).get("conditions", [])
+        if not any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions):
+            continue
+        worker_pods.append(name)
+    if not worker_pods:
+        raise RuntimeError(f"no worker-default pods found in namespace {namespace!r}")
+
+    for disk_name in disk_names:
+        quoted = shlex.quote(disk_name)
+        for pod in worker_pods:
+            run(
+                [
+                    kubectl,
+                    "exec",
+                    "-n",
+                    namespace,
+                    pod,
+                    "--",
+                    "sh",
+                    "-lc",
+                    (
+                        "for path in $(find /data/durable-disks -mindepth 2 "
+                        f"-maxdepth 2 -type d -name {quoted} -print 2>/dev/null); "
+                        "do echo deleting:$path; rm -rf \"$path\"; done"
+                    ),
+                ]
+            )
+
+
 def cli(args, context):
     if context:
         args = args + ["--context", context]
@@ -158,6 +245,9 @@ def main():
     parser.add_argument("--prefix", default=f"stateful-{int(time.time())}")
     parser.add_argument("--pool", default="")
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--kubectl", default=os.environ.get("KUBECTL", "kubectl"))
+    parser.add_argument("--namespace", default=os.environ.get("BETA9_NAMESPACE", "beta9"))
+    parser.add_argument("--skip-replica-loss", action="store_true")
     parser.add_argument("--keep", action="store_true", help="Do not delete created resources.")
     args = parser.parse_args()
 
@@ -170,8 +260,17 @@ def main():
     app_name = f"{args.prefix}-app"
     key = f"{args.prefix}-key"
     value = f"value-{int(time.time())}"
+    pg_disk = f"{pg_name}-data"
+    redis_disk = f"{redis_name}-data"
 
-    created = {"postgres": pg_name, "redis": redis_name, "app": app_name, "app_id": ""}
+    created = {
+        "postgres": pg_name,
+        "redis": redis_name,
+        "app": app_name,
+        "app_id": "",
+        "postgres_id": "",
+        "redis_id": "",
+    }
 
     with tempfile.TemporaryDirectory(prefix="beta9-stateful-") as tmp:
         root = Path(tmp)
@@ -183,7 +282,7 @@ def main():
             common_db += ["--pool", args.pool]
 
         try:
-            parse_last_json(
+            pg_out = parse_last_json(
                 run(
                     cli(
                         [
@@ -203,7 +302,9 @@ def main():
                     )
                 )
             )
-            parse_last_json(
+            created["postgres_id"] = pg_out["deployment_id"]
+
+            redis_out = parse_last_json(
                 run(
                     cli(
                         [
@@ -221,6 +322,7 @@ def main():
                     )
                 )
             )
+            created["redis_id"] = redis_out["deployment_id"]
 
             app_out = parse_last_json(
                 run(
@@ -279,10 +381,45 @@ def main():
             run(cli([cli_bin, "deployment", "scale", created["app_id"], "--replicas", "1"], args.context))
 
             wait_http(read_url, args.timeout)
+            stopped = stop_deployment_containers(
+                cli_bin,
+                args.context,
+                [created["postgres_id"], created["redis_id"]],
+                args.timeout,
+            )
+            print(f"stopped database containers: {', '.join(stopped)}")
+            wait_http(read_url, args.timeout)
+
+            if not args.skip_replica_loss:
+                kubectl_bin = shutil.which(args.kubectl)
+                if not kubectl_bin:
+                    raise RuntimeError(f"kubectl {args.kubectl!r} not found")
+
+                for kind, name in (("postgres", pg_name), ("redis", redis_name)):
+                    run(cli([cli_bin, kind, "scale", name, "--replicas", "0"], args.context))
+                run(cli([cli_bin, "deployment", "scale", created["app_id"], "--replicas", "0"], args.context))
+                wait_for_no_deployment_containers(
+                    cli_bin,
+                    args.context,
+                    [created["postgres_id"], created["redis_id"], created["app_id"]],
+                    args.timeout,
+                )
+
+                delete_dev_disk_primaries(kubectl_bin, args.namespace, [pg_disk, redis_disk])
+
+                for kind, name in (("postgres", pg_name), ("redis", redis_name)):
+                    run(cli([cli_bin, kind, "scale", name, "--replicas", "1"], args.context))
+                run(cli([cli_bin, "deployment", "scale", created["app_id"], "--replicas", "1"], args.context))
+                wait_http(read_url, args.timeout)
+
             print("stateful verification passed")
         finally:
             if not args.keep:
-                run(cli([cli_bin, "deployment", "delete", created["app_id"]], args.context), check=False)
+                if created["app_id"]:
+                    run(
+                        cli([cli_bin, "deployment", "delete", created["app_id"]], args.context),
+                        check=False,
+                    )
                 run(cli([cli_bin, "postgres", "delete", pg_name], args.context), check=False)
                 run(cli([cli_bin, "redis", "delete", redis_name], args.context), check=False)
 

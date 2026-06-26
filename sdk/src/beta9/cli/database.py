@@ -1,6 +1,7 @@
 import os
 import secrets as secrets_lib
 import sys
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 from urllib.parse import quote, urlparse
@@ -16,8 +17,10 @@ from ..clients.gateway import (
     BindServiceRequest,
     DeleteDeploymentRequest,
     GetUrlRequest,
+    ListContainersRequest,
     ListDeploymentsRequest,
     ScaleDeploymentRequest,
+    StopContainerRequest,
     StringList,
 )
 from ..clients.secret import (
@@ -83,6 +86,9 @@ REDIS = DatabaseProduct(
     readiness_probe="PING",
     connection_env_name="REDIS_URL",
 )
+
+DEFAULT_DATABASE_KEEP_WARM_SECONDS = 300
+DELETE_DRAIN_TIMEOUT_SECONDS = 120
 
 
 def _env_prefix(kind: str, name: str) -> str:
@@ -237,7 +243,7 @@ def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
     return [
         "sh",
         "-lc",
-        "export POSTGRES_USER=\"${%s}\" POSTGRES_PASSWORD=\"${%s}\" POSTGRES_DB=\"${%s}\" PGDATA=/var/lib/postgresql/data/pgdata; exec docker-entrypoint.sh postgres"
+        "export PATH=/usr/lib/postgresql/16/bin:$PATH POSTGRES_USER=\"${%s}\" POSTGRES_PASSWORD=\"${%s}\" POSTGRES_DB=\"${%s}\" PGDATA=/var/lib/postgresql/data/pgdata; exec docker-entrypoint.sh postgres"
         % (secret_names["username"], secret_names["password"], secret_names["database"]),
     ]
 
@@ -297,7 +303,7 @@ def _create_database(
         ports=[product.port],
         tcp=True,
         min_replicas=min_replicas,
-        keep_warm_seconds=0,
+        keep_warm_seconds=DEFAULT_DATABASE_KEEP_WARM_SECONDS,
         pool=pool,
         secrets=[v for k, v in secret_names.items() if k != "url"],
         env=env,
@@ -549,6 +555,8 @@ def redis_rotate(service: ServiceClient, name: str, format: str):
 def _delete_database(service: ServiceClient, product: DatabaseProduct, name: str) -> None:
     deployment = _deployment_by_name(service, name)
     if deployment is not None:
+        _scale_database_to(service, product, name, 0, quiet=True)
+        _drain_database_containers(service, deployment.id)
         res = service.gateway.delete_deployment(DeleteDeploymentRequest(id=deployment.id))
         if not res.ok:
             raise click.ClickException(res.err_msg or f"Failed to delete deployment {deployment.id}.")
@@ -615,6 +623,16 @@ def redis_scale(service: ServiceClient, name: str, containers: int):
 
 
 def _scale_database(service: ServiceClient, product: DatabaseProduct, name: str, containers: int) -> None:
+    _scale_database_to(service, product, name, containers, quiet=False)
+
+
+def _scale_database_to(
+    service: ServiceClient,
+    product: DatabaseProduct,
+    name: str,
+    containers: int,
+    quiet: bool,
+) -> None:
     deployment = _deployment_by_name(service, name)
     if deployment is None:
         raise click.ClickException(f"{product.kind} service {name!r} not found.")
@@ -623,4 +641,43 @@ def _scale_database(service: ServiceClient, product: DatabaseProduct, name: str,
     )
     if not res.ok:
         raise click.ClickException(res.err_msg or f"Failed to scale {name}.")
-    terminal.success(f"Scaled {product.kind} service {name} to {containers} replicas")
+    if not quiet:
+        terminal.success(f"Scaled {product.kind} service {name} to {containers} replicas")
+
+
+def _deployment_containers(service: ServiceClient, deployment_id: str):
+    res = service.gateway.list_containers(ListContainersRequest())
+    if not res.ok:
+        raise click.ClickException(res.error_msg or "Failed to list containers.")
+    return [
+        container
+        for container in res.containers
+        if container.deployment_id == deployment_id and container.container_id
+    ]
+
+
+def _drain_database_containers(service: ServiceClient, deployment_id: str) -> None:
+    deadline = time.time() + DELETE_DRAIN_TIMEOUT_SECONDS
+    last = []
+
+    while time.time() < deadline:
+        last = _deployment_containers(service, deployment_id)
+        if not last:
+            return
+
+        for container in last:
+            if container.status == "STOPPING":
+                continue
+            res = service.gateway.stop_container(
+                StopContainerRequest(container_id=container.container_id)
+            )
+            if not res.ok and "not found" not in res.error_msg.lower():
+                raise click.ClickException(
+                    res.error_msg or f"Failed to stop container {container.container_id}."
+                )
+        time.sleep(2)
+
+    container_ids = ", ".join(container.container_id for container in last)
+    raise click.ClickException(
+        f"Timed out waiting for database containers to stop: {container_ids}"
+    )

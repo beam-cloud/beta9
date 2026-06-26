@@ -70,6 +70,27 @@ func TestContainerResolvConfSourceUsesHostResolverWhenReachable(t *testing.T) {
 	require.Equal(t, workerResolvConfPath, containerResolvConfSource(false, hostResolv))
 }
 
+func TestContainerHostsFileSourceAddsServiceBindingAliases(t *testing.T) {
+	containerId := "container-host-alias-test"
+	t.Cleanup(func() {
+		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
+	})
+
+	path, err := containerHostsFileSource(containerId, map[string]string{
+		"postgres.localhost": "10.43.45.147",
+		" bad host ":         "10.43.45.148",
+		"redis.localhost":    "not-an-ip",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, path)
+
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(contents), "10.43.45.147\tpostgres.localhost")
+	require.NotContains(t, string(contents), "bad host")
+	require.NotContains(t, string(contents), "redis.localhost")
+}
+
 func TestStartupPortBindingsForSandboxSkipsInternalPorts(t *testing.T) {
 	request := &types.ContainerRequest{
 		Ports: []uint32{
@@ -1154,8 +1175,9 @@ func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
 
+	require.NoError(t, err)
 	require.Equal(t, map[string]string{"data": localPath}, volumeCacheMap)
 	require.DirExists(t, localPath)
 	require.Len(t, spec.Mounts, 1)
@@ -1176,8 +1198,9 @@ func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
 
+	require.NoError(t, err)
 	require.Empty(t, volumeCacheMap)
 	require.Empty(t, spec.Mounts)
 }
@@ -1203,8 +1226,9 @@ func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
 
+	require.NoError(t, err)
 	require.Empty(t, volumeCacheMap)
 	require.DirExists(t, localPath)
 	require.FileExists(t, filepath.Join(localPath, ".beta9-durable-disk"))
