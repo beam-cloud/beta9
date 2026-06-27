@@ -16,7 +16,8 @@ func (s *Worker) listenForWorkerEvents() {
 
 	for {
 		stream, err := s.workerRepoClient.StreamWorkerEvents(s.ctx, &pb.StreamWorkerEventsRequest{
-			WorkerId: s.workerId,
+			WorkerId:      s.workerId,
+			StorageNodeId: s.storageNodeID(),
 		})
 		if err != nil {
 			if s.ctx.Err() != nil {
@@ -103,7 +104,13 @@ func (s *Worker) handleWorkerEvent(event *pb.WorkerEvent) {
 
 		s.cancelBuild(e.StopBuild.ContainerId)
 	case *pb.WorkerEvent_DurableDisk:
-		if e.DurableDisk == nil || (e.DurableDisk.WorkerId != "" && e.DurableDisk.WorkerId != s.workerId) {
+		if e.DurableDisk == nil {
+			return
+		}
+		if e.DurableDisk.WorkerId != "" && e.DurableDisk.WorkerId != s.workerId {
+			return
+		}
+		if e.DurableDisk.StorageNodeId != "" && e.DurableDisk.StorageNodeId != s.storageNodeID() {
 			return
 		}
 		if err := s.handleDurableDiskEvent(e.DurableDisk); err != nil {
@@ -114,16 +121,23 @@ func (s *Worker) handleWorkerEvent(event *pb.WorkerEvent) {
 	}
 }
 
+func (s *Worker) storageNodeID() string {
+	if s == nil {
+		return ""
+	}
+	return types.StableStorageNodeID(s.machineID, s.workerId)
+}
+
 func (s *Worker) handleDurableDiskEvent(event *pb.DurableDiskEvent) error {
 	mount := types.NewMountFromProto(event.Mount)
 	if mount == nil || mount.DurableDisk == nil {
 		return fmt.Errorf("durable disk event is missing mount metadata")
 	}
 
-	switch types.DurableDiskEventAction(event.Action) {
-	case types.DurableDiskEventActionPrepare:
+	switch types.DurableDiskCommandAction(event.Action) {
+	case types.DurableDiskCommandActionPrepare:
 		return s.prepareDRBDPeerMount(mount)
-	case types.DurableDiskEventActionDemote:
+	case types.DurableDiskCommandActionDemote:
 		return s.teardownDRBDDurableDiskMount(nil, mount)
 	default:
 		return fmt.Errorf("unsupported durable disk action %q", event.Action)

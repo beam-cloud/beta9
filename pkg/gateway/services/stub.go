@@ -17,7 +17,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -315,7 +314,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
-	if err := gws.sendDurableDiskPrepareEvents(authInfo.Workspace.Name, stubConfig.Disks); err != nil {
+	if err := gws.dispatchDurableDiskPrepareCommands(authInfo.Workspace.Name, stubConfig.Disks); err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
@@ -383,34 +382,43 @@ func (gws *GatewayService) configureDurableDiskPlacement(stubConfig *types.StubC
 			replication.Quorum = types.DurableDiskReplicationQuorumMajority
 		}
 
-		poolWorkerIDs, err := gws.durableDiskCandidateWorkerIDs(stubConfig.PoolSelector())
+		poolNodes, err := gws.durableDiskCandidateStorageNodes(stubConfig.PoolSelector())
 		if err != nil {
 			return err
 		}
-		allWorkerIDs := poolWorkerIDs
+		allNodes := poolNodes
 		if stubConfig.PoolSelector() != "" {
-			allWorkerIDs, err = gws.durableDiskCandidateWorkerIDs("")
+			allNodes, err = gws.durableDiskCandidateStorageNodes("")
 			if err != nil {
 				return err
 			}
 		}
-		if replication.PrimaryWorkerId != "" && stubConfig.PoolSelector() != "" && !slices.Contains(poolWorkerIDs, replication.PrimaryWorkerId) {
-			return fmt.Errorf("durable disk %q primary worker %s is not available in pool %q", disk.Name, replication.PrimaryWorkerId, stubConfig.PoolSelector())
+
+		if replication.PrimaryWorkerId != "" {
+			primaryNodeID, ok := durableDiskCanonicalStorageNodeID(replication.PrimaryWorkerId, allNodes)
+			if !ok {
+				return fmt.Errorf("durable disk %q primary storage node %s is unavailable", disk.Name, replication.PrimaryWorkerId)
+			}
+			if stubConfig.PoolSelector() != "" && !durableDiskStorageNodeIDIn(primaryNodeID, poolNodes) {
+				return fmt.Errorf("durable disk %q primary storage node %s is not available in pool %q", disk.Name, primaryNodeID, stubConfig.PoolSelector())
+			}
+			replication.PrimaryWorkerId = primaryNodeID
 		}
 
 		replicaIDs := make([]string, 0, replication.Replicas)
-		addReplicaID := func(workerID string) error {
-			workerID = strings.TrimSpace(workerID)
-			if workerID == "" {
+		addReplicaID := func(storageNodeID string) error {
+			storageNodeID = strings.TrimSpace(storageNodeID)
+			if storageNodeID == "" {
 				return nil
 			}
-			if slices.Contains(replicaIDs, workerID) {
+			canonicalID, ok := durableDiskCanonicalStorageNodeID(storageNodeID, allNodes)
+			if !ok {
+				return fmt.Errorf("durable disk %q requested unavailable DRBD replica storage node %s in pool %q", disk.Name, storageNodeID, stubConfig.PoolSelector())
+			}
+			if slices.Contains(replicaIDs, canonicalID) {
 				return nil
 			}
-			if !slices.Contains(allWorkerIDs, workerID) {
-				return fmt.Errorf("durable disk %q requested unavailable DRBD replica worker %s in pool %q", disk.Name, workerID, stubConfig.PoolSelector())
-			}
-			replicaIDs = append(replicaIDs, workerID)
+			replicaIDs = append(replicaIDs, canonicalID)
 			return nil
 		}
 
@@ -422,17 +430,17 @@ func (gws *GatewayService) configureDurableDiskPlacement(stubConfig *types.StubC
 				return err
 			}
 		}
-		for _, workerID := range poolWorkerIDs {
+		for _, node := range poolNodes {
 			if len(replicaIDs) >= int(replication.Replicas) {
 				break
 			}
-			if err := addReplicaID(workerID); err != nil {
+			if err := addReplicaID(node.ID); err != nil {
 				return err
 			}
 		}
 
 		if len(replicaIDs) < int(replication.Replicas) {
-			return fmt.Errorf("durable disk %q needs %d DRBD replica workers, but only %d available worker(s) matched pool %q", disk.Name, replication.Replicas, len(poolWorkerIDs), stubConfig.PoolSelector())
+			return fmt.Errorf("durable disk %q needs %d DRBD storage nodes, but only %d available node(s) matched pool %q", disk.Name, replication.Replicas, len(poolNodes), stubConfig.PoolSelector())
 		}
 		replication.ReplicaWorkerIds = replicaIDs
 		if replication.PrimaryWorkerId == "" {
@@ -443,7 +451,7 @@ func (gws *GatewayService) configureDurableDiskPlacement(stubConfig *types.StubC
 	return nil
 }
 
-func (gws *GatewayService) sendDurableDiskPrepareEvents(workspaceName string, disks []*pb.DurableDisk) error {
+func (gws *GatewayService) dispatchDurableDiskPrepareCommands(workspaceName string, disks []*pb.DurableDisk) error {
 	if gws == nil || gws.redisClient == nil {
 		return nil
 	}
@@ -458,32 +466,37 @@ func (gws *GatewayService) sendDurableDiskPrepareEvents(workspaceName string, di
 			LocalPath:   path.Join(types.DefaultDurableDisksPath, workspaceName, types.SafeDurableDiskName(disk.Name)),
 			MountPath:   disk.MountPath,
 			ReadOnly:    disk.ReadOnly,
-			MountType:   storage.StorageModeDurableDisk,
+			MountType:   types.StorageModeDurableDisk,
 			DurableDisk: types.NewDurableDiskMountConfigFromProto(disk),
 		}
-		for _, workerID := range disk.Replication.ReplicaWorkerIds {
+		for _, storageNodeID := range disk.Replication.ReplicaWorkerIds {
 			nonce, err := common.GenerateObjectId()
 			if err != nil {
-				return fmt.Errorf("generate durable disk event nonce: %w", err)
+				return fmt.Errorf("generate durable disk command nonce: %w", err)
 			}
-			args, err := types.DurableDiskEventArgs{
-				WorkerID: workerID,
-				Action:   types.DurableDiskEventActionPrepare,
-				Mount:    mount,
-				Nonce:    nonce,
+			args, err := types.DurableDiskCommandArgs{
+				StorageNodeID: storageNodeID,
+				Action:        types.DurableDiskCommandActionPrepare,
+				Mount:         mount,
+				Nonce:         nonce,
 			}.ToMap()
 			if err != nil {
 				return err
 			}
-			if _, err := eventBus.Send(&common.Event{Type: common.EventTypeDurableDisk, Retries: 3, LockAndDelete: false, Args: args}); err != nil {
-				return fmt.Errorf("send durable disk prepare event for %s: %w", workerID, err)
+			if _, err := eventBus.Send(&common.Event{Type: common.EventTypeDurableDiskCommand, Retries: 3, LockAndDelete: false, Args: args}); err != nil {
+				return fmt.Errorf("send durable disk prepare command for storage node %s: %w", storageNodeID, err)
 			}
 		}
 	}
 	return nil
 }
 
-func (gws *GatewayService) durableDiskCandidateWorkerIDs(poolName string) ([]string, error) {
+type durableDiskStorageNode struct {
+	ID       string
+	WorkerID string
+}
+
+func (gws *GatewayService) durableDiskCandidateStorageNodes(poolName string) ([]durableDiskStorageNode, error) {
 	if gws == nil || gws.workerRepo == nil {
 		return nil, fmt.Errorf("durable disk DRBD placement requires a worker repository")
 	}
@@ -501,15 +514,46 @@ func (gws *GatewayService) durableDiskCandidateWorkerIDs(poolName string) ([]str
 		return nil, fmt.Errorf("list workers for DRBD durable disk placement: %w", err)
 	}
 
-	workerIDs := make([]string, 0, len(workers))
+	byID := map[string]durableDiskStorageNode{}
 	for _, worker := range workers {
 		if worker == nil || worker.Id == "" || worker.Status != types.WorkerStatusAvailable {
 			continue
 		}
-		workerIDs = append(workerIDs, worker.Id)
+		storageNodeID := worker.StorageNodeID()
+		if storageNodeID == "" {
+			continue
+		}
+		if _, ok := byID[storageNodeID]; !ok {
+			byID[storageNodeID] = durableDiskStorageNode{ID: storageNodeID, WorkerID: worker.Id}
+		}
 	}
-	slices.Sort(workerIDs)
-	return workerIDs, nil
+
+	nodes := make([]durableDiskStorageNode, 0, len(byID))
+	for _, node := range byID {
+		nodes = append(nodes, node)
+	}
+	slices.SortFunc(nodes, func(a, b durableDiskStorageNode) int {
+		return strings.Compare(a.ID, b.ID)
+	})
+	return nodes, nil
+}
+
+func durableDiskStorageNodeIDIn(id string, nodes []durableDiskStorageNode) bool {
+	_, ok := durableDiskCanonicalStorageNodeID(id, nodes)
+	return ok
+}
+
+func durableDiskCanonicalStorageNodeID(id string, nodes []durableDiskStorageNode) (string, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", false
+	}
+	for _, node := range nodes {
+		if id == node.ID || id == node.WorkerID {
+			return node.ID, true
+		}
+	}
+	return "", false
 }
 
 func durableDiskGatewayDriver(configured string) string {

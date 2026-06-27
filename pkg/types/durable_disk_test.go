@@ -6,10 +6,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDurableDiskEventArgsRoundTrip(t *testing.T) {
-	args := DurableDiskEventArgs{
-		WorkerID: "worker-a",
-		Action:   DurableDiskEventActionPrepare,
+func TestDurableDiskCommandArgsRoundTrip(t *testing.T) {
+	args := DurableDiskCommandArgs{
+		StorageNodeID: "node-a",
+		Action:        DurableDiskCommandActionPrepare,
 		Mount: Mount{
 			LocalPath: "/data/durable-disks/workspace/pg-data",
 			MountPath: "/data",
@@ -24,10 +24,10 @@ func TestDurableDiskEventArgsRoundTrip(t *testing.T) {
 
 	raw, err := args.ToMap()
 	require.NoError(t, err)
-	got, err := ToDurableDiskEventArgs(raw)
+	got, err := ToDurableDiskCommandArgs(raw)
 	require.NoError(t, err)
 
-	require.Equal(t, args.WorkerID, got.WorkerID)
+	require.Equal(t, args.StorageNodeID, got.StorageNodeID)
 	require.Equal(t, args.Action, got.Action)
 	require.Equal(t, args.Mount.DurableDisk, got.Mount.DurableDisk)
 	require.Equal(t, args.Nonce, got.Nonce)

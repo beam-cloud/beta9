@@ -990,7 +990,8 @@ func (s *Worker) keepalive() {
 		select {
 		case <-ticker.C:
 			_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
-				WorkerId: s.workerId,
+				WorkerId:  s.workerId,
+				MachineId: s.machineID,
 			}))
 			if err != nil {
 				consecutiveFailures++

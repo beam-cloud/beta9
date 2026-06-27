@@ -1213,7 +1213,7 @@ func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
 		Mounts: []types.Mount{{
 			LocalPath: localPath,
 			MountPath: "/var/lib/postgresql/data",
-			MountType: storage.StorageModeDurableDisk,
+			MountType: types.StorageModeDurableDisk,
 			DurableDisk: &types.DurableDiskMountConfig{
 				Name:       "pg-data",
 				Size:       "10Gi",

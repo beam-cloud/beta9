@@ -89,7 +89,10 @@ message GetNextContainerRequestResponse {
   string error_msg = 3;
 }
 
-message StreamWorkerEventsRequest { string worker_id = 1; }
+message StreamWorkerEventsRequest {
+  string worker_id = 1;
+  string storage_node_id = 2;
+}
 
 message WorkerEvent {
   string event_id = 1;
@@ -113,6 +116,7 @@ message DurableDiskEvent {
   string worker_id = 1;
   string action = 2;
   types.Mount mount = 3;
+  string storage_node_id = 4;
 }
 
 message SetImagePullLockRequest {
@@ -201,7 +205,10 @@ message UpdateWorkerCapacityResponse {
   string error_msg = 2;
 }
 
-message SetWorkerKeepAliveRequest { string worker_id = 1; }
+message SetWorkerKeepAliveRequest {
+  string worker_id = 1;
+  string machine_id = 2;
+}
 
 message SetWorkerKeepAliveResponse {
   bool ok = 1;

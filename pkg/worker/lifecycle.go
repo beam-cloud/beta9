@@ -1007,7 +1007,7 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 		return true, nil
 	}
 
-	if mount.MountType == storage.StorageModeDurableDisk {
+	if mount.MountType == types.StorageModeDurableDisk {
 		if err := s.prepareDurableDiskMount(request, mount); err != nil {
 			return false, fmt.Errorf("failed to prepare durable disk mount: %w", err)
 		}

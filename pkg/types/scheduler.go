@@ -67,6 +67,24 @@ type Worker struct {
 	Runtime              string       `json:"runtime" redis:"runtime"`
 }
 
+type WorkerKeepAlive struct {
+	MachineId string `json:"machine_id"`
+}
+
+func (w *Worker) StorageNodeID() string {
+	if w == nil {
+		return ""
+	}
+	return StableStorageNodeID(w.MachineId, w.Id)
+}
+
+func StableStorageNodeID(machineID, workerID string) string {
+	if machineID = strings.TrimSpace(machineID); machineID != "" {
+		return machineID
+	}
+	return strings.TrimSpace(workerID)
+}
+
 func (w *Worker) ToProto() *pb.Worker {
 	containers := make([]*pb.Container, len(w.ActiveContainers))
 	for i, c := range w.ActiveContainers {

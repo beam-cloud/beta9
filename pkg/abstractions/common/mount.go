@@ -82,7 +82,7 @@ func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace
 			LocalPath:   path.Join(types.DefaultDurableDisksPath, workspace.Name, types.SafeDurableDiskName(disk.Name)),
 			MountPath:   disk.MountPath,
 			ReadOnly:    disk.ReadOnly,
-			MountType:   storage.StorageModeDurableDisk,
+			MountType:   types.StorageModeDurableDisk,
 			DurableDisk: types.NewDurableDiskMountConfigFromProto(disk),
 		})
 	}

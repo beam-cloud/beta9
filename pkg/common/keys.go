@@ -41,15 +41,15 @@ var (
 )
 
 var (
-	workerPrefix                 string = "worker"
-	workerImageLock              string = "worker:%s:image:%s:lock"
-	workerContainerResourceUsage string = "worker:%s:container:%s:resource_usage"
-	workerNetworkLock            string = "worker:network:%s:lock"
-	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
-	workerNetworkIpRefCounts     string = "worker:network:%s:ip_ref_counts"
-	workerNetworkIpOwner         string = "worker:network:%s:ip_owner:%s"
-	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
-	workerDurableDiskEventQueue  string = "worker:%s:durable_disk_events"
+	workerPrefix                       string = "worker"
+	workerImageLock                    string = "worker:%s:image:%s:lock"
+	workerContainerResourceUsage       string = "worker:%s:container:%s:resource_usage"
+	workerNetworkLock                  string = "worker:network:%s:lock"
+	workerNetworkIpIndex               string = "worker:network:%s:ip_index"
+	workerNetworkIpRefCounts           string = "worker:network:%s:ip_ref_counts"
+	workerNetworkIpOwner               string = "worker:network:%s:ip_owner:%s"
+	workerNetworkContainerIp           string = "worker:network:%s:container_ip:%s"
+	storageNodeDurableDiskCommandQueue string = "storage_node:%s:durable_disk_commands"
 )
 
 var (
@@ -277,8 +277,8 @@ func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {
 	return fmt.Sprintf(workerNetworkLock, networkPrefix)
 }
 
-func (rk *redisKeys) WorkerDurableDiskEventQueue(workerId string) string {
-	return fmt.Sprintf(workerDurableDiskEventQueue, workerId)
+func (rk *redisKeys) StorageNodeDurableDiskCommandQueue(storageNodeID string) string {
+	return fmt.Sprintf(storageNodeDurableDiskCommandQueue, storageNodeID)
 }
 
 func (rk *redisKeys) WorkerNetworkIpIndex(networkPrefix string) string {

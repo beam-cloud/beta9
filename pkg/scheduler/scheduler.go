@@ -909,7 +909,7 @@ func filterWorkersByTargetWorker(workers []*types.Worker, request *types.Contain
 
 	filteredWorkers := make([]*types.Worker, 0, 1)
 	for _, worker := range workers {
-		if worker.Id == request.TargetWorkerId {
+		if worker.Id == request.TargetWorkerId || worker.StorageNodeID() == request.TargetWorkerId {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}

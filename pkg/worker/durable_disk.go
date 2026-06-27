@@ -430,19 +430,23 @@ func (s *Worker) newDRBDDiskConfig(mount *types.Mount, requirePrimary bool) (*dr
 	if s == nil || s.workerId == "" {
 		return nil, fmt.Errorf("durable disk %q requested DRBD on a worker with no worker id", disk.Name)
 	}
-	if requirePrimary && disk.PrimaryWorkerID != s.workerId {
-		return nil, fmt.Errorf("durable disk %q primary is %s, refusing attach on worker %s", disk.Name, disk.PrimaryWorkerID, s.workerId)
+	localStorageNodeID := s.storageNodeID()
+	if localStorageNodeID == "" {
+		return nil, fmt.Errorf("durable disk %q requested DRBD on a worker with no storage node id", disk.Name)
+	}
+	if requirePrimary && disk.PrimaryWorkerID != localStorageNodeID {
+		return nil, fmt.Errorf("durable disk %q primary is storage node %s, refusing attach on storage node %s", disk.Name, disk.PrimaryWorkerID, localStorageNodeID)
 	}
 
 	replicaWorkerIDs := normalizedDRBDReplicaWorkerIDs(disk)
 	if len(replicaWorkerIDs) < 2 {
-		return nil, fmt.Errorf("durable disk %q requested DRBD with %d replica worker(s); at least 2 are required", disk.Name, len(replicaWorkerIDs))
+		return nil, fmt.Errorf("durable disk %q requested DRBD with %d replica storage node(s); at least 2 are required", disk.Name, len(replicaWorkerIDs))
 	}
 	if !drbdHasQuorum(disk, replicaWorkerIDs) {
 		return nil, fmt.Errorf("durable disk %q requested quorum %q without a majority-capable replica set", disk.Name, disk.Quorum)
 	}
-	if !slices.Contains(replicaWorkerIDs, s.workerId) {
-		return nil, fmt.Errorf("durable disk %q is not placed on worker %s", disk.Name, s.workerId)
+	if !slices.Contains(replicaWorkerIDs, localStorageNodeID) {
+		return nil, fmt.Errorf("durable disk %q is not placed on storage node %s", disk.Name, localStorageNodeID)
 	}
 
 	sizeBytes, err := durableDiskSizeBytes(disk.Size)
@@ -465,7 +469,7 @@ func (s *Worker) newDRBDDiskConfig(mount *types.Mount, requirePrimary bool) (*dr
 	if err != nil {
 		return nil, err
 	}
-	localNodeName, err := drbdLocalNodeName(s.workerId, nodeNames)
+	localNodeName, err := drbdLocalNodeName(localStorageNodeID, nodeNames)
 	if err != nil {
 		return nil, err
 	}
@@ -479,25 +483,25 @@ func (s *Worker) newDRBDDiskConfig(mount *types.Mount, requirePrimary bool) (*dr
 	configPath := filepath.Join(firstNonEmpty(os.Getenv(drbdConfigDirEnv), defaultDRBDConfigDir), resource+".res")
 
 	nodes := make([]drbdNodeConfig, 0, len(replicaWorkerIDs))
-	for _, workerID := range replicaWorkerIDs {
-		address := strings.TrimSpace(addresses[workerID])
-		if workerID == s.workerId {
+	for _, replicaStorageNodeID := range replicaWorkerIDs {
+		address := strings.TrimSpace(addresses[replicaStorageNodeID])
+		if replicaStorageNodeID == localStorageNodeID {
 			address = firstNonEmpty(os.Getenv(drbdLocalAddressEnv), address)
 		}
 		if address == "" {
-			return nil, fmt.Errorf("durable disk %q missing DRBD address for replica worker %s; set %s", disk.Name, workerID, drbdNodeAddressesEnv)
+			return nil, fmt.Errorf("durable disk %q missing DRBD address for storage node %s; set %s", disk.Name, replicaStorageNodeID, drbdNodeAddressesEnv)
 		}
 		netAddress := drbdAddressWithPort(address, port)
 
-		name := strings.TrimSpace(nodeNames[workerID])
-		if workerID == s.workerId {
+		name := strings.TrimSpace(nodeNames[replicaStorageNodeID])
+		if replicaStorageNodeID == localStorageNodeID {
 			name = localNodeName
 		}
 		if name == "" {
 			name = drbdNodeNameFromAddress(netAddress.Value)
 		}
 		if name == "" {
-			return nil, fmt.Errorf("durable disk %q missing DRBD node name for replica worker %s; set %s", disk.Name, workerID, drbdNodeNamesEnv)
+			return nil, fmt.Errorf("durable disk %q missing DRBD node name for storage node %s; set %s", disk.Name, replicaStorageNodeID, drbdNodeNamesEnv)
 		}
 
 		nodes = append(nodes, drbdNodeConfig{

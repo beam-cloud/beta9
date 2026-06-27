@@ -436,6 +436,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: wpc.name,
 		},
 		{
+			Name: types.WorkerMachineEnv,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "spec.nodeName",
+				},
+			},
+		},
+		{
 			Name:  "CACHE_LOCALITY",
 			Value: locality,
 		},

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-type DurableDiskEventAction string
+type DurableDiskCommandAction string
 
 const (
 	DurableDiskDriverDev  = "dev"
@@ -14,18 +14,18 @@ const (
 	DurableDiskReplicationModeSync       = "sync"
 	DurableDiskReplicationQuorumMajority = "majority"
 
-	DurableDiskEventActionPrepare DurableDiskEventAction = "prepare"
-	DurableDiskEventActionDemote  DurableDiskEventAction = "demote"
+	DurableDiskCommandActionPrepare DurableDiskCommandAction = "prepare"
+	DurableDiskCommandActionDemote  DurableDiskCommandAction = "demote"
 )
 
-type DurableDiskEventArgs struct {
-	WorkerID string                 `json:"worker_id"`
-	Action   DurableDiskEventAction `json:"action"`
-	Mount    Mount                  `json:"mount"`
-	Nonce    string                 `json:"nonce,omitempty"`
+type DurableDiskCommandArgs struct {
+	StorageNodeID string                   `json:"storage_node_id"`
+	Action        DurableDiskCommandAction `json:"action"`
+	Mount         Mount                    `json:"mount"`
+	Nonce         string                   `json:"nonce,omitempty"`
 }
 
-func (a DurableDiskEventArgs) ToMap() (map[string]any, error) {
+func (a DurableDiskCommandArgs) ToMap() (map[string]any, error) {
 	data, err := json.Marshal(a)
 	if err != nil {
 		return nil, err
@@ -38,13 +38,13 @@ func (a DurableDiskEventArgs) ToMap() (map[string]any, error) {
 	return result, nil
 }
 
-func ToDurableDiskEventArgs(m map[string]any) (*DurableDiskEventArgs, error) {
+func ToDurableDiskCommandArgs(m map[string]any) (*DurableDiskCommandArgs, error) {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return nil, err
 	}
 
-	var result DurableDiskEventArgs
+	var result DurableDiskCommandArgs
 	if err = json.Unmarshal(data, &result); err != nil {
 		return nil, err
 	}

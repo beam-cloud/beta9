@@ -188,7 +188,7 @@ func TestSetWorkerKeepAlivePromotesPendingWorker(t *testing.T) {
 	}
 	assert.Nil(t, repo.AddWorker(worker))
 
-	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id))
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{}))
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
@@ -211,7 +211,7 @@ func TestSetWorkerKeepAliveDoesNotPromoteDisabledWorker(t *testing.T) {
 	}
 	assert.Nil(t, repo.AddWorker(worker))
 
-	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id))
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{}))
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
@@ -608,6 +608,31 @@ func TestGetAllWorkersOnMachineUsesMachineIndex(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(workers))
 	assert.Equal(t, "worker-machine-a", workers[0].Id)
+}
+
+func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{Id: "worker-moving", Status: types.WorkerStatusAvailable, PoolName: "pool-a", MachineId: "machine-a"}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{MachineId: "machine-b"}))
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, "machine-b", updatedWorker.MachineId)
+
+	oldWorkers, err := repo.GetAllWorkersOnMachine("machine-a")
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(oldWorkers))
+
+	newWorkers, err := repo.GetAllWorkersOnMachine("machine-b")
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(newWorkers))
+	assert.Equal(t, worker.Id, newWorkers[0].Id)
 }
 
 func TestWorkerSecondaryIndexesRemoveStaleMembers(t *testing.T) {

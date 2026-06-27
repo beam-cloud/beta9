@@ -466,27 +466,49 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
-func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string) error {
+func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error {
 	ctx := context.TODO()
-	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
-
-	status, err := r.rdb.HGet(ctx, stateKey, "status").Result()
-	if err == redis.Nil {
-		return &types.ErrWorkerNotFound{WorkerId: workerId}
-	}
+	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
 	}
-	if types.WorkerStatus(status) == types.WorkerStatusPending {
-		return r.ToggleWorkerAvailable(workerId)
-	}
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
-	// Set TTL on state key
-	err = r.rdb.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	worker, err := r.getWorkerFromKey(stateKey)
 	if err != nil {
-		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
+		return err
 	}
 
+	oldMachineID := worker.MachineId
+	oldStatus := worker.Status
+	machineID := strings.TrimSpace(keepAlive.MachineId)
+	if machineID != "" {
+		worker.MachineId = machineID
+	}
+	if worker.Status == types.WorkerStatusPending {
+		if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
+			return err
+		}
+		worker.Status = types.WorkerStatusAvailable
+	}
+	if worker.MachineId != oldMachineID || worker.Status != oldStatus {
+		worker.ResourceVersion++
+	}
+
+	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, common.ToSlice(worker))
+	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
+	if oldMachineID != "" && oldMachineID != worker.MachineId {
+		pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldMachineID), stateKey)
+	}
+	for _, indexKey := range r.workerIndexKeys(worker) {
+		pipe.SAdd(ctx, indexKey, stateKey)
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set worker keepalive <%v>: %w", stateKey, err)
+	}
 	return nil
 }
 
