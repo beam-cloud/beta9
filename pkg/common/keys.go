@@ -49,6 +49,7 @@ var (
 	workerNetworkIpRefCounts     string = "worker:network:%s:ip_ref_counts"
 	workerNetworkIpOwner         string = "worker:network:%s:ip_owner:%s"
 	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
+	workerDurableDiskEventQueue  string = "worker:%s:durable_disk_events"
 )
 
 var (
@@ -274,6 +275,10 @@ func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 
 func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {
 	return fmt.Sprintf(workerNetworkLock, networkPrefix)
+}
+
+func (rk *redisKeys) WorkerDurableDiskEventQueue(workerId string) string {
+	return fmt.Sprintf(workerDurableDiskEventQueue, workerId)
 }
 
 func (rk *redisKeys) WorkerNetworkIpIndex(networkPrefix string) string {

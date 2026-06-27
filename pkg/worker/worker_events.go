@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -101,8 +102,31 @@ func (s *Worker) handleWorkerEvent(event *pb.WorkerEvent) {
 		}
 
 		s.cancelBuild(e.StopBuild.ContainerId)
+	case *pb.WorkerEvent_DurableDisk:
+		if e.DurableDisk == nil || (e.DurableDisk.WorkerId != "" && e.DurableDisk.WorkerId != s.workerId) {
+			return
+		}
+		if err := s.handleDurableDiskEvent(e.DurableDisk); err != nil {
+			log.Error().Err(err).Str("event_id", event.EventId).Msg("failed to handle durable disk event")
+		}
 	default:
 		log.Warn().Str("event_id", event.EventId).Msg("received unknown worker event")
+	}
+}
+
+func (s *Worker) handleDurableDiskEvent(event *pb.DurableDiskEvent) error {
+	mount := types.NewMountFromProto(event.Mount)
+	if mount == nil || mount.DurableDisk == nil {
+		return fmt.Errorf("durable disk event is missing mount metadata")
+	}
+
+	switch types.DurableDiskEventAction(event.Action) {
+	case types.DurableDiskEventActionPrepare:
+		return s.prepareDRBDPeerMount(mount)
+	case types.DurableDiskEventActionDemote:
+		return s.teardownDRBDDurableDiskMount(nil, mount)
+	default:
+		return fmt.Errorf("unsupported durable disk action %q", event.Action)
 	}
 }
 

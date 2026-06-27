@@ -47,6 +47,7 @@ type Event struct {
 const (
 	EventTypeStopContainer  EventType = "STOP_CONTAINER"
 	EventTypeStopBuild      EventType = "STOP_BUILD"
+	EventTypeDurableDisk    EventType = "DURABLE_DISK"
 	EventTypeReloadInstance EventType = "RELOAD_INSTANCE"
 )
 

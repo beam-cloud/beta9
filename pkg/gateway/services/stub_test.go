@@ -29,7 +29,7 @@ func TestConfigureDurableDiskPlacementFillsDRBDReplicaWorkers(t *testing.T) {
 		Disks: []*pb.DurableDisk{
 			{
 				Name:   "pg-data",
-				Driver: "drbd",
+				Driver: types.DurableDiskDriverDRBD,
 				Replication: &pb.DiskReplication{
 					Replicas: 3,
 				},
@@ -42,8 +42,8 @@ func TestConfigureDurableDiskPlacementFillsDRBDReplicaWorkers(t *testing.T) {
 
 	require.Equal(t, "worker-a", config.Disks[0].Replication.PrimaryWorkerId)
 	require.Equal(t, []string{"worker-a", "worker-b", "worker-c"}, config.Disks[0].Replication.ReplicaWorkerIds)
-	require.Equal(t, "sync", config.Disks[0].Replication.Mode)
-	require.Equal(t, "majority", config.Disks[0].Replication.Quorum)
+	require.Equal(t, types.DurableDiskReplicationModeSync, config.Disks[0].Replication.Mode)
+	require.Equal(t, types.DurableDiskReplicationQuorumMajority, config.Disks[0].Replication.Quorum)
 }
 
 func TestConfigureDurableDiskPlacementFailsClosedWithoutQuorumWorkers(t *testing.T) {
@@ -55,7 +55,7 @@ func TestConfigureDurableDiskPlacementFailsClosedWithoutQuorumWorkers(t *testing
 		Disks: []*pb.DurableDisk{
 			{
 				Name:   "pg-data",
-				Driver: "drbd",
+				Driver: types.DurableDiskDriverDRBD,
 				Replication: &pb.DiskReplication{
 					Replicas: 3,
 				},
@@ -84,7 +84,7 @@ func TestConfigureDurableDiskPlacementPreservesExplicitPrimary(t *testing.T) {
 		Disks: []*pb.DurableDisk{
 			{
 				Name:   "pg-data",
-				Driver: "drbd",
+				Driver: types.DurableDiskDriverDRBD,
 				Replication: &pb.DiskReplication{
 					Replicas:        3,
 					PrimaryWorkerId: "worker-c",

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -59,9 +60,9 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
-	case "", "dev":
+	case "", types.DurableDiskDriverDev:
 		return prepareDevDurableDiskMount(mount)
-	case "drbd":
+	case types.DurableDiskDriverDRBD:
 		return s.prepareDRBDDurableDiskMount(request, mount)
 	default:
 		return fmt.Errorf("durable disk %q requested unsupported driver %q", mount.DurableDisk.Name, driver)
@@ -69,10 +70,10 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 }
 
 func durableDiskDriver(configured string) string {
-	if configured = strings.TrimSpace(configured); configured != "" {
-		return strings.ToLower(configured)
+	if driver := types.NormalizeDurableDiskDriver(configured); driver != "" {
+		return driver
 	}
-	return strings.ToLower(strings.TrimSpace(os.Getenv(durableDiskDriverEnv)))
+	return types.NormalizeDurableDiskDriver(os.Getenv(durableDiskDriverEnv))
 }
 
 func prepareDevDurableDiskMount(mount *types.Mount) error {
@@ -100,11 +101,11 @@ func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) {
 			continue
 		}
 		switch durableDiskDriver(mount.DurableDisk.Driver) {
-		case "dev":
+		case types.DurableDiskDriverDev:
 			if err := syncDevDurableDiskMount(mount); err != nil {
 				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to sync dev durable disk replicas")
 			}
-		case "drbd":
+		case types.DurableDiskDriverDRBD:
 			if err := s.teardownDRBDDurableDiskMount(request, mount); err != nil {
 				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to demote drbd durable disk")
 			}
@@ -324,7 +325,7 @@ func copyDurableDiskFile(src, dst string, mode os.FileMode) error {
 }
 
 func (s *Worker) prepareDRBDDurableDiskMount(_ *types.ContainerRequest, mount *types.Mount) error {
-	config, err := s.newDRBDDiskConfig(mount)
+	config, err := s.newDRBDDiskConfig(mount, true)
 	if err != nil {
 		return err
 	}
@@ -342,7 +343,7 @@ func (s *Worker) prepareDRBDDurableDiskMount(_ *types.ContainerRequest, mount *t
 	if err := config.prepareBackingDevice(ctx); err != nil {
 		return err
 	}
-	if err := config.bringUpResource(ctx); err != nil {
+	if err := config.bringUpResource(ctx, true); err != nil {
 		return err
 	}
 	if err := config.mountPrimary(ctx, mount.LocalPath); err != nil {
@@ -353,7 +354,7 @@ func (s *Worker) prepareDRBDDurableDiskMount(_ *types.ContainerRequest, mount *t
 }
 
 func (s *Worker) teardownDRBDDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
-	config, err := s.newDRBDDiskConfig(mount)
+	config, err := s.newDRBDDiskConfig(mount, false)
 	if err != nil {
 		return err
 	}
@@ -372,6 +373,28 @@ func (s *Worker) teardownDRBDDurableDiskMount(request *types.ContainerRequest, m
 		return fmt.Errorf("drbd teardown: %w", err)
 	}
 	return nil
+}
+
+func (s *Worker) prepareDRBDPeerMount(mount *types.Mount) error {
+	config, err := s.newDRBDDiskConfig(mount, false)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	if s != nil && s.ctx != nil {
+		ctx = s.ctx
+	}
+	ctx, cancel := context.WithTimeout(ctx, drbdAttachTimeout())
+	defer cancel()
+
+	if err := validateDRBDHost(mount.DurableDisk.Name); err != nil {
+		return err
+	}
+	if err := config.prepareBackingDevice(ctx); err != nil {
+		return err
+	}
+	return config.bringUpResource(ctx, false)
 }
 
 type drbdDiskConfig struct {
@@ -393,7 +416,7 @@ type drbdNodeConfig struct {
 	Disk          string
 }
 
-func (s *Worker) newDRBDDiskConfig(mount *types.Mount) (*drbdDiskConfig, error) {
+func (s *Worker) newDRBDDiskConfig(mount *types.Mount, requirePrimary bool) (*drbdDiskConfig, error) {
 	if mount == nil || mount.DurableDisk == nil {
 		return nil, fmt.Errorf("durable disk mount is missing metadata")
 	}
@@ -407,7 +430,7 @@ func (s *Worker) newDRBDDiskConfig(mount *types.Mount) (*drbdDiskConfig, error) 
 	if s == nil || s.workerId == "" {
 		return nil, fmt.Errorf("durable disk %q requested DRBD on a worker with no worker id", disk.Name)
 	}
-	if disk.PrimaryWorkerID != s.workerId {
+	if requirePrimary && disk.PrimaryWorkerID != s.workerId {
 		return nil, fmt.Errorf("durable disk %q primary is %s, refusing attach on worker %s", disk.Name, disk.PrimaryWorkerID, s.workerId)
 	}
 
@@ -417,6 +440,9 @@ func (s *Worker) newDRBDDiskConfig(mount *types.Mount) (*drbdDiskConfig, error) 
 	}
 	if !drbdHasQuorum(disk, replicaWorkerIDs) {
 		return nil, fmt.Errorf("durable disk %q requested quorum %q without a majority-capable replica set", disk.Name, disk.Quorum)
+	}
+	if !slices.Contains(replicaWorkerIDs, s.workerId) {
+		return nil, fmt.Errorf("durable disk %q is not placed on worker %s", disk.Name, s.workerId)
 	}
 
 	sizeBytes, err := durableDiskSizeBytes(disk.Size)
@@ -579,7 +605,7 @@ func (c *drbdDiskConfig) findLoopDevice(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-func (c *drbdDiskConfig) bringUpResource(ctx context.Context) error {
+func (c *drbdDiskConfig) bringUpResource(ctx context.Context, promote bool) error {
 	_, _ = durableDiskRun(ctx, "modprobe", "drbd")
 
 	if _, err := durableDiskRun(ctx, "drbdadm", "create-md", c.Resource); err != nil && !isIgnorableDRBDError(err) {
@@ -590,6 +616,9 @@ func (c *drbdDiskConfig) bringUpResource(ctx context.Context) error {
 	}
 	if _, err := durableDiskRun(ctx, "drbdadm", "connect", c.Resource); err != nil && !isIgnorableDRBDError(err) {
 		return fmt.Errorf("connect drbd resource %s: %w", c.Resource, err)
+	}
+	if !promote {
+		return nil
 	}
 	if _, err := durableDiskRun(ctx, "drbdadm", "primary", "--force", c.Resource); err != nil && !isIgnorableDRBDError(err) {
 		return fmt.Errorf("promote drbd resource %s: %w", c.Resource, err)
@@ -712,7 +741,7 @@ func drbdHasQuorum(disk *types.DurableDiskMountConfig, workerIDs []string) bool 
 	if disk == nil {
 		return false
 	}
-	if strings.TrimSpace(strings.ToLower(disk.Quorum)) != "" && strings.TrimSpace(strings.ToLower(disk.Quorum)) != "majority" {
+	if quorum := strings.TrimSpace(strings.ToLower(disk.Quorum)); quorum != "" && quorum != types.DurableDiskReplicationQuorumMajority {
 		return true
 	}
 	replicas := int(disk.Replicas)

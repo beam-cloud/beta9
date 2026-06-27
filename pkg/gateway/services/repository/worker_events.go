@@ -10,15 +10,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	redis "github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
 	workerEventSinkBufferSize          = 128
 	workerEventRetryDelay              = 5 * time.Second
 	workerEventStreamHeartbeatInterval = 30 * time.Second
+	durableDiskEventQueueTTL           = time.Hour
 )
 
 type workerEventSink struct {
@@ -46,18 +49,20 @@ func newWorkerEventBroker(ctx context.Context, rdb *common.RedisClient) *workerE
 
 	go broker.receive(common.EventTypeStopContainer)
 	go broker.receive(common.EventTypeStopBuild)
+	go broker.receive(common.EventTypeDurableDisk)
 
 	return broker
 }
 
 func (b *workerEventBroker) register(workerID string) (uint64, <-chan *pb.WorkerEvent) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	b.nextID++
 	id := b.nextID
 	events := make(chan *pb.WorkerEvent, workerEventSinkBufferSize)
 	b.sinks[id] = &workerEventSink{workerID: workerID, events: events}
+	b.mu.Unlock()
+
+	b.flushDurableDiskEvents(workerID, events)
 	return id, events
 }
 
@@ -137,6 +142,27 @@ func (b *workerEventBroker) handleRedisEventID(eventID string) {
 }
 
 func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
+	if disk := event.GetDurableDisk(); disk != nil && disk.WorkerId != "" {
+		delivered := false
+		b.mu.RLock()
+		for _, sink := range b.sinks {
+			if sink.workerID != disk.WorkerId {
+				continue
+			}
+			select {
+			case sink.events <- event:
+				delivered = true
+			default:
+				log.Warn().Str("worker_id", disk.WorkerId).Str("event_id", event.EventId).Msg("queueing durable disk event for slow stream")
+			}
+		}
+		b.mu.RUnlock()
+		if !delivered {
+			b.queueDurableDiskEvent(disk.WorkerId, event)
+		}
+		return
+	}
+
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -148,6 +174,49 @@ func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
 				Str("worker_id", sink.workerID).
 				Str("event_id", event.EventId).
 				Msg("dropping worker event for slow stream")
+		}
+	}
+}
+
+func (b *workerEventBroker) queueDurableDiskEvent(workerID string, event *pb.WorkerEvent) {
+	data, err := proto.Marshal(event)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal durable disk event")
+		return
+	}
+	key := common.RedisKeys.WorkerDurableDiskEventQueue(workerID)
+	if err := b.rdb.RPush(b.ctx, key, string(data)).Err(); err != nil {
+		log.Error().Err(err).Str("worker_id", workerID).Msg("failed to queue durable disk event")
+		return
+	}
+	_ = b.rdb.Expire(b.ctx, key, durableDiskEventQueueTTL).Err()
+}
+
+func (b *workerEventBroker) flushDurableDiskEvents(workerID string, out chan<- *pb.WorkerEvent) {
+	key := common.RedisKeys.WorkerDurableDiskEventQueue(workerID)
+	for {
+		value, err := b.rdb.LPop(b.ctx, key).Result()
+		if errors.Is(err, redis.Nil) {
+			return
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("worker_id", workerID).Msg("failed to read queued durable disk event")
+			return
+		}
+
+		event := &pb.WorkerEvent{}
+		if err := proto.Unmarshal([]byte(value), event); err != nil {
+			log.Warn().Err(err).Str("worker_id", workerID).Msg("skipping invalid durable disk event")
+			continue
+		}
+		select {
+		case out <- event:
+		case <-b.ctx.Done():
+			b.queueDurableDiskEvent(workerID, event)
+			return
+		default:
+			b.queueDurableDiskEvent(workerID, event)
+			return
 		}
 	}
 }
@@ -180,6 +249,25 @@ func workerEventFromRedisEvent(eventID string, event *common.Event) (*pb.WorkerE
 			EventId: eventID,
 			Event: &pb.WorkerEvent_StopBuild{
 				StopBuild: &pb.StopBuildEvent{ContainerId: containerID},
+			},
+		}, nil
+	case common.EventTypeDurableDisk:
+		args, err := types.ToDurableDiskEventArgs(event.Args)
+		if err != nil {
+			return nil, err
+		}
+		if args.WorkerID == "" || args.Action == "" {
+			return nil, fmt.Errorf("durable disk event is missing worker_id or action")
+		}
+
+		return &pb.WorkerEvent{
+			EventId: eventID,
+			Event: &pb.WorkerEvent_DurableDisk{
+				DurableDisk: &pb.DurableDiskEvent{
+					WorkerId: args.WorkerID,
+					Action:   string(args.Action),
+					Mount:    args.Mount.ToProto(),
+				},
 			},
 		}, nil
 	default:

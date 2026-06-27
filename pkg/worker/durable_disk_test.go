@@ -53,10 +53,10 @@ func devDurableDiskTestMount(primary string) *types.Mount {
 		MountPath: "/data",
 		DurableDisk: &types.DurableDiskMountConfig{
 			Name:     filepath.Base(primary),
-			Driver:   "dev",
+			Driver:   types.DurableDiskDriverDev,
 			Replicas: 3,
-			Mode:     "sync",
-			Quorum:   "majority",
+			Mode:     types.DurableDiskReplicationModeSync,
+			Quorum:   types.DurableDiskReplicationQuorumMajority,
 		},
 	}
 }
@@ -65,7 +65,7 @@ func TestDRBDDurableDiskRejectsNonPrimaryWorker(t *testing.T) {
 	mount := drbdDurableDiskTestMount(filepath.Join(t.TempDir(), "pg-data"))
 	worker := &Worker{workerId: "worker-b"}
 
-	_, err := worker.newDRBDDiskConfig(mount)
+	_, err := worker.newDRBDDiskConfig(mount, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "refusing attach")
 }
@@ -74,7 +74,7 @@ func TestDRBDDurableDiskRequiresReplicaAddresses(t *testing.T) {
 	mount := drbdDurableDiskTestMount(filepath.Join(t.TempDir(), "pg-data"))
 	worker := &Worker{workerId: "worker-a"}
 
-	_, err := worker.newDRBDDiskConfig(mount)
+	_, err := worker.newDRBDDiskConfig(mount, true)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), drbdNodeAddressesEnv)
 }
@@ -158,10 +158,10 @@ func drbdDurableDiskTestMount(primary string) *types.Mount {
 			Name:             filepath.Base(primary),
 			Size:             "1Gi",
 			Filesystem:       "ext4",
-			Driver:           "drbd",
+			Driver:           types.DurableDiskDriverDRBD,
 			Replicas:         3,
-			Mode:             "sync",
-			Quorum:           "majority",
+			Mode:             types.DurableDiskReplicationModeSync,
+			Quorum:           types.DurableDiskReplicationQuorumMajority,
 			PrimaryWorkerID:  "worker-a",
 			ReplicaWorkerIDs: []string{"worker-a", "worker-b", "worker-c"},
 		},

@@ -97,6 +97,7 @@ message WorkerEvent {
   oneof event {
     StopContainerEvent stop_container = 2;
     StopBuildEvent stop_build = 3;
+    DurableDiskEvent durable_disk = 4;
   }
 }
 
@@ -107,6 +108,12 @@ message StopContainerEvent {
 }
 
 message StopBuildEvent { string container_id = 1; }
+
+message DurableDiskEvent {
+  string worker_id = 1;
+  string action = 2;
+  types.Mount mount = 3;
+}
 
 message SetImagePullLockRequest {
   string worker_id = 1;

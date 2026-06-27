@@ -2,7 +2,6 @@ package abstractions
 
 import (
 	"path"
-	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -80,7 +79,7 @@ func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace
 		}
 
 		mounts = append(mounts, types.Mount{
-			LocalPath:   path.Join(types.DefaultDurableDisksPath, workspace.Name, safeDiskName(disk.Name)),
+			LocalPath:   path.Join(types.DefaultDurableDisksPath, workspace.Name, types.SafeDurableDiskName(disk.Name)),
 			MountPath:   disk.MountPath,
 			ReadOnly:    disk.ReadOnly,
 			MountType:   storage.StorageModeDurableDisk,
@@ -89,14 +88,4 @@ func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace
 	}
 
 	return mounts, nil
-}
-
-func safeDiskName(name string) string {
-	name = strings.TrimSpace(name)
-	name = strings.ReplaceAll(name, "\\", "-")
-	name = strings.ReplaceAll(name, "/", "-")
-	if name == "" || name == "." || name == ".." {
-		return "disk"
-	}
-	return name
 }

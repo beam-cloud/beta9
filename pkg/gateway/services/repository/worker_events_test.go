@@ -96,6 +96,64 @@ func TestWorkerEventBrokerConvertsStopBuildEvents(t *testing.T) {
 	require.Equal(t, "build-1", stopBuild.ContainerId)
 }
 
+func TestWorkerEventBrokerConvertsDurableDiskEvents(t *testing.T) {
+	broker, eventBus := newWorkerEventBrokerForTest(t)
+
+	sinkID, sink := broker.register("worker-b")
+	defer broker.unregister(sinkID)
+
+	mount := types.Mount{
+		LocalPath: "/data/durable-disks/workspace/pg-data",
+		MountPath: "/var/lib/postgresql/data",
+		DurableDisk: &types.DurableDiskMountConfig{
+			Name:             "pg-data",
+			Driver:           types.DurableDiskDriverDRBD,
+			PrimaryWorkerID:  "worker-a",
+			ReplicaWorkerIDs: []string{"worker-a", "worker-b"},
+		},
+	}
+	args, err := types.DurableDiskEventArgs{
+		WorkerID: "worker-b",
+		Action:   types.DurableDiskEventActionPrepare,
+		Mount:    mount,
+	}.ToMap()
+	require.NoError(t, err)
+
+	eventID, err := eventBus.Send(&common.Event{
+		Type:          common.EventTypeDurableDisk,
+		Args:          args,
+		LockAndDelete: false,
+	})
+	require.NoError(t, err)
+
+	broker.handleRedisEventID(eventID)
+
+	event := receiveWorkerEvent(t, sink)
+	require.Equal(t, eventID, event.EventId)
+	disk := event.GetDurableDisk()
+	require.NotNil(t, disk)
+	require.Equal(t, "worker-b", disk.WorkerId)
+	require.Equal(t, string(types.DurableDiskEventActionPrepare), disk.Action)
+	require.Equal(t, "pg-data", disk.Mount.DurableDisk.Name)
+}
+
+func TestWorkerEventBrokerQueuesDurableDiskEventsUntilWorkerConnects(t *testing.T) {
+	broker, _ := newWorkerEventBrokerForTest(t)
+	event := &pb.WorkerEvent{
+		EventId: "event-1",
+		Event: &pb.WorkerEvent_DurableDisk{
+			DurableDisk: &pb.DurableDiskEvent{WorkerId: "worker-b", Action: string(types.DurableDiskEventActionPrepare)},
+		},
+	}
+
+	broker.fanout(event)
+
+	sinkID, sink := broker.register("worker-b")
+	defer broker.unregister(sinkID)
+
+	require.Equal(t, "event-1", receiveWorkerEvent(t, sink).EventId)
+}
+
 func TestStreamWorkerEventsRejectsInvalidRequests(t *testing.T) {
 	service := &WorkerRepositoryService{ctx: context.Background()}
 
