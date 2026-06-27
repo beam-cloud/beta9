@@ -358,6 +358,18 @@ func (c *ContainerRequest) NetworkRestricted() bool {
 	return c.NetworkPolicy() != ContainerNetworkPolicyOpen
 }
 
+func (c *ContainerRequest) HasDurableDiskMount() bool {
+	if c == nil {
+		return false
+	}
+	for _, mount := range c.Mounts {
+		if mount.MountType == StorageModeDurableDisk || mount.DurableDisk != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *ContainerRequest) Clone() *ContainerRequest {
 	if c == nil {
 		return nil

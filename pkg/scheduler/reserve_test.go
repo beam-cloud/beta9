@@ -82,6 +82,36 @@ func TestProvisioningFailureBackoffSkipsImmediateAddWorkerRetry(t *testing.T) {
 	assert.Equal(t, 1, controller.AddWorkerCallCount())
 }
 
+func TestTargetWorkerRequestDoesNotProvisionGenericWorker(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "beta9-cpu",
+		config:     scheduler.config,
+		workerRepo: scheduler.workerRepo,
+	}
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+
+	request := &types.ContainerRequest{
+		ContainerId:    uuid.New().String(),
+		Cpu:            100,
+		Memory:         100,
+		PoolSelector:   "beta9-cpu",
+		TargetWorkerId: "storage-node-a",
+		Timestamp:      time.Now(),
+	}
+	newSchedulingAttempt(scheduler, request, nil).runWaitingOrProvisioning()
+
+	assert.Equal(t, 0, controller.AddWorkerCallCount())
+	time.Sleep(provisioningWorkerRequeueDelay + requestProcessingInterval)
+	requeuedRequest, err := scheduler.requestBacklog.Pop()
+	assert.Nil(t, err)
+	assert.Equal(t, request.ContainerId, requeuedRequest.ContainerId)
+	assert.Equal(t, "storage-node-a", requeuedRequest.TargetWorkerId)
+}
+
 func TestProvisioningAttemptDoesNotFailOverWithinReservation(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -245,6 +275,45 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int64(100), privateAfter.FreeCpu)
 	assert.Equal(t, 0, privateController.AddWorkerCallCount())
+}
+
+func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	privateController := &capacityCheckingWorkerPoolControllerForTest{
+		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
+			ctx:              context.Background(),
+			name:             "private-cpu",
+			config:           scheduler.config,
+			workerRepo:       scheduler.workerRepo,
+			requiresSelector: true,
+		},
+		hasCapacity: false,
+	}
+	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
+		Mode:                 types.PoolModePrivate,
+		RequiresPoolSelector: true,
+	}, privateController)
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "private-cpu",
+		Timestamp:    time.Now(),
+		Mounts: []types.Mount{
+			{
+				MountType:   types.StorageModeDurableDisk,
+				DurableDisk: &types.DurableDiskMountConfig{Name: "pg-data"},
+			},
+		},
+	}
+
+	fallback, poolName, ok := newSchedulingAttempt(scheduler, request, nil).privatePoolFallbackRequest()
+	assert.False(t, ok)
+	assert.Nil(t, fallback)
+	assert.Equal(t, "", poolName)
 }
 
 func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T) {

@@ -14,6 +14,10 @@ service BackendRepositoryService {
       returns (CreateCheckpointResponse);
   rpc UpdateCheckpoint(UpdateCheckpointRequest)
       returns (UpdateCheckpointResponse);
+  rpc CreateDiskSnapshot(CreateDiskSnapshotRequest)
+      returns (CreateDiskSnapshotResponse);
+  rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
+      returns (GetLatestDiskSnapshotResponse);
 }
 
 message GetCheckpointByIdRequest { string checkpoint_id = 1; }
@@ -70,5 +74,55 @@ message UpdateCheckpointRequest {
 message UpdateCheckpointResponse {
   bool ok = 1;
   types.Checkpoint checkpoint = 2;
+  string error_msg = 3;
+}
+
+message DiskSnapshot {
+  string external_id = 1;
+  string disk_name = 2;
+  string format = 3;
+  string status = 4;
+  string reason = 5;
+  string parent_snapshot_id = 6;
+  int64 generation = 7;
+  int64 size_bytes = 8;
+  string filesystem = 9;
+  string driver = 10;
+  string manifest_key = 11;
+  string manifest_digest = 12;
+  int64 manifest_size_bytes = 13;
+  int64 chunk_count = 14;
+  int64 logical_size_bytes = 15;
+  int64 stored_size_bytes = 16;
+  string bucket_name = 17;
+  string object_prefix = 18;
+  string source_pool = 19;
+  string source_worker_id = 20;
+  string source_storage_node_id = 21;
+  google.protobuf.Timestamp created_at = 22;
+  google.protobuf.Timestamp updated_at = 23;
+  google.protobuf.Timestamp completed_at = 24;
+}
+
+message CreateDiskSnapshotRequest {
+  string workspace_id = 1;
+  string stub_id = 2;
+  DiskSnapshot snapshot = 3;
+}
+
+message CreateDiskSnapshotResponse {
+  bool ok = 1;
+  DiskSnapshot snapshot = 2;
+  string error_msg = 3;
+}
+
+message GetLatestDiskSnapshotRequest {
+  string workspace_id = 1;
+  string disk_name = 2;
+}
+
+message GetLatestDiskSnapshotResponse {
+  bool ok = 1;
+  DiskSnapshot snapshot = 2;
   string error_msg = 3;
 }

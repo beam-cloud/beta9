@@ -184,19 +184,12 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		*exitCode = 0
 	}
 
-	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-		ContainerId: containerId,
-		ExitCode:    int32(*exitCode),
-	}))
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to set exit code: %v", err)
-	}
-
 	s.clearContainer(containerId, request, *exitCode)
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
 	s.syncDurableDiskMounts(request)
+	s.setContainerExitCode(containerId, exitCode)
 
 	s.containerLock.Lock()
 
@@ -252,6 +245,20 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
+}
+
+func (s *Worker) setContainerExitCode(containerId string, exitCode int) {
+	if s.containerRepoClient == nil {
+		return
+	}
+
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+		ContainerId: containerId,
+		ExitCode:    int32(exitCode),
+	}))
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+	}
 }
 
 func (s *Worker) markContainerStopping(containerId string) {
@@ -364,10 +371,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// runc container or execute any commands inside it. Mark the build as successful and exit.
 	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		exitCode := 0
-		_, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-			ContainerId: containerId,
-			ExitCode:    int32(exitCode),
-		}))
 		s.containerWg.Add(1)
 		go func() {
 			s.finalizeContainer(containerId, request, &exitCode)

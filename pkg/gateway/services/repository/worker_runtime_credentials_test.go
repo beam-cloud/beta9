@@ -174,6 +174,50 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 	require.Equal(t, "mount-secret", resp.MountCredentials[0].Config.SecretKey)
 }
 
+func TestGetContainerRuntimeCredentialsVendsStubScopedSecretAlias(t *testing.T) {
+	signingKey, signingKeyBytes := testSigningKey(t)
+	databaseURL, err := common.Encrypt(signingKeyBytes, "postgres://app:pass@db/app")
+	require.NoError(t, err)
+	stubConfig := types.StubConfigV1{
+		Secrets: []types.Secret{{
+			Name:  "DATABASE_URL",
+			Value: databaseURL,
+		}},
+	}
+	configJSON, err := json.Marshal(stubConfig)
+	require.NoError(t, err)
+
+	service := &WorkerRepositoryService{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
+			workspace: &types.Workspace{
+				Id:         7,
+				ExternalId: "workspace-id",
+				SigningKey: &signingKey,
+			},
+			stub: &types.StubWithRelated{
+				Stub: types.Stub{ExternalId: "stub-id", Config: string(configJSON)},
+			},
+		},
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
+		},
+	}
+
+	resp, err := service.GetContainerRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{
+			WorkspaceId: "workspace-id",
+			StubId:      "stub-id",
+			ContainerId: "container-id",
+			SecretNames: []string{"DATABASE_URL"},
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, []string{"DATABASE_URL=postgres://app:pass@db/app"}, resp.Env)
+}
+
 func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) {
 	signingKey, _ := testSigningKey(t)
 	workspaceID := uint(7)

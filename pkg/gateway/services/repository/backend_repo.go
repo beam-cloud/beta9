@@ -2,10 +2,12 @@ package repository_services
 
 import (
 	"context"
+	"errors"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type BackendRepositoryService struct {
@@ -96,4 +98,119 @@ func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb
 	}
 
 	return &pb.UpdateCheckpointResponse{Ok: true, Checkpoint: checkpoint.ToProto()}, nil
+}
+
+func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *pb.CreateDiskSnapshotRequest) (*pb.CreateDiskSnapshotResponse, error) {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	snapshot := diskSnapshotFromProto(req.Snapshot)
+	if snapshot == nil {
+		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: "disk snapshot is required"}, nil
+	}
+	snapshot.WorkspaceId = workspace.Id
+
+	if req.StubId != "" {
+		stub, err := s.backendRepo.GetStubByExternalId(ctx, req.StubId)
+		if err != nil {
+			return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+		if stub.WorkspaceId != workspace.Id {
+			return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: "snapshot stub does not belong to workspace"}, nil
+		}
+		snapshot.StubId = stub.Id
+	}
+
+	created, err := s.backendRepo.CreateDiskSnapshot(ctx, snapshot)
+	if err != nil {
+		return &pb.CreateDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.CreateDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(created)}, nil
+}
+
+func (s *BackendRepositoryService) GetLatestDiskSnapshot(ctx context.Context, req *pb.GetLatestDiskSnapshotRequest) (*pb.GetLatestDiskSnapshotResponse, error) {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return &pb.GetLatestDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	snapshot, err := s.backendRepo.GetLatestDiskSnapshot(ctx, workspace.Id, req.DiskName)
+	if err != nil {
+		var notFound *types.ErrDiskSnapshotNotFound
+		if errors.As(err, &notFound) {
+			return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
+		}
+		return &pb.GetLatestDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
+}
+
+func diskSnapshotToProto(snapshot *types.DiskSnapshot) *pb.DiskSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+
+	var completedAt *timestamppb.Timestamp
+	if snapshot.CompletedAt.Valid {
+		completedAt = timestamppb.New(snapshot.CompletedAt.Time)
+	}
+
+	return &pb.DiskSnapshot{
+		ExternalId:          snapshot.ExternalId,
+		DiskName:            snapshot.DiskName,
+		Format:              snapshot.Format,
+		Status:              string(snapshot.Status),
+		Reason:              snapshot.Reason,
+		ParentSnapshotId:    snapshot.ParentSnapshotId,
+		Generation:          snapshot.Generation,
+		SizeBytes:           snapshot.SizeBytes,
+		Filesystem:          snapshot.Filesystem,
+		Driver:              snapshot.Driver,
+		ManifestKey:         snapshot.ManifestKey,
+		ManifestDigest:      snapshot.ManifestDigest,
+		ManifestSizeBytes:   snapshot.ManifestSizeBytes,
+		ChunkCount:          snapshot.ChunkCount,
+		LogicalSizeBytes:    snapshot.LogicalSizeBytes,
+		StoredSizeBytes:     snapshot.StoredSizeBytes,
+		BucketName:          snapshot.BucketName,
+		ObjectPrefix:        snapshot.ObjectPrefix,
+		SourcePool:          snapshot.SourcePool,
+		SourceWorkerId:      snapshot.SourceWorkerId,
+		SourceStorageNodeId: snapshot.SourceStorageNodeId,
+		CreatedAt:           timestamppb.New(snapshot.CreatedAt.Time),
+		UpdatedAt:           timestamppb.New(snapshot.UpdatedAt.Time),
+		CompletedAt:         completedAt,
+	}
+}
+
+func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
+	if in == nil {
+		return nil
+	}
+
+	return &types.DiskSnapshot{
+		ExternalId:          in.ExternalId,
+		DiskName:            in.DiskName,
+		Format:              in.Format,
+		Status:              types.DiskSnapshotStatus(in.Status),
+		Reason:              in.Reason,
+		ParentSnapshotId:    in.ParentSnapshotId,
+		Generation:          in.Generation,
+		SizeBytes:           in.SizeBytes,
+		Filesystem:          in.Filesystem,
+		Driver:              in.Driver,
+		ManifestKey:         in.ManifestKey,
+		ManifestDigest:      in.ManifestDigest,
+		ManifestSizeBytes:   in.ManifestSizeBytes,
+		ChunkCount:          in.ChunkCount,
+		LogicalSizeBytes:    in.LogicalSizeBytes,
+		StoredSizeBytes:     in.StoredSizeBytes,
+		BucketName:          in.BucketName,
+		ObjectPrefix:        in.ObjectPrefix,
+		SourcePool:          in.SourcePool,
+		SourceWorkerId:      in.SourceWorkerId,
+		SourceStorageNodeId: in.SourceStorageNodeId,
+	}
 }

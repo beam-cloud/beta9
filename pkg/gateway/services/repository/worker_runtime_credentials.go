@@ -157,27 +157,11 @@ func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, wo
 func (s *WorkerRepositoryService) workerRuntimeEnv(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]string, error) {
 	env := make([]string, 0, len(req.SecretNames)+1)
 	if len(req.SecretNames) > 0 {
-		secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, req.SecretNames)
+		secrets, err := s.workerRuntimeSecrets(ctx, workspace, req)
 		if err != nil {
 			return nil, err
 		}
-		byName := make(map[string]types.Secret, len(secrets))
 		for _, secret := range secrets {
-			byName[secret.Name] = secret
-		}
-		seen := make(map[string]struct{}, len(req.SecretNames))
-		for _, name := range req.SecretNames {
-			if name == "" {
-				continue
-			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
-			secret, ok := byName[name]
-			if !ok {
-				return nil, fmt.Errorf("secret %q is unavailable", name)
-			}
 			env = append(env, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
 		}
 	}
@@ -190,6 +174,78 @@ func (s *WorkerRepositoryService) workerRuntimeEnv(ctx context.Context, workspac
 		env = append(env, fmt.Sprintf("BETA9_TOKEN=%s", token))
 	}
 	return env, nil
+}
+
+func (s *WorkerRepositoryService) workerRuntimeSecrets(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]types.Secret, error) {
+	requested := uniqueRuntimeSecretNames(req.SecretNames)
+	byName := make(map[string]types.Secret, len(requested))
+	missing := make([]string, 0, len(requested))
+
+	stubConfig, err := s.workerRuntimeStubConfig(ctx, req.StubId, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
+	if err != nil {
+		return nil, err
+	}
+	wanted := make(map[string]struct{}, len(requested))
+	for _, name := range requested {
+		wanted[name] = struct{}{}
+	}
+	for _, secret := range stubConfig.Secrets {
+		if _, ok := wanted[secret.Name]; !ok {
+			continue
+		}
+		value, err := common.Decrypt(secretKey, secret.Value)
+		if err != nil {
+			return nil, err
+		}
+		secret.Value = value
+		byName[secret.Name] = secret
+	}
+
+	for _, name := range requested {
+		if _, ok := byName[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, missing)
+		if err != nil {
+			return nil, err
+		}
+		for _, secret := range secrets {
+			byName[secret.Name] = secret
+		}
+	}
+
+	secrets := make([]types.Secret, 0, len(requested))
+	for _, name := range requested {
+		secret, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("secret %q is unavailable", name)
+		}
+		secrets = append(secrets, secret)
+	}
+	return secrets, nil
+}
+
+func uniqueRuntimeSecretNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
 }
 
 func (s *WorkerRepositoryService) workspaceRuntimeToken(ctx context.Context, workspaceID uint) (string, error) {

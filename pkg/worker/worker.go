@@ -714,14 +714,6 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 		exitCode = int(serr.ExitCode)
 	}
 
-	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-		ContainerId: containerId,
-		ExitCode:    int32(exitCode),
-	}))
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-	}
-
 	s.clearContainer(containerId, request, exitCode)
 }
 

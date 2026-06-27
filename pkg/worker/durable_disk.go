@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
 )
 
@@ -61,6 +63,11 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
 	case "", types.DurableDiskDriverDev:
+		if s != nil {
+			if err := s.restoreDevDurableDiskSnapshot(request, mount); err != nil {
+				return err
+			}
+		}
 		return prepareDevDurableDiskMount(mount)
 	case types.DurableDiskDriverDRBD:
 		return s.prepareDRBDDurableDiskMount(request, mount)
@@ -102,6 +109,9 @@ func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) {
 		}
 		switch durableDiskDriver(mount.DurableDisk.Driver) {
 		case types.DurableDiskDriverDev:
+			if err := s.snapshotDevDurableDiskMount(request, mount); err != nil {
+				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to snapshot dev durable disk")
+			}
 			if err := syncDevDurableDiskMount(mount); err != nil {
 				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to sync dev durable disk replicas")
 			}
@@ -133,6 +143,116 @@ func restoreDevDurableDiskPrimary(mount *types.Mount) error {
 	}
 
 	return nil
+}
+
+func (s *Worker) snapshotDevDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
+	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
+		return nil
+	}
+	if !devDurableDiskHasPayload(mount.LocalPath) {
+		return nil
+	}
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, "", true)
+	if err != nil {
+		return err
+	}
+
+	generation := time.Now().UnixNano()
+	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
+	snapshot, _, err := createDurableDiskDirectorySnapshot(
+		ctx,
+		store,
+		mount.LocalPath,
+		durableDiskSnapshotObjectPrefix(mount, generation),
+		types.DiskSnapshot{
+			DiskName:            mount.DurableDisk.Name,
+			Generation:          generation,
+			SizeBytes:           sizeBytes,
+			Filesystem:          mount.DurableDisk.Filesystem,
+			Driver:              durableDiskDriver(mount.DurableDisk.Driver),
+			BucketName:          store.bucket,
+			SourcePool:          s.poolName,
+			SourceWorkerId:      s.workerId,
+			SourceStorageNodeId: s.storageNodeID(),
+		},
+		defaultDurableDiskSnapshotChunkSize,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		StubId:      cacheRequestStubID(request),
+		Snapshot:    durableDiskSnapshotToProto(snapshot),
+	}))
+	return err
+}
+
+func (s *Worker) restoreDevDurableDiskSnapshot(request *types.ContainerRequest, mount *types.Mount) error {
+	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
+		return nil
+	}
+	if devDurableDiskHasPayload(mount.LocalPath) || devDurableDiskReplicaHasPayload(mount) {
+		return nil
+	}
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		DiskName:    mount.DurableDisk.Name,
+	}))
+	if err != nil {
+		return fmt.Errorf("get latest durable disk snapshot: %w", err)
+	}
+	snapshot := durableDiskSnapshotFromProto(resp.Snapshot)
+	if snapshot == nil || snapshot.ManifestKey == "" {
+		return nil
+	}
+	if snapshot.Format != types.DiskSnapshotFormatTarV1 {
+		return fmt.Errorf("durable disk snapshot %s has unsupported format %q", snapshot.ExternalId, snapshot.Format)
+	}
+
+	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, snapshot.BucketName, false)
+	if err != nil {
+		return err
+	}
+	if _, err := restoreDurableDiskDirectorySnapshot(ctx, store, snapshot.ManifestKey, mount.LocalPath); err != nil {
+		return fmt.Errorf("restore durable disk snapshot %s: %w", snapshot.ExternalId, err)
+	}
+	return nil
+}
+
+func devDurableDiskReplicaHasPayload(mount *types.Mount) bool {
+	for _, replicaPath := range devDurableDiskReplicaPaths(mount) {
+		if devDurableDiskHasPayload(replicaPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) string {
+	return path.Join(
+		"durable-disks",
+		types.SafeDurableDiskName(mount.DurableDisk.Name),
+		"snapshots",
+		strconv.FormatInt(generation, 10),
+	)
 }
 
 func ensureDevDurableDiskReplicas(mount *types.Mount) error {
@@ -271,6 +391,9 @@ func copyDurableDiskDir(src, dst string) error {
 
 	entries, err := os.ReadDir(src)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 	for _, entry := range entries {
@@ -278,6 +401,9 @@ func copyDurableDiskDir(src, dst string) error {
 		dstPath := filepath.Join(dst, entry.Name())
 		info, err := os.Lstat(srcPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return err
 		}
 

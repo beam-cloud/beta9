@@ -486,10 +486,12 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	if machineID != "" {
 		worker.MachineId = machineID
 	}
-	if worker.Status == types.WorkerStatusPending {
+	if worker.Status == types.WorkerStatusPending || worker.Status == types.WorkerStatusAvailable {
 		if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
 			return err
 		}
+	}
+	if worker.Status == types.WorkerStatusPending {
 		worker.Status = types.WorkerStatusAvailable
 	}
 	if worker.MachineId != oldMachineID || worker.Status != oldStatus {

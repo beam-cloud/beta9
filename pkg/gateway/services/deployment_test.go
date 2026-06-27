@@ -19,6 +19,7 @@ type deploymentLifecycleBackendRepo struct {
 	repository.BackendRepository
 	deployments map[string]types.DeploymentWithRelated
 	stubConfigs map[uint]*types.StubConfigV1
+	snapshots   map[string]*types.DiskSnapshot
 }
 
 func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLifecycleBackendRepo) {
@@ -85,6 +86,7 @@ func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLi
 			deployment.ExternalId: deployment,
 		},
 		stubConfigs: map[uint]*types.StubConfigV1{},
+		snapshots:   map[string]*types.DiskSnapshot{},
 	}
 
 	return &GatewayService{
@@ -146,6 +148,14 @@ func (r *deploymentLifecycleBackendRepo) UpdateStubConfig(_ context.Context, stu
 	deployment.Stub.Config = string(configBytes)
 	r.deployments[deployment.ExternalId] = deployment
 	return nil
+}
+
+func (r *deploymentLifecycleBackendRepo) GetLatestDiskSnapshot(_ context.Context, workspaceID uint, diskName string) (*types.DiskSnapshot, error) {
+	snapshot, ok := r.snapshots[diskName]
+	if !ok || snapshot.WorkspaceId != workspaceID {
+		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: diskName}
+	}
+	return snapshot, nil
 }
 
 type deploymentLifecycleContainerRepo struct {
@@ -235,6 +245,112 @@ func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	require.Equal(t, uint(16), backend.stubConfigs[20].Autoscaler.TasksPerContainer)
 	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MinContainers)
 	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MaxContainers)
+}
+
+func TestScalePodDeploymentRefreshesDevDurableDiskPlacement(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	workerRepo := newDurableDiskPlacementWorkerRepo(t)
+	require.NoError(t, workerRepo.AddWorker(&types.Worker{
+		Id:        "worker-b",
+		MachineId: "node-b",
+		Status:    types.WorkerStatusAvailable,
+		PoolName:  "pool-a",
+	}))
+	gws.workerRepo = workerRepo
+
+	config := types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+		Disks: []*pb.DurableDisk{{
+			Name:   "pg-data",
+			Driver: types.DurableDiskDriverDev,
+			Replication: &pb.DiskReplication{
+				PrimaryWorkerId: "node-a",
+			},
+		}},
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deployment := backend.deployments["deployment-id"]
+	deployment.Stub.Config = string(configBytes)
+	backend.deployments["deployment-id"] = deployment
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 1,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Equal(t, "node-b", backend.stubConfigs[20].Disks[0].Replication.PrimaryWorkerId)
+	require.Equal(t, []string{"node-b"}, backend.stubConfigs[20].Disks[0].Replication.ReplicaWorkerIds)
+}
+
+func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGone(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	workerRepo := newDurableDiskPlacementWorkerRepo(t)
+	require.NoError(t, workerRepo.AddWorker(&types.Worker{
+		Id:                   "a-private-worker",
+		Status:               types.WorkerStatusAvailable,
+		PoolName:             "other-private",
+		RequiresPoolSelector: true,
+	}))
+	require.NoError(t, workerRepo.AddWorker(&types.Worker{
+		Id:         "z-regular-worker",
+		Status:     types.WorkerStatusAvailable,
+		PoolName:   "beta9-cpu",
+		TotalCpu:   2000,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+	}))
+	gws.workerRepo = workerRepo
+	backend.snapshots["pg-data"] = &types.DiskSnapshot{
+		WorkspaceId: 1,
+		DiskName:    "pg-data",
+		Format:      types.DiskSnapshotFormatTarV1,
+		Status:      types.DiskSnapshotStatusAvailable,
+		ManifestKey: "durable-disks/pg-data/snapshots/1/manifest.json",
+	}
+
+	config := types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+		Disks: []*pb.DurableDisk{{
+			Name:   "pg-data",
+			Driver: types.DurableDiskDriverDev,
+			Replication: &pb.DiskReplication{
+				PrimaryWorkerId: "node-a",
+			},
+		}},
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deployment := backend.deployments["deployment-id"]
+	deployment.Stub.Config = string(configBytes)
+	backend.deployments["deployment-id"] = deployment
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 1,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Nil(t, backend.stubConfigs[20].Pool)
+	require.Equal(t, "z-regular-worker", backend.stubConfigs[20].Disks[0].Replication.PrimaryWorkerId)
+	require.Equal(t, []string{"z-regular-worker"}, backend.stubConfigs[20].Disks[0].Replication.ReplicaWorkerIds)
 }
 
 func TestScaleDeploymentRejectsRestrictedToken(t *testing.T) {

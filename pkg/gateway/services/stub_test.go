@@ -1,6 +1,7 @@
 package gatewayservices
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -38,7 +39,7 @@ func TestConfigureDurableDiskPlacementFillsDRBDReplicaWorkers(t *testing.T) {
 	}
 
 	gws := &GatewayService{workerRepo: workerRepo}
-	require.NoError(t, gws.configureDurableDiskPlacement(config))
+	require.NoError(t, gws.configureDurableDiskPlacement(context.Background(), nil, config))
 
 	require.Equal(t, "worker-a", config.Disks[0].Replication.PrimaryWorkerId)
 	require.Equal(t, []string{"worker-a", "worker-b", "worker-c"}, config.Disks[0].Replication.ReplicaWorkerIds)
@@ -64,9 +65,66 @@ func TestConfigureDurableDiskPlacementFailsClosedWithoutQuorumWorkers(t *testing
 	}
 
 	gws := &GatewayService{workerRepo: workerRepo}
-	err := gws.configureDurableDiskPlacement(config)
+	err := gws.configureDurableDiskPlacement(context.Background(), nil, config)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "needs 3 DRBD storage nodes")
+}
+
+func TestConfigureDurableDiskPlacementPinsDevDiskToSingleStorageNode(t *testing.T) {
+	workerRepo := newDurableDiskPlacementWorkerRepo(t)
+	for _, worker := range []*types.Worker{
+		{Id: "worker-b", MachineId: "node-b", Status: types.WorkerStatusAvailable, PoolName: "pool-a"},
+		{Id: "worker-a", MachineId: "node-a", Status: types.WorkerStatusAvailable, PoolName: "pool-a"},
+	} {
+		require.NoError(t, workerRepo.AddWorker(worker))
+	}
+
+	config := &types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Disks: []*pb.DurableDisk{
+			{
+				Name:        "pg-data",
+				Driver:      types.DurableDiskDriverDev,
+				Replication: &pb.DiskReplication{},
+			},
+		},
+	}
+
+	gws := &GatewayService{workerRepo: workerRepo}
+	require.NoError(t, gws.configureDurableDiskPlacement(context.Background(), nil, config))
+
+	require.Equal(t, uint32(0), config.Disks[0].Replication.Replicas)
+	require.Equal(t, "node-a", config.Disks[0].Replication.PrimaryWorkerId)
+	require.Equal(t, []string{"node-a"}, config.Disks[0].Replication.ReplicaWorkerIds)
+}
+
+func TestConfigureDurableDiskPlacementReplacesMissingDevPrimary(t *testing.T) {
+	workerRepo := newDurableDiskPlacementWorkerRepo(t)
+	require.NoError(t, workerRepo.AddWorker(&types.Worker{
+		Id:        "worker-b",
+		MachineId: "node-b",
+		Status:    types.WorkerStatusAvailable,
+		PoolName:  "pool-a",
+	}))
+
+	config := &types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Disks: []*pb.DurableDisk{
+			{
+				Name:   "pg-data",
+				Driver: types.DurableDiskDriverDev,
+				Replication: &pb.DiskReplication{
+					PrimaryWorkerId: "node-a",
+				},
+			},
+		},
+	}
+
+	gws := &GatewayService{workerRepo: workerRepo}
+	require.NoError(t, gws.configureDurableDiskPlacement(context.Background(), nil, config))
+
+	require.Equal(t, "node-b", config.Disks[0].Replication.PrimaryWorkerId)
+	require.Equal(t, []string{"node-b"}, config.Disks[0].Replication.ReplicaWorkerIds)
 }
 
 func TestConfigureDurableDiskPlacementPreservesExplicitPrimary(t *testing.T) {
@@ -94,7 +152,7 @@ func TestConfigureDurableDiskPlacementPreservesExplicitPrimary(t *testing.T) {
 	}
 
 	gws := &GatewayService{workerRepo: workerRepo}
-	require.NoError(t, gws.configureDurableDiskPlacement(config))
+	require.NoError(t, gws.configureDurableDiskPlacement(context.Background(), nil, config))
 
 	require.Equal(t, "worker-c", config.Disks[0].Replication.PrimaryWorkerId)
 	require.Equal(t, []string{"worker-c", "worker-a", "worker-b"}, config.Disks[0].Replication.ReplicaWorkerIds)
@@ -125,7 +183,7 @@ func TestConfigureDurableDiskPlacementUsesStorageNodeIDs(t *testing.T) {
 	}
 
 	gws := &GatewayService{workerRepo: workerRepo}
-	require.NoError(t, gws.configureDurableDiskPlacement(config))
+	require.NoError(t, gws.configureDurableDiskPlacement(context.Background(), nil, config))
 
 	require.Equal(t, "node-a", config.Disks[0].Replication.PrimaryWorkerId)
 	require.Equal(t, []string{"node-a", "node-b", "node-c"}, config.Disks[0].Replication.ReplicaWorkerIds)

@@ -215,6 +215,7 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 		stubConfig.Env = mergeEnvVar(stubConfig.Env, key, value)
 	}
 
+	aliasIP := gws.serviceBindAliasHost(ctx, authInfo.Workspace.ExternalId, stubConfig)
 	for _, secretName := range in.Secrets {
 		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
 		if err != nil {
@@ -246,7 +247,7 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 			UpdatedAt: secret.UpdatedAt,
 		})
 
-		if aliasIP := gatewayTCPServiceHost(); aliasIP != "" {
+		if aliasIP != "" {
 			secretKey, err := common.ParseSecretKey(*authInfo.Workspace.SigningKey)
 			if err != nil {
 				return &pb.BindServiceResponse{
@@ -282,6 +283,25 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 	}})
 
 	return &pb.BindServiceResponse{Ok: true}, nil
+}
+
+func (gws *GatewayService) serviceBindAliasHost(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) string {
+	if gws.usesPrivatePool(ctx, workspaceID, stubConfig) {
+		return ""
+	}
+	return gatewayTCPServiceHost()
+}
+
+func (gws *GatewayService) usesPrivatePool(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) bool {
+	if gws == nil || gws.computeRepo == nil || stubConfig == nil {
+		return false
+	}
+	poolName := stubConfig.PoolSelector()
+	if poolName == "" {
+		return false
+	}
+	pool, err := gws.computeRepo.GetPoolState(ctx, workspaceID, poolName)
+	return err == nil && pool != nil
 }
 
 func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
@@ -389,23 +409,21 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 			}
 		}
 
-		if err := gws.stopActiveDeploymentContainers(deployment, false); err != nil {
-			return err
-		}
-
-		// Disable deployment
 		deployment.Active = false
 		if _, err := gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment); err != nil {
 			return err
 		}
 
-		// Publish reload instance event
 		eventBus := common.NewEventBus(gws.redisClient)
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 			"stub_id":   deployment.Stub.ExternalId,
 			"stub_type": deployment.StubType,
 			"timestamp": time.Now().Unix(),
 		}})
+
+		if err := gws.stopActiveDeploymentContainers(deployment, false); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -419,6 +437,11 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}
 
 	stubConfig.SetReplicaCount(containers)
+	if containers > 0 && len(stubConfig.Disks) > 0 {
+		if err := gws.configureDurableDiskPlacement(ctx, &deployment.Workspace, stubConfig); err != nil {
+			return err
+		}
+	}
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {
@@ -488,6 +511,8 @@ func mergeSecret(secrets []types.Secret, secret types.Secret) []types.Secret {
 
 func gatewayTCPServiceHost() string {
 	for _, key := range []string{
+		"BETA9_GATEWAY_PROXY_TCP_SERVICE_HOST",
+		"BETA9_GATEWAY_PROXY_TCP_PORT_443_TCP_ADDR",
 		"BETA9_GATEWAY_PORT_1995_TCP_ADDR",
 		"BETA9_GATEWAY_SERVICE_HOST",
 	} {

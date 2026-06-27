@@ -1875,6 +1875,14 @@ func (f *fakeBackendRepoClient) UpdateCheckpoint(ctx context.Context, in *pb.Upd
 	return &pb.UpdateCheckpointResponse{Ok: true}, nil
 }
 
+func (f *fakeBackendRepoClient) CreateDiskSnapshot(ctx context.Context, in *pb.CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.CreateDiskSnapshotResponse, error) {
+	return &pb.CreateDiskSnapshotResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {
+	return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
+}
+
 type mockResourceRuntime struct {
 	mockRuntime
 	updateContainerID string

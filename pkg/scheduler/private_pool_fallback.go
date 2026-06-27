@@ -35,6 +35,10 @@ func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 }
 
 func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerRequest, string, bool) {
+	if a == nil || a.request == nil || a.request.HasDurableDiskMount() {
+		return nil, "", false
+	}
+
 	pool, ok := a.selectedPrivatePool()
 	if !ok || pool.Controller == nil {
 		return nil, "", false

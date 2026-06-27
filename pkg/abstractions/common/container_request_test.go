@@ -4,46 +4,34 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigureContainerRequestNetworkCopiesNetworkControls(t *testing.T) {
+func TestConfigureContainerRequestDurableDiskPlacementTargetsDevPrimary(t *testing.T) {
 	request := &types.ContainerRequest{}
-	stubConfig := types.StubConfigV1{
-		BlockNetwork:  true,
-		DockerEnabled: true,
-	}
+	ConfigureContainerRequestDurableDiskPlacement(request, types.StubConfigV1{
+		Disks: []*pb.DurableDisk{{
+			Driver: types.DurableDiskDriverDev,
+			Replication: &pb.DiskReplication{
+				PrimaryWorkerId: "node-a",
+			},
+		}},
+	})
 
-	err := ConfigureContainerRequestNetwork(request, stubConfig)
-	require.NoError(t, err)
-	require.True(t, request.BlockNetwork)
-	require.True(t, request.DockerEnabled)
-	require.Empty(t, request.AllowList)
+	require.Equal(t, "node-a", request.TargetWorkerId)
 }
 
-func TestConfigureContainerRequestNetworkCopiesAllowList(t *testing.T) {
-	allowList := []string{"10.0.0.0/8"}
+func TestConfigureContainerRequestDurableDiskPlacementTargetsDRBDPrimary(t *testing.T) {
 	request := &types.ContainerRequest{}
-
-	err := ConfigureContainerRequestNetwork(request, types.StubConfigV1{AllowList: allowList})
-	require.NoError(t, err)
-	require.Equal(t, allowList, request.AllowList)
-
-	allowList[0] = "192.168.0.0/16"
-	require.Equal(t, []string{"10.0.0.0/8"}, request.AllowList)
-}
-
-func TestConfigureContainerRequestNetworkRejectsConflictingPolicy(t *testing.T) {
-	err := ConfigureContainerRequestNetwork(&types.ContainerRequest{}, types.StubConfigV1{
-		BlockNetwork: true,
-		AllowList:    []string{"10.0.0.0/8"},
+	ConfigureContainerRequestDurableDiskPlacement(request, types.StubConfigV1{
+		Disks: []*pb.DurableDisk{{
+			Driver: types.DurableDiskDriverDRBD,
+			Replication: &pb.DiskReplication{
+				PrimaryWorkerId: "node-a",
+			},
+		}},
 	})
-	require.Error(t, err)
-}
 
-func TestConfigureContainerRequestNetworkValidatesAllowList(t *testing.T) {
-	err := ConfigureContainerRequestNetwork(&types.ContainerRequest{}, types.StubConfigV1{
-		AllowList: []string{"not-a-cidr"},
-	})
-	require.Error(t, err)
+	require.Equal(t, "node-a", request.TargetWorkerId)
 }

@@ -264,7 +264,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if err := gws.configureDurableDiskPlacement(&stubConfig); err != nil {
+	if err := gws.configureDurableDiskPlacement(ctx, authInfo.Workspace, &stubConfig); err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
@@ -358,96 +358,229 @@ func stubTypeSupportsInfiniteKeepWarm(stubType types.StubType) bool {
 	}
 }
 
-func (gws *GatewayService) configureDurableDiskPlacement(stubConfig *types.StubConfigV1) error {
+func (gws *GatewayService) configureDurableDiskPlacement(ctx context.Context, workspace *types.Workspace, stubConfig *types.StubConfigV1) error {
 	if stubConfig == nil || len(stubConfig.Disks) == 0 {
 		return nil
 	}
 
-	for _, disk := range stubConfig.Disks {
-		if disk == nil || durableDiskGatewayDriver(disk.Driver) != types.DurableDiskDriverDRBD {
-			continue
-		}
-		if disk.Replication == nil {
-			disk.Replication = &pb.DiskReplication{}
-		}
-
-		replication := disk.Replication
-		if replication.Replicas == 0 {
-			replication.Replicas = 3
-		}
-		if replication.Mode == "" {
-			replication.Mode = types.DurableDiskReplicationModeSync
-		}
-		if replication.Quorum == "" {
-			replication.Quorum = types.DurableDiskReplicationQuorumMajority
-		}
-
-		poolNodes, err := gws.durableDiskCandidateStorageNodes(stubConfig.PoolSelector())
-		if err != nil {
+	poolName := stubConfig.PoolSelector()
+	if err := gws.configureDurableDiskPlacementForPool(poolName, stubConfig); err != nil {
+		if fallbackErr := gws.configureDurableDiskSnapshotFallback(ctx, workspace, poolName, stubConfig); fallbackErr != nil {
 			return err
-		}
-		allNodes := poolNodes
-		if stubConfig.PoolSelector() != "" {
-			allNodes, err = gws.durableDiskCandidateStorageNodes("")
-			if err != nil {
-				return err
-			}
-		}
-
-		if replication.PrimaryWorkerId != "" {
-			primaryNodeID, ok := durableDiskCanonicalStorageNodeID(replication.PrimaryWorkerId, allNodes)
-			if !ok {
-				return fmt.Errorf("durable disk %q primary storage node %s is unavailable", disk.Name, replication.PrimaryWorkerId)
-			}
-			if stubConfig.PoolSelector() != "" && !durableDiskStorageNodeIDIn(primaryNodeID, poolNodes) {
-				return fmt.Errorf("durable disk %q primary storage node %s is not available in pool %q", disk.Name, primaryNodeID, stubConfig.PoolSelector())
-			}
-			replication.PrimaryWorkerId = primaryNodeID
-		}
-
-		replicaIDs := make([]string, 0, replication.Replicas)
-		addReplicaID := func(storageNodeID string) error {
-			storageNodeID = strings.TrimSpace(storageNodeID)
-			if storageNodeID == "" {
-				return nil
-			}
-			canonicalID, ok := durableDiskCanonicalStorageNodeID(storageNodeID, allNodes)
-			if !ok {
-				return fmt.Errorf("durable disk %q requested unavailable DRBD replica storage node %s in pool %q", disk.Name, storageNodeID, stubConfig.PoolSelector())
-			}
-			if slices.Contains(replicaIDs, canonicalID) {
-				return nil
-			}
-			replicaIDs = append(replicaIDs, canonicalID)
-			return nil
-		}
-
-		if err := addReplicaID(replication.PrimaryWorkerId); err != nil {
-			return err
-		}
-		for _, workerID := range replication.ReplicaWorkerIds {
-			if err := addReplicaID(workerID); err != nil {
-				return err
-			}
-		}
-		for _, node := range poolNodes {
-			if len(replicaIDs) >= int(replication.Replicas) {
-				break
-			}
-			if err := addReplicaID(node.ID); err != nil {
-				return err
-			}
-		}
-
-		if len(replicaIDs) < int(replication.Replicas) {
-			return fmt.Errorf("durable disk %q needs %d DRBD storage nodes, but only %d available node(s) matched pool %q", disk.Name, replication.Replicas, len(poolNodes), stubConfig.PoolSelector())
-		}
-		replication.ReplicaWorkerIds = replicaIDs
-		if replication.PrimaryWorkerId == "" {
-			replication.PrimaryWorkerId = replication.ReplicaWorkerIds[0]
 		}
 	}
 
+	return nil
+}
+
+func (gws *GatewayService) configureDurableDiskPlacementForPool(poolName string, stubConfig *types.StubConfigV1) error {
+	for _, disk := range stubConfig.Disks {
+		if disk == nil {
+			continue
+		}
+
+		driver := durableDiskGatewayDriver(disk.Driver)
+		if driver == "" {
+			driver = types.DurableDiskDriverDev
+		}
+		disk.Driver = driver
+
+		switch driver {
+		case types.DurableDiskDriverDev:
+			if err := gws.configureSingleNodeDurableDiskPlacement(poolName, disk); err != nil {
+				return err
+			}
+		case types.DurableDiskDriverDRBD:
+			if err := gws.configureDRBDDurableDiskPlacement(poolName, disk); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (gws *GatewayService) configureDurableDiskSnapshotFallback(ctx context.Context, workspace *types.Workspace, poolName string, stubConfig *types.StubConfigV1) error {
+	if poolName == "" || !durableDiskSnapshotFallbackSupported(stubConfig.Disks) {
+		return fmt.Errorf("durable disk snapshot fallback is not available for pool %q", poolName)
+	}
+	if err := gws.ensureDurableDiskSnapshotsAvailable(ctx, workspace, stubConfig.Disks); err != nil {
+		return err
+	}
+	if err := gws.ensureDurableDiskFallbackPool(ctx, workspace, poolName); err != nil {
+		return err
+	}
+
+	stubConfig.Pool = nil
+	for _, disk := range stubConfig.Disks {
+		if disk == nil {
+			continue
+		}
+		disk.Replication = &pb.DiskReplication{}
+	}
+	return gws.configureDurableDiskPlacementForPool("", stubConfig)
+}
+
+func durableDiskSnapshotFallbackSupported(disks []*pb.DurableDisk) bool {
+	for _, disk := range disks {
+		if disk == nil {
+			continue
+		}
+		driver := durableDiskGatewayDriver(disk.Driver)
+		if driver == "" {
+			driver = types.DurableDiskDriverDev
+		}
+		if driver != types.DurableDiskDriverDev {
+			return false
+		}
+	}
+	return true
+}
+
+func (gws *GatewayService) ensureDurableDiskSnapshotsAvailable(ctx context.Context, workspace *types.Workspace, disks []*pb.DurableDisk) error {
+	if gws == nil || gws.backendRepo == nil || workspace == nil {
+		return fmt.Errorf("durable disk snapshot fallback requires workspace metadata")
+	}
+	for _, disk := range disks {
+		if disk == nil || disk.Name == "" {
+			continue
+		}
+		snapshot, err := gws.backendRepo.GetLatestDiskSnapshot(ctx, workspace.Id, disk.Name)
+		if err != nil {
+			return fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
+		}
+		if snapshot == nil || snapshot.ManifestKey == "" || snapshot.Format != types.DiskSnapshotFormatTarV1 {
+			return fmt.Errorf("durable disk %q has no restorable filesystem snapshot", disk.Name)
+		}
+	}
+	return nil
+}
+
+func (gws *GatewayService) ensureDurableDiskFallbackPool(ctx context.Context, workspace *types.Workspace, poolName string) error {
+	if gws == nil || gws.computeRepo == nil || workspace == nil {
+		return nil
+	}
+	state, err := gws.computeRepo.GetPoolState(ctx, workspace.ExternalId, poolName)
+	if err != nil {
+		return err
+	}
+	if state != nil && state.Mode != "" && state.Mode != string(types.PoolModePrivate) {
+		return fmt.Errorf("durable disk snapshot fallback is only enabled for private pools")
+	}
+	return nil
+}
+
+func (gws *GatewayService) configureSingleNodeDurableDiskPlacement(poolName string, disk *pb.DurableDisk) error {
+	if disk.Replication == nil {
+		disk.Replication = &pb.DiskReplication{}
+	}
+
+	nodes, err := gws.durableDiskCandidateStorageNodes(poolName)
+	if err != nil {
+		return err
+	}
+
+	primaryID := strings.TrimSpace(disk.Replication.PrimaryWorkerId)
+	if primaryID != "" {
+		canonicalID, ok := durableDiskCanonicalStorageNodeID(primaryID, nodes)
+		if ok {
+			primaryID = canonicalID
+		} else {
+			primaryID = ""
+		}
+	}
+	if primaryID == "" {
+		if len(nodes) == 0 {
+			return fmt.Errorf("durable disk %q needs an available storage node in pool %q", disk.Name, poolName)
+		}
+		primaryID = nodes[0].ID
+	}
+
+	disk.Replication.PrimaryWorkerId = primaryID
+	disk.Replication.ReplicaWorkerIds = []string{primaryID}
+	return nil
+}
+
+func (gws *GatewayService) configureDRBDDurableDiskPlacement(poolName string, disk *pb.DurableDisk) error {
+	if disk.Replication == nil {
+		disk.Replication = &pb.DiskReplication{}
+	}
+
+	replication := disk.Replication
+	if replication.Replicas == 0 {
+		replication.Replicas = 3
+	}
+	if replication.Mode == "" {
+		replication.Mode = types.DurableDiskReplicationModeSync
+	}
+	if replication.Quorum == "" {
+		replication.Quorum = types.DurableDiskReplicationQuorumMajority
+	}
+
+	poolNodes, err := gws.durableDiskCandidateStorageNodes(poolName)
+	if err != nil {
+		return err
+	}
+	allNodes := poolNodes
+	if poolName != "" {
+		allNodes, err = gws.durableDiskCandidateStorageNodes("")
+		if err != nil {
+			return err
+		}
+	}
+
+	if replication.PrimaryWorkerId != "" {
+		primaryNodeID, ok := durableDiskCanonicalStorageNodeID(replication.PrimaryWorkerId, allNodes)
+		if !ok {
+			return fmt.Errorf("durable disk %q primary storage node %s is unavailable", disk.Name, replication.PrimaryWorkerId)
+		}
+		if poolName != "" && !durableDiskStorageNodeIDIn(primaryNodeID, poolNodes) {
+			return fmt.Errorf("durable disk %q primary storage node %s is not available in pool %q", disk.Name, primaryNodeID, poolName)
+		}
+		replication.PrimaryWorkerId = primaryNodeID
+	}
+
+	replicaIDs := make([]string, 0, replication.Replicas)
+	addReplicaID := func(storageNodeID string) error {
+		storageNodeID = strings.TrimSpace(storageNodeID)
+		if storageNodeID == "" {
+			return nil
+		}
+		canonicalID, ok := durableDiskCanonicalStorageNodeID(storageNodeID, allNodes)
+		if !ok {
+			return fmt.Errorf("durable disk %q requested unavailable DRBD replica storage node %s in pool %q", disk.Name, storageNodeID, poolName)
+		}
+		if slices.Contains(replicaIDs, canonicalID) {
+			return nil
+		}
+		replicaIDs = append(replicaIDs, canonicalID)
+		return nil
+	}
+
+	if err := addReplicaID(replication.PrimaryWorkerId); err != nil {
+		return err
+	}
+	for _, workerID := range replication.ReplicaWorkerIds {
+		if err := addReplicaID(workerID); err != nil {
+			return err
+		}
+	}
+	for _, node := range poolNodes {
+		if len(replicaIDs) >= int(replication.Replicas) {
+			break
+		}
+		if err := addReplicaID(node.ID); err != nil {
+			return err
+		}
+	}
+
+	if len(replicaIDs) < int(replication.Replicas) {
+		return fmt.Errorf("durable disk %q needs %d DRBD storage nodes, but only %d available node(s) matched pool %q", disk.Name, replication.Replicas, len(poolNodes), poolName)
+	}
+	replication.ReplicaWorkerIds = replicaIDs
+	if replication.PrimaryWorkerId == "" {
+		replication.PrimaryWorkerId = replication.ReplicaWorkerIds[0]
+	}
 	return nil
 }
 
@@ -517,6 +650,9 @@ func (gws *GatewayService) durableDiskCandidateStorageNodes(poolName string) ([]
 	byID := map[string]durableDiskStorageNode{}
 	for _, worker := range workers {
 		if worker == nil || worker.Id == "" || worker.Status != types.WorkerStatusAvailable {
+			continue
+		}
+		if poolName == "" && worker.RequiresPoolSelector {
 			continue
 		}
 		storageNodeID := worker.StorageNodeID()
