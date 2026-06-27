@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -262,6 +263,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	if err := gws.configureDurableDiskPlacement(&stubConfig); err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
 	appName := in.AppName
 	if appName == "" {
 		appName = in.Name
@@ -340,6 +348,116 @@ func stubTypeSupportsInfiniteKeepWarm(stubType types.StubType) bool {
 	default:
 		return false
 	}
+}
+
+func (gws *GatewayService) configureDurableDiskPlacement(stubConfig *types.StubConfigV1) error {
+	if stubConfig == nil || len(stubConfig.Disks) == 0 {
+		return nil
+	}
+
+	for _, disk := range stubConfig.Disks {
+		if disk == nil || durableDiskGatewayDriver(disk.Driver) != "drbd" {
+			continue
+		}
+		if disk.Replication == nil {
+			disk.Replication = &pb.DiskReplication{}
+		}
+
+		replication := disk.Replication
+		if replication.Replicas == 0 {
+			replication.Replicas = 3
+		}
+		if replication.Mode == "" {
+			replication.Mode = "sync"
+		}
+		if replication.Quorum == "" {
+			replication.Quorum = "majority"
+		}
+
+		workerIDs, err := gws.durableDiskCandidateWorkerIDs(stubConfig.PoolSelector())
+		if err != nil {
+			return err
+		}
+
+		replicaIDs := make([]string, 0, replication.Replicas)
+		addReplicaID := func(workerID string) error {
+			workerID = strings.TrimSpace(workerID)
+			if workerID == "" {
+				return nil
+			}
+			if slices.Contains(replicaIDs, workerID) {
+				return nil
+			}
+			if !slices.Contains(workerIDs, workerID) {
+				return fmt.Errorf("durable disk %q requested unavailable DRBD replica worker %s in pool %q", disk.Name, workerID, stubConfig.PoolSelector())
+			}
+			replicaIDs = append(replicaIDs, workerID)
+			return nil
+		}
+
+		if err := addReplicaID(replication.PrimaryWorkerId); err != nil {
+			return err
+		}
+		for _, workerID := range replication.ReplicaWorkerIds {
+			if err := addReplicaID(workerID); err != nil {
+				return err
+			}
+		}
+		for _, workerID := range workerIDs {
+			if len(replicaIDs) >= int(replication.Replicas) {
+				break
+			}
+			if err := addReplicaID(workerID); err != nil {
+				return err
+			}
+		}
+
+		if len(replicaIDs) < int(replication.Replicas) {
+			return fmt.Errorf("durable disk %q needs %d DRBD replica workers, but only %d available worker(s) matched pool %q", disk.Name, replication.Replicas, len(workerIDs), stubConfig.PoolSelector())
+		}
+		replication.ReplicaWorkerIds = replicaIDs
+		if replication.PrimaryWorkerId == "" {
+			replication.PrimaryWorkerId = replication.ReplicaWorkerIds[0]
+		}
+	}
+
+	return nil
+}
+
+func (gws *GatewayService) durableDiskCandidateWorkerIDs(poolName string) ([]string, error) {
+	if gws == nil || gws.workerRepo == nil {
+		return nil, fmt.Errorf("durable disk DRBD placement requires a worker repository")
+	}
+
+	var (
+		workers []*types.Worker
+		err     error
+	)
+	if poolName != "" {
+		workers, err = gws.workerRepo.GetAllWorkersInPool(poolName)
+	} else {
+		workers, err = gws.workerRepo.GetAllWorkers()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list workers for DRBD durable disk placement: %w", err)
+	}
+
+	workerIDs := make([]string, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil || worker.Id == "" || worker.Status != types.WorkerStatusAvailable {
+			continue
+		}
+		workerIDs = append(workerIDs, worker.Id)
+	}
+	slices.Sort(workerIDs)
+	return workerIDs, nil
+}
+
+func durableDiskGatewayDriver(configured string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return strings.ToLower(configured)
+	}
+	return strings.ToLower(strings.TrimSpace(os.Getenv("BETA9_DURABLE_DISK_DRIVER")))
 }
 
 func autoscalerFromProto(in *pb.Autoscaler) *types.Autoscaler {

@@ -389,26 +389,13 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 			}
 		}
 
-		// Stop active containers
-		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
-		if err != nil {
-			return fmt.Errorf("list active containers for deployment %s: %w", deployment.Stub.ExternalId, err)
-		}
-
-		var stopErr error
-		for _, container := range containers {
-			if err := gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonUser}); err != nil {
-				stopErr = errors.Join(stopErr, fmt.Errorf("stop container %s: %w", container.ContainerId, err))
-			}
-		}
-		if stopErr != nil {
-			return stopErr
+		if err := gws.stopActiveDeploymentContainers(deployment, false); err != nil {
+			return err
 		}
 
 		// Disable deployment
 		deployment.Active = false
-		_, err = gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment)
-		if err != nil {
+		if _, err := gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment); err != nil {
 			return err
 		}
 
@@ -438,6 +425,12 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 		return err
 	}
 
+	if containers == 0 {
+		if err := gws.stopActiveDeploymentContainers(deployment, true); err != nil {
+			return err
+		}
+	}
+
 	// Publish reload instance event
 	eventBus := common.NewEventBus(gws.redisClient)
 	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
@@ -447,6 +440,28 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}})
 
 	return nil
+}
+
+func (gws *GatewayService) stopActiveDeploymentContainers(deployment types.DeploymentWithRelated, force bool) error {
+	containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
+	if err != nil {
+		return fmt.Errorf("list active containers for deployment %s: %w", deployment.Stub.ExternalId, err)
+	}
+
+	var stopErr error
+	for _, container := range containers {
+		if container.ContainerId == "" || container.Status == types.ContainerStatusStopping {
+			continue
+		}
+		if err := gws.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: container.ContainerId,
+			Force:       force,
+			Reason:      types.StopContainerReasonUser,
+		}); err != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("stop container %s: %w", container.ContainerId, err))
+		}
+	}
+	return stopErr
 }
 
 func mergeEnvVar(env []string, key, value string) []string {
