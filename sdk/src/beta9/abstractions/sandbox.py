@@ -1,6 +1,7 @@
 import asyncio
 import atexit
 import io
+import posixpath
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -1778,6 +1779,108 @@ class SandboxFileSystem:
 
     def __init__(self, sandbox_instance: SandboxInstance):
         self.sandbox_instance = sandbox_instance
+
+    @staticmethod
+    def _normalize_sandbox_path(sandbox_path: str) -> str:
+        if not sandbox_path or "\x00" in sandbox_path:
+            raise ValueError("sandbox_path must be a non-empty POSIX path")
+
+        normalized = posixpath.normpath(sandbox_path)
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+
+        return normalized
+
+    @staticmethod
+    def _parent_directories(sandbox_path: str) -> List[str]:
+        parents = []
+        parent = posixpath.dirname(sandbox_path)
+        while parent and parent != "/":
+            parents.append(parent)
+            parent = posixpath.dirname(parent)
+        return list(reversed(parents))
+
+    def create_file(
+        self,
+        sandbox_path: str,
+        contents: Union[str, bytes] = "",
+        *,
+        mode: int = 0o644,
+        parents: bool = False,
+        overwrite: bool = False,
+        encoding: str = "utf-8",
+    ):
+        """
+        Create a file in the sandbox from in-memory contents.
+
+        Parameters:
+            sandbox_path (str): The destination path within the sandbox.
+            contents (Union[str, bytes]): File contents. Strings are encoded with
+                the provided encoding.
+            mode (int): File permissions. Default is 0o644.
+            parents (bool): Create missing parent directories first.
+            overwrite (bool): Allow replacing an existing file.
+            encoding (str): Encoding used when contents is a string.
+
+        Raises:
+            SandboxFileSystemError: If file creation fails.
+            FileExistsError: If the file exists and overwrite is False.
+            ValueError: If the path or contents are invalid.
+
+        Example:
+            ```python
+            fs.create_file("/workspace/app.py", "print('hello')\n", parents=True)
+            fs.create_file("/workspace/model.bin", b"\x00\x01", overwrite=True)
+            ```
+        """
+        sandbox_path = self._normalize_sandbox_path(sandbox_path)
+
+        if not isinstance(contents, (str, bytes)):
+            raise ValueError("contents must be str or bytes")
+
+        if not 0 <= mode <= 0o777:
+            raise ValueError("mode must be between 0o000 and 0o777")
+
+        if parents:
+            for parent in self._parent_directories(sandbox_path):
+                try:
+                    info = self.stat_file(parent)
+                except SandboxFileSystemError:
+                    self.create_directory(parent)
+                else:
+                    if not info.is_dir:
+                        raise SandboxFileSystemError(
+                            message=f"Parent path is not a directory: {parent}",
+                            operation="create_file",
+                            path=sandbox_path,
+                            container_id=self.sandbox_instance.container_id,
+                        )
+
+        if not overwrite:
+            try:
+                self.stat_file(sandbox_path)
+            except SandboxFileSystemError:
+                pass
+            else:
+                raise FileExistsError(f"Sandbox file already exists: {sandbox_path}")
+
+        data = contents.encode(encoding) if isinstance(contents, str) else contents
+        response = self.sandbox_instance.stub.sandbox_upload_file(
+            PodSandboxUploadFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+                data=data,
+                mode=mode,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="create_file",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
     def upload_file(self, local_path: str, sandbox_path: str):
         """
@@ -3615,6 +3718,43 @@ class AsyncSandboxFileSystem:
             SandboxFileSystemError: If the upload fails.
         """
         return await asyncio.to_thread(self._sync.upload_file, local_path, sandbox_path)
+
+    async def create_file(
+        self,
+        sandbox_path: str,
+        contents: Union[str, bytes] = "",
+        *,
+        mode: int = 0o644,
+        parents: bool = False,
+        overwrite: bool = False,
+        encoding: str = "utf-8",
+    ):
+        """
+        Create a file in the sandbox from in-memory contents asynchronously.
+
+        Parameters:
+            sandbox_path (str): The destination path within the sandbox.
+            contents (Union[str, bytes]): File contents. Strings are encoded with
+                the provided encoding.
+            mode (int): File permissions. Default is 0o644.
+            parents (bool): Create missing parent directories first.
+            overwrite (bool): Allow replacing an existing file.
+            encoding (str): Encoding used when contents is a string.
+
+        Raises:
+            SandboxFileSystemError: If file creation fails.
+            FileExistsError: If the file exists and overwrite is False.
+            ValueError: If the path or contents are invalid.
+        """
+        return await asyncio.to_thread(
+            self._sync.create_file,
+            sandbox_path,
+            contents,
+            mode=mode,
+            parents=parents,
+            overwrite=overwrite,
+            encoding=encoding,
+        )
 
     async def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 644):
         """
