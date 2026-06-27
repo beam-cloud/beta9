@@ -77,41 +77,30 @@ func resolvConfHasUsableNameserver(path string) bool {
 }
 
 func containerHostsFileSource(containerId string, aliases map[string]string) (string, error) {
-	if len(aliases) == 0 {
-		return "", nil
-	}
-
 	lines := make([]string, 0, len(aliases))
-	validAliases := make(map[string]string, len(aliases))
-	hosts := make([]string, 0, len(aliases))
 	for host, ip := range aliases {
 		host = strings.TrimSpace(host)
 		ip = strings.TrimSpace(ip)
-		if host == "" || strings.ContainsAny(host, " \t\r\n/") {
+		if host == "" || strings.ContainsAny(host, " \t\r\n/") || net.ParseIP(ip) == nil {
 			continue
 		}
-		if parsed := net.ParseIP(ip); parsed == nil {
-			continue
-		}
-		validAliases[host] = ip
-		hosts = append(hosts, host)
-	}
-	sort.Strings(hosts)
-	for _, host := range hosts {
-		lines = append(lines, fmt.Sprintf("%s\t%s", validAliases[host], host))
+		lines = append(lines, fmt.Sprintf("%s\t%s", ip, host))
 	}
 	if len(lines) == 0 {
 		return "", nil
 	}
+	sort.Strings(lines)
 
 	contents, err := os.ReadFile(hostEtcHostsPath)
 	if err != nil || len(contents) == 0 {
 		contents = []byte("127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n")
 	}
-	if !strings.HasSuffix(string(contents), "\n") {
+	if contents[len(contents)-1] != '\n' {
 		contents = append(contents, '\n')
 	}
-	contents = append(contents, []byte("# beta9 service bindings\n"+strings.Join(lines, "\n")+"\n")...)
+	contents = append(contents, []byte("# beta9 service bindings\n")...)
+	contents = append(contents, []byte(strings.Join(lines, "\n"))...)
+	contents = append(contents, '\n')
 
 	dir := filepath.Join(baseConfigPath, containerId)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
