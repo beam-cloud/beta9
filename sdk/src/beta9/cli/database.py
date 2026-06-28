@@ -240,7 +240,7 @@ def _database_serving_config(
             port=product.port,
             readiness_probe=product.readiness_probe,
             connection_env_name=product.connection_env_name,
-            durability_mode="wal_archive" if product.kind == "postgres" else "aof_tail",
+            durability_mode="snapshot_wal" if product.kind == "postgres" else "aof_tail",
             credential_secret_names=list(secret_names.values()),
             username_secret_name=secret_names["username"],
             password_secret_name=secret_names["password"],
@@ -251,7 +251,6 @@ def _database_serving_config(
 
 
 def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
-    archive_dir = "/var/lib/postgresql/data/pgdata/.beta9-wal"
     return [
         "sh",
         "-lc",
@@ -262,11 +261,7 @@ def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
             f"POSTGRES_DB=\"${{{secret_names['database']}}}\" "
             "PGDATA=/var/lib/postgresql/data/pgdata; "
             "exec docker-entrypoint.sh postgres "
-            "-c wal_level=replica "
-            "-c wal_compression=on "
-            "-c archive_mode=on "
-            "-c archive_timeout=60s "
-            f"-c \"archive_command=mkdir -p {archive_dir} && (test -f {archive_dir}/%f || cp %p {archive_dir}/%f)\""
+            "-c wal_compression=on"
         ),
     ]
 
@@ -419,7 +414,13 @@ def _create_options(func):
     )(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
     func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
-    func = click.option("--min-replicas", type=click.IntRange(min=0, max=1), default=0, show_default=True)(func)
+    func = click.option(
+        "--min-replicas",
+        type=click.IntRange(min=0, max=1),
+        default=1,
+        show_default=True,
+        help="Minimum database replicas to keep warm. Use 0 to enable scale-to-zero.",
+    )(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Run on a private pool.")(func)
     func = click.option("--size", type=click.STRING, default=None, help="Durable disk size.")(func)
     func = click.option("--password-stdin", is_flag=True, help="Read password from stdin.")(func)

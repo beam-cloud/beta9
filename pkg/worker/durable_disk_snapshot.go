@@ -362,7 +362,7 @@ func durableDiskSnapshotAppendOnlyFile(format, name string) bool {
 
 func durableDiskSnapshotPostgresWALFile(name string) bool {
 	name = filepath.ToSlash(name)
-	return strings.HasPrefix(name, "pgdata/.beta9-wal/") || strings.HasPrefix(name, "pgdata/pg_wal/")
+	return strings.HasPrefix(name, "pgdata/pg_wal/")
 }
 
 func durableDiskSnapshotSeenChunks(previous *types.DiskSnapshotManifest, chunkPrefix string) map[string]struct{} {
