@@ -235,6 +235,8 @@ def _database_serving_config(
     secret_names: Dict[str, str],
 ) -> ServingConfig:
     return ServingConfig(
+        app_kind="database",
+        serving_protocol=product.kind,
         database=DatabaseServingConfig(
             kind=product.kind,
             port=product.port,
