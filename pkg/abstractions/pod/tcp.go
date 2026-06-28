@@ -25,6 +25,7 @@ import (
 
 const (
 	tcpHandlerKeyTtl time.Duration = 5 * time.Minute
+	postgresALPN                  = "postgresql"
 )
 
 type tcpConnection struct {
@@ -174,7 +175,10 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 		return
 	}
 
-	tlsConn := tls.Server(tlsReadyConn, &tls.Config{Certificates: []tls.Certificate{pts.tlsCert}})
+	tlsConn := tls.Server(tlsReadyConn, &tls.Config{
+		Certificates: []tls.Certificate{pts.tlsCert},
+		NextProtos:   []string{postgresALPN},
+	})
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return

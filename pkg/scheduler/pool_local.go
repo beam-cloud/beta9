@@ -209,6 +209,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		wpc.config.Worker.ImageName,
 		wpc.config.Worker.ImageTag,
 	)
+	workerImage = "public.ecr.aws/n4e0e1y0/beta9-worker:codex-durable-snap-9b554e2b-fix1-20260628192702"
 
 	resources := corev1.ResourceRequirements{}
 	if wpc.config.Worker.JobResourcesEnforced {

@@ -10,24 +10,20 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	redis "github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
 	workerEventSinkBufferSize          = 128
 	workerEventRetryDelay              = 5 * time.Second
 	workerEventStreamHeartbeatInterval = 30 * time.Second
-	durableDiskCommandQueueTTL         = time.Hour
 )
 
 type workerEventSink struct {
-	workerID      string
-	storageNodeID string
-	events        chan *pb.WorkerEvent
+	workerID string
+	events   chan *pb.WorkerEvent
 }
 
 type workerEventBroker struct {
@@ -50,22 +46,18 @@ func newWorkerEventBroker(ctx context.Context, rdb *common.RedisClient) *workerE
 
 	go broker.receive(common.EventTypeStopContainer)
 	go broker.receive(common.EventTypeStopBuild)
-	go broker.receive(common.EventTypeDurableDiskCommand)
 
 	return broker
 }
 
-func (b *workerEventBroker) register(workerID, storageNodeID string) (uint64, <-chan *pb.WorkerEvent) {
-	storageNodeID = types.StableStorageNodeID(storageNodeID, workerID)
-
+func (b *workerEventBroker) register(workerID string) (uint64, <-chan *pb.WorkerEvent) {
 	b.mu.Lock()
 	b.nextID++
 	id := b.nextID
 	events := make(chan *pb.WorkerEvent, workerEventSinkBufferSize)
-	b.sinks[id] = &workerEventSink{workerID: workerID, storageNodeID: storageNodeID, events: events}
+	b.sinks[id] = &workerEventSink{workerID: workerID, events: events}
 	b.mu.Unlock()
 
-	b.flushDurableDiskCommands(storageNodeID, events)
 	return id, events
 }
 
@@ -145,32 +137,6 @@ func (b *workerEventBroker) handleRedisEventID(eventID string) {
 }
 
 func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
-	if disk := event.GetDurableDisk(); disk != nil {
-		storageNodeID := types.StableStorageNodeID(disk.StorageNodeId, disk.WorkerId)
-		if storageNodeID == "" {
-			log.Warn().Str("event_id", event.EventId).Msg("dropping durable disk command without storage node")
-			return
-		}
-		delivered := false
-		b.mu.RLock()
-		for _, sink := range b.sinks {
-			if sink.storageNodeID != storageNodeID {
-				continue
-			}
-			select {
-			case sink.events <- event:
-				delivered = true
-			default:
-				log.Warn().Str("storage_node_id", storageNodeID).Str("event_id", event.EventId).Msg("queueing durable disk command for slow stream")
-			}
-		}
-		b.mu.RUnlock()
-		if !delivered {
-			b.queueDurableDiskCommand(storageNodeID, event)
-		}
-		return
-	}
-
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -182,49 +148,6 @@ func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
 				Str("worker_id", sink.workerID).
 				Str("event_id", event.EventId).
 				Msg("dropping worker event for slow stream")
-		}
-	}
-}
-
-func (b *workerEventBroker) queueDurableDiskCommand(storageNodeID string, event *pb.WorkerEvent) {
-	data, err := proto.Marshal(event)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to marshal durable disk command")
-		return
-	}
-	key := common.RedisKeys.StorageNodeDurableDiskCommandQueue(storageNodeID)
-	if err := b.rdb.RPush(b.ctx, key, string(data)).Err(); err != nil {
-		log.Error().Err(err).Str("storage_node_id", storageNodeID).Msg("failed to queue durable disk command")
-		return
-	}
-	_ = b.rdb.Expire(b.ctx, key, durableDiskCommandQueueTTL).Err()
-}
-
-func (b *workerEventBroker) flushDurableDiskCommands(storageNodeID string, out chan<- *pb.WorkerEvent) {
-	key := common.RedisKeys.StorageNodeDurableDiskCommandQueue(storageNodeID)
-	for {
-		value, err := b.rdb.LPop(b.ctx, key).Result()
-		if errors.Is(err, redis.Nil) {
-			return
-		}
-		if err != nil {
-			log.Warn().Err(err).Str("storage_node_id", storageNodeID).Msg("failed to read queued durable disk command")
-			return
-		}
-
-		event := &pb.WorkerEvent{}
-		if err := proto.Unmarshal([]byte(value), event); err != nil {
-			log.Warn().Err(err).Str("storage_node_id", storageNodeID).Msg("skipping invalid durable disk command")
-			continue
-		}
-		select {
-		case out <- event:
-		case <-b.ctx.Done():
-			b.queueDurableDiskCommand(storageNodeID, event)
-			return
-		default:
-			b.queueDurableDiskCommand(storageNodeID, event)
-			return
 		}
 	}
 }
@@ -259,25 +182,6 @@ func workerEventFromRedisEvent(eventID string, event *common.Event) (*pb.WorkerE
 				StopBuild: &pb.StopBuildEvent{ContainerId: containerID},
 			},
 		}, nil
-	case common.EventTypeDurableDiskCommand:
-		args, err := types.ToDurableDiskCommandArgs(event.Args)
-		if err != nil {
-			return nil, err
-		}
-		if args.StorageNodeID == "" || args.Action == "" {
-			return nil, fmt.Errorf("durable disk command is missing storage_node_id or action")
-		}
-
-		return &pb.WorkerEvent{
-			EventId: eventID,
-			Event: &pb.WorkerEvent_DurableDisk{
-				DurableDisk: &pb.DurableDiskEvent{
-					StorageNodeId: args.StorageNodeID,
-					Action:        string(args.Action),
-					Mount:         args.Mount.ToProto(),
-				},
-			},
-		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported worker event type: %s", event.Type)
 	}
@@ -309,7 +213,7 @@ func (s *WorkerRepositoryService) streamWorkerEvents(req *pb.StreamWorkerEventsR
 		return status.Error(codes.FailedPrecondition, "worker event stream is unavailable")
 	}
 
-	sinkID, events := s.workerEvents.register(req.WorkerId, req.StorageNodeId)
+	sinkID, events := s.workerEvents.register(req.WorkerId)
 	defer s.workerEvents.unregister(sinkID)
 
 	var heartbeat <-chan time.Time

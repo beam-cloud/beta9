@@ -337,9 +337,9 @@ class DatabaseServingConfig:
 
 @dataclass
 class DiskReplication:
-    replicas: int = 3
-    mode: str = "sync"
-    quorum: str = "majority"
+    replicas: int = 0
+    mode: str = ""
+    quorum: str = ""
     replica_worker_ids: List[str] = field(default_factory=list)
     primary_worker_id: str = ""
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -1085,7 +1086,56 @@ func (pb *PodProxyBuffer) checkContainerReady(address string, timeout time.Durat
 	if llmEnabled(pb.stubConfig) {
 		return pb.checkLLMContainerReady(address, timeout)
 	}
+	switch databaseKind(pb.stubConfig) {
+	case "postgres", "postgresql":
+		return pb.checkPostgresContainerReady(address, timeout)
+	}
 	return pb.checkContainerAvailableWithTimeout(address, timeout)
+}
+
+func databaseKind(config *types.StubConfigV1) string {
+	if config == nil || config.EffectiveDatabaseConfig() == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(config.EffectiveDatabaseConfig().Kind))
+}
+
+func (pb *PodProxyBuffer) checkPostgresContainerReady(address string, timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = containerAvailableTimeout
+	}
+	conn, err := network.ConnectToBackend(pb.baseContext(), address, timeout, pb.tailscale, pb.tsConfig, pb.containerRepo)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	payload := []byte("user\x00postgres\x00database\x00postgres\x00application_name\x00beta9_readiness\x00\x00")
+	startup := make([]byte, 8+len(payload))
+	binary.BigEndian.PutUint32(startup[0:4], uint32(len(startup)))
+	binary.BigEndian.PutUint32(startup[4:8], 196608)
+	copy(startup[8:], payload)
+	if _, err := conn.Write(startup); err != nil {
+		return false
+	}
+
+	header := make([]byte, 5)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return false
+	}
+	size := int(binary.BigEndian.Uint32(header[1:5])) - 4
+	if size < 0 || size > 1<<20 {
+		return false
+	}
+	body := make([]byte, size)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return false
+	}
+	if header[0] == 'E' && bytes.Contains(bytes.ToLower(body), []byte("starting up")) {
+		return false
+	}
+	return true
 }
 
 func (pb *PodProxyBuffer) checkLLMContainerReady(address string, timeout time.Duration) bool {

@@ -282,10 +282,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
+	var object types.Object
+	if strings.TrimSpace(in.ObjectId) == "" {
+		object, err = gws.ensureEmptyStubObject(ctx, authInfo.Workspace)
+	} else {
+		object, err = gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
+	}
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
-			Ok: false,
+			Ok:     false,
+			ErrMsg: "Failed to prepare stub object",
 		}, nil
 	}
 
@@ -310,13 +316,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				ErrMsg: res.ErrMsg,
 			}, nil
 		}
-	}
-
-	if err := gws.dispatchDurableDiskPrepareCommands(authInfo.Workspace.Name, stubConfig.Disks); err != nil {
-		return &pb.GetOrCreateStubResponse{
-			Ok:     false,
-			ErrMsg: err.Error(),
-		}, nil
 	}
 
 	return &pb.GetOrCreateStubResponse{

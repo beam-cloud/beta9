@@ -188,15 +188,6 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
-	durableDiskSynced := false
-	if request.HasDurableDiskMount() {
-		if err := s.syncDurableDiskMounts(request); err != nil {
-			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks before container completion")
-			return
-		}
-		durableDiskSynced = true
-	}
-
 	s.setContainerExitCode(containerId, exitCode)
 
 	// Set container exit code on instance before any slower cleanup work.
@@ -206,10 +197,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		s.containerInstances.Set(containerId, instance)
 	}
 
-	if !durableDiskSynced {
-		if err := s.syncDurableDiskMounts(request); err != nil {
-			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
-		}
+	if err := s.syncDurableDiskMounts(request); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
 	}
 
 	s.containerLock.Lock()

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -224,12 +222,12 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 			ErrMsg: "Unable to parse deployment config",
 		}, nil
 	}
+	stubConfig.HostAliases = nil
 
 	for key, value := range in.Env {
 		stubConfig.Env = mergeEnvVar(stubConfig.Env, key, value)
 	}
 
-	aliasIP := gws.serviceBindAliasHost(ctx, authInfo.Workspace.ExternalId, stubConfig)
 	for _, secretName := range in.Secrets {
 		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
 		if err != nil {
@@ -260,26 +258,6 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 			CreatedAt: secret.CreatedAt,
 			UpdatedAt: secret.UpdatedAt,
 		})
-
-		if aliasIP != "" {
-			secretKey, err := common.ParseSecretKey(*authInfo.Workspace.SigningKey)
-			if err != nil {
-				return &pb.BindServiceResponse{
-					Ok:     false,
-					ErrMsg: "Unable to parse workspace signing key",
-				}, nil
-			}
-			value, err := common.Decrypt(secretKey, secret.Value)
-			if err != nil {
-				return &pb.BindServiceResponse{
-					Ok:     false,
-					ErrMsg: fmt.Sprintf("Unable to decrypt secret %q", secretName),
-				}, nil
-			}
-			if host := connectionStringHost(value); host != "" {
-				stubConfig.HostAliases = mergeHostAlias(stubConfig.HostAliases, host, aliasIP)
-			}
-		}
 	}
 
 	if err := gws.backendRepo.UpdateStubConfig(ctx, deploymentWithRelated.Stub.Id, stubConfig); err != nil {
@@ -297,13 +275,6 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 	}})
 
 	return &pb.BindServiceResponse{Ok: true}, nil
-}
-
-func (gws *GatewayService) serviceBindAliasHost(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) string {
-	if gws.usesPrivatePool(ctx, workspaceID, stubConfig) {
-		return ""
-	}
-	return gatewayTCPServiceHost()
 }
 
 func (gws *GatewayService) usesPrivatePool(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) bool {
@@ -528,39 +499,4 @@ func mergeSecret(secrets []types.Secret, secret types.Secret) []types.Secret {
 		}
 	}
 	return append(secrets, secret)
-}
-
-func gatewayTCPServiceHost() string {
-	for _, key := range []string{
-		"BETA9_GATEWAY_PROXY_TCP_SERVICE_HOST",
-		"BETA9_GATEWAY_PROXY_TCP_PORT_443_TCP_ADDR",
-		"BETA9_GATEWAY_PORT_1995_TCP_ADDR",
-		"BETA9_GATEWAY_SERVICE_HOST",
-	} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func connectionStringHost(value string) string {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
-}
-
-func mergeHostAlias(aliases map[string]string, host string, ip string) map[string]string {
-	host = strings.TrimSpace(host)
-	ip = strings.TrimSpace(ip)
-	if host == "" || ip == "" {
-		return aliases
-	}
-	if aliases == nil {
-		aliases = map[string]string{}
-	}
-	aliases[host] = ip
-	return aliases
 }

@@ -1,25 +1,35 @@
 import os
 import secrets as secrets_lib
+import shlex
 import sys
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 import click
 from rich.table import Column, Table, box
 
 from .. import terminal
+from ..abstractions.base.runner import POD_DEPLOYMENT_STUB_TYPE
 from ..abstractions.image import Image
 from ..abstractions.service import Service
 from ..channel import ServiceClient
 from ..clients.gateway import (
+    Autoscaler as AutoscalerProto,
     BindServiceRequest,
     DeleteDeploymentRequest,
+    DeployStubRequest,
     GetUrlRequest,
+    GetOrCreateStubRequest,
     ListDeploymentsRequest,
+    SecretVar,
+    DatabaseServingConfig as DatabaseServingConfigProto,
+    ServingConfig as ServingConfigProto,
     ScaleDeploymentRequest,
     StringList,
+    TaskPolicy as TaskPolicyProto,
 )
+from ..clients.image import BuildImageRequest, ImageServiceStub, VerifyImageBuildRequest
 from ..clients.secret import (
     CreateSecretRequest,
     DeleteSecretRequest,
@@ -86,6 +96,8 @@ REDIS = DatabaseProduct(
 
 DEFAULT_DATABASE_KEEP_WARM_SECONDS = 300
 DEFAULT_DATABASE_POOL = "default"
+DEFAULT_DATABASE_CPU = 1.0
+DEFAULT_DATABASE_MEMORY = 512
 
 
 def _env_prefix(kind: str, name: str) -> str:
@@ -101,11 +113,14 @@ def _password(password: str, password_from_env: str, password_stdin: bool) -> st
         return password
     if password_from_env:
         value = os.getenv(password_from_env)
-        if value is None:
+        if not value:
             raise click.ClickException(f"Environment variable {password_from_env!r} is not set.")
         return value
     if password_stdin:
-        return sys.stdin.read().strip()
+        value = sys.stdin.read().strip()
+        if not value:
+            raise click.ClickException("No password was provided on stdin.")
+        return value
     return secrets_lib.token_urlsafe(32)
 
 
@@ -163,6 +178,16 @@ def _deployments_by_name(service: ServiceClient, name: str):
     return [deployment for deployment in res.deployments if deployment.name == name]
 
 
+def _ensure_database_name_available(service: ServiceClient, product: DatabaseProduct, name: str) -> None:
+    if _deployment_by_name(service, name) is None:
+        return
+    raise click.ClickException(
+        f"{product.kind} service {name!r} already exists. "
+        f"Use `beam {product.kind} credentials {name}`, `beam {product.kind} status {name}`, "
+        f"or delete it before creating a replacement."
+    )
+
+
 def _deployment_sort_key(deployment):
     return (
         bool(deployment.active),
@@ -181,13 +206,8 @@ def _tcp_host_from_url(url: str) -> str:
     return host or "<host>"
 
 
-def _tcp_host_for_service(service: Service) -> str:
-    res = service.gateway_stub.get_url(
-        GetUrlRequest(
-            stub_id=service.stub_id,
-            deployment_id=getattr(service, "deployment_id", ""),
-        )
-    )
+def _tcp_host_for_stub(service: ServiceClient, stub_id: str, deployment_id: str) -> str:
+    res = service.gateway.get_url(GetUrlRequest(stub_id=stub_id, deployment_id=deployment_id))
     if not res.ok:
         raise click.ClickException(res.err_msg or "Failed to get database TCP endpoint.")
     return _tcp_host_from_url(res.url)
@@ -203,7 +223,7 @@ def _postgres_url(username: str, password: str, host: str, database: str) -> str
 
 
 def _redis_url(username: str, password: str, host: str) -> str:
-    if username and username != "default":
+    if username:
         return "rediss://{}:{}@{}/0".format(quote(username), quote(password), host)
     return "rediss://:{}@{}/0".format(quote(password), host)
 
@@ -218,15 +238,26 @@ def _print_result(format: str, payload: Dict[str, object]) -> None:
         Column("Value"),
         box=box.SIMPLE,
     )
-    for key in (
+    preferred = (
         "name",
         "kind",
         "deployment_id",
+        "version",
+        "disk",
+        "disk_size",
         "host",
+        "username",
+        "database",
         "connection_string",
         "connection_string_secret",
-    ):
-        table.add_row(key, str(payload.get(key, "")))
+        "username_secret",
+        "password_secret",
+        "database_secret",
+    )
+    keys = [key for key in preferred if key in payload]
+    keys.extend(sorted(key for key in payload if key not in keys))
+    for key in keys:
+        table.add_row(key, str(payload[key]))
     terminal.print(table)
 
 
@@ -252,6 +283,28 @@ def _database_serving_config(
     )
 
 
+def _serving_config_proto(config: ServingConfig) -> ServingConfigProto:
+    database = config.database
+    return ServingConfigProto(
+        app_kind=config.app_kind,
+        serving_protocol=config.serving_protocol,
+        database=DatabaseServingConfigProto(
+            kind=database.kind,
+            port=database.port,
+            readiness_probe=database.readiness_probe,
+            connection_env_name=database.connection_env_name,
+            credential_secret_names=database.credential_secret_names,
+            durability_mode=database.durability_mode,
+            username_secret_name=database.username_secret_name,
+            password_secret_name=database.password_secret_name,
+            database_secret_name=database.database_secret_name,
+            connection_url_secret_name=database.connection_url_secret_name,
+        )
+        if database
+        else None,
+    )
+
+
 def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
     return [
         "sh",
@@ -269,17 +322,137 @@ def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
 
 
 def _redis_entrypoint(secret_names: Dict[str, str]) -> list:
+    username = secret_names["username"]
+    password = secret_names["password"]
     return [
         "sh",
         "-lc",
-        "printf 'appendonly yes\\nappendfsync always\\ndir /data\\nuser default off\\nuser %s on >%s ~* &* +@all\\n' \"${%s}\" \"${%s}\" > /tmp/redis.conf; exec redis-server /tmp/redis.conf"
-        % (
-            "%s",
-            "%s",
-            secret_names["username"],
-            secret_names["password"],
+        (
+            f"if [ \"${{{username}}}\" = \"default\" ]; then "
+            "printf 'appendonly yes\\nappendfsync always\\ndir /data\\nuser default on >%s ~* &* +@all\\n' "
+            f"\"${{{password}}}\" > /tmp/redis.conf; "
+            "else "
+            "printf 'appendonly yes\\nappendfsync always\\ndir /data\\nuser default off\\nuser %s on >%s ~* &* +@all\\n' "
+            f"\"${{{username}}}\" \"${{{password}}}\" > /tmp/redis.conf; "
+            "fi; exec redis-server /tmp/redis.conf"
         ),
     ]
+
+
+def _registry_image_id(service: ServiceClient, image: Image) -> Tuple[str, str]:
+    image_client = ImageServiceStub(service.channel)
+    python_version = getattr(image.python_version, "value", image.python_version)
+    verify = image_client.verify_image_build(
+        VerifyImageBuildRequest(
+            python_version=python_version,
+            existing_image_uri=image.base_image,
+        )
+    )
+    if verify.exists:
+        return verify.image_id, python_version
+
+    final = None
+    for response in image_client.build_image(
+        BuildImageRequest(
+            python_version=python_version,
+            existing_image_uri=image.base_image,
+        )
+    ):
+        if response.done:
+            final = response
+            break
+
+    if not final or not final.success:
+        raise click.ClickException(
+            (final.msg if final else "") or f"Failed to prepare image {image.base_image}."
+        )
+    return final.image_id, final.python_version or python_version
+
+
+def _database_service(
+    product: DatabaseProduct,
+    name: str,
+    size: str,
+    pool: Optional[str],
+    min_replicas: int,
+    cpu: Optional[float],
+    memory: Optional[str],
+) -> Service:
+    secret_names = _secret_names(product, name)
+    disk = DurableDisk(
+        name=f"{name}-data",
+        size=size,
+        mount_path=product.mount_path,
+        replication=DiskReplication(),
+    )
+    return Service(
+        name=name,
+        image=Image.from_registry(product.image),
+        entrypoint=_postgres_entrypoint(secret_names)
+        if product.kind == "postgres"
+        else _redis_entrypoint(secret_names),
+        ports=[product.port],
+        tcp=True,
+        min_replicas=min_replicas,
+        keep_warm_seconds=DEFAULT_DATABASE_KEEP_WARM_SECONDS,
+        pool=pool or DEFAULT_DATABASE_POOL,
+        secrets=[v for k, v in secret_names.items() if k != "url"],
+        env={},
+        disks=[disk],
+        serving=_database_serving_config(product, secret_names),
+        cpu=cpu or DEFAULT_DATABASE_CPU,
+        memory=memory or DEFAULT_DATABASE_MEMORY,
+    )
+
+
+def _deploy_database_stub(service: ServiceClient, db_service: Service) -> Tuple[str, str, int]:
+    image_id, python_version = _registry_image_id(service, db_service.image)
+    stub_response = service.gateway.get_or_create_stub(
+        GetOrCreateStubRequest(
+            image_id=image_id,
+            stub_type=POD_DEPLOYMENT_STUB_TYPE,
+            name=POD_DEPLOYMENT_STUB_TYPE,
+            python_version=python_version,
+            cpu=db_service.cpu,
+            memory=db_service.memory,
+            gpu="",
+            gpu_count=0,
+            keep_warm_seconds=db_service.keep_warm_seconds,
+            workers=1,
+            max_pending_tasks=100,
+            secrets=[SecretVar(name=secret.name) for secret in db_service.secrets],
+            autoscaler=AutoscalerProto(
+                type="queue_depth",
+                max_containers=db_service.max_replicas,
+                tasks_per_container=1,
+                min_containers=db_service.min_replicas,
+            ),
+            task_policy=TaskPolicyProto(timeout=3600, max_retries=3),
+            concurrent_requests=1,
+            entrypoint=db_service.entrypoint or [],
+            ports=db_service.ports,
+            env=db_service.env,
+            app_name=db_service.name or "",
+            force_create=True,
+            authorized=False,
+            tcp=True,
+            pool=db_service.pool_config,
+            is_service=True,
+            serving=_serving_config_proto(db_service.serving),
+            disks=[disk.export() for disk in db_service.disks],
+        )
+    )
+    if not stub_response.ok:
+        raise click.ClickException(stub_response.err_msg or "Failed to create database service.")
+
+    deploy_response = service.gateway.deploy_stub(
+        DeployStubRequest(stub_id=stub_response.stub_id, name=db_service.name or "")
+    )
+    if not deploy_response.ok:
+        raise click.ClickException(
+            deploy_response.invoke_url or f"Failed to deploy database service {db_service.name}."
+        )
+    return stub_response.stub_id, deploy_response.deployment_id, deploy_response.version
 
 
 def _create_database(
@@ -293,10 +466,10 @@ def _create_database(
     pool: Optional[str],
     min_replicas: int,
     format: str,
-    disk_driver: str,
     cpu: Optional[float],
     memory: Optional[str],
 ) -> None:
+    _ensure_database_name_available(service, product, name)
     secret_names = _secret_names(product, name)
     _upsert_secret(service, secret_names["username"], username)
     _upsert_secret(service, secret_names["password"], password)
@@ -314,7 +487,6 @@ def _create_database(
         pool=pool,
         min_replicas=min_replicas,
         format=format,
-        disk_driver=disk_driver,
         cpu=cpu,
         memory=memory,
     )
@@ -331,52 +503,21 @@ def _deploy_database_service(
     pool: Optional[str],
     min_replicas: int,
     format: str,
-    disk_driver: str,
     cpu: Optional[float],
     memory: Optional[str],
 ) -> None:
     secret_names = _secret_names(product, name)
-    disk = DurableDisk(
-        name=f"{name}-data",
+    db_service = _database_service(
+        product=product,
+        name=name,
         size=size,
-        mount_path=product.mount_path,
-        driver=disk_driver,
-        replication=DiskReplication(),
-    )
-
-    if product.kind == "postgres":
-        entrypoint = _postgres_entrypoint(secret_names)
-        env = {}
-    else:
-        entrypoint = _redis_entrypoint(secret_names)
-        env = {}
-
-    db_service = Service(
-        name=name,
-        image=Image.from_registry(product.image),
-        entrypoint=entrypoint,
-        ports=[product.port],
-        tcp=True,
+        pool=pool,
         min_replicas=min_replicas,
-        keep_warm_seconds=DEFAULT_DATABASE_KEEP_WARM_SECONDS,
-        pool=pool or DEFAULT_DATABASE_POOL,
-        secrets=[v for k, v in secret_names.items() if k != "url"],
-        env=env,
-        disks=[disk],
-        serving=_database_serving_config(product, secret_names),
+        cpu=cpu,
+        memory=memory,
     )
-    if cpu is not None:
-        db_service.cpu = db_service.parse_cpu(cpu)
-    if memory is not None:
-        db_service.memory = db_service.parse_memory(memory)
-    details, ok = db_service.deploy(
-        name=name,
-        invocation_details_func=lambda **_: None,
-    )
-    if not ok:
-        raise click.ClickException(f"Failed to deploy {product.kind} service {name}.")
-
-    host = _tcp_host_for_service(db_service)
+    stub_id, deployment_id, version = _deploy_database_stub(service, db_service)
+    host = _tcp_host_for_stub(service, stub_id, deployment_id)
     if product.kind == "postgres":
         connection_url = _postgres_url(username, password, host, database)
     else:
@@ -388,24 +529,23 @@ def _deploy_database_service(
         {
             "name": name,
             "kind": product.kind,
-            "deployment_id": details.get("deployment_id", ""),
+            "deployment_id": deployment_id,
+            "version": version,
+            "disk": db_service.disks[0].name,
+            "disk_size": db_service.disks[0].size,
             "host": host,
+            "username": username,
             "connection_string": connection_url,
             "connection_string_secret": secret_names["url"],
             "username_secret": secret_names["username"],
             "password_secret": secret_names["password"],
-            "database_secret": secret_names.get("database", ""),
+            **({"database": database} if product.kind == "postgres" else {}),
+            **({"database_secret": secret_names["database"]} if product.kind == "postgres" else {}),
         },
     )
 
 
 def _create_options(func):
-    func = click.option(
-        "--disk-driver",
-        default="",
-        hidden=True,
-        help="Durable disk driver override.",
-    )(func)
     func = click.option(
         "--format",
         "format",
@@ -419,9 +559,9 @@ def _create_options(func):
     func = click.option(
         "--min-replicas",
         type=click.IntRange(min=0, max=1),
-        default=1,
+        default=0,
         show_default=True,
-        help="Minimum database replicas to keep warm. Use 0 to enable scale-to-zero.",
+        help="Minimum database replicas to keep warm. Use 1 to keep the service warm.",
     )(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Run on a private pool.")(func)
     func = click.option("--size", type=click.STRING, default=None, help="Durable disk size.")(func)
@@ -449,7 +589,6 @@ def create_postgres(
     pool: Optional[str],
     min_replicas: int,
     format: str,
-    disk_driver: str,
     cpu: Optional[float],
     memory: Optional[str],
 ):
@@ -464,7 +603,6 @@ def create_postgres(
         pool=pool,
         min_replicas=min_replicas,
         format=format,
-        disk_driver=disk_driver,
         cpu=cpu,
         memory=memory,
     )
@@ -485,7 +623,6 @@ def create_redis(
     pool: Optional[str],
     min_replicas: int,
     format: str,
-    disk_driver: str,
     cpu: Optional[float],
     memory: Optional[str],
 ):
@@ -500,7 +637,6 @@ def create_redis(
         pool=pool,
         min_replicas=min_replicas,
         format=format,
-        disk_driver=disk_driver,
         cpu=cpu,
         memory=memory,
     )
@@ -538,16 +674,35 @@ def redis_credentials(service: ServiceClient, name: str, format: str):
 
 @postgres.command(name="connect", help="Print the Postgres connection string.")
 @click.argument("name")
+@click.option("--psql", "psql_command", is_flag=True, help="Print a psql command.")
 @extraclick.pass_service_client
-def postgres_connect(service: ServiceClient, name: str):
-    terminal.print(_get_secret_value(service, _secret_names(POSTGRES, name)["url"]))
+def postgres_connect(service: ServiceClient, name: str, psql_command: bool):
+    url = _get_secret_value(service, _secret_names(POSTGRES, name)["url"])
+    click.echo(f"psql {shlex.quote(url)}" if psql_command else url)
 
 
 @redis.command(name="connect", help="Print the Redis connection string.")
 @click.argument("name")
+@click.option("--redis-cli", "redis_cli_command", is_flag=True, help="Print a redis-cli command with SNI.")
 @extraclick.pass_service_client
-def redis_connect(service: ServiceClient, name: str):
-    terminal.print(_get_secret_value(service, _secret_names(REDIS, name)["url"]))
+def redis_connect(service: ServiceClient, name: str, redis_cli_command: bool):
+    url = _get_secret_value(service, _secret_names(REDIS, name)["url"])
+    if redis_cli_command:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        username = parsed.username or "default"
+        password = parsed.password or ""
+        port = parsed.port or 443
+        click.echo(
+            "redis-cli --tls --sni {host} -h {host} -p {port} --user {username} --pass {password}".format(
+                host=shlex.quote(host),
+                port=shlex.quote(str(port)),
+                username=shlex.quote(username),
+                password=shlex.quote(password),
+            )
+        )
+        return
+    click.echo(url)
 
 
 def _status(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
@@ -588,30 +743,13 @@ def redis_status(service: ServiceClient, name: str, format: str):
 
 
 def _rotate(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
-    secret_names = _secret_names(product, name)
-    password = secrets_lib.token_urlsafe(32)
-    _upsert_secret(service, secret_names["password"], password)
-    username = _get_secret_value(service, secret_names["username"])
-    old_url = _get_secret_value(service, secret_names["url"])
-    host = old_url.split("@", 1)[1].rsplit("/", 1)[0] if "@" in old_url else "<host>"
-    if product.kind == "postgres":
-        database = _get_secret_value(service, secret_names["database"])
-        connection_url = _postgres_url(username, password, host, database)
-    else:
-        connection_url = _redis_url(username, password, host)
-    _upsert_secret(service, secret_names["url"], connection_url)
-    _print_result(
-        format,
-        {
-            "name": name,
-            "kind": product.kind,
-            "connection_string": connection_url,
-            "connection_string_secret": secret_names["url"],
-        },
+    raise click.ClickException(
+        f"{product.kind} password rotation is not available yet. "
+        "Delete and recreate the service to replace credentials."
     )
 
 
-@postgres.command(name="rotate", help="Rotate the stored Postgres password.")
+@postgres.command(name="rotate", help="Rotate the Postgres password. Not available yet.")
 @click.argument("name")
 @click.option("--format", type=click.Choice(("table", "json")), default="table")
 @extraclick.pass_service_client
@@ -619,7 +757,7 @@ def postgres_rotate(service: ServiceClient, name: str, format: str):
     _rotate(service, POSTGRES, name, format)
 
 
-@redis.command(name="rotate", help="Rotate the stored Redis password.")
+@redis.command(name="rotate", help="Rotate the Redis password. Not available yet.")
 @click.argument("name")
 @click.option("--format", type=click.Choice(("table", "json")), default="table")
 @extraclick.pass_service_client
@@ -681,7 +819,6 @@ def bind_service(service: ServiceClient, app: str, postgres_name: str, redis_nam
 
 def _scale_options(func):
     func = click.option("--format", type=click.Choice(("table", "json")), default="table")(func)
-    func = click.option("--disk-driver", default="", hidden=True, help="Durable disk driver override.")(func)
     func = click.option("--size", type=click.STRING, default=None, help="Durable disk size to use when redeploying.")(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Pool to use when redeploying with new resources.")(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
@@ -701,10 +838,9 @@ def postgres_scale(
     memory: Optional[str],
     pool: Optional[str],
     size: Optional[str],
-    disk_driver: str,
     format: str,
 ):
-    _scale_database(service, POSTGRES, name, containers, cpu, memory, pool, size, disk_driver, format)
+    _scale_database(service, POSTGRES, name, containers, cpu, memory, pool, size, format)
 
 
 @redis.command(name="scale", help="Scale a Redis service.")
@@ -719,10 +855,9 @@ def redis_scale(
     memory: Optional[str],
     pool: Optional[str],
     size: Optional[str],
-    disk_driver: str,
     format: str,
 ):
-    _scale_database(service, REDIS, name, containers, cpu, memory, pool, size, disk_driver, format)
+    _scale_database(service, REDIS, name, containers, cpu, memory, pool, size, format)
 
 
 def _scale_database(
@@ -734,7 +869,6 @@ def _scale_database(
     memory: Optional[str],
     pool: Optional[str],
     size: Optional[str],
-    disk_driver: str,
     format: str,
 ) -> None:
     if cpu is not None or memory is not None:
@@ -751,7 +885,6 @@ def _scale_database(
             pool=pool,
             min_replicas=containers,
             format=format,
-            disk_driver=disk_driver,
             cpu=cpu,
             memory=memory,
         )

@@ -42,9 +42,9 @@ func newWorkerEventBrokerForTest(t *testing.T) (*workerEventBroker, *common.Even
 func TestWorkerEventBrokerFansOutStopContainerEvents(t *testing.T) {
 	broker, eventBus := newWorkerEventBrokerForTest(t)
 
-	sinkAID, sinkA := broker.register("worker-a", "")
+	sinkAID, sinkA := broker.register("worker-a")
 	defer broker.unregister(sinkAID)
-	sinkBID, sinkB := broker.register("worker-b", "")
+	sinkBID, sinkB := broker.register("worker-b")
 	defer broker.unregister(sinkBID)
 
 	args, err := types.StopContainerArgs{
@@ -77,7 +77,7 @@ func TestWorkerEventBrokerFansOutStopContainerEvents(t *testing.T) {
 func TestWorkerEventBrokerConvertsStopBuildEvents(t *testing.T) {
 	broker, eventBus := newWorkerEventBrokerForTest(t)
 
-	sinkID, sink := broker.register("worker-a", "")
+	sinkID, sink := broker.register("worker-a")
 	defer broker.unregister(sinkID)
 
 	eventID, err := eventBus.Send(&common.Event{
@@ -94,64 +94,6 @@ func TestWorkerEventBrokerConvertsStopBuildEvents(t *testing.T) {
 	stopBuild := event.GetStopBuild()
 	require.NotNil(t, stopBuild)
 	require.Equal(t, "build-1", stopBuild.ContainerId)
-}
-
-func TestWorkerEventBrokerConvertsDurableDiskEvents(t *testing.T) {
-	broker, eventBus := newWorkerEventBrokerForTest(t)
-
-	sinkID, sink := broker.register("worker-b", "node-b")
-	defer broker.unregister(sinkID)
-
-	mount := types.Mount{
-		LocalPath: "/data/durable-disks/workspace/pg-data",
-		MountPath: "/var/lib/postgresql/data",
-		DurableDisk: &types.DurableDiskMountConfig{
-			Name:             "pg-data",
-			Driver:           types.DurableDiskDriverDRBD,
-			PrimaryWorkerID:  "node-a",
-			ReplicaWorkerIDs: []string{"node-a", "node-b"},
-		},
-	}
-	args, err := types.DurableDiskCommandArgs{
-		StorageNodeID: "node-b",
-		Action:        types.DurableDiskCommandActionPrepare,
-		Mount:         mount,
-	}.ToMap()
-	require.NoError(t, err)
-
-	eventID, err := eventBus.Send(&common.Event{
-		Type:          common.EventTypeDurableDiskCommand,
-		Args:          args,
-		LockAndDelete: false,
-	})
-	require.NoError(t, err)
-
-	broker.handleRedisEventID(eventID)
-
-	event := receiveWorkerEvent(t, sink)
-	require.Equal(t, eventID, event.EventId)
-	disk := event.GetDurableDisk()
-	require.NotNil(t, disk)
-	require.Equal(t, "node-b", disk.StorageNodeId)
-	require.Equal(t, string(types.DurableDiskCommandActionPrepare), disk.Action)
-	require.Equal(t, "pg-data", disk.Mount.DurableDisk.Name)
-}
-
-func TestWorkerEventBrokerQueuesDurableDiskCommandsUntilStorageNodeConnects(t *testing.T) {
-	broker, _ := newWorkerEventBrokerForTest(t)
-	event := &pb.WorkerEvent{
-		EventId: "event-1",
-		Event: &pb.WorkerEvent_DurableDisk{
-			DurableDisk: &pb.DurableDiskEvent{StorageNodeId: "node-b", Action: string(types.DurableDiskCommandActionPrepare)},
-		},
-	}
-
-	broker.fanout(event)
-
-	sinkID, sink := broker.register("worker-b-rolled", "node-b")
-	defer broker.unregister(sinkID)
-
-	require.Equal(t, "event-1", receiveWorkerEvent(t, sink).EventId)
 }
 
 func TestStreamWorkerEventsRejectsInvalidRequests(t *testing.T) {

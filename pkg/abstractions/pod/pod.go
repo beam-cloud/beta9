@@ -425,7 +425,6 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return "", err
 	}
-	abstractions.ConfigureContainerRequestDurableDiskPlacement(runRequest, stubConfig)
 
 	err = s.scheduler.Run(runRequest)
 	if err != nil {
