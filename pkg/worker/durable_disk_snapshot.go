@@ -184,10 +184,10 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 		CreatedAt:        time.Now().UTC(),
 	}
 
-	files := durableDiskSnapshotSeedFiles(manifest.Format, previous)
 	previousFiles := durableDiskSnapshotFilesByPath(previous)
 	chunkPrefix := durableDiskSnapshotChunkPrefix(objectPrefix)
-	seen := map[string]struct{}{}
+	files := map[string]types.DiskSnapshotFile{}
+	seen := durableDiskSnapshotSeenChunks(previous, chunkPrefix)
 	buffer := make([]byte, int(chunkSize))
 
 	if err := filepath.WalkDir(sourceDir, func(name string, entry os.DirEntry, err error) error {
@@ -226,9 +226,6 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 			file.Type = "dir"
 		case info.Mode().IsRegular():
 			file.Type = "file"
-			if durableDiskSnapshotReusePostgresBaseFile(manifest.Format, previous, file.Path) {
-				return nil
-			}
 			previousFile := previousFiles[file.Path]
 			if durableDiskSnapshotFileReusable(previousFile, file) {
 				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
@@ -279,17 +276,6 @@ func durableDiskSnapshotFilesByPath(manifest *types.DiskSnapshotManifest) map[st
 	}
 	files := make(map[string]types.DiskSnapshotFile, len(manifest.Files))
 	for _, file := range manifest.Files {
-		files[file.Path] = file
-	}
-	return files
-}
-
-func durableDiskSnapshotSeedFiles(format string, previous *types.DiskSnapshotManifest) map[string]types.DiskSnapshotFile {
-	files := map[string]types.DiskSnapshotFile{}
-	if format != types.DiskSnapshotFormatPostgresWalV1 || previous == nil {
-		return files
-	}
-	for _, file := range previous.Files {
 		files[file.Path] = file
 	}
 	return files
@@ -362,10 +348,6 @@ func durableDiskSnapshotFileAppendReusable(previous, current types.DiskSnapshotF
 	return end == previous.SizeBytes
 }
 
-func durableDiskSnapshotReusePostgresBaseFile(format string, previous *types.DiskSnapshotManifest, name string) bool {
-	return format == types.DiskSnapshotFormatPostgresWalV1 && previous != nil && !durableDiskSnapshotPostgresWALFile(name)
-}
-
 func durableDiskSnapshotAppendOnlyFile(format, name string) bool {
 	name = filepath.ToSlash(name)
 	switch format {
@@ -381,6 +363,24 @@ func durableDiskSnapshotAppendOnlyFile(format, name string) bool {
 func durableDiskSnapshotPostgresWALFile(name string) bool {
 	name = filepath.ToSlash(name)
 	return strings.HasPrefix(name, "pgdata/.beta9-wal/") || strings.HasPrefix(name, "pgdata/pg_wal/")
+}
+
+func durableDiskSnapshotSeenChunks(previous *types.DiskSnapshotManifest, chunkPrefix string) map[string]struct{} {
+	seen := map[string]struct{}{}
+	if previous == nil {
+		return seen
+	}
+	for _, file := range previous.Files {
+		for _, chunk := range file.Chunks {
+			if chunk.ObjectKey != "" {
+				seen[chunk.ObjectKey] = struct{}{}
+			}
+			if digest := strings.TrimPrefix(chunk.Digest, "sha256:"); digest != "" {
+				seen[path.Join(chunkPrefix, digest)] = struct{}{}
+			}
+		}
+	}
+	return seen
 }
 
 func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore, filename, chunkPrefix string, buffer []byte, seen map[string]struct{}, file *types.DiskSnapshotFile) error {

@@ -101,7 +101,7 @@ func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
 	require.Equal(t, []string{"rbind", "rw"}, spec.Mounts[0].Options)
 }
 
-func TestCreateDurableDiskDirectorySnapshotReusesUnchangedFiles(t *testing.T) {
+func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "pg-data")
 	require.NoError(t, os.MkdirAll(filepath.Join(source, "pgdata", "base"), 0o700))
@@ -138,8 +138,8 @@ func TestCreateDurableDiskDirectorySnapshotReusesUnchangedFiles(t *testing.T) {
 	}, 4, firstManifest)
 	require.NoError(t, err)
 	require.Equal(t, first.ExternalId, second.ParentSnapshotId)
-	require.Equal(t, baseFile.Chunks, snapshotTestFile(secondManifest, "pgdata/base/1").Chunks)
-	require.Empty(t, snapshotTestFile(secondManifest, "pgdata/base/2").Path)
+	require.NotEqual(t, baseFile.Chunks, snapshotTestFile(secondManifest, "pgdata/base/1").Chunks)
+	require.NotEmpty(t, snapshotTestFile(secondManifest, "pgdata/base/2").Chunks)
 	require.Less(t, store.existsCalls, int(second.ChunkCount))
 
 	walFile := snapshotTestFile(secondManifest, "pgdata/pg_wal/0002")
@@ -156,22 +156,13 @@ func TestCreateDurableDiskDirectorySnapshotReusesUnchangedFiles(t *testing.T) {
 	require.Equal(t, 1, cacheReader.hits)
 	data, err := os.ReadFile(filepath.Join(restored, "pgdata", "base", "1"))
 	require.NoError(t, err)
-	require.Equal(t, "base-data", string(data))
+	require.Equal(t, "base-data-mutated", string(data))
+	data, err = os.ReadFile(filepath.Join(restored, "pgdata", "base", "2"))
+	require.NoError(t, err)
+	require.Equal(t, "new-base-file", string(data))
 	data, err = os.ReadFile(filepath.Join(restored, "pgdata", "pg_wal", "0002"))
 	require.NoError(t, err)
 	require.Equal(t, "wal2", string(data))
-}
-
-func TestPreparePostgresWALRecoveryWritesRecoverySignal(t *testing.T) {
-	localPath := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(localPath, "pgdata"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(localPath, "pgdata", "PG_VERSION"), []byte("16"), 0o600))
-
-	require.NoError(t, preparePostgresWALRecovery(&types.Mount{
-		LocalPath: localPath,
-		MountPath: "/var/lib/postgresql/data",
-	}))
-	require.FileExists(t, filepath.Join(localPath, "pgdata", "recovery.signal"))
 }
 
 func TestCreateDurableDiskDirectorySnapshotReusesAppendOnlyTail(t *testing.T) {

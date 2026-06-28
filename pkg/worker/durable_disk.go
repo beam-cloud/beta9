@@ -325,11 +325,6 @@ func (s *Worker) restoreDevDurableDiskSnapshot(request *types.ContainerRequest, 
 	if _, err := restoreDurableDiskDirectorySnapshotWithCache(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, mount.LocalPath); err != nil {
 		return fmt.Errorf("restore durable disk snapshot %s: %w", snapshot.ExternalId, err)
 	}
-	if snapshot.Format == types.DiskSnapshotFormatPostgresWalV1 {
-		if err := preparePostgresWALRecovery(mount); err != nil {
-			return err
-		}
-	}
 	if !devDurableDiskHasRestorablePayload(mount, mount.LocalPath) {
 		_ = os.RemoveAll(mount.LocalPath)
 		return fmt.Errorf("restore durable disk snapshot %s produced an invalid payload", snapshot.ExternalId)
@@ -351,20 +346,6 @@ func durableDiskSnapshotFormatForMount(request *types.ContainerRequest, mount *t
 	default:
 		return types.DiskSnapshotFormatDirV1
 	}
-}
-
-func preparePostgresWALRecovery(mount *types.Mount) error {
-	if mount == nil || mount.MountPath != "/var/lib/postgresql/data" {
-		return nil
-	}
-	pgDataPath := filepath.Join(mount.LocalPath, "pgdata")
-	if _, err := os.Stat(filepath.Join(pgDataPath, "PG_VERSION")); err != nil {
-		return nil
-	}
-	if err := os.WriteFile(filepath.Join(pgDataPath, "recovery.signal"), nil, 0600); err != nil {
-		return fmt.Errorf("write postgres recovery signal: %w", err)
-	}
-	return nil
 }
 
 func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader {

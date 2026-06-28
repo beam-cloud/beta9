@@ -266,8 +266,7 @@ def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
             "-c wal_compression=on "
             "-c archive_mode=on "
             "-c archive_timeout=60s "
-            f"-c \"archive_command=mkdir -p {archive_dir} && (test -f {archive_dir}/%f || cp %p {archive_dir}/%f)\" "
-            f"-c \"restore_command=cp {archive_dir}/%f %p\""
+            f"-c \"archive_command=mkdir -p {archive_dir} && (test -f {archive_dir}/%f || cp %p {archive_dir}/%f)\""
         ),
     ]
 
