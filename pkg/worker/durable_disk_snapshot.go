@@ -30,6 +30,10 @@ type durableDiskSnapshotStore interface {
 	DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+type durableDiskSnapshotCacheReader interface {
+	GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error)
+}
+
 type durableDiskSnapshotBucketStore struct {
 	client *clients.WorkspaceStorageClient
 	bucket string
@@ -216,11 +220,15 @@ func durableDiskSnapshotChunkPrefix(objectPrefix string) string {
 }
 
 func restoreDurableDiskSnapshot(ctx context.Context, store durableDiskSnapshotStore, manifestKey, backingPath string) (*types.DiskSnapshotManifest, error) {
+	return restoreDurableDiskSnapshotWithCache(ctx, store, nil, manifestKey, "", 0, backingPath)
+}
+
+func restoreDurableDiskSnapshotWithCache(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifestKey, manifestDigest string, manifestSizeBytes int64, backingPath string) (*types.DiskSnapshotManifest, error) {
 	if store == nil {
 		return nil, fmt.Errorf("durable disk snapshot store is nil")
 	}
 
-	manifestReader, err := store.DownloadWithReader(ctx, manifestKey)
+	manifestReader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, manifestKey, manifestDigest, manifestSizeBytes)
 	if err != nil {
 		return nil, fmt.Errorf("download durable disk snapshot manifest %s: %w", manifestKey, err)
 	}
@@ -246,7 +254,7 @@ func restoreDurableDiskSnapshot(ctx context.Context, store durableDiskSnapshotSt
 			_ = out.Close()
 			return nil, fmt.Errorf("seek durable disk restore file %s: %w", tmpPath, err)
 		}
-		reader, err := store.DownloadWithReader(ctx, chunk.ObjectKey)
+		reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, chunk.ObjectKey, chunk.Digest, chunk.SizeBytes)
 		if err != nil {
 			_ = out.Close()
 			return nil, fmt.Errorf("download durable disk snapshot chunk %s: %w", chunk.ObjectKey, err)
@@ -281,6 +289,17 @@ func restoreDurableDiskSnapshot(ctx context.Context, store durableDiskSnapshotSt
 	return &manifest, nil
 }
 
+func durableDiskSnapshotObjectReader(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, key, digest string, sizeBytes int64) (io.ReadCloser, error) {
+	hash := strings.TrimPrefix(digest, "sha256:")
+	if cacheReader != nil && hash != "" && sizeBytes > 0 {
+		data, err := cacheReader.GetContent(hash, 0, sizeBytes, struct{ RoutingKey string }{RoutingKey: hash})
+		if err == nil && int64(len(data)) == sizeBytes {
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}
+	}
+	return store.DownloadWithReader(ctx, key)
+}
+
 func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
 	if !devDurableDiskHasPayload(sourceDir) {
 		return nil, nil, fmt.Errorf("durable disk directory %s has no payload", sourceDir)
@@ -305,7 +324,7 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	return createDurableDiskSnapshot(ctx, store, tmpPath, objectPrefix, snapshot, chunkSize)
 }
 
-func restoreDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, manifestKey, targetDir string) (*types.DiskSnapshotManifest, error) {
+func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifestKey, manifestDigest string, manifestSizeBytes int64, targetDir string) (*types.DiskSnapshotManifest, error) {
 	tmp, err := os.CreateTemp("", "beta9-disk-restore-*.tar")
 	if err != nil {
 		return nil, fmt.Errorf("create durable disk restore tar: %w", err)
@@ -314,7 +333,7 @@ func restoreDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskS
 	_ = tmp.Close()
 	defer os.Remove(tmpPath)
 
-	manifest, err := restoreDurableDiskSnapshot(ctx, store, manifestKey, tmpPath)
+	manifest, err := restoreDurableDiskSnapshotWithCache(ctx, store, cacheReader, manifestKey, manifestDigest, manifestSizeBytes, tmpPath)
 	if err != nil {
 		return nil, err
 	}

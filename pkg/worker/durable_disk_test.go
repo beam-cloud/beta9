@@ -1,8 +1,11 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +32,24 @@ func TestDevDurableDiskRestoresMissingPrimaryFromReplica(t *testing.T) {
 	require.Equal(t, "postgres-value", string(data))
 }
 
+func TestDevDurableDiskRejectsIncompletePostgresPayload(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "pg-data")
+	mount := devDurableDiskTestMount(primary)
+	mount.MountPath = "/var/lib/postgresql/data"
+
+	incomplete := filepath.Join(primary, "pgdata")
+	require.NoError(t, os.MkdirAll(incomplete, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(incomplete, "PG_VERSION"), []byte("16"), 0o600))
+	require.False(t, devDurableDiskHasRestorablePayload(mount, primary))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(incomplete, "global"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(incomplete, "global", "pg_control"), []byte("control"), 0o600))
+	require.True(t, devDurableDiskHasRestorablePayload(mount, primary))
+
+	require.NoError(t, os.WriteFile(filepath.Join(incomplete, "postmaster.pid"), []byte("123"), 0o600))
+	require.False(t, devDurableDiskHasRestorablePayload(mount, primary))
+}
+
 func TestDevDurableDiskSyncRecreatesMissingReplicaFromPrimary(t *testing.T) {
 	primary := filepath.Join(t.TempDir(), "redis-data")
 	mount := devDurableDiskTestMount(primary)
@@ -45,6 +66,135 @@ func TestDevDurableDiskSyncRecreatesMissingReplicaFromPrimary(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(replica, "appendonlydir", "state"))
 	require.NoError(t, err)
 	require.Equal(t, "redis-value", string(data))
+}
+
+func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), "durable")
+	spec := getTestBaseSpec()
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Mounts: []types.Mount{{
+			LocalPath: localPath,
+			MountPath: "/var/lib/postgresql/data",
+			MountType: types.StorageModeDurableDisk,
+			DurableDisk: &types.DurableDiskMountConfig{
+				Name:       "pg-data",
+				Size:       "10Gi",
+				Filesystem: "ext4",
+				Driver:     "dev",
+				Replicas:   3,
+				Mode:       "sync",
+				Quorum:     "majority",
+			},
+		}},
+	}
+
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
+
+	require.NoError(t, err)
+	require.Empty(t, volumeCacheMap)
+	require.DirExists(t, localPath)
+	require.FileExists(t, filepath.Join(localPath, ".beta9-durable-disk"))
+	require.Len(t, spec.Mounts, 1)
+	require.Equal(t, localPath, spec.Mounts[0].Source)
+	require.Equal(t, request.Mounts[0].MountPath, spec.Mounts[0].Destination)
+	require.Equal(t, []string{"rbind", "rw"}, spec.Mounts[0].Options)
+}
+
+func TestCreateDurableDiskSnapshotUploadsMissingContentAddressedChunks(t *testing.T) {
+	ctx := context.Background()
+	backingPath := filepath.Join(t.TempDir(), "backing.img")
+	require.NoError(t, os.WriteFile(backingPath, []byte("aaaabbbb"), 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{
+		objects: map[string][]byte{
+			"durable-disks/pg-data/chunks/61be55a8e2f6b4e172338bddf184d6dbee29c98853e0a0485ecee7f27b9af0b4": []byte("aaaa"),
+		},
+	}
+
+	snapshot, manifest, err := createDurableDiskSnapshot(ctx, store, backingPath, "durable-disks/pg-data/snapshots/7", types.DiskSnapshot{
+		DiskName:   "pg-data",
+		Filesystem: "ext4",
+		Generation: 7,
+	}, 4)
+
+	require.NoError(t, err)
+	require.Equal(t, types.DiskSnapshotStatusAvailable, snapshot.Status)
+	require.Equal(t, "durable-disks/pg-data/snapshots/7/manifest.json", snapshot.ManifestKey)
+	require.Equal(t, int64(2), snapshot.ChunkCount)
+	require.Equal(t, int64(8), snapshot.LogicalSizeBytes)
+	require.Equal(t, int64(8), snapshot.StoredSizeBytes)
+	require.Len(t, manifest.Chunks, 2)
+	require.Equal(t, 2, store.existsCalls)
+	require.Equal(t, 2, store.uploadCalls) // one new chunk plus the manifest
+
+	var storedManifest types.DiskSnapshotManifest
+	require.NoError(t, json.Unmarshal(store.objects["durable-disks/pg-data/snapshots/7/manifest.json"], &storedManifest))
+	require.Equal(t, "pg-data", storedManifest.DiskName)
+	require.Equal(t, int64(7), storedManifest.Generation)
+	require.Equal(t, "durable-disks/pg-data/chunks/61be55a8e2f6b4e172338bddf184d6dbee29c98853e0a0485ecee7f27b9af0b4", storedManifest.Chunks[0].ObjectKey)
+
+	restorePath := filepath.Join(t.TempDir(), "restored.img")
+	restoredManifest, err := restoreDurableDiskSnapshot(ctx, store, "durable-disks/pg-data/snapshots/7/manifest.json", restorePath)
+	require.NoError(t, err)
+	require.Equal(t, manifest.LogicalSizeBytes, restoredManifest.LogicalSizeBytes)
+	restored, err := os.ReadFile(restorePath)
+	require.NoError(t, err)
+	require.Equal(t, []byte("aaaabbbb"), restored)
+}
+
+func TestRestoreDurableDiskSnapshotReadsChunksFromCache(t *testing.T) {
+	ctx := context.Background()
+	backingPath := filepath.Join(t.TempDir(), "backing.img")
+	require.NoError(t, os.WriteFile(backingPath, []byte("aaaabbbb"), 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{}
+	snapshot, manifest, err := createDurableDiskSnapshot(ctx, store, backingPath, "durable-disks/pg-data/snapshots/7", types.DiskSnapshot{
+		DiskName:   "pg-data",
+		Filesystem: "ext4",
+		Generation: 7,
+	}, 4)
+	require.NoError(t, err)
+	require.NotEmpty(t, manifest.Chunks)
+
+	chunk := manifest.Chunks[0]
+	chunkHash := strings.TrimPrefix(chunk.Digest, "sha256:")
+	cacheReader := &fakeDurableDiskSnapshotCacheReader{objects: map[string][]byte{chunkHash: []byte("aaaa")}}
+	delete(store.objects, chunk.ObjectKey)
+
+	restorePath := filepath.Join(t.TempDir(), "restored.img")
+	_, err = restoreDurableDiskSnapshotWithCache(ctx, store, cacheReader, snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, restorePath)
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, cacheReader.calls, 1)
+	require.Equal(t, 1, cacheReader.hits)
+	restored, err := os.ReadFile(restorePath)
+	require.NoError(t, err)
+	require.Equal(t, []byte("aaaabbbb"), restored)
+}
+
+func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
+	items := durableDiskSnapshotRequiredContentItems(&types.DiskSnapshot{
+		BucketName:        "disk-bucket",
+		ManifestKey:       "durable-disks/pg-data/snapshots/7/manifest.json",
+		ManifestDigest:    "sha256:" + strings.Repeat("a", 64),
+		ManifestSizeBytes: 512,
+	}, &types.DiskSnapshotManifest{
+		Chunks: []types.DiskSnapshotChunk{{
+			ObjectKey: "durable-disks/pg-data/chunks/" + strings.Repeat("b", 64),
+			Digest:    "sha256:" + strings.Repeat("b", 64),
+			SizeBytes: 4096,
+		}},
+	})
+
+	require.Len(t, items, 2)
+	require.Equal(t, types.CacheContentKindDiskSnapshot, items[0].Kind)
+	require.Equal(t, strings.Repeat("a", 64), items[0].Hash)
+	require.Equal(t, "disk-bucket", items[0].SourceBucket)
+	require.Equal(t, "durable-disks/pg-data/snapshots/7/manifest.json", items[0].Source)
+	require.Equal(t, int64(512), items[0].SizeBytes)
+	require.Equal(t, strings.Repeat("b", 64), items[1].Hash)
+	require.Equal(t, "disk-bucket", items[1].SourceBucket)
 }
 
 func devDurableDiskTestMount(primary string) *types.Mount {
@@ -232,4 +382,57 @@ func withDurableDiskTestHooks(t *testing.T, runner *fakeDurableDiskRunner) {
 		durableDiskEUID = oldEUID
 		durableDiskHostname = oldHostname
 	})
+}
+
+type fakeDurableDiskSnapshotStore struct {
+	objects     map[string][]byte
+	existsCalls int
+	uploadCalls int
+}
+
+func (s *fakeDurableDiskSnapshotStore) Exists(_ context.Context, key string) (bool, error) {
+	s.existsCalls++
+	_, ok := s.objects[key]
+	return ok, nil
+}
+
+func (s *fakeDurableDiskSnapshotStore) Upload(_ context.Context, key string, data []byte) error {
+	s.uploadCalls++
+	if s.objects == nil {
+		s.objects = map[string][]byte{}
+	}
+	s.objects[key] = append([]byte(nil), data...)
+	return nil
+}
+
+func (s *fakeDurableDiskSnapshotStore) UploadWithReader(_ context.Context, key string, data io.Reader) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return err
+	}
+	return s.Upload(context.Background(), key, body)
+}
+
+func (s *fakeDurableDiskSnapshotStore) DownloadWithReader(_ context.Context, key string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(s.objects[key])), nil
+}
+
+type fakeDurableDiskSnapshotCacheReader struct {
+	objects map[string][]byte
+	calls   int
+	hits    int
+}
+
+func (s *fakeDurableDiskSnapshotCacheReader) GetContent(hash string, offset int64, length int64, _ struct{ RoutingKey string }) ([]byte, error) {
+	s.calls++
+	data, ok := s.objects[hash]
+	if !ok {
+		return nil, fmt.Errorf("cache miss")
+	}
+	s.hits++
+	end := offset + length
+	if offset < 0 || end > int64(len(data)) {
+		return nil, fmt.Errorf("invalid cache range")
+	}
+	return append([]byte(nil), data[offset:end]...), nil
 }

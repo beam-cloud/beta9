@@ -150,6 +150,20 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 			ErrMsg: "Deployment not found",
 		}, nil
 	}
+	if workspace := authInfo.Workspace; workspace != nil {
+		if deploymentWithRelated.Workspace.Id == 0 {
+			deploymentWithRelated.Workspace.Id = workspace.Id
+		}
+		if deploymentWithRelated.Workspace.ExternalId == "" {
+			deploymentWithRelated.Workspace.ExternalId = workspace.ExternalId
+		}
+		if deploymentWithRelated.Workspace.Name == "" {
+			deploymentWithRelated.Workspace.Name = workspace.Name
+		}
+		if deploymentWithRelated.Workspace.Storage == nil {
+			deploymentWithRelated.Workspace.Storage = workspace.Storage
+		}
+	}
 
 	// For now, we only support direct scaling of pod deployments
 	if deploymentWithRelated.Stub.Type != types.StubType(types.StubTypePodDeployment) {
@@ -170,7 +184,7 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 	if err := gws.scaleDeployment(ctx, *deploymentWithRelated, uint(in.Containers)); err != nil {
 		return &pb.ScaleDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Unable to scale deployment",
+			ErrMsg: err.Error(),
 		}, nil
 	}
 
@@ -437,9 +451,15 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}
 
 	stubConfig.SetReplicaCount(containers)
-	if containers > 0 && len(stubConfig.Disks) > 0 {
-		if err := gws.configureDurableDiskPlacement(ctx, &deployment.Workspace, stubConfig); err != nil {
-			return err
+	if containers > 0 {
+		if len(stubConfig.Disks) > 0 {
+			if err := gws.configureDurableDiskPlacement(ctx, &deployment.Workspace, stubConfig); err != nil {
+				return err
+			}
+		} else {
+			if err := gws.configureUnavailablePrivatePoolFallback(ctx, &deployment.Workspace, stubConfig); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -449,7 +469,8 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}
 
 	if containers == 0 {
-		if err := gws.stopActiveDeploymentContainers(deployment, true); err != nil {
+		forceStop := len(stubConfig.Disks) == 0
+		if err := gws.stopActiveDeploymentContainers(deployment, forceStop); err != nil {
 			return err
 		}
 	}

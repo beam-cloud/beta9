@@ -1,5 +1,12 @@
 package types
 
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
+
 const (
 	StorageModeJuiceFS     = "juicefs"
 	StorageModeMountPoint  = "mountpoint"
@@ -8,3 +15,142 @@ const (
 	StorageModeLocal       = "local"
 	StorageModeDurableDisk = "durable_disk"
 )
+
+type DurableDiskCommandAction string
+
+const (
+	DurableDiskDriverDev  = "dev"
+	DurableDiskDriverDRBD = "drbd"
+
+	DurableDiskReplicationModeSync       = "sync"
+	DurableDiskReplicationQuorumMajority = "majority"
+
+	DurableDiskCommandActionPrepare DurableDiskCommandAction = "prepare"
+	DurableDiskCommandActionDemote  DurableDiskCommandAction = "demote"
+)
+
+type DurableDiskCommandArgs struct {
+	StorageNodeID string                   `json:"storage_node_id"`
+	Action        DurableDiskCommandAction `json:"action"`
+	Mount         Mount                    `json:"mount"`
+	Nonce         string                   `json:"nonce,omitempty"`
+}
+
+func (a DurableDiskCommandArgs) ToMap() (map[string]any, error) {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func ToDurableDiskCommandArgs(m map[string]any) (*DurableDiskCommandArgs, error) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+
+	var result DurableDiskCommandArgs
+	if err = json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func NormalizeDurableDiskDriver(driver string) string {
+	return strings.ToLower(strings.TrimSpace(driver))
+}
+
+func SafeDurableDiskName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, "\\", "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	if name == "" || name == "." || name == ".." {
+		return "disk"
+	}
+	return name
+}
+
+type DiskSnapshotStatus string
+
+const (
+	DiskSnapshotStatusPending   DiskSnapshotStatus = "pending"
+	DiskSnapshotStatusAvailable DiskSnapshotStatus = "available"
+	DiskSnapshotStatusFailed    DiskSnapshotStatus = "failed"
+
+	DiskSnapshotFormatBlockV1 = "block.v1"
+	DiskSnapshotFormatTarV1   = "tar.v1"
+)
+
+type DiskSnapshot struct {
+	Id                  uint               `db:"id" json:"id,omitempty"`
+	ExternalId          string             `db:"external_id" json:"external_id"`
+	WorkspaceId         uint               `db:"workspace_id" json:"workspace_id"`
+	StubId              uint               `db:"stub_id" json:"stub_id,omitempty"`
+	DiskName            string             `db:"disk_name" json:"disk_name"`
+	Format              string             `db:"format" json:"format"`
+	Status              DiskSnapshotStatus `db:"status" json:"status"`
+	Reason              string             `db:"reason" json:"reason,omitempty"`
+	ParentSnapshotId    string             `db:"parent_snapshot_id" json:"parent_snapshot_id,omitempty"`
+	Generation          int64              `db:"generation" json:"generation"`
+	SizeBytes           int64              `db:"size_bytes" json:"size_bytes"`
+	Filesystem          string             `db:"filesystem" json:"filesystem"`
+	Driver              string             `db:"driver" json:"driver"`
+	ManifestKey         string             `db:"manifest_key" json:"manifest_key"`
+	ManifestDigest      string             `db:"manifest_digest" json:"manifest_digest"`
+	ManifestSizeBytes   int64              `db:"manifest_size_bytes" json:"manifest_size_bytes"`
+	ChunkCount          int64              `db:"chunk_count" json:"chunk_count"`
+	LogicalSizeBytes    int64              `db:"logical_size_bytes" json:"logical_size_bytes"`
+	StoredSizeBytes     int64              `db:"stored_size_bytes" json:"stored_size_bytes"`
+	BucketName          string             `db:"bucket_name" json:"bucket_name"`
+	ObjectPrefix        string             `db:"object_prefix" json:"object_prefix"`
+	SourcePool          string             `db:"source_pool" json:"source_pool,omitempty"`
+	SourceWorkerId      string             `db:"source_worker_id" json:"source_worker_id,omitempty"`
+	SourceStorageNodeId string             `db:"source_storage_node_id" json:"source_storage_node_id,omitempty"`
+	CreatedAt           Time               `db:"created_at" json:"created_at"`
+	UpdatedAt           Time               `db:"updated_at" json:"updated_at"`
+	CompletedAt         NullTime           `db:"completed_at" json:"completed_at,omitempty"`
+	DeletedAt           NullTime           `db:"deleted_at" json:"deleted_at,omitempty"`
+}
+
+type DiskSnapshotFilter struct {
+	WorkspaceId         uint
+	WorkspaceExternalId string
+	DiskName            string
+	Statuses            []DiskSnapshotStatus
+	Limit               uint64
+}
+
+type DiskSnapshotManifest struct {
+	Version          int                 `json:"version"`
+	Format           string              `json:"format"`
+	DiskName         string              `json:"disk_name"`
+	Filesystem       string              `json:"filesystem"`
+	Generation       int64               `json:"generation"`
+	ParentSnapshotId string              `json:"parent_snapshot_id,omitempty"`
+	LogicalSizeBytes int64               `json:"logical_size_bytes"`
+	StoredSizeBytes  int64               `json:"stored_size_bytes"`
+	Chunks           []DiskSnapshotChunk `json:"chunks"`
+	CreatedAt        time.Time           `json:"created_at"`
+}
+
+type DiskSnapshotChunk struct {
+	Index       int64  `json:"index"`
+	OffsetBytes int64  `json:"offset_bytes"`
+	SizeBytes   int64  `json:"size_bytes"`
+	ObjectKey   string `json:"object_key"`
+	Digest      string `json:"digest"`
+}
+
+type ErrDiskSnapshotNotFound struct {
+	SnapshotId string
+}
+
+func (e *ErrDiskSnapshotNotFound) Error() string {
+	return fmt.Sprintf("disk snapshot not found: %s", e.SnapshotId)
+}

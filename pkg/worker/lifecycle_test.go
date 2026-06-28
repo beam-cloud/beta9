@@ -1205,38 +1205,6 @@ func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
 	require.Empty(t, spec.Mounts)
 }
 
-func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
-	localPath := filepath.Join(t.TempDir(), "durable")
-	spec := getTestBaseSpec()
-	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-		Mounts: []types.Mount{{
-			LocalPath: localPath,
-			MountPath: "/var/lib/postgresql/data",
-			MountType: types.StorageModeDurableDisk,
-			DurableDisk: &types.DurableDiskMountConfig{
-				Name:       "pg-data",
-				Size:       "10Gi",
-				Filesystem: "ext4",
-				Driver:     "dev",
-				Replicas:   3,
-				Mode:       "sync",
-				Quorum:     "majority",
-			},
-		}},
-	}
-
-	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
-
-	require.NoError(t, err)
-	require.Empty(t, volumeCacheMap)
-	require.DirExists(t, localPath)
-	require.FileExists(t, filepath.Join(localPath, ".beta9-durable-disk"))
-	require.Len(t, spec.Mounts, 1)
-	require.Equal(t, localPath, spec.Mounts[0].Source)
-	require.Equal(t, "/var/lib/postgresql/data", spec.Mounts[0].Destination)
-}
-
 func TestEnsureBindMountSourceDirsCreatesMissingSources(t *testing.T) {
 	root := t.TempDir()
 	outputPath := filepath.Join(root, "outputs", "stub")

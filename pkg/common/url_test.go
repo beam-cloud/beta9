@@ -163,6 +163,20 @@ func TestBuildPodURL(t *testing.T) {
 	}
 }
 
+func TestBuildPodDeploymentURL(t *testing.T) {
+	got := BuildPodDeploymentURL(
+		"https://svc.example.com",
+		InvokeUrlTypeHost,
+		&types.Deployment{
+			Name:      "postgres",
+			Subdomain: "postgres-a1b2c3d",
+			Version:   3,
+		},
+		&types.StubConfigV1{Ports: []uint32{5432}},
+	)
+	assert.Equal(t, "https://postgres-a1b2c3d-latest-5432.svc.example.com", got)
+}
+
 func TestBuildSandboxURL(t *testing.T) {
 	stub := &types.StubWithRelated{Stub: types.Stub{
 		Type:       types.StubType(types.StubTypeSandbox),

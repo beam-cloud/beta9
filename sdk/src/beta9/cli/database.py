@@ -148,15 +148,28 @@ def _get_secret_value(service: ServiceClient, name: str) -> str:
 
 
 def _deployment_by_name(service: ServiceClient, name: str):
+    deployments = _deployments_by_name(service, name)
+    if not deployments:
+        return None
+    return max(deployments, key=_deployment_sort_key)
+
+
+def _deployments_by_name(service: ServiceClient, name: str):
     res = service.gateway.list_deployments(
         ListDeploymentsRequest(filters={"name": StringList(values=[name])}, limit=20)
     )
     if not res.ok:
         raise click.ClickException(res.err_msg or "Unable to list deployments.")
-    for deployment in res.deployments:
-        if deployment.name == name:
-            return deployment
-    return None
+    return [deployment for deployment in res.deployments if deployment.name == name]
+
+
+def _deployment_sort_key(deployment):
+    return (
+        bool(deployment.active),
+        deployment.version,
+        deployment.updated_at.timestamp() if deployment.updated_at else 0,
+        deployment.created_at.timestamp() if deployment.created_at else 0,
+    )
 
 
 def _tcp_host_from_url(url: str) -> str:
@@ -271,6 +284,8 @@ def _create_database(
     min_replicas: int,
     format: str,
     disk_driver: str,
+    cpu: Optional[float],
+    memory: Optional[str],
 ) -> None:
     secret_names = _secret_names(product, name)
     _upsert_secret(service, secret_names["username"], username)
@@ -278,6 +293,39 @@ def _create_database(
     if product.kind == "postgres":
         _upsert_secret(service, secret_names["database"], database)
 
+    _deploy_database_service(
+        service=service,
+        product=product,
+        name=name,
+        username=username,
+        database=database,
+        password=password,
+        size=size,
+        pool=pool,
+        min_replicas=min_replicas,
+        format=format,
+        disk_driver=disk_driver,
+        cpu=cpu,
+        memory=memory,
+    )
+
+
+def _deploy_database_service(
+    service: ServiceClient,
+    product: DatabaseProduct,
+    name: str,
+    username: str,
+    database: str,
+    password: str,
+    size: str,
+    pool: Optional[str],
+    min_replicas: int,
+    format: str,
+    disk_driver: str,
+    cpu: Optional[float],
+    memory: Optional[str],
+) -> None:
+    secret_names = _secret_names(product, name)
     disk = DurableDisk(
         name=f"{name}-data",
         size=size,
@@ -307,6 +355,10 @@ def _create_database(
         disks=[disk],
         serving=_database_serving_config(product, secret_names),
     )
+    if cpu is not None:
+        db_service.cpu = db_service.parse_cpu(cpu)
+    if memory is not None:
+        db_service.memory = db_service.parse_memory(memory)
     details, ok = db_service.deploy(
         name=name,
         invocation_details_func=lambda **_: None,
@@ -352,7 +404,9 @@ def _create_options(func):
         show_default=True,
         help="Change the format of the output.",
     )(func)
-    func = click.option("--min-replicas", type=click.IntRange(min=0), default=0, show_default=True)(func)
+    func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
+    func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
+    func = click.option("--min-replicas", type=click.IntRange(min=0, max=1), default=0, show_default=True)(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Run on a private pool.")(func)
     func = click.option("--size", type=click.STRING, default=None, help="Durable disk size.")(func)
     func = click.option("--password-stdin", is_flag=True, help="Read password from stdin.")(func)
@@ -380,6 +434,8 @@ def create_postgres(
     min_replicas: int,
     format: str,
     disk_driver: str,
+    cpu: Optional[float],
+    memory: Optional[str],
 ):
     _create_database(
         service=service,
@@ -393,6 +449,8 @@ def create_postgres(
         min_replicas=min_replicas,
         format=format,
         disk_driver=disk_driver,
+        cpu=cpu,
+        memory=memory,
     )
 
 
@@ -412,6 +470,8 @@ def create_redis(
     min_replicas: int,
     format: str,
     disk_driver: str,
+    cpu: Optional[float],
+    memory: Optional[str],
 ):
     _create_database(
         service=service,
@@ -425,6 +485,8 @@ def create_redis(
         min_replicas=min_replicas,
         format=format,
         disk_driver=disk_driver,
+        cpu=cpu,
+        memory=memory,
     )
 
 
@@ -550,8 +612,8 @@ def redis_rotate(service: ServiceClient, name: str, format: str):
 
 
 def _delete_database(service: ServiceClient, product: DatabaseProduct, name: str) -> None:
-    deployment = _deployment_by_name(service, name)
-    if deployment is not None:
+    deployments = _deployments_by_name(service, name)
+    for deployment in deployments:
         res = service.gateway.delete_deployment(DeleteDeploymentRequest(id=deployment.id))
         if not res.ok:
             raise click.ClickException(res.err_msg or f"Failed to delete deployment {deployment.id}.")
@@ -601,23 +663,84 @@ def bind_service(service: ServiceClient, app: str, postgres_name: str, redis_nam
     terminal.success(f"Bound {', '.join(sorted(secret_env))} to {app}")
 
 
+def _scale_options(func):
+    func = click.option("--format", type=click.Choice(("table", "json")), default="table")(func)
+    func = click.option("--disk-driver", default="", hidden=True, help="Durable disk driver override.")(func)
+    func = click.option("--size", type=click.STRING, default=None, help="Durable disk size to use when redeploying.")(func)
+    func = click.option("--pool", type=click.STRING, default=None, help="Pool to use when redeploying with new resources.")(func)
+    func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
+    func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
+    return click.option("--replicas", "--containers", "containers", type=click.IntRange(min=0, max=1), required=True)(func)
+
+
 @postgres.command(name="scale", help="Scale a Postgres service.")
 @click.argument("name")
-@click.option("--replicas", "--containers", "containers", type=click.IntRange(min=0), required=True)
+@_scale_options
 @extraclick.pass_service_client
-def postgres_scale(service: ServiceClient, name: str, containers: int):
-    _scale_database(service, POSTGRES, name, containers)
+def postgres_scale(
+    service: ServiceClient,
+    name: str,
+    containers: int,
+    cpu: Optional[float],
+    memory: Optional[str],
+    pool: Optional[str],
+    size: Optional[str],
+    disk_driver: str,
+    format: str,
+):
+    _scale_database(service, POSTGRES, name, containers, cpu, memory, pool, size, disk_driver, format)
 
 
 @redis.command(name="scale", help="Scale a Redis service.")
 @click.argument("name")
-@click.option("--replicas", "--containers", "containers", type=click.IntRange(min=0), required=True)
+@_scale_options
 @extraclick.pass_service_client
-def redis_scale(service: ServiceClient, name: str, containers: int):
-    _scale_database(service, REDIS, name, containers)
+def redis_scale(
+    service: ServiceClient,
+    name: str,
+    containers: int,
+    cpu: Optional[float],
+    memory: Optional[str],
+    pool: Optional[str],
+    size: Optional[str],
+    disk_driver: str,
+    format: str,
+):
+    _scale_database(service, REDIS, name, containers, cpu, memory, pool, size, disk_driver, format)
 
 
-def _scale_database(service: ServiceClient, product: DatabaseProduct, name: str, containers: int) -> None:
+def _scale_database(
+    service: ServiceClient,
+    product: DatabaseProduct,
+    name: str,
+    containers: int,
+    cpu: Optional[float],
+    memory: Optional[str],
+    pool: Optional[str],
+    size: Optional[str],
+    disk_driver: str,
+    format: str,
+) -> None:
+    if cpu is not None or memory is not None:
+        secret_names = _secret_names(product, name)
+        _scale_database_to(service, product, name, 0, quiet=True, all_deployments=True)
+        _deploy_database_service(
+            service=service,
+            product=product,
+            name=name,
+            username=_get_secret_value(service, secret_names["username"]),
+            database=_get_secret_value(service, secret_names["database"]) if product.kind == "postgres" else "",
+            password=_get_secret_value(service, secret_names["password"]),
+            size=size or product.default_size,
+            pool=pool,
+            min_replicas=containers,
+            format=format,
+            disk_driver=disk_driver,
+            cpu=cpu,
+            memory=memory,
+        )
+        return
+
     _scale_database_to(service, product, name, containers, quiet=False)
 
 
@@ -627,14 +750,19 @@ def _scale_database_to(
     name: str,
     containers: int,
     quiet: bool,
+    all_deployments: bool = False,
 ) -> None:
-    deployment = _deployment_by_name(service, name)
-    if deployment is None:
+    deployments = _deployments_by_name(service, name)
+    if not deployments:
         raise click.ClickException(f"{product.kind} service {name!r} not found.")
-    res = service.gateway.scale_deployment(
-        ScaleDeploymentRequest(id=deployment.id, containers=containers)
-    )
-    if not res.ok:
-        raise click.ClickException(res.err_msg or f"Failed to scale {name}.")
+    targets = deployments if all_deployments or containers == 0 else [max(deployments, key=_deployment_sort_key)]
+    for deployment in targets:
+        if deployment is None:
+            continue
+        res = service.gateway.scale_deployment(
+            ScaleDeploymentRequest(id=deployment.id, containers=containers)
+        )
+        if not res.ok:
+            raise click.ClickException(res.err_msg or f"Failed to scale {name}.")
     if not quiet:
         terminal.success(f"Scaled {product.kind} service {name} to {containers} replicas")

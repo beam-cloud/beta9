@@ -36,7 +36,7 @@ func ConfigureContainerRequestDurableDiskPlacement(request *types.ContainerReque
 	}
 
 	for _, disk := range stubConfig.Disks {
-		if disk == nil || disk.Replication == nil || disk.Replication.PrimaryWorkerId == "" {
+		if disk == nil || disk.Replication == nil || disk.Replication.PrimaryWorkerId == "" || types.NormalizeDurableDiskDriver(disk.Driver) != types.DurableDiskDriverDRBD {
 			continue
 		}
 		request.TargetWorkerId = disk.Replication.PrimaryWorkerId

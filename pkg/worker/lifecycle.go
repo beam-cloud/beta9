@@ -188,8 +188,16 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
-	s.syncDurableDiskMounts(request)
 	s.setContainerExitCode(containerId, exitCode)
+
+	// Set container exit code on instance before any slower cleanup work.
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
+		instance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, instance)
+	}
+
+	s.syncDurableDiskMounts(request)
 
 	s.containerLock.Lock()
 
@@ -209,12 +217,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.completedRequests <- request
 	s.containerLock.Unlock()
 
-	// Set container exit code on instance
-	instance, exists := s.containerInstances.Get(containerId)
-	if exists {
-		instance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, instance)
-	}
 	s.markContainerStopping(containerId)
 
 	go func() {
@@ -252,7 +254,10 @@ func (s *Worker) setContainerExitCode(containerId string, exitCode int) {
 		return
 	}
 
-	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
 		ContainerId: containerId,
 		ExitCode:    int32(exitCode),
 	}))

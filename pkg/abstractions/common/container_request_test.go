@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigureContainerRequestDurableDiskPlacementTargetsDevPrimary(t *testing.T) {
+func TestConfigureContainerRequestDurableDiskPlacementDoesNotTargetDevPrimary(t *testing.T) {
 	request := &types.ContainerRequest{}
 	ConfigureContainerRequestDurableDiskPlacement(request, types.StubConfigV1{
 		Disks: []*pb.DurableDisk{{
@@ -19,7 +19,7 @@ func TestConfigureContainerRequestDurableDiskPlacementTargetsDevPrimary(t *testi
 		}},
 	})
 
-	require.Equal(t, "node-a", request.TargetWorkerId)
+	require.Empty(t, request.TargetWorkerId)
 }
 
 func TestConfigureContainerRequestDurableDiskPlacementTargetsDRBDPrimary(t *testing.T) {

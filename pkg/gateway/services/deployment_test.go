@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -156,6 +157,15 @@ func (r *deploymentLifecycleBackendRepo) GetLatestDiskSnapshot(_ context.Context
 		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: diskName}
 	}
 	return snapshot, nil
+}
+
+type deploymentLifecycleComputeRepo struct {
+	repository.ComputeRepository
+	states map[string]*compute.PoolState
+}
+
+func (r *deploymentLifecycleComputeRepo) GetPoolState(_ context.Context, _ string, name string) (*compute.PoolState, error) {
+	return r.states[name], nil
 }
 
 type deploymentLifecycleContainerRepo struct {
@@ -310,6 +320,9 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 		FreeMemory: 2000,
 	}))
 	gws.workerRepo = workerRepo
+	gws.computeRepo = &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{
+		"pool-a": {Name: "pool-a", Mode: string(types.PoolModePrivate)},
+	}}
 	backend.snapshots["pg-data"] = &types.DiskSnapshot{
 		WorkspaceId: 1,
 		DiskName:    "pg-data",
@@ -351,6 +364,36 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 	require.Nil(t, backend.stubConfigs[20].Pool)
 	require.Equal(t, "z-regular-worker", backend.stubConfigs[20].Disks[0].Replication.PrimaryWorkerId)
 	require.Equal(t, []string{"z-regular-worker"}, backend.stubConfigs[20].Disks[0].Replication.ReplicaWorkerIds)
+}
+
+func TestScalePodDeploymentClearsUnavailablePrivatePoolWithoutDisks(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	gws.workerRepo = newDurableDiskPlacementWorkerRepo(t)
+
+	config := types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deployment := backend.deployments["deployment-id"]
+	deployment.Stub.Config = string(configBytes)
+	backend.deployments["deployment-id"] = deployment
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 1,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Nil(t, backend.stubConfigs[20].Pool)
 }
 
 func TestScaleDeploymentRejectsRestrictedToken(t *testing.T) {
