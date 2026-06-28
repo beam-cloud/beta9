@@ -76,6 +76,15 @@ func SafeDurableDiskName(name string) string {
 	return name
 }
 
+func IsDiskSnapshotFilesystemFormat(format string) bool {
+	switch format {
+	case DiskSnapshotFormatDirV1, DiskSnapshotFormatPostgresWalV1, DiskSnapshotFormatRedisAOFV1:
+		return true
+	default:
+		return false
+	}
+}
+
 type DiskSnapshotStatus string
 
 const (
@@ -83,8 +92,9 @@ const (
 	DiskSnapshotStatusAvailable DiskSnapshotStatus = "available"
 	DiskSnapshotStatusFailed    DiskSnapshotStatus = "failed"
 
-	DiskSnapshotFormatBlockV1 = "block.v1"
-	DiskSnapshotFormatTarV1   = "tar.v1"
+	DiskSnapshotFormatDirV1         = "dir.v1"
+	DiskSnapshotFormatPostgresWalV1 = "postgres.wal.v1"
+	DiskSnapshotFormatRedisAOFV1    = "redis.aof.v1"
 )
 
 type DiskSnapshot struct {
@@ -127,16 +137,28 @@ type DiskSnapshotFilter struct {
 }
 
 type DiskSnapshotManifest struct {
-	Version          int                 `json:"version"`
-	Format           string              `json:"format"`
-	DiskName         string              `json:"disk_name"`
-	Filesystem       string              `json:"filesystem"`
-	Generation       int64               `json:"generation"`
-	ParentSnapshotId string              `json:"parent_snapshot_id,omitempty"`
-	LogicalSizeBytes int64               `json:"logical_size_bytes"`
-	StoredSizeBytes  int64               `json:"stored_size_bytes"`
-	Chunks           []DiskSnapshotChunk `json:"chunks"`
-	CreatedAt        time.Time           `json:"created_at"`
+	Version          int                `json:"version"`
+	Format           string             `json:"format"`
+	DiskName         string             `json:"disk_name"`
+	Filesystem       string             `json:"filesystem"`
+	Generation       int64              `json:"generation"`
+	ParentSnapshotId string             `json:"parent_snapshot_id,omitempty"`
+	LogicalSizeBytes int64              `json:"logical_size_bytes"`
+	StoredSizeBytes  int64              `json:"stored_size_bytes"`
+	Files            []DiskSnapshotFile `json:"files,omitempty"`
+	CreatedAt        time.Time          `json:"created_at"`
+}
+
+type DiskSnapshotFile struct {
+	Path            string              `json:"path"`
+	Type            string              `json:"type"`
+	Mode            int64               `json:"mode"`
+	Uid             int                 `json:"uid,omitempty"`
+	Gid             int                 `json:"gid,omitempty"`
+	SizeBytes       int64               `json:"size_bytes,omitempty"`
+	ModTimeUnixNano int64               `json:"mtime_unix_nano,omitempty"`
+	LinkName        string              `json:"link_name,omitempty"`
+	Chunks          []DiskSnapshotChunk `json:"chunks,omitempty"`
 }
 
 type DiskSnapshotChunk struct {

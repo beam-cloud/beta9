@@ -240,6 +240,7 @@ def _database_serving_config(
             port=product.port,
             readiness_probe=product.readiness_probe,
             connection_env_name=product.connection_env_name,
+            durability_mode="wal_archive" if product.kind == "postgres" else "aof_tail",
             credential_secret_names=list(secret_names.values()),
             username_secret_name=secret_names["username"],
             password_secret_name=secret_names["password"],
@@ -250,11 +251,24 @@ def _database_serving_config(
 
 
 def _postgres_entrypoint(secret_names: Dict[str, str]) -> list:
+    archive_dir = "/var/lib/postgresql/data/pgdata/.beta9-wal"
     return [
         "sh",
         "-lc",
-        "export PATH=/usr/lib/postgresql/16/bin:$PATH POSTGRES_USER=\"${%s}\" POSTGRES_PASSWORD=\"${%s}\" POSTGRES_DB=\"${%s}\" PGDATA=/var/lib/postgresql/data/pgdata; exec docker-entrypoint.sh postgres"
-        % (secret_names["username"], secret_names["password"], secret_names["database"]),
+        (
+            "export PATH=/usr/lib/postgresql/16/bin:$PATH "
+            f"POSTGRES_USER=\"${{{secret_names['username']}}}\" "
+            f"POSTGRES_PASSWORD=\"${{{secret_names['password']}}}\" "
+            f"POSTGRES_DB=\"${{{secret_names['database']}}}\" "
+            "PGDATA=/var/lib/postgresql/data/pgdata; "
+            "exec docker-entrypoint.sh postgres "
+            "-c wal_level=replica "
+            "-c wal_compression=on "
+            "-c archive_mode=on "
+            "-c archive_timeout=60s "
+            f"-c \"archive_command=mkdir -p {archive_dir} && (test -f {archive_dir}/%f || cp %p {archive_dir}/%f)\" "
+            f"-c \"restore_command=cp {archive_dir}/%f %p\""
+        ),
     ]
 
 

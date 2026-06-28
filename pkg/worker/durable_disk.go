@@ -101,21 +101,27 @@ func prepareDevDurableDiskMount(mount *types.Mount) error {
 	return ensureDevDurableDiskReplicas(mount)
 }
 
-func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) {
+func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) error {
 	if request == nil {
-		return
+		return nil
 	}
 
+	var syncErrs []error
 	for i := range request.Mounts {
 		mount := &request.Mounts[i]
 		if mount == nil || mount.DurableDisk == nil {
 			continue
 		}
 		switch durableDiskDriver(mount.DurableDisk.Driver) {
-		case types.DurableDiskDriverDev:
+		case "", types.DurableDiskDriverDev:
 			err := withDevDurableDiskLock(mount, func() error {
 				if err := s.snapshotDevDurableDiskMount(request, mount); err != nil {
-					return fmt.Errorf("snapshot: %w", err)
+					if s != nil && s.backendRepoClient != nil {
+						return fmt.Errorf("snapshot: %w", err)
+					}
+					log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to snapshot dev durable disk")
+				} else if s != nil && s.backendRepoClient != nil {
+					return nil
 				}
 				if err := syncDevDurableDiskMount(mount); err != nil {
 					return fmt.Errorf("sync replicas: %w", err)
@@ -124,13 +130,17 @@ func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) {
 			})
 			if err != nil {
 				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to sync dev durable disk")
+				syncErrs = append(syncErrs, err)
 			}
 		case types.DurableDiskDriverDRBD:
 			if err := s.teardownDRBDDurableDiskMount(request, mount); err != nil {
 				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to demote drbd durable disk")
+				syncErrs = append(syncErrs, err)
 			}
 		}
 	}
+
+	return errors.Join(syncErrs...)
 }
 
 func withDevDurableDiskLock(mount *types.Mount, fn func() error) error {
@@ -166,6 +176,9 @@ func withDevDurableDiskLock(mount *types.Mount, fn func() error) error {
 func restoreDevDurableDiskPrimary(mount *types.Mount) error {
 	if devDurableDiskHasRestorablePayload(mount, mount.LocalPath) {
 		return nil
+	}
+	if devDurableDiskHasPayload(mount.LocalPath) {
+		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
 	}
 
 	for _, replicaPath := range devDurableDiskReplicaPaths(mount) {
@@ -207,6 +220,7 @@ func (s *Worker) snapshotDevDurableDiskMount(request *types.ContainerRequest, mo
 	if err != nil {
 		return err
 	}
+	parentSnapshot, previousManifest := s.latestDurableDiskSnapshotManifest(ctx, request, mount, store)
 
 	generation := time.Now().UnixNano()
 	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
@@ -217,6 +231,8 @@ func (s *Worker) snapshotDevDurableDiskMount(request *types.ContainerRequest, mo
 		durableDiskSnapshotObjectPrefix(mount, generation),
 		types.DiskSnapshot{
 			DiskName:            mount.DurableDisk.Name,
+			Format:              durableDiskSnapshotFormatForMount(request, mount),
+			ParentSnapshotId:    durableDiskSnapshotExternalID(parentSnapshot),
 			Generation:          generation,
 			SizeBytes:           sizeBytes,
 			Filesystem:          mount.DurableDisk.Filesystem,
@@ -227,6 +243,7 @@ func (s *Worker) snapshotDevDurableDiskMount(request *types.ContainerRequest, mo
 			SourceStorageNodeId: s.storageNodeID(),
 		},
 		defaultDurableDiskSnapshotChunkSize,
+		previousManifest,
 	)
 	if err != nil {
 		return err
@@ -245,12 +262,38 @@ func (s *Worker) snapshotDevDurableDiskMount(request *types.ContainerRequest, mo
 	return nil
 }
 
+func (s *Worker) latestDurableDiskSnapshotManifest(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, store durableDiskSnapshotStore) (*types.DiskSnapshot, *types.DiskSnapshotManifest) {
+	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
+		WorkspaceId: cacheRequestWorkspaceID(request),
+		DiskName:    mount.DurableDisk.Name,
+	}))
+	if err != nil || resp == nil || resp.Snapshot == nil {
+		return nil, nil
+	}
+	snapshot := durableDiskSnapshotFromProto(resp.Snapshot)
+	manifest, err := loadDurableDiskSnapshotManifest(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot)
+	if err != nil || manifest == nil || len(manifest.Files) == 0 {
+		return snapshot, nil
+	}
+	return snapshot, manifest
+}
+
+func durableDiskSnapshotExternalID(snapshot *types.DiskSnapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+	return snapshot.ExternalId
+}
+
 func (s *Worker) restoreDevDurableDiskSnapshot(request *types.ContainerRequest, mount *types.Mount) error {
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
 	}
 	if devDurableDiskHasRestorablePayload(mount, mount.LocalPath) || devDurableDiskReplicaHasRestorablePayload(mount) {
 		return nil
+	}
+	if devDurableDiskHasPayload(mount.LocalPath) {
+		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
 	}
 
 	ctx := s.ctx
@@ -271,8 +314,8 @@ func (s *Worker) restoreDevDurableDiskSnapshot(request *types.ContainerRequest, 
 	if snapshot == nil || snapshot.ManifestKey == "" {
 		return nil
 	}
-	if snapshot.Format != types.DiskSnapshotFormatTarV1 {
-		return fmt.Errorf("durable disk snapshot %s has unsupported format %q", snapshot.ExternalId, snapshot.Format)
+	if !types.IsDiskSnapshotFilesystemFormat(snapshot.Format) {
+		return fmt.Errorf("durable disk snapshot %s has unsupported filesystem format %q", snapshot.ExternalId, snapshot.Format)
 	}
 
 	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, snapshot.BucketName, false)
@@ -282,9 +325,44 @@ func (s *Worker) restoreDevDurableDiskSnapshot(request *types.ContainerRequest, 
 	if _, err := restoreDurableDiskDirectorySnapshotWithCache(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, mount.LocalPath); err != nil {
 		return fmt.Errorf("restore durable disk snapshot %s: %w", snapshot.ExternalId, err)
 	}
+	if snapshot.Format == types.DiskSnapshotFormatPostgresWalV1 {
+		if err := preparePostgresWALRecovery(mount); err != nil {
+			return err
+		}
+	}
 	if !devDurableDiskHasRestorablePayload(mount, mount.LocalPath) {
 		_ = os.RemoveAll(mount.LocalPath)
 		return fmt.Errorf("restore durable disk snapshot %s produced an invalid payload", snapshot.ExternalId)
+	}
+	return nil
+}
+
+func durableDiskSnapshotFormatForMount(request *types.ContainerRequest, mount *types.Mount) string {
+	config := requestStubConfig(request)
+	if config == nil || config.EffectiveDatabaseConfig() == nil {
+		return types.DiskSnapshotFormatDirV1
+	}
+
+	switch strings.ToLower(strings.TrimSpace(config.EffectiveDatabaseConfig().Kind)) {
+	case "postgres", "postgresql":
+		return types.DiskSnapshotFormatPostgresWalV1
+	case "redis", "valkey":
+		return types.DiskSnapshotFormatRedisAOFV1
+	default:
+		return types.DiskSnapshotFormatDirV1
+	}
+}
+
+func preparePostgresWALRecovery(mount *types.Mount) error {
+	if mount == nil || mount.MountPath != "/var/lib/postgresql/data" {
+		return nil
+	}
+	pgDataPath := filepath.Join(mount.LocalPath, "pgdata")
+	if _, err := os.Stat(filepath.Join(pgDataPath, "PG_VERSION")); err != nil {
+		return nil
+	}
+	if err := os.WriteFile(filepath.Join(pgDataPath, "recovery.signal"), nil, 0600); err != nil {
+		return fmt.Errorf("write postgres recovery signal: %w", err)
 	}
 	return nil
 }
@@ -334,7 +412,7 @@ func durableDiskSnapshotRequiredContentItems(snapshot *types.DiskSnapshot, manif
 	if snapshot == nil || manifest == nil || snapshot.BucketName == "" {
 		return nil
 	}
-	items := make([]types.CacheRequiredContentItem, 0, len(manifest.Chunks)+1)
+	items := make([]types.CacheRequiredContentItem, 0, len(manifest.Files)+1)
 	add := func(hash, key string, size int64) {
 		hash = strings.TrimPrefix(hash, "sha256:")
 		if hash == "" || key == "" || size <= 0 {
@@ -351,8 +429,10 @@ func durableDiskSnapshotRequiredContentItems(snapshot *types.DiskSnapshot, manif
 		})
 	}
 	add(snapshot.ManifestDigest, snapshot.ManifestKey, snapshot.ManifestSizeBytes)
-	for _, chunk := range manifest.Chunks {
-		add(chunk.Digest, chunk.ObjectKey, chunk.SizeBytes)
+	for _, file := range manifest.Files {
+		for _, chunk := range file.Chunks {
+			add(chunk.Digest, chunk.ObjectKey, chunk.SizeBytes)
+		}
 	}
 	return items
 }

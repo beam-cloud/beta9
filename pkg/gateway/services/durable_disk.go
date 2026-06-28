@@ -141,7 +141,7 @@ func (gws *GatewayService) ensureDurableDiskSnapshotsAvailable(ctx context.Conte
 		if err != nil {
 			return fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
 		}
-		if snapshot == nil || snapshot.ManifestKey == "" || snapshot.Format != types.DiskSnapshotFormatTarV1 {
+		if snapshot == nil || snapshot.ManifestKey == "" || !types.IsDiskSnapshotFilesystemFormat(snapshot.Format) {
 			return fmt.Errorf("durable disk %q has no restorable filesystem snapshot", disk.Name)
 		}
 	}

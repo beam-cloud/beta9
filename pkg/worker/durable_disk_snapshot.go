@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -12,7 +11,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -107,7 +108,58 @@ func durableDiskBucketPart(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func createDurableDiskSnapshot(ctx context.Context, store durableDiskSnapshotStore, backingPath, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
+func uploadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, manifestKey string, manifest *types.DiskSnapshotManifest) (string, int64, error) {
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return "", 0, fmt.Errorf("marshal durable disk snapshot manifest: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	if err := store.Upload(ctx, manifestKey, data); err != nil {
+		return "", 0, fmt.Errorf("upload durable disk snapshot manifest %s: %w", manifestKey, err)
+	}
+	return "sha256:" + hex.EncodeToString(sum[:]), int64(len(data)), nil
+}
+
+func durableDiskSnapshotChunkPrefix(objectPrefix string) string {
+	root := path.Dir(path.Dir(objectPrefix))
+	if root == "." || root == "/" {
+		return path.Join(objectPrefix, "chunks")
+	}
+	return path.Join(root, "chunks")
+}
+
+func durableDiskSnapshotObjectReader(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, key, digest string, sizeBytes int64) (io.ReadCloser, error) {
+	hash := strings.TrimPrefix(digest, "sha256:")
+	if cacheReader != nil && hash != "" && sizeBytes > 0 {
+		data, err := cacheReader.GetContent(hash, 0, sizeBytes, struct{ RoutingKey string }{RoutingKey: hash})
+		if err == nil && int64(len(data)) == sizeBytes {
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}
+	}
+	return store.DownloadWithReader(ctx, key)
+}
+
+func loadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, snapshot *types.DiskSnapshot) (*types.DiskSnapshotManifest, error) {
+	if snapshot == nil || snapshot.ManifestKey == "" {
+		return nil, nil
+	}
+	reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	var manifest types.DiskSnapshotManifest
+	if err := json.NewDecoder(reader).Decode(&manifest); err != nil {
+		return nil, err
+	}
+	return &manifest, nil
+}
+
+func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
+	if !devDurableDiskHasPayload(sourceDir) {
+		return nil, nil, fmt.Errorf("durable disk directory %s has no payload", sourceDir)
+	}
 	if store == nil {
 		return nil, nil, fmt.Errorf("durable disk snapshot store is nil")
 	}
@@ -122,242 +174,30 @@ func createDurableDiskSnapshot(ctx context.Context, store durableDiskSnapshotSto
 		return nil, nil, fmt.Errorf("durable disk snapshot chunk size %d is too large", chunkSize)
 	}
 
-	file, err := os.Open(backingPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open durable disk backing file %s: %w", backingPath, err)
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stat durable disk backing file %s: %w", backingPath, err)
-	}
-	if info.IsDir() {
-		return nil, nil, fmt.Errorf("durable disk backing path %s is a directory; snapshot a block image or backing file", backingPath)
-	}
-
 	manifest := &types.DiskSnapshotManifest{
 		Version:          1,
-		Format:           firstNonEmpty(snapshot.Format, types.DiskSnapshotFormatBlockV1),
+		Format:           firstNonEmpty(snapshot.Format, types.DiskSnapshotFormatDirV1),
 		DiskName:         snapshot.DiskName,
 		Filesystem:       snapshot.Filesystem,
 		Generation:       snapshot.Generation,
 		ParentSnapshotId: snapshot.ParentSnapshotId,
-		LogicalSizeBytes: info.Size(),
 		CreatedAt:        time.Now().UTC(),
 	}
 
+	files := durableDiskSnapshotSeedFiles(manifest.Format, previous)
+	previousFiles := durableDiskSnapshotFilesByPath(previous)
 	chunkPrefix := durableDiskSnapshotChunkPrefix(objectPrefix)
-	buffer := make([]byte, int(chunkSize))
 	seen := map[string]struct{}{}
-	for index, offset := int64(0), int64(0); ; index++ {
-		n, readErr := file.Read(buffer)
-		if n > 0 {
-			chunk := buffer[:n]
-			sum := sha256.Sum256(chunk)
-			digest := "sha256:" + hex.EncodeToString(sum[:])
-			key := path.Join(chunkPrefix, hex.EncodeToString(sum[:]))
+	buffer := make([]byte, int(chunkSize))
 
-			if _, ok := seen[key]; !ok {
-				exists, err := store.Exists(ctx, key)
-				if err != nil {
-					return nil, nil, fmt.Errorf("check durable disk snapshot chunk %s: %w", key, err)
-				}
-				if !exists {
-					if err := store.UploadWithReader(ctx, key, bytes.NewReader(chunk)); err != nil {
-						return nil, nil, fmt.Errorf("upload durable disk snapshot chunk %s: %w", key, err)
-					}
-				}
-				seen[key] = struct{}{}
-			}
-
-			manifest.Chunks = append(manifest.Chunks, types.DiskSnapshotChunk{
-				Index:       index,
-				OffsetBytes: offset,
-				SizeBytes:   int64(n),
-				ObjectKey:   key,
-				Digest:      digest,
-			})
-			manifest.StoredSizeBytes += int64(n)
-			offset += int64(n)
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return nil, nil, fmt.Errorf("read durable disk backing file %s: %w", backingPath, readErr)
-		}
-	}
-
-	data, err := json.Marshal(manifest)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal durable disk snapshot manifest: %w", err)
-	}
-	manifestSum := sha256.Sum256(data)
-	manifestKey := path.Join(objectPrefix, "manifest.json")
-	if err := store.Upload(ctx, manifestKey, data); err != nil {
-		return nil, nil, fmt.Errorf("upload durable disk snapshot manifest %s: %w", manifestKey, err)
-	}
-
-	snapshot.Format = manifest.Format
-	snapshot.Status = types.DiskSnapshotStatusAvailable
-	snapshot.ObjectPrefix = objectPrefix
-	snapshot.ManifestKey = manifestKey
-	snapshot.ManifestDigest = "sha256:" + hex.EncodeToString(manifestSum[:])
-	snapshot.ManifestSizeBytes = int64(len(data))
-	snapshot.ChunkCount = int64(len(manifest.Chunks))
-	snapshot.LogicalSizeBytes = manifest.LogicalSizeBytes
-	snapshot.StoredSizeBytes = manifest.StoredSizeBytes
-	return &snapshot, manifest, nil
-}
-
-func durableDiskSnapshotChunkPrefix(objectPrefix string) string {
-	root := path.Dir(path.Dir(objectPrefix))
-	if root == "." || root == "/" {
-		return path.Join(objectPrefix, "chunks")
-	}
-	return path.Join(root, "chunks")
-}
-
-func restoreDurableDiskSnapshot(ctx context.Context, store durableDiskSnapshotStore, manifestKey, backingPath string) (*types.DiskSnapshotManifest, error) {
-	return restoreDurableDiskSnapshotWithCache(ctx, store, nil, manifestKey, "", 0, backingPath)
-}
-
-func restoreDurableDiskSnapshotWithCache(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifestKey, manifestDigest string, manifestSizeBytes int64, backingPath string) (*types.DiskSnapshotManifest, error) {
-	if store == nil {
-		return nil, fmt.Errorf("durable disk snapshot store is nil")
-	}
-
-	manifestReader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, manifestKey, manifestDigest, manifestSizeBytes)
-	if err != nil {
-		return nil, fmt.Errorf("download durable disk snapshot manifest %s: %w", manifestKey, err)
-	}
-	defer manifestReader.Close()
-
-	var manifest types.DiskSnapshotManifest
-	if err := json.NewDecoder(manifestReader).Decode(&manifest); err != nil {
-		return nil, fmt.Errorf("decode durable disk snapshot manifest %s: %w", manifestKey, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(backingPath), 0755); err != nil {
-		return nil, fmt.Errorf("create durable disk restore directory %s: %w", filepath.Dir(backingPath), err)
-	}
-	tmpPath := backingPath + ".restore-tmp"
-	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("create durable disk restore file %s: %w", tmpPath, err)
-	}
-	defer os.Remove(tmpPath)
-
-	for _, chunk := range manifest.Chunks {
-		if _, err := out.Seek(chunk.OffsetBytes, io.SeekStart); err != nil {
-			_ = out.Close()
-			return nil, fmt.Errorf("seek durable disk restore file %s: %w", tmpPath, err)
-		}
-		reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, chunk.ObjectKey, chunk.Digest, chunk.SizeBytes)
-		if err != nil {
-			_ = out.Close()
-			return nil, fmt.Errorf("download durable disk snapshot chunk %s: %w", chunk.ObjectKey, err)
-		}
-		sum := sha256.New()
-		n, copyErr := io.CopyN(out, io.TeeReader(reader, sum), chunk.SizeBytes)
-		closeErr := reader.Close()
-		if copyErr != nil {
-			_ = out.Close()
-			return nil, fmt.Errorf("restore durable disk snapshot chunk %s: copied %d of %d bytes: %w", chunk.ObjectKey, n, chunk.SizeBytes, copyErr)
-		}
-		if closeErr != nil {
-			_ = out.Close()
-			return nil, fmt.Errorf("close durable disk snapshot chunk %s: %w", chunk.ObjectKey, closeErr)
-		}
-		if digest := "sha256:" + hex.EncodeToString(sum.Sum(nil)); digest != chunk.Digest {
-			_ = out.Close()
-			return nil, fmt.Errorf("durable disk snapshot chunk %s digest mismatch: got %s want %s", chunk.ObjectKey, digest, chunk.Digest)
-		}
-	}
-
-	if err := out.Truncate(manifest.LogicalSizeBytes); err != nil {
-		_ = out.Close()
-		return nil, fmt.Errorf("truncate durable disk restore file %s: %w", tmpPath, err)
-	}
-	if err := out.Close(); err != nil {
-		return nil, fmt.Errorf("close durable disk restore file %s: %w", tmpPath, err)
-	}
-	if err := os.Rename(tmpPath, backingPath); err != nil {
-		return nil, fmt.Errorf("install durable disk restore file %s: %w", backingPath, err)
-	}
-	return &manifest, nil
-}
-
-func durableDiskSnapshotObjectReader(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, key, digest string, sizeBytes int64) (io.ReadCloser, error) {
-	hash := strings.TrimPrefix(digest, "sha256:")
-	if cacheReader != nil && hash != "" && sizeBytes > 0 {
-		data, err := cacheReader.GetContent(hash, 0, sizeBytes, struct{ RoutingKey string }{RoutingKey: hash})
-		if err == nil && int64(len(data)) == sizeBytes {
-			return io.NopCloser(bytes.NewReader(data)), nil
-		}
-	}
-	return store.DownloadWithReader(ctx, key)
-}
-
-func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
-	if !devDurableDiskHasPayload(sourceDir) {
-		return nil, nil, fmt.Errorf("durable disk directory %s has no payload", sourceDir)
-	}
-
-	tmp, err := os.CreateTemp("", "beta9-disk-snapshot-*.tar")
-	if err != nil {
-		return nil, nil, fmt.Errorf("create durable disk snapshot tar: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-
-	if err := writeDurableDiskTar(tmp, sourceDir); err != nil {
-		_ = tmp.Close()
-		return nil, nil, err
-	}
-	if err := tmp.Close(); err != nil {
-		return nil, nil, fmt.Errorf("close durable disk snapshot tar %s: %w", tmpPath, err)
-	}
-
-	snapshot.Format = types.DiskSnapshotFormatTarV1
-	return createDurableDiskSnapshot(ctx, store, tmpPath, objectPrefix, snapshot, chunkSize)
-}
-
-func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifestKey, manifestDigest string, manifestSizeBytes int64, targetDir string) (*types.DiskSnapshotManifest, error) {
-	tmp, err := os.CreateTemp("", "beta9-disk-restore-*.tar")
-	if err != nil {
-		return nil, fmt.Errorf("create durable disk restore tar: %w", err)
-	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	defer os.Remove(tmpPath)
-
-	manifest, err := restoreDurableDiskSnapshotWithCache(ctx, store, cacheReader, manifestKey, manifestDigest, manifestSizeBytes, tmpPath)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.RemoveAll(targetDir); err != nil {
-		return nil, fmt.Errorf("clear durable disk restore directory %s: %w", targetDir, err)
-	}
-	if err := extractDurableDiskTar(tmpPath, targetDir); err != nil {
-		return nil, err
-	}
-	return manifest, nil
-}
-
-func writeDurableDiskTar(out io.Writer, sourceDir string) error {
-	tw := tar.NewWriter(out)
-	defer tw.Close()
-
-	return filepath.WalkDir(sourceDir, func(path string, entry os.DirEntry, err error) error {
+	if err := filepath.WalkDir(sourceDir, func(name string, entry os.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		if path == sourceDir {
+		if name == sourceDir {
 			return nil
 		}
 
@@ -368,117 +208,350 @@ func writeDurableDiskTar(out io.Writer, sourceDir string) error {
 			}
 			return err
 		}
-		link := ""
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err = os.Readlink(path)
+		rel, err := filepath.Rel(sourceDir, name)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		file := durableDiskSnapshotFile(rel, info)
+
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			file.Type = "symlink"
+			file.LinkName, err = os.Readlink(name)
 			if err != nil {
 				return err
 			}
-		}
-
-		header, err := tar.FileInfoHeader(info, link)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(sourceDir, path)
-		if err != nil {
-			return err
-		}
-		header.Name = filepath.ToSlash(rel)
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
+		case info.IsDir():
+			file.Type = "dir"
+		case info.Mode().IsRegular():
+			file.Type = "file"
+			if durableDiskSnapshotReusePostgresBaseFile(manifest.Format, previous, file.Path) {
+				return nil
+			}
+			previousFile := previousFiles[file.Path]
+			if durableDiskSnapshotFileReusable(previousFile, file) {
+				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
+			} else if durableDiskSnapshotAppendOnlyFile(manifest.Format, file.Path) && durableDiskSnapshotFileAppendReusable(previousFile, file) {
+				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
+				if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, buffer, seen, &file); err != nil {
+					return err
+				}
+			} else if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, buffer, seen, &file); err != nil {
+				return err
+			}
+		default:
 			return nil
 		}
 
-		file, err := os.Open(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		_, copyErr := io.Copy(tw, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
+		files[file.Path] = file
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+
+	manifest.Files = durableDiskSnapshotSortedFiles(files)
+	logicalSizeBytes, storedSizeBytes, chunkCount := durableDiskSnapshotManifestStats(manifest.Files)
+	manifest.LogicalSizeBytes = logicalSizeBytes
+	manifest.StoredSizeBytes = storedSizeBytes
+
+	manifestKey := path.Join(objectPrefix, "manifest.json")
+	manifestDigest, manifestSizeBytes, err := uploadDurableDiskSnapshotManifest(ctx, store, manifestKey, manifest)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	snapshot.Format = manifest.Format
+	snapshot.Status = types.DiskSnapshotStatusAvailable
+	snapshot.ObjectPrefix = objectPrefix
+	snapshot.ManifestKey = manifestKey
+	snapshot.ManifestDigest = manifestDigest
+	snapshot.ManifestSizeBytes = manifestSizeBytes
+	snapshot.ChunkCount = chunkCount
+	snapshot.LogicalSizeBytes = manifest.LogicalSizeBytes
+	snapshot.StoredSizeBytes = manifest.StoredSizeBytes
+	return &snapshot, manifest, nil
 }
 
-func extractDurableDiskTar(tarPath, targetDir string) error {
-	file, err := os.Open(tarPath)
-	if err != nil {
-		return fmt.Errorf("open durable disk restore tar %s: %w", tarPath, err)
+func durableDiskSnapshotFilesByPath(manifest *types.DiskSnapshotManifest) map[string]types.DiskSnapshotFile {
+	if manifest == nil || len(manifest.Files) == 0 {
+		return nil
 	}
-	defer file.Close()
+	files := make(map[string]types.DiskSnapshotFile, len(manifest.Files))
+	for _, file := range manifest.Files {
+		files[file.Path] = file
+	}
+	return files
+}
 
+func durableDiskSnapshotSeedFiles(format string, previous *types.DiskSnapshotManifest) map[string]types.DiskSnapshotFile {
+	files := map[string]types.DiskSnapshotFile{}
+	if format != types.DiskSnapshotFormatPostgresWalV1 || previous == nil {
+		return files
+	}
+	for _, file := range previous.Files {
+		files[file.Path] = file
+	}
+	return files
+}
+
+func durableDiskSnapshotSortedFiles(files map[string]types.DiskSnapshotFile) []types.DiskSnapshotFile {
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	result := make([]types.DiskSnapshotFile, 0, len(paths))
+	for _, path := range paths {
+		result = append(result, files[path])
+	}
+	return result
+}
+
+func durableDiskSnapshotManifestStats(files []types.DiskSnapshotFile) (logicalSizeBytes, storedSizeBytes, chunkCount int64) {
+	for _, file := range files {
+		if file.Type != "file" {
+			continue
+		}
+		logicalSizeBytes += file.SizeBytes
+		storedSizeBytes += durableDiskSnapshotFileStoredBytes(file.Chunks)
+		chunkCount += int64(len(file.Chunks))
+	}
+	return logicalSizeBytes, storedSizeBytes, chunkCount
+}
+
+func durableDiskSnapshotFile(name string, info os.FileInfo) types.DiskSnapshotFile {
+	file := types.DiskSnapshotFile{
+		Path:            name,
+		Mode:            int64(info.Mode()),
+		SizeBytes:       info.Size(),
+		ModTimeUnixNano: info.ModTime().UnixNano(),
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		file.Uid = int(stat.Uid)
+		file.Gid = int(stat.Gid)
+	}
+	return file
+}
+
+func durableDiskSnapshotFileReusable(previous, current types.DiskSnapshotFile) bool {
+	return previous.Type == current.Type &&
+		previous.Mode == current.Mode &&
+		previous.Uid == current.Uid &&
+		previous.Gid == current.Gid &&
+		previous.SizeBytes == current.SizeBytes &&
+		previous.ModTimeUnixNano == current.ModTimeUnixNano &&
+		len(previous.Chunks) > 0
+}
+
+func durableDiskSnapshotFileAppendReusable(previous, current types.DiskSnapshotFile) bool {
+	if previous.Type != "file" || current.Type != "file" || previous.SizeBytes >= current.SizeBytes {
+		return false
+	}
+	if previous.Mode != current.Mode || previous.Uid != current.Uid || previous.Gid != current.Gid {
+		return false
+	}
+	var end int64
+	for _, chunk := range previous.Chunks {
+		if chunk.OffsetBytes != end || chunk.SizeBytes <= 0 {
+			return false
+		}
+		end += chunk.SizeBytes
+	}
+	return end == previous.SizeBytes
+}
+
+func durableDiskSnapshotReusePostgresBaseFile(format string, previous *types.DiskSnapshotManifest, name string) bool {
+	return format == types.DiskSnapshotFormatPostgresWalV1 && previous != nil && !durableDiskSnapshotPostgresWALFile(name)
+}
+
+func durableDiskSnapshotAppendOnlyFile(format, name string) bool {
+	name = filepath.ToSlash(name)
+	switch format {
+	case types.DiskSnapshotFormatPostgresWalV1:
+		return durableDiskSnapshotPostgresWALFile(name)
+	case types.DiskSnapshotFormatRedisAOFV1:
+		return strings.HasSuffix(path.Base(name), ".aof")
+	default:
+		return false
+	}
+}
+
+func durableDiskSnapshotPostgresWALFile(name string) bool {
+	name = filepath.ToSlash(name)
+	return strings.HasPrefix(name, "pgdata/.beta9-wal/") || strings.HasPrefix(name, "pgdata/pg_wal/")
+}
+
+func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore, filename, chunkPrefix string, buffer []byte, seen map[string]struct{}, file *types.DiskSnapshotFile) error {
+	in, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	var index, offset int64
+	if len(file.Chunks) > 0 {
+		last := file.Chunks[len(file.Chunks)-1]
+		index = last.Index + 1
+		offset = last.OffsetBytes + last.SizeBytes
+		if _, err := in.Seek(offset, io.SeekStart); err != nil {
+			return err
+		}
+	}
+
+	for ; ; index++ {
+		n, readErr := in.Read(buffer)
+		if n > 0 {
+			chunk := buffer[:n]
+			sum := sha256.Sum256(chunk)
+			hash := hex.EncodeToString(sum[:])
+			key := path.Join(chunkPrefix, hash)
+			if _, ok := seen[key]; !ok {
+				exists, err := store.Exists(ctx, key)
+				if err != nil {
+					return fmt.Errorf("check durable disk snapshot chunk %s: %w", key, err)
+				}
+				if !exists {
+					if err := store.UploadWithReader(ctx, key, bytes.NewReader(chunk)); err != nil {
+						return fmt.Errorf("upload durable disk snapshot chunk %s: %w", key, err)
+					}
+				}
+				seen[key] = struct{}{}
+			}
+			file.Chunks = append(file.Chunks, types.DiskSnapshotChunk{
+				Index:       index,
+				OffsetBytes: offset,
+				SizeBytes:   int64(n),
+				ObjectKey:   key,
+				Digest:      "sha256:" + hash,
+			})
+			offset += int64(n)
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return fmt.Errorf("read durable disk snapshot file %s: %w", filename, readErr)
+		}
+	}
+}
+
+func durableDiskSnapshotFileStoredBytes(chunks []types.DiskSnapshotChunk) int64 {
+	var n int64
+	for _, chunk := range chunks {
+		n += chunk.SizeBytes
+	}
+	return n
+}
+
+func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifestKey, manifestDigest string, manifestSizeBytes int64, targetDir string) (*types.DiskSnapshotManifest, error) {
+	manifest, err := loadDurableDiskSnapshotManifest(ctx, store, cacheReader, &types.DiskSnapshot{
+		ManifestKey:       manifestKey,
+		ManifestDigest:    manifestDigest,
+		ManifestSizeBytes: manifestSizeBytes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("download durable disk snapshot manifest %s: %w", manifestKey, err)
+	}
+	if len(manifest.Files) == 0 {
+		return nil, fmt.Errorf("durable disk directory snapshot %s has no files", manifestKey)
+	}
+	return manifest, restoreDurableDiskDirectoryManifest(ctx, store, cacheReader, manifest, targetDir)
+}
+
+func restoreDurableDiskDirectoryManifest(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifest *types.DiskSnapshotManifest, targetDir string) error {
+	if err := os.RemoveAll(targetDir); err != nil {
+		return fmt.Errorf("clear durable disk restore directory %s: %w", targetDir, err)
+	}
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("create durable disk restore directory %s: %w", targetDir, err)
 	}
 
-	tr := tar.NewReader(file)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("read durable disk restore tar %s: %w", tarPath, err)
-		}
-
-		targetPath, err := durableDiskTarTarget(targetDir, header.Name)
+	for _, file := range manifest.Files {
+		targetPath, err := durableDiskRestoreTarget(targetDir, file.Path)
 		if err != nil {
 			return err
 		}
-		mode := os.FileMode(header.Mode)
-		switch header.Typeflag {
-		case tar.TypeDir:
+		mode := os.FileMode(file.Mode)
+		switch file.Type {
+		case "dir":
 			if err := os.MkdirAll(targetPath, mode.Perm()); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case "symlink":
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-			if err != nil {
+			if err := os.Symlink(file.LinkName, targetPath); err != nil && !os.IsExist(err) {
 				return err
 			}
-			_, copyErr := io.Copy(out, tr)
-			closeErr := out.Close()
-			if copyErr != nil {
-				return copyErr
-			}
-			if closeErr != nil {
-				return closeErr
-			}
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return err
-			}
-			if err := os.Symlink(header.Linkname, targetPath); err != nil {
+		case "file":
+			if err := restoreDurableDiskManifestFile(ctx, store, cacheReader, file, targetPath, mode.Perm()); err != nil {
 				return err
 			}
 		default:
 			continue
 		}
-		_ = os.Chown(targetPath, header.Uid, header.Gid)
-		_ = os.Chtimes(targetPath, header.ModTime, header.ModTime)
+		_ = os.Chown(targetPath, file.Uid, file.Gid)
+		if file.ModTimeUnixNano > 0 {
+			modTime := time.Unix(0, file.ModTimeUnixNano)
+			_ = os.Chtimes(targetPath, modTime, modTime)
+		}
 	}
+	return nil
 }
 
-func durableDiskTarTarget(root, name string) (string, error) {
+func restoreDurableDiskManifestFile(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, file types.DiskSnapshotFile, targetPath string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	for _, chunk := range file.Chunks {
+		if _, err := out.Seek(chunk.OffsetBytes, io.SeekStart); err != nil {
+			_ = out.Close()
+			return err
+		}
+		reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, chunk.ObjectKey, chunk.Digest, chunk.SizeBytes)
+		if err != nil {
+			_ = out.Close()
+			return fmt.Errorf("download durable disk snapshot chunk %s: %w", chunk.ObjectKey, err)
+		}
+		sum := sha256.New()
+		n, copyErr := io.CopyN(out, io.TeeReader(reader, sum), chunk.SizeBytes)
+		closeErr := reader.Close()
+		if copyErr != nil {
+			_ = out.Close()
+			return fmt.Errorf("restore durable disk snapshot chunk %s: copied %d of %d bytes: %w", chunk.ObjectKey, n, chunk.SizeBytes, copyErr)
+		}
+		if closeErr != nil {
+			_ = out.Close()
+			return fmt.Errorf("close durable disk snapshot chunk %s: %w", chunk.ObjectKey, closeErr)
+		}
+		if digest := "sha256:" + hex.EncodeToString(sum.Sum(nil)); digest != chunk.Digest {
+			_ = out.Close()
+			return fmt.Errorf("durable disk snapshot chunk %s digest mismatch: got %s want %s", chunk.ObjectKey, digest, chunk.Digest)
+		}
+	}
+	if err := out.Truncate(file.SizeBytes); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func durableDiskRestoreTarget(root, name string) (string, error) {
 	name = filepath.Clean(name)
 	if name == "." || filepath.IsAbs(name) || strings.HasPrefix(name, ".."+string(os.PathSeparator)) || name == ".." {
-		return "", fmt.Errorf("invalid durable disk tar path %q", name)
+		return "", fmt.Errorf("invalid durable disk snapshot path %q", name)
 	}
 
 	target := filepath.Join(root, name)
 	if rel, err := filepath.Rel(root, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("durable disk tar path escapes target: %q", name)
+		return "", fmt.Errorf("durable disk snapshot path escapes target: %q", name)
 	}
 	return target, nil
 }

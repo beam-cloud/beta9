@@ -19,7 +19,7 @@ func upAddDiskSnapshot(ctx context.Context, tx *sql.Tx) error {
 			workspace_id INT NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
 			stub_id INT REFERENCES stub(id) ON DELETE SET NULL,
 			disk_name TEXT NOT NULL,
-			format TEXT NOT NULL DEFAULT 'block.v1',
+			format TEXT NOT NULL DEFAULT 'dir.v1',
 			status TEXT NOT NULL DEFAULT 'pending',
 			reason TEXT NOT NULL DEFAULT '',
 			parent_snapshot_id TEXT NOT NULL DEFAULT '',

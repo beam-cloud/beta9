@@ -56,7 +56,7 @@ func (r *PostgresBackendRepository) CreateDiskSnapshot(ctx context.Context, snap
 	}
 
 	if snapshot.Format == "" {
-		snapshot.Format = types.DiskSnapshotFormatBlockV1
+		snapshot.Format = types.DiskSnapshotFormatDirV1
 	}
 	if snapshot.Status == "" {
 		snapshot.Status = types.DiskSnapshotStatusPending

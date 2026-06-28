@@ -326,7 +326,7 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 	backend.snapshots["pg-data"] = &types.DiskSnapshot{
 		WorkspaceId: 1,
 		DiskName:    "pg-data",
-		Format:      types.DiskSnapshotFormatTarV1,
+		Format:      types.DiskSnapshotFormatDirV1,
 		Status:      types.DiskSnapshotStatusAvailable,
 		ManifestKey: "durable-disks/pg-data/snapshots/1/manifest.json",
 	}
