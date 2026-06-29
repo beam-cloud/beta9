@@ -179,7 +179,8 @@ worker:
         gvisorExtraArgs:
           - --overlay2=none
           - --file-access=shared
-      # Optional per-pool cache disk override for nodes with different storage layouts.
+      # Optional per-pool durable disk and cache overrides for nodes with different storage layouts.
+      # durableDisksPath: /var/lib/beta9/durable-disks
       # cache:
       #   disk:
       #     hostPath: /mnt/nvme/beta9/cache
@@ -208,7 +209,8 @@ worker:
         gvisorExtraArgs:
           - --overlay2=none
           - --file-access=shared
-      # Optional per-pool cache disk override.
+      # Optional per-pool durable disk and cache overrides.
+      # durableDisksPath: /var/lib/beta9/durable-disks
       # cache:
       #   disk:
       #     hostPath: /mnt/build-cache/beta9/cache

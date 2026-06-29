@@ -465,7 +465,8 @@ type WorkerPoolConfig struct {
 	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 	StoragePath               string                            `key:"storagePath" json:"storage_path"`
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
-	ImagesPath                string                            `key:"imagesPath" json:"images_path"` // Host path backing the worker's /images volume (clip layer cache + image mounts); defaults to /images
+	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume (clip layer cache + image mounts); defaults to /images
+	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; defaults to /var/lib/beta9/durable-disks
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
 }
 

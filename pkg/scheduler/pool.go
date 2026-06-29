@@ -117,6 +117,13 @@ func workerImagesHostPath(poolConfig types.WorkerPoolConfig) string {
 	return defaultImagesPath
 }
 
+func workerDurableDisksHostPath(poolConfig types.WorkerPoolConfig) string {
+	if poolConfig.DurableDisksPath != "" {
+		return poolConfig.DurableDisksPath
+	}
+	return types.DefaultDurableDisksPath
+}
+
 func workerCacheHostPath(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {
 	if poolConfig.Cache.Disk.HostPath != "" {
 		return poolConfig.Cache.Disk.HostPath

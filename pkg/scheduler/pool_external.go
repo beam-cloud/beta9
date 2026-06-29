@@ -610,7 +610,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		Name: durableDiskVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
-				Path: types.DefaultDurableDisksPath,
+				Path: workerDurableDisksHostPath(wpc.workerPoolConfig),
 				Type: &hostPathType,
 			},
 		},

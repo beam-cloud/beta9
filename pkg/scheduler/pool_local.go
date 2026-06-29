@@ -366,7 +366,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		Name: durableDiskVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
-				Path: types.DefaultDurableDisksPath,
+				Path: workerDurableDisksHostPath(wpc.workerPoolConfig),
 				Type: &hostPathType,
 			},
 		},
