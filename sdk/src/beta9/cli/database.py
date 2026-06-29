@@ -177,12 +177,21 @@ def _deployments_by_name(service: ServiceClient, name: str):
     return [deployment for deployment in res.deployments if deployment.name == name]
 
 
+def _cli_name() -> str:
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None and ctx.command_path:
+        return ctx.command_path.split()[0]
+    return "beta9"
+
+
 def _ensure_database_name_available(service: ServiceClient, product: DatabaseProduct, name: str) -> None:
     if _deployment_by_name(service, name) is None:
         return
+    cli_name = _cli_name()
     raise click.ClickException(
         f"{product.kind} service {name!r} already exists. "
-        f"Use `beam {product.kind} credentials {name}`, `beam {product.kind} status {name}`, "
+        f"Use `{cli_name} db {product.kind} credentials {name}`, "
+        f"`{cli_name} db {product.kind} status {name}`, "
         f"or delete it before creating a replacement."
     )
 
@@ -252,9 +261,7 @@ def _print_result(format: str, payload: Dict[str, object]) -> None:
         "name",
         "kind",
         "deployment_id",
-        "version",
         "disk",
-        "disk_size",
         "host",
         "username",
         "database",
@@ -526,7 +533,7 @@ def _deploy_database_service(
         cpu=cpu,
         memory=memory,
     )
-    stub_id, deployment_id, version = _deploy_database_stub(service, db_service)
+    stub_id, deployment_id, _ = _deploy_database_stub(service, db_service)
     host = _tcp_host_for_stub(service, stub_id, deployment_id)
     if product.kind == "postgres":
         connection_url = _postgres_url(username, password, host, database)
@@ -540,9 +547,7 @@ def _deploy_database_service(
             "name": name,
             "kind": product.kind,
             "deployment_id": deployment_id,
-            "version": version,
             "disk": db_service.disks[0].name,
-            "disk_size": db_service.disks[0].size,
             "host": host,
             "username": username,
             "connection_string": connection_url,
@@ -575,7 +580,6 @@ def _create_options(func):
         help="Minimum database replicas to keep warm. Use 1 to keep the service warm.",
     )(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Run on a private pool.")(func)
-    func = click.option("--size", type=click.STRING, default=None, help="Durable disk size.")(func)
     func = click.option("--password-stdin", is_flag=True, help="Read password from stdin.")(func)
     func = click.option("--password-from-env", type=click.STRING, default="", help="Read password from an environment variable.")(func)
     func = click.option("--password", type=click.STRING, default="", help="Database password. Generated if omitted.")(func)
@@ -596,7 +600,6 @@ def create_postgres(
     password: str,
     password_from_env: str,
     password_stdin: bool,
-    size: str,
     pool: Optional[str],
     min_replicas: int,
     format: str,
@@ -610,7 +613,7 @@ def create_postgres(
         username=username or name.replace("-", "_"),
         database=database or name.replace("-", "_") or POSTGRES.default_database,
         password=_password(password, password_from_env, password_stdin),
-        size=size or POSTGRES.default_size,
+        size=POSTGRES.default_size,
         pool=pool,
         min_replicas=min_replicas,
         format=format,
@@ -630,7 +633,6 @@ def create_redis(
     password: str,
     password_from_env: str,
     password_stdin: bool,
-    size: str,
     pool: Optional[str],
     min_replicas: int,
     format: str,
@@ -644,7 +646,7 @@ def create_redis(
         username=username or "default",
         database="",
         password=_password(password, password_from_env, password_stdin),
-        size=size or REDIS.default_size,
+        size=REDIS.default_size,
         pool=pool,
         min_replicas=min_replicas,
         format=format,
@@ -800,7 +802,6 @@ def _status(service: ServiceClient, product: DatabaseProduct, name: str, format:
         "kind": product.kind,
         "deployment_id": deployment.id,
         "active": deployment.active,
-        "version": deployment.version,
         "connection_string_secret": _secret_names(product, name)["url"],
     }
     if format == "json":
@@ -878,7 +879,6 @@ def redis_delete(service: ServiceClient, name: str):
 
 def _scale_options(func):
     func = click.option("--format", type=click.Choice(("table", "json")), default="table")(func)
-    func = click.option("--size", type=click.STRING, default=None, help="Durable disk size to use when redeploying.")(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Pool to use when redeploying with new resources.")(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
     func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
@@ -898,10 +898,9 @@ def postgres_scale(
     cpu: Optional[float],
     memory: Optional[str],
     pool: Optional[str],
-    size: Optional[str],
     format: str,
 ):
-    _scale_database(service, POSTGRES, name, always_on, serverless, cpu, memory, pool, size, format)
+    _scale_database(service, POSTGRES, name, always_on, serverless, cpu, memory, pool, format)
 
 
 @redis.command(name="scale", help="Scale a Redis service.")
@@ -916,10 +915,9 @@ def redis_scale(
     cpu: Optional[float],
     memory: Optional[str],
     pool: Optional[str],
-    size: Optional[str],
     format: str,
 ):
-    _scale_database(service, REDIS, name, always_on, serverless, cpu, memory, pool, size, format)
+    _scale_database(service, REDIS, name, always_on, serverless, cpu, memory, pool, format)
 
 
 def _scale_mode_containers(always_on: bool, serverless: bool) -> int:
@@ -937,7 +935,6 @@ def _scale_database(
     cpu: Optional[float],
     memory: Optional[str],
     pool: Optional[str],
-    size: Optional[str],
     format: str,
 ) -> None:
     containers = _scale_mode_containers(always_on, serverless)
@@ -951,7 +948,7 @@ def _scale_database(
             username=_get_secret_value(service, secret_names["username"]),
             database=_get_secret_value(service, secret_names["database"]) if product.kind == "postgres" else "",
             password=_get_secret_value(service, secret_names["password"]),
-            size=size or product.default_size,
+            size=product.default_size,
             pool=pool,
             min_replicas=containers,
             format=format,
