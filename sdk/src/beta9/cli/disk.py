@@ -21,7 +21,7 @@ from .extraclick import ClickManagementGroup
 
 @click.group(
     name="disk",
-    help="Manage durable disks.",
+    help="Manage disks (durable, fixed-size block storage on local SSD/NVMe).",
     cls=ClickManagementGroup,
 )
 def management():
@@ -128,7 +128,7 @@ def _print_snapshot_table(snapshots: Iterable) -> None:
 
 @management.command(
     name="list",
-    help="List available durable disks.",
+    help="List available disks.",
 )
 @_format_option
 @extraclick.pass_service_client
@@ -148,7 +148,7 @@ def list_disks(service: ServiceClient, format: str):
 
 @management.command(
     name="create",
-    help="Create a new durable disk.",
+    help="Create a new disk.",
 )
 @click.argument(
     "name",
@@ -205,7 +205,7 @@ def create_disk(
 
 @management.command(
     name="delete",
-    help="Delete a durable disk.",
+    help="Delete a disk.",
 )
 @click.argument(
     "name",
@@ -235,7 +235,7 @@ def delete_disk(service: ServiceClient, name: str, yes: bool):
 
 @management.command(
     name="snapshots",
-    help="List snapshots for a durable disk.",
+    help="List snapshots for a disk.",
 )
 @click.argument(
     "name",
