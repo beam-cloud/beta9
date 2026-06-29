@@ -100,11 +100,6 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 		return err
 	}
 
-	if b.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		go b.refreshBuildContainerTTL(ctx, build.containerID)
-		return nil
-	}
-
 	hostname, err := b.containerRepo.GetWorkerAddress(ctx, build.containerID)
 	if err != nil {
 		build.log(true, "Failed to connect to build container.\n")

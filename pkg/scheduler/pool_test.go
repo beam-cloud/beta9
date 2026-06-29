@@ -83,7 +83,11 @@ func TestWorkerPodCommandUsesInitReaper(t *testing.T) {
 
 func TestWorkerDurableDisksHostPathUsesPoolOverride(t *testing.T) {
 	assert.Equal(t, types.DefaultDurableDisksPath, workerDurableDisksHostPath(types.WorkerPoolConfig{}))
+	assert.Equal(t, "/mnt/nvme/beta9/storage/durable-disks", workerDurableDisksHostPath(types.WorkerPoolConfig{
+		StoragePath: "/mnt/nvme/beta9/storage",
+	}))
 	assert.Equal(t, "/mnt/nvme/beta9/disks", workerDurableDisksHostPath(types.WorkerPoolConfig{
+		StoragePath:      "/mnt/nvme/beta9/storage",
 		DurableDisksPath: "/mnt/nvme/beta9/disks",
 	}))
 }
