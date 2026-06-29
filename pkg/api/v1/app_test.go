@@ -432,6 +432,7 @@ func TestDatabaseAppListOmitsConnectionURLAndRetrieveIncludesIt(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
+	listBody := rec.Body.String()
 
 	var listResponse struct {
 		Data []struct {
@@ -466,7 +467,10 @@ func TestDatabaseAppListOmitsConnectionURLAndRetrieveIncludesIt(t *testing.T) {
 		t.Fatalf("failed to parse raw response: %v", err)
 	}
 	if _, ok := rawList.Data[0]["connection_url"]; ok {
-		t.Fatalf("list response should not include connection_url: %s", rec.Body.String())
+		t.Fatalf("list response should not include connection_url: %s", listBody)
+	}
+	if strings.Contains(listBody, "connection_url_secret_name") || strings.Contains(listBody, "password_secret_name") {
+		t.Fatalf("list response should not include database secret names: %s", listBody)
 	}
 	if servingRaw, ok := rawList.Data[0]["serving"]; ok {
 		var serving map[string]json.RawMessage
@@ -479,7 +483,7 @@ func TestDatabaseAppListOmitsConnectionURLAndRetrieveIncludesIt(t *testing.T) {
 				t.Fatalf("failed to parse database response: %v", err)
 			}
 			if _, ok := database["connection_url"]; ok {
-				t.Fatalf("list serving response should not include connection_url: %s", rec.Body.String())
+				t.Fatalf("list serving response should not include connection_url: %s", listBody)
 			}
 		}
 	}
@@ -503,8 +507,12 @@ func TestDatabaseAppListOmitsConnectionURLAndRetrieveIncludesIt(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
+	detailBody := rec.Body.String()
 	if backendRepo.secretLookups != 1 {
 		t.Fatalf("retrieve endpoint should load one secret batch, got %d lookups", backendRepo.secretLookups)
+	}
+	if strings.Contains(detailBody, "connection_url_secret_name") || strings.Contains(detailBody, "password_secret_name") {
+		t.Fatalf("retrieve response should not include database secret names: %s", detailBody)
 	}
 
 	var detailResponse struct {
@@ -535,7 +543,7 @@ func TestEnrichAppWithStubConfigHidesDefaultPool(t *testing.T) {
 	}
 
 	appGroup := &AppGroup{}
-	appGroup.enrichAppWithStubConfig(&app, stub, nil)
+	appGroup.enrichAppWithStubConfig(&app, stub, nil, false)
 
 	if app.PoolName != "" {
 		t.Fatalf("expected default pool to be hidden, got %q", app.PoolName)

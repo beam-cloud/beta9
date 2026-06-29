@@ -112,13 +112,13 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 
 		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
 			deploymentCopy := deployment
-			a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment)
+			a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment, false)
 			if deploymentCopy.Stub.ExternalId != "" {
 				latestStubIndexes[deploymentCopy.Stub.ExternalId] = append(latestStubIndexes[deploymentCopy.Stub.ExternalId], i)
 			}
 			deploymentCopy.URL = appsWithLatest.Data[i].URL
 			deploymentCopy.InvokeURL = appsWithLatest.Data[i].InvokeURL
-			if err := deploymentCopy.Stub.SanitizeConfig(); err != nil {
+			if err := sanitizeDeploymentWithRelated(&deploymentCopy); err != nil {
 				return HTTPInternalServerError("Failed to sanitize stub config")
 			}
 			appsWithLatest.Data[i].Deployment = &deploymentCopy
@@ -131,12 +131,12 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		stubCopy := stub
-		a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub, nil)
+		a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub, nil, false)
 		if stubCopy.Stub.ExternalId != "" {
 			latestStubIndexes[stubCopy.Stub.ExternalId] = append(latestStubIndexes[stubCopy.Stub.ExternalId], i)
 		}
 		appsWithLatest.Data[i].Stub = &stubCopy
-		if err := appsWithLatest.Data[i].Stub.SanitizeConfig(); err != nil {
+		if err := sanitizeStubWithRelated(appsWithLatest.Data[i].Stub); err != nil {
 			return HTTPInternalServerError("Failed to sanitize stub config")
 		}
 	}
@@ -184,7 +184,7 @@ func countRunningContainersForStubs(containerRepo repository.ContainerRepository
 	return runningByStubID, nil
 }
 
-func (a *AppGroup) enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stub, deployment *types.Deployment) {
+func (a *AppGroup) enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stub, deployment *types.Deployment, includeDatabaseSecretNames bool) {
 	if stub == nil {
 		return
 	}
@@ -202,6 +202,9 @@ func (a *AppGroup) enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, s
 	}
 	app.IsService = config.IsService
 	app.Serving = cloneServingConfig(config.EffectiveServingConfig())
+	if !includeDatabaseSecretNames {
+		clearDatabaseSecretNames(app.Serving)
+	}
 	app.URL = a.appURL(stub, config, deployment)
 	app.InvokeURL = app.URL
 }
@@ -220,6 +223,23 @@ func cloneServingConfig(serving *types.ServingConfig) *types.ServingConfig {
 		clone.LLM = &llm
 	}
 	return &clone
+}
+
+func clearDatabaseSecretNames(serving *types.ServingConfig) {
+	if serving == nil || serving.Database == nil {
+		return
+	}
+	serving.Database.ClearSecretNames()
+}
+
+func sanitizeDeploymentWithRelated(deployment *types.DeploymentWithRelated) error {
+	deployment.Workspace = deployment.Workspace.WithoutPrivateCredentials()
+	return deployment.Stub.SanitizeConfig()
+}
+
+func sanitizeStubWithRelated(stub *types.StubWithRelated) error {
+	stub.Workspace = stub.Workspace.WithoutPrivateCredentials()
+	return stub.SanitizeConfig()
 }
 
 func (a *AppGroup) appURL(stub *types.Stub, config *types.StubConfigV1, deployment *types.Deployment) string {
@@ -243,7 +263,12 @@ func (a *AppGroup) appURL(stub *types.Stub, config *types.StubConfigV1, deployme
 }
 
 func (a *AppGroup) hydrateDatabaseConnectionURL(ctx context.Context, workspace *types.Workspace, app *AppWithLatestStubOrDeployment) {
-	if workspace == nil || workspace.SigningKey == nil || app == nil || app.Serving == nil || app.Serving.Database == nil {
+	if app == nil {
+		return
+	}
+	defer clearDatabaseSecretNames(app.Serving)
+
+	if workspace == nil || workspace.SigningKey == nil || app.Serving == nil || app.Serving.Database == nil {
 		return
 	}
 
@@ -274,9 +299,12 @@ func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace 
 	}
 	if deployment, ok := deploymentsByApp[app.ExternalId]; ok {
 		deploymentCopy := deployment
-		a.enrichAppWithStubConfig(&appWithLatest, &deploymentCopy.Stub, &deploymentCopy.Deployment)
+		a.enrichAppWithStubConfig(&appWithLatest, &deploymentCopy.Stub, &deploymentCopy.Deployment, true)
 		deploymentCopy.URL = appWithLatest.URL
 		deploymentCopy.InvokeURL = appWithLatest.InvokeURL
+		if err := sanitizeDeploymentWithRelated(&deploymentCopy); err != nil {
+			return appWithLatest, err
+		}
 		appWithLatest.Deployment = &deploymentCopy
 		return appWithLatest, nil
 	}
@@ -287,7 +315,10 @@ func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace 
 	}
 	if stub, ok := stubsByApp[app.ExternalId]; ok {
 		stubCopy := stub
-		a.enrichAppWithStubConfig(&appWithLatest, &stubCopy.Stub, nil)
+		a.enrichAppWithStubConfig(&appWithLatest, &stubCopy.Stub, nil, true)
+		if err := sanitizeStubWithRelated(&stubCopy); err != nil {
+			return appWithLatest, err
+		}
 		appWithLatest.Stub = &stubCopy
 	}
 
