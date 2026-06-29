@@ -47,6 +47,9 @@ type AppWithLatestStubOrDeployment struct {
 	types.App
 	Stub              *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
 	Deployment        *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
+	URL               string                       `json:"url,omitempty" serializer:"url,omitempty"`
+	InvokeURL         string                       `json:"invoke_url,omitempty" serializer:"invoke_url,omitempty"`
+	ConnectionURL     string                       `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
 	PoolName          string                       `json:"pool_name" serializer:"pool_name"`
 	RunningContainers int                          `json:"running_containers" serializer:"running_containers"`
 	IsService         bool                         `json:"is_service" serializer:"is_service"`
@@ -109,10 +112,12 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 
 		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
 			deploymentCopy := deployment
-			enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub)
+			a.enrichAppWithStubConfig(ctx.Request().Context(), &workspace, &appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment)
 			if deploymentCopy.Stub.ExternalId != "" {
 				latestStubIndexes[deploymentCopy.Stub.ExternalId] = append(latestStubIndexes[deploymentCopy.Stub.ExternalId], i)
 			}
+			deploymentCopy.URL = appsWithLatest.Data[i].URL
+			deploymentCopy.InvokeURL = appsWithLatest.Data[i].InvokeURL
 			if err := deploymentCopy.Stub.SanitizeConfig(); err != nil {
 				return HTTPInternalServerError("Failed to sanitize stub config")
 			}
@@ -126,7 +131,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		stubCopy := stub
-		enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub)
+		a.enrichAppWithStubConfig(ctx.Request().Context(), &workspace, &appsWithLatest.Data[i], &stubCopy.Stub, nil)
 		if stubCopy.Stub.ExternalId != "" {
 			latestStubIndexes[stubCopy.Stub.ExternalId] = append(latestStubIndexes[stubCopy.Stub.ExternalId], i)
 		}
@@ -177,7 +182,7 @@ func countRunningContainersByStubID(containerRepo repository.ContainerRepository
 	return runningByStubID, nil
 }
 
-func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stub) {
+func (a *AppGroup) enrichAppWithStubConfig(ctx context.Context, workspace *types.Workspace, app *AppWithLatestStubOrDeployment, stub *types.Stub, deployment *types.Deployment) {
 	if stub == nil {
 		return
 	}
@@ -194,29 +199,87 @@ func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stu
 		}
 	}
 	app.IsService = config.IsService
-	app.Serving = config.EffectiveServingConfig()
+	app.Serving = cloneServingConfig(config.EffectiveServingConfig())
+	app.URL = a.appURL(stub, config, deployment)
+	app.InvokeURL = app.URL
+	if connectionURL := a.databaseConnectionURL(ctx, workspace, app.Serving); connectionURL != "" {
+		app.ConnectionURL = connectionURL
+		app.Serving.Database.ConnectionURL = connectionURL
+	}
 }
 
-func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspaceID uint, app types.App) (AppWithLatestStubOrDeployment, error) {
+func cloneServingConfig(serving *types.ServingConfig) *types.ServingConfig {
+	if serving == nil {
+		return nil
+	}
+	clone := *serving
+	if serving.Database != nil {
+		database := *serving.Database
+		clone.Database = &database
+	}
+	if serving.LLM != nil {
+		llm := *serving.LLM
+		clone.LLM = &llm
+	}
+	return &clone
+}
+
+func (a *AppGroup) appURL(stub *types.Stub, config *types.StubConfigV1, deployment *types.Deployment) string {
+	stubWithRelated := &types.StubWithRelated{Stub: *stub}
+	if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
+		externalURL := a.config.GatewayService.HTTP.GetExternalURL()
+		urlType := a.config.GatewayService.InvokeURLType
+		if config.TCP {
+			externalURL = a.config.Abstractions.Pod.TCP.GetExternalURL()
+			urlType = common.InvokeUrlTypeHost
+		}
+		if deployment != nil {
+			return common.BuildPodDeploymentURL(externalURL, urlType, deployment, config)
+		}
+		return common.BuildPodURL(externalURL, urlType, stubWithRelated, config)
+	}
+	if deployment != nil {
+		return common.BuildDeploymentURL(a.config.GatewayService.HTTP.GetExternalURL(), a.config.GatewayService.InvokeURLType, stubWithRelated, deployment)
+	}
+	return common.BuildStubURL(a.config.GatewayService.HTTP.GetExternalURL(), a.config.GatewayService.InvokeURLType, stubWithRelated)
+}
+
+func (a *AppGroup) databaseConnectionURL(ctx context.Context, workspace *types.Workspace, serving *types.ServingConfig) string {
+	if workspace == nil || serving == nil || serving.Database == nil || serving.Database.ConnectionURLSecretName == "" {
+		return ""
+	}
+	secret, err := a.backendRepo.GetSecretByNameDecrypted(ctx, workspace, serving.Database.ConnectionURLSecretName)
+	if err != nil {
+		log.Warn().Err(err).Str("secret_name", serving.Database.ConnectionURLSecretName).Msg("failed to load database connection url")
+		return ""
+	}
+	return secret.Value
+}
+
+func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace *types.Workspace, app types.App) (AppWithLatestStubOrDeployment, error) {
 	appWithLatest := AppWithLatestStubOrDeployment{App: app}
 
-	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(ctx, workspaceID, []string{app.ExternalId})
+	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(ctx, workspace.Id, []string{app.ExternalId})
 	if err != nil {
 		return appWithLatest, err
 	}
 	if deployment, ok := deploymentsByApp[app.ExternalId]; ok {
 		deploymentCopy := deployment
-		enrichAppWithStubConfig(&appWithLatest, &deploymentCopy.Stub)
+		a.enrichAppWithStubConfig(ctx, workspace, &appWithLatest, &deploymentCopy.Stub, &deploymentCopy.Deployment)
+		deploymentCopy.URL = appWithLatest.URL
+		deploymentCopy.InvokeURL = appWithLatest.InvokeURL
+		appWithLatest.Deployment = &deploymentCopy
 		return appWithLatest, nil
 	}
 
-	stubsByApp, err := a.backendRepo.ListLatestStubsByAppIDs(ctx, workspaceID, []string{app.ExternalId})
+	stubsByApp, err := a.backendRepo.ListLatestStubsByAppIDs(ctx, workspace.Id, []string{app.ExternalId})
 	if err != nil {
 		return appWithLatest, err
 	}
 	if stub, ok := stubsByApp[app.ExternalId]; ok {
 		stubCopy := stub
-		enrichAppWithStubConfig(&appWithLatest, &stubCopy.Stub)
+		a.enrichAppWithStubConfig(ctx, workspace, &appWithLatest, &stubCopy.Stub, nil)
+		appWithLatest.Stub = &stubCopy
 	}
 
 	return appWithLatest, nil
@@ -283,7 +346,7 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	appWithLatest, err := a.appWithLatestStubOrDeployment(ctx.Request().Context(), workspace.Id, *app)
+	appWithLatest, err := a.appWithLatestStubOrDeployment(ctx.Request().Context(), &workspace, *app)
 	if err != nil {
 		return HTTPInternalServerError("Failed to get app metadata")
 	}
