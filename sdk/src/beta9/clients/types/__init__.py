@@ -109,7 +109,6 @@ class ContainerRequest(betterproto.Message):
     docker_enabled: bool = betterproto.bool_field(30)
     runtime_secret_names: List[str] = betterproto.string_field(31)
     runtime_token_required: bool = betterproto.bool_field(32)
-    target_worker_id: str = betterproto.string_field(33)
 
 
 @dataclass(eq=False, repr=False)
@@ -133,10 +132,6 @@ class DurableDiskMountConfig(betterproto.Message):
     filesystem: str = betterproto.string_field(3)
     driver: str = betterproto.string_field(4)
     replicas: int = betterproto.uint32_field(5)
-    mode: str = betterproto.string_field(6)
-    quorum: str = betterproto.string_field(7)
-    primary_worker_id: str = betterproto.string_field(8)
-    replica_worker_i_ds: List[str] = betterproto.string_field(9)
 
 
 @dataclass(eq=False, repr=False)

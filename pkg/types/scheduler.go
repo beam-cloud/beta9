@@ -71,13 +71,6 @@ type WorkerKeepAlive struct {
 	MachineId string `json:"machine_id"`
 }
 
-func (w *Worker) StorageNodeID() string {
-	if w == nil {
-		return ""
-	}
-	return StableStorageNodeID(w.MachineId, w.Id)
-}
-
 func StableStorageNodeID(machineID, workerID string) string {
 	if machineID = strings.TrimSpace(machineID); machineID != "" {
 		return machineID
@@ -261,7 +254,6 @@ type ContainerRequest struct {
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
-	TargetWorkerId           string          `json:"target_worker_id,omitempty"`
 }
 
 type ContainerNetworkPolicy string

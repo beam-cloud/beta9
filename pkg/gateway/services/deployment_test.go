@@ -160,6 +160,17 @@ func (r *deploymentLifecycleBackendRepo) GetLatestDiskSnapshot(_ context.Context
 	return snapshot, nil
 }
 
+func setDeploymentStubConfig(t *testing.T, backend *deploymentLifecycleBackendRepo, config types.StubConfigV1) {
+	t.Helper()
+
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deployment := backend.deployments["deployment-id"]
+	deployment.Stub.Config = string(configBytes)
+	backend.deployments[deployment.ExternalId] = deployment
+}
+
 type deploymentLifecycleComputeRepo struct {
 	repository.ComputeRepository
 	states map[string]*compute.PoolState
@@ -230,20 +241,14 @@ func TestScalePodDeploymentZeroEnablesScaleToZero(t *testing.T) {
 
 func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
-	config := types.StubConfigV1{
+	setDeploymentStubConfig(t, backend, types.StubConfigV1{
 		Autoscaler: &types.Autoscaler{
 			Type:              types.LLMTokenPressureAutoscaler,
 			MinContainers:     1,
 			MaxContainers:     4,
 			TasksPerContainer: 16,
 		},
-	}
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deployment := backend.deployments["deployment-id"]
-	deployment.Stub.Config = string(configBytes)
-	backend.deployments["deployment-id"] = deployment
+	})
 
 	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
 		Id:         "deployment-id",
@@ -258,69 +263,8 @@ func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MaxContainers)
 }
 
-func TestScalePodDeploymentRefreshesDevDurableDiskPlacement(t *testing.T) {
-	gws, backend := newDeploymentLifecycleGateway(t)
-	workerRepo := newDurableDiskPlacementWorkerRepo(t)
-	require.NoError(t, workerRepo.AddWorker(&types.Worker{
-		Id:        "worker-b",
-		MachineId: "node-b",
-		Status:    types.WorkerStatusAvailable,
-		PoolName:  "pool-a",
-	}))
-	gws.workerRepo = workerRepo
-
-	config := types.StubConfigV1{
-		Pool: &types.PoolConfig{Name: "pool-a"},
-		Autoscaler: &types.Autoscaler{
-			Type:              types.QueueDepthAutoscaler,
-			MinContainers:     0,
-			MaxContainers:     1,
-			TasksPerContainer: 1,
-		},
-		Disks: []*pb.DurableDisk{{
-			Name:   "pg-data",
-			Driver: types.DurableDiskDriverDev,
-			Replication: &pb.DiskReplication{
-				PrimaryWorkerId: "node-a",
-			},
-		}},
-	}
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deployment := backend.deployments["deployment-id"]
-	deployment.Stub.Config = string(configBytes)
-	backend.deployments["deployment-id"] = deployment
-
-	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
-		Id:         "deployment-id",
-		Containers: 1,
-	})
-
-	require.NoError(t, err)
-	require.True(t, resp.Ok, resp.ErrMsg)
-	require.Equal(t, "node-b", backend.stubConfigs[20].Disks[0].Replication.PrimaryWorkerId)
-	require.Equal(t, []string{"node-b"}, backend.stubConfigs[20].Disks[0].Replication.ReplicaWorkerIds)
-}
-
 func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGone(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
-	workerRepo := newDurableDiskPlacementWorkerRepo(t)
-	require.NoError(t, workerRepo.AddWorker(&types.Worker{
-		Id:                   "a-private-worker",
-		Status:               types.WorkerStatusAvailable,
-		PoolName:             "other-private",
-		RequiresPoolSelector: true,
-	}))
-	require.NoError(t, workerRepo.AddWorker(&types.Worker{
-		Id:         "z-regular-worker",
-		Status:     types.WorkerStatusAvailable,
-		PoolName:   "beta9-cpu",
-		TotalCpu:   2000,
-		FreeCpu:    2000,
-		FreeMemory: 2000,
-	}))
-	gws.workerRepo = workerRepo
 	gws.computeRepo = &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{
 		"pool-a": {Name: "pool-a", Mode: string(types.PoolModePrivate)},
 	}}
@@ -343,17 +287,9 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 		Disks: []*pb.DurableDisk{{
 			Name:   "pg-data",
 			Driver: types.DurableDiskDriverDev,
-			Replication: &pb.DiskReplication{
-				PrimaryWorkerId: "node-a",
-			},
 		}},
 	}
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deployment := backend.deployments["deployment-id"]
-	deployment.Stub.Config = string(configBytes)
-	backend.deployments["deployment-id"] = deployment
+	setDeploymentStubConfig(t, backend, config)
 
 	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
 		Id:         "deployment-id",
@@ -363,15 +299,13 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 	require.NoError(t, err)
 	require.True(t, resp.Ok, resp.ErrMsg)
 	require.Nil(t, backend.stubConfigs[20].Pool)
-	require.Equal(t, "z-regular-worker", backend.stubConfigs[20].Disks[0].Replication.PrimaryWorkerId)
-	require.Equal(t, []string{"z-regular-worker"}, backend.stubConfigs[20].Disks[0].Replication.ReplicaWorkerIds)
+	require.Equal(t, types.DurableDiskDriverDev, backend.stubConfigs[20].Disks[0].Driver)
 }
 
 func TestScalePodDeploymentClearsUnavailablePrivatePoolWithoutDisks(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
-	gws.workerRepo = newDurableDiskPlacementWorkerRepo(t)
 
-	config := types.StubConfigV1{
+	setDeploymentStubConfig(t, backend, types.StubConfigV1{
 		Pool: &types.PoolConfig{Name: "pool-a"},
 		Autoscaler: &types.Autoscaler{
 			Type:              types.QueueDepthAutoscaler,
@@ -379,13 +313,7 @@ func TestScalePodDeploymentClearsUnavailablePrivatePoolWithoutDisks(t *testing.T
 			MaxContainers:     1,
 			TasksPerContainer: 1,
 		},
-	}
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deployment := backend.deployments["deployment-id"]
-	deployment.Stub.Config = string(configBytes)
-	backend.deployments["deployment-id"] = deployment
+	})
 
 	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
 		Id:         "deployment-id",

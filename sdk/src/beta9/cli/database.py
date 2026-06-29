@@ -35,7 +35,7 @@ from ..clients.secret import (
     GetSecretRequest,
     UpdateSecretRequest,
 )
-from ..type import DatabaseServingConfig, DiskReplication, DurableDisk, ServingConfig
+from ..type import DatabaseServingConfig, DurableDisk, ServingConfig
 from . import extraclick
 from .extraclick import ClickCommonGroup
 
@@ -389,7 +389,6 @@ def _database_service(
         name=f"{name}-data",
         size=size,
         mount_path=product.mount_path,
-        replication=DiskReplication(),
     )
     return Service(
         name=name,

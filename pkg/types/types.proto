@@ -100,7 +100,6 @@ message ContainerRequest {
   bool docker_enabled = 30;
   repeated string runtime_secret_names = 31;
   bool runtime_token_required = 32;
-  string target_worker_id = 33;
 }
 
 message ContainerState {
@@ -122,10 +121,6 @@ message DurableDiskMountConfig {
   string filesystem = 3;
   string driver = 4;
   uint32 replicas = 5;
-  string mode = 6;
-  string quorum = 7;
-  string primary_worker_id = 8;
-  repeated string replica_worker_i_ds = 9;
 }
 
 message FileInfo {

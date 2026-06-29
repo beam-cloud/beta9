@@ -82,36 +82,6 @@ func TestProvisioningFailureBackoffSkipsImmediateAddWorkerRetry(t *testing.T) {
 	assert.Equal(t, 1, controller.AddWorkerCallCount())
 }
 
-func TestTargetWorkerRequestDoesNotProvisionGenericWorker(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	controller := &LocalWorkerPoolControllerForTest{
-		ctx:        context.Background(),
-		name:       "beta9-cpu",
-		config:     scheduler.config,
-		workerRepo: scheduler.workerRepo,
-	}
-	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
-
-	request := &types.ContainerRequest{
-		ContainerId:    uuid.New().String(),
-		Cpu:            100,
-		Memory:         100,
-		PoolSelector:   "beta9-cpu",
-		TargetWorkerId: "storage-node-a",
-		Timestamp:      time.Now(),
-	}
-	newSchedulingAttempt(scheduler, request, nil).runWaitingOrProvisioning()
-
-	assert.Equal(t, 0, controller.AddWorkerCallCount())
-	time.Sleep(provisioningWorkerRequeueDelay + requestProcessingInterval)
-	requeuedRequest, err := scheduler.requestBacklog.Pop()
-	assert.Nil(t, err)
-	assert.Equal(t, request.ContainerId, requeuedRequest.ContainerId)
-	assert.Equal(t, "storage-node-a", requeuedRequest.TargetWorkerId)
-}
-
 func TestProvisioningAttemptDoesNotFailOverWithinReservation(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)

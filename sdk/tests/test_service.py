@@ -5,7 +5,6 @@ from unittest import TestCase, mock
 
 from beta9 import (
     DatabaseServingConfig,
-    DiskReplication,
     DurableDisk,
     Image,
     LLMConfig,
@@ -99,12 +98,7 @@ class TestService(TestCase):
                     name="pg-data",
                     size="10Gi",
                     mount_path="/var/lib/postgresql/data",
-                    replication=DiskReplication(
-                        replicas=3,
-                        mode="sync",
-                        quorum="majority",
-                        primary_worker_id="worker-a",
-                    ),
+                    replicas=3,
                 )
             ],
             serving=ServingConfig(
@@ -128,7 +122,7 @@ class TestService(TestCase):
         )
 
         self.assertEqual(req.disks[0].name, "pg-data")
-        self.assertEqual(req.disks[0].replication.primary_worker_id, "worker-a")
+        self.assertEqual(req.disks[0].replicas, 3)
         self.assertEqual(req.serving.database.kind, "postgres")
         self.assertEqual(req.serving.database.connection_env_name, "DATABASE_URL")
 

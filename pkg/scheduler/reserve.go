@@ -42,12 +42,6 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 		return
 	}
 
-	if a.request.TargetWorkerId != "" {
-		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "target_worker_wait")
-		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "target_worker_wait")
-		return
-	}
-
 	if a.tryPrivatePoolFallback() {
 		return
 	}

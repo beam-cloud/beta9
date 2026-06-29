@@ -2,12 +2,8 @@ package gatewayservices
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"os"
-	"slices"
-	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -27,7 +23,7 @@ func (gws *GatewayService) configureDurableDiskPlacement(ctx context.Context, wo
 		return gws.configureDurableDiskSnapshotFallback(ctx, workspace, poolName, stubConfig)
 	}
 
-	if err := gws.configureDurableDiskPlacementForPool(poolName, stubConfig); err != nil {
+	if err := gws.configureDurableDiskDrivers(stubConfig); err != nil {
 		if fallbackErr := gws.configureDurableDiskSnapshotFallback(ctx, workspace, poolName, stubConfig); fallbackErr != nil {
 			return fmt.Errorf("%w; snapshot fallback unavailable: %v", err, fallbackErr)
 		}
@@ -36,7 +32,7 @@ func (gws *GatewayService) configureDurableDiskPlacement(ctx context.Context, wo
 	return nil
 }
 
-func (gws *GatewayService) configureDurableDiskPlacementForPool(poolName string, stubConfig *types.StubConfigV1) error {
+func (gws *GatewayService) configureDurableDiskDrivers(stubConfig *types.StubConfigV1) error {
 	for _, disk := range stubConfig.Disks {
 		if disk == nil {
 			continue
@@ -48,12 +44,7 @@ func (gws *GatewayService) configureDurableDiskPlacementForPool(poolName string,
 		}
 		disk.Driver = driver
 
-		switch driver {
-		case types.DurableDiskDriverDev:
-			if err := gws.configureSingleNodeDurableDiskPlacement(poolName, disk); err != nil {
-				return err
-			}
-		default:
+		if driver != types.DurableDiskDriverDev {
 			return fmt.Errorf("durable disk %q requested unsupported driver %q", disk.Name, driver)
 		}
 	}
@@ -77,13 +68,7 @@ func (gws *GatewayService) configureDurableDiskSnapshotFallback(ctx context.Cont
 	}
 
 	stubConfig.Pool = nil
-	for _, disk := range stubConfig.Disks {
-		if disk == nil {
-			continue
-		}
-		disk.Replication = &pb.DiskReplication{}
-	}
-	return gws.configureDurableDiskPlacementForPool("", stubConfig)
+	return gws.configureDurableDiskDrivers(stubConfig)
 }
 
 func durableDiskSnapshotFallbackSupported(disks []*pb.DurableDisk) bool {
@@ -201,136 +186,6 @@ func (gws *GatewayService) privatePoolHasAvailableWorkers(poolName string) bool 
 		}
 	}
 	return false
-}
-
-func (gws *GatewayService) configureSingleNodeDurableDiskPlacement(poolName string, disk *pb.DurableDisk) error {
-	if disk.Replication == nil {
-		disk.Replication = &pb.DiskReplication{}
-	}
-
-	nodes, err := gws.durableDiskCandidateStorageNodes(poolName)
-	if err != nil {
-		return err
-	}
-
-	primaryID := strings.TrimSpace(disk.Replication.PrimaryWorkerId)
-	if primaryID != "" {
-		canonicalID, ok := durableDiskCanonicalStorageNodeID(primaryID, nodes)
-		if ok {
-			primaryID = canonicalID
-		} else {
-			primaryID = ""
-		}
-	}
-	if primaryID == "" {
-		if len(nodes) == 0 {
-			disk.Replication.PrimaryWorkerId = ""
-			disk.Replication.ReplicaWorkerIds = nil
-			return nil
-		}
-		primaryID = durableDiskPreferredStorageNodeID(disk.Name, nodes)
-	}
-
-	disk.Replication.PrimaryWorkerId = primaryID
-	disk.Replication.ReplicaWorkerIds = []string{primaryID}
-	return nil
-}
-
-type durableDiskStorageNode struct {
-	ID         string
-	WorkerID   string
-	FreeCPU    int64
-	FreeMemory int64
-}
-
-func (gws *GatewayService) durableDiskCandidateStorageNodes(poolName string) ([]durableDiskStorageNode, error) {
-	if gws == nil || gws.workerRepo == nil {
-		return nil, fmt.Errorf("durable disk placement requires a worker repository")
-	}
-
-	var (
-		workers []*types.Worker
-		err     error
-	)
-	if poolName != "" {
-		workers, err = gws.workerRepo.GetAllWorkersInPool(poolName)
-	} else {
-		workers, err = gws.workerRepo.GetAllWorkers()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list workers for durable disk placement: %w", err)
-	}
-
-	byID := map[string]durableDiskStorageNode{}
-	for _, worker := range workers {
-		if worker == nil || worker.Id == "" || worker.Status != types.WorkerStatusAvailable {
-			continue
-		}
-		if poolName == "" && worker.RequiresPoolSelector {
-			continue
-		}
-		storageNodeID := worker.StorageNodeID()
-		if storageNodeID == "" {
-			continue
-		}
-		node := durableDiskStorageNode{
-			ID:         storageNodeID,
-			WorkerID:   worker.Id,
-			FreeCPU:    worker.FreeCpu,
-			FreeMemory: worker.FreeMemory,
-		}
-		if existing, ok := byID[storageNodeID]; !ok || durableDiskStorageNodeLess(existing, node) {
-			byID[storageNodeID] = node
-		}
-	}
-
-	nodes := make([]durableDiskStorageNode, 0, len(byID))
-	for _, node := range byID {
-		nodes = append(nodes, node)
-	}
-	slices.SortFunc(nodes, func(a, b durableDiskStorageNode) int {
-		return strings.Compare(a.ID, b.ID)
-	})
-	return nodes, nil
-}
-
-func durableDiskPreferredStorageNodeID(diskName string, nodes []durableDiskStorageNode) string {
-	if len(nodes) == 0 {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(diskName))
-	start := int(binary.BigEndian.Uint64(sum[:8]) % uint64(len(nodes)))
-	best := nodes[start]
-	for offset := 1; offset < len(nodes); offset++ {
-		node := nodes[(start+offset)%len(nodes)]
-		if durableDiskStorageNodeLess(best, node) {
-			best = node
-		}
-	}
-	return best.ID
-}
-
-func durableDiskStorageNodeLess(a, b durableDiskStorageNode) bool {
-	if a.FreeMemory != b.FreeMemory {
-		return a.FreeMemory < b.FreeMemory
-	}
-	if a.FreeCPU != b.FreeCPU {
-		return a.FreeCPU < b.FreeCPU
-	}
-	return false
-}
-
-func durableDiskCanonicalStorageNodeID(id string, nodes []durableDiskStorageNode) (string, bool) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return "", false
-	}
-	for _, node := range nodes {
-		if id == node.ID || id == node.WorkerID {
-			return node.ID, true
-		}
-	}
-	return "", false
 }
 
 func durableDiskGatewayDriver(configured string) string {

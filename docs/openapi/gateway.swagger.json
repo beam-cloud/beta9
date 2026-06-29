@@ -318,44 +318,6 @@
         ]
       }
     },
-    "/deployments/{id}/bind": {
-      "post": {
-        "operationId": "GatewayService_BindService",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/gatewayBindServiceResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/GatewayServiceBindServiceBody"
-            }
-          }
-        ],
-        "tags": [
-          "GatewayService"
-        ]
-      }
-    },
     "/deployments/{id}/scale": {
       "post": {
         "operationId": "GatewayService_ScaleDeployment",
@@ -1603,29 +1565,6 @@
     }
   },
   "definitions": {
-    "GatewayServiceBindServiceBody": {
-      "type": "object",
-      "properties": {
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "secrets": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "secretEnv": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      }
-    },
     "GatewayServiceCreatePoolJoinTokenBody": {
       "type": "object",
       "properties": {
@@ -2125,17 +2064,6 @@
         }
       }
     },
-    "gatewayBindServiceResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayCheckpointContainerResponse": {
       "type": "object",
       "properties": {
@@ -2507,30 +2435,6 @@
         }
       }
     },
-    "gatewayDiskReplication": {
-      "type": "object",
-      "properties": {
-        "replicas": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "mode": {
-          "type": "string"
-        },
-        "quorum": {
-          "type": "string"
-        },
-        "replicaWorkerIds": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "primaryWorkerId": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayDrainWorkerResponse": {
       "type": "object",
       "properties": {
@@ -2560,8 +2464,9 @@
         "driver": {
           "type": "string"
         },
-        "replication": {
-          "$ref": "#/definitions/gatewayDiskReplication"
+        "replicas": {
+          "type": "integer",
+          "format": "int64"
         },
         "readOnly": {
           "type": "boolean"

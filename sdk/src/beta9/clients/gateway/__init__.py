@@ -324,22 +324,13 @@ class ServingConfig(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class DiskReplication(betterproto.Message):
-    replicas: int = betterproto.uint32_field(1)
-    mode: str = betterproto.string_field(2)
-    quorum: str = betterproto.string_field(3)
-    replica_worker_ids: List[str] = betterproto.string_field(4)
-    primary_worker_id: str = betterproto.string_field(5)
-
-
-@dataclass(eq=False, repr=False)
 class DurableDisk(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: str = betterproto.string_field(2)
     mount_path: str = betterproto.string_field(3)
     filesystem: str = betterproto.string_field(4)
     driver: str = betterproto.string_field(5)
-    replication: "DiskReplication" = betterproto.message_field(6)
+    replicas: int = betterproto.uint32_field(6)
     read_only: bool = betterproto.bool_field(7)
 
 

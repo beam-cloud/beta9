@@ -548,21 +548,13 @@ message ServingConfig {
   DatabaseServingConfig database = 4;
 }
 
-message DiskReplication {
-  uint32 replicas = 1;
-  string mode = 2;
-  string quorum = 3;
-  repeated string replica_worker_ids = 4;
-  string primary_worker_id = 5;
-}
-
 message DurableDisk {
   string name = 1;
   string size = 2;
   string mount_path = 3;
   string filesystem = 4;
   string driver = 5;
-  DiskReplication replication = 6;
+  uint32 replicas = 6;
   bool read_only = 7;
 }
 

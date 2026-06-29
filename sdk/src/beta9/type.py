@@ -336,33 +336,13 @@ class DatabaseServingConfig:
 
 
 @dataclass
-class DiskReplication:
-    replicas: int = 0
-    mode: str = ""
-    quorum: str = ""
-    replica_worker_ids: List[str] = field(default_factory=list)
-    primary_worker_id: str = ""
-
-    def export(self):
-        from .clients.gateway import DiskReplication as DiskReplicationProto
-
-        return DiskReplicationProto(
-            replicas=self.replicas,
-            mode=self.mode,
-            quorum=self.quorum,
-            replica_worker_ids=self.replica_worker_ids,
-            primary_worker_id=self.primary_worker_id,
-        )
-
-
-@dataclass
 class DurableDisk:
     name: str
     size: str
     mount_path: str
     filesystem: str = "ext4"
     driver: str = ""
-    replication: DiskReplication = field(default_factory=DiskReplication)
+    replicas: int = 0
     read_only: bool = False
 
     def export(self):
@@ -374,7 +354,7 @@ class DurableDisk:
             mount_path=self.mount_path,
             filesystem=self.filesystem,
             driver=self.driver,
-            replication=self.replication.export() if self.replication else None,
+            replicas=self.replicas,
             read_only=self.read_only,
         )
 

@@ -61,15 +61,11 @@ type Mount struct {
 
 // @go2proto
 type DurableDiskMountConfig struct {
-	Name             string   `json:"name"`
-	Size             string   `json:"size"`
-	Filesystem       string   `json:"filesystem"`
-	Driver           string   `json:"driver"`
-	Replicas         uint32   `json:"replicas"`
-	Mode             string   `json:"mode"`
-	Quorum           string   `json:"quorum"`
-	PrimaryWorkerID  string   `json:"primary_worker_id"`
-	ReplicaWorkerIDs []string `json:"replica_worker_ids"`
+	Name       string `json:"name"`
+	Size       string `json:"size"`
+	Filesystem string `json:"filesystem"`
+	Driver     string `json:"driver"`
+	Replicas   uint32 `json:"replicas"`
 }
 
 func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountConfig {
@@ -82,14 +78,7 @@ func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountCon
 		Size:       in.Size,
 		Filesystem: in.Filesystem,
 		Driver:     in.Driver,
-	}
-
-	if in.Replication != nil {
-		config.Replicas = in.Replication.Replicas
-		config.Mode = in.Replication.Mode
-		config.Quorum = in.Replication.Quorum
-		config.PrimaryWorkerID = in.Replication.PrimaryWorkerId
-		config.ReplicaWorkerIDs = append([]string(nil), in.Replication.ReplicaWorkerIds...)
+		Replicas:   in.Replicas,
 	}
 
 	return config
@@ -104,15 +93,11 @@ func (m *Mount) ToProto() *pb.Mount {
 	var durableDisk *pb.DurableDiskMountConfig
 	if m.DurableDisk != nil {
 		durableDisk = &pb.DurableDiskMountConfig{
-			Name:             m.DurableDisk.Name,
-			Size:             m.DurableDisk.Size,
-			Filesystem:       m.DurableDisk.Filesystem,
-			Driver:           m.DurableDisk.Driver,
-			Replicas:         m.DurableDisk.Replicas,
-			Mode:             m.DurableDisk.Mode,
-			Quorum:           m.DurableDisk.Quorum,
-			PrimaryWorkerId:  m.DurableDisk.PrimaryWorkerID,
-			ReplicaWorkerIDs: append([]string(nil), m.DurableDisk.ReplicaWorkerIDs...),
+			Name:       m.DurableDisk.Name,
+			Size:       m.DurableDisk.Size,
+			Filesystem: m.DurableDisk.Filesystem,
+			Driver:     m.DurableDisk.Driver,
+			Replicas:   m.DurableDisk.Replicas,
 		}
 	}
 
@@ -136,15 +121,11 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 	var durableDisk *DurableDiskMountConfig
 	if in.DurableDisk != nil {
 		durableDisk = &DurableDiskMountConfig{
-			Name:             in.DurableDisk.Name,
-			Size:             in.DurableDisk.Size,
-			Filesystem:       in.DurableDisk.Filesystem,
-			Driver:           in.DurableDisk.Driver,
-			Replicas:         in.DurableDisk.Replicas,
-			Mode:             in.DurableDisk.Mode,
-			Quorum:           in.DurableDisk.Quorum,
-			PrimaryWorkerID:  in.DurableDisk.PrimaryWorkerId,
-			ReplicaWorkerIDs: append([]string(nil), in.DurableDisk.ReplicaWorkerIDs...),
+			Name:       in.DurableDisk.Name,
+			Size:       in.DurableDisk.Size,
+			Filesystem: in.DurableDisk.Filesystem,
+			Driver:     in.DurableDisk.Driver,
+			Replicas:   in.DurableDisk.Replicas,
 		}
 	}
 

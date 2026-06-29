@@ -85,8 +85,6 @@ func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
 				Filesystem: "ext4",
 				Driver:     "dev",
 				Replicas:   3,
-				Mode:       "sync",
-				Quorum:     "majority",
 			},
 		}},
 	}
