@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -120,6 +121,9 @@ func workerImagesHostPath(poolConfig types.WorkerPoolConfig) string {
 func workerDurableDisksHostPath(poolConfig types.WorkerPoolConfig) string {
 	if poolConfig.DurableDisksPath != "" {
 		return poolConfig.DurableDisksPath
+	}
+	if poolConfig.StoragePath != "" {
+		return filepath.Join(poolConfig.StoragePath, "durable-disks")
 	}
 	return types.DefaultDurableDisksPath
 }

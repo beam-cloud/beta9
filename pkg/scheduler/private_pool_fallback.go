@@ -35,7 +35,12 @@ func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 }
 
 func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerRequest, string, bool) {
-	if a == nil || a.request == nil || a.request.HasDurableDiskMount() {
+	if a == nil || a.request == nil {
+		return nil, "", false
+	}
+	if a.request.HasDurableDiskMount() {
+		// Durable disk fallback is handled before scheduling so snapshot
+		// availability is checked before the pool selector is cleared.
 		return nil, "", false
 	}
 

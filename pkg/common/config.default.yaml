@@ -180,7 +180,8 @@ worker:
           - --overlay2=none
           - --file-access=shared
       # Optional per-pool durable disk and cache overrides for nodes with different storage layouts.
-      # durableDisksPath: /var/lib/beta9/durable-disks
+      # Defaults to <storagePath>/durable-disks when storagePath is set, otherwise /var/lib/beta9/durable-disks.
+      # durableDisksPath: /mnt/nvme/beta9/durable-disks
       # cache:
       #   disk:
       #     hostPath: /mnt/nvme/beta9/cache
@@ -210,7 +211,8 @@ worker:
           - --overlay2=none
           - --file-access=shared
       # Optional per-pool durable disk and cache overrides.
-      # durableDisksPath: /var/lib/beta9/durable-disks
+      # Defaults to <storagePath>/durable-disks when storagePath is set, otherwise /var/lib/beta9/durable-disks.
+      # durableDisksPath: /mnt/build-cache/beta9/durable-disks
       # cache:
       #   disk:
       #     hostPath: /mnt/build-cache/beta9/cache
