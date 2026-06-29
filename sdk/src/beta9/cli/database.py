@@ -45,12 +45,17 @@ def common(**_):
     pass
 
 
-@common.group(name="postgres", help="Create and manage Postgres services.")
+@common.group(name="db", help="Create and manage database services.")
+def db():
+    pass
+
+
+@db.group(name="postgres", help="Create and manage Postgres services.")
 def postgres():
     pass
 
 
-@common.group(name="redis", help="Create and manage Redis services.")
+@db.group(name="redis", help="Create and manage Redis services.")
 def redis():
     pass
 
