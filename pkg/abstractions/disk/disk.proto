@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+import "google/protobuf/timestamp.proto";
+
+package disk;
+
+import "google/api/annotations.proto";
+
+service DiskService {
+  rpc GetOrCreateDisk(GetOrCreateDiskRequest) returns (GetOrCreateDiskResponse) {
+    option (google.api.http) = {
+      post: "/disks"
+      body: "*"
+    };
+  }
+  rpc ListDisks(ListDisksRequest) returns (ListDisksResponse) {
+    option (google.api.http) = {
+      get: "/disks"
+    };
+  }
+  rpc DeleteDisk(DeleteDiskRequest) returns (DeleteDiskResponse) {
+    option (google.api.http) = {
+      post: "/disks/{name}/delete"
+      body: "*"
+    };
+  }
+  rpc ListDiskSnapshots(ListDiskSnapshotsRequest) returns (ListDiskSnapshotsResponse) {
+    option (google.api.http) = {
+      get: "/disks/snapshots"
+    };
+  }
+}
+
+message DiskInstance {
+  string id = 1;
+  string name = 2;
+  string size = 3;
+  string filesystem = 4;
+  string driver = 5;
+  string mount_path = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  string workspace_id = 9;
+  string workspace_name = 10;
+}
+
+message DiskSnapshotInstance {
+  string id = 1;
+  string disk_name = 2;
+  string format = 3;
+  string status = 4;
+  int64 generation = 5;
+  int64 size_bytes = 6;
+  int64 logical_size_bytes = 7;
+  int64 stored_size_bytes = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp completed_at = 10;
+}
+
+message GetOrCreateDiskRequest {
+  string name = 1;
+  string size = 2;
+  string filesystem = 3;
+  string driver = 4;
+  string mount_path = 5;
+}
+
+message GetOrCreateDiskResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  DiskInstance disk = 3;
+}
+
+message ListDisksRequest {}
+
+message ListDisksResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated DiskInstance disks = 3;
+}
+
+message DeleteDiskRequest {
+  string name = 1;
+}
+
+message DeleteDiskResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message ListDiskSnapshotsRequest {
+  string disk_name = 1;
+}
+
+message ListDiskSnapshotsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated DiskSnapshotInstance snapshots = 3;
+}

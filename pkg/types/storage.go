@@ -42,6 +42,28 @@ func IsDiskSnapshotFilesystemFormat(format string) bool {
 	}
 }
 
+// Disk is a first-class durable disk resource. Durable disks provide
+// node-local durable state that is snapshotted to object storage. A disk is
+// referenced by name when attached to a stub/service.
+type Disk struct {
+	Id          uint     `db:"id" json:"id"`
+	ExternalId  string   `db:"external_id" json:"external_id"`
+	WorkspaceId uint     `db:"workspace_id" json:"workspace_id"`
+	Name        string   `db:"name" json:"name"`
+	Size        string   `db:"size" json:"size"`
+	Filesystem  string   `db:"filesystem" json:"filesystem"`
+	Driver      string   `db:"driver" json:"driver"`
+	MountPath   string   `db:"mount_path" json:"mount_path"`
+	CreatedAt   Time     `db:"created_at" json:"created_at"`
+	UpdatedAt   Time     `db:"updated_at" json:"updated_at"`
+	DeletedAt   NullTime `db:"deleted_at" json:"deleted_at,omitempty"`
+}
+
+type DiskWithRelated struct {
+	Disk
+	Workspace Workspace `db:"workspace" json:"workspace"`
+}
+
 type DiskSnapshotStatus string
 
 const (

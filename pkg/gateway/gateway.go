@@ -27,6 +27,7 @@ import (
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 	"github.com/beam-cloud/beta9/pkg/clients"
 
+	disk "github.com/beam-cloud/beta9/pkg/abstractions/disk"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	dmap "github.com/beam-cloud/beta9/pkg/abstractions/map"
@@ -308,6 +309,9 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	if err := pb.RegisterVolumeServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
 	}
+	if err := pb.RegisterDiskServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
+		return err
+	}
 	if err := pb.RegisterGatewayServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
 	}
@@ -433,6 +437,13 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
+
+	// Register disk service
+	ds, err := disk.NewGlobalDiskService(g.BackendRepo, g.WorkspaceRepo, g.rootRouteGroup)
+	if err != nil {
+		return err
+	}
+	pb.RegisterDiskServiceServer(g.grpcServer, ds)
 
 	// Register pod service
 	ps, err := pod.NewPodService(

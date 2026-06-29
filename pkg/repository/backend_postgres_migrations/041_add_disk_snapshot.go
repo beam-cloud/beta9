@@ -11,8 +11,12 @@ func init() {
 	goose.AddMigrationContext(upAddDiskSnapshot, downAddDiskSnapshot)
 }
 
-func upAddDiskSnapshot(ctx context.Context, tx *sql.Tx) error {
-	statements := []string{
+// diskSnapshotSchemaStatements returns the idempotent statements that create the
+// disk_snapshot table and its indexes. It is shared so later migrations can
+// guarantee the table exists before altering it, which keeps migrations robust
+// even when goose version state and the actual schema drift apart.
+func diskSnapshotSchemaStatements() []string {
+	return []string{
 		`CREATE TABLE IF NOT EXISTS disk_snapshot (
 			id SERIAL PRIMARY KEY,
 			external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,
@@ -46,7 +50,10 @@ func upAddDiskSnapshot(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX IF NOT EXISTS idx_disk_snapshot_workspace_disk_available ON disk_snapshot(workspace_id, disk_name, generation DESC, created_at DESC) WHERE deleted_at IS NULL AND status = 'available';`,
 		`CREATE INDEX IF NOT EXISTS idx_disk_snapshot_stub ON disk_snapshot(stub_id) WHERE deleted_at IS NULL;`,
 	}
-	for _, statement := range statements {
+}
+
+func upAddDiskSnapshot(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range diskSnapshotSchemaStatements() {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}

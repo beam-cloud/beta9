@@ -11,6 +11,7 @@ from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
 from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
+from .clients.disk import DiskServiceStub
 from .clients.secret import SecretServiceStub
 from .clients.volume import VolumeServiceStub
 from .config import (
@@ -267,6 +268,7 @@ class ServiceClient:
         self._channel: Optional[Channel] = None
         self._gateway: Optional[GatewayServiceStub] = None
         self._volume: Optional[VolumeServiceStub] = None
+        self._disk: Optional[DiskServiceStub] = None
         self._secret: Optional[SecretServiceStub] = None
 
     def __enter__(self) -> "ServiceClient":
@@ -305,6 +307,12 @@ class ServiceClient:
         if not self._volume:
             self._volume = VolumeServiceStub(self.channel)
         return self._volume
+
+    @property
+    def disk(self) -> DiskServiceStub:
+        if not self._disk:
+            self._disk = DiskServiceStub(self.channel)
+        return self._disk
 
     @property
     def secret(self) -> SecretServiceStub:

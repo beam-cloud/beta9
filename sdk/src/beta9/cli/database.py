@@ -94,7 +94,6 @@ REDIS = DatabaseProduct(
 )
 
 DEFAULT_DATABASE_KEEP_WARM_SECONDS = 300
-DEFAULT_DATABASE_POOL = "default"
 DEFAULT_DATABASE_CPU = 1.0
 DEFAULT_DATABASE_MEMORY = 512
 
@@ -364,6 +363,7 @@ def _registry_image_id(service: ServiceClient, image: Image) -> Tuple[str, str]:
         VerifyImageBuildRequest(
             python_version=python_version,
             existing_image_uri=image.base_image,
+            ignore_python=image.ignore_python,
         )
     )
     if verify.exists:
@@ -374,6 +374,7 @@ def _registry_image_id(service: ServiceClient, image: Image) -> Tuple[str, str]:
         BuildImageRequest(
             python_version=python_version,
             existing_image_uri=image.base_image,
+            ignore_python=image.ignore_python,
         )
     ):
         if response.done:
@@ -397,6 +398,8 @@ def _database_service(
     memory: Optional[str],
 ) -> Service:
     secret_names = _secret_names(product, name)
+    image = Image.from_registry(product.image)
+    image.ignore_python = True
     disk = DurableDisk(
         name=f"{name}-data",
         size=size,
@@ -404,7 +407,7 @@ def _database_service(
     )
     return Service(
         name=name,
-        image=Image.from_registry(product.image),
+        image=image,
         entrypoint=_postgres_entrypoint(secret_names)
         if product.kind == "postgres"
         else _redis_entrypoint(secret_names),
@@ -412,7 +415,7 @@ def _database_service(
         tcp=True,
         min_replicas=min_replicas,
         keep_warm_seconds=DEFAULT_DATABASE_KEEP_WARM_SECONDS,
-        pool=pool or DEFAULT_DATABASE_POOL,
+        pool=pool,
         secrets=[v for k, v in secret_names.items() if k != "url"],
         env={},
         disks=[disk],
@@ -879,14 +882,14 @@ def redis_delete(service: ServiceClient, name: str):
 
 def _scale_options(func):
     func = click.option("--format", type=click.Choice(("table", "json")), default="table")(func)
-    func = click.option("--pool", type=click.STRING, default=None, help="Pool to use when redeploying with new resources.")(func)
+    func = click.option("--pool", type=click.STRING, default=None, help="Redeploy the database on a pool.")(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
     func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
-    func = click.option("--serverless", is_flag=True, help="Allow the database to scale to zero.")(func)
+    func = click.option("--serverless", is_flag=True, help="Scale to zero when idle.")(func)
     return click.option("--always-on", is_flag=True, help="Keep one database container warm.")(func)
 
 
-@postgres.command(name="scale", help="Scale a Postgres service.")
+@postgres.command(name="scale", help="Set Postgres warm mode or resources.")
 @click.argument("name")
 @_scale_options
 @extraclick.pass_service_client
@@ -903,7 +906,7 @@ def postgres_scale(
     _scale_database(service, POSTGRES, name, always_on, serverless, cpu, memory, pool, format)
 
 
-@redis.command(name="scale", help="Scale a Redis service.")
+@redis.command(name="scale", help="Set Redis warm mode or resources.")
 @click.argument("name")
 @_scale_options
 @extraclick.pass_service_client
@@ -938,7 +941,7 @@ def _scale_database(
     format: str,
 ) -> None:
     containers = _scale_mode_containers(always_on, serverless)
-    if cpu is not None or memory is not None:
+    if cpu is not None or memory is not None or pool is not None:
         secret_names = _secret_names(product, name)
         _scale_database_to(service, product, name, 0, quiet=True, all_deployments=True)
         _deploy_database_service(

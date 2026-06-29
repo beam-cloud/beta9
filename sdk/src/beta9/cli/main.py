@@ -17,6 +17,7 @@ from . import (
     database,
     deployment,
     dev,
+    disk,
     machine,
     pool,
     run,
@@ -101,6 +102,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(database)
     cli.register(serve)
     cli.register(volume)
+    cli.register(disk)
     cli.register(config)
     cli.register(pool)
     cli.register(container)

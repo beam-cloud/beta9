@@ -127,6 +127,11 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --p
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/volume/volume.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/volume/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/volume/volume.proto
 
+protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/disk/disk.proto
+protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/disk/disk.proto
+protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/disk/disk.proto
+protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/abstractions/disk/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/disk/disk.proto
+
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/taskqueue/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/taskqueue/taskqueue.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/taskqueue/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/taskqueue/taskqueue.proto
 

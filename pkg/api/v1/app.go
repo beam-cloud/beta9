@@ -1,7 +1,9 @@
 package apiv1
 
 import (
+	"context"
 	"net/http"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -186,10 +188,38 @@ func enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stu
 	}
 
 	if config.Pool != nil {
-		app.PoolName = config.Pool.Name
+		poolName := strings.TrimSpace(config.Pool.Name)
+		if poolName != "" && poolName != types.DefaultCPUWorkerPoolName {
+			app.PoolName = poolName
+		}
 	}
 	app.IsService = config.IsService
 	app.Serving = config.EffectiveServingConfig()
+}
+
+func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspaceID uint, app types.App) (AppWithLatestStubOrDeployment, error) {
+	appWithLatest := AppWithLatestStubOrDeployment{App: app}
+
+	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(ctx, workspaceID, []string{app.ExternalId})
+	if err != nil {
+		return appWithLatest, err
+	}
+	if deployment, ok := deploymentsByApp[app.ExternalId]; ok {
+		deploymentCopy := deployment
+		enrichAppWithStubConfig(&appWithLatest, &deploymentCopy.Stub)
+		return appWithLatest, nil
+	}
+
+	stubsByApp, err := a.backendRepo.ListLatestStubsByAppIDs(ctx, workspaceID, []string{app.ExternalId})
+	if err != nil {
+		return appWithLatest, err
+	}
+	if stub, ok := stubsByApp[app.ExternalId]; ok {
+		stubCopy := stub
+		enrichAppWithStubConfig(&appWithLatest, &stubCopy.Stub)
+	}
+
+	return appWithLatest, nil
 }
 
 func (a *AppGroup) ListApps(ctx echo.Context) error {
@@ -253,7 +283,12 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	serializedApp, err := serializer.Serialize(app)
+	appWithLatest, err := a.appWithLatestStubOrDeployment(ctx.Request().Context(), workspace.Id, *app)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get app metadata")
+	}
+
+	serializedApp, err := serializer.Serialize(appWithLatest)
 	if err != nil {
 		return HTTPInternalServerError("Failed to serialize response")
 	}

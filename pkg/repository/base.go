@@ -233,6 +233,10 @@ type BackendRepository interface {
 	GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error)
 	GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error)
 	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
+	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)
+	GetOrCreateDisk(ctx context.Context, workspaceId uint, disk *types.Disk) (*types.Disk, error)
+	DeleteDisk(ctx context.Context, workspaceId uint, name string) error
+	ListDisksWithRelated(ctx context.Context, workspaceId uint) ([]types.DiskWithRelated, error)
 }
 
 type TaskRepository interface {
