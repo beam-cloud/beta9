@@ -24,6 +24,7 @@ type appBackendRepo struct {
 	deploymentsByApp map[string][]types.DeploymentWithRelated
 	stubsByApp       map[string][]types.StubWithRelated
 	secrets          map[string]string
+	secretLookups    int
 }
 
 type appContainerRepo struct {
@@ -35,16 +36,6 @@ func (r *appContainerRepo) GetActiveContainersByWorkspaceId(_ string) ([]types.C
 	return r.states, nil
 }
 
-func (r *appContainerRepo) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
-	states := make([]types.ContainerState, 0)
-	for _, state := range r.states {
-		if state.StubId == stubId {
-			states = append(states, state)
-		}
-	}
-	return states, nil
-}
-
 func (r *appBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalId string) (types.Workspace, error) {
 	if r.workspace == nil || r.workspace.ExternalId != externalId {
 		return types.Workspace{}, errors.New("workspace not found")
@@ -53,8 +44,22 @@ func (r *appBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalId 
 	return *r.workspace, nil
 }
 
+func (r *appBackendRepo) GetWorkspaceByExternalIdWithSigningKey(_ context.Context, externalId string) (types.Workspace, error) {
+	return r.GetWorkspaceByExternalId(context.Background(), externalId)
+}
+
 func (r *appBackendRepo) ListAppsPaginated(_ context.Context, _ uint, _ types.AppFilter) (repoCommon.CursorPaginationInfo[types.App], error) {
 	return r.apps, nil
+}
+
+func (r *appBackendRepo) RetrieveApp(_ context.Context, workspaceID uint, appID string) (*types.App, error) {
+	for i := range r.apps.Data {
+		app := r.apps.Data[i]
+		if app.WorkspaceId == workspaceID && app.ExternalId == appID {
+			return &app, nil
+		}
+	}
+	return nil, nil
 }
 
 func (r *appBackendRepo) ListDeploymentsWithRelated(_ context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
@@ -85,15 +90,18 @@ func (r *appBackendRepo) ListLatestStubsByAppIDs(_ context.Context, _ uint, appE
 	return stubs, nil
 }
 
-func (r *appBackendRepo) GetSecretByNameDecrypted(_ context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+func (r *appBackendRepo) GetSecretsByNameDecrypted(_ context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
+	r.secretLookups++
 	if workspace == nil || r.workspace == nil || workspace.Id != r.workspace.Id {
 		return nil, errors.New("workspace not found")
 	}
-	value, ok := r.secrets[name]
-	if !ok {
-		return nil, errors.New("secret not found")
+	secrets := make([]types.Secret, 0, len(names))
+	for _, name := range names {
+		if value, ok := r.secrets[name]; ok {
+			secrets = append(secrets, types.Secret{Name: name, Value: value, WorkspaceId: workspace.Id})
+		}
 	}
-	return &types.Secret{Name: name, Value: value, WorkspaceId: workspace.Id}, nil
+	return secrets, nil
 }
 
 func TestListAppWithLatestActivityAllowsAppsWithoutActivity(t *testing.T) {
@@ -340,11 +348,47 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 	}
 }
 
-func TestListAppWithLatestActivityIncludesDatabaseURLs(t *testing.T) {
-	workspace := &types.Workspace{Id: 1, ExternalId: "workspace-1", Name: "Workspace 1"}
+func TestDatabaseAppListOmitsConnectionURLAndRetrieveIncludesIt(t *testing.T) {
+	signingKey := "test-signing-key"
+	workspace := &types.Workspace{Id: 1, ExternalId: "workspace-1", Name: "Workspace 1", SigningKey: &signingKey}
 	appWithDatabase := types.App{Id: 1, ExternalId: "app-db", Name: "App DB", WorkspaceId: workspace.Id}
 	connectionURL := "rediss://default:password@redis-a1b2c3d-latest-6379.svc.stage.beam.cloud:443/0"
 
+	backendRepo := &appBackendRepo{
+		workspace: workspace,
+		apps: repoCommon.CursorPaginationInfo[types.App]{
+			Data: []types.App{appWithDatabase},
+			Next: "",
+		},
+		deploymentsByApp: map[string][]types.DeploymentWithRelated{
+			appWithDatabase.ExternalId: {
+				{
+					Deployment: types.Deployment{
+						ExternalId:  "deployment-db",
+						Name:        "luke-staging-redis",
+						Subdomain:   "redis-a1b2c3d",
+						Version:     1,
+						WorkspaceId: workspace.Id,
+						AppId:       appWithDatabase.Id,
+					},
+					Stub: types.Stub{
+						Id:          1,
+						ExternalId:  "stub-db",
+						Name:        "Stub DB",
+						Type:        types.StubType(types.StubTypePodDeployment),
+						Config:      `{"is_service":true,"tcp":true,"ports":[6379],"serving":{"app_kind":"database","serving_protocol":"redis","database":{"kind":"redis","port":6379,"connection_env_name":"REDIS_URL","connection_url_secret_name":"BETA9_REDIS_URL"}}}`,
+						WorkspaceId: workspace.Id,
+						AppId:       appWithDatabase.Id,
+					},
+					Workspace: *workspace,
+					App:       appWithDatabase,
+				},
+			},
+		},
+		secrets: map[string]string{
+			"BETA9_REDIS_URL": connectionURL,
+		},
+	}
 	appGroup := &AppGroup{
 		config: types.AppConfig{
 			GatewayService: types.GatewayServiceConfig{
@@ -365,41 +409,7 @@ func TestListAppWithLatestActivityIncludesDatabaseURLs(t *testing.T) {
 				},
 			},
 		},
-		backendRepo: &appBackendRepo{
-			workspace: workspace,
-			apps: repoCommon.CursorPaginationInfo[types.App]{
-				Data: []types.App{appWithDatabase},
-				Next: "",
-			},
-			deploymentsByApp: map[string][]types.DeploymentWithRelated{
-				appWithDatabase.ExternalId: {
-					{
-						Deployment: types.Deployment{
-							ExternalId:  "deployment-db",
-							Name:        "luke-staging-redis",
-							Subdomain:   "redis-a1b2c3d",
-							Version:     1,
-							WorkspaceId: workspace.Id,
-							AppId:       appWithDatabase.Id,
-						},
-						Stub: types.Stub{
-							Id:          1,
-							ExternalId:  "stub-db",
-							Name:        "Stub DB",
-							Type:        types.StubType(types.StubTypePodDeployment),
-							Config:      `{"is_service":true,"tcp":true,"ports":[6379],"serving":{"app_kind":"database","serving_protocol":"redis","database":{"kind":"redis","port":6379,"connection_env_name":"REDIS_URL","connection_url_secret_name":"BETA9_REDIS_URL"}}}`,
-							WorkspaceId: workspace.Id,
-							AppId:       appWithDatabase.Id,
-						},
-						Workspace: *workspace,
-						App:       appWithDatabase,
-					},
-				},
-			},
-			secrets: map[string]string{
-				"BETA9_REDIS_URL": connectionURL,
-			},
-		},
+		backendRepo: backendRepo,
 	}
 
 	e := echo.New()
@@ -423,37 +433,98 @@ func TestListAppWithLatestActivityIncludesDatabaseURLs(t *testing.T) {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
 
-	var response struct {
+	var listResponse struct {
 		Data []struct {
-			ID            string `json:"id"`
-			URL           string `json:"url"`
-			InvokeURL     string `json:"invoke_url"`
-			ConnectionURL string `json:"connection_url"`
-			Deployment    struct {
+			ID         string `json:"id"`
+			URL        string `json:"url"`
+			InvokeURL  string `json:"invoke_url"`
+			Deployment struct {
 				URL       string `json:"url"`
 				InvokeURL string `json:"invoke_url"`
 			} `json:"deployment"`
-			Serving struct {
-				Database struct {
-					ConnectionURL string `json:"connection_url"`
-				} `json:"database"`
-			} `json:"serving"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResponse); err != nil {
 		t.Fatalf("failed to parse response: %v", err)
 	}
-	if len(response.Data) != 1 {
-		t.Fatalf("expected one app, got %d", len(response.Data))
+	if len(listResponse.Data) != 1 {
+		t.Fatalf("expected one app, got %d", len(listResponse.Data))
 	}
 
-	app := response.Data[0]
+	app := listResponse.Data[0]
 	expectedURL := "https://redis-a1b2c3d-latest-6379.svc.stage.beam.cloud"
 	if app.URL != expectedURL || app.InvokeURL != expectedURL || app.Deployment.URL != expectedURL || app.Deployment.InvokeURL != expectedURL {
 		t.Fatalf("unexpected urls: %+v", app)
 	}
-	if app.ConnectionURL != connectionURL || app.Serving.Database.ConnectionURL != connectionURL {
-		t.Fatalf("unexpected connection url: %+v", app)
+	if backendRepo.secretLookups != 0 {
+		t.Fatalf("list endpoint should not load secrets, got %d lookups", backendRepo.secretLookups)
+	}
+	var rawList struct {
+		Data []map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rawList); err != nil {
+		t.Fatalf("failed to parse raw response: %v", err)
+	}
+	if _, ok := rawList.Data[0]["connection_url"]; ok {
+		t.Fatalf("list response should not include connection_url: %s", rec.Body.String())
+	}
+	if servingRaw, ok := rawList.Data[0]["serving"]; ok {
+		var serving map[string]json.RawMessage
+		if err := json.Unmarshal(servingRaw, &serving); err != nil {
+			t.Fatalf("failed to parse serving response: %v", err)
+		}
+		if databaseRaw, ok := serving["database"]; ok {
+			var database map[string]json.RawMessage
+			if err := json.Unmarshal(databaseRaw, &database); err != nil {
+				t.Fatalf("failed to parse database response: %v", err)
+			}
+			if _, ok := database["connection_url"]; ok {
+				t.Fatalf("list serving response should not include connection_url: %s", rec.Body.String())
+			}
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/workspace-1/app-db", nil)
+	rec = httptest.NewRecorder()
+	ctx = e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId", "appId")
+	ctx.SetParamValues(workspace.ExternalId, appWithDatabase.ExternalId)
+
+	err = appGroup.RetrieveApp(&auth.HttpAuthContext{
+		Context: ctx,
+		AuthInfo: &auth.AuthInfo{
+			Workspace: workspace,
+			Token:     &types.Token{TokenType: types.TokenTypeWorkspacePrimary},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if backendRepo.secretLookups != 1 {
+		t.Fatalf("retrieve endpoint should load one secret batch, got %d lookups", backendRepo.secretLookups)
+	}
+
+	var detailResponse struct {
+		URL           string `json:"url"`
+		InvokeURL     string `json:"invoke_url"`
+		ConnectionURL string `json:"connection_url"`
+		Serving       struct {
+			Database struct {
+				ConnectionURL string `json:"connection_url"`
+			} `json:"database"`
+		} `json:"serving"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &detailResponse); err != nil {
+		t.Fatalf("failed to parse retrieve response: %v", err)
+	}
+	if detailResponse.URL != expectedURL || detailResponse.InvokeURL != expectedURL {
+		t.Fatalf("unexpected retrieve urls: %+v", detailResponse)
+	}
+	if detailResponse.ConnectionURL != connectionURL || detailResponse.Serving.Database.ConnectionURL != connectionURL {
+		t.Fatalf("unexpected retrieve connection url: %+v", detailResponse)
 	}
 }
 
@@ -464,7 +535,7 @@ func TestEnrichAppWithStubConfigHidesDefaultPool(t *testing.T) {
 	}
 
 	appGroup := &AppGroup{}
-	appGroup.enrichAppWithStubConfig(context.Background(), nil, &app, stub, nil)
+	appGroup.enrichAppWithStubConfig(&app, stub, nil)
 
 	if app.PoolName != "" {
 		t.Fatalf("expected default pool to be hidden, got %q", app.PoolName)
