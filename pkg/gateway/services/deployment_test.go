@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ type deploymentLifecycleBackendRepo struct {
 	repository.BackendRepository
 	deployments map[string]types.DeploymentWithRelated
 	stubConfigs map[uint]*types.StubConfigV1
+	secrets     map[string]types.Secret
 	snapshots   map[string]*types.DiskSnapshot
 }
 
@@ -87,12 +89,14 @@ func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLi
 			deployment.ExternalId: deployment,
 		},
 		stubConfigs: map[uint]*types.StubConfigV1{},
+		secrets:     map[string]types.Secret{},
 		snapshots:   map[string]*types.DiskSnapshot{},
 	}
 
 	return &GatewayService{
 		appConfig: types.AppConfig{
 			GatewayService: types.GatewayServiceConfig{
+				Host:       "localhost",
 				StubLimits: types.StubLimits{MaxReplicas: 10},
 			},
 		},
@@ -151,6 +155,14 @@ func (r *deploymentLifecycleBackendRepo) UpdateStubConfig(_ context.Context, stu
 	return nil
 }
 
+func (r *deploymentLifecycleBackendRepo) GetSecretByName(_ context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
+	secret, ok := r.secrets[name]
+	if !ok || secret.WorkspaceId != workspace.Id {
+		return nil, errors.New("secret not found")
+	}
+	return &secret, nil
+}
+
 func (r *deploymentLifecycleBackendRepo) GetLatestDiskSnapshot(_ context.Context, workspaceID uint, diskName string) (*types.DiskSnapshot, error) {
 	snapshot, ok := r.snapshots[diskName]
 	if !ok || snapshot.WorkspaceId != workspaceID {
@@ -174,6 +186,34 @@ type deploymentLifecycleContainerRepo struct {
 
 func (r *deploymentLifecycleContainerRepo) GetActiveContainersByStubId(string) ([]types.ContainerState, error) {
 	return nil, nil
+}
+
+func TestBindServiceAddsSecretEnvAndGatewayHostAlias(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	t.Setenv("BETA9_GATEWAY_PROXY_TCP_SERVICE_HOST", "10.0.0.5")
+
+	backend.secrets["DATABASE_URL_SECRET"] = types.Secret{
+		Name:        "DATABASE_URL_SECRET",
+		Value:       "postgresql://user:pass@pg.example.test:443/app?sslmode=require",
+		WorkspaceId: 1,
+	}
+
+	res, err := gws.BindService(auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 1},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspace},
+	}), &pb.BindServiceRequest{
+		Id:        "deployment-id",
+		Env:       map[string]string{"REDIS_URL": "rediss://default:pass@redis.example.test:443/0"},
+		SecretEnv: map[string]string{"DATABASE_URL": "DATABASE_URL_SECRET"},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	config := backend.stubConfigs[20]
+	require.NotNil(t, config)
+	require.Contains(t, config.Secrets, types.Secret{Name: "DATABASE_URL", Value: backend.secrets["DATABASE_URL_SECRET"].Value})
+	require.Equal(t, "10.0.0.5", config.HostAliases["pg.example.test"])
+	require.Equal(t, "10.0.0.5", config.HostAliases["redis.example.test"])
 }
 
 func TestPodDeploymentLifecycleUsesListedDeploymentID(t *testing.T) {

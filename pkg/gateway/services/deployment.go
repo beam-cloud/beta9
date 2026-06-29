@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -222,10 +225,12 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 			ErrMsg: "Unable to parse deployment config",
 		}, nil
 	}
-	stubConfig.HostAliases = nil
 
 	for key, value := range in.Env {
 		stubConfig.Env = mergeEnvVar(stubConfig.Env, key, value)
+		if host, ip, ok := gws.serviceBindingHostAlias(value); ok {
+			stubConfig.HostAliases = mergeHostAlias(stubConfig.HostAliases, host, ip)
+		}
 	}
 
 	for _, secretName := range in.Secrets {
@@ -258,6 +263,9 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 			CreatedAt: secret.CreatedAt,
 			UpdatedAt: secret.UpdatedAt,
 		})
+		if host, ip, ok := gws.serviceBindingHostAlias(secret.Value); ok {
+			stubConfig.HostAliases = mergeHostAlias(stubConfig.HostAliases, host, ip)
+		}
 	}
 
 	if err := gws.backendRepo.UpdateStubConfig(ctx, deploymentWithRelated.Stub.Id, stubConfig); err != nil {
@@ -275,6 +283,74 @@ func (gws *GatewayService) BindService(ctx context.Context, in *pb.BindServiceRe
 	}})
 
 	return &pb.BindServiceResponse{Ok: true}, nil
+}
+
+func (gws *GatewayService) serviceBindingHostAlias(secretValue string) (string, string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(secretValue))
+	if err != nil {
+		return "", "", false
+	}
+	switch parsed.Scheme {
+	case "postgres", "postgresql", "redis", "rediss":
+	default:
+		return "", "", false
+	}
+
+	host := parsed.Hostname()
+	ip := gws.serviceBindingProxyIP()
+	return host, ip, host != "" && ip != ""
+}
+
+func (gws *GatewayService) serviceBindingProxyIP() string {
+	if gws == nil {
+		return ""
+	}
+
+	for _, host := range []string{
+		os.Getenv("BETA9_GATEWAY_PROXY_TCP_SERVICE_HOST"),
+		"beta9-gateway-proxy-tcp",
+		gws.appConfig.GatewayService.Host,
+	} {
+		if ip := lookupHostIP(host); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
+func lookupHostIP(host string) string {
+	host = strings.TrimSpace(host)
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+	}
+	if host == "" {
+		return ""
+	}
+	if parsed := net.ParseIP(host); parsed != nil {
+		return parsed.String()
+	}
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return ""
+	}
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String()
+		}
+	}
+	if len(ips) > 0 {
+		return ips[0].String()
+	}
+	return ""
+}
+
+func mergeHostAlias(aliases map[string]string, host, ip string) map[string]string {
+	if aliases == nil {
+		aliases = map[string]string{}
+	}
+	aliases[host] = ip
+	return aliases
 }
 
 func (gws *GatewayService) usesPrivatePool(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) bool {

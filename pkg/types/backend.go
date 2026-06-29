@@ -568,6 +568,45 @@ type DatabaseServingConfig struct {
 	ConnectionURLSecretName string   `json:"connection_url_secret_name,omitempty" serializer:"connection_url_secret_name,omitempty"`
 }
 
+const (
+	DatabaseKindPostgres      = "postgres"
+	DatabaseKindPostgresAlias = "postgresql"
+	DatabaseKindRedis         = "redis"
+	DatabaseKindValkey        = "valkey"
+
+	PostgresDataMountPath = "/var/lib/postgresql/data"
+)
+
+func NormalizeDatabaseKind(kind string) string {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	switch kind {
+	case DatabaseKindPostgresAlias:
+		return DatabaseKindPostgres
+	default:
+		return kind
+	}
+}
+
+func (c *DatabaseServingConfig) NormalizedKind() string {
+	if c == nil {
+		return ""
+	}
+	return NormalizeDatabaseKind(c.Kind)
+}
+
+func (c *DatabaseServingConfig) IsPostgres() bool {
+	return c.NormalizedKind() == DatabaseKindPostgres
+}
+
+func (c *DatabaseServingConfig) IsRedisCompatible() bool {
+	switch c.NormalizedKind() {
+	case DatabaseKindRedis, DatabaseKindValkey:
+		return true
+	default:
+		return false
+	}
+}
+
 type LLMConfig struct {
 	ModelID         string `json:"model_id,omitempty" serializer:"model_id,omitempty"`
 	Engine          string `json:"engine,omitempty" serializer:"engine,omitempty"`

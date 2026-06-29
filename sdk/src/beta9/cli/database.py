@@ -228,6 +228,17 @@ def _redis_url(username: str, password: str, host: str) -> str:
     return "rediss://:{}@{}/0".format(quote(password), host)
 
 
+def _redis_connection_fields(url: str) -> Dict[str, object]:
+    parsed = urlparse(url)
+    return {
+        "host": parsed.hostname or "",
+        "port": parsed.port or 443,
+        "username": parsed.username or "default",
+        "password": parsed.password or "",
+        "tls_server_name": parsed.hostname or "",
+    }
+
+
 def _print_result(format: str, payload: Dict[str, object]) -> None:
     if format == "json":
         terminal.print_json(payload)
@@ -539,6 +550,7 @@ def _deploy_database_service(
             "connection_string_secret": secret_names["url"],
             "username_secret": secret_names["username"],
             "password_secret": secret_names["password"],
+            **({"tls_server_name": _redis_connection_fields(connection_url)["tls_server_name"]} if product.kind == "redis" else {}),
             **({"database": database} if product.kind == "postgres" else {}),
             **({"database_secret": secret_names["database"]} if product.kind == "postgres" else {}),
         },
@@ -653,6 +665,8 @@ def _credentials(service: ServiceClient, product: DatabaseProduct, name: str, fo
     }
     if product.kind == "postgres":
         payload["database"] = _get_secret_value(service, secret_names["database"])
+    else:
+        payload.update({k: v for k, v in _redis_connection_fields(payload["connection_string"]).items() if k != "password"})
     _print_result(format, payload)
 
 
@@ -684,22 +698,41 @@ def postgres_connect(service: ServiceClient, name: str, psql_command: bool):
 @redis.command(name="connect", help="Print the Redis connection string.")
 @click.argument("name")
 @click.option("--redis-cli", "redis_cli_command", is_flag=True, help="Print a redis-cli command with SNI.")
+@click.option("--node-redis", "node_redis", is_flag=True, help="Print a node-redis connection snippet.")
+@click.option("--ioredis", "ioredis", is_flag=True, help="Print an ioredis connection snippet.")
 @extraclick.pass_service_client
-def redis_connect(service: ServiceClient, name: str, redis_cli_command: bool):
+def redis_connect(
+    service: ServiceClient,
+    name: str,
+    redis_cli_command: bool,
+    node_redis: bool,
+    ioredis: bool,
+):
+    if sum([redis_cli_command, node_redis, ioredis]) > 1:
+        raise click.ClickException("Specify only one Redis client output format.")
+
     url = _get_secret_value(service, _secret_names(REDIS, name)["url"])
+    fields = _redis_connection_fields(url)
     if redis_cli_command:
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-        username = parsed.username or "default"
-        password = parsed.password or ""
-        port = parsed.port or 443
         click.echo(
             "redis-cli --tls --sni {host} -h {host} -p {port} --user {username} --pass {password}".format(
-                host=shlex.quote(host),
-                port=shlex.quote(str(port)),
-                username=shlex.quote(username),
-                password=shlex.quote(password),
+                host=shlex.quote(str(fields["host"])),
+                port=shlex.quote(str(fields["port"])),
+                username=shlex.quote(str(fields["username"])),
+                password=shlex.quote(str(fields["password"])),
             )
+        )
+        return
+    if node_redis:
+        click.echo(
+            "createClient({ url: %s, socket: { tls: true, servername: %s } })"
+            % (repr(url), repr(fields["tls_server_name"]))
+        )
+        return
+    if ioredis:
+        click.echo(
+            "new Redis(%s, { tls: { servername: %s } })"
+            % (repr(url), repr(fields["tls_server_name"]))
         )
         return
     click.echo(url)

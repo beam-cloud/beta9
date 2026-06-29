@@ -34,7 +34,7 @@ func TestDevDurableDiskRestoresMissingPrimaryFromReplica(t *testing.T) {
 func TestDevDurableDiskCleansStalePostgresPid(t *testing.T) {
 	primary := filepath.Join(t.TempDir(), "pg-data")
 	mount := devDurableDiskTestMount(primary)
-	mount.MountPath = "/var/lib/postgresql/data"
+	mount.MountPath = types.PostgresDataMountPath
 
 	incomplete := filepath.Join(primary, "pgdata")
 	require.NoError(t, os.MkdirAll(incomplete, 0o755))
@@ -77,7 +77,7 @@ func TestAddRequestMountsPreparesDevDurableDisk(t *testing.T) {
 		ContainerId: "container-1",
 		Mounts: []types.Mount{{
 			LocalPath: localPath,
-			MountPath: "/var/lib/postgresql/data",
+			MountPath: types.PostgresDataMountPath,
 			MountType: types.StorageModeDurableDisk,
 			DurableDisk: &types.DurableDiskMountConfig{
 				Name:       "pg-data",

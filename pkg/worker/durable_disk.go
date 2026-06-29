@@ -309,10 +309,11 @@ func durableDiskSnapshotFormatForMount(request *types.ContainerRequest, mount *t
 		return types.DiskSnapshotFormatDirV1
 	}
 
-	switch strings.ToLower(strings.TrimSpace(config.EffectiveDatabaseConfig().Kind)) {
-	case "postgres", "postgresql":
+	database := config.EffectiveDatabaseConfig()
+	switch {
+	case database.IsPostgres():
 		return types.DiskSnapshotFormatPostgresWalV1
-	case "redis", "valkey":
+	case database.IsRedisCompatible():
 		return types.DiskSnapshotFormatRedisAOFV1
 	default:
 		return types.DiskSnapshotFormatDirV1
@@ -469,7 +470,7 @@ func devDurableDiskHasRestorablePayload(mount *types.Mount, diskPath string) boo
 }
 
 func devDurableDiskHasIncompletePostgresPayload(mount *types.Mount, diskPath string) bool {
-	if mount == nil || mount.MountPath != "/var/lib/postgresql/data" {
+	if mount == nil || mount.MountPath != types.PostgresDataMountPath {
 		return false
 	}
 	pgDataPath := filepath.Join(diskPath, "pgdata")
@@ -483,7 +484,7 @@ func devDurableDiskHasIncompletePostgresPayload(mount *types.Mount, diskPath str
 }
 
 func cleanDevDurableDiskRuntimeFiles(mount *types.Mount, diskPath string) error {
-	if mount == nil || mount.MountPath != "/var/lib/postgresql/data" {
+	if mount == nil || mount.MountPath != types.PostgresDataMountPath {
 		return nil
 	}
 	if err := os.Remove(filepath.Join(diskPath, "pgdata", "postmaster.pid")); err != nil && !os.IsNotExist(err) {
