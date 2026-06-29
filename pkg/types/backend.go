@@ -570,6 +570,17 @@ type DatabaseServingConfig struct {
 	ConnectionURLSecretName string   `json:"connection_url_secret_name,omitempty" serializer:"connection_url_secret_name,omitempty"`
 }
 
+func (d *DatabaseServingConfig) ClearSecretNames() {
+	if d == nil {
+		return
+	}
+	d.CredentialSecretNames = nil
+	d.UsernameSecretName = ""
+	d.PasswordSecretName = ""
+	d.DatabaseSecretName = ""
+	d.ConnectionURLSecretName = ""
+}
+
 const (
 	DatabaseKindPostgres      = "postgres"
 	DatabaseKindPostgresAlias = "postgresql"
@@ -902,6 +913,9 @@ func (s *Stub) SanitizeConfig() error {
 	// Remove secret values from config
 	for i := range config.Secrets {
 		config.Secrets[i].Value = ""
+	}
+	if config.Serving != nil {
+		config.Serving.Database.ClearSecretNames()
 	}
 
 	data, err := json.Marshal(config)

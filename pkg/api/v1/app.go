@@ -112,13 +112,13 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 
 		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
 			deploymentCopy := deployment
-			a.enrichAppWithStubConfig(ctx.Request().Context(), &workspace, &appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment)
+			a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment, false)
 			if deploymentCopy.Stub.ExternalId != "" {
 				latestStubIndexes[deploymentCopy.Stub.ExternalId] = append(latestStubIndexes[deploymentCopy.Stub.ExternalId], i)
 			}
 			deploymentCopy.URL = appsWithLatest.Data[i].URL
 			deploymentCopy.InvokeURL = appsWithLatest.Data[i].InvokeURL
-			if err := deploymentCopy.Stub.SanitizeConfig(); err != nil {
+			if err := sanitizeDeploymentWithRelated(&deploymentCopy); err != nil {
 				return HTTPInternalServerError("Failed to sanitize stub config")
 			}
 			appsWithLatest.Data[i].Deployment = &deploymentCopy
@@ -131,18 +131,18 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		stubCopy := stub
-		a.enrichAppWithStubConfig(ctx.Request().Context(), &workspace, &appsWithLatest.Data[i], &stubCopy.Stub, nil)
+		a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub, nil, false)
 		if stubCopy.Stub.ExternalId != "" {
 			latestStubIndexes[stubCopy.Stub.ExternalId] = append(latestStubIndexes[stubCopy.Stub.ExternalId], i)
 		}
 		appsWithLatest.Data[i].Stub = &stubCopy
-		if err := appsWithLatest.Data[i].Stub.SanitizeConfig(); err != nil {
+		if err := sanitizeStubWithRelated(appsWithLatest.Data[i].Stub); err != nil {
 			return HTTPInternalServerError("Failed to sanitize stub config")
 		}
 	}
 
 	if a.containerRepo != nil && len(latestStubIndexes) > 0 {
-		runningByStubID, err := countRunningContainersByStubID(a.containerRepo, latestStubIndexes)
+		runningByStubID, err := countRunningContainersForStubs(a.containerRepo, workspaceID, latestStubIndexes)
 		if err != nil {
 			return HTTPInternalServerError("Failed to get running containers")
 		}
@@ -165,24 +165,26 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 	)
 }
 
-func countRunningContainersByStubID(containerRepo repository.ContainerRepository, latestStubIndexes map[string][]int) (map[string]int, error) {
+func countRunningContainersForStubs(containerRepo repository.ContainerRepository, workspaceID string, latestStubIndexes map[string][]int) (map[string]int, error) {
 	runningByStubID := make(map[string]int, len(latestStubIndexes))
-	for stubID := range latestStubIndexes {
-		containers, err := containerRepo.GetActiveContainersByStubId(stubID)
-		if err != nil {
-			return nil, err
-		}
+	containers, err := containerRepo.GetActiveContainersByWorkspaceId(workspaceID)
+	if err != nil {
+		return nil, err
+	}
 
-		for _, container := range containers {
-			if container.Status == types.ContainerStatusRunning {
-				runningByStubID[stubID]++
-			}
+	for _, container := range containers {
+		if container.Status != types.ContainerStatusRunning {
+			continue
+		}
+		if _, ok := latestStubIndexes[container.StubId]; ok {
+			runningByStubID[container.StubId]++
 		}
 	}
+
 	return runningByStubID, nil
 }
 
-func (a *AppGroup) enrichAppWithStubConfig(ctx context.Context, workspace *types.Workspace, app *AppWithLatestStubOrDeployment, stub *types.Stub, deployment *types.Deployment) {
+func (a *AppGroup) enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stub, deployment *types.Deployment, includeDatabaseSecretNames bool) {
 	if stub == nil {
 		return
 	}
@@ -200,12 +202,11 @@ func (a *AppGroup) enrichAppWithStubConfig(ctx context.Context, workspace *types
 	}
 	app.IsService = config.IsService
 	app.Serving = cloneServingConfig(config.EffectiveServingConfig())
+	if !includeDatabaseSecretNames {
+		clearDatabaseSecretNames(app.Serving)
+	}
 	app.URL = a.appURL(stub, config, deployment)
 	app.InvokeURL = app.URL
-	if connectionURL := a.databaseConnectionURL(ctx, workspace, app.Serving); connectionURL != "" {
-		app.ConnectionURL = connectionURL
-		app.Serving.Database.ConnectionURL = connectionURL
-	}
 }
 
 func cloneServingConfig(serving *types.ServingConfig) *types.ServingConfig {
@@ -222,6 +223,23 @@ func cloneServingConfig(serving *types.ServingConfig) *types.ServingConfig {
 		clone.LLM = &llm
 	}
 	return &clone
+}
+
+func clearDatabaseSecretNames(serving *types.ServingConfig) {
+	if serving == nil || serving.Database == nil {
+		return
+	}
+	serving.Database.ClearSecretNames()
+}
+
+func sanitizeDeploymentWithRelated(deployment *types.DeploymentWithRelated) error {
+	deployment.Workspace = deployment.Workspace.WithoutPrivateCredentials()
+	return deployment.Stub.SanitizeConfig()
+}
+
+func sanitizeStubWithRelated(stub *types.StubWithRelated) error {
+	stub.Workspace = stub.Workspace.WithoutPrivateCredentials()
+	return stub.SanitizeConfig()
 }
 
 func (a *AppGroup) appURL(stub *types.Stub, config *types.StubConfigV1, deployment *types.Deployment) string {
@@ -244,16 +262,32 @@ func (a *AppGroup) appURL(stub *types.Stub, config *types.StubConfigV1, deployme
 	return common.BuildStubURL(a.config.GatewayService.HTTP.GetExternalURL(), a.config.GatewayService.InvokeURLType, stubWithRelated)
 }
 
-func (a *AppGroup) databaseConnectionURL(ctx context.Context, workspace *types.Workspace, serving *types.ServingConfig) string {
-	if workspace == nil || serving == nil || serving.Database == nil || serving.Database.ConnectionURLSecretName == "" {
-		return ""
+func (a *AppGroup) hydrateDatabaseConnectionURL(ctx context.Context, workspace *types.Workspace, app *AppWithLatestStubOrDeployment) {
+	if app == nil {
+		return
 	}
-	secret, err := a.backendRepo.GetSecretByNameDecrypted(ctx, workspace, serving.Database.ConnectionURLSecretName)
+	defer clearDatabaseSecretNames(app.Serving)
+
+	if workspace == nil || workspace.SigningKey == nil || app.Serving == nil || app.Serving.Database == nil {
+		return
+	}
+
+	name := app.Serving.Database.ConnectionURLSecretName
+	if name == "" {
+		return
+	}
+
+	secrets, err := a.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, []string{name})
 	if err != nil {
-		log.Warn().Err(err).Str("secret_name", serving.Database.ConnectionURLSecretName).Msg("failed to load database connection url")
-		return ""
+		log.Warn().Err(err).Str("secret_name", name).Msg("failed to load database connection url")
+		return
 	}
-	return secret.Value
+	if len(secrets) == 0 {
+		return
+	}
+
+	app.ConnectionURL = secrets[0].Value
+	app.Serving.Database.ConnectionURL = secrets[0].Value
 }
 
 func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace *types.Workspace, app types.App) (AppWithLatestStubOrDeployment, error) {
@@ -265,9 +299,12 @@ func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace 
 	}
 	if deployment, ok := deploymentsByApp[app.ExternalId]; ok {
 		deploymentCopy := deployment
-		a.enrichAppWithStubConfig(ctx, workspace, &appWithLatest, &deploymentCopy.Stub, &deploymentCopy.Deployment)
+		a.enrichAppWithStubConfig(&appWithLatest, &deploymentCopy.Stub, &deploymentCopy.Deployment, true)
 		deploymentCopy.URL = appWithLatest.URL
 		deploymentCopy.InvokeURL = appWithLatest.InvokeURL
+		if err := sanitizeDeploymentWithRelated(&deploymentCopy); err != nil {
+			return appWithLatest, err
+		}
 		appWithLatest.Deployment = &deploymentCopy
 		return appWithLatest, nil
 	}
@@ -278,7 +315,10 @@ func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace 
 	}
 	if stub, ok := stubsByApp[app.ExternalId]; ok {
 		stubCopy := stub
-		a.enrichAppWithStubConfig(ctx, workspace, &appWithLatest, &stubCopy.Stub, nil)
+		a.enrichAppWithStubConfig(&appWithLatest, &stubCopy.Stub, nil, true)
+		if err := sanitizeStubWithRelated(&stubCopy); err != nil {
+			return appWithLatest, err
+		}
 		appWithLatest.Stub = &stubCopy
 	}
 
@@ -328,7 +368,7 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	workspace, err := a.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	workspace, err := a.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx.Request().Context(), workspaceID)
 	if err != nil {
 		return HTTPBadRequest("Failed to retrieve workspace")
 	}
@@ -350,6 +390,7 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 	if err != nil {
 		return HTTPInternalServerError("Failed to get app metadata")
 	}
+	a.hydrateDatabaseConnectionURL(ctx.Request().Context(), &workspace, &appWithLatest)
 
 	serializedApp, err := serializer.Serialize(appWithLatest)
 	if err != nil {
