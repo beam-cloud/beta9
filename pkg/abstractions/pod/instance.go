@@ -15,7 +15,8 @@ import (
 
 type podInstance struct {
 	*abstractions.AutoscaledInstance
-	buffer *PodProxyBuffer
+	buffer                    *PodProxyBuffer
+	durableDiskPlacementRepos abstractions.DurableDiskPlacementRepos
 }
 
 func (i *podInstance) ensureReadyForRequest() error {
@@ -47,6 +48,10 @@ func (i *podInstance) ensureReadyForRequest() error {
 }
 
 func (i *podInstance) startContainers(containersToRun int) error {
+	if err := abstractions.ConfigureDurableDiskPlacement(i.Ctx, i.durableDiskPlacementRepos, i.Workspace, i.StubConfig); err != nil {
+		return err
+	}
+
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
 	if err != nil {
 		return err

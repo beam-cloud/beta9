@@ -157,7 +157,7 @@ func loadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnaps
 }
 
 func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
-	if !devDurableDiskHasPayload(sourceDir) {
+	if !durableDiskHasPayload(sourceDir) {
 		return nil, nil, fmt.Errorf("durable disk directory %s has no payload", sourceDir)
 	}
 	if store == nil {

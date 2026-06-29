@@ -70,6 +70,7 @@ type Gateway struct {
 	WorkspaceRepo        repository.WorkspaceRepository
 	ContainerRepo        repository.ContainerRepository
 	BackendRepo          repository.BackendRepository
+	ComputeRepo          repository.ComputeRepository
 	ProviderRepo         repository.ProviderRepository
 	WorkerPoolRepo       repository.WorkerPoolRepository
 	EventRepo            repository.EventRepository
@@ -144,6 +145,7 @@ func NewGateway() (*Gateway, error) {
 	tailscale := network.GetOrCreateTailscale(gatewayTailscaleConfig(config), tailscaleRepo)
 
 	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
+	computeRepo := repository.NewComputeRedisRepository(redisClient)
 
 	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, usageMetricsRepo, backendRepo, workspaceRepo, tailscale)
 	if err != nil {
@@ -173,6 +175,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.ProviderRepo = providerRepo
 	gateway.WorkerPoolRepo = workerPoolRepo
 	gateway.BackendRepo = backendRepo
+	gateway.ComputeRepo = computeRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
 	gateway.UsageMetricsRepo = usageMetricsRepo
@@ -438,12 +441,14 @@ func (g *Gateway) registerServices() error {
 			Config:        g.Config,
 			BackendRepo:   g.BackendRepo,
 			ContainerRepo: g.ContainerRepo,
+			ComputeRepo:   g.ComputeRepo,
 			Tailscale:     g.Tailscale,
 			Scheduler:     g.Scheduler,
 			RedisClient:   g.RedisClient,
 			EventRepo:     g.EventRepo,
 			RouteGroup:    g.rootRouteGroup,
 			WorkspaceRepo: g.WorkspaceRepo,
+			WorkerRepo:    g.workerRepo,
 			DrainContext:  g.drainCtx,
 		},
 	)
@@ -528,6 +533,7 @@ func (g *Gateway) registerServices() error {
 		EventRepo:        g.EventRepo,
 		WorkerRepo:       g.workerRepo,
 		WorkerPoolRepo:   g.WorkerPoolRepo,
+		ComputeRepo:      g.ComputeRepo,
 		UsageMetricsRepo: g.UsageMetricsRepo,
 		Tailscale:        g.Tailscale,
 	})

@@ -9,13 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigureDurableDiskPlacementDefaultsDevDriver(t *testing.T) {
+func TestConfigureDurableDiskPlacementDefaultsSnapshotDriver(t *testing.T) {
 	config := &types.StubConfigV1{
 		Disks: []*pb.DurableDisk{{Name: "pg-data"}},
 	}
 
 	require.NoError(t, (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config))
-	require.Equal(t, types.DurableDiskDriverDev, config.Disks[0].Driver)
+	require.Equal(t, types.DurableDiskDriverSnapshot, config.Disks[0].Driver)
 }
 
 func TestConfigureDurableDiskPlacementRejectsUnsupportedDriver(t *testing.T) {

@@ -16,7 +16,7 @@ const (
 )
 
 const (
-	DurableDiskDriverDev = "dev"
+	DurableDiskDriverSnapshot = "snapshot"
 )
 
 func NormalizeDurableDiskDriver(driver string) string {

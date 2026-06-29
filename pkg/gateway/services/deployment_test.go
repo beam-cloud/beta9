@@ -263,7 +263,7 @@ func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MaxContainers)
 }
 
-func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGone(t *testing.T) {
+func TestScalePodDeploymentRestoresDurableDiskToRegularPoolWhenPrivatePoolGone(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
 	gws.computeRepo = &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{
 		"pool-a": {Name: "pool-a", Mode: string(types.PoolModePrivate)},
@@ -286,7 +286,7 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 		},
 		Disks: []*pb.DurableDisk{{
 			Name:   "pg-data",
-			Driver: types.DurableDiskDriverDev,
+			Driver: types.DurableDiskDriverSnapshot,
 		}},
 	}
 	setDeploymentStubConfig(t, backend, config)
@@ -299,7 +299,7 @@ func TestScalePodDeploymentRestoresDevDurableDiskToRegularPoolWhenPrivatePoolGon
 	require.NoError(t, err)
 	require.True(t, resp.Ok, resp.ErrMsg)
 	require.Nil(t, backend.stubConfigs[20].Pool)
-	require.Equal(t, types.DurableDiskDriverDev, backend.stubConfigs[20].Disks[0].Driver)
+	require.Equal(t, types.DurableDiskDriverSnapshot, backend.stubConfigs[20].Disks[0].Driver)
 }
 
 func TestScalePodDeploymentClearsUnavailablePrivatePoolWithoutDisks(t *testing.T) {
