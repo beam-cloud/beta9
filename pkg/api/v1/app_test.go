@@ -326,3 +326,19 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 		t.Fatalf("unexpected stub app enrichment: %+v", stubApp)
 	}
 }
+
+func TestEnrichAppWithStubConfigHidesDefaultPool(t *testing.T) {
+	app := AppWithLatestStubOrDeployment{}
+	stub := &types.Stub{
+		Config: `{"pool":{"name":"default"},"is_service":true}`,
+	}
+
+	enrichAppWithStubConfig(&app, stub)
+
+	if app.PoolName != "" {
+		t.Fatalf("expected default pool to be hidden, got %q", app.PoolName)
+	}
+	if !app.IsService {
+		t.Fatal("expected service metadata to remain populated")
+	}
+}

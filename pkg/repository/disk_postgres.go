@@ -12,6 +12,109 @@ import (
 
 const defaultDiskSnapshotListLimit uint64 = 100
 
+const diskColumns = "id, external_id::text AS external_id, workspace_id, name, size, filesystem, driver, mount_path, created_at, updated_at, deleted_at"
+
+func (r *PostgresBackendRepository) GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error) {
+	name, err := normalizedDiskName(name)
+	if err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf(`SELECT %s FROM disk WHERE workspace_id = $1 AND name = $2 AND deleted_at IS NULL LIMIT 1;`, diskColumns)
+
+	var disk types.Disk
+	if err := r.client.GetContext(ctx, &disk, query, workspaceId, name); err != nil {
+		return nil, err
+	}
+	return &disk, nil
+}
+
+func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspaceId uint, disk *types.Disk) (*types.Disk, error) {
+	if disk == nil {
+		return nil, fmt.Errorf("disk is nil")
+	}
+
+	name, err := normalizedDiskName(disk.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	if existing, err := r.GetDisk(ctx, workspaceId, name); err == nil {
+		return existing, nil
+	} else if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	filesystem := disk.Filesystem
+	if filesystem == "" {
+		filesystem = "ext4"
+	}
+	driver := types.NormalizeDurableDiskDriver(disk.Driver)
+	if driver == "" {
+		driver = types.DurableDiskDriverSnapshot
+	}
+	if driver != types.DurableDiskDriverSnapshot {
+		return nil, fmt.Errorf("unsupported durable disk driver %q", driver)
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO disk (workspace_id, name, size, filesystem, driver, mount_path)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (workspace_id, name) WHERE deleted_at IS NULL DO NOTHING
+		RETURNING %s;`, diskColumns)
+
+	var created types.Disk
+	if err := r.client.GetContext(ctx, &created, query,
+		workspaceId,
+		name,
+		strings.TrimSpace(disk.Size),
+		strings.TrimSpace(filesystem),
+		driver,
+		strings.TrimSpace(disk.MountPath),
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return r.GetDisk(ctx, workspaceId, name)
+		}
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (r *PostgresBackendRepository) DeleteDisk(ctx context.Context, workspaceId uint, name string) error {
+	name, err := normalizedDiskName(name)
+	if err != nil {
+		return err
+	}
+
+	query := `UPDATE disk SET deleted_at = CURRENT_TIMESTAMP WHERE workspace_id = $1 AND name = $2 AND deleted_at IS NULL;`
+	_, err = r.client.ExecContext(ctx, query, workspaceId, name)
+	return err
+}
+
+func (r *PostgresBackendRepository) ListDisksWithRelated(ctx context.Context, workspaceId uint) ([]types.DiskWithRelated, error) {
+	query := `
+		SELECT d.id, d.external_id::text AS external_id, d.workspace_id, d.name, d.size, d.filesystem,
+		       d.driver, d.mount_path, d.created_at, d.updated_at, d.deleted_at,
+		       w.external_id::text AS "workspace.external_id", w.name AS "workspace.name"
+		FROM disk d
+		JOIN workspace w ON d.workspace_id = w.id
+		WHERE d.workspace_id = $1 AND d.deleted_at IS NULL
+		ORDER BY d.created_at DESC;`
+
+	var disks []types.DiskWithRelated
+	if err := r.client.SelectContext(ctx, &disks, query, workspaceId); err != nil {
+		return nil, err
+	}
+	return disks, nil
+}
+
+func normalizedDiskName(name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("disk name is required")
+	}
+	return types.SafeDurableDiskName(name), nil
+}
+
 func diskSnapshotColumns(alias string) string {
 	prefix := ""
 	if alias != "" {

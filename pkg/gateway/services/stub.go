@@ -17,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
@@ -267,6 +268,23 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Ok:     false,
 			ErrMsg: err.Error(),
 		}, nil
+	}
+
+	// Register a first-class disk record for each durable disk declared on the
+	// stub so disks are listable as standalone resources (dashboard + CLI).
+	for _, durableDisk := range stubConfig.Disks {
+		if durableDisk == nil || durableDisk.Name == "" {
+			continue
+		}
+		if _, err := gws.backendRepo.GetOrCreateDisk(ctx, authInfo.Workspace.Id, &types.Disk{
+			Name:       types.SafeDurableDiskName(durableDisk.Name),
+			Size:       durableDisk.Size,
+			Filesystem: durableDisk.Filesystem,
+			Driver:     durableDisk.Driver,
+			MountPath:  durableDisk.MountPath,
+		}); err != nil {
+			log.Error().Err(err).Str("disk_name", durableDisk.Name).Msg("failed to register durable disk record")
+		}
 	}
 
 	appName := in.AppName
