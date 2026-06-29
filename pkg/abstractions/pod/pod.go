@@ -23,18 +23,19 @@ import (
 )
 
 type PodServiceOpts struct {
-	Config        types.AppConfig
-	BackendRepo   repository.BackendRepository
-	ContainerRepo repository.ContainerRepository
-	ComputeRepo   repository.ComputeRepository
-	WorkspaceRepo repository.WorkspaceRepository
-	WorkerRepo    repository.WorkerRepository
-	Tailscale     *network.Tailscale
-	Scheduler     *scheduler.Scheduler
-	RedisClient   *common.RedisClient
-	EventRepo     repository.EventRepository
-	RouteGroup    *echo.Group
-	DrainContext  context.Context
+	Config         types.AppConfig
+	BackendRepo    repository.BackendRepository
+	ContainerRepo  repository.ContainerRepository
+	ComputeRepo    repository.ComputeRepository
+	WorkspaceRepo  repository.WorkspaceRepository
+	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
+	Tailscale      *network.Tailscale
+	Scheduler      *scheduler.Scheduler
+	RedisClient    *common.RedisClient
+	EventRepo      repository.EventRepository
+	RouteGroup     *echo.Group
+	DrainContext   context.Context
 }
 
 const (
@@ -60,6 +61,7 @@ type GenericPodService struct {
 	computeRepo     repository.ComputeRepository
 	workspaceRepo   repository.WorkspaceRepository
 	workerRepo      repository.WorkerRepository
+	workerPoolRepo  repository.WorkerPoolRepository
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
@@ -89,6 +91,7 @@ func NewPodService(
 		computeRepo:     opts.ComputeRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
 		workerRepo:      opts.WorkerRepo,
+		workerPoolRepo:  opts.WorkerPoolRepo,
 		scheduler:       opts.Scheduler,
 		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
@@ -192,9 +195,10 @@ func (ps *GenericPodService) durableDiskPlacementRepos() abstractions.DurableDis
 		return abstractions.DurableDiskPlacementRepos{}
 	}
 	return abstractions.DurableDiskPlacementRepos{
-		BackendRepo: ps.backendRepo,
-		ComputeRepo: ps.computeRepo,
-		WorkerRepo:  ps.workerRepo,
+		BackendRepo:    ps.backendRepo,
+		ComputeRepo:    ps.computeRepo,
+		WorkerRepo:     ps.workerRepo,
+		WorkerPoolRepo: ps.workerPoolRepo,
 	}
 }
 

@@ -341,6 +341,43 @@ func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRunt
 	require.Zero(t, backendRepo.workspaceWithSigningCalls)
 }
 
+func TestGetContainerRuntimeCredentialsVendsWorkspaceStorageWithoutContainerState(t *testing.T) {
+	storageID := uint(1)
+	storageBucket := "workspace-bucket"
+	storageAccess := "storage-access"
+	storageSecret := "storage-secret"
+	backendRepo := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{
+			Id:         7,
+			ExternalId: "workspace-id",
+			Name:       "workspace",
+			Storage: &types.WorkspaceStorage{
+				Id:         &storageID,
+				BucketName: &storageBucket,
+				AccessKey:  &storageAccess,
+				SecretKey:  &storageSecret,
+			},
+		},
+	}
+	service := &WorkerRepositoryService{backendRepo: backendRepo}
+
+	resp, err := service.GetContainerRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{
+			WorkspaceId:      "workspace-id",
+			StubId:           "stub-id",
+			ContainerId:      "container-id",
+			WorkspaceStorage: true,
+		},
+	)
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.NotNil(t, resp.WorkspaceStorage)
+	require.Equal(t, "storage-access", resp.WorkspaceStorage.AccessKey)
+	require.Equal(t, "storage-secret", resp.WorkspaceStorage.SecretKey)
+}
+
 func TestGetContainerRuntimeCredentialsRequiresSigningKeyForSecrets(t *testing.T) {
 	service := &WorkerRepositoryService{
 		backendRepo: &workerRuntimeCredentialsBackendRepo{

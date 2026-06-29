@@ -62,23 +62,29 @@ type SSHShellService struct {
 	keyEventManager *common.KeyEventManager
 	scheduler       *scheduler.Scheduler
 	backendRepo     repository.BackendRepository
+	computeRepo     repository.ComputeRepository
 	workspaceRepo   repository.WorkspaceRepository
 	containerRepo   repository.ContainerRepository
+	workerRepo      repository.WorkerRepository
+	workerPoolRepo  repository.WorkerPoolRepository
 	eventRepo       repository.EventRepository
 	tailscale       *network.Tailscale
 	keyEventChan    chan common.KeyEvent
 }
 
 type ShellServiceOpts struct {
-	Config        types.AppConfig
-	RedisClient   *common.RedisClient
-	BackendRepo   repository.BackendRepository
-	WorkspaceRepo repository.WorkspaceRepository
-	ContainerRepo repository.ContainerRepository
-	Scheduler     *scheduler.Scheduler
-	RouteGroup    *echo.Group
-	Tailscale     *network.Tailscale
-	EventRepo     repository.EventRepository
+	Config         types.AppConfig
+	RedisClient    *common.RedisClient
+	BackendRepo    repository.BackendRepository
+	ComputeRepo    repository.ComputeRepository
+	WorkspaceRepo  repository.WorkspaceRepository
+	ContainerRepo  repository.ContainerRepository
+	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
+	Scheduler      *scheduler.Scheduler
+	RouteGroup     *echo.Group
+	Tailscale      *network.Tailscale
+	EventRepo      repository.EventRepository
 }
 
 func NewSSHShellService(
@@ -97,8 +103,11 @@ func NewSSHShellService(
 		keyEventManager: keyEventManager,
 		scheduler:       opts.Scheduler,
 		backendRepo:     opts.BackendRepo,
+		computeRepo:     opts.ComputeRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
 		containerRepo:   opts.ContainerRepo,
+		workerRepo:      opts.WorkerRepo,
+		workerPoolRepo:  opts.WorkerPoolRepo,
 		tailscale:       opts.Tailscale,
 		eventRepo:       opts.EventRepo,
 		keyEventChan:    make(chan common.KeyEvent),
@@ -113,6 +122,15 @@ func NewSSHShellService(
 	go ss.handleTTLEvents()
 
 	return ss, nil
+}
+
+func (ss *SSHShellService) durableDiskPlacementRepos() abstractions.DurableDiskPlacementRepos {
+	return abstractions.DurableDiskPlacementRepos{
+		BackendRepo:    ss.backendRepo,
+		ComputeRepo:    ss.computeRepo,
+		WorkerRepo:     ss.workerRepo,
+		WorkerPoolRepo: ss.workerPoolRepo,
+	}
 }
 
 func (ss *SSHShellService) handleTTLEvents() {
@@ -360,6 +378,13 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 
 	if stubConfig.Runtime.Memory <= 0 {
 		stubConfig.Runtime.Memory = defaultContainerMemory
+	}
+
+	if err := abstractions.ConfigureDurableDiskPlacement(ctx, ss.durableDiskPlacementRepos(), authInfo.Workspace, &stubConfig); err != nil {
+		return &pb.CreateStandaloneShellResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
 	}
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(

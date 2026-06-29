@@ -58,7 +58,7 @@ from ..clients.pod import (
 from ..config import ConfigContext
 from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
-from ..type import GpuType, GpuTypeAlias, Pool
+from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
 from ..utils import retry_on_transient_error
 
 SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
@@ -238,6 +238,7 @@ class Sandbox(Pod):
         authorized: bool = False,
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
@@ -263,6 +264,7 @@ class Sandbox(Pod):
             authorized=authorized,
             name=name,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             env=env,
             block_network=block_network,

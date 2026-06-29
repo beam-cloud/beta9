@@ -250,13 +250,13 @@ def _print_result(format: str, payload: Dict[str, object]) -> None:
         "version",
         "disk",
         "disk_size",
-            "host",
-            "username",
-            "database",
-            "connection_env_name",
-            "connection_string",
-            "connection_string_secret",
-            "username_secret",
+        "host",
+        "username",
+        "database",
+        "connection_env_name",
+        "connection_string",
+        "connection_string_secret",
+        "username_secret",
         "password_secret",
         "database_secret",
     )
@@ -681,8 +681,7 @@ def _secret_env_names(product: DatabaseProduct) -> Dict[str, str]:
 
 def _secrets(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
     secret_names = _secret_names(product, name)
-    for secret_name in secret_names.values():
-        _get_secret_value(service, secret_name)
+    connection_string = _get_secret_value(service, secret_names["url"])
 
     env = {
         env_name: secret_names[key]
@@ -692,16 +691,15 @@ def _secrets(service: ServiceClient, product: DatabaseProduct, name: str, format
     payload = {
         "name": name,
         "kind": product.kind,
+        "connection_string": connection_string,
+        "connection_string_secret": secret_names["url"],
         "secrets": env,
     }
     if format == "json":
         terminal.print_json(payload)
         return
 
-    table = Table(Column("Environment"), Column("Beta9 secret"), box=box.SIMPLE)
-    for env_name, secret_name in env.items():
-        table.add_row(env_name, secret_name)
-    terminal.print(table)
+    click.echo(connection_string)
 
 
 @postgres.command(name="credentials", help="Show Postgres connection details.")
@@ -720,7 +718,7 @@ def redis_credentials(service: ServiceClient, name: str, format: str):
     _credentials(service, REDIS, name, format)
 
 
-@postgres.command(name="secrets", help="Show generated Postgres secret names.")
+@postgres.command(name="secrets", help="Print the Postgres connection string.")
 @click.argument("name")
 @click.option("--format", type=click.Choice(("table", "json")), default="table")
 @extraclick.pass_service_client
@@ -728,7 +726,7 @@ def postgres_secrets(service: ServiceClient, name: str, format: str):
     _secrets(service, POSTGRES, name, format)
 
 
-@redis.command(name="secrets", help="Show generated Redis secret names.")
+@redis.command(name="secrets", help="Print the Redis connection string.")
 @click.argument("name")
 @click.option("--format", type=click.Choice(("table", "json")), default="table")
 @extraclick.pass_service_client
@@ -879,7 +877,8 @@ def _scale_options(func):
     func = click.option("--pool", type=click.STRING, default=None, help="Pool to use when redeploying with new resources.")(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
     func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
-    return click.option("--replicas", "--containers", "containers", type=click.IntRange(min=0, max=1), required=True)(func)
+    func = click.option("--serverless", is_flag=True, help="Allow the database to scale to zero.")(func)
+    return click.option("--always-on", is_flag=True, help="Keep one database container warm.")(func)
 
 
 @postgres.command(name="scale", help="Scale a Postgres service.")
@@ -889,14 +888,15 @@ def _scale_options(func):
 def postgres_scale(
     service: ServiceClient,
     name: str,
-    containers: int,
+    always_on: bool,
+    serverless: bool,
     cpu: Optional[float],
     memory: Optional[str],
     pool: Optional[str],
     size: Optional[str],
     format: str,
 ):
-    _scale_database(service, POSTGRES, name, containers, cpu, memory, pool, size, format)
+    _scale_database(service, POSTGRES, name, always_on, serverless, cpu, memory, pool, size, format)
 
 
 @redis.command(name="scale", help="Scale a Redis service.")
@@ -906,27 +906,36 @@ def postgres_scale(
 def redis_scale(
     service: ServiceClient,
     name: str,
-    containers: int,
+    always_on: bool,
+    serverless: bool,
     cpu: Optional[float],
     memory: Optional[str],
     pool: Optional[str],
     size: Optional[str],
     format: str,
 ):
-    _scale_database(service, REDIS, name, containers, cpu, memory, pool, size, format)
+    _scale_database(service, REDIS, name, always_on, serverless, cpu, memory, pool, size, format)
+
+
+def _scale_mode_containers(always_on: bool, serverless: bool) -> int:
+    if always_on == serverless:
+        raise click.ClickException("Specify exactly one of --always-on or --serverless.")
+    return 1 if always_on else 0
 
 
 def _scale_database(
     service: ServiceClient,
     product: DatabaseProduct,
     name: str,
-    containers: int,
+    always_on: bool,
+    serverless: bool,
     cpu: Optional[float],
     memory: Optional[str],
     pool: Optional[str],
     size: Optional[str],
     format: str,
 ) -> None:
+    containers = _scale_mode_containers(always_on, serverless)
     if cpu is not None or memory is not None:
         secret_names = _secret_names(product, name)
         _scale_database_to(service, product, name, 0, quiet=True, all_deployments=True)
@@ -970,4 +979,5 @@ def _scale_database_to(
         if not res.ok:
             raise click.ClickException(res.err_msg or f"Failed to scale {name}.")
     if not quiet:
-        terminal.success(f"Scaled {product.kind} service {name} to {containers} replicas")
+        mode = "always-on" if containers == 1 else "serverless"
+        terminal.success(f"Set {product.kind} service {name} to {mode}")

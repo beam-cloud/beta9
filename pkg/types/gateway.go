@@ -4,7 +4,7 @@ const (
 	DefaultGatewayServiceName          string = "gateway"
 	DefaultExtractedObjectPath         string = "/data/unpacked"
 	DefaultVolumesPath                 string = "/data/volumes"
-	DefaultDurableDisksPath            string = "/data/durable-disks"
+	DefaultDurableDisksPath            string = "/var/lib/beta9/durable-disks"
 	DefaultObjectPath                  string = "/data/objects"
 	DefaultOutputsPath                 string = "/data/outputs"
 	DefaultObjectPrefix                string = "objects"

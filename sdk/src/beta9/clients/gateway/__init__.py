@@ -330,8 +330,7 @@ class DurableDisk(betterproto.Message):
     mount_path: str = betterproto.string_field(3)
     filesystem: str = betterproto.string_field(4)
     driver: str = betterproto.string_field(5)
-    replicas: int = betterproto.uint32_field(6)
-    read_only: bool = betterproto.bool_field(7)
+    read_only: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)

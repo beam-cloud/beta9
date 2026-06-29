@@ -65,7 +65,6 @@ type DurableDiskMountConfig struct {
 	Size       string `json:"size"`
 	Filesystem string `json:"filesystem"`
 	Driver     string `json:"driver"`
-	Replicas   uint32 `json:"replicas"`
 }
 
 func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountConfig {
@@ -78,7 +77,6 @@ func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountCon
 		Size:       in.Size,
 		Filesystem: in.Filesystem,
 		Driver:     in.Driver,
-		Replicas:   in.Replicas,
 	}
 
 	return config
@@ -97,7 +95,6 @@ func (m *Mount) ToProto() *pb.Mount {
 			Size:       m.DurableDisk.Size,
 			Filesystem: m.DurableDisk.Filesystem,
 			Driver:     m.DurableDisk.Driver,
-			Replicas:   m.DurableDisk.Replicas,
 		}
 	}
 
@@ -125,7 +122,6 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 			Size:       in.DurableDisk.Size,
 			Filesystem: in.DurableDisk.Filesystem,
 			Driver:     in.DurableDisk.Driver,
-			Replicas:   in.DurableDisk.Replicas,
 		}
 	}
 

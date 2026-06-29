@@ -2464,10 +2464,6 @@
         "driver": {
           "type": "string"
         },
-        "replicas": {
-          "type": "integer",
-          "format": "int64"
-        },
         "readOnly": {
           "type": "boolean"
         }

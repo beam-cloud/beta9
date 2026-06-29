@@ -14,23 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDurableDiskRestoresMissingPrimaryFromReplica(t *testing.T) {
-	primary := filepath.Join(t.TempDir(), "pg-data")
-	mount := durableDiskTestMount(primary)
-
-	require.NoError(t, prepareSnapshotDurableDiskMount(mount))
-	require.NoError(t, os.MkdirAll(filepath.Join(primary, "pgdata"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(primary, "pgdata", "state"), []byte("postgres-value"), 0o644))
-	require.NoError(t, syncDurableDiskReplicas(mount))
-
-	require.NoError(t, os.RemoveAll(primary))
-	require.NoError(t, prepareSnapshotDurableDiskMount(mount))
-
-	data, err := os.ReadFile(filepath.Join(primary, "pgdata", "state"))
-	require.NoError(t, err)
-	require.Equal(t, "postgres-value", string(data))
-}
-
 func TestDurableDiskCleansStalePostgresPid(t *testing.T) {
 	primary := filepath.Join(t.TempDir(), "pg-data")
 	mount := durableDiskTestMount(primary)
@@ -52,24 +35,6 @@ func TestDurableDiskCleansStalePostgresPid(t *testing.T) {
 	require.NoFileExists(t, pidFile)
 }
 
-func TestDurableDiskSyncRecreatesMissingReplicaFromPrimary(t *testing.T) {
-	primary := filepath.Join(t.TempDir(), "redis-data")
-	mount := durableDiskTestMount(primary)
-
-	require.NoError(t, prepareSnapshotDurableDiskMount(mount))
-	require.NoError(t, os.MkdirAll(filepath.Join(primary, "appendonlydir"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(primary, "appendonlydir", "state"), []byte("redis-value"), 0o644))
-	require.NoError(t, syncDurableDiskReplicas(mount))
-
-	replica := durableDiskReplicaPaths(mount)[0]
-	require.NoError(t, os.RemoveAll(replica))
-	require.NoError(t, syncDurableDiskReplicas(mount))
-
-	data, err := os.ReadFile(filepath.Join(replica, "appendonlydir", "state"))
-	require.NoError(t, err)
-	require.Equal(t, "redis-value", string(data))
-}
-
 func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "durable")
 	spec := getTestBaseSpec()
@@ -84,7 +49,6 @@ func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
 				Size:       "10Gi",
 				Filesystem: "ext4",
 				Driver:     "snapshot",
-				Replicas:   3,
 			},
 		}},
 	}
@@ -248,9 +212,8 @@ func durableDiskTestMount(primary string) *types.Mount {
 		LocalPath: primary,
 		MountPath: "/data",
 		DurableDisk: &types.DurableDiskMountConfig{
-			Name:     filepath.Base(primary),
-			Driver:   types.DurableDiskDriverSnapshot,
-			Replicas: 3,
+			Name:   filepath.Base(primary),
+			Driver: types.DurableDiskDriverSnapshot,
 		},
 	}
 }

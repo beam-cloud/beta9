@@ -345,7 +345,6 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		wpc.config.Worker.ImageName,
 		wpc.config.Worker.ImageTag,
 	)
-	workerImage = "public.ecr.aws/n4e0e1y0/beta9-worker:codex-durable-snap-9b554e2b-fix1-20260628192702"
 
 	resources := corev1.ResourceRequirements{}
 	if workerGpuType != "" {
@@ -607,6 +606,16 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		})
 	}
 
+	volumes = append(volumes, corev1.Volume{
+		Name: durableDiskVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: types.DefaultDurableDisksPath,
+				Type: &hostPathType,
+			},
+		},
+	})
+
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
 		Name: devicePluginVolumeName,
@@ -660,6 +669,12 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			ReadOnly:  false,
 		})
 	}
+
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      durableDiskVolumeName,
+		MountPath: types.DefaultDurableDisksPath,
+		ReadOnly:  false,
+	})
 
 	return volumeMounts
 }

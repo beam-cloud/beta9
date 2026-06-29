@@ -554,8 +554,7 @@ message DurableDisk {
   string mount_path = 3;
   string filesystem = 4;
   string driver = 5;
-  uint32 replicas = 6;
-  bool read_only = 7;
+  bool read_only = 6;
 }
 
 message TaskPolicy {

@@ -12,9 +12,10 @@ func (gws *GatewayService) durableDiskPlacementRepos() abstractions.DurableDiskP
 		return abstractions.DurableDiskPlacementRepos{}
 	}
 	return abstractions.DurableDiskPlacementRepos{
-		BackendRepo: gws.backendRepo,
-		ComputeRepo: gws.computeRepo,
-		WorkerRepo:  gws.workerRepo,
+		BackendRepo:    gws.backendRepo,
+		ComputeRepo:    gws.computeRepo,
+		WorkerRepo:     gws.workerRepo,
+		WorkerPoolRepo: gws.workerPoolRepo,
 	}
 }
 

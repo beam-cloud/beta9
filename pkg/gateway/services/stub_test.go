@@ -29,3 +29,32 @@ func TestConfigureDurableDiskPlacementRejectsUnsupportedDriver(t *testing.T) {
 	err := (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config)
 	require.ErrorContains(t, err, `unsupported driver "unsupported"`)
 }
+
+func TestConfigureDurableDiskPlacementRejectsWritableDiskWithMultipleContainers(t *testing.T) {
+	config := &types.StubConfigV1{
+		Autoscaler: &types.Autoscaler{MaxContainers: 2},
+		Disks:      []*pb.DurableDisk{{Name: "data"}},
+	}
+
+	err := (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config)
+	require.ErrorContains(t, err, "writable durable disks support one container")
+}
+
+func TestConfigureDurableDiskPlacementRejectsWritableDiskWithMultipleMinContainers(t *testing.T) {
+	config := &types.StubConfigV1{
+		Autoscaler: &types.Autoscaler{MinContainers: 2},
+		Disks:      []*pb.DurableDisk{{Name: "data"}},
+	}
+
+	err := (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config)
+	require.ErrorContains(t, err, "writable durable disks support one container")
+}
+
+func TestConfigureDurableDiskPlacementAllowsReadOnlyDiskWithMultipleContainers(t *testing.T) {
+	config := &types.StubConfigV1{
+		Autoscaler: &types.Autoscaler{MaxContainers: 4},
+		Disks:      []*pb.DurableDisk{{Name: "data", ReadOnly: true}},
+	}
+
+	require.NoError(t, (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config))
+}

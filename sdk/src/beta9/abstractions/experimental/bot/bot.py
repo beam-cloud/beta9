@@ -22,7 +22,7 @@ from ....clients.bot import (
     BotServiceStub,
 )
 from ....sync import FileSyncer
-from ....type import GpuType, GpuTypeAlias, PythonVersion
+from ....type import DurableDisk, GpuType, GpuTypeAlias, PythonVersion
 from ...mixins import DeployableMixin
 from .marker import BotLocation
 
@@ -260,10 +260,11 @@ class Bot(RunnerAbstraction, DeployableMixin):
         locations: List[BotLocation] = [],
         description: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
+        disks: Optional[List[DurableDisk]] = None,
         authorized: bool = True,
         welcome_message: Optional[str] = None,
     ) -> None:
-        super().__init__(volumes=volumes)
+        super().__init__(volumes=volumes, disks=disks)
 
         if not api_key or api_key == "":
             raise ValueError("API key is required")

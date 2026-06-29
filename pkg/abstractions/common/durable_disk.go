@@ -11,14 +11,18 @@ import (
 )
 
 type DurableDiskPlacementRepos struct {
-	BackendRepo repository.BackendRepository
-	ComputeRepo repository.ComputeRepository
-	WorkerRepo  repository.WorkerRepository
+	BackendRepo    repository.BackendRepository
+	ComputeRepo    repository.ComputeRepository
+	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
 }
 
 func ConfigureDurableDiskPlacement(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, stubConfig *types.StubConfigV1) error {
 	if stubConfig == nil || len(stubConfig.Disks) == 0 {
 		return nil
+	}
+	if err := enforceDurableDiskSingleWriter(stubConfig); err != nil {
+		return err
 	}
 
 	poolName := stubConfig.PoolSelector()
@@ -39,9 +43,40 @@ func ConfigureDurableDiskPlacement(ctx context.Context, repos DurableDiskPlaceme
 	return nil
 }
 
+func enforceDurableDiskSingleWriter(stubConfig *types.StubConfigV1) error {
+	if durableDisksReadOnly(stubConfig.Disks) {
+		return nil
+	}
+
+	maxContainers := uint(1)
+	minContainers := uint(0)
+	if stubConfig.Autoscaler != nil {
+		minContainers = stubConfig.Autoscaler.MinContainers
+		if stubConfig.Autoscaler.MaxContainers > 0 {
+			maxContainers = stubConfig.Autoscaler.MaxContainers
+		}
+	}
+	if minContainers > 1 || maxContainers > 1 {
+		return fmt.Errorf("writable durable disks support one container; set max containers to 1 or mark the disk read_only")
+	}
+	return nil
+}
+
+func durableDisksReadOnly(disks []*pb.DurableDisk) bool {
+	for _, disk := range disks {
+		if disk != nil && !disk.ReadOnly {
+			return false
+		}
+	}
+	return true
+}
+
 func ConfigureUnavailablePrivatePoolFallback(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, stubConfig *types.StubConfigV1) error {
+	if stubConfig == nil {
+		return nil
+	}
 	poolName := stubConfig.PoolSelector()
-	if poolName == "" || privatePoolHasAvailableWorkers(repos, poolName) {
+	if poolName == "" || privatePoolHasAvailableWorkers(ctx, repos, poolName) {
 		return nil
 	}
 	if err := ensurePrivatePoolFallbackAllowed(ctx, repos, workspace, poolName); err != nil {
@@ -107,7 +142,7 @@ func durableDiskSnapshotFallbackSupported(disks []*pb.DurableDisk) bool {
 }
 
 func durableDiskSnapshotFallbackNeeded(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, poolName string, disks []*pb.DurableDisk) (bool, error) {
-	if poolName == "" || !durableDiskSnapshotFallbackSupported(disks) || privatePoolHasAvailableWorkers(repos, poolName) {
+	if poolName == "" || !durableDiskSnapshotFallbackSupported(disks) || privatePoolHasAvailableWorkers(ctx, repos, poolName) {
 		return false, nil
 	}
 	allowed, err := privatePoolSnapshotFallbackAllowed(ctx, repos, workspace, poolName)
@@ -179,9 +214,15 @@ func ensurePrivatePoolFallbackAllowed(ctx context.Context, repos DurableDiskPlac
 	return nil
 }
 
-func privatePoolHasAvailableWorkers(repos DurableDiskPlacementRepos, poolName string) bool {
+func privatePoolHasAvailableWorkers(ctx context.Context, repos DurableDiskPlacementRepos, poolName string) bool {
 	if repos.WorkerRepo == nil || poolName == "" {
 		return false
+	}
+	if repos.WorkerPoolRepo != nil {
+		state, err := repos.WorkerPoolRepo.GetWorkerPoolState(ctx, poolName)
+		if err == nil && state != nil {
+			return state.ReadyMachines > 0
+		}
 	}
 	workers, err := repos.WorkerRepo.GetAllWorkersInPool(poolName)
 	if err != nil {

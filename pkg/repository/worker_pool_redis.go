@@ -63,6 +63,7 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, pool
 		"running_containers", state.RunningContainers,
 		"registered_machines", state.RegisteredMachines,
 		"pending_machines", state.PendingMachines,
+		"ready_machines", state.ReadyMachines,
 	).Err()
 }
 

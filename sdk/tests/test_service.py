@@ -98,7 +98,6 @@ class TestService(TestCase):
                     name="pg-data",
                     size="10Gi",
                     mount_path="/var/lib/postgresql/data",
-                    replicas=3,
                 )
             ],
             serving=ServingConfig(
@@ -122,7 +121,6 @@ class TestService(TestCase):
         )
 
         self.assertEqual(req.disks[0].name, "pg-data")
-        self.assertEqual(req.disks[0].replicas, 3)
         self.assertEqual(req.serving.database.kind, "postgres")
         self.assertEqual(req.serving.database.connection_env_name, "DATABASE_URL")
 

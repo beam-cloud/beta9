@@ -342,7 +342,6 @@ class DurableDisk:
     mount_path: str
     filesystem: str = "ext4"
     driver: str = ""
-    replicas: int = 0
     read_only: bool = False
 
     def export(self):
@@ -354,7 +353,6 @@ class DurableDisk:
             mount_path=self.mount_path,
             filesystem=self.filesystem,
             driver=self.driver,
-            replicas=self.replicas,
             read_only=self.read_only,
         )
 

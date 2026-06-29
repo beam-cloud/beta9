@@ -120,7 +120,6 @@ message DurableDiskMountConfig {
   string size = 2;
   string filesystem = 3;
   string driver = 4;
-  uint32 replicas = 5;
 }
 
 message FileInfo {

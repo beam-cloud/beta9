@@ -60,11 +60,16 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, err
 	}
 
-	if s.containerRepo == nil {
-		return nil, fmt.Errorf("container repository is unavailable")
-	}
 	if s.backendRepo == nil {
 		return nil, fmt.Errorf("backend repository is unavailable")
+	}
+
+	if runtimeCredentialsWorkspaceStorageOnly(req) {
+		return s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
+	}
+
+	if s.containerRepo == nil {
+		return nil, fmt.Errorf("container repository is unavailable")
 	}
 
 	state, err := s.runtimeCredentialsContainerState(ctx, req.ContainerId)
@@ -124,6 +129,14 @@ func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Contex
 
 func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsRequest) bool {
 	return req != nil && (len(req.SecretNames) > 0 || len(req.MountCredentials) > 0)
+}
+
+func runtimeCredentialsWorkspaceStorageOnly(req *pb.GetContainerRuntimeCredentialsRequest) bool {
+	return req != nil &&
+		req.WorkspaceStorage &&
+		!req.RuntimeToken &&
+		len(req.SecretNames) == 0 &&
+		len(req.MountCredentials) == 0
 }
 
 func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {

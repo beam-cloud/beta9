@@ -131,7 +131,6 @@ class DurableDiskMountConfig(betterproto.Message):
     size: str = betterproto.string_field(2)
     filesystem: str = betterproto.string_field(3)
     driver: str = betterproto.string_field(4)
-    replicas: int = betterproto.uint32_field(5)
 
 
 @dataclass(eq=False, repr=False)

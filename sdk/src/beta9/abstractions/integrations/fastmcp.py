@@ -12,7 +12,14 @@ from ...channel import with_grpc_error_handling
 from ...clients.endpoint import StartEndpointServeRequest, StartEndpointServeResponse
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
-from ...type import Autoscaler, GpuType, GpuTypeAlias, PricingPolicy, QueueDepthAutoscaler
+from ...type import (
+    Autoscaler,
+    DurableDisk,
+    GpuType,
+    GpuTypeAlias,
+    PricingPolicy,
+    QueueDepthAutoscaler,
+)
 
 
 @dataclass
@@ -93,6 +100,7 @@ class MCPServer(ASGI):
         authorized: bool = False,
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         on_start: Optional[Callable[..., None]] = None,
@@ -118,6 +126,7 @@ class MCPServer(ASGI):
             authorized=authorized,
             name=name,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             autoscaler=autoscaler,
             on_start=on_start,

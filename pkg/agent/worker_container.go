@@ -57,6 +57,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		dirs.Workspace + ":" + types.AgentWorkspacePath,
 		dirs.Cache + ":" + types.AgentCachePath,
 		dirs.Checkpoints + ":" + types.AgentCheckpointPath,
+		dirs.DurableDisk + ":" + types.DefaultDurableDisksPath,
 		dirs.Logs + ":" + types.AgentLogsPath,
 		configPath + ":" + types.AgentConfigPath + ":ro",
 	}

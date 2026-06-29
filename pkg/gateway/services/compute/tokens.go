@@ -104,13 +104,16 @@ func (s *Service) createPrivatePoolJoinCommandForOwner(ctx context.Context, work
 	}
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
 	devMode := isLocalGatewayURL(gatewayURL)
-	command := agentInstallCommand(gatewayURL, token, devMode)
+	command := agentInstallCommand(gatewayURL, token, devMode, agentWorkerImage(s.appConfig))
 	return command, token, expiresAt, nil
 }
 
-func agentInstallCommand(gatewayURL, token string, devMode bool) string {
+func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage string) string {
 	installURL := common.ShellQuote(strings.TrimRight(gatewayURL, "/") + "/install/agent")
 	args := fmt.Sprintf("--gateway %s --join-token %s", common.ShellQuote(gatewayURL), common.ShellQuote(token))
+	if workerImage = strings.TrimSpace(workerImage); workerImage != "" {
+		args += " --worker-image " + common.ShellQuote(workerImage)
+	}
 	if devMode {
 		return fmt.Sprintf("curl -fsSL %s | sh -s -- %s --dev", installURL, args)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -18,12 +17,10 @@ import (
 )
 
 const (
-	durableDiskDriverEnv            = "BETA9_DURABLE_DISK_DRIVER"
-	durableDiskMarkerFile           = ".beta9-durable-disk"
-	durableDiskLockDir              = ".beta9-durable-disk-locks"
-	durableDiskReplicaDir           = ".beta9-durable-disk-replicas"
-	defaultDurableDiskReplicaCopies = 3
-	durableDiskLockWait             = 10 * time.Minute
+	durableDiskDriverEnv  = "BETA9_DURABLE_DISK_DRIVER"
+	durableDiskMarkerFile = ".beta9-durable-disk"
+	durableDiskLockDir    = ".beta9-durable-disk-locks"
+	durableDiskLockWait   = 10 * time.Minute
 )
 
 func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
@@ -61,20 +58,16 @@ func durableDiskDriver(configured string) string {
 }
 
 func prepareSnapshotDurableDiskMount(mount *types.Mount) error {
-	if err := restoreDurableDiskPrimaryReplica(mount); err != nil {
-		return err
-	}
 	if err := cleanDurableDiskRuntimeFiles(mount, mount.LocalPath); err != nil {
 		return err
+	}
+	if durableDiskHasPayload(mount.LocalPath) && !durableDiskHasRestorablePayload(mount, mount.LocalPath) {
+		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
 	}
 	if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
 		return fmt.Errorf("create durable disk path %s: %w", mount.LocalPath, err)
 	}
-	if err := writeDurableDiskMarker(mount.LocalPath, mount); err != nil {
-		return err
-	}
-
-	return ensureDurableDiskReplicas(mount)
+	return writeDurableDiskMarker(mount.LocalPath)
 }
 
 func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) error {
@@ -92,15 +85,7 @@ func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) error {
 		case types.DurableDiskDriverSnapshot:
 			err := withDurableDiskLock(mount, func() error {
 				if err := s.snapshotDurableDiskMount(request, mount); err != nil {
-					if s != nil && s.backendRepoClient != nil {
-						return fmt.Errorf("snapshot: %w", err)
-					}
-					log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to snapshot durable disk")
-				} else if s != nil && s.backendRepoClient != nil {
-					return nil
-				}
-				if err := syncDurableDiskReplicas(mount); err != nil {
-					return fmt.Errorf("sync replicas: %w", err)
+					return fmt.Errorf("snapshot: %w", err)
 				}
 				return nil
 			})
@@ -144,31 +129,6 @@ func withDurableDiskLock(mount *types.Mount, fn func() error) error {
 	return fn()
 }
 
-func restoreDurableDiskPrimaryReplica(mount *types.Mount) error {
-	if durableDiskHasRestorablePayload(mount, mount.LocalPath) {
-		return nil
-	}
-	if durableDiskHasPayload(mount.LocalPath) {
-		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
-	}
-
-	for _, replicaPath := range durableDiskReplicaPaths(mount) {
-		if !durableDiskHasRestorablePayload(mount, replicaPath) {
-			continue
-		}
-
-		if err := os.RemoveAll(mount.LocalPath); err != nil {
-			return fmt.Errorf("clear durable disk primary %s: %w", mount.LocalPath, err)
-		}
-		if err := copyDurableDiskDir(replicaPath, mount.LocalPath); err != nil {
-			return fmt.Errorf("restore durable disk primary %s from replica %s: %w", mount.LocalPath, replicaPath, err)
-		}
-		return writeDurableDiskMarker(mount.LocalPath, mount)
-	}
-
-	return nil
-}
-
 func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
@@ -189,6 +149,10 @@ func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
+		return err
+	}
 
 	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, "", true)
 	if err != nil {
@@ -263,7 +227,7 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
 	}
-	if durableDiskHasRestorablePayload(mount, mount.LocalPath) || durableDiskReplicaHasRestorablePayload(mount) {
+	if durableDiskHasRestorablePayload(mount, mount.LocalPath) {
 		return nil
 	}
 	if durableDiskHasPayload(mount.LocalPath) {
@@ -276,6 +240,10 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
+		return err
+	}
 
 	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
@@ -306,6 +274,33 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	return nil
 }
 
+func (s *Worker) ensureDurableDiskSnapshotStorage(ctx context.Context, request *types.ContainerRequest) error {
+	if request == nil || workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+		return nil
+	}
+	if !request.Workspace.StorageAvailable() {
+		return fmt.Errorf("workspace storage is required for durable disk snapshots")
+	}
+	if s == nil || s.workerRepoClient == nil {
+		return fmt.Errorf("worker repository client is required for durable disk snapshot credentials")
+	}
+
+	resp, err := handleGRPCResponse(s.workerRepoClient.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{
+		WorkspaceId:      cacheRequestWorkspaceID(request),
+		StubId:           cacheRequestStubID(request),
+		ContainerId:      request.ContainerId,
+		WorkspaceStorage: true,
+	}))
+	if err != nil {
+		return fmt.Errorf("hydrate durable disk snapshot storage credentials: %w", err)
+	}
+	applyRuntimeCredentials(request, resp)
+	if !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
+		return fmt.Errorf("workspace storage credentials are required for durable disk snapshots")
+	}
+	return nil
+}
+
 func durableDiskSnapshotFormatForMount(request *types.ContainerRequest, mount *types.Mount) string {
 	config := requestStubConfig(request)
 	if config == nil || config.EffectiveDatabaseConfig() == nil {
@@ -328,15 +323,6 @@ func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader
 		return nil
 	}
 	return s.cacheManager.client
-}
-
-func durableDiskReplicaHasRestorablePayload(mount *types.Mount) bool {
-	for _, replicaPath := range durableDiskReplicaPaths(mount) {
-		if durableDiskHasRestorablePayload(mount, replicaPath) {
-			return true
-		}
-	}
-	return false
 }
 
 func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) string {
@@ -393,63 +379,6 @@ func durableDiskSnapshotRequiredContentItems(snapshot *types.DiskSnapshot, manif
 	return items
 }
 
-func ensureDurableDiskReplicas(mount *types.Mount) error {
-	for _, replicaPath := range durableDiskReplicaPaths(mount) {
-		if durableDiskHasPayload(mount.LocalPath) {
-			if err := os.MkdirAll(replicaPath, 0755); err != nil {
-				return fmt.Errorf("create durable disk replica %s: %w", replicaPath, err)
-			}
-			if err := writeDurableDiskMarker(replicaPath, mount); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := os.MkdirAll(replicaPath, 0755); err != nil {
-			return fmt.Errorf("create durable disk replica %s: %w", replicaPath, err)
-		}
-		if err := writeDurableDiskMarker(replicaPath, mount); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func syncDurableDiskReplicas(mount *types.Mount) error {
-	if !durableDiskHasPayload(mount.LocalPath) {
-		return nil
-	}
-
-	for _, replicaPath := range durableDiskReplicaPaths(mount) {
-		if err := copyDurableDiskDirAtomic(mount.LocalPath, replicaPath); err != nil {
-			return fmt.Errorf("sync durable disk replica %s: %w", replicaPath, err)
-		}
-	}
-	return nil
-}
-
-func durableDiskReplicaPaths(mount *types.Mount) []string {
-	if mount == nil || mount.DurableDisk == nil {
-		return nil
-	}
-
-	replicas := int(mount.DurableDisk.Replicas)
-	if replicas == 0 {
-		replicas = defaultDurableDiskReplicaCopies
-	}
-	if replicas <= 1 {
-		return nil
-	}
-
-	base := filepath.Base(filepath.Clean(mount.LocalPath))
-	root := filepath.Join(filepath.Dir(filepath.Clean(mount.LocalPath)), durableDiskReplicaDir, base)
-	paths := make([]string, 0, replicas-1)
-	for replica := 1; replica < replicas; replica++ {
-		paths = append(paths, filepath.Join(root, fmt.Sprintf("replica-%d", replica)))
-	}
-	return paths
-}
-
 func durableDiskHasPayload(path string) bool {
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -496,125 +425,9 @@ func cleanDurableDiskRuntimeFiles(mount *types.Mount, diskPath string) error {
 	return nil
 }
 
-func writeDurableDiskMarker(path string, mount *types.Mount) error {
-	replicas := uint32(defaultDurableDiskReplicaCopies)
-	if mount != nil && mount.DurableDisk != nil && mount.DurableDisk.Replicas > 0 {
-		replicas = mount.DurableDisk.Replicas
-	}
-
-	marker := fmt.Sprintf("driver=snapshot\nreplicas=%d\n", replicas)
-	if err := os.WriteFile(filepath.Join(path, durableDiskMarkerFile), []byte(marker), 0644); err != nil {
+func writeDurableDiskMarker(path string) error {
+	if err := os.WriteFile(filepath.Join(path, durableDiskMarkerFile), []byte("driver=snapshot\n"), 0644); err != nil {
 		return fmt.Errorf("write durable disk marker %s: %w", path, err)
-	}
-	return nil
-}
-
-func copyDurableDiskDirAtomic(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
-	suffix := fmt.Sprintf("%d.%d", os.Getpid(), time.Now().UnixNano())
-	tmp := fmt.Sprintf("%s.tmp.%s", dst, suffix)
-	backup := fmt.Sprintf("%s.old.%s", dst, suffix)
-	movedExisting := false
-	defer os.RemoveAll(tmp)
-
-	if err := copyDurableDiskDir(src, tmp); err != nil {
-		return err
-	}
-
-	if _, err := os.Lstat(dst); err == nil {
-		if err := os.Rename(dst, backup); err != nil {
-			return err
-		}
-		movedExisting = true
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-
-	if err := os.Rename(tmp, dst); err != nil {
-		if movedExisting {
-			_ = os.Rename(backup, dst)
-		}
-		return err
-	}
-
-	if movedExisting {
-		_ = os.RemoveAll(backup)
-	}
-	return nil
-}
-
-func copyDurableDiskDir(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", src)
-	}
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-		info, err := os.Lstat(srcPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(srcPath)
-			if err != nil {
-				return err
-			}
-			if err := os.Symlink(target, dstPath); err != nil {
-				return err
-			}
-		case info.IsDir():
-			if err := copyDurableDiskDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		case info.Mode().IsRegular():
-			if err := copyDurableDiskFile(srcPath, dstPath, info.Mode().Perm()); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func copyDurableDiskFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	if err := out.Close(); err != nil {
-		return err
 	}
 	return nil
 }

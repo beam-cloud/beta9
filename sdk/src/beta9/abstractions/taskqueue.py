@@ -26,6 +26,7 @@ from ..env import is_local
 from ..schema import Schema
 from ..type import (
     Autoscaler,
+    DurableDisk,
     GpuType,
     GpuTypeAlias,
     Pool,
@@ -145,6 +146,7 @@ class TaskQueue(RunnerAbstraction):
         on_deploy: Optional[AbstractCallableWrapper] = None,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
@@ -173,6 +175,7 @@ class TaskQueue(RunnerAbstraction):
             on_deploy=on_deploy,
             callback_url=callback_url,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             env=env,
             name=name,

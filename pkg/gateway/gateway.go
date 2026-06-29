@@ -438,18 +438,19 @@ func (g *Gateway) registerServices() error {
 	ps, err := pod.NewPodService(
 		g.ctx,
 		pod.PodServiceOpts{
-			Config:        g.Config,
-			BackendRepo:   g.BackendRepo,
-			ContainerRepo: g.ContainerRepo,
-			ComputeRepo:   g.ComputeRepo,
-			Tailscale:     g.Tailscale,
-			Scheduler:     g.Scheduler,
-			RedisClient:   g.RedisClient,
-			EventRepo:     g.EventRepo,
-			RouteGroup:    g.rootRouteGroup,
-			WorkspaceRepo: g.WorkspaceRepo,
-			WorkerRepo:    g.workerRepo,
-			DrainContext:  g.drainCtx,
+			Config:         g.Config,
+			BackendRepo:    g.BackendRepo,
+			ContainerRepo:  g.ContainerRepo,
+			ComputeRepo:    g.ComputeRepo,
+			Tailscale:      g.Tailscale,
+			Scheduler:      g.Scheduler,
+			RedisClient:    g.RedisClient,
+			EventRepo:      g.EventRepo,
+			RouteGroup:     g.rootRouteGroup,
+			WorkspaceRepo:  g.WorkspaceRepo,
+			WorkerRepo:     g.workerRepo,
+			WorkerPoolRepo: g.WorkerPoolRepo,
+			DrainContext:   g.drainCtx,
 		},
 	)
 	if err != nil {
@@ -497,15 +498,18 @@ func (g *Gateway) registerServices() error {
 
 	// Register shell service
 	ss, err := _shell.NewSSHShellService(g.ctx, _shell.ShellServiceOpts{
-		Config:        g.Config,
-		RedisClient:   g.RedisClient,
-		Scheduler:     g.Scheduler,
-		BackendRepo:   g.BackendRepo,
-		WorkspaceRepo: g.WorkspaceRepo,
-		ContainerRepo: g.ContainerRepo,
-		Tailscale:     g.Tailscale,
-		EventRepo:     g.EventRepo,
-		RouteGroup:    g.rootRouteGroup,
+		Config:         g.Config,
+		RedisClient:    g.RedisClient,
+		Scheduler:      g.Scheduler,
+		BackendRepo:    g.BackendRepo,
+		ComputeRepo:    g.ComputeRepo,
+		WorkspaceRepo:  g.WorkspaceRepo,
+		ContainerRepo:  g.ContainerRepo,
+		WorkerRepo:     g.workerRepo,
+		WorkerPoolRepo: g.WorkerPoolRepo,
+		Tailscale:      g.Tailscale,
+		EventRepo:      g.EventRepo,
+		RouteGroup:     g.rootRouteGroup,
 	})
 	if err != nil {
 		return err
