@@ -122,12 +122,6 @@ service GatewayService {
       body : "*"
     };
   }
-  rpc BindService(BindServiceRequest) returns (BindServiceResponse) {
-    option (google.api.http) = {
-      post : "/deployments/{id}/bind"
-      body : "*"
-    };
-  }
   rpc DeleteDeployment(DeleteDeploymentRequest)
       returns (DeleteDeploymentResponse) {
     option (google.api.http) = {
@@ -696,18 +690,6 @@ message ScaleDeploymentRequest {
 }
 
 message ScaleDeploymentResponse {
-  bool ok = 1;
-  string err_msg = 2;
-}
-
-message BindServiceRequest {
-  string id = 1;
-  map<string, string> env = 2;
-  repeated string secrets = 3;
-  map<string, string> secret_env = 4;
-}
-
-message BindServiceResponse {
   bool ok = 1;
   string err_msg = 2;
 }

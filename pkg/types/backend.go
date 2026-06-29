@@ -545,7 +545,6 @@ type StubConfigV1 struct {
 	Serving            *ServingConfig    `json:"serving,omitempty"`
 	Pool               *PoolConfig       `json:"pool,omitempty"`
 	Disks              []*pb.DurableDisk `json:"disks,omitempty"`
-	HostAliases        map[string]string `json:"host_aliases,omitempty"`
 }
 
 type ServingConfig struct {

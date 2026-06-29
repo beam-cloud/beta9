@@ -498,24 +498,6 @@ class ScaleDeploymentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class BindServiceRequest(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    env: Dict[str, str] = betterproto.map_field(
-        2, betterproto.TYPE_STRING, betterproto.TYPE_STRING
-    )
-    secrets: List[str] = betterproto.string_field(3)
-    secret_env: Dict[str, str] = betterproto.map_field(
-        4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
-    )
-
-
-@dataclass(eq=False, repr=False)
-class BindServiceResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
 class DeleteDeploymentRequest(betterproto.Message):
     id: str = betterproto.string_field(1)
 
@@ -1460,15 +1442,6 @@ class GatewayServiceStub(SyncServiceStub):
             ScaleDeploymentRequest,
             ScaleDeploymentResponse,
         )(scale_deployment_request)
-
-    def bind_service(
-        self, bind_service_request: "BindServiceRequest"
-    ) -> "BindServiceResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/BindService",
-            BindServiceRequest,
-            BindServiceResponse,
-        )(bind_service_request)
 
     def delete_deployment(
         self, delete_deployment_request: "DeleteDeploymentRequest"

@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +43,6 @@ const (
 const (
 	hostResolvConfPath   = "/etc/resolv.conf"
 	workerResolvConfPath = "/workspace/etc/resolv.conf"
-	hostEtcHostsPath     = "/etc/hosts"
 )
 
 type containerResourceUpdater interface {
@@ -74,44 +72,6 @@ func resolvConfHasUsableNameserver(path string) bool {
 		}
 	}
 	return false
-}
-
-func containerHostsFileSource(containerId string, aliases map[string]string) (string, error) {
-	lines := make([]string, 0, len(aliases))
-	for host, ip := range aliases {
-		host = strings.TrimSpace(host)
-		ip = strings.TrimSpace(ip)
-		if host == "" || strings.ContainsAny(host, " \t\r\n/") || net.ParseIP(ip) == nil {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("%s\t%s", ip, host))
-	}
-	if len(lines) == 0 {
-		return "", nil
-	}
-	sort.Strings(lines)
-
-	contents, err := os.ReadFile(hostEtcHostsPath)
-	if err != nil || len(contents) == 0 {
-		contents = []byte("127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n")
-	}
-	if contents[len(contents)-1] != '\n' {
-		contents = append(contents, '\n')
-	}
-	contents = append(contents, []byte("# beta9 service bindings\n")...)
-	contents = append(contents, []byte(strings.Join(lines, "\n"))...)
-	contents = append(contents, '\n')
-
-	dir := filepath.Join(baseConfigPath, containerId)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	path := filepath.Join(dir, "hosts")
-	if err := os.WriteFile(path, contents, 0o644); err != nil {
-		return "", err
-	}
-
-	return path, nil
 }
 
 // handleStopContainerArgs queues a stop for a locally owned container.
@@ -860,27 +820,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
-
-	if stubConfig := requestStubConfig(request); stubConfig != nil {
-		hostsPath, err := containerHostsFileSource(request.ContainerId, stubConfig.HostAliases)
-		if err != nil {
-			log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("failed to prepare service binding hosts file")
-		} else if hostsPath != "" {
-			spec.Mounts = append(spec.Mounts, specs.Mount{
-				Type:        "none",
-				Source:      hostsPath,
-				Destination: hostEtcHostsPath,
-				Options: []string{
-					"ro",
-					"rbind",
-					"rprivate",
-					"nosuid",
-					"noexec",
-					"nodev",
-				},
-			})
-		}
-	}
 
 	// External mount for gVisor file uploads (external mounts bypass directory caching)
 	uploadsPath := filepath.Join(types.WorkerContainerUploadsHostPath, request.ContainerId)

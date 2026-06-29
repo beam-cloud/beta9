@@ -16,7 +16,6 @@ from ..abstractions.service import Service
 from ..channel import ServiceClient
 from ..clients.gateway import (
     Autoscaler as AutoscalerProto,
-    BindServiceRequest,
     DeleteDeploymentRequest,
     DeployStubRequest,
     GetUrlRequest,
@@ -53,11 +52,6 @@ def postgres():
 
 @common.group(name="redis", help="Create and manage Redis services.")
 def redis():
-    pass
-
-
-@common.group(name="service", help="Manage service bindings.")
-def service():
     pass
 
 
@@ -256,12 +250,13 @@ def _print_result(format: str, payload: Dict[str, object]) -> None:
         "version",
         "disk",
         "disk_size",
-        "host",
-        "username",
-        "database",
-        "connection_string",
-        "connection_string_secret",
-        "username_secret",
+            "host",
+            "username",
+            "database",
+            "connection_env_name",
+            "connection_string",
+            "connection_string_secret",
+            "username_secret",
         "password_secret",
         "database_secret",
     )
@@ -670,6 +665,46 @@ def _credentials(service: ServiceClient, product: DatabaseProduct, name: str, fo
     _print_result(format, payload)
 
 
+def _secret_env_names(product: DatabaseProduct) -> Dict[str, str]:
+    if product.kind == "postgres":
+        return {
+            "DATABASE_URL": "url",
+            "POSTGRES_USER": "username",
+            "POSTGRES_PASSWORD": "password",
+            "POSTGRES_DB": "database",
+        }
+    return {
+        "REDIS_URL": "url",
+        "REDIS_USER": "username",
+        "REDIS_PASSWORD": "password",
+    }
+
+
+def _secrets(service: ServiceClient, product: DatabaseProduct, name: str, format: str) -> None:
+    secret_names = _secret_names(product, name)
+    for secret_name in secret_names.values():
+        _get_secret_value(service, secret_name)
+
+    env = {
+        env_name: secret_names[key]
+        for env_name, key in _secret_env_names(product).items()
+        if key in secret_names
+    }
+    payload = {
+        "name": name,
+        "kind": product.kind,
+        "secrets": env,
+    }
+    if format == "json":
+        terminal.print_json(payload)
+        return
+
+    table = Table(Column("Environment"), Column("Beta9 secret"), box=box.SIMPLE)
+    for env_name, secret_name in env.items():
+        table.add_row(env_name, secret_name)
+    terminal.print(table)
+
+
 @postgres.command(name="credentials", help="Show Postgres connection details.")
 @click.argument("name")
 @click.option("--format", type=click.Choice(("table", "json")), default="table")
@@ -684,6 +719,22 @@ def postgres_credentials(service: ServiceClient, name: str, format: str):
 @extraclick.pass_service_client
 def redis_credentials(service: ServiceClient, name: str, format: str):
     _credentials(service, REDIS, name, format)
+
+
+@postgres.command(name="secrets", help="Show generated Postgres secret names.")
+@click.argument("name")
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+@extraclick.pass_service_client
+def postgres_secrets(service: ServiceClient, name: str, format: str):
+    _secrets(service, POSTGRES, name, format)
+
+
+@redis.command(name="secrets", help="Show generated Redis secret names.")
+@click.argument("name")
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+@extraclick.pass_service_client
+def redis_secrets(service: ServiceClient, name: str, format: str):
+    _secrets(service, REDIS, name, format)
 
 
 @postgres.command(name="connect", help="Print the Postgres connection string.")
@@ -821,33 +872,6 @@ def postgres_delete(service: ServiceClient, name: str):
 @extraclick.pass_service_client
 def redis_delete(service: ServiceClient, name: str):
     _delete_database(service, REDIS, name)
-
-
-@service.command(name="bind", help="Bind database services to an app deployment.")
-@click.argument("app")
-@click.option("--postgres", "postgres_name", type=click.STRING, default="")
-@click.option("--redis", "redis_name", type=click.STRING, default="")
-@extraclick.pass_service_client
-def bind_service(service: ServiceClient, app: str, postgres_name: str, redis_name: str):
-    deployment = _deployment_by_name(service, app)
-    if deployment is None:
-        raise click.ClickException(f"App deployment {app!r} not found.")
-
-    secret_env: Dict[str, str] = {}
-    if postgres_name:
-        secret_env["DATABASE_URL"] = _secret_names(POSTGRES, postgres_name)["url"]
-    if redis_name:
-        secret_env["REDIS_URL"] = _secret_names(REDIS, redis_name)["url"]
-    if not secret_env:
-        raise click.ClickException("Specify at least one database binding.")
-
-    res = service.gateway.bind_service(
-        BindServiceRequest(id=deployment.id, secret_env=secret_env)
-    )
-    if not res.ok:
-        raise click.ClickException(res.err_msg or "Failed to bind service.")
-
-    terminal.success(f"Bound {', '.join(sorted(secret_env))} to {app}")
 
 
 def _scale_options(func):
