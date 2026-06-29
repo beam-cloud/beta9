@@ -9,6 +9,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -19,6 +20,7 @@ type deploymentLifecycleBackendRepo struct {
 	repository.BackendRepository
 	deployments map[string]types.DeploymentWithRelated
 	stubConfigs map[uint]*types.StubConfigV1
+	snapshots   map[string]*types.DiskSnapshot
 }
 
 func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLifecycleBackendRepo) {
@@ -85,11 +87,13 @@ func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLi
 			deployment.ExternalId: deployment,
 		},
 		stubConfigs: map[uint]*types.StubConfigV1{},
+		snapshots:   map[string]*types.DiskSnapshot{},
 	}
 
 	return &GatewayService{
 		appConfig: types.AppConfig{
 			GatewayService: types.GatewayServiceConfig{
+				Host:       "localhost",
 				StubLimits: types.StubLimits{MaxReplicas: 10},
 			},
 		},
@@ -146,6 +150,34 @@ func (r *deploymentLifecycleBackendRepo) UpdateStubConfig(_ context.Context, stu
 	deployment.Stub.Config = string(configBytes)
 	r.deployments[deployment.ExternalId] = deployment
 	return nil
+}
+
+func (r *deploymentLifecycleBackendRepo) GetLatestDiskSnapshot(_ context.Context, workspaceID uint, diskName string) (*types.DiskSnapshot, error) {
+	snapshot, ok := r.snapshots[diskName]
+	if !ok || snapshot.WorkspaceId != workspaceID {
+		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: diskName}
+	}
+	return snapshot, nil
+}
+
+func setDeploymentStubConfig(t *testing.T, backend *deploymentLifecycleBackendRepo, config types.StubConfigV1) {
+	t.Helper()
+
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deployment := backend.deployments["deployment-id"]
+	deployment.Stub.Config = string(configBytes)
+	backend.deployments[deployment.ExternalId] = deployment
+}
+
+type deploymentLifecycleComputeRepo struct {
+	repository.ComputeRepository
+	states map[string]*compute.PoolState
+}
+
+func (r *deploymentLifecycleComputeRepo) GetPoolState(_ context.Context, _ string, name string) (*compute.PoolState, error) {
+	return r.states[name], nil
 }
 
 type deploymentLifecycleContainerRepo struct {
@@ -209,20 +241,14 @@ func TestScalePodDeploymentZeroEnablesScaleToZero(t *testing.T) {
 
 func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
-	config := types.StubConfigV1{
+	setDeploymentStubConfig(t, backend, types.StubConfigV1{
 		Autoscaler: &types.Autoscaler{
 			Type:              types.LLMTokenPressureAutoscaler,
 			MinContainers:     1,
 			MaxContainers:     4,
 			TasksPerContainer: 16,
 		},
-	}
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-
-	deployment := backend.deployments["deployment-id"]
-	deployment.Stub.Config = string(configBytes)
-	backend.deployments["deployment-id"] = deployment
+	})
 
 	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
 		Id:         "deployment-id",
@@ -235,6 +261,68 @@ func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
 	require.Equal(t, uint(16), backend.stubConfigs[20].Autoscaler.TasksPerContainer)
 	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MinContainers)
 	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MaxContainers)
+}
+
+func TestScalePodDeploymentRestoresDurableDiskToRegularPoolWhenPrivatePoolGone(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	gws.computeRepo = &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{
+		"pool-a": {Name: "pool-a", Mode: string(types.PoolModePrivate)},
+	}}
+	backend.snapshots["pg-data"] = &types.DiskSnapshot{
+		WorkspaceId: 1,
+		DiskName:    "pg-data",
+		Format:      types.DiskSnapshotFormatDirV1,
+		Status:      types.DiskSnapshotStatusAvailable,
+		ManifestKey: "durable-disks/pg-data/snapshots/1/manifest.json",
+	}
+
+	config := types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+		Disks: []*pb.DurableDisk{{
+			Name:   "pg-data",
+			Driver: types.DurableDiskDriverSnapshot,
+		}},
+	}
+	setDeploymentStubConfig(t, backend, config)
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 1,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Nil(t, backend.stubConfigs[20].Pool)
+	require.Equal(t, types.DurableDiskDriverSnapshot, backend.stubConfigs[20].Disks[0].Driver)
+}
+
+func TestScalePodDeploymentClearsUnavailablePrivatePoolWithoutDisks(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+
+	setDeploymentStubConfig(t, backend, types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+	})
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 1,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Nil(t, backend.stubConfigs[20].Pool)
 }
 
 func TestScaleDeploymentRejectsRestrictedToken(t *testing.T) {

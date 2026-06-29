@@ -73,5 +73,19 @@ func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace
 		mounts = append(mounts, mount)
 	}
 
+	for _, disk := range config.Disks {
+		if disk == nil || disk.Name == "" || disk.MountPath == "" {
+			continue
+		}
+
+		mounts = append(mounts, types.Mount{
+			LocalPath:   path.Join(types.DefaultDurableDisksPath, workspace.Name, types.SafeDurableDiskName(disk.Name)),
+			MountPath:   disk.MountPath,
+			ReadOnly:    disk.ReadOnly,
+			MountType:   types.StorageModeDurableDisk,
+			DurableDisk: types.NewDurableDiskMountConfigFromProto(disk),
+		})
+	}
+
 	return mounts, nil
 }

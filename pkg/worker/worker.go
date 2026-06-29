@@ -714,14 +714,6 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 		exitCode = int(serr.ExitCode)
 	}
 
-	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-		ContainerId: containerId,
-		ExitCode:    int32(exitCode),
-	}))
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-	}
-
 	s.clearContainer(containerId, request, exitCode)
 }
 
@@ -990,7 +982,8 @@ func (s *Worker) keepalive() {
 		select {
 		case <-ticker.C:
 			_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
-				WorkerId: s.workerId,
+				WorkerId:  s.workerId,
+				MachineId: s.machineID,
 			}))
 			if err != nil {
 				consecutiveFailures++

@@ -164,6 +164,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		IsService:          in.IsService,
 		Serving:            servingConfig,
 		Pool:               poolConfig,
+		Disks:              in.Disks,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -261,6 +262,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	if err := gws.configureDurableDiskPlacement(ctx, authInfo.Workspace, &stubConfig); err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
 	appName := in.AppName
 	if appName == "" {
 		appName = in.Name
@@ -274,10 +282,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
+	var object types.Object
+	if strings.TrimSpace(in.ObjectId) == "" {
+		object, err = gws.ensureEmptyStubObject(ctx, authInfo.Workspace)
+	} else {
+		object, err = gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
+	}
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
-			Ok: false,
+			Ok:     false,
+			ErrMsg: "Failed to prepare stub object",
 		}, nil
 	}
 
@@ -412,6 +426,25 @@ func llmConfigFromProto(in *pb.LLMConfig) *types.LLMConfig {
 	}
 }
 
+func databaseConfigFromProto(in *pb.DatabaseServingConfig) *types.DatabaseServingConfig {
+	if in == nil {
+		return nil
+	}
+
+	return &types.DatabaseServingConfig{
+		Kind:                    in.Kind,
+		Port:                    in.Port,
+		ReadinessProbe:          in.ReadinessProbe,
+		ConnectionEnvName:       in.ConnectionEnvName,
+		CredentialSecretNames:   append([]string(nil), in.CredentialSecretNames...),
+		DurabilityMode:          in.DurabilityMode,
+		UsernameSecretName:      in.UsernameSecretName,
+		PasswordSecretName:      in.PasswordSecretName,
+		DatabaseSecretName:      in.DatabaseSecretName,
+		ConnectionURLSecretName: in.ConnectionUrlSecretName,
+	}
+}
+
 func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
 	if in == nil {
 		return nil
@@ -421,6 +454,7 @@ func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
 		AppKind:         in.AppKind,
 		ServingProtocol: in.ServingProtocol,
 		LLM:             llmConfigFromProto(in.Llm),
+		Database:        databaseConfigFromProto(in.Database),
 	})
 }
 
@@ -428,7 +462,7 @@ func compactServingConfig(in *types.ServingConfig) *types.ServingConfig {
 	if in == nil {
 		return nil
 	}
-	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil {
+	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil && in.Database == nil {
 		return nil
 	}
 	return in
@@ -692,6 +726,19 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		if stubConfig.TCP {
 			externalUrl = gws.appConfig.Abstractions.Pod.TCP.GetExternalURL()
 			in.UrlType = common.InvokeUrlTypeHost
+			if in.DeploymentId != "" {
+				deployment, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.DeploymentId)
+				if err != nil {
+					return &pb.GetURLResponse{
+						Ok:     false,
+						ErrMsg: "Unable to get deployment",
+					}, nil
+				}
+				return &pb.GetURLResponse{
+					Ok:  true,
+					Url: common.BuildPodDeploymentURL(externalUrl, in.UrlType, &deployment.Deployment, stubConfig),
+				}, nil
+			}
 		}
 
 		return &pb.GetURLResponse{

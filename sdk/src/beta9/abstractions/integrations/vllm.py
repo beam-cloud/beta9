@@ -15,6 +15,7 @@ from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
 from ...type import (
     Autoscaler,
+    DurableDisk,
     GpuType,
     GpuTypeAlias,
     LLM_APP_KIND,
@@ -241,6 +242,7 @@ class VLLM(ASGI):
         authorized: bool = True,
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         vllm_args: VLLMArgs = VLLMArgs(),
@@ -274,6 +276,7 @@ class VLLM(ASGI):
             authorized=authorized,
             name=name,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             autoscaler=autoscaler,
         )

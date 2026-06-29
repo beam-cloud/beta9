@@ -144,18 +144,23 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		*exitCode = 0
 	}
 
-	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-		ContainerId: containerId,
-		ExitCode:    int32(*exitCode),
-	}))
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to set exit code: %v", err)
-	}
-
 	s.clearContainer(containerId, request, *exitCode)
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
+	s.setContainerExitCode(containerId, exitCode)
+
+	// Set container exit code on instance before any slower cleanup work.
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
+		instance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, instance)
+	}
+
+	if err := s.syncDurableDiskMounts(request); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
+	}
+
 	s.containerLock.Lock()
 
 	// De-allocate GPU devices so they are available for new containers
@@ -174,12 +179,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.completedRequests <- request
 	s.containerLock.Unlock()
 
-	// Set container exit code on instance
-	instance, exists := s.containerInstances.Get(containerId)
-	if exists {
-		instance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, instance)
-	}
 	s.markContainerStopping(containerId)
 
 	go func() {
@@ -210,6 +209,23 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
+}
+
+func (s *Worker) setContainerExitCode(containerId string, exitCode int) {
+	if s.containerRepoClient == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+		ContainerId: containerId,
+		ExitCode:    int32(exitCode),
+	}))
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+	}
 }
 
 func (s *Worker) markContainerStopping(containerId string) {
@@ -322,10 +338,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// runc container or execute any commands inside it. Mark the build as successful and exit.
 	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		exitCode := 0
-		_, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-			ContainerId: containerId,
-			ExitCode:    int32(exitCode),
-		}))
 		s.containerWg.Add(1)
 		go func() {
 			s.finalizeContainer(containerId, request, &exitCode)
@@ -786,7 +798,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
-	volumeCacheMap := s.addRequestMounts(request, spec)
+	volumeCacheMap, err := s.addRequestMounts(request, spec)
+	if err != nil {
+		return nil, err
+	}
 	s.enableVolumeCaching(request, volumeCacheMap, spec)
 
 	// Configure resolv.conf
@@ -888,11 +903,16 @@ func requestStubConfig(request *types.ContainerRequest) *types.StubConfigV1 {
 	return stubConfig
 }
 
-func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) map[string]string {
+func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) (map[string]string, error) {
 	volumeCacheMap := make(map[string]string)
 
-	for _, mount := range request.Mounts {
-		if !s.prepareRequestMount(request, mount, volumeCacheMap) {
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		ok, err := s.prepareRequestMount(request, mount, volumeCacheMap)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			continue
 		}
 
@@ -906,19 +926,30 @@ func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.S
 			Type:        "none",
 			Source:      mount.LocalPath,
 			Destination: mount.MountPath,
-			Options:     []string{"rbind", bindMountMode(mount)},
+			Options:     []string{"rbind", bindMountMode(*mount)},
 		})
 	}
 
-	return volumeCacheMap
+	return volumeCacheMap, nil
 }
 
-func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount types.Mount, volumeCacheMap map[string]string) bool {
+func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *types.Mount, volumeCacheMap map[string]string) (bool, error) {
+	if mount == nil {
+		return false, nil
+	}
+
 	if mount.MountType == storage.StorageModeMountPoint {
 		if _, err := os.Stat(mount.LocalPath); os.IsNotExist(err) {
-			return false
+			return false, nil
 		}
-		return true
+		return true, nil
+	}
+
+	if mount.MountType == types.StorageModeDurableDisk {
+		if err := s.prepareDurableDiskMount(request, mount); err != nil {
+			return false, fmt.Errorf("failed to prepare durable disk mount: %w", err)
+		}
+		return true, nil
 	}
 
 	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) {
@@ -927,10 +958,10 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount type
 
 	if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-		return false
+		return false, nil
 	}
 
-	return true
+	return true, nil
 }
 
 func ensureBindMountSourceDirs(mounts []types.Mount) error {

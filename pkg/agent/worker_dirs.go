@@ -10,6 +10,7 @@ type workerDirs struct {
 	Workspace   string
 	Cache       string
 	Checkpoints string
+	DurableDisk string
 	Logs        string
 }
 
@@ -22,6 +23,7 @@ func (d workerDirs) All() []string {
 		d.Workspace,
 		d.Cache,
 		d.Checkpoints,
+		d.DurableDisk,
 		d.Logs,
 	}
 }
@@ -36,6 +38,7 @@ func agentWorkerDirs(stateDir, workerID string) workerDirs {
 		Workspace:   filepath.Join(stateDir, "workspace-data"),
 		Cache:       filepath.Join(stateDir, "cache"),
 		Checkpoints: filepath.Join(stateDir, "checkpoints"),
+		DurableDisk: filepath.Join(stateDir, "durable-disks"),
 		Logs:        filepath.Join(stateDir, "logs", slotName),
 	}
 }

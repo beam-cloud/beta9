@@ -23,7 +23,7 @@ type WorkerRepository interface {
 	ToggleWorkerAvailable(workerId string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
-	SetWorkerKeepAlive(workerId string) error
+	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
@@ -228,6 +228,11 @@ type BackendRepository interface {
 	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
 	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error)
 	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
+	CreateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
+	UpdateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
+	GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error)
+	GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error)
+	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
 }
 
 type TaskRepository interface {

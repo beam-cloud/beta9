@@ -90,18 +90,23 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 		return err
 	}
 
+	if err := b.containerRepo.SetBuildContainerTTL(build.containerID, time.Duration(imageContainerTtlS)*time.Second); err != nil {
+		build.log(true, "Failed to connect to build container.\n")
+		return err
+	}
+
 	if err = b.scheduler.Run(containerRequest); err != nil {
 		build.log(true, err.Error()+"\n")
 		return err
 	}
 
-	hostname, err := b.containerRepo.GetWorkerAddress(ctx, build.containerID)
-	if err != nil {
-		build.log(true, "Failed to connect to build container.\n")
-		return err
+	if b.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
+		go b.refreshBuildContainerTTL(ctx, build.containerID)
+		return nil
 	}
 
-	if err := b.containerRepo.SetBuildContainerTTL(build.containerID, time.Duration(imageContainerTtlS)*time.Second); err != nil {
+	hostname, err := b.containerRepo.GetWorkerAddress(ctx, build.containerID)
+	if err != nil {
 		build.log(true, "Failed to connect to build container.\n")
 		return err
 	}
@@ -215,7 +220,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	go build.streamLogs()
+	if build.containerClient != nil {
+		go build.streamLogs()
+	}
 
 	// Wait for the build container lifecycle to complete
 	err = b.waitForBuildContainer(ctx, build)

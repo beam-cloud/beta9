@@ -106,6 +106,13 @@ func (s *Worker) handleWorkerEvent(event *pb.WorkerEvent) {
 	}
 }
 
+func (s *Worker) storageNodeID() string {
+	if s == nil {
+		return ""
+	}
+	return types.StableStorageNodeID(s.machineID, s.workerId)
+}
+
 func (s *Worker) registerBuildCancel(containerID string, cancel context.CancelFunc) {
 	if s.buildCancels == nil {
 		s.buildCancels = common.NewSafeMap[context.CancelFunc]()

@@ -23,16 +23,19 @@ import (
 )
 
 type PodServiceOpts struct {
-	Config        types.AppConfig
-	BackendRepo   repository.BackendRepository
-	ContainerRepo repository.ContainerRepository
-	WorkspaceRepo repository.WorkspaceRepository
-	Tailscale     *network.Tailscale
-	Scheduler     *scheduler.Scheduler
-	RedisClient   *common.RedisClient
-	EventRepo     repository.EventRepository
-	RouteGroup    *echo.Group
-	DrainContext  context.Context
+	Config         types.AppConfig
+	BackendRepo    repository.BackendRepository
+	ContainerRepo  repository.ContainerRepository
+	ComputeRepo    repository.ComputeRepository
+	WorkspaceRepo  repository.WorkspaceRepository
+	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
+	Tailscale      *network.Tailscale
+	Scheduler      *scheduler.Scheduler
+	RedisClient    *common.RedisClient
+	EventRepo      repository.EventRepository
+	RouteGroup     *echo.Group
+	DrainContext   context.Context
 }
 
 const (
@@ -55,7 +58,10 @@ type GenericPodService struct {
 	config          types.AppConfig
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
+	computeRepo     repository.ComputeRepository
 	workspaceRepo   repository.WorkspaceRepository
+	workerRepo      repository.WorkerRepository
+	workerPoolRepo  repository.WorkerPoolRepository
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
@@ -82,7 +88,10 @@ func NewPodService(
 		mu:              sync.Mutex{},
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
+		computeRepo:     opts.ComputeRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
+		workerRepo:      opts.WorkerRepo,
+		workerPoolRepo:  opts.WorkerPoolRepo,
 		scheduler:       opts.Scheduler,
 		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
@@ -181,6 +190,22 @@ func (ps *GenericPodService) rejectDrainingRequest(ctx echo.Context) error {
 	return ctx.String(http.StatusServiceUnavailable, "Service is draining")
 }
 
+func (ps *GenericPodService) durableDiskPlacementRepos() abstractions.DurableDiskPlacementRepos {
+	if ps == nil {
+		return abstractions.DurableDiskPlacementRepos{}
+	}
+	return abstractions.DurableDiskPlacementRepos{
+		BackendRepo:    ps.backendRepo,
+		ComputeRepo:    ps.computeRepo,
+		WorkerRepo:     ps.workerRepo,
+		WorkerPoolRepo: ps.workerPoolRepo,
+	}
+}
+
+func (ps *GenericPodService) prepareDurableDiskPlacement(ctx context.Context, workspace *types.Workspace, stubConfig *types.StubConfigV1) error {
+	return abstractions.ConfigureDurableDiskPlacement(ctx, ps.durableDiskPlacementRepos(), workspace, stubConfig)
+}
+
 func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) error {
 	if ps.isDraining() {
 		return ps.rejectDrainingRequest(ctx)
@@ -270,6 +295,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 
 	// Create queue instance to hold taskqueue specific methods/fields
 	instance = &podInstance{}
+	instance.durableDiskPlacementRepos = ps.durableDiskPlacementRepos()
 
 	// Create base autoscaled instance
 	autoscaledInstance, err := abstractions.NewAutoscaledInstance(ps.ctx, &abstractions.AutoscaledInstanceConfig{
@@ -334,6 +360,9 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return "", err
+	}
+	if err := s.prepareDurableDiskPlacement(ctx, workspace, &stubConfig); err != nil {
 		return "", err
 	}
 

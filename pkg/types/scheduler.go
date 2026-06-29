@@ -67,6 +67,17 @@ type Worker struct {
 	Runtime              string       `json:"runtime" redis:"runtime"`
 }
 
+type WorkerKeepAlive struct {
+	MachineId string `json:"machine_id"`
+}
+
+func StableStorageNodeID(machineID, workerID string) string {
+	if machineID = strings.TrimSpace(machineID); machineID != "" {
+		return machineID
+	}
+	return strings.TrimSpace(workerID)
+}
+
 func (w *Worker) ToProto() *pb.Worker {
 	containers := make([]*pb.Container, len(w.ActiveContainers))
 	for i, c := range w.ActiveContainers {
@@ -337,6 +348,18 @@ func (c *ContainerRequest) NetworkPolicy() ContainerNetworkPolicy {
 
 func (c *ContainerRequest) NetworkRestricted() bool {
 	return c.NetworkPolicy() != ContainerNetworkPolicyOpen
+}
+
+func (c *ContainerRequest) HasDurableDiskMount() bool {
+	if c == nil {
+		return false
+	}
+	for _, mount := range c.Mounts {
+		if mount.MountType == StorageModeDurableDisk || mount.DurableDisk != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *ContainerRequest) Clone() *ContainerRequest {

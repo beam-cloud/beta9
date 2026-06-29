@@ -2139,21 +2139,21 @@ func TestValidateAgentTransportConfig(t *testing.T) {
 }
 
 func TestAgentInstallCommandDoesNotUseSudoOnDarwin(t *testing.T) {
-	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false)
+	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test")
 
 	if !strings.Contains(command, `uname -s`) || !strings.Contains(command, `Darwin`) {
 		t.Fatalf("expected command to branch on Darwin, got %s", command)
 	}
-	if !strings.Contains(command, `then curl -fsSL 'https://app.stage.beam.cloud/install/agent' | sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'join-token'`) {
+	if !strings.Contains(command, `then curl -fsSL 'https://app.stage.beam.cloud/install/agent' | sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'join-token' --worker-image 'worker:test'`) {
 		t.Fatalf("expected Darwin/root path to run without sudo, got %s", command)
 	}
-	if !strings.Contains(command, `else curl -fsSL 'https://app.stage.beam.cloud/install/agent' | sudo sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'join-token'`) {
+	if !strings.Contains(command, `else curl -fsSL 'https://app.stage.beam.cloud/install/agent' | sudo sh -s -- --gateway 'https://app.stage.beam.cloud' --join-token 'join-token' --worker-image 'worker:test'`) {
 		t.Fatalf("expected non-root Linux path to use sudo, got %s", command)
 	}
 }
 
 func TestAgentInstallCommandDevModeRunsWithoutSudo(t *testing.T) {
-	command := agentInstallCommand("http://localhost:1994", "join-token", true)
+	command := agentInstallCommand("http://localhost:1994", "join-token", true, "worker:test")
 
 	if strings.Contains(command, "sudo") {
 		t.Fatalf("dev command should not use sudo: %s", command)

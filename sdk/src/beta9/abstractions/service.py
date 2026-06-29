@@ -9,6 +9,7 @@ from ..type import (
     Pool,
     QueueDepthAutoscaler,
     ServingConfig,
+    DurableDisk,
 )
 from .base.container import Container
 from .image import Image
@@ -178,6 +179,7 @@ class Service(Pod):
         gpu_count: int = 0,
         image: Image = Image(),
         volumes: Optional[List] = None,
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
         keep_warm_seconds: int = 0,
@@ -229,6 +231,7 @@ class Service(Pod):
             gpu_count=gpu_count,
             image=image,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             env=service_env,
             keep_warm_seconds=keep_warm_seconds,

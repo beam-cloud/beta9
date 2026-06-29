@@ -302,10 +302,35 @@ class LlmConfig(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class DatabaseServingConfig(betterproto.Message):
+    kind: str = betterproto.string_field(1)
+    port: int = betterproto.uint32_field(2)
+    readiness_probe: str = betterproto.string_field(3)
+    connection_env_name: str = betterproto.string_field(4)
+    credential_secret_names: List[str] = betterproto.string_field(5)
+    durability_mode: str = betterproto.string_field(6)
+    username_secret_name: str = betterproto.string_field(7)
+    password_secret_name: str = betterproto.string_field(8)
+    database_secret_name: str = betterproto.string_field(9)
+    connection_url_secret_name: str = betterproto.string_field(10)
+
+
+@dataclass(eq=False, repr=False)
 class ServingConfig(betterproto.Message):
     app_kind: str = betterproto.string_field(1)
     serving_protocol: str = betterproto.string_field(2)
     llm: "LlmConfig" = betterproto.message_field(3)
+    database: "DatabaseServingConfig" = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class DurableDisk(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    size: str = betterproto.string_field(2)
+    mount_path: str = betterproto.string_field(3)
+    filesystem: str = betterproto.string_field(4)
+    driver: str = betterproto.string_field(5)
+    read_only: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -372,6 +397,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     pool: "PoolConfig" = betterproto.message_field(41)
     is_service: bool = betterproto.bool_field(42)
     serving: "ServingConfig" = betterproto.message_field(43)
+    disks: List["DurableDisk"] = betterproto.message_field(44)
 
 
 @dataclass(eq=False, repr=False)

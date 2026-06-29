@@ -148,6 +148,20 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 			ErrMsg: "Deployment not found",
 		}, nil
 	}
+	if workspace := authInfo.Workspace; workspace != nil {
+		if deploymentWithRelated.Workspace.Id == 0 {
+			deploymentWithRelated.Workspace.Id = workspace.Id
+		}
+		if deploymentWithRelated.Workspace.ExternalId == "" {
+			deploymentWithRelated.Workspace.ExternalId = workspace.ExternalId
+		}
+		if deploymentWithRelated.Workspace.Name == "" {
+			deploymentWithRelated.Workspace.Name = workspace.Name
+		}
+		if deploymentWithRelated.Workspace.Storage == nil {
+			deploymentWithRelated.Workspace.Storage = workspace.Storage
+		}
+	}
 
 	// For now, we only support direct scaling of pod deployments
 	if deploymentWithRelated.Stub.Type != types.StubType(types.StubTypePodDeployment) {
@@ -168,13 +182,25 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 	if err := gws.scaleDeployment(ctx, *deploymentWithRelated, uint(in.Containers)); err != nil {
 		return &pb.ScaleDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Unable to scale deployment",
+			ErrMsg: err.Error(),
 		}, nil
 	}
 
 	return &pb.ScaleDeploymentResponse{
 		Ok: true,
 	}, nil
+}
+
+func (gws *GatewayService) usesPrivatePool(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) bool {
+	if gws == nil || gws.computeRepo == nil || stubConfig == nil {
+		return false
+	}
+	poolName := stubConfig.PoolSelector()
+	if poolName == "" {
+		return false
+	}
+	pool, err := gws.computeRepo.GetPoolState(ctx, workspaceID, poolName)
+	return err == nil && pool != nil
 }
 
 func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
@@ -282,36 +308,21 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 			}
 		}
 
-		// Stop active containers
-		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
-		if err != nil {
-			return fmt.Errorf("list active containers for deployment %s: %w", deployment.Stub.ExternalId, err)
-		}
-
-		var stopErr error
-		for _, container := range containers {
-			if err := gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonUser}); err != nil {
-				stopErr = errors.Join(stopErr, fmt.Errorf("stop container %s: %w", container.ContainerId, err))
-			}
-		}
-		if stopErr != nil {
-			return stopErr
-		}
-
-		// Disable deployment
 		deployment.Active = false
-		_, err = gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment)
-		if err != nil {
+		if _, err := gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment); err != nil {
 			return err
 		}
 
-		// Publish reload instance event
 		eventBus := common.NewEventBus(gws.redisClient)
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 			"stub_id":   deployment.Stub.ExternalId,
 			"stub_type": deployment.StubType,
 			"timestamp": time.Now().Unix(),
 		}})
+
+		if err := gws.stopActiveDeploymentContainers(deployment, false); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -325,10 +336,28 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}
 
 	stubConfig.SetReplicaCount(containers)
+	if containers > 0 {
+		if len(stubConfig.Disks) > 0 {
+			if err := gws.configureDurableDiskPlacement(ctx, &deployment.Workspace, stubConfig); err != nil {
+				return err
+			}
+		} else {
+			if err := gws.configureUnavailablePrivatePoolFallback(ctx, &deployment.Workspace, stubConfig); err != nil {
+				return err
+			}
+		}
+	}
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {
 		return err
+	}
+
+	if containers == 0 {
+		forceStop := len(stubConfig.Disks) == 0
+		if err := gws.stopActiveDeploymentContainers(deployment, forceStop); err != nil {
+			return err
+		}
 	}
 
 	// Publish reload instance event
@@ -340,4 +369,48 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}})
 
 	return nil
+}
+
+func (gws *GatewayService) stopActiveDeploymentContainers(deployment types.DeploymentWithRelated, force bool) error {
+	containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
+	if err != nil {
+		return fmt.Errorf("list active containers for deployment %s: %w", deployment.Stub.ExternalId, err)
+	}
+
+	var stopErr error
+	for _, container := range containers {
+		if container.ContainerId == "" || container.Status == types.ContainerStatusStopping {
+			continue
+		}
+		if err := gws.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: container.ContainerId,
+			Force:       force,
+			Reason:      types.StopContainerReasonUser,
+		}); err != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("stop container %s: %w", container.ContainerId, err))
+		}
+	}
+	return stopErr
+}
+
+func mergeEnvVar(env []string, key, value string) []string {
+	prefix := key + "="
+	next := key + "=" + value
+	for i, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			env[i] = next
+			return env
+		}
+	}
+	return append(env, next)
+}
+
+func mergeSecret(secrets []types.Secret, secret types.Secret) []types.Secret {
+	for i, existing := range secrets {
+		if existing.Name == secret.Name {
+			secrets[i] = secret
+			return secrets
+		}
+	}
+	return append(secrets, secret)
 }

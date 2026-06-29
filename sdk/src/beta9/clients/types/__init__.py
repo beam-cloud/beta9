@@ -126,6 +126,14 @@ class ContainerState(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class DurableDiskMountConfig(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    size: str = betterproto.string_field(2)
+    filesystem: str = betterproto.string_field(3)
+    driver: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
 class FileInfo(betterproto.Message):
     name: str = betterproto.string_field(1)
     is_dir: bool = betterproto.bool_field(2)
@@ -170,6 +178,7 @@ class Mount(betterproto.Message):
     read_only: bool = betterproto.bool_field(4)
     mount_type: str = betterproto.string_field(5)
     mount_point_config: "MountPointConfig" = betterproto.message_field(6)
+    durable_disk: "DurableDiskMountConfig" = betterproto.message_field(7)
 
 
 @dataclass(eq=False, repr=False)

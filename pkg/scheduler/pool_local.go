@@ -362,6 +362,16 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		})
 	}
 
+	volumes = append(volumes, corev1.Volume{
+		Name: durableDiskVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: workerDurableDisksHostPath(wpc.workerPoolConfig),
+				Type: &hostPathType,
+			},
+		},
+	})
+
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
 		Name: devicePluginVolumeName,
@@ -417,6 +427,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		})
 	}
 
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      durableDiskVolumeName,
+		MountPath: types.DefaultDurableDisksPath,
+		ReadOnly:  false,
+	})
+
 	return volumeMounts
 }
 
@@ -434,6 +450,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		{
 			Name:  "WORKER_POOL_NAME",
 			Value: wpc.name,
+		},
+		{
+			Name: types.WorkerMachineEnv,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "spec.nodeName",
+				},
+			},
 		},
 		{
 			Name:  "CACHE_LOCALITY",

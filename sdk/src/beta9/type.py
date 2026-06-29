@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Type, Union
 
@@ -322,10 +322,47 @@ class LLMConfig:
 
 
 @dataclass
+class DatabaseServingConfig:
+    kind: str
+    port: int
+    readiness_probe: str
+    connection_env_name: str
+    credential_secret_names: List[str] = field(default_factory=list)
+    durability_mode: str = "strict"
+    username_secret_name: str = ""
+    password_secret_name: str = ""
+    database_secret_name: str = ""
+    connection_url_secret_name: str = ""
+
+
+@dataclass
+class DurableDisk:
+    name: str
+    size: str
+    mount_path: str
+    filesystem: str = "ext4"
+    driver: str = ""
+    read_only: bool = False
+
+    def export(self):
+        from .clients.gateway import DurableDisk as DurableDiskProto
+
+        return DurableDiskProto(
+            name=self.name,
+            size=self.size,
+            mount_path=self.mount_path,
+            filesystem=self.filesystem,
+            driver=self.driver,
+            read_only=self.read_only,
+        )
+
+
+@dataclass
 class ServingConfig:
     app_kind: str = ""
     serving_protocol: str = ""
     llm: Optional[LLMConfig] = None
+    database: Optional[DatabaseServingConfig] = None
 
     @classmethod
     def from_options(
@@ -347,10 +384,13 @@ class ServingConfig:
         if self.llm:
             self.app_kind = self.app_kind or LLM_APP_KIND
             self.serving_protocol = self.serving_protocol or OPENAI_SERVING_PROTOCOL
+        if self.database:
+            self.app_kind = self.app_kind or "database"
+            self.serving_protocol = self.serving_protocol or self.database.kind
         return self
 
     def is_empty(self) -> bool:
-        return not (self.app_kind or self.serving_protocol or self.llm)
+        return not (self.app_kind or self.serving_protocol or self.llm or self.database)
 
     def uses_token_pressure_autoscaling(self) -> bool:
         return bool(self.llm and self.serving_protocol == OPENAI_SERVING_PROTOCOL)

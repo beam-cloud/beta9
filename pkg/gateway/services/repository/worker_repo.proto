@@ -89,7 +89,9 @@ message GetNextContainerRequestResponse {
   string error_msg = 3;
 }
 
-message StreamWorkerEventsRequest { string worker_id = 1; }
+message StreamWorkerEventsRequest {
+  string worker_id = 1;
+}
 
 message WorkerEvent {
   string event_id = 1;
@@ -194,7 +196,10 @@ message UpdateWorkerCapacityResponse {
   string error_msg = 2;
 }
 
-message SetWorkerKeepAliveRequest { string worker_id = 1; }
+message SetWorkerKeepAliveRequest {
+  string worker_id = 1;
+  string machine_id = 2;
+}
 
 message SetWorkerKeepAliveResponse {
   bool ok = 1;

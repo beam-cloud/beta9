@@ -52,12 +52,12 @@ func newWorkerEventBroker(ctx context.Context, rdb *common.RedisClient) *workerE
 
 func (b *workerEventBroker) register(workerID string) (uint64, <-chan *pb.WorkerEvent) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	b.nextID++
 	id := b.nextID
 	events := make(chan *pb.WorkerEvent, workerEventSinkBufferSize)
 	b.sinks[id] = &workerEventSink{workerID: workerID, events: events}
+	b.mu.Unlock()
+
 	return id, events
 }
 

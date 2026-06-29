@@ -28,7 +28,7 @@ from ..clients.function import (
 from ..env import called_on_import, is_local
 from ..schema import Schema
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias, Pool, PricingPolicy, TaskPolicy
+from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, PricingPolicy, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -111,6 +111,7 @@ class Function(RunnerAbstraction):
         retries: int = 3,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
@@ -132,6 +133,7 @@ class Function(RunnerAbstraction):
             retries=retries,
             callback_url=callback_url,
             volumes=volumes,
+            disks=disks,
             secrets=secrets,
             env=env,
             name=name,
@@ -410,6 +412,7 @@ class Schedule(Function):
         retries: int = 3,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
+        disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,

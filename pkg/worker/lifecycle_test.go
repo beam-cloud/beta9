@@ -1154,8 +1154,9 @@ func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
 
+	require.NoError(t, err)
 	require.Equal(t, map[string]string{"data": localPath}, volumeCacheMap)
 	require.DirExists(t, localPath)
 	require.Len(t, spec.Mounts, 1)
@@ -1176,8 +1177,9 @@ func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
 
+	require.NoError(t, err)
 	require.Empty(t, volumeCacheMap)
 	require.Empty(t, spec.Mounts)
 }
@@ -1818,6 +1820,14 @@ func (f *fakeBackendRepoClient) UpdateCheckpoint(ctx context.Context, in *pb.Upd
 	f.updateCalls++
 	f.lastUpdate = in
 	return &pb.UpdateCheckpointResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) CreateDiskSnapshot(ctx context.Context, in *pb.CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.CreateDiskSnapshotResponse, error) {
+	return &pb.CreateDiskSnapshotResponse{Ok: true}, nil
+}
+
+func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {
+	return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
 }
 
 type mockResourceRuntime struct {

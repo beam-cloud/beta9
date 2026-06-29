@@ -188,7 +188,7 @@ func TestSetWorkerKeepAlivePromotesPendingWorker(t *testing.T) {
 	}
 	assert.Nil(t, repo.AddWorker(worker))
 
-	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id))
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{}))
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
@@ -211,11 +211,45 @@ func TestSetWorkerKeepAliveDoesNotPromoteDisabledWorker(t *testing.T) {
 	}
 	assert.Nil(t, repo.AddWorker(worker))
 
-	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id))
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{}))
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, types.WorkerStatusDisabled, updatedWorker.Status)
+}
+
+func TestSetWorkerKeepAliveReconcilesAvailableWorkerCapacity(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:          "worker-keepalive-reconcile",
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    3000,
+		TotalMemory: 3000,
+		FreeCpu:     0,
+		FreeMemory:  0,
+	}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	for _, state := range []*types.ContainerState{
+		{ContainerId: "container-keepalive-running", Status: types.ContainerStatusRunning, Cpu: 1000, Memory: 512},
+		{ContainerId: "container-keepalive-stopping", Status: types.ContainerStatusStopping, Cpu: 1000, Memory: 512},
+	} {
+		key := common.RedisKeys.SchedulerContainerState(state.ContainerId)
+		assert.Nil(t, rdb.HSet(context.TODO(), key, common.ToSlice(state)).Err())
+		assert.Nil(t, rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), key).Err())
+	}
+
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{}))
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
+	assert.Equal(t, int64(2000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(2360), updatedWorker.FreeMemory)
 }
 
 func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *testing.T) {
@@ -608,6 +642,31 @@ func TestGetAllWorkersOnMachineUsesMachineIndex(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(workers))
 	assert.Equal(t, "worker-machine-a", workers[0].Id)
+}
+
+func TestSetWorkerKeepAliveUpdatesMachineIndex(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{Id: "worker-moving", Status: types.WorkerStatusAvailable, PoolName: "pool-a", MachineId: "machine-a"}
+	assert.Nil(t, repo.AddWorker(worker))
+
+	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{MachineId: "machine-b"}))
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, "machine-b", updatedWorker.MachineId)
+
+	oldWorkers, err := repo.GetAllWorkersOnMachine("machine-a")
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(oldWorkers))
+
+	newWorkers, err := repo.GetAllWorkersOnMachine("machine-b")
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(newWorkers))
+	assert.Equal(t, worker.Id, newWorkers[0].Id)
 }
 
 func TestWorkerSecondaryIndexesRemoveStaleMembers(t *testing.T) {

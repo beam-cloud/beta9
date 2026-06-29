@@ -937,7 +937,7 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 		// then stored under the decompressed content hash, mirroring the clip
 		// read path. The local mounted-source path is not valid for layers.
 		return m.materializeOCILayer(ctx, server, stub, item)
-	case types.CacheContentKindVolume:
+	case types.CacheContentKindVolume, types.CacheContentKindDiskSnapshot:
 		return m.materializeWorkspaceObject(ctx, server, stub, item)
 	case types.CacheContentKindClipV1:
 		// The v1 archive is one content-addressed object; re-fetch the whole
@@ -1101,11 +1101,15 @@ func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, ser
 	}
 
 	ws := creds.workspaceStorage
+	bucketName := ws.BucketName
+	if item.SourceBucket != "" {
+		bucketName = item.SourceBucket
+	}
 	req := &pb.CacheStoreContentFromSourceRequest{
 		Source: &pb.CacheSource{
 			Path:           item.Source,
 			ExpectedHash:   item.Hash,
-			BucketName:     ws.BucketName,
+			BucketName:     bucketName,
 			Region:         ws.Region,
 			EndpointUrl:    ws.EndpointUrl,
 			AccessKey:      ws.AccessKey,

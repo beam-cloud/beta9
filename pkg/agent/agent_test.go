@@ -248,6 +248,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		"/tmp/agent-state/workspace-data:" + types.AgentWorkspacePath,
 		"/tmp/agent-state/cache:" + types.AgentCachePath,
 		"/tmp/agent-state/checkpoints:" + types.AgentCheckpointPath,
+		"/tmp/agent-state/durable-disks:" + types.DefaultDurableDisksPath,
 	} {
 		if !containsArg(args, "-v", want) {
 			t.Fatalf("expected %s volume in docker args: %#v", want, args)

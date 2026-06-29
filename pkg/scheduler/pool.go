@@ -28,6 +28,7 @@ const (
 	imagesVolumeName            string  = "beta9-images"
 	storageVolumeName           string  = "beta9-storage"
 	cacheVolumeName             string  = "beta9-cache"
+	durableDiskVolumeName       string  = "beta9-durable-disks"
 	devicePluginVolumeName      string  = "kubelet-device-plugins"
 	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
 	defaultContainerName        string  = "worker"
@@ -114,6 +115,13 @@ func workerImagesHostPath(poolConfig types.WorkerPoolConfig) string {
 		return poolConfig.ImagesPath
 	}
 	return defaultImagesPath
+}
+
+func workerDurableDisksHostPath(poolConfig types.WorkerPoolConfig) string {
+	if poolConfig.DurableDisksPath != "" {
+		return poolConfig.DurableDisksPath
+	}
+	return types.DefaultDurableDisksPath
 }
 
 func workerCacheHostPath(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {

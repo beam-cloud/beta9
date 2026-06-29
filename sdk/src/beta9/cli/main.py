@@ -14,6 +14,7 @@ from ..config import SDKSettings, is_config_empty, set_settings
 from . import (
     config,
     container,
+    database,
     deployment,
     dev,
     machine,
@@ -97,6 +98,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
     cli.register(deployment)
+    cli.register(database)
     cli.register(serve)
     cli.register(volume)
     cli.register(config)

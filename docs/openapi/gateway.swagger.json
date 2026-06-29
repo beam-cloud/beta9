@@ -2279,6 +2279,45 @@
         }
       }
     },
+    "gatewayDatabaseServingConfig": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "readinessProbe": {
+          "type": "string"
+        },
+        "connectionEnvName": {
+          "type": "string"
+        },
+        "credentialSecretNames": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "durabilityMode": {
+          "type": "string"
+        },
+        "usernameSecretName": {
+          "type": "string"
+        },
+        "passwordSecretName": {
+          "type": "string"
+        },
+        "databaseSecretName": {
+          "type": "string"
+        },
+        "connectionUrlSecretName": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayDeleteDeploymentResponse": {
       "type": "object",
       "properties": {
@@ -2404,6 +2443,29 @@
         },
         "errMsg": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayDurableDisk": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "filesystem": {
+          "type": "string"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
         }
       }
     },
@@ -2672,6 +2734,13 @@
         },
         "serving": {
           "$ref": "#/definitions/gatewayServingConfig"
+        },
+        "disks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayDurableDisk"
+          }
         }
       }
     },
@@ -3704,6 +3773,9 @@
         },
         "llm": {
           "$ref": "#/definitions/gatewayLLMConfig"
+        },
+        "database": {
+          "$ref": "#/definitions/gatewayDatabaseServingConfig"
         }
       }
     },

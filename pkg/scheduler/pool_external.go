@@ -606,6 +606,16 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		})
 	}
 
+	volumes = append(volumes, corev1.Volume{
+		Name: durableDiskVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: workerDurableDisksHostPath(wpc.workerPoolConfig),
+				Type: &hostPathType,
+			},
+		},
+	})
+
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
 		Name: devicePluginVolumeName,
@@ -659,6 +669,12 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			ReadOnly:  false,
 		})
 	}
+
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      durableDiskVolumeName,
+		MountPath: types.DefaultDurableDisksPath,
+		ReadOnly:  false,
+	})
 
 	return volumeMounts
 }

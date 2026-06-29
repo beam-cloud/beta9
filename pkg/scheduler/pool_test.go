@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/tj/assert"
 )
 
@@ -78,4 +79,11 @@ func TestWorkerPodTerminationGracePeriodAllowsNestedCleanup(t *testing.T) {
 
 func TestWorkerPodCommandUsesInitReaper(t *testing.T) {
 	assert.Equal(t, []string{"/usr/bin/tini", "-g", "--", "/usr/local/bin/worker"}, workerPodCommand())
+}
+
+func TestWorkerDurableDisksHostPathUsesPoolOverride(t *testing.T) {
+	assert.Equal(t, types.DefaultDurableDisksPath, workerDurableDisksHostPath(types.WorkerPoolConfig{}))
+	assert.Equal(t, "/mnt/nvme/beta9/disks", workerDurableDisksHostPath(types.WorkerPoolConfig{
+		DurableDisksPath: "/mnt/nvme/beta9/disks",
+	}))
 }

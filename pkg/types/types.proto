@@ -115,6 +115,13 @@ message ContainerState {
   int64 started_at = 10;
 }
 
+message DurableDiskMountConfig {
+  string name = 1;
+  string size = 2;
+  string filesystem = 3;
+  string driver = 4;
+}
+
 message FileInfo {
   string name = 1;
   bool is_dir = 2;
@@ -154,6 +161,7 @@ message Mount {
   bool read_only = 4;
   string mount_type = 5;
   MountPointConfig mount_point_config = 6;
+  DurableDiskMountConfig durable_disk = 7;
 }
 
 message MountPointConfig {

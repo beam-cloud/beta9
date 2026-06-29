@@ -1081,13 +1081,6 @@ func llmReadinessProbePaths(config *types.StubConfigV1) []string {
 	return out
 }
 
-func (pb *PodProxyBuffer) checkContainerReady(address string, timeout time.Duration) bool {
-	if llmEnabled(pb.stubConfig) {
-		return pb.checkLLMContainerReady(address, timeout)
-	}
-	return pb.checkContainerAvailableWithTimeout(address, timeout)
-}
-
 func (pb *PodProxyBuffer) checkLLMContainerReady(address string, timeout time.Duration) bool {
 	if address == "" {
 		return false
