@@ -293,6 +293,8 @@ type DeploymentWithRelated struct {
 	StubId      string    `serializer:"stub_id,source:stub.id"`
 	AppId       string    `serializer:"app_id,source:app.id"`
 	WorkspaceId string    `serializer:"workspace_id,source:workspace.id"`
+	URL         string    `db:"-" json:"url,omitempty" serializer:"url,omitempty"`
+	InvokeURL   string    `db:"-" json:"invoke_url,omitempty" serializer:"invoke_url,omitempty"`
 }
 
 // @go2proto
@@ -559,6 +561,7 @@ type DatabaseServingConfig struct {
 	Port                    uint32   `json:"port,omitempty" serializer:"port,omitempty"`
 	ReadinessProbe          string   `json:"readiness_probe,omitempty" serializer:"readiness_probe,omitempty"`
 	ConnectionEnvName       string   `json:"connection_env_name,omitempty" serializer:"connection_env_name,omitempty"`
+	ConnectionURL           string   `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
 	CredentialSecretNames   []string `json:"credential_secret_names,omitempty" serializer:"credential_secret_names,omitempty"`
 	DurabilityMode          string   `json:"durability_mode,omitempty" serializer:"durability_mode,omitempty"`
 	UsernameSecretName      string   `json:"username_secret_name,omitempty" serializer:"username_secret_name,omitempty"`

@@ -439,7 +439,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
 
 	// Register disk service
-	ds, err := disk.NewGlobalDiskService(g.BackendRepo, g.WorkspaceRepo, g.rootRouteGroup)
+	ds, err := disk.NewGlobalDiskService(g.BackendRepo, g.WorkspaceRepo, g.baseRouteGroup)
 	if err != nil {
 		return err
 	}

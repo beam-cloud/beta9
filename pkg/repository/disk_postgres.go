@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -164,16 +165,23 @@ func (r *PostgresBackendRepository) CreateDiskSnapshot(ctx context.Context, snap
 	if snapshot.Status == "" {
 		snapshot.Status = types.DiskSnapshotStatusPending
 	}
+	var completedAt any
+	if snapshot.CompletedAt.Valid {
+		completedAt = snapshot.CompletedAt.Time
+	} else if diskSnapshotStatusTerminal(snapshot.Status) {
+		completedAt = time.Now()
+	}
 
 	query := fmt.Sprintf(`
 		INSERT INTO disk_snapshot (
 			workspace_id, stub_id, disk_name, format, status, reason, parent_snapshot_id,
 			generation, size_bytes, filesystem, driver, manifest_key, manifest_digest,
 			manifest_size_bytes, chunk_count, logical_size_bytes, stored_size_bytes,
-			bucket_name, object_prefix, source_pool, source_worker_id, source_storage_node_id
+			bucket_name, object_prefix, source_pool, source_worker_id, source_storage_node_id,
+			completed_at
 		) VALUES (
 			$1, NULLIF($2, 0), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
 		)
 		RETURNING %s;`, diskSnapshotColumns(""))
 
@@ -201,6 +209,7 @@ func (r *PostgresBackendRepository) CreateDiskSnapshot(ctx context.Context, snap
 		snapshot.SourcePool,
 		snapshot.SourceWorkerId,
 		snapshot.SourceStorageNodeId,
+		completedAt,
 	); err != nil {
 		return nil, err
 	}

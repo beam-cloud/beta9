@@ -39,6 +39,7 @@ func TestCreateDiskSnapshotStoresManifestReference(t *testing.T) {
 			"private-pool",
 			"worker-a",
 			"node-a",
+			nil,
 		).
 		WillReturnRows(diskSnapshotRows().AddRow(
 			uint(1),
@@ -90,6 +91,97 @@ func TestCreateDiskSnapshotStoresManifestReference(t *testing.T) {
 	require.Equal(t, "snapshot-1", snapshot.ExternalId)
 	require.Equal(t, types.DiskSnapshotStatusPending, snapshot.Status)
 	require.Equal(t, "snapshots/workspace/pg-data/snap-1", snapshot.ObjectPrefix)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateDiskSnapshotSetsCompletedAtForTerminalStatus(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	now := time.Now()
+	mock.ExpectQuery("INSERT INTO disk_snapshot").
+		WithArgs(
+			uint(7),
+			uint(13),
+			"pg-data",
+			types.DiskSnapshotFormatDirV1,
+			types.DiskSnapshotStatusAvailable,
+			"",
+			"",
+			int64(42),
+			int64(10<<30),
+			"ext4",
+			types.DurableDiskDriverSnapshot,
+			"snapshots/workspace/pg-data/snap-1/manifest.json",
+			"sha256:manifest",
+			int64(512),
+			int64(128),
+			int64(10<<30),
+			int64(3<<30),
+			"beta9-workspace-disk-pg-data",
+			"snapshots/workspace/pg-data/snap-1",
+			"private-pool",
+			"worker-a",
+			"node-a",
+			sqlmock.AnyArg(),
+		).
+		WillReturnRows(diskSnapshotRows().AddRow(
+			uint(1),
+			"snapshot-1",
+			uint(7),
+			uint(13),
+			"pg-data",
+			types.DiskSnapshotFormatDirV1,
+			types.DiskSnapshotStatusAvailable,
+			"",
+			"",
+			int64(42),
+			int64(10<<30),
+			"ext4",
+			types.DurableDiskDriverSnapshot,
+			"snapshots/workspace/pg-data/snap-1/manifest.json",
+			"sha256:manifest",
+			int64(512),
+			int64(128),
+			int64(10<<30),
+			int64(3<<30),
+			"beta9-workspace-disk-pg-data",
+			"snapshots/workspace/pg-data/snap-1",
+			"private-pool",
+			"worker-a",
+			"node-a",
+			now,
+			now,
+			now,
+			nil,
+		))
+
+	snapshot, err := postgresRepo.CreateDiskSnapshot(context.Background(), &types.DiskSnapshot{
+		WorkspaceId:         7,
+		StubId:              13,
+		DiskName:            "pg-data",
+		Format:              types.DiskSnapshotFormatDirV1,
+		Status:              types.DiskSnapshotStatusAvailable,
+		Generation:          42,
+		SizeBytes:           10 << 30,
+		Filesystem:          "ext4",
+		Driver:              types.DurableDiskDriverSnapshot,
+		ManifestKey:         "snapshots/workspace/pg-data/snap-1/manifest.json",
+		ManifestDigest:      "sha256:manifest",
+		ManifestSizeBytes:   512,
+		ChunkCount:          128,
+		LogicalSizeBytes:    10 << 30,
+		StoredSizeBytes:     3 << 30,
+		ObjectPrefix:        "snapshots/workspace/pg-data/snap-1",
+		SourcePool:          "private-pool",
+		BucketName:          "beta9-workspace-disk-pg-data",
+		SourceWorkerId:      "worker-a",
+		SourceStorageNodeId: "node-a",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, types.DiskSnapshotStatusAvailable, snapshot.Status)
+	require.True(t, snapshot.CompletedAt.Valid)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

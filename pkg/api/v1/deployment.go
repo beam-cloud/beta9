@@ -402,7 +402,12 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 			return HTTPNotFound()
 		}
 
-		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub)
+		if stubConfig.Pricing != nil {
+			invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub)
+			return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
+		}
+
+		invokeUrl := g.deploymentURL(stub, &deployment.Deployment, stubConfig)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
@@ -438,6 +443,19 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
-	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub, &deployment.Deployment)
+	invokeUrl := g.deploymentURL(stub, &deployment.Deployment, stubConfig)
 	return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
+}
+
+func (g *DeploymentGroup) deploymentURL(stub *types.StubWithRelated, deployment *types.Deployment, stubConfig *types.StubConfigV1) string {
+	if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
+		externalURL := g.config.GatewayService.HTTP.GetExternalURL()
+		urlType := g.config.GatewayService.InvokeURLType
+		if stubConfig.TCP {
+			externalURL = g.config.Abstractions.Pod.TCP.GetExternalURL()
+			urlType = common.InvokeUrlTypeHost
+		}
+		return common.BuildPodDeploymentURL(externalURL, urlType, deployment, stubConfig)
+	}
+	return common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub, deployment)
 }
