@@ -302,6 +302,42 @@ func TestScalePodDeploymentRestoresDurableDiskToRegularPoolWhenPrivatePoolGone(t
 	require.Equal(t, types.DurableDiskDriverSnapshot, backend.stubConfigs[20].Disks[0].Driver)
 }
 
+func TestScalePodDeploymentRestoresDurableDiskWhenPrivatePoolRecordIsGone(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	gws.computeRepo = &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{}}
+	backend.snapshots["pg-data"] = &types.DiskSnapshot{
+		WorkspaceId:    1,
+		DiskName:       "pg-data",
+		Format:         types.DiskSnapshotFormatPostgresWalV1,
+		Status:         types.DiskSnapshotStatusAvailable,
+		ManifestKey:    "durable-disks/pg-data/snapshots/1/manifest.json",
+		SourceWorkerId: "worker-a",
+	}
+
+	setDeploymentStubConfig(t, backend, types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "pool-a"},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     0,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+		Disks: []*pb.DurableDisk{{
+			Name:   "pg-data",
+			Driver: types.DurableDiskDriverSnapshot,
+		}},
+	})
+
+	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
+		Id:         "deployment-id",
+		Containers: 1,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Nil(t, backend.stubConfigs[20].Pool)
+}
+
 func TestScalePodDeploymentClearsUnavailablePrivatePoolWithoutDisks(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
 

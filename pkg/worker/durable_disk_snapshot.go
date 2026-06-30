@@ -41,7 +41,7 @@ type durableDiskSnapshotBucketStore struct {
 	bucket string
 }
 
-func newDurableDiskSnapshotBucketStore(ctx context.Context, request *types.ContainerRequest, diskName, bucketName string, create bool) (*durableDiskSnapshotBucketStore, error) {
+func newDurableDiskSnapshotBucketStore(ctx context.Context, request *types.ContainerRequest, _ string, bucketName string, create bool) (*durableDiskSnapshotBucketStore, error) {
 	if request == nil || request.Workspace.Name == "" || !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
 		return nil, fmt.Errorf("workspace storage credentials are required for durable disk snapshots")
 	}
@@ -51,10 +51,14 @@ func newDurableDiskSnapshotBucketStore(ctx context.Context, request *types.Conta
 		return nil, fmt.Errorf("create durable disk snapshot storage client: %w", err)
 	}
 	if bucketName == "" {
-		bucketName = durableDiskSnapshotBucketName(client.BucketName(), diskName)
+		bucketName = client.BucketName()
 	}
 	if create {
-		if err := client.StorageClient.EnsureBucket(ctx, bucketName); err != nil {
+		if bucketName == client.BucketName() {
+			if err := client.EnsureLocalBucket(ctx); err != nil {
+				return nil, fmt.Errorf("ensure durable disk snapshot bucket %s: %w", bucketName, err)
+			}
+		} else if err := client.StorageClient.EnsureBucket(ctx, bucketName); err != nil {
 			return nil, fmt.Errorf("ensure durable disk snapshot bucket %s: %w", bucketName, err)
 		}
 	}
@@ -75,38 +79,6 @@ func (s *durableDiskSnapshotBucketStore) UploadWithReader(ctx context.Context, k
 
 func (s *durableDiskSnapshotBucketStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
 	return s.client.StorageClient.DownloadWithReader(ctx, key, s.bucket)
-}
-
-func durableDiskSnapshotBucketName(workspaceBucket, diskName string) string {
-	sum := sha256.Sum256([]byte(workspaceBucket + "/" + diskName))
-	suffix := hex.EncodeToString(sum[:])[:12]
-	prefix := durableDiskBucketPart(workspaceBucket + "-disk-" + diskName)
-	if len(prefix) > 50 {
-		prefix = strings.Trim(prefix[:50], "-")
-	}
-	if prefix == "" {
-		prefix = "beta9-disk"
-	}
-	return strings.Trim(prefix+"-"+suffix, "-")
-}
-
-func durableDiskBucketPart(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range value {
-		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
-		if !ok {
-			if !lastDash {
-				b.WriteByte('-')
-				lastDash = true
-			}
-			continue
-		}
-		b.WriteRune(r)
-		lastDash = false
-	}
-	return strings.Trim(b.String(), "-")
 }
 
 func uploadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, manifestKey string, manifest *types.DiskSnapshotManifest) (string, int64, error) {
