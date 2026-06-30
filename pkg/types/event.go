@@ -86,16 +86,18 @@ var EventPlatformCacheSchemaVersion = "1.0"
 // non-secret descriptor (OCI layer identity or workspace object path) used to
 // resolve an origin fetch; it never carries credentials.
 type CacheRequiredContentItem struct {
-	Hash         string           `json:"hash"`
-	RoutingKey   string           `json:"routing_key"`
-	SizeBytes    int64            `json:"size_bytes,omitempty"`
-	ExpectedHash string           `json:"expected_hash,omitempty"`
-	ImageID      string           `json:"image_id,omitempty"`
-	Source       string           `json:"source,omitempty"`
-	SourceBucket string           `json:"source_bucket,omitempty"`
-	Kind         CacheContentKind `json:"kind,omitempty"`
-	CheckpointID string           `json:"checkpoint_id,omitempty"`
-	Accelerator  string           `json:"accelerator,omitempty"`
+	Hash               string           `json:"hash"`
+	RoutingKey         string           `json:"routing_key"`
+	SizeBytes          int64            `json:"size_bytes,omitempty"`
+	ExpectedHash       string           `json:"expected_hash,omitempty"`
+	ImageID            string           `json:"image_id,omitempty"`
+	Source             string           `json:"source,omitempty"`
+	SourceBucket       string           `json:"source_bucket,omitempty"`
+	Kind               CacheContentKind `json:"kind,omitempty"`
+	CheckpointID       string           `json:"checkpoint_id,omitempty"`
+	Accelerator        string           `json:"accelerator,omitempty"`
+	DiskName           string           `json:"disk_name,omitempty"`
+	SnapshotGeneration int64            `json:"snapshot_generation,omitempty"`
 }
 
 // EventStubCacheRequiredContentSchema is the coalesced required-content report

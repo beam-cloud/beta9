@@ -244,6 +244,52 @@ func TestUpdateDiskSnapshotFinalizesManifestReference(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetLatestDiskSnapshotOrdersByGeneration(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	now := time.Now()
+	mock.ExpectQuery("ORDER BY generation DESC, created_at DESC").
+		WithArgs(uint(7), "pg-data", types.DiskSnapshotStatusAvailable).
+		WillReturnRows(diskSnapshotRows().AddRow(
+			uint(2),
+			"snapshot-2",
+			uint(7),
+			uint(13),
+			"pg-data",
+			types.DiskSnapshotFormatDirV1,
+			types.DiskSnapshotStatusAvailable,
+			"",
+			"snapshot-1",
+			int64(2),
+			int64(10<<30),
+			"ext4",
+			types.DurableDiskDriverSnapshot,
+			"durable-disks/pg-data/snapshots/2/manifest.json",
+			"sha256:manifest-2",
+			int64(512),
+			int64(128),
+			int64(10<<30),
+			int64(3<<30),
+			"disk-bucket",
+			"durable-disks/pg-data/snapshots/2",
+			"default",
+			"worker-a",
+			"node-a",
+			now,
+			now,
+			now,
+			nil,
+		))
+
+	snapshot, err := postgresRepo.GetLatestDiskSnapshot(context.Background(), 7, "pg-data")
+
+	require.NoError(t, err)
+	require.Equal(t, "snapshot-2", snapshot.ExternalId)
+	require.Equal(t, int64(2), snapshot.Generation)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func diskSnapshotRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"id",

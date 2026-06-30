@@ -1666,7 +1666,7 @@ func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredCo
 		if item.Kind == "" {
 			item.Kind = schema.Kind
 		}
-		merged[item.Hash+"\x00"+item.RoutingKey] = item
+		mergeStubCacheRequiredContentItem(merged, item)
 	}
 }
 
@@ -1676,6 +1676,80 @@ func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentI
 		items = append(items, item)
 	}
 	return items
+}
+
+func mergeStubCacheRequiredContentItem(merged map[string]types.CacheRequiredContentItem, item types.CacheRequiredContentItem) {
+	item = normalizeStubCacheRequiredContentItem(item)
+	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
+		latest := latestDiskSnapshotContentGeneration(merged, item.DiskName)
+		if item.SnapshotGeneration < latest {
+			return
+		}
+		if item.SnapshotGeneration > latest {
+			pruneDiskSnapshotContentGenerationsBefore(merged, item.DiskName, item.SnapshotGeneration)
+		}
+	}
+	merged[stubCacheRequiredContentItemKey(item)] = item
+}
+
+func normalizeStubCacheRequiredContentItem(item types.CacheRequiredContentItem) types.CacheRequiredContentItem {
+	if item.Kind != types.CacheContentKindDiskSnapshot || (item.DiskName != "" && item.SnapshotGeneration > 0) {
+		return item
+	}
+	diskName, generation := diskSnapshotContentIdentity(item.Source)
+	if item.DiskName == "" {
+		item.DiskName = diskName
+	}
+	if item.SnapshotGeneration == 0 {
+		item.SnapshotGeneration = generation
+	}
+	return item
+}
+
+func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string {
+	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
+		return strings.Join([]string{
+			string(item.Kind),
+			item.DiskName,
+			strconv.FormatInt(item.SnapshotGeneration, 10),
+			item.Hash,
+			item.RoutingKey,
+		}, "\x00")
+	}
+	return item.Hash + "\x00" + item.RoutingKey
+}
+
+func latestDiskSnapshotContentGeneration(merged map[string]types.CacheRequiredContentItem, diskName string) int64 {
+	var latest int64
+	for _, item := range merged {
+		if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName == diskName && item.SnapshotGeneration > latest {
+			latest = item.SnapshotGeneration
+		}
+	}
+	return latest
+}
+
+func pruneDiskSnapshotContentGenerationsBefore(merged map[string]types.CacheRequiredContentItem, diskName string, generation int64) {
+	for key, item := range merged {
+		if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName == diskName && item.SnapshotGeneration < generation {
+			delete(merged, key)
+		}
+	}
+}
+
+func diskSnapshotContentIdentity(source string) (string, int64) {
+	parts := strings.Split(strings.Trim(source, "/"), "/")
+	if len(parts) < 3 || parts[0] != "durable-disks" {
+		return "", 0
+	}
+	if len(parts) >= 5 && parts[2] == "snapshots" {
+		generation, _ := strconv.ParseInt(parts[3], 10, 64)
+		return parts[1], generation
+	}
+	if parts[2] == "chunks" {
+		return parts[1], 0
+	}
+	return "", 0
 }
 
 func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containerID string) s2.StreamName {
