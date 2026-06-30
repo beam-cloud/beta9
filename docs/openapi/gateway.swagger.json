@@ -2432,6 +2432,15 @@
         },
         "appId": {
           "type": "string"
+        },
+        "databaseKind": {
+          "type": "string"
+        },
+        "connectionStringSecret": {
+          "type": "string"
+        },
+        "connectionEnvName": {
+          "type": "string"
         }
       }
     },

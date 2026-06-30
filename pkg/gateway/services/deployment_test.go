@@ -211,6 +211,30 @@ func TestPodDeploymentLifecycleUsesListedDeploymentID(t *testing.T) {
 	require.Empty(t, backend.deployments)
 }
 
+func TestListDeploymentsIncludesDatabaseMetadata(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	setDeploymentStubConfig(t, backend, types.StubConfigV1{
+		Serving: &types.ServingConfig{
+			AppKind:         "database",
+			ServingProtocol: "redis",
+			Database: &types.DatabaseServingConfig{
+				Kind:                    "redis",
+				ConnectionEnvName:       "REDIS_URL",
+				ConnectionURLSecretName: "BETA9_REDIS_TEST_URL",
+			},
+		},
+	})
+
+	resp, err := gws.ListDeployments(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ListDeploymentsRequest{})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Len(t, resp.Deployments, 1)
+	require.Equal(t, "redis", resp.Deployments[0].DatabaseKind)
+	require.Equal(t, "REDIS_URL", resp.Deployments[0].ConnectionEnvName)
+	require.Equal(t, "BETA9_REDIS_TEST_URL", resp.Deployments[0].ConnectionStringSecret)
+}
+
 func TestScalePodDeploymentUpdatesFixedReplicaBounds(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
 
