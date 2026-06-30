@@ -231,18 +231,12 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 			if durableDiskSnapshotFileReusable(previousFile, file) {
 				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
 			} else if durableDiskSnapshotAppendOnlyFile(manifest.Format, file.Path) && durableDiskSnapshotFileAppendReusable(previousFile, file) {
-				reusePrefix := durableDiskSnapshotSameIdentity(previousFile, file)
+				reusePrefix, err := durableDiskSnapshotFileChunksReusable(name, previousFile)
+				if err != nil {
+					return err
+				}
 				if reusePrefix {
 					file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
-				} else {
-					var err error
-					reusePrefix, err = durableDiskSnapshotFileChunksReusable(name, previousFile)
-					if err != nil {
-						return err
-					}
-					if reusePrefix {
-						file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
-					}
 				}
 				if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, buffer, seen, &file); err != nil {
 					return err
