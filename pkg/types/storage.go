@@ -136,6 +136,9 @@ type DiskSnapshotFile struct {
 	Gid             int                 `json:"gid,omitempty"`
 	SizeBytes       int64               `json:"size_bytes,omitempty"`
 	ModTimeUnixNano int64               `json:"mtime_unix_nano,omitempty"`
+	ChangeUnixNano  int64               `json:"ctime_unix_nano,omitempty"`
+	DeviceId        uint64              `json:"device_id,omitempty"`
+	Inode           uint64              `json:"inode,omitempty"`
 	LinkName        string              `json:"link_name,omitempty"`
 	Chunks          []DiskSnapshotChunk `json:"chunks,omitempty"`
 }

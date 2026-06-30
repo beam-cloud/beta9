@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,29 @@ func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
 	require.Equal(t, localPath, spec.Mounts[0].Source)
 	require.Equal(t, request.Mounts[0].MountPath, spec.Mounts[0].Destination)
 	require.Equal(t, []string{"rbind", "rw"}, spec.Mounts[0].Options)
+}
+
+func TestDurableDiskShouldKeepLocalPayload(t *testing.T) {
+	snapshot := &types.DiskSnapshot{Generation: 2, ManifestDigest: "sha256:new"}
+
+	require.False(t, durableDiskShouldKeepLocalPayload(durableDiskMarker{
+		State:      durableDiskStateDirty,
+		Generation: 1,
+	}, snapshot))
+	require.True(t, durableDiskShouldKeepLocalPayload(durableDiskMarker{
+		State:      durableDiskStateDirty,
+		Generation: 2,
+	}, snapshot))
+	require.True(t, durableDiskShouldKeepLocalPayload(durableDiskMarker{
+		State:          durableDiskStateClean,
+		Generation:     2,
+		ManifestDigest: "sha256:new",
+	}, snapshot))
+	require.False(t, durableDiskShouldKeepLocalPayload(durableDiskMarker{
+		State:          durableDiskStateClean,
+		Generation:     2,
+		ManifestDigest: "sha256:old",
+	}, snapshot))
 }
 
 func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
@@ -168,6 +192,112 @@ func TestCreateDurableDiskDirectorySnapshotReusesAppendOnlyTail(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(restored, "appendonlydir", "appendonly.aof.1.incr.aof"))
 	require.NoError(t, err)
 	require.Equal(t, "aaaabbbbcccc", string(data))
+}
+
+func TestCreateDurableDiskDirectorySnapshotRejectsRecreatedAppendOnlyPrefix(t *testing.T) {
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "redis-data")
+	aof := filepath.Join(source, "appendonlydir", "appendonly.aof.1.incr.aof")
+	require.NoError(t, os.MkdirAll(filepath.Dir(aof), 0o700))
+	require.NoError(t, os.WriteFile(aof, []byte("aaaabbbb"), 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{}
+	_, firstManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/redis-data/snapshots/1", types.DiskSnapshot{
+		DiskName:   "redis-data",
+		Format:     types.DiskSnapshotFormatRedisAOFV1,
+		Filesystem: "ext4",
+		Generation: 1,
+	}, 4, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Remove(aof))
+	require.NoError(t, os.WriteFile(aof, []byte("xxxxbbbbcccc"), 0o600))
+	second, _, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/redis-data/snapshots/2", types.DiskSnapshot{
+		DiskName:   "redis-data",
+		Format:     types.DiskSnapshotFormatRedisAOFV1,
+		Filesystem: "ext4",
+		Generation: 2,
+	}, 4, firstManifest)
+	require.NoError(t, err)
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	_, err = restoreDurableDiskDirectorySnapshotWithCache(ctx, store, nil, second.ManifestKey, second.ManifestDigest, second.ManifestSizeBytes, restored)
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(restored, "appendonlydir", "appendonly.aof.1.incr.aof"))
+	require.NoError(t, err)
+	require.Equal(t, "xxxxbbbbcccc", string(data))
+}
+
+func TestCreateDurableDiskDirectorySnapshotRejectsSameMetadataRewrite(t *testing.T) {
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "data")
+	file := filepath.Join(source, "dbfile")
+	require.NoError(t, os.MkdirAll(source, 0o700))
+	require.NoError(t, os.WriteFile(file, []byte("aaaabbbb"), 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{}
+	_, firstManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/1", types.DiskSnapshot{
+		DiskName:   "data",
+		Format:     types.DiskSnapshotFormatDirV1,
+		Filesystem: "ext4",
+		Generation: 1,
+	}, 4, nil)
+	require.NoError(t, err)
+	firstFile := snapshotTestFile(firstManifest, "dbfile")
+	require.NotEmpty(t, firstFile.Chunks)
+
+	modTime := time.Unix(0, firstFile.ModTimeUnixNano)
+	require.NoError(t, os.WriteFile(file, []byte("xxxxbbbb"), 0o600))
+	require.NoError(t, os.Chtimes(file, modTime, modTime))
+
+	second, _, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/2", types.DiskSnapshot{
+		DiskName:   "data",
+		Format:     types.DiskSnapshotFormatDirV1,
+		Filesystem: "ext4",
+		Generation: 2,
+	}, 4, firstManifest)
+	require.NoError(t, err)
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	_, err = restoreDurableDiskDirectorySnapshotWithCache(ctx, store, nil, second.ManifestKey, second.ManifestDigest, second.ManifestSizeBytes, restored)
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(restored, "dbfile"))
+	require.NoError(t, err)
+	require.Equal(t, "xxxxbbbb", string(data))
+}
+
+func TestCreateDurableDiskDirectorySnapshotPreservesEmptyDirectory(t *testing.T) {
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "data")
+	require.NoError(t, os.MkdirAll(source, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "value"), []byte("present"), 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{}
+	_, firstManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/1", types.DiskSnapshot{
+		DiskName:   "data",
+		Format:     types.DiskSnapshotFormatDirV1,
+		Filesystem: "ext4",
+		Generation: 1,
+	}, 4, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstManifest.Files)
+
+	require.NoError(t, os.Remove(filepath.Join(source, "value")))
+	second, secondManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/2", types.DiskSnapshot{
+		DiskName:   "data",
+		Format:     types.DiskSnapshotFormatDirV1,
+		Filesystem: "ext4",
+		Generation: 2,
+	}, 4, firstManifest)
+	require.NoError(t, err)
+	require.Empty(t, secondManifest.Files)
+
+	restored := filepath.Join(t.TempDir(), "restored")
+	_, err = restoreDurableDiskDirectorySnapshotWithCache(ctx, store, nil, second.ManifestKey, second.ManifestDigest, second.ManifestSizeBytes, restored)
+	require.NoError(t, err)
+	entries, err := os.ReadDir(restored)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
