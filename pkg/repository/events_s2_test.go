@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,6 +245,80 @@ func TestMergeStubCacheRequiredContentRecordKeepsLatestItem(t *testing.T) {
 	}
 	if got, want := items[0].SizeBytes, int64(200); got != want {
 		t.Fatalf("unexpected size: got %d want %d", got, want)
+	}
+}
+
+func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	writeRecord := func(items ...types.CacheRequiredContentItem) {
+		body, err := json.Marshal(struct {
+			Type string                                    `json:"type"`
+			Data types.EventStubCacheRequiredContentSchema `json:"data"`
+		}{
+			Type: types.EventStubCacheRequiredContent,
+			Data: types.EventStubCacheRequiredContentSchema{
+				Kind:  types.CacheContentKindDiskSnapshot,
+				Items: items,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mergeStubCacheRequiredContentRecord(merged, body)
+	}
+
+	writeRecord(
+		types.CacheRequiredContentItem{
+			Hash:               "old-manifest",
+			RoutingKey:         "old-manifest",
+			Source:             "durable-disks/redis-data/snapshots/1/manifest.json",
+			DiskName:           "redis-data",
+			SnapshotGeneration: 1,
+		},
+		types.CacheRequiredContentItem{
+			Hash:               "old-only-chunk",
+			RoutingKey:         "old-only-chunk",
+			Source:             "durable-disks/redis-data/chunks/old-only-chunk",
+			DiskName:           "redis-data",
+			SnapshotGeneration: 1,
+		},
+		types.CacheRequiredContentItem{
+			Hash:       "old-unversioned-chunk",
+			RoutingKey: "old-unversioned-chunk",
+			Source:     "durable-disks/redis-data/chunks/old-unversioned-chunk",
+		},
+	)
+	writeRecord(types.CacheRequiredContentItem{
+		Hash:               "new-manifest",
+		RoutingKey:         "new-manifest",
+		Source:             "durable-disks/redis-data/snapshots/2/manifest.json",
+		DiskName:           "redis-data",
+		SnapshotGeneration: 2,
+	})
+	writeRecord(types.CacheRequiredContentItem{
+		Hash:               "new-chunk",
+		RoutingKey:         "new-chunk",
+		Source:             "durable-disks/redis-data/chunks/new-chunk",
+		DiskName:           "redis-data",
+		SnapshotGeneration: 2,
+	})
+	writeRecord(types.CacheRequiredContentItem{
+		Hash:       "ignored-old-late",
+		RoutingKey: "ignored-old-late",
+		Source:     "durable-disks/redis-data/chunks/ignored-old-late",
+	})
+
+	items := stubCacheRequiredContentItems(merged)
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("unexpected item count: got %d want %d: %#v", got, want, items)
+	}
+	for _, item := range items {
+		if got, want := item.SnapshotGeneration, int64(2); got != want {
+			t.Fatalf("unexpected snapshot generation: got %d want %d", got, want)
+		}
+		if strings.HasPrefix(item.Hash, "old") || strings.HasPrefix(item.Hash, "ignored") {
+			t.Fatalf("stale snapshot item kept: %#v", item)
+		}
 	}
 }
 

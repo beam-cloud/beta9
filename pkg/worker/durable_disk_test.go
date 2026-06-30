@@ -303,6 +303,8 @@ func TestCreateDurableDiskDirectorySnapshotPreservesEmptyDirectory(t *testing.T)
 func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
 	items := durableDiskSnapshotRequiredContentItems(&types.DiskSnapshot{
 		BucketName:        "disk-bucket",
+		DiskName:          "pg-data",
+		Generation:        7,
 		ManifestKey:       "durable-disks/pg-data/snapshots/7/manifest.json",
 		ManifestDigest:    "sha256:" + strings.Repeat("a", 64),
 		ManifestSizeBytes: 512,
@@ -324,8 +326,12 @@ func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
 	require.Equal(t, "disk-bucket", items[0].SourceBucket)
 	require.Equal(t, "durable-disks/pg-data/snapshots/7/manifest.json", items[0].Source)
 	require.Equal(t, int64(512), items[0].SizeBytes)
+	require.Equal(t, "pg-data", items[0].DiskName)
+	require.Equal(t, int64(7), items[0].SnapshotGeneration)
 	require.Equal(t, strings.Repeat("b", 64), items[1].Hash)
 	require.Equal(t, "disk-bucket", items[1].SourceBucket)
+	require.Equal(t, "pg-data", items[1].DiskName)
+	require.Equal(t, int64(7), items[1].SnapshotGeneration)
 }
 
 func snapshotTestFile(manifest *types.DiskSnapshotManifest, name string) types.DiskSnapshotFile {

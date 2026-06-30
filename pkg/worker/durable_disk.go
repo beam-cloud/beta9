@@ -411,13 +411,15 @@ func durableDiskSnapshotRequiredContentItems(snapshot *types.DiskSnapshot, manif
 			return
 		}
 		items = append(items, types.CacheRequiredContentItem{
-			Hash:         hash,
-			RoutingKey:   hash,
-			ExpectedHash: hash,
-			SizeBytes:    size,
-			Source:       key,
-			SourceBucket: snapshot.BucketName,
-			Kind:         types.CacheContentKindDiskSnapshot,
+			Hash:               hash,
+			RoutingKey:         hash,
+			ExpectedHash:       hash,
+			SizeBytes:          size,
+			Source:             key,
+			SourceBucket:       snapshot.BucketName,
+			Kind:               types.CacheContentKindDiskSnapshot,
+			DiskName:           snapshot.DiskName,
+			SnapshotGeneration: snapshot.Generation,
 		})
 	}
 	add(snapshot.ManifestDigest, snapshot.ManifestKey, snapshot.ManifestSizeBytes)
