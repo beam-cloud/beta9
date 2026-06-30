@@ -41,7 +41,31 @@ type durableDiskSnapshotBucketStore struct {
 	bucket string
 }
 
-func newDurableDiskSnapshotBucketStore(ctx context.Context, request *types.ContainerRequest, _ string, bucketName string, create bool) (*durableDiskSnapshotBucketStore, error) {
+func newDurableDiskSnapshotWriteStore(ctx context.Context, request *types.ContainerRequest) (*durableDiskSnapshotBucketStore, error) {
+	client, err := newDurableDiskSnapshotStorageClient(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	bucketName := client.BucketName()
+	if err := client.EnsureLocalBucket(ctx); err != nil {
+		return nil, fmt.Errorf("ensure durable disk snapshot bucket %s: %w", bucketName, err)
+	}
+	return &durableDiskSnapshotBucketStore{client: client, bucket: bucketName}, nil
+}
+
+func newDurableDiskSnapshotReadStore(ctx context.Context, request *types.ContainerRequest, bucketName string) (*durableDiskSnapshotBucketStore, error) {
+	client, err := newDurableDiskSnapshotStorageClient(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if bucketName == "" {
+		bucketName = client.BucketName()
+	}
+	return &durableDiskSnapshotBucketStore{client: client, bucket: bucketName}, nil
+}
+
+func newDurableDiskSnapshotStorageClient(ctx context.Context, request *types.ContainerRequest) (*clients.WorkspaceStorageClient, error) {
 	if request == nil || request.Workspace.Name == "" || !workspaceStorageDownloadAvailable(request.Workspace.Storage) {
 		return nil, fmt.Errorf("workspace storage credentials are required for durable disk snapshots")
 	}
@@ -50,19 +74,7 @@ func newDurableDiskSnapshotBucketStore(ctx context.Context, request *types.Conta
 	if err != nil {
 		return nil, fmt.Errorf("create durable disk snapshot storage client: %w", err)
 	}
-	if bucketName == "" {
-		bucketName = client.BucketName()
-	}
-	if create {
-		if bucketName == client.BucketName() {
-			if err := client.EnsureLocalBucket(ctx); err != nil {
-				return nil, fmt.Errorf("ensure durable disk snapshot bucket %s: %w", bucketName, err)
-			}
-		} else if err := client.StorageClient.EnsureBucket(ctx, bucketName); err != nil {
-			return nil, fmt.Errorf("ensure durable disk snapshot bucket %s: %w", bucketName, err)
-		}
-	}
-	return &durableDiskSnapshotBucketStore{client: client, bucket: bucketName}, nil
+	return client, nil
 }
 
 func (s *durableDiskSnapshotBucketStore) Exists(ctx context.Context, key string) (bool, error) {

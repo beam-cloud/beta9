@@ -178,7 +178,7 @@ func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount
 		return err
 	}
 
-	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, "", true)
+	store, err := newDurableDiskSnapshotWriteStore(ctx, request)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
 	}
 
-	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, snapshot.BucketName, false)
+	store, err := newDurableDiskSnapshotReadStore(ctx, request, snapshot.BucketName)
 	if err != nil {
 		return err
 	}
