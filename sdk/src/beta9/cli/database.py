@@ -3,7 +3,7 @@ import secrets as secrets_lib
 import shlex
 import sys
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 import click
@@ -48,6 +48,22 @@ def common(**_):
 @common.group(name="db", help="Create and manage database services.")
 def db():
     pass
+
+
+@db.command(name="list", help="List database services.")
+@click.option(
+    "--kind",
+    type=click.Choice(("all", "postgres", "redis")),
+    default="all",
+    show_default=True,
+    help="Filter database services by kind.",
+)
+@click.option("--limit", type=click.IntRange(min=1), default=1000, show_default=True, help="Maximum deployments to scan.")
+@click.option("--all-versions", is_flag=True, help="Show every database deployment version.")
+@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
+@extraclick.pass_service_client
+def list_databases(service: ServiceClient, kind: str, limit: int, all_versions: bool, format: str):
+    _print_database_list(format, _database_deployments(service, limit, kind, all_versions))
 
 
 @db.group(name="postgres", help="Create and manage Postgres services.")
@@ -202,6 +218,77 @@ def _deployment_sort_key(deployment):
         deployment.updated_at.timestamp() if deployment.updated_at else 0,
         deployment.created_at.timestamp() if deployment.created_at else 0,
     )
+
+
+def _is_database_deployment(deployment) -> bool:
+    return bool(getattr(deployment, "database_kind", ""))
+
+
+def _database_deployments(service: ServiceClient, limit: int, kind: str, all_versions: bool = False):
+    res = service.gateway.list_deployments(ListDeploymentsRequest(limit=limit))
+    if not res.ok:
+        raise click.ClickException(res.err_msg or "Unable to list database services.")
+
+    deployments = [
+        deployment
+        for deployment in res.deployments
+        if _is_database_deployment(deployment)
+        and (kind == "all" or deployment.database_kind == kind)
+    ]
+    if all_versions:
+        return deployments
+
+    latest = {}
+    for deployment in deployments:
+        key = (deployment.database_kind, deployment.name)
+        if key not in latest or _deployment_sort_key(deployment) > _deployment_sort_key(latest[key]):
+            latest[key] = deployment
+    return sorted(latest.values(), key=lambda deployment: deployment.updated_at or deployment.created_at, reverse=True)
+
+
+def _database_list_payload(deployment) -> Dict[str, object]:
+    return {
+        "name": deployment.name,
+        "kind": deployment.database_kind,
+        "deployment_id": deployment.id,
+        "version": deployment.version,
+        "active": deployment.active,
+        "connection_env_name": deployment.connection_env_name,
+        "connection_string_secret": deployment.connection_string_secret,
+        "created_at": deployment.created_at,
+        "updated_at": deployment.updated_at,
+    }
+
+
+def _print_database_list(format: str, deployments: Iterable) -> None:
+    deployments = list(deployments)
+    if format == "json":
+        terminal.print_json([_database_list_payload(deployment) for deployment in deployments])
+        return
+
+    table = Table(
+        Column("Name"),
+        Column("Kind"),
+        Column("Active"),
+        Column("Version", justify="right"),
+        Column("Connection Env"),
+        Column("Connection Secret"),
+        Column("Updated At"),
+        box=box.SIMPLE,
+    )
+    for deployment in deployments:
+        table.add_row(
+            deployment.name,
+            deployment.database_kind,
+            "Yes" if deployment.active else "No",
+            str(deployment.version),
+            deployment.connection_env_name or "-",
+            deployment.connection_string_secret or "-",
+            terminal.humanize_date(deployment.updated_at),
+        )
+    table.add_section()
+    table.add_row(f"[bold]{len(deployments)} databases")
+    terminal.print(table)
 
 
 def _tcp_host_from_url(url: str) -> str:

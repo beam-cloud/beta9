@@ -648,6 +648,9 @@ message Deployment {
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
   string app_id = 12;
+  string database_kind = 13;
+  string connection_string_secret = 14;
+  string connection_env_name = 15;
 }
 
 message ListDeploymentsRequest {

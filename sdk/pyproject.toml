@@ -4,7 +4,8 @@ authors = [
 ]
 requires-python = "<4.0,>=3.8"
 dependencies = [
-    "typeguard<3.0.0,>=2.13.3",
+    "typeguard<3.0.0,>=2.13.3; python_version < '3.9'",
+    "typeguard<5.0.0,>=4.4.3; python_version >= '3.9'",
     "typing-extensions<5.0.0,>=4.7.1",
     "grpclib<1.0.0,>=0.4.7",
     "grpcio<2.0.0,>=1.69.0",
@@ -26,7 +27,7 @@ dependencies = [
     "pyyaml<7.0.0,>=6.0.0",
 ]
 name = "beta9"
-version = "0.1.249"
+version = "0.1.250"
 description = ""
 
 [project.scripts]

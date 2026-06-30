@@ -436,6 +436,9 @@ class Deployment(betterproto.Message):
     created_at: datetime = betterproto.message_field(10)
     updated_at: datetime = betterproto.message_field(11)
     app_id: str = betterproto.string_field(12)
+    database_kind: str = betterproto.string_field(13)
+    connection_string_secret: str = betterproto.string_field(14)
+    connection_env_name: str = betterproto.string_field(15)
 
 
 @dataclass(eq=False, repr=False)

@@ -62,19 +62,29 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 
 	deployments := make([]*pb.Deployment, len(deploymentsWithRelated))
 	for i, deployment := range deploymentsWithRelated {
+		database := deploymentDatabaseConfig(deployment.Stub.Config)
+		databaseKind, connectionStringSecret, connectionEnvName := "", "", ""
+		if database != nil {
+			databaseKind = database.NormalizedKind()
+			connectionStringSecret = database.ConnectionURLSecretName
+			connectionEnvName = database.ConnectionEnvName
+		}
 		deployments[i] = &pb.Deployment{
-			Id:            deployment.ExternalId,
-			Name:          deployment.Name,
-			Active:        deployment.Active,
-			StubId:        deployment.Stub.ExternalId,
-			StubName:      deployment.Stub.Name,
-			StubType:      string(deployment.Stub.Type),
-			Version:       uint32(deployment.Version),
-			WorkspaceId:   deployment.Workspace.ExternalId,
-			WorkspaceName: deployment.Workspace.Name,
-			CreatedAt:     timestamppb.New(deployment.CreatedAt.Time),
-			UpdatedAt:     timestamppb.New(deployment.UpdatedAt.Time),
-			AppId:         deployment.App.ExternalId,
+			Id:                     deployment.ExternalId,
+			Name:                   deployment.Name,
+			Active:                 deployment.Active,
+			StubId:                 deployment.Stub.ExternalId,
+			StubName:               deployment.Stub.Name,
+			StubType:               string(deployment.Stub.Type),
+			Version:                uint32(deployment.Version),
+			WorkspaceId:            deployment.Workspace.ExternalId,
+			WorkspaceName:          deployment.Workspace.Name,
+			CreatedAt:              timestamppb.New(deployment.CreatedAt.Time),
+			UpdatedAt:              timestamppb.New(deployment.UpdatedAt.Time),
+			AppId:                  deployment.App.ExternalId,
+			DatabaseKind:           databaseKind,
+			ConnectionStringSecret: connectionStringSecret,
+			ConnectionEnvName:      connectionEnvName,
 		}
 	}
 
@@ -82,6 +92,17 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 		Ok:          true,
 		Deployments: deployments,
 	}, nil
+}
+
+func deploymentDatabaseConfig(configJSON string) *types.DatabaseServingConfig {
+	if configJSON == "" {
+		return nil
+	}
+	var config types.StubConfigV1
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		return nil
+	}
+	return config.EffectiveDatabaseConfig()
 }
 
 func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploymentRequest) (*pb.StopDeploymentResponse, error) {
