@@ -48,8 +48,14 @@ func (i *podInstance) ensureReadyForRequest() error {
 }
 
 func (i *podInstance) startContainers(containersToRun int) error {
+	poolSelector := i.StubConfig.PoolSelector()
 	if err := abstractions.ConfigureDurableDiskPlacement(i.Ctx, i.durableDiskPlacementRepos, i.Workspace, i.StubConfig); err != nil {
 		return err
+	}
+	if poolSelector != i.StubConfig.PoolSelector() && i.Stub != nil && i.BackendRepo != nil {
+		if err := i.BackendRepo.UpdateStubConfig(i.Ctx, i.Stub.Id, i.StubConfig); err != nil {
+			return err
+		}
 	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)

@@ -110,15 +110,8 @@ func configureDurableDiskSnapshotFallback(ctx context.Context, repos DurableDisk
 	if poolName == "" || !durableDiskSnapshotFallbackSupported(stubConfig.Disks) {
 		return fmt.Errorf("durable disk snapshot fallback is not available for pool %q", poolName)
 	}
-	if err := ensureDurableDiskSnapshotsAvailable(ctx, repos, workspace, stubConfig.Disks); err != nil {
+	if _, err := latestRestorableDurableDiskSnapshots(ctx, repos, workspace, stubConfig.Disks); err != nil {
 		return err
-	}
-	allowed, err := privatePoolSnapshotFallbackAllowed(ctx, repos, workspace, poolName)
-	if err != nil {
-		return err
-	}
-	if !allowed {
-		return fmt.Errorf("durable disk snapshot fallback is only enabled for private pools")
 	}
 
 	stubConfig.Pool = nil
@@ -145,42 +138,33 @@ func durableDiskSnapshotFallbackNeeded(ctx context.Context, repos DurableDiskPla
 	if poolName == "" || !durableDiskSnapshotFallbackSupported(disks) || privatePoolHasAvailableWorkers(ctx, repos, poolName) {
 		return false, nil
 	}
-	allowed, err := privatePoolSnapshotFallbackAllowed(ctx, repos, workspace, poolName)
-	return allowed, err
+	_, err := latestRestorableDurableDiskSnapshots(ctx, repos, workspace, disks)
+	return err == nil, err
 }
 
-func privatePoolSnapshotFallbackAllowed(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, poolName string) (bool, error) {
-	if repos.ComputeRepo == nil || workspace == nil {
-		return false, nil
-	}
-	state, err := repos.ComputeRepo.GetPoolState(ctx, workspace.ExternalId, poolName)
-	if err != nil {
-		return false, err
-	}
-	return state != nil && state.Mode == string(types.PoolModePrivate), nil
-}
-
-func ensureDurableDiskSnapshotsAvailable(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, disks []*pb.DurableDisk) error {
+func latestRestorableDurableDiskSnapshots(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, disks []*pb.DurableDisk) ([]*types.DiskSnapshot, error) {
 	if repos.BackendRepo == nil || workspace == nil {
-		return fmt.Errorf("durable disk snapshot fallback requires workspace metadata")
+		return nil, fmt.Errorf("durable disk snapshot fallback requires workspace metadata")
 	}
 	workspaceID, err := durableDiskSnapshotWorkspaceID(ctx, repos, workspace)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	snapshots := make([]*types.DiskSnapshot, 0, len(disks))
 	for _, disk := range disks {
 		if disk == nil || disk.Name == "" {
 			continue
 		}
 		snapshot, err := repos.BackendRepo.GetLatestDiskSnapshot(ctx, workspaceID, disk.Name)
 		if err != nil {
-			return fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
+			return nil, fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
 		}
 		if snapshot == nil || snapshot.ManifestKey == "" || !types.IsDiskSnapshotFilesystemFormat(snapshot.Format) {
-			return fmt.Errorf("durable disk %q has no restorable filesystem snapshot", disk.Name)
+			return nil, fmt.Errorf("durable disk %q has no restorable filesystem snapshot", disk.Name)
 		}
+		snapshots = append(snapshots, snapshot)
 	}
-	return nil
+	return snapshots, nil
 }
 
 func durableDiskSnapshotWorkspaceID(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace) (uint, error) {
