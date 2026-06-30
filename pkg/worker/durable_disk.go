@@ -21,7 +21,18 @@ const (
 	durableDiskMarkerFile = ".beta9-durable-disk"
 	durableDiskLockDir    = ".beta9-durable-disk-locks"
 	durableDiskLockWait   = 10 * time.Minute
+
+	durableDiskStateClean = "clean"
+	durableDiskStateDirty = "dirty"
 )
+
+type durableDiskMarker struct {
+	Driver         string
+	State          string
+	SnapshotID     string
+	ManifestDigest string
+	Generation     int64
+}
 
 func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
 	if mount == nil || mount.DurableDisk == nil {
@@ -40,7 +51,20 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 					return err
 				}
 			}
-			return prepareSnapshotDurableDiskMount(mount)
+			if err := prepareSnapshotDurableDiskMount(mount); err != nil {
+				return err
+			}
+			if mount.ReadOnly {
+				return nil
+			}
+			marker := readDurableDiskMarker(mount.LocalPath)
+			return writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{
+				Driver:         types.DurableDiskDriverSnapshot,
+				State:          durableDiskStateDirty,
+				Generation:     marker.Generation,
+				SnapshotID:     marker.SnapshotID,
+				ManifestDigest: marker.ManifestDigest,
+			})
 		})
 	default:
 		return fmt.Errorf("durable disk %q requested unsupported driver %q", mount.DurableDisk.Name, driver)
@@ -67,7 +91,10 @@ func prepareSnapshotDurableDiskMount(mount *types.Mount) error {
 	if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
 		return fmt.Errorf("create durable disk path %s: %w", mount.LocalPath, err)
 	}
-	return writeDurableDiskMarker(mount.LocalPath)
+	if _, err := os.Stat(filepath.Join(mount.LocalPath, durableDiskMarkerFile)); os.IsNotExist(err) {
+		return writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{Driver: types.DurableDiskDriverSnapshot, State: durableDiskStateClean})
+	}
+	return nil
 }
 
 func (s *Worker) syncDurableDiskMounts(request *types.ContainerRequest) error {
@@ -133,13 +160,10 @@ func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
 	}
-	if !durableDiskHasPayload(mount.LocalPath) {
-		return nil
-	}
 	if err := cleanDurableDiskRuntimeFiles(mount, mount.LocalPath); err != nil {
 		return err
 	}
-	if !durableDiskHasRestorablePayload(mount, mount.LocalPath) {
+	if durableDiskHasPayload(mount.LocalPath) && !durableDiskHasRestorablePayload(mount, mount.LocalPath) {
 		return fmt.Errorf("durable disk %q is not ready to snapshot", mount.DurableDisk.Name)
 	}
 
@@ -187,12 +211,25 @@ func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount
 		return err
 	}
 
-	_, err = handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
+	resp, err := handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
 		StubId:      cacheRequestStubID(request),
 		Snapshot:    durableDiskSnapshotToProto(snapshot),
 	}))
 	if err != nil {
+		return err
+	}
+	if created := durableDiskSnapshotFromProto(resp.Snapshot); created != nil {
+		snapshot = created
+	}
+
+	if err := writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{
+		Driver:         types.DurableDiskDriverSnapshot,
+		State:          durableDiskStateClean,
+		SnapshotID:     snapshot.ExternalId,
+		ManifestDigest: snapshot.ManifestDigest,
+		Generation:     snapshot.Generation,
+	}); err != nil {
 		return err
 	}
 
@@ -227,13 +264,6 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
 	}
-	if durableDiskHasRestorablePayload(mount, mount.LocalPath) {
-		return nil
-	}
-	if durableDiskHasPayload(mount.LocalPath) {
-		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
-	}
-
 	ctx := s.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -254,24 +284,44 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	}
 	snapshot := durableDiskSnapshotFromProto(resp.Snapshot)
 	if snapshot == nil || snapshot.ManifestKey == "" {
+		if durableDiskHasRestorablePayload(mount, mount.LocalPath) {
+			return nil
+		}
+		if durableDiskHasPayload(mount.LocalPath) {
+			return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
+		}
 		return nil
 	}
 	if !types.IsDiskSnapshotFilesystemFormat(snapshot.Format) {
 		return fmt.Errorf("durable disk snapshot %s has unsupported filesystem format %q", snapshot.ExternalId, snapshot.Format)
+	}
+	if durableDiskHasRestorablePayload(mount, mount.LocalPath) {
+		if durableDiskShouldKeepLocalPayload(readDurableDiskMarker(mount.LocalPath), snapshot) {
+			return nil
+		}
+	} else if durableDiskHasPayload(mount.LocalPath) {
+		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
 	}
 
 	store, err := newDurableDiskSnapshotBucketStore(ctx, request, mount.DurableDisk.Name, snapshot.BucketName, false)
 	if err != nil {
 		return err
 	}
-	if _, err := restoreDurableDiskDirectorySnapshotWithCache(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, mount.LocalPath); err != nil {
+	manifest, err := restoreDurableDiskDirectorySnapshotWithCache(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, mount.LocalPath)
+	if err != nil {
 		return fmt.Errorf("restore durable disk snapshot %s: %w", snapshot.ExternalId, err)
 	}
-	if !durableDiskHasRestorablePayload(mount, mount.LocalPath) {
+	if len(manifest.Files) > 0 && !durableDiskHasRestorablePayload(mount, mount.LocalPath) {
 		_ = os.RemoveAll(mount.LocalPath)
 		return fmt.Errorf("restore durable disk snapshot %s produced an invalid payload", snapshot.ExternalId)
 	}
-	return nil
+	return writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{
+		Driver:         types.DurableDiskDriverSnapshot,
+		State:          durableDiskStateClean,
+		SnapshotID:     snapshot.ExternalId,
+		ManifestDigest: snapshot.ManifestDigest,
+		Generation:     snapshot.Generation,
+	})
 }
 
 func (s *Worker) ensureDurableDiskSnapshotStorage(ctx context.Context, request *types.ContainerRequest) error {
@@ -425,8 +475,60 @@ func cleanDurableDiskRuntimeFiles(mount *types.Mount, diskPath string) error {
 	return nil
 }
 
-func writeDurableDiskMarker(path string) error {
-	if err := os.WriteFile(filepath.Join(path, durableDiskMarkerFile), []byte("driver=snapshot\n"), 0644); err != nil {
+func readDurableDiskMarker(path string) durableDiskMarker {
+	data, err := os.ReadFile(filepath.Join(path, durableDiskMarkerFile))
+	if err != nil {
+		return durableDiskMarker{}
+	}
+	marker := durableDiskMarker{}
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "driver":
+			marker.Driver = value
+		case "state":
+			marker.State = value
+		case "snapshot_id":
+			marker.SnapshotID = value
+		case "manifest_digest":
+			marker.ManifestDigest = value
+		case "generation":
+			marker.Generation, _ = strconv.ParseInt(value, 10, 64)
+		}
+	}
+	return marker
+}
+
+func durableDiskShouldKeepLocalPayload(marker durableDiskMarker, snapshot *types.DiskSnapshot) bool {
+	if snapshot == nil {
+		return true
+	}
+	switch marker.State {
+	case durableDiskStateDirty:
+		return marker.Generation >= snapshot.Generation
+	case durableDiskStateClean:
+		return marker.Generation == snapshot.Generation && marker.ManifestDigest == snapshot.ManifestDigest
+	default:
+		return false
+	}
+}
+
+func writeDurableDiskMarker(path string, marker durableDiskMarker) error {
+	if marker.Driver == "" {
+		marker.Driver = types.DurableDiskDriverSnapshot
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "driver=%s\nstate=%s\ngeneration=%d\n", marker.Driver, marker.State, marker.Generation)
+	if marker.SnapshotID != "" {
+		fmt.Fprintf(&b, "snapshot_id=%s\n", marker.SnapshotID)
+	}
+	if marker.ManifestDigest != "" {
+		fmt.Fprintf(&b, "manifest_digest=%s\n", marker.ManifestDigest)
+	}
+	if err := os.WriteFile(filepath.Join(path, durableDiskMarkerFile), []byte(b.String()), 0644); err != nil {
 		return fmt.Errorf("write durable disk marker %s: %w", path, err)
 	}
 	return nil

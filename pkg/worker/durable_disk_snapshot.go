@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -157,9 +158,6 @@ func loadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnaps
 }
 
 func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
-	if !durableDiskHasPayload(sourceDir) {
-		return nil, nil, fmt.Errorf("durable disk directory %s has no payload", sourceDir)
-	}
 	if store == nil {
 		return nil, nil, fmt.Errorf("durable disk snapshot store is nil")
 	}
@@ -213,6 +211,9 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if rel == durableDiskMarkerFile {
+			return nil
+		}
 		file := durableDiskSnapshotFile(rel, info)
 
 		switch {
@@ -230,7 +231,19 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 			if durableDiskSnapshotFileReusable(previousFile, file) {
 				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
 			} else if durableDiskSnapshotAppendOnlyFile(manifest.Format, file.Path) && durableDiskSnapshotFileAppendReusable(previousFile, file) {
-				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
+				reusePrefix := durableDiskSnapshotSameIdentity(previousFile, file)
+				if reusePrefix {
+					file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
+				} else {
+					var err error
+					reusePrefix, err = durableDiskSnapshotFileChunksReusable(name, previousFile)
+					if err != nil {
+						return err
+					}
+					if reusePrefix {
+						file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
+					}
+				}
 				if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, buffer, seen, &file); err != nil {
 					return err
 				}
@@ -317,6 +330,9 @@ func durableDiskSnapshotFile(name string, info os.FileInfo) types.DiskSnapshotFi
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		file.Uid = int(stat.Uid)
 		file.Gid = int(stat.Gid)
+		file.ChangeUnixNano = durableDiskSnapshotChangeTimeUnixNano(stat)
+		file.DeviceId = uint64(stat.Dev)
+		file.Inode = uint64(stat.Ino)
 	}
 	return file
 }
@@ -328,7 +344,35 @@ func durableDiskSnapshotFileReusable(previous, current types.DiskSnapshotFile) b
 		previous.Gid == current.Gid &&
 		previous.SizeBytes == current.SizeBytes &&
 		previous.ModTimeUnixNano == current.ModTimeUnixNano &&
+		previous.ChangeUnixNano == current.ChangeUnixNano &&
+		durableDiskSnapshotSameIdentity(previous, current) &&
 		len(previous.Chunks) > 0
+}
+
+func durableDiskSnapshotSameIdentity(previous, current types.DiskSnapshotFile) bool {
+	return previous.DeviceId != 0 &&
+		previous.Inode != 0 &&
+		previous.DeviceId == current.DeviceId &&
+		previous.Inode == current.Inode
+}
+
+func durableDiskSnapshotChangeTimeUnixNano(stat *syscall.Stat_t) int64 {
+	if stat == nil {
+		return 0
+	}
+	value := reflect.ValueOf(*stat)
+	for _, name := range []string{"Ctim", "Ctimespec"} {
+		field := value.FieldByName(name)
+		if !field.IsValid() {
+			continue
+		}
+		sec := field.FieldByName("Sec")
+		nsec := field.FieldByName("Nsec")
+		if sec.IsValid() && nsec.IsValid() {
+			return sec.Int()*int64(time.Second) + nsec.Int()
+		}
+	}
+	return 0
 }
 
 func durableDiskSnapshotFileAppendReusable(previous, current types.DiskSnapshotFile) bool {
@@ -346,6 +390,32 @@ func durableDiskSnapshotFileAppendReusable(previous, current types.DiskSnapshotF
 		end += chunk.SizeBytes
 	}
 	return end == previous.SizeBytes
+}
+
+func durableDiskSnapshotFileChunksReusable(filename string, previous types.DiskSnapshotFile) (bool, error) {
+	in, err := os.Open(filename)
+	if err != nil {
+		return false, err
+	}
+	defer in.Close()
+
+	for _, chunk := range previous.Chunks {
+		if chunk.SizeBytes <= 0 || chunk.Digest == "" {
+			return false, nil
+		}
+		if _, err := in.Seek(chunk.OffsetBytes, io.SeekStart); err != nil {
+			return false, err
+		}
+
+		sum := sha256.New()
+		if n, err := io.CopyN(sum, in, chunk.SizeBytes); err != nil || n != chunk.SizeBytes {
+			return false, nil
+		}
+		if "sha256:"+hex.EncodeToString(sum.Sum(nil)) != chunk.Digest {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func durableDiskSnapshotAppendOnlyFile(format, name string) bool {
@@ -453,9 +523,6 @@ func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store dur
 	})
 	if err != nil {
 		return nil, fmt.Errorf("download durable disk snapshot manifest %s: %w", manifestKey, err)
-	}
-	if len(manifest.Files) == 0 {
-		return nil, fmt.Errorf("durable disk directory snapshot %s has no files", manifestKey)
 	}
 	return manifest, restoreDurableDiskDirectoryManifest(ctx, store, cacheReader, manifest, targetDir)
 }
