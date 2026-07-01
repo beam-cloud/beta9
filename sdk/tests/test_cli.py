@@ -29,7 +29,8 @@ def test_database_commands_are_nested_under_db():
 
     db = cli.common_group.get_command(None, "db")
     assert db is not None
-    assert sorted(db.commands) == ["postgres", "redis"]
+    assert sorted(db.commands) == ["list", "postgres", "redis"]
+    assert "list" in db.commands
     assert "create" in db.commands["postgres"].commands
     assert "create" in db.commands["redis"].commands
 
