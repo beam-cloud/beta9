@@ -2,14 +2,13 @@ package abstractions
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"net"
 	"testing"
 	"time"
 )
 
-func TestConnIdleDeadlineAppliesToNonTCPConn(t *testing.T) {
+func TestConnIdleDeadlineClosesIdleConn(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 	defer server.Close()
@@ -19,11 +18,7 @@ func TestConnIdleDeadlineAppliesToNonTCPConn(t *testing.T) {
 
 	_, err := client.Read(make([]byte, 1))
 	if err == nil {
-		t.Fatal("expected idle read deadline to fire")
-	}
-	var netErr net.Error
-	if !errors.As(err, &netErr) || !netErr.Timeout() {
-		t.Fatalf("read error = %v, want timeout", err)
+		t.Fatal("expected idle connection to close")
 	}
 }
 
@@ -88,10 +83,6 @@ func TestCopyWithProxyBufferActivityReturnsIdleTimeout(t *testing.T) {
 
 	_, err := CopyWithProxyBufferActivity(io.Discard, src, idle.Refresh)
 	if err == nil {
-		t.Fatal("expected idle timeout")
-	}
-	var netErr net.Error
-	if !errors.As(err, &netErr) || !netErr.Timeout() {
-		t.Fatalf("copy error = %v, want timeout", err)
+		t.Fatal("expected idle connection to close")
 	}
 }

@@ -43,15 +43,21 @@ func SetConnOptions(conn net.Conn, keepAlive bool, keepAliveInterval time.Durati
 }
 
 type ConnIdleDeadline struct {
-	mu      sync.Mutex
 	timeout time.Duration
 	conns   []net.Conn
+	done    chan struct{}
+	active  chan struct{}
+	stop    sync.Once
 }
 
 // NewConnIdleDeadline applies one shared idle deadline to every connection.
 // Call Refresh whenever bytes move in either direction.
 func NewConnIdleDeadline(timeout time.Duration, conns ...net.Conn) *ConnIdleDeadline {
-	d := &ConnIdleDeadline{timeout: timeout}
+	d := &ConnIdleDeadline{
+		timeout: timeout,
+		done:    make(chan struct{}),
+		active:  make(chan struct{}, 1),
+	}
 	if timeout <= 0 {
 		return d
 	}
@@ -60,7 +66,8 @@ func NewConnIdleDeadline(timeout time.Duration, conns ...net.Conn) *ConnIdleDead
 			d.conns = append(d.conns, conn)
 		}
 	}
-	d.Refresh()
+	d.setDeadline(time.Now().Add(timeout))
+	go d.closeWhenIdle()
 	return d
 }
 
@@ -69,9 +76,43 @@ func (d *ConnIdleDeadline) Refresh() {
 	if d == nil || d.timeout <= 0 {
 		return
 	}
-	deadline := time.Now().Add(d.timeout)
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.setDeadline(time.Now().Add(d.timeout))
+	select {
+	case <-d.done:
+	case d.active <- struct{}{}:
+	default:
+	}
+}
+
+func (d *ConnIdleDeadline) closeWhenIdle() {
+	timer := time.NewTimer(d.timeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-d.done:
+			return
+		case <-d.active:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(d.timeout)
+		case <-timer.C:
+			d.stop.Do(func() {
+				close(d.done)
+				for _, conn := range d.conns {
+					_ = conn.Close()
+				}
+			})
+			return
+		}
+	}
+}
+
+func (d *ConnIdleDeadline) setDeadline(deadline time.Time) {
 	for _, conn := range d.conns {
 		_ = conn.SetDeadline(deadline)
 	}
@@ -82,9 +123,8 @@ func (d *ConnIdleDeadline) Clear() {
 	if d == nil || d.timeout <= 0 {
 		return
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, conn := range d.conns {
-		_ = conn.SetDeadline(time.Time{})
-	}
+	d.stop.Do(func() {
+		close(d.done)
+		d.setDeadline(time.Time{})
+	})
 }
