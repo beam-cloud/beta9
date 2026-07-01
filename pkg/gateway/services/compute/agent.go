@@ -581,6 +581,60 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
 }
 
+func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgentAvailabilityRequest) (*pb.UpdateAgentAvailabilityResponse, error) {
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
+	if err != nil {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if agentState == nil {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+	}
+	current, err := s.currentComputeAgentState(ctx, agentState)
+	if err != nil {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if current == nil {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "agent token is no longer current"}, nil
+	}
+	if in.Schedulable && model.AgentPreflightFailed(current.Preflight) {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "machine has failed preflight checks"}, nil
+	}
+
+	observedAt := time.Now().UTC()
+	if in.ObservedAt > 0 {
+		observedAt = time.Unix(0, in.ObservedAt).UTC()
+	}
+	current.Schedulable = in.Schedulable
+	current.AvailabilityReason = strings.TrimSpace(in.Reason)
+	current.AvailabilityUpdatedAt = observedAt
+	if current.Schedulable {
+		current.LastDisconnectAt = time.Time{}
+	}
+	if err := s.saveComputeAgentTokenState(ctx, current); err != nil {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if !current.Schedulable {
+		s.disableMachineWorker(ctx, current, reconcileReasonExternalAvailability)
+	}
+
+	status := "unschedulable"
+	if current.Schedulable {
+		status = "schedulable"
+	}
+	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
+		Timestamp:   observedAt,
+		WorkspaceID: current.WorkspaceID,
+		PoolName:    current.PoolName,
+		MachineID:   current.MachineID,
+		Action:      types.EventComputeActionMachineAvailabilityUpdated,
+		Status:      status,
+		Schedulable: boolPtr(current.Schedulable),
+		Message:     "agent availability updated: " + firstNonEmpty(current.AvailabilityReason, "unspecified"),
+	})
+
+	return &pb.UpdateAgentAvailabilityResponse{Ok: true}, nil
+}
+
 func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, poolState *model.PoolState) (*pb.AgentBootstrapConfig, error) {
 	config := normalizePoolConfig(poolState.Config)
 	telemetryConfig, err := s.scopedTelemetryConfig(ctx, workspaceID)

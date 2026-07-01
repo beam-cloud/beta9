@@ -74,6 +74,10 @@ func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.Up
 	return gws.computeService.UpdateAgentRouteStatus(ctx, in)
 }
 
+func (gws *GatewayService) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgentAvailabilityRequest) (*pb.UpdateAgentAvailabilityResponse, error) {
+	return gws.computeService.UpdateAgentAvailability(ctx, in)
+}
+
 func (gws *GatewayService) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelemetryServer) error {
 	return gws.computeService.StreamAgentTelemetry(stream)
 }

@@ -19,6 +19,7 @@ const agentInterruptedExitCode = 130
 var commands = map[string]commandFunc{
 	"join":            runJoin,
 	"install-service": runInstallService,
+	"vast":            runVast,
 }
 
 func main() {
@@ -55,4 +56,5 @@ func commandExitCode(err error) (int, bool) {
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage: %s join --gateway <url> --join-token <token> [--dev]\n", types.DefaultAgentServiceName)
 	fmt.Fprintf(os.Stderr, "       %s install-service --gateway <url> --join-token <token> [--manager auto]\n", types.DefaultAgentServiceName)
+	fmt.Fprintf(os.Stderr, "       %s vast <install|host|sentinel> [options]\n", types.DefaultAgentServiceName)
 }

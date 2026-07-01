@@ -250,6 +250,13 @@ service GatewayService {
       body : "*"
     };
   }
+  rpc UpdateAgentAvailability(UpdateAgentAvailabilityRequest)
+      returns (UpdateAgentAvailabilityResponse) {
+    option (google.api.http) = {
+      post : "/agent/availability"
+      body : "*"
+    };
+  }
   rpc StreamAgent(StreamAgentRequest) returns (stream StreamAgentResponse);
   rpc StreamAgentTelemetry(stream AgentTelemetryRequest)
       returns (AgentTelemetryResponse);
@@ -1330,4 +1337,16 @@ message ExportWorkspaceConfigResponse {
   int32 gateway_grpc_port = 5;
   bool gateway_grpc_tls = 6;
   string workspace_id = 7;
+}
+
+message UpdateAgentAvailabilityRequest {
+  string agent_token = 1;
+  bool schedulable = 2;
+  string reason = 3;
+  int64 observed_at = 4;
+}
+
+message UpdateAgentAvailabilityResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }
