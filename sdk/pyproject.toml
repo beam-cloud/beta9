@@ -17,7 +17,7 @@ dependencies = [
     "fastapi<1.0.0,>=0.115.11",
     "uvicorn<1.0.0,>=0.29.0",
     "watchdog<5.0.0,>=4.0.0",
-    "betterproto-beta9[compiler]==2.0.1",
+    "betterproto-beta9==2.0.1",
     "croniter<4.0.0,>=3.0.3",
     "websocket-client<2.0.0,>=1.8.0",
     "prompt-toolkit<4.0.0,>=3.0.48",
@@ -27,7 +27,7 @@ dependencies = [
     "pyyaml<7.0.0,>=6.0.0",
 ]
 name = "beta9"
-version = "0.1.250"
+version = "0.1.251"
 description = ""
 
 [project.scripts]
