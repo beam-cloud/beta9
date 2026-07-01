@@ -74,6 +74,40 @@ func removeOtherManagedWorkerContainers(name string, slot *pb.AgentWorkerSlot) e
 	return nil
 }
 
+func RemoveManagedWorkerContainersForMachine(machineID string) error {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return fmt.Errorf("machine id is required")
+	}
+	out, err := exec.Command(
+		"docker", "ps", "-aq",
+		"--filter", "label="+types.AgentDockerLabelManaged+"=true",
+		"--filter", "label="+types.AgentDockerLabelMachineID+"="+machineID,
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("list managed worker containers for machine %q: %w: %s", machineID, err, strings.TrimSpace(string(out)))
+	}
+
+	var failures []string
+	for _, id := range strings.Fields(string(out)) {
+		inspect, exists, err := inspectDockerContainer(id)
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		if !exists || !dockerContainerManagedByMachine(inspect, machineID) {
+			continue
+		}
+		if err := removeDockerContainer(id); err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
 func pullDockerImage(ctx context.Context, image string, output io.Writer) (string, error) {
 	args := []string{"pull"}
 	if platform := strings.TrimSpace(os.Getenv(types.AgentWorkerPlatformEnv)); platform != "" {
@@ -175,6 +209,14 @@ func shouldRemoveManagedWorkerContainer(inspect *dockerContainerInspect, desired
 		return false
 	}
 	return !dockerContainerNameMatches(inspect.Name, desiredName) || !dockerContainerLabelsMatchSlot(inspect.Config.Labels, slot)
+}
+
+func dockerContainerManagedByMachine(inspect *dockerContainerInspect, machineID string) bool {
+	if inspect == nil {
+		return false
+	}
+	return inspect.Config.Labels[types.AgentDockerLabelManaged] == "true" &&
+		inspect.Config.Labels[types.AgentDockerLabelMachineID] == machineID
 }
 
 func dockerContainerNameMatches(actual, desired string) bool {

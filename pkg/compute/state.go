@@ -76,6 +76,8 @@ type AgentTokenState struct {
 	NetworkSlotPoolSize       uint32                `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32                `json:"container_start_concurrency"`
 	Schedulable               bool                  `json:"schedulable"`
+	AvailabilityReason        string                `json:"availability_reason,omitempty"`
+	AvailabilityUpdatedAt     time.Time             `json:"availability_updated_at,omitempty"`
 	Preflight                 []PreflightCheckState `json:"preflight"`
 	Metrics                   AgentMachineMetrics   `json:"metrics"`
 	CreatedAt                 time.Time             `json:"created_at"`
@@ -141,7 +143,7 @@ func AgentMachineStatus(state *AgentTokenState, now time.Time) string {
 	if AgentMachineConnected(state, now) {
 		return types.AgentMachineStatusSchedulable
 	}
-	if state != nil && !state.Schedulable && hasPreflightFailure(state.Preflight) {
+	if state != nil && !state.Schedulable && AgentPreflightFailed(state.Preflight) {
 		return types.AgentMachineStatusPreflightFail
 	}
 	return types.AgentMachineStatusDisconnected
@@ -177,7 +179,7 @@ func AgentMachineLastSeen(state *AgentTokenState) time.Time {
 	return state.LastJoinAt
 }
 
-func hasPreflightFailure(checks []PreflightCheckState) bool {
+func AgentPreflightFailed(checks []PreflightCheckState) bool {
 	for _, check := range checks {
 		if check.Severity == "error" && !check.OK {
 			return true

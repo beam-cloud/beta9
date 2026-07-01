@@ -415,6 +415,53 @@ func TestShouldRemoveManagedWorkerContainer(t *testing.T) {
 	}
 }
 
+func TestDockerContainerManagedByMachine(t *testing.T) {
+	tests := []struct {
+		name      string
+		inspect   *dockerContainerInspect
+		machineID string
+		want      bool
+	}{
+		{
+			name: "matches managed machine",
+			inspect: dockerInspectWithLabels("/beam-agent-worker", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelMachineID: "machine-one",
+			}),
+			machineID: "machine-one",
+			want:      true,
+		},
+		{
+			name: "ignores unmanaged same machine label",
+			inspect: dockerInspectWithLabels("/other", map[string]string{
+				types.AgentDockerLabelMachineID: "machine-one",
+			}),
+			machineID: "machine-one",
+		},
+		{
+			name: "ignores different machine",
+			inspect: dockerInspectWithLabels("/beam-agent-worker", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelMachineID: "machine-two",
+			}),
+			machineID: "machine-one",
+		},
+		{
+			name:      "ignores nil inspect",
+			machineID: "machine-one",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dockerContainerManagedByMachine(tt.inspect, tt.machineID)
+			if got != tt.want {
+				t.Fatalf("managed = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func dockerInspectWithLabels(name string, labels map[string]string) *dockerContainerInspect {
 	if labels == nil {
 		labels = map[string]string{}

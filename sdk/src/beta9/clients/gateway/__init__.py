@@ -1262,6 +1262,20 @@ class ExportWorkspaceConfigResponse(betterproto.Message):
     workspace_id: str = betterproto.string_field(7)
 
 
+@dataclass(eq=False, repr=False)
+class UpdateAgentAvailabilityRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+    schedulable: bool = betterproto.bool_field(2)
+    reason: str = betterproto.string_field(3)
+    observed_at: int = betterproto.int64_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentAvailabilityResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -1603,6 +1617,15 @@ class GatewayServiceStub(SyncServiceStub):
             UpdateAgentRouteStatusRequest,
             UpdateAgentRouteStatusResponse,
         )(update_agent_route_status_request)
+
+    def update_agent_availability(
+        self, update_agent_availability_request: "UpdateAgentAvailabilityRequest"
+    ) -> "UpdateAgentAvailabilityResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/UpdateAgentAvailability",
+            UpdateAgentAvailabilityRequest,
+            UpdateAgentAvailabilityResponse,
+        )(update_agent_availability_request)
 
     def stream_agent(
         self, stream_agent_request: "StreamAgentRequest"

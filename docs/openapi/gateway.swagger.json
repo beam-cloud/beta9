@@ -16,6 +16,38 @@
     "application/json"
   ],
   "paths": {
+    "/agent/availability": {
+      "post": {
+        "operationId": "GatewayService_UpdateAgentAvailability",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateAgentAvailabilityResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateAgentAvailabilityRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/agent/join": {
       "post": {
         "operationId": "GatewayService_JoinAgent",
@@ -4065,6 +4097,35 @@
       }
     },
     "gatewayUncordonWorkerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayUpdateAgentAvailabilityRequest": {
+      "type": "object",
+      "properties": {
+        "agentToken": {
+          "type": "string"
+        },
+        "schedulable": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayUpdateAgentAvailabilityResponse": {
       "type": "object",
       "properties": {
         "ok": {

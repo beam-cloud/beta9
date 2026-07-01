@@ -3017,6 +3017,72 @@ func TestRecordAgentMetricsKeepsAgentAliveWhenNodeUsageMetricsFail(t *testing.T)
 	}
 }
 
+func TestUpdateAgentAvailabilityDisablesMachineWorker(t *testing.T) {
+	now := time.Now().UTC()
+	agentToken := "agent-token"
+	machine := &model.AgentTokenState{
+		TokenHash:       hashComputeToken(agentToken),
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Hostname:        "node-1",
+		OS:              "linux",
+		Arch:            "amd64",
+		CPUCount:        4,
+		CPUMillicores:   4000,
+		MemoryMB:        8192,
+		GPUs:            []string{"A10G"},
+		GPUIDs:          []string{"GPU-one"},
+		GPUCount:        1,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastJoinAt:      now,
+		LastHeartbeatAt: now,
+	}
+	computeRepo := &fakeComputeRepo{
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "pool-1"): {machine},
+		},
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{worker: &types.Worker{
+		Id:        workerID,
+		MachineId: machine.MachineID,
+		PoolName:  machine.PoolName,
+		Status:    types.WorkerStatusAvailable,
+	}}
+	containerRepo := &fakeContainerRepo{containers: []types.ContainerState{{
+		ContainerId: "container-one",
+		Status:      types.ContainerStatusRunning,
+	}}}
+	service := &Service{computeRepo: computeRepo, workerRepo: workerRepo, containerRepo: containerRepo}
+
+	resp, err := service.UpdateAgentAvailability(context.Background(), &pb.UpdateAgentAvailabilityRequest{
+		AgentToken:  agentToken,
+		Schedulable: false,
+		Reason:      "vast_preempt",
+		ObservedAt:  now.UnixNano(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Ok {
+		t.Fatalf("response not ok: %s", resp.ErrMsg)
+	}
+	if machine.Schedulable {
+		t.Fatal("machine is still schedulable")
+	}
+	if machine.AvailabilityReason != "vast_preempt" {
+		t.Fatalf("availability reason = %q", machine.AvailabilityReason)
+	}
+	if workerRepo.worker.Status != types.WorkerStatusDisabled {
+		t.Fatalf("worker status = %s, want %s", workerRepo.worker.Status, types.WorkerStatusDisabled)
+	}
+	if got, want := strings.Join(containerRepo.stopped, ","), "container-one"; got != want {
+		t.Fatalf("stopped containers = %q, want %q", got, want)
+	}
+}
+
 func TestRecordAgentDisconnectIgnoresFreshHeartbeat(t *testing.T) {
 	now := time.Now().UTC()
 	machine := &model.AgentTokenState{
@@ -4571,6 +4637,13 @@ func (r *fakeComputeRepo) SaveAgentTokenState(ctx context.Context, state *model.
 }
 
 func (r *fakeComputeRepo) GetAgentTokenState(ctx context.Context, tokenHash string) (*model.AgentTokenState, error) {
+	for _, machines := range r.machines {
+		for _, machine := range machines {
+			if machine != nil && machine.TokenHash == tokenHash {
+				return machine, nil
+			}
+		}
+	}
 	return nil, nil
 }
 

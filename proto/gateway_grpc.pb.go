@@ -58,6 +58,7 @@ const (
 	GatewayService_RequestAgentTransportCredential_FullMethodName = "/gateway.GatewayService/RequestAgentTransportCredential"
 	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
 	GatewayService_UpdateAgentRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateAgentRouteStatus"
+	GatewayService_UpdateAgentAvailability_FullMethodName         = "/gateway.GatewayService/UpdateAgentAvailability"
 	GatewayService_StreamAgent_FullMethodName                     = "/gateway.GatewayService/StreamAgent"
 	GatewayService_StreamAgentTelemetry_FullMethodName            = "/gateway.GatewayService/StreamAgentTelemetry"
 	GatewayService_ListMachines_FullMethodName                    = "/gateway.GatewayService/ListMachines"
@@ -125,6 +126,7 @@ type GatewayServiceClient interface {
 	RequestAgentTransportCredential(ctx context.Context, in *RequestAgentTransportCredentialRequest, opts ...grpc.CallOption) (*RequestAgentTransportCredentialResponse, error)
 	ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error)
 	UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error)
+	UpdateAgentAvailability(ctx context.Context, in *UpdateAgentAvailabilityRequest, opts ...grpc.CallOption) (*UpdateAgentAvailabilityResponse, error)
 	StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error)
 	StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error)
 	// Machines
@@ -551,6 +553,15 @@ func (c *gatewayServiceClient) UpdateAgentRouteStatus(ctx context.Context, in *U
 	return out, nil
 }
 
+func (c *gatewayServiceClient) UpdateAgentAvailability(ctx context.Context, in *UpdateAgentAvailabilityRequest, opts ...grpc.CallOption) (*UpdateAgentAvailabilityResponse, error) {
+	out := new(UpdateAgentAvailabilityResponse)
+	err := c.cc.Invoke(ctx, GatewayService_UpdateAgentAvailability_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error) {
 	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[2], GatewayService_StreamAgent_FullMethodName, opts...)
 	if err != nil {
@@ -776,6 +787,7 @@ type GatewayServiceServer interface {
 	RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error)
 	ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error)
 	UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error)
+	UpdateAgentAvailability(context.Context, *UpdateAgentAvailabilityRequest) (*UpdateAgentAvailabilityResponse, error)
 	StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error
 	StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error
 	// Machines
@@ -917,6 +929,9 @@ func (UnimplementedGatewayServiceServer) ListAgentRoutes(context.Context, *ListA
 }
 func (UnimplementedGatewayServiceServer) UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentRouteStatus not implemented")
+}
+func (UnimplementedGatewayServiceServer) UpdateAgentAvailability(context.Context, *UpdateAgentAvailabilityRequest) (*UpdateAgentAvailabilityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentAvailability not implemented")
 }
 func (UnimplementedGatewayServiceServer) StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error {
 	return status.Errorf(codes.Unimplemented, "method StreamAgent not implemented")
@@ -1691,6 +1706,24 @@ func _GatewayService_UpdateAgentRouteStatus_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_UpdateAgentAvailability_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAgentAvailabilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).UpdateAgentAvailability(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_UpdateAgentAvailability_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).UpdateAgentAvailability(ctx, req.(*UpdateAgentAvailabilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_StreamAgent_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamAgentRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -2108,6 +2141,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateAgentRouteStatus",
 			Handler:    _GatewayService_UpdateAgentRouteStatus_Handler,
+		},
+		{
+			MethodName: "UpdateAgentAvailability",
+			Handler:    _GatewayService_UpdateAgentAvailability_Handler,
 		},
 		{
 			MethodName: "ListMachines",
