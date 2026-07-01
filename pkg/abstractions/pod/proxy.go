@@ -3,6 +3,7 @@ package pod
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -562,14 +563,21 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 	podConn, err := network.ConnectToBackend(pb.baseContext(), targetHost, conn.backendDialTimeout(), pb.tailscale, pb.tsConfig, pb.containerRepo)
 	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "tcp", err == nil, time.Since(dialStart))
 	if err == nil {
-		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, connectionReadTimeout)
+		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, -1)
+		abstractions.SetConnOptions(tc.Conn, true, connectionKeepAliveInterval, -1)
 	} else if err != nil {
 		tc.Conn.Close()
 		return
 	}
+	idleDeadline := abstractions.NewConnIdleDeadline(connectionReadTimeout, tc.Conn, podConn)
+	defer idleDeadline.Clear()
 
 	isExpectedError := func(err error) bool {
 		if err == nil || err == io.EOF {
+			return true
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			return true
 		}
 
@@ -585,7 +593,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 
 	go func() {
 		defer wg.Done()
-		_, err := abstractions.CopyWithProxyBuffer(podConn, tc.Conn) // Client -> Pod
+		_, err := abstractions.CopyWithProxyBufferActivity(podConn, tc.Conn, idleDeadline.Refresh) // Client -> Pod
 		if err != nil && !isExpectedError(err) {
 			log.Warn().Err(err).Msg("error copying from client to pod")
 		}
@@ -598,7 +606,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 	go func() {
 		defer wg.Done()
 
-		_, err := abstractions.CopyWithProxyBuffer(tc.Conn, podConn) // Pod -> Client
+		_, err := abstractions.CopyWithProxyBufferActivity(tc.Conn, podConn, idleDeadline.Refresh) // Pod -> Client
 		if err != nil && !isExpectedError(err) {
 			log.Warn().Err(err).Msg("error copying from pod to client")
 		}
