@@ -15,7 +15,7 @@ import (
 
 type GPUInfoClient interface {
 	AvailableGPUDevices() ([]int, error)
-	DeviceUUID(deviceIndex int) (string, bool)
+	DeviceUUIDs() (map[int]string, error)
 	GetGPUMemoryUsage(deviceIndex int) (GPUMemoryUsageStats, error)
 }
 
@@ -172,18 +172,19 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 	return result, nil
 }
 
-func (c *NvidiaInfoClient) DeviceUUID(deviceIndex int) (string, bool) {
+// DeviceUUIDs returns the index-to-UUID mapping for all devices from a single
+// nvidia-smi query, so callers can resolve many devices without re-querying.
+func (c *NvidiaInfoClient) DeviceUUIDs() (map[int]string, error) {
 	devices, err := nvidiaSMIDevices()
 	if err != nil {
-		return "", false
+		return nil, err
 	}
 
+	uuids := make(map[int]string, len(devices))
 	for _, device := range devices {
-		if device.Index == deviceIndex {
-			return device.UUID, true
-		}
+		uuids[device.Index] = device.UUID
 	}
-	return "", false
+	return uuids, nil
 }
 
 func nvidiaSMIDevices() ([]nvidiaSMIDevice, error) {

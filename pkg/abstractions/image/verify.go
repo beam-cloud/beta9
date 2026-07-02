@@ -109,7 +109,6 @@ func (is *ContainerImageService) buildOptionsFromVerifyRequest(ctx context.Conte
 		BuildSecrets:   buildSecrets,
 		Gpu:            in.Gpu,
 		ClipVersion:    is.config.ImageService.ClipVersion,
-		TargetPlatform: in.TargetPlatform,
 	}
 
 	if in.Dockerfile == "" {

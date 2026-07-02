@@ -25,7 +25,10 @@ const (
 	DefaultHostServiceName  = "beam-agent-vast-compat"
 	DefaultGPUServicePrefix = "beam-agent-vast-compat-gpu"
 	DefaultGPUServiceName   = DefaultGPUServicePrefix + "@%s.service"
-	DefaultSentinelImage    = "beam/vast-sentinel:latest"
+	// DefaultSentinelImage is pinned to a versioned tag so hosts do not
+	// silently pick up new sentinel builds. Operators can override it with
+	// the `vast install --sentinel-image` flag.
+	DefaultSentinelImage = "beam/vast-sentinel:v0.1.0"
 )
 
 type GPU struct {

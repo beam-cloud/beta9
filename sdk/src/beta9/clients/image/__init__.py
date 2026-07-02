@@ -46,7 +46,6 @@ class VerifyImageBuildRequest(betterproto.Message):
     gpu: str = betterproto.string_field(11)
     ignore_python: bool = betterproto.bool_field(12)
     image_id: Optional[str] = betterproto.string_field(13, optional=True)
-    target_platform: str = betterproto.string_field(14)
 
 
 @dataclass(eq=False, repr=False)
@@ -76,7 +75,6 @@ class BuildImageRequest(betterproto.Message):
     secrets: List[str] = betterproto.string_field(10)
     gpu: str = betterproto.string_field(11)
     ignore_python: bool = betterproto.bool_field(12)
-    target_platform: str = betterproto.string_field(13)
 
 
 @dataclass(eq=False, repr=False)

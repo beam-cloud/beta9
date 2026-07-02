@@ -101,7 +101,15 @@ func installJoinToken(opts InstallOptions) (string, error) {
 func installSentinelToken(opts InstallOptions) (string, string, error) {
 	if opts.SentinelTokenFile != "" {
 		token, err := readSecret("", opts.SentinelTokenFile)
-		return token, opts.SentinelTokenFile, err
+		if err != nil {
+			return "", "", err
+		}
+		// The compat controller refuses to start with an empty token, so
+		// catch it here instead of installing a service that crash-loops.
+		if token == "" {
+			return "", "", fmt.Errorf("sentinel token file %s is empty", opts.SentinelTokenFile)
+		}
+		return token, opts.SentinelTokenFile, nil
 	}
 	token := strings.TrimSpace(opts.SentinelToken)
 	if token == "" {

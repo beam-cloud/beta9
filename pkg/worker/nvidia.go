@@ -269,10 +269,13 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 	return devicesToAllocate, nil
 }
 
+// CDIDevices returns index-based CDI device names. The generated CDI spec
+// (nvidia-ctk cdi generate) names devices by index, so UUID selectors would be
+// unresolvable; UUIDs are only used for env var pinning.
 func (c *ContainerNvidiaManager) CDIDevices(assignedDevices []int) []string {
 	devices := make([]string, 0, len(assignedDevices))
 	for _, device := range assignedDevices {
-		devices = append(devices, fmt.Sprintf("%s=%s", nvidiaDeviceKindPrefix, c.deviceSelector(device)))
+		devices = append(devices, fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device))
 	}
 	return devices
 }
@@ -290,16 +293,22 @@ func (c *ContainerNvidiaManager) InjectAssignedEnvVars(env []string, assignedDev
 }
 
 func (c *ContainerNvidiaManager) assignedVisibleDevices(assignedDevices []int) string {
+	// Query nvidia-smi once and reuse the snapshot for every assigned device.
+	uuids, err := c.infoClient.DeviceUUIDs()
+	if err != nil {
+		uuids = nil
+	}
+
 	devices := make([]string, 0, len(assignedDevices))
 	for _, device := range assignedDevices {
-		devices = append(devices, c.deviceSelector(device))
+		devices = append(devices, c.deviceSelector(device, uuids))
 	}
 	return strings.Join(devices, ",")
 }
 
-func (c *ContainerNvidiaManager) deviceSelector(device int) string {
+func (c *ContainerNvidiaManager) deviceSelector(device int, uuids map[int]string) string {
 	index := strconv.Itoa(device)
-	uuid, ok := c.infoClient.DeviceUUID(device)
+	uuid, ok := uuids[device]
 	if !ok {
 		return index
 	}

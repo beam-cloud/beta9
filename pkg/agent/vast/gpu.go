@@ -27,8 +27,11 @@ func DetectNvidiaGPUs(ctx context.Context) ([]GPU, error) {
 }
 
 func DetectVisibleGPUUUID(ctx context.Context) (string, error) {
-	if value := firstCSV(os.Getenv(types.NvidiaVisibleDevicesEnv)); strings.HasPrefix(value, "GPU-") {
-		return value, nil
+	if values := splitCSV(os.Getenv(types.NvidiaVisibleDevicesEnv)); len(values) > 0 && strings.HasPrefix(values[0], "GPU-") {
+		if len(values) != 1 {
+			return "", fmt.Errorf("expected exactly one visible GPU, %s lists %d", types.NvidiaVisibleDevicesEnv, len(values))
+		}
+		return values[0], nil
 	}
 	gpus, err := DetectNvidiaGPUs(ctx)
 	if err != nil {
@@ -93,12 +96,14 @@ func hostFingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-func firstCSV(value string) string {
-	for _, part := range strings.Split(value, ",") {
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part != "" {
-			return part
+			out = append(out, part)
 		}
 	}
-	return ""
+	return out
 }

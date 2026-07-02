@@ -29,7 +29,6 @@ class BuildOptions(betterproto.Message):
     build_ctx_object: str = betterproto.string_field(3)
     source_image_creds: str = betterproto.string_field(4)
     build_secrets: List[str] = betterproto.string_field(5)
-    target_platform: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)

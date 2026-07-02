@@ -1719,52 +1719,24 @@ func openImageLockFile(lockPath string) (*os.File, error) {
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
-	platform := targetImagePlatform(request)
-	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, platform, nil)
+	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, nil)
 	if err != nil {
 		return err
 	}
 
-	if imageMetadata.Architecture != platform.Architecture {
+	if imageMetadata.Architecture != runtime.GOARCH {
 		return &types.ExitCodeError{
 			ExitCode: types.ContainerExitCodeIncorrectImageArch,
 		}
 	}
 
-	if imageMetadata.Os != platform.OS {
+	if imageMetadata.Os != runtime.GOOS {
 		return &types.ExitCodeError{
 			ExitCode: types.ContainerExitCodeIncorrectImageOs,
 		}
 	}
 
 	return nil
-}
-
-func targetImagePlatform(request *types.ContainerRequest) common.ImagePlatform {
-	platform := common.ImagePlatform{
-		OS:           runtime.GOOS,
-		Architecture: runtime.GOARCH,
-	}
-	if request == nil {
-		return platform
-	}
-	if requested, ok := common.ParseImagePlatform(request.BuildOptions.TargetPlatform); ok {
-		return requested
-	}
-	if request.AllowMarketplace {
-		// Marketplace V1 only admits Linux/amd64 GPU sellers. Keep the normal
-		// private/BYOC image path tied to the image-service runtime.
-		platform.OS = "linux"
-		platform.Architecture = "amd64"
-	}
-	return platform
-}
-
-func buildahPlatformArgs(platform common.ImagePlatform) []string {
-	if platform.String() == "" {
-		return nil
-	}
-	return []string{"--platform", platform.String()}
 }
 
 // getBuildRegistry returns the registry to use for final and intermediate build images
@@ -2252,7 +2224,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
 	}
-	targetPlatform := targetImagePlatform(request)
 	seedSourceImageAfterBuild := false
 	defer func() {
 		if seedSourceImageAfterBuild {
@@ -2274,7 +2245,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		} else {
 			// buildah pull the base image so bud doesn't attempt HTTPS
 			pullArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "pull"}
-			pullArgs = append(pullArgs, buildahPlatformArgs(targetPlatform)...)
 			if insecure {
 				pullArgs = append(pullArgs, "--tls-verify=false")
 			}
@@ -2309,7 +2279,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	f.Close()
 
 	budArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "bud"}
-	budArgs = append(budArgs, buildahPlatformArgs(targetPlatform)...)
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
@@ -2498,8 +2467,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociRef)
 
-	platform := targetImagePlatform(request)
-	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, platform)
+	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		log.Warn().Err(err).Msg("unable to inspect image size")
 	}
@@ -2507,7 +2475,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageSizeMB))
 	startTime := time.Now()
-	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, platform, outputLogger)
+	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, outputLogger)
 	if err != nil {
 		return err
 	}

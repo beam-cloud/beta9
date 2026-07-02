@@ -56,4 +56,5 @@ func commandExitCode(err error) (int, bool) {
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage: %s join --gateway <url> --join-token <token> [--dev]\n", types.DefaultAgentServiceName)
 	fmt.Fprintf(os.Stderr, "       %s install-service --gateway <url> --join-token <token> [--manager auto]\n", types.DefaultAgentServiceName)
+	fmt.Fprintf(os.Stderr, "       %s vast <install|sentinel|host|gpu-agent> [flags]\n", types.DefaultAgentServiceName)
 }

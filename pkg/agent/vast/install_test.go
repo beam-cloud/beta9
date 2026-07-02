@@ -1,9 +1,36 @@
 package vast
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestInstallRejectsEmptySentinelTokenFile(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "sentinel-token")
+	if err := os.WriteFile(tokenFile, []byte("\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := installSentinelToken(InstallOptions{SentinelTokenFile: tokenFile})
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("err = %v, want empty sentinel token error", err)
+	}
+}
+
+func TestInstallAcceptsNonEmptySentinelTokenFile(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "sentinel-token")
+	if err := os.WriteFile(tokenFile, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	token, path, err := installSentinelToken(InstallOptions{SentinelTokenFile: tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "secret" || path != tokenFile {
+		t.Fatalf("token = %q path = %q", token, path)
+	}
+}
 
 func TestVastHostUnitEscapesServiceTemplateSpecifier(t *testing.T) {
 	unit := compatControllerUnit(InstallOptions{

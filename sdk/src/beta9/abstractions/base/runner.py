@@ -63,7 +63,6 @@ ASGI_STUB_TYPE = "asgi"
 SCHEDULE_STUB_TYPE = "schedule"
 BOT_STUB_TYPE = "bot"
 SHELL_STUB_TYPE = "shell"
-MARKETPLACE_TARGET_PLATFORM = "linux/amd64"
 
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
@@ -229,11 +228,7 @@ class RunnerAbstraction(BaseAbstraction):
     def get_client(self) -> Union[Client, None]:
         if self.client:
             return self.client
-        self.client = (
-            Client(token=self.config_context.token)
-            if self.config_context.token
-            else None
-        )
+        self.client = Client(token=self.config_context.token) if self.config_context.token else None
         return self.client
 
     @property
@@ -269,35 +264,31 @@ class RunnerAbstraction(BaseAbstraction):
         return ServingConfigProto(
             app_kind=self.serving.app_kind,
             serving_protocol=self.serving.serving_protocol,
-            database=(
-                DatabaseServingConfigProto(
-                    kind=self.serving.database.kind,
-                    port=self.serving.database.port,
-                    readiness_probe=self.serving.database.readiness_probe,
-                    connection_env_name=self.serving.database.connection_env_name,
-                    credential_secret_names=self.serving.database.credential_secret_names,
-                    durability_mode=self.serving.database.durability_mode,
-                    username_secret_name=self.serving.database.username_secret_name,
-                    password_secret_name=self.serving.database.password_secret_name,
-                    database_secret_name=self.serving.database.database_secret_name,
-                    connection_url_secret_name=self.serving.database.connection_url_secret_name,
-                )
-                if self.serving.database
-                else None
-            ),
-            llm=(
-                LLMConfigProto(
-                    model_id=llm.model_id,
-                    engine=llm.engine,
-                    served_model_name=llm.served_model_name,
-                    context_length=llm.context_length,
-                    tokenizer=llm.tokenizer,
-                    metrics_path=llm.metrics_path,
-                    slo_tier=llm.slo_tier,
-                )
-                if llm
-                else None
-            ),
+            database=DatabaseServingConfigProto(
+                kind=self.serving.database.kind,
+                port=self.serving.database.port,
+                readiness_probe=self.serving.database.readiness_probe,
+                connection_env_name=self.serving.database.connection_env_name,
+                credential_secret_names=self.serving.database.credential_secret_names,
+                durability_mode=self.serving.database.durability_mode,
+                username_secret_name=self.serving.database.username_secret_name,
+                password_secret_name=self.serving.database.password_secret_name,
+                database_secret_name=self.serving.database.database_secret_name,
+                connection_url_secret_name=self.serving.database.connection_url_secret_name,
+            )
+            if self.serving.database
+            else None,
+            llm=LLMConfigProto(
+                model_id=llm.model_id,
+                engine=llm.engine,
+                served_model_name=llm.served_model_name,
+                context_length=llm.context_length,
+                tokenizer=llm.tokenizer,
+                metrics_path=llm.metrics_path,
+                slo_tier=llm.slo_tier,
+            )
+            if llm
+            else None,
         )
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
@@ -429,9 +420,7 @@ class RunnerAbstraction(BaseAbstraction):
             if min_cores <= cpu <= max_cores:
                 return int(cpu * 1000)  # convert cores to millicores
             else:
-                raise ValueError(
-                    "CPU value out of range. Must be between 0.1 and 64 cores."
-                )
+                raise ValueError("CPU value out of range. Must be between 0.1 and 64 cores.")
 
         elif isinstance(cpu, str):
             if cpu.endswith("m") and cpu[:-1].isdigit():
@@ -439,9 +428,7 @@ class RunnerAbstraction(BaseAbstraction):
                 if min_cores * 1000 <= millicores <= max_cores * 1000:
                     return millicores
                 else:
-                    raise ValueError(
-                        "CPU value out of range. Must be between 100m and 64000m."
-                    )
+                    raise ValueError("CPU value out of range. Must be between 100m and 64000m.")
             else:
                 raise ValueError(
                     "Invalid CPU string format. Must be a digit followed by 'm' (e.g., '1000m')."
@@ -476,9 +463,7 @@ class RunnerAbstraction(BaseAbstraction):
                 raise ValueError(f"Failed to pickle function: {str(e)}")
         elif hasattr(module, "__file__"):
             # Normal module case - use relative path
-            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace(
-                "/", "."
-            )
+            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
             setattr(self, attr, f"{module_name}:{func.__name__}")
         else:
@@ -533,11 +518,7 @@ class RunnerAbstraction(BaseAbstraction):
         if func is None:
             return None
 
-        if (
-            not callable(func)
-            or not hasattr(func, "parent")
-            or not hasattr(func, "func")
-        ):
+        if not callable(func) or not hasattr(func, "parent") or not hasattr(func, "func"):
             raise terminal.error(
                 "Build failed: on_deploy must be a callable function with a function decorator"
             )
@@ -563,9 +544,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return SchemaFieldProto(type=field_dict["type"])
 
         fields_dict = py_schema.to_dict()["fields"]
-        return SchemaProto(
-            fields={k: _field_to_proto(v) for k, v in fields_dict.items()}
-        )
+        return SchemaProto(fields={k: _field_to_proto(v) for k, v in fields_dict.items()})
 
     def prepare_runtime(
         self,
@@ -625,12 +604,7 @@ class RunnerAbstraction(BaseAbstraction):
             return True
 
         with sdk_timing("prepare_runtime.image"):
-            target_platform = (
-                MARKETPLACE_TARGET_PLATFORM if self.allow_marketplace else ""
-            )
-            image_build_result: ImageBuildResult = self.image.build(
-                target_platform=target_platform
-            )
+            image_build_result: ImageBuildResult = self.image.build()
 
         if image_build_result and image_build_result.success:
             self.image_available = True
@@ -687,9 +661,7 @@ class RunnerAbstraction(BaseAbstraction):
             return {
                 "autoscaler_type": autoscaler_type,
                 "inputs": self._schema_to_proto(self.inputs) if self.inputs else None,
-                "outputs": (
-                    self._schema_to_proto(self.outputs) if self.outputs else None
-                ),
+                "outputs": self._schema_to_proto(self.outputs) if self.outputs else None,
             }
 
     def _stub_request(
@@ -742,16 +714,14 @@ class RunnerAbstraction(BaseAbstraction):
             extra=json.dumps(self.extra),
             entrypoint=self.entrypoint,
             ports=self.ports,
-            pricing=(
-                PricingPolicyProto(
-                    cost_per_task=self.pricing.cost_per_task,
-                    cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
-                    cost_model=self.pricing.cost_model,
-                    max_in_flight=self.pricing.max_in_flight,
-                )
-                if self.pricing
-                else None
-            ),
+            pricing=PricingPolicyProto(
+                cost_per_task=self.pricing.cost_per_task,
+                cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
+                cost_model=self.pricing.cost_model,
+                max_in_flight=self.pricing.max_in_flight,
+            )
+            if self.pricing
+            else None,
             inputs=inputs,
             outputs=outputs,
             docker_enabled=self.docker_enabled,
@@ -765,16 +735,14 @@ class RunnerAbstraction(BaseAbstraction):
             disks=[disk.export() for disk in self.disks],
         )
 
-    def _get_or_create_stub(
-        self, stub_request: GetOrCreateStubRequest
-    ) -> GetOrCreateStubResponse:
+    def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
         if _stub_created_for_current_workspace():
             return self.gateway_stub.get_or_create_stub(stub_request)
 
         with _stub_creation_lock:
             if not _stub_created_for_current_workspace():
-                stub_response: GetOrCreateStubResponse = (
-                    self.gateway_stub.get_or_create_stub(stub_request)
+                stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
+                    stub_request
                 )
                 if stub_response.ok:
                     _mark_stub_created_for_workspace()

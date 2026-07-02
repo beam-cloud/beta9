@@ -92,15 +92,16 @@ func isLoopbackHost(host string) bool {
 }
 
 func normalizeBootstrapForAgentRuntime(gatewayURL string, bootstrap bootstrapConfig) bootstrapConfig {
+	if !envBool(types.AgentInContainerEnv) {
+		return bootstrap
+	}
+
 	u, err := url.Parse(gatewayURL)
 	if err != nil {
 		return bootstrap
 	}
 	runtimeHost := u.Hostname()
 	if runtimeHost == "" {
-		return bootstrap
-	}
-	if !envBool(types.AgentInContainerEnv) && !isLoopbackHost(runtimeHost) {
 		return bootstrap
 	}
 

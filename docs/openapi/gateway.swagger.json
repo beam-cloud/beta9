@@ -4820,9 +4820,10 @@
         "reason": {
           "type": "string"
         },
-        "observedAt": {
+        "observedAtUnixNano": {
           "type": "string",
-          "format": "int64"
+          "format": "int64",
+          "description": "Unix nanoseconds, matching the *_unix_nano convention used elsewhere in\nthis file (e.g. AgentLogRecord.timestamp_unix_nano)."
         }
       }
     },

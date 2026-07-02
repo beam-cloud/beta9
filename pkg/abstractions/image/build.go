@@ -306,7 +306,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 			Dockerfile:       &b.opts.Dockerfile,
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
-			TargetPlatform:   b.opts.TargetPlatform,
 		},
 		ContainerId: b.containerID,
 		Env:         b.opts.EnvVars,
@@ -360,7 +359,6 @@ func (b *Build) getContainerImageID() (string, error) {
 		EnvVars:           b.opts.EnvVars,
 		Dockerfile:        b.opts.Dockerfile,
 		BuildCtxObject:    b.opts.BuildCtxObject,
-		TargetPlatform:    b.opts.TargetPlatform,
 	})
 }
 

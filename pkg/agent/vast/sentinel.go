@@ -67,7 +67,14 @@ func RunSentinel(ctx context.Context, opts SentinelOptions) error {
 		case <-ctx.Done():
 			preemptCtx, cancel := context.WithTimeout(context.Background(), opts.PreemptTimeout)
 			defer cancel()
-			if err := postSentinelEvent(preemptCtx, opts.HTTPClient, opts.HostURL, "/preempt", token, event); err != nil {
+			// The shared client's short heartbeat timeout must not cut a
+			// slow withdrawal short; the preempt request is bounded only by
+			// preemptCtx (>= opts.PreemptTimeout).
+			preemptClient := *opts.HTTPClient
+			if preemptClient.Timeout > 0 && preemptClient.Timeout < opts.PreemptTimeout {
+				preemptClient.Timeout = opts.PreemptTimeout
+			}
+			if err := postSentinelEvent(preemptCtx, &preemptClient, opts.HostURL, "/preempt", token, event); err != nil {
 				fmt.Fprintf(opts.Stderr, "vast sentinel preempt failed for gpu %s: %v\n", gpuUUID, err)
 			}
 			return nil

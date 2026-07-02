@@ -126,7 +126,14 @@ func (h *compatController) run(ctx context.Context) error {
 	mux.HandleFunc("/heartbeat", h.handleHeartbeat)
 	mux.HandleFunc("/preempt", h.handlePreempt)
 
-	httpServer := &http.Server{Addr: h.opts.ListenAddr, Handler: mux}
+	httpServer := &http.Server{
+		Addr:              h.opts.ListenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      2 * time.Minute, // /preempt waits for withdrawal, which can be slow
+		IdleTimeout:       2 * time.Minute,
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		err := httpServer.ListenAndServe()
@@ -194,6 +201,12 @@ func (h *compatController) handlePreempt(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	h.mu.Lock()
+	current, hasLease := h.leases[event.GPUUUID]
+	if hasLease && !preemptMatchesLease(event, current) {
+		h.mu.Unlock()
+		http.Error(w, "preempt identity does not match active lease", http.StatusConflict)
+		return
+	}
 	delete(h.leases, event.GPUUUID)
 	h.mu.Unlock()
 	if err := h.withdrawGPU(r.Context(), gpu, PreemptReason, true); err != nil {
@@ -201,6 +214,21 @@ func (h *compatController) handlePreempt(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// preemptMatchesLease guards against a stale preempt from a previous sentinel
+// incarnation stopping the agent that a newer sentinel is keeping alive. When
+// the preempt event carries identity fields (hostname/pid), each provided
+// field must match the active lease. Events without identity fields are
+// accepted for compatibility with older sentinels that only send the GPU UUID.
+func preemptMatchesLease(event sentinelEvent, current lease) bool {
+	if event.Hostname != "" && event.Hostname != current.Hostname {
+		return false
+	}
+	if event.PID != 0 && event.PID != current.PID {
+		return false
+	}
+	return true
 }
 
 func (h *compatController) decodeEvent(w http.ResponseWriter, r *http.Request) (sentinelEvent, bool) {
@@ -295,6 +323,9 @@ func (h *compatController) withdrawGPU(ctx context.Context, gpu GPU, reason stri
 	stopErr := h.opts.Services.Stop(ctx, unit)
 	if stopErr != nil {
 		fmt.Fprintf(h.opts.Stderr, "failed to stop %s: %v\n", unit, stopErr)
+		// Mark the unit unknown so the next reconcile pass retries the stop
+		// instead of treating it as already stopped.
+		h.noteServiceUnknown(gpu.UUID)
 	}
 	if state != nil && state.MachineID != "" {
 		if err := h.opts.Cleaner.RemoveManagedWorkerContainersForMachine(state.MachineID); err != nil {
@@ -329,6 +360,12 @@ func (h *compatController) noteServiceStopped(gpuUUID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.serviceStates[gpuUUID] = serviceStateStopped
+}
+
+func (h *compatController) noteServiceUnknown(gpuUUID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.serviceStates[gpuUUID] = serviceStateUnknown
 }
 
 func (h *compatController) serviceUnit(gpu GPU) string {

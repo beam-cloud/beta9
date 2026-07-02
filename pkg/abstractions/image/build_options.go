@@ -29,7 +29,6 @@ type BuildOpts struct {
 	Gpu                string
 	IgnorePython       bool
 	ClipVersion        uint32
-	TargetPlatform     string
 }
 
 func (o *BuildOpts) String() string {
@@ -51,7 +50,6 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
 	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
 	fmt.Fprintf(&b, "  \"IgnorePython\": %v,", o.IgnorePython)
-	fmt.Fprintf(&b, "  \"TargetPlatform\": %q,", o.TargetPlatform)
 	fmt.Fprintf(&b, "}")
 	return b.String()
 }

@@ -23,29 +23,9 @@ const (
 )
 
 type SkopeoClient interface {
-	Inspect(ctx context.Context, sourceImage string, creds string, platform ImagePlatform, overrideLogger *slog.Logger) (ImageMetadata, error)
-	InspectSizeInBytes(ctx context.Context, sourceImage string, creds string, platform ImagePlatform) (int64, error)
-	Copy(ctx context.Context, sourceImage string, dest string, creds string, platform ImagePlatform, overrideLogger *slog.Logger) error
-}
-
-type ImagePlatform struct {
-	OS           string
-	Architecture string
-}
-
-func ParseImagePlatform(value string) (ImagePlatform, bool) {
-	osName, arch, ok := strings.Cut(strings.TrimSpace(value), "/")
-	if !ok || osName == "" || arch == "" {
-		return ImagePlatform{}, false
-	}
-	return ImagePlatform{OS: osName, Architecture: arch}, true
-}
-
-func (p ImagePlatform) String() string {
-	if p.OS == "" || p.Architecture == "" {
-		return ""
-	}
-	return p.OS + "/" + p.Architecture
+	Inspect(ctx context.Context, sourceImage string, creds string, overrideLogger *slog.Logger) (ImageMetadata, error)
+	InspectSizeInBytes(ctx context.Context, sourceImage string, creds string) (int64, error)
+	Copy(ctx context.Context, sourceImage string, dest string, creds string, overrideLogger *slog.Logger) error
 }
 
 type skopeoClient struct {
@@ -96,12 +76,11 @@ func NewSkopeoClient(config types.AppConfig) SkopeoClient {
 	}
 }
 
-func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds string, platform ImagePlatform, overrideLogger *slog.Logger) (ImageMetadata, error) {
+func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds string, overrideLogger *slog.Logger) (ImageMetadata, error) {
 	var imageMetadata ImageMetadata
 	args := []string{"inspect", fmt.Sprintf("docker://%s", sourceImage)}
 
 	args = append(args, p.inspectArgs(creds)...)
-	args = append(args, platform.skopeoArgs()...)
 	cmd := exec.CommandContext(ctx, p.pullCommand, args...)
 	cmd.Stdout = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s inspect", p.pullCommand)) }}
 	cmd.Stderr = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s inspect", p.pullCommand)) }}
@@ -125,8 +104,8 @@ func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds st
 	return imageMetadata, nil
 }
 
-func (p *skopeoClient) InspectSizeInBytes(ctx context.Context, sourceImage string, creds string, platform ImagePlatform) (int64, error) {
-	imageMetadata, err := p.Inspect(ctx, sourceImage, creds, platform, nil)
+func (p *skopeoClient) InspectSizeInBytes(ctx context.Context, sourceImage string, creds string) (int64, error) {
+	imageMetadata, err := p.Inspect(ctx, sourceImage, creds, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -139,11 +118,10 @@ func (p *skopeoClient) InspectSizeInBytes(ctx context.Context, sourceImage strin
 	return size, nil
 }
 
-func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string, platform ImagePlatform, overrideLogger *slog.Logger) error {
+func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string, overrideLogger *slog.Logger) error {
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, p.copyArgs(creds)...)
-	args = append(args, platform.skopeoArgs()...)
 	cmd := exec.CommandContext(ctx, p.pullCommand, args...)
 
 	env := os.Environ()
@@ -217,17 +195,6 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	}
 
 	return out
-}
-
-func (p ImagePlatform) skopeoArgs() []string {
-	args := []string{}
-	if p.OS != "" {
-		args = append(args, "--override-os", p.OS)
-	}
-	if p.Architecture != "" {
-		args = append(args, "--override-arch", p.Architecture)
-	}
-	return args
 }
 
 // AddSkopeoEnvVars adds performance-tuning environment variables for skopeo

@@ -153,13 +153,24 @@ func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *mode
 	return nil
 }
 
-func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
+// requireAgentState resolves an agent token to its current machine state,
+// returning a user-facing error message when the token is invalid or stale.
+// Shared by every agent-token-authenticated RPC in this file.
+func (s *Service) requireAgentState(ctx context.Context, token string) (*model.AgentTokenState, string) {
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, token)
 	if err != nil {
-		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return nil, err.Error()
 	}
 	if agentState == nil {
-		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+		return nil, "invalid agent token"
+	}
+	return agentState, ""
+}
+
+func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
+	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 
 	transport := types.NormalizeBackendRouteTransport(in.Transport)
@@ -186,12 +197,9 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 
 func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	ctx := stream.Context()
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
-	if err != nil {
-		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
-	}
-	if agentState == nil {
-		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "invalid agent token"})
+	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: errMsg})
 	}
 	// Record disconnect on any stream exit; recordAgentDisconnect no-ops
 	// while the heartbeat is still fresh.
@@ -551,12 +559,9 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 }
 
 func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest) (*pb.UpdateAgentRouteStatusResponse, error) {
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
-	if err != nil {
-		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if agentState == nil {
-		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 
 	route, err := s.containerRepo.GetBackendRoute(ctx, in.RouteId)
@@ -610,27 +615,18 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 }
 
 func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgentAvailabilityRequest) (*pb.UpdateAgentAvailabilityResponse, error) {
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
-	if err != nil {
-		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if agentState == nil {
-		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
-	}
-	current, err := s.currentComputeAgentState(ctx, agentState)
-	if err != nil {
-		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if current == nil {
-		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "agent token is no longer current"}, nil
+	// requireAgentState already resolves to the current machine state.
+	current, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 	if in.Schedulable && model.AgentPreflightFailed(current.Preflight) {
 		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "machine has failed preflight checks"}, nil
 	}
 
 	observedAt := time.Now().UTC()
-	if in.ObservedAt > 0 {
-		observedAt = time.Unix(0, in.ObservedAt).UTC()
+	if in.ObservedAtUnixNano > 0 {
+		observedAt = time.Unix(0, in.ObservedAtUnixNano).UTC()
 	}
 	current.Schedulable = in.Schedulable
 	current.AvailabilityReason = strings.TrimSpace(in.Reason)
@@ -643,6 +639,13 @@ func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgen
 	}
 	if !current.Schedulable {
 		s.disableMachineWorker(ctx, current, reconcileReasonExternalAvailability)
+	} else if s.scheduler != nil {
+		// The worker was disabled while the machine was unschedulable;
+		// re-registering the pool re-runs ensureMachineWorkers, which recreates
+		// it immediately instead of waiting for the next agent stream refresh.
+		if poolState, err := s.getPrivatePoolState(ctx, current.WorkspaceID, current.PoolName); err == nil && poolState != nil {
+			_ = s.scheduler.RegisterAgentPool(current.WorkspaceID, poolState)
+		}
 	}
 
 	status := "unschedulable"

@@ -68,11 +68,9 @@ class TestRunner(unittest.TestCase):
             self.runner.parse_cpu({})  # type:ignore[reportArgumentType]
 
     def test_prepare_runtime_is_single_flight(self):
-        def slow_image_build(target_platform=""):
+        def slow_image_build():
             sleep(0.01)
-            return ImageBuildResult(
-                success=True, image_id="image-id", python_version="python3.12"
-            )
+            return ImageBuildResult(success=True, image_id="image-id", python_version="python3.12")
 
         def slow_file_sync(ignore_patterns=None):
             sleep(0.01)
@@ -84,9 +82,7 @@ class TestRunner(unittest.TestCase):
 
         self.runner.image.build = MagicMock(side_effect=slow_image_build)
         self.runner.syncer.sync = MagicMock(side_effect=slow_file_sync)
-        self.runner.gateway_stub.get_or_create_stub = MagicMock(
-            side_effect=slow_stub_create
-        )
+        self.runner.gateway_stub.get_or_create_stub = MagicMock(side_effect=slow_stub_create)
 
         with ThreadPoolExecutor(max_workers=16) as executor:
             results = list(
@@ -101,31 +97,8 @@ class TestRunner(unittest.TestCase):
 
         self.assertTrue(all(results))
         self.assertEqual(self.runner.image.build.call_count, 1)
-        self.runner.image.build.assert_called_once_with(target_platform="")
         self.assertEqual(self.runner.syncer.sync.call_count, 1)
         self.assertEqual(self.runner.gateway_stub.get_or_create_stub.call_count, 1)
-
-    def test_prepare_image_targets_amd64_only_for_marketplace(self):
-        self.runner.image.build = MagicMock(
-            return_value=ImageBuildResult(
-                success=True, image_id="normal-image", python_version="python3.12"
-            )
-        )
-
-        self.assertTrue(self.runner._prepare_image())
-        self.runner.image.build.assert_called_once_with(target_platform="")
-
-        marketplace_runner = RunnerAbstraction(allow_marketplace=True)
-        marketplace_runner.image.build = MagicMock(
-            return_value=ImageBuildResult(
-                success=True, image_id="marketplace-image", python_version="python3.12"
-            )
-        )
-
-        self.assertTrue(marketplace_runner._prepare_image())
-        marketplace_runner.image.build.assert_called_once_with(
-            target_platform=runner_module.MARKETPLACE_TARGET_PLATFORM
-        )
 
     def test_stub_creation_flag_is_not_reset_on_read(self):
         runner_module._mark_stub_created_for_workspace()

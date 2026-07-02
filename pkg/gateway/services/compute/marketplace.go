@@ -30,17 +30,6 @@ type marketplaceAuthContext struct {
 	ownerTokenID string
 }
 
-type marketplaceListingDraft struct {
-	sellerWorkspaceID string
-	displayName       string
-	gpu               string
-	gpuCount          uint32
-	source            string
-	preemptible       bool
-	public            bool
-	region            string
-}
-
 // marketplaceOfferStats aggregates the live agent machine states behind a
 // listing into buyer-facing offer fields.
 type marketplaceOfferStats struct {
@@ -97,8 +86,10 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 }
 
 func (s *Service) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMarketplaceListingRequest) (*pb.DeleteMarketplaceListingResponse, error) {
+	// Deleting releases machines and tears down the pool, so it requires the
+	// same owner-scoped auth as create/update.
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasWorkspace() {
+	if !authCtx.hasOwner() {
 		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 	listingID := strings.TrimSpace(in.GetListingId())
@@ -216,21 +207,15 @@ func (s *Service) GetMarketplaceOffer(ctx context.Context, in *pb.GetMarketplace
 	if listingID == "" {
 		return &pb.GetMarketplaceOfferResponse{Ok: false, ErrMsg: "listing id is required"}, nil
 	}
-	listings, err := s.computeRepo.ListAllMarketplaceListings(ctx, 0)
+	listing, err := s.computeRepo.GetMarketplaceListingByID(ctx, listingID)
 	if err != nil {
 		return &pb.GetMarketplaceOfferResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	for _, listing := range listings {
-		if listing == nil || listing.ID != listingID {
-			continue
-		}
-		if listing.Status != model.MarketplaceListingStatusActive {
-			break
-		}
-		stats := s.marketplaceOfferStats(ctx, listing)
-		return &pb.GetMarketplaceOfferResponse{Ok: true, Offer: marketplaceOfferProto(listing, stats)}, nil
+	if listing == nil || listing.Status != model.MarketplaceListingStatusActive {
+		return &pb.GetMarketplaceOfferResponse{Ok: false, ErrMsg: marketplaceErrListingNotFound}, nil
 	}
-	return &pb.GetMarketplaceOfferResponse{Ok: false, ErrMsg: marketplaceErrListingNotFound}, nil
+	stats := s.marketplaceOfferStats(ctx, listing)
+	return &pb.GetMarketplaceOfferResponse{Ok: true, Offer: marketplaceOfferProto(listing, stats)}, nil
 }
 
 func marketplaceOfferProto(listing *model.MarketplaceListingState, stats marketplaceOfferStats) *pb.MarketplaceOffer {
@@ -286,17 +271,17 @@ func newMarketplaceListingState(workspaceID string, in *pb.CreateMarketplaceList
 	if in == nil {
 		in = &pb.CreateMarketplaceListingRequest{}
 	}
-	draft := marketplaceListingDraft{
-		sellerWorkspaceID: workspaceID,
-		displayName:       strings.TrimSpace(in.GetDisplayName()),
-		gpu:               normalizeMarketplaceGPU(in.GetGpu()),
-		gpuCount:          firstNonZeroUint32(in.GetGpuCount(), 1),
-		source:            firstNonEmpty(strings.TrimSpace(in.GetSource()), defaultMarketplaceSource),
-		preemptible:       in.GetPreemptible(),
-		public:            in.GetPublic(),
-		region:            strings.TrimSpace(in.GetRegion()),
+	listing := &model.MarketplaceListingState{
+		SellerWorkspaceID: workspaceID,
+		DisplayName:       strings.TrimSpace(in.GetDisplayName()),
+		GPU:               normalizeMarketplaceGPU(in.GetGpu()),
+		GPUCount:          firstNonZeroUint32(in.GetGpuCount(), 1),
+		Source:            firstNonEmpty(strings.TrimSpace(in.GetSource()), defaultMarketplaceSource),
+		Preemptible:       in.GetPreemptible(),
+		Public:            in.GetPublic(),
+		Region:            strings.TrimSpace(in.GetRegion()),
+		Status:            model.MarketplaceListingStatusActive,
 	}
-	listing := draft.state()
 	if err := validateMarketplaceListing(listing); err != nil {
 		return nil, err
 	}
@@ -317,20 +302,6 @@ func (a marketplaceAuthContext) hasWorkspace() bool {
 
 func (a marketplaceAuthContext) hasOwner() bool {
 	return a.workspaceID != "" && a.ownerTokenID != ""
-}
-
-func (d marketplaceListingDraft) state() *model.MarketplaceListingState {
-	return &model.MarketplaceListingState{
-		SellerWorkspaceID: d.sellerWorkspaceID,
-		DisplayName:       d.displayName,
-		GPU:               d.gpu,
-		GPUCount:          d.gpuCount,
-		Source:            d.source,
-		Preemptible:       d.preemptible,
-		Public:            d.public,
-		Region:            d.region,
-		Status:            model.MarketplaceListingStatusActive,
-	}
 }
 
 func applyMarketplaceListingUpdate(listing *model.MarketplaceListingState, in *pb.UpdateMarketplaceListingRequest) error {
@@ -516,7 +487,7 @@ func (s *Service) marketplaceListingToProto(ctx context.Context, listing *model.
 	if listing == nil {
 		return nil
 	}
-	total, ready := s.marketplaceMachineCounts(ctx, listing)
+	stats := s.marketplaceOfferStats(ctx, listing)
 	return &pb.MarketplaceListing{
 		Id:                listing.ID,
 		SellerWorkspaceId: listing.SellerWorkspaceID,
@@ -531,14 +502,9 @@ func (s *Service) marketplaceListingToProto(ctx context.Context, listing *model.
 		Region:            listing.Region,
 		CreatedAt:         timestampOrNil(listing.CreatedAt),
 		UpdatedAt:         timestampOrNil(listing.UpdatedAt),
-		MachineCount:      total,
-		ReadyMachineCount: ready,
+		MachineCount:      stats.total,
+		ReadyMachineCount: stats.ready,
 	}
-}
-
-func (s *Service) marketplaceMachineCounts(ctx context.Context, listing *model.MarketplaceListingState) (uint32, uint32) {
-	stats := s.marketplaceOfferStats(ctx, listing)
-	return stats.total, stats.ready
 }
 
 func (s *Service) marketplaceOfferStats(ctx context.Context, listing *model.MarketplaceListingState) marketplaceOfferStats {

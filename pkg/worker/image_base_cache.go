@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -45,10 +46,9 @@ func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *s
 		return "", false, err
 	}
 
-	platform := targetImagePlatform(request)
 	remoteOpts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithPlatform(v1.Platform{OS: platform.OS, Architecture: platform.Architecture}),
+		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}),
 	}
 	if auth := c.remoteImageAuthenticator(ctx, request, ref); auth != nil {
 		remoteOpts = append(remoteOpts, remote.WithAuth(auth))
@@ -237,10 +237,9 @@ func (c *ImageClient) seedBaseImageBlobsFromRegistry(request *types.ContainerReq
 		return
 	}
 
-	platform := targetImagePlatform(request)
 	remoteOpts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithPlatform(v1.Platform{OS: platform.OS, Architecture: platform.Architecture}),
+		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}),
 	}
 	if auth := c.remoteImageAuthenticator(ctx, request, ref); auth != nil {
 		remoteOpts = append(remoteOpts, remote.WithAuth(auth))

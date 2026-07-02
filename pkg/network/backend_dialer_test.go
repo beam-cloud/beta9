@@ -209,15 +209,22 @@ func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
 	}
 }
 
-func TestBackendDialerTSNetDialsWhenPeerMissingFromStatus(t *testing.T) {
+// newMissingPeerBackendDialer builds a dialer whose tsnet route targets a peer
+// that is absent from the tailscale netmap, with fast polling for tests.
+// Shared by the netmap-miss tests below.
+func newMissingPeerBackendDialer(t *testing.T, dialTimeout time.Duration) (*Tailscale, *BackendDialer) {
+	t.Helper()
 	withFastRoutePolling(t)
 	withFastPeerPolling(t)
 	withFastPeerAdvisory(t)
 
 	ts := testTailscale(t, statusWithPeers("some-other-agent"))
 	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-missing.tailnet.ts.net:29443"}
+	return ts, NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, dialTimeout)
+}
 
-	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 300*time.Millisecond)
+func TestBackendDialerTSNetDialsWhenPeerMissingFromStatus(t *testing.T) {
+	_, dialer := newMissingPeerBackendDialer(t, 300*time.Millisecond)
 	serverSide := make(chan net.Conn, 1)
 	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
 		client, server := net.Pipe()
@@ -252,14 +259,7 @@ func TestBackendDialerTSNetDialsWhenPeerMissingFromStatus(t *testing.T) {
 }
 
 func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
-	withFastRoutePolling(t)
-	withFastPeerPolling(t)
-	withFastPeerAdvisory(t)
-
-	ts := testTailscale(t, statusWithPeers("some-other-agent"))
-	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-missing.tailnet.ts.net:29443"}
-
-	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 250*time.Millisecond)
+	_, dialer := newMissingPeerBackendDialer(t, 250*time.Millisecond)
 	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
 		return nil, context.DeadlineExceeded
 	}
@@ -274,15 +274,8 @@ func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
 }
 
 func TestBackendDialerTSNetRecyclesDialerAfterLookupMiss(t *testing.T) {
-	withFastRoutePolling(t)
-	withFastPeerPolling(t)
-	withFastPeerAdvisory(t)
-
-	ts := testTailscale(t, statusWithPeers("some-other-agent"))
+	ts, dialer := newMissingPeerBackendDialer(t, 250*time.Millisecond)
 	originalServer := ts.currentServer()
-	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-missing.tailnet.ts.net:29443"}
-
-	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 250*time.Millisecond)
 	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
 		return nil, &net.DNSError{Err: "no such host", Name: "beam-agent-missing", IsNotFound: true}
 	}

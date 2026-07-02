@@ -111,7 +111,6 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 		Secrets:          in.Secrets,
 		Gpu:              in.Gpu,
 		IgnorePython:     in.IgnorePython,
-		TargetPlatform:   in.TargetPlatform,
 	}
 
 	verifyResult, err := is.verifyImage(stream.Context(), verifyReq)

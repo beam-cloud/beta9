@@ -218,7 +218,6 @@ type BuildOptions struct {
 	BuildCtxObject   *string  `json:"build_context"`
 	SourceImageCreds string   `json:"source_image_creds"`
 	BuildSecrets     []string `json:"build_secrets"`
-	TargetPlatform   string   `json:"target_platform"`
 }
 
 // @go2proto
@@ -518,7 +517,6 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 			BuildCtxObject:   buildCtxObject,
 			SourceImageCreds: c.BuildOptions.SourceImageCreds,
 			BuildSecrets:     c.BuildOptions.BuildSecrets,
-			TargetPlatform:   c.BuildOptions.TargetPlatform,
 		}
 	}
 
@@ -581,7 +579,6 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 			BuildCtxObject:   getPointerOrNil(in.BuildOptions.BuildCtxObject),
 			SourceImageCreds: in.BuildOptions.SourceImageCreds,
 			BuildSecrets:     in.BuildOptions.BuildSecrets,
-			TargetPlatform:   in.BuildOptions.TargetPlatform,
 		}
 	}
 

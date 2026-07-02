@@ -143,21 +143,6 @@ func TestNormalizeBootstrapForAgentRuntimeUsesReachableGatewayHost(t *testing.T)
 	}
 }
 
-func TestNormalizeBootstrapForAgentRuntimeUsesHostLoopbackGateway(t *testing.T) {
-	got := normalizeBootstrapForAgentRuntime("http://127.0.0.1:1994", bootstrapConfig{
-		GatewayHTTPURL:  "http://localhost:1994",
-		GatewayGRPCHost: "beta9-gateway",
-		GatewayGRPCPort: 1993,
-	})
-
-	if got.GatewayHTTPURL != "http://127.0.0.1:1994" {
-		t.Fatalf("expected host-loopback http url, got %q", got.GatewayHTTPURL)
-	}
-	if got.GatewayGRPCHost != "127.0.0.1" {
-		t.Fatalf("expected host-loopback grpc host, got %q", got.GatewayGRPCHost)
-	}
-}
-
 func TestNormalizeBootstrapForAgentRuntimePreservesPublicGRPCHost(t *testing.T) {
 	t.Setenv(types.AgentInContainerEnv, "1")
 
@@ -367,13 +352,22 @@ func TestAgentWorkerConfigMarketplaceSlotRunsGvisorWithBilling(t *testing.T) {
 	}
 }
 
-// Marketplace slots from an older gateway (no runtime field) still fall back
-// to gvisor: buyer workloads must never run under runc on seller machines.
-func TestAgentWorkerConfigMarketplaceSlotDefaultsToGvisor(t *testing.T) {
-	slot := &pb.AgentWorkerSlot{PoolName: "marketplace-listing-1", Mode: string(types.PoolModeMarketplace)}
-	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
-	if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != types.ContainerRuntimeGvisor.String() {
-		t.Fatalf("pool runtime = %q, want gvisor fallback", got)
+// Marketplace slots run gvisor no matter what the gateway sends: buyer
+// workloads must never run under runc on seller machines, whether the runtime
+// field is missing (older gateway) or wrong (gateway bug).
+func TestAgentWorkerConfigMarketplaceSlotAlwaysGvisor(t *testing.T) {
+	for name, slot := range map[string]*pb.AgentWorkerSlot{
+		"missing runtime": {PoolName: "marketplace-listing-1", Mode: string(types.PoolModeMarketplace)},
+		"runc sent by gateway": {
+			PoolName:         "marketplace-listing-1",
+			Mode:             string(types.PoolModeMarketplace),
+			ContainerRuntime: types.ContainerRuntimeRunc.String(),
+		},
+	} {
+		config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+		if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != types.ContainerRuntimeGvisor.String() {
+			t.Fatalf("%s: pool runtime = %q, want gvisor enforced", name, got)
+		}
 	}
 }
 

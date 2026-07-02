@@ -11,7 +11,7 @@ import (
 
 func runVast(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: %s vast <install|sentinel>", os.Args[0])
+		return fmt.Errorf("usage: %s vast <install|sentinel|host|gpu-agent>", os.Args[0])
 	}
 	switch args[0] {
 	case agentvast.CommandInstall:
@@ -27,7 +27,7 @@ func runVast(ctx context.Context, args []string) error {
 	case agentvast.LegacyCommandAgent:
 		return runVastGPUAgent(ctx, args[1:])
 	default:
-		return fmt.Errorf("usage: %s vast <install|sentinel>", os.Args[0])
+		return fmt.Errorf("usage: %s vast <install|sentinel|host|gpu-agent>", os.Args[0])
 	}
 }
 

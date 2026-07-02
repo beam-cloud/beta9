@@ -1475,7 +1475,11 @@ class UpdateAgentAvailabilityRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
     schedulable: bool = betterproto.bool_field(2)
     reason: str = betterproto.string_field(3)
-    observed_at: int = betterproto.int64_field(4)
+    observed_at_unix_nano: int = betterproto.int64_field(4)
+    """
+    Unix nanoseconds, matching the *_unix_nano convention used elsewhere in
+     this file (e.g. AgentLogRecord.timestamp_unix_nano).
+    """
 
 
 @dataclass(eq=False, repr=False)

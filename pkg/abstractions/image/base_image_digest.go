@@ -2,11 +2,9 @@ package image
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -36,13 +34,12 @@ func (is *ContainerImageService) resolveBaseImageDigest(ctx context.Context, opt
 	}
 
 	sourceImage := getSourceImage(opts)
-	platform := buildTargetPlatform(opts)
 	if !cacheable {
-		opts.BaseImageDigest = is.inspectBaseImageDigest(ctx, sourceImage, opts.BaseImageCreds, platform)
+		opts.BaseImageDigest = is.inspectBaseImageDigest(ctx, sourceImage, opts.BaseImageCreds)
 		return
 	}
 
-	digest, shared := is.baseImageDigests.resolve(ctx, sourceImage, opts.BaseImageCreds, platform, is.inspectBaseImageDigest)
+	digest, shared := is.baseImageDigests.resolve(ctx, sourceImage, opts.BaseImageCreds, is.inspectBaseImageDigest)
 	if digest == "" {
 		return
 	}
@@ -57,22 +54,20 @@ func (c *baseImageDigestCache) resolve(
 	ctx context.Context,
 	sourceImage string,
 	creds string,
-	platform common.ImagePlatform,
-	inspect func(context.Context, string, string, common.ImagePlatform) string,
+	inspect func(context.Context, string, string) string,
 ) (string, bool) {
-	cacheKey := baseImageDigestCacheKey(sourceImage, platform)
-	if digest := c.get(cacheKey); digest != "" {
+	if digest := c.get(sourceImage); digest != "" {
 		return digest, false
 	}
 
-	digest, _, shared := c.group.Do(cacheKey, func() (interface{}, error) {
-		if digest := c.get(cacheKey); digest != "" {
+	digest, _, shared := c.group.Do(sourceImage, func() (interface{}, error) {
+		if digest := c.get(sourceImage); digest != "" {
 			return digest, nil
 		}
 
-		digest := inspect(ctx, sourceImage, creds, platform)
+		digest := inspect(ctx, sourceImage, creds)
 		if digest != "" {
-			c.set(cacheKey, digest)
+			c.set(sourceImage, digest)
 		}
 		return digest, nil
 	})
@@ -81,9 +76,9 @@ func (c *baseImageDigestCache) resolve(
 	return resolvedDigest, shared
 }
 
-func (is *ContainerImageService) inspectBaseImageDigest(ctx context.Context, sourceImage, creds string, platform common.ImagePlatform) string {
+func (is *ContainerImageService) inspectBaseImageDigest(ctx context.Context, sourceImage, creds string) string {
 	startedAt := time.Now()
-	metadata, err := is.builder.skopeoClient.Inspect(ctx, sourceImage, creds, platform, nil)
+	metadata, err := is.builder.skopeoClient.Inspect(ctx, sourceImage, creds, nil)
 	if err != nil {
 		log.Warn().Err(err).Str("source_image", sourceImage).Msg("failed to resolve base image digest for image identity")
 		return ""
@@ -95,10 +90,6 @@ func (is *ContainerImageService) inspectBaseImageDigest(ctx context.Context, sou
 
 	log.Debug().Str("source_image", sourceImage).Dur("duration", time.Since(startedAt)).Msg("resolved base image digest")
 	return metadata.Digest
-}
-
-func baseImageDigestCacheKey(sourceImage string, platform common.ImagePlatform) string {
-	return fmt.Sprintf("%s|%s/%s", sourceImage, platform.OS, platform.Architecture)
 }
 
 func (c *baseImageDigestCache) get(sourceImage string) string {

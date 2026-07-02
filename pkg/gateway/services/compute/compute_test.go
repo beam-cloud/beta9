@@ -3058,10 +3058,10 @@ func TestUpdateAgentAvailabilityDisablesMachineWorker(t *testing.T) {
 	service := &Service{computeRepo: computeRepo, workerRepo: workerRepo, containerRepo: containerRepo}
 
 	resp, err := service.UpdateAgentAvailability(context.Background(), &pb.UpdateAgentAvailabilityRequest{
-		AgentToken:  agentToken,
-		Schedulable: false,
-		Reason:      "vast_preempt",
-		ObservedAt:  now.UnixNano(),
+		AgentToken:         agentToken,
+		Schedulable:        false,
+		Reason:             "vast_preempt",
+		ObservedAtUnixNano: now.UnixNano(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -4725,6 +4725,17 @@ func (r *fakeComputeRepo) GetMarketplaceListing(ctx context.Context, sellerWorks
 	for _, listing := range r.listings[sellerWorkspaceID] {
 		if listing != nil && listing.ID == listingID {
 			return listing, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeComputeRepo) GetMarketplaceListingByID(ctx context.Context, listingID string) (*model.MarketplaceListingState, error) {
+	for _, listings := range r.listings {
+		for _, listing := range listings {
+			if listing != nil && listing.ID == listingID {
+				return listing, nil
+			}
 		}
 	}
 	return nil, nil

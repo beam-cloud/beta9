@@ -21,8 +21,9 @@ import (
 )
 
 type GPUInfoClientForTest struct {
-	GpuCount int
-	UUIDs    map[int]string
+	GpuCount        int
+	UUIDs           map[int]string
+	DeviceUUIDCalls int
 }
 
 func NewContainerNvidiaManagerForTest(gpuCount int) GPUManager {
@@ -49,15 +50,17 @@ func (c *GPUInfoClientForTest) AvailableGPUDevices() ([]int, error) {
 	return gpus, nil
 }
 
-func (c *GPUInfoClientForTest) DeviceUUID(deviceIndex int) (string, bool) {
+func (c *GPUInfoClientForTest) DeviceUUIDs() (map[int]string, error) {
+	c.DeviceUUIDCalls++
 	if c.UUIDs != nil {
-		uuid, ok := c.UUIDs[deviceIndex]
-		return uuid, ok
+		return c.UUIDs, nil
 	}
-	if deviceIndex < 0 || deviceIndex >= c.GpuCount {
-		return "", false
+
+	uuids := make(map[int]string, c.GpuCount)
+	for i := 0; i < c.GpuCount; i++ {
+		uuids[i] = fmt.Sprintf("GPU-%d", i)
 	}
-	return fmt.Sprintf("GPU-%d", deviceIndex), true
+	return uuids, nil
 }
 
 func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats, error) {
@@ -401,7 +404,9 @@ func TestAssignMoreGPUsThanAvailable(t *testing.T) {
 	}
 }
 
-func TestCDIDevicesPrefersAssignedUUIDs(t *testing.T) {
+func TestCDIDevicesUseIndexNames(t *testing.T) {
+	// The generated CDI spec names devices by index, so UUID-based selectors
+	// would be unresolvable even on UUID-filtered workers.
 	manager := &ContainerNvidiaManager{
 		infoClient: &GPUInfoClientForTest{
 			GpuCount: 2,
@@ -413,8 +418,7 @@ func TestCDIDevicesPrefersAssignedUUIDs(t *testing.T) {
 		resolvedVisibleDevices: "GPU-a",
 	}
 
-	assert.Equal(t, []string{"nvidia.com/gpu=GPU-a"}, manager.CDIDevices([]int{0}))
-	assert.Equal(t, []string{"nvidia.com/gpu=1"}, manager.CDIDevices([]int{1}))
+	assert.Equal(t, []string{"nvidia.com/gpu=0", "nvidia.com/gpu=1"}, manager.CDIDevices([]int{0, 1}))
 }
 
 func TestInjectAssignedEnvVarsRestoresPinnedGPU(t *testing.T) {
@@ -436,6 +440,53 @@ func TestInjectAssignedEnvVarsRestoresPinnedGPU(t *testing.T) {
 		"A=1",
 		"NVIDIA_VISIBLE_DEVICES=GPU-a",
 		"WORKER_GPU_DEVICES=GPU-a",
+	}, env)
+}
+
+func TestInjectAssignedEnvVarsUsesIndexWhenNotUUIDFiltered(t *testing.T) {
+	manager := &ContainerNvidiaManager{
+		infoClient: &GPUInfoClientForTest{
+			GpuCount: 2,
+			UUIDs: map[int]string{
+				0: "GPU-a",
+				1: "GPU-b",
+			},
+		},
+		resolvedVisibleDevices: "all",
+	}
+
+	env := manager.InjectAssignedEnvVars([]string{"A=1"}, []int{0, 1})
+
+	sort.Strings(env)
+	assert.Equal(t, []string{
+		"A=1",
+		"NVIDIA_VISIBLE_DEVICES=0,1",
+		"WORKER_GPU_DEVICES=0,1",
+	}, env)
+}
+
+func TestInjectAssignedEnvVarsQueriesDeviceUUIDsOnce(t *testing.T) {
+	infoClient := &GPUInfoClientForTest{
+		GpuCount: 4,
+		UUIDs: map[int]string{
+			0: "GPU-a",
+			1: "GPU-b",
+			2: "GPU-c",
+			3: "GPU-d",
+		},
+	}
+	manager := &ContainerNvidiaManager{
+		infoClient:             infoClient,
+		resolvedVisibleDevices: "GPU-a,GPU-b,GPU-c,GPU-d",
+	}
+
+	env := manager.InjectAssignedEnvVars([]string{}, []int{0, 1, 2, 3})
+
+	assert.Equal(t, 1, infoClient.DeviceUUIDCalls)
+	sort.Strings(env)
+	assert.Equal(t, []string{
+		"NVIDIA_VISIBLE_DEVICES=GPU-a,GPU-b,GPU-c,GPU-d",
+		"WORKER_GPU_DEVICES=GPU-a,GPU-b,GPU-c,GPU-d",
 	}, env)
 }
 

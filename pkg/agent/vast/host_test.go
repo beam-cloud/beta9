@@ -3,6 +3,7 @@ package vast
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -129,6 +130,85 @@ func TestHostStopsUnknownServiceOnceWithoutLease(t *testing.T) {
 	}
 }
 
+func TestHostPreemptRejectsStaleSentinelIdentity(t *testing.T) {
+	gpu := GPU{Index: "0", UUID: "GPU-one"}
+	services := &fakeServices{}
+	host, err := newHostServer(context.Background(), HostOptions{
+		GatewayURL:      "http://gateway.example",
+		StateDir:        t.TempDir(),
+		SentinelToken:   "sentinel-token",
+		Services:        services,
+		Cleaner:         &fakeCleaner{},
+		DetectGPUs:      func(context.Context) ([]GPU, error) { return []GPU{gpu}, nil },
+		ReconcilePeriod: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	active := sentinelEvent{GPUUUID: gpu.UUID, Hostname: "sentinel-new", PID: 200}
+	host.handleHeartbeat(httptest.NewRecorder(), sentinelEventRequest(t, "/heartbeat", "sentinel-token", active))
+
+	stale := sentinelEvent{GPUUUID: gpu.UUID, Hostname: "sentinel-old", PID: 100}
+	rec := httptest.NewRecorder()
+	host.handlePreempt(rec, sentinelEventRequest(t, "/preempt", "sentinel-token", stale))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale preempt status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	if len(services.stops) != 0 {
+		t.Fatalf("stale preempt stopped services: %v", services.stops)
+	}
+	if !host.leaseActive(gpu.UUID, time.Now().UTC()) {
+		t.Fatal("stale preempt removed the active lease")
+	}
+
+	// Identity-less events are accepted for compatibility with older sentinels.
+	rec = httptest.NewRecorder()
+	host.handlePreempt(rec, sentinelEventRequest(t, "/preempt", "sentinel-token", sentinelEvent{GPUUUID: gpu.UUID}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("compat preempt status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(services.stops) != 1 {
+		t.Fatalf("compat preempt stops = %v, want one stop", services.stops)
+	}
+}
+
+func TestHostRetriesStopAfterTransientFailure(t *testing.T) {
+	gpu := GPU{Index: "0", UUID: "GPU-one"}
+	services := &fakeServices{stopErrs: []error{fmt.Errorf("transient systemctl failure")}}
+	host, err := newHostServer(context.Background(), HostOptions{
+		GatewayURL:      "http://gateway.example",
+		StateDir:        t.TempDir(),
+		SentinelToken:   "sentinel-token",
+		Services:        services,
+		Cleaner:         &fakeCleaner{},
+		DetectGPUs:      func(context.Context) ([]GPU, error) { return []GPU{gpu}, nil },
+		ReconcilePeriod: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host.reconcile(context.Background(), time.Now().UTC()) // stop fails
+	host.reconcile(context.Background(), time.Now().UTC()) // stop retried, succeeds
+	host.reconcile(context.Background(), time.Now().UTC()) // already stopped, no retry
+
+	if got, want := strings.Join(services.stops, ","), "beam-agent-vast-compat-gpu@0.service,beam-agent-vast-compat-gpu@0.service"; got != want {
+		t.Fatalf("stops = %q, want %q", got, want)
+	}
+}
+
+func sentinelEventRequest(t *testing.T, path, token string, event sentinelEvent) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	return req
+}
+
 func sentinelRequest(t *testing.T, path, token, gpuUUID string) *http.Request {
 	t.Helper()
 	body, err := json.Marshal(sentinelEvent{GPUUUID: gpuUUID})
@@ -141,8 +221,9 @@ func sentinelRequest(t *testing.T, path, token, gpuUUID string) *http.Request {
 }
 
 type fakeServices struct {
-	starts []string
-	stops  []string
+	starts   []string
+	stops    []string
+	stopErrs []error
 }
 
 func (f *fakeServices) Start(_ context.Context, unit string) error {
@@ -152,6 +233,11 @@ func (f *fakeServices) Start(_ context.Context, unit string) error {
 
 func (f *fakeServices) Stop(_ context.Context, unit string) error {
 	f.stops = append(f.stops, unit)
+	if len(f.stopErrs) > 0 {
+		err := f.stopErrs[0]
+		f.stopErrs = f.stopErrs[1:]
+		return err
+	}
 	return nil
 }
 

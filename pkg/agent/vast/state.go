@@ -43,10 +43,10 @@ func loadRuntimeState(stateDir string) (*runtimeState, error) {
 }
 
 type availabilityRequest struct {
-	AgentToken  string `json:"agentToken"`
-	Schedulable bool   `json:"schedulable"`
-	Reason      string `json:"reason"`
-	ObservedAt  int64  `json:"observedAt"`
+	AgentToken         string `json:"agentToken"`
+	Schedulable        bool   `json:"schedulable"`
+	Reason             string `json:"reason"`
+	ObservedAtUnixNano int64  `json:"observedAtUnixNano"`
 }
 
 type availabilityResponse struct {
@@ -67,10 +67,10 @@ func updateAvailability(ctx context.Context, client *http.Client, gatewayURL, ag
 		httpClient.Client = &http.Client{Timeout: 30 * time.Second}
 	}
 	req := availabilityRequest{
-		AgentToken:  agentToken,
-		Schedulable: schedulable,
-		Reason:      reason,
-		ObservedAt:  time.Now().UTC().UnixNano(),
+		AgentToken:         agentToken,
+		Schedulable:        schedulable,
+		Reason:             reason,
+		ObservedAtUnixNano: time.Now().UTC().UnixNano(),
 	}
 	var resp availabilityResponse
 	if err := httpClient.Do(ctx, http.MethodPost, "/api/v1/gateway/agent/availability", req, &resp); err != nil {

@@ -127,6 +127,11 @@ func marketplaceUsageEndpoint(endpoint string) string {
 
 func marketplaceUsagePath(path string) string {
 	path = strings.TrimRight(path, "/")
+	// Already a marketplace usage path — keep the rewrite idempotent so a
+	// pre-normalized endpoint config doesn't get mangled.
+	if strings.HasSuffix(path, marketplaceUsageRoute) {
+		return path + "/"
+	}
 	path = strings.TrimSuffix(path, managedComputeUsageSuffix)
 	if strings.HasSuffix(path, managedComputeRoute) {
 		path = strings.TrimSuffix(path, managedComputeRoute) + marketplaceUsageRoute

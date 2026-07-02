@@ -432,6 +432,27 @@ func (r *ComputeRedisRepository) ListAllMarketplaceListings(ctx context.Context,
 	return r.marketplaceListings(ctx, keys)
 }
 
+// GetMarketplaceListingByID resolves a listing without knowing its seller —
+// used by the public direct-link lookup. The global index maps listing ids to
+// their workspace, so only the one matching listing body is fetched.
+func (r *ComputeRedisRepository) GetMarketplaceListingByID(ctx context.Context, listingID string) (*compute.MarketplaceListingState, error) {
+	if listingID == "" {
+		return nil, nil
+	}
+	members, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeMarketplaceGlobalIndex()).Result()
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range members {
+		workspaceID, memberListingID, ok := splitMarketplaceListingGlobalMember(member)
+		if !ok || memberListingID != listingID {
+			continue
+		}
+		return r.GetMarketplaceListing(ctx, workspaceID, listingID)
+	}
+	return nil, nil
+}
+
 func (r *ComputeRedisRepository) DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error {
 	if sellerWorkspaceID == "" || listingID == "" {
 		return nil
@@ -495,6 +516,12 @@ func (r *ComputeRedisRepository) marketplaceListings(ctx context.Context, keys [
 		if err := json.Unmarshal(data, &state); err != nil {
 			log.Warn().Err(err).Str("key", keys[i]).Msg("skipping corrupt marketplace listing state")
 			continue
+		}
+		// Older records may predate the seller_workspace_id field; the key
+		// embeds it (compute:marketplace:{workspace}:listing:id), mirroring the
+		// backfill GetMarketplaceListing does.
+		if state.SellerWorkspaceID == "" {
+			state.SellerWorkspaceID = workspaceIDFromComputePoolKey(keys[i])
 		}
 		states = append(states, &state)
 	}

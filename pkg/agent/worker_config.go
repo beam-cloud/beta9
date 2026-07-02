@@ -92,10 +92,10 @@ type agentConfigS3Registry struct {
 }
 
 type agentConfigMonitoring struct {
-	MetricsCollector         string               `json:"metricsCollector"`
-	ContainerMetricsInterval string               `json:"containerMetricsInterval"`
+	MetricsCollector         string                `json:"metricsCollector"`
+	ContainerMetricsInterval string                `json:"containerMetricsInterval"`
 	Prometheus               agentConfigPrometheus `json:"prometheus"`
-	ContainerCostHook        *agentConfigCostHook `json:"containerCostHook,omitempty"`
+	ContainerCostHook        *agentConfigCostHook  `json:"containerCostHook,omitempty"`
 }
 
 type agentConfigCostHook struct {
@@ -314,13 +314,15 @@ func slotPoolMode(slot *pb.AgentWorkerSlot) string {
 }
 
 // slotContainerRuntime returns the runtime the gateway assigned to this slot.
-// Marketplace slots must run gvisor even if an older gateway omits the field.
+// Marketplace slots run gvisor unconditionally — buyer workloads on seller
+// hardware must be isolated, so the agent enforces the invariant locally
+// rather than trusting whatever runtime the gateway sent.
 func slotContainerRuntime(slot *pb.AgentWorkerSlot) string {
-	if slot != nil && slot.ContainerRuntime != "" {
-		return slot.ContainerRuntime
-	}
 	if slotPoolMode(slot) == string(types.PoolModeMarketplace) {
 		return types.ContainerRuntimeGvisor.String()
+	}
+	if slot != nil && slot.ContainerRuntime != "" {
+		return slot.ContainerRuntime
 	}
 	return types.ContainerRuntimeRunc.String()
 }

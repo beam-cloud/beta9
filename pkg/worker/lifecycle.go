@@ -1108,8 +1108,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
 				return
 			}
-			spec.Process.Env = s.containerGPUManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 		}
+
+		// Pin env vars to the assigned devices regardless of CDI support; for
+		// non-CDI runtimes this is the only thing scoping the container's GPUs.
+		spec.Process.Env = s.containerGPUManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
 	// Expose the bind ports

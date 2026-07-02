@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
@@ -101,28 +100,6 @@ func TestGetBuildContextDoesNotFallBackToWorkspaceFuseMount(t *testing.T) {
 	_, err := client.getBuildContext(context.Background(), buildPath, request)
 
 	require.ErrorContains(t, err, "workspace storage credentials are required")
-}
-
-func TestTargetImagePlatformUsesRuntimeForNormalRequests(t *testing.T) {
-	platform := targetImagePlatform(&types.ContainerRequest{})
-
-	require.Equal(t, runtime.GOOS, platform.OS)
-	require.Equal(t, runtime.GOARCH, platform.Architecture)
-}
-
-func TestTargetImagePlatformUsesMarketplaceV1Platform(t *testing.T) {
-	platform := targetImagePlatform(&types.ContainerRequest{AllowMarketplace: true})
-
-	require.Equal(t, "linux", platform.OS)
-	require.Equal(t, "amd64", platform.Architecture)
-}
-
-func TestBuildahPlatformArgs(t *testing.T) {
-	require.Equal(t, []string{"--platform", "linux/amd64"}, buildahPlatformArgs(common.ImagePlatform{
-		OS:           "linux",
-		Architecture: "amd64",
-	}))
-	require.Nil(t, buildahPlatformArgs(common.ImagePlatform{}))
 }
 
 func TestNewBuildahCommandUsesCancelableProcessGroup(t *testing.T) {

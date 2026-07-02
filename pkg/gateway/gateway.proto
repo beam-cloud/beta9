@@ -1573,7 +1573,9 @@ message UpdateAgentAvailabilityRequest {
   string agent_token = 1;
   bool schedulable = 2;
   string reason = 3;
-  int64 observed_at = 4;
+  // Unix nanoseconds, matching the *_unix_nano convention used elsewhere in
+  // this file (e.g. AgentLogRecord.timestamp_unix_nano).
+  int64 observed_at_unix_nano = 4;
 }
 
 message UpdateAgentAvailabilityResponse {
