@@ -110,11 +110,6 @@ class ContainerRequest(betterproto.Message):
     runtime_secret_names: List[str] = betterproto.string_field(31)
     runtime_token_required: bool = betterproto.bool_field(32)
     allow_marketplace: bool = betterproto.bool_field(33)
-    marketplace_listing_id: str = betterproto.string_field(34)
-    marketplace_seller_id: str = betterproto.string_field(35)
-    marketplace_pool_name: str = betterproto.string_field(36)
-    marketplace_machine_id: str = betterproto.string_field(37)
-    marketplace_runtime: str = betterproto.string_field(38)
 
 
 @dataclass(eq=False, repr=False)
@@ -276,7 +271,6 @@ class Worker(betterproto.Message):
     build_version: str = betterproto.string_field(16)
     active_containers: List["Container"] = betterproto.message_field(17)
     runtime: str = betterproto.string_field(18)
-    marketplace_listing_id: str = betterproto.string_field(19)
 
 
 @dataclass(eq=False, repr=False)

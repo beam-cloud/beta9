@@ -141,6 +141,8 @@ type AgentWorkerSlotState struct {
 	MachineID                 string    `json:"machine_id"`
 	Mode                      string    `json:"mode,omitempty"`
 	ContainerRuntime          string    `json:"container_runtime,omitempty"`
+	MarketplaceListingID      string    `json:"marketplace_listing_id,omitempty"`
+	SellerWorkspaceID         string    `json:"seller_workspace_id,omitempty"`
 	CPU                       int64     `json:"cpu"`
 	Memory                    int64     `json:"memory"`
 	GPU                       string    `json:"gpu"`

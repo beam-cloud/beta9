@@ -273,7 +273,10 @@ func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
 	}
 }
 
-func TestBackendDialerTSNetRecyclesDialerAfterLookupMiss(t *testing.T) {
+// A dead peer (offline seller machine) produces netmap miss + NXDOMAIN on
+// every dial. That must feed the rate-limited stale-netmap detector only —
+// recycling the shared tsnet server per dial would drop every other route.
+func TestBackendDialerTSNetDeadPeerDoesNotRecycleServer(t *testing.T) {
 	ts, dialer := newMissingPeerBackendDialer(t, 250*time.Millisecond)
 	originalServer := ts.currentServer()
 	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
@@ -284,8 +287,8 @@ func TestBackendDialerTSNetRecyclesDialerAfterLookupMiss(t *testing.T) {
 	if err == nil {
 		t.Fatal("dial succeeded, want error")
 	}
-	if ts.currentServer() == originalServer {
-		t.Fatal("tsnet server was not recycled after netmap miss plus MagicDNS lookup miss")
+	if ts.currentServer() != originalServer {
+		t.Fatal("a single dead peer must not recycle the shared tsnet server")
 	}
 }
 

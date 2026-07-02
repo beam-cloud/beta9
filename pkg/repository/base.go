@@ -22,7 +22,6 @@ type WorkerRepository interface {
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
-	SetWorkerMarketplaceListingID(workerId, listingID string) error
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error

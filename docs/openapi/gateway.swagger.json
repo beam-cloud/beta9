@@ -2334,6 +2334,13 @@
         },
         "containerRuntime": {
           "type": "string"
+        },
+        "marketplaceListingId": {
+          "type": "string",
+          "description": "Marketplace identity of the machine backing this slot. Machines join a\n(possibly shared) pool through exactly one listing; the worker reports\nbuyer usage against it, so the request itself carries no billing fields."
+        },
+        "sellerWorkspaceId": {
+          "type": "string"
         }
       }
     },
@@ -5085,9 +5092,6 @@
           }
         },
         "runtime": {
-          "type": "string"
-        },
-        "marketplaceListingId": {
           "type": "string"
         }
       }

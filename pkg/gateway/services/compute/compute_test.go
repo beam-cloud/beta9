@@ -5027,15 +5027,22 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	config.Worker.ImageTag = "same-tag"
 
 	marketplaceState := &model.AgentTokenState{
-		WorkspaceID: "seller-1",
-		PoolName:    "marketplace-listing-1",
-		MachineID:   "machine-1",
-		Mode:        string(types.PoolModeMarketplace),
+		WorkspaceID:          "seller-1",
+		PoolName:             "marketplace-listing-1",
+		MachineID:            "machine-1",
+		Mode:                 string(types.PoolModeMarketplace),
+		MarketplaceListingID: "listing-1",
+		SellerWorkspaceID:    "seller-1",
 	}
 	worker := &types.Worker{Id: "worker-1", TotalCpu: 4000, TotalMemory: 8192, Gpu: "A10G", TotalGpuCount: 1}
 	slot := agentWorkerSlotState(config, marketplaceState, worker, "token-id", "token-hash")
 	if slot.Mode != string(types.PoolModeMarketplace) {
 		t.Fatalf("slot mode = %q, want marketplace", slot.Mode)
+	}
+	// The slot carries the machine's marketplace identity so the worker can
+	// attribute buyer usage without billing fields on container requests.
+	if slot.MarketplaceListingID != "listing-1" || slot.SellerWorkspaceID != "seller-1" {
+		t.Fatalf("slot marketplace identity = %q/%q, want listing-1/seller-1", slot.MarketplaceListingID, slot.SellerWorkspaceID)
 	}
 	if slot.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
 		t.Fatalf("slot runtime = %q, want gvisor for supported marketplace GPU", slot.ContainerRuntime)

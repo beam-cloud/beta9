@@ -101,11 +101,6 @@ message ContainerRequest {
   repeated string runtime_secret_names = 31;
   bool runtime_token_required = 32;
   bool allow_marketplace = 33;
-  string marketplace_listing_id = 34;
-  string marketplace_seller_id = 35;
-  string marketplace_pool_name = 36;
-  string marketplace_machine_id = 37;
-  string marketplace_runtime = 38;
 }
 
 message ContainerState {
@@ -251,7 +246,6 @@ message Worker {
   string build_version = 16;
   repeated Container active_containers = 17;
   string runtime = 18;
-  string marketplace_listing_id = 19;
 }
 
 message WorkerPoolState {

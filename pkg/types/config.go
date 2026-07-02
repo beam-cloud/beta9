@@ -443,6 +443,13 @@ var (
 	PoolModeMarketplace PoolMode = "marketplace"
 )
 
+// AgentHosted reports whether pools of this mode run on agent-managed
+// machines outside the cluster. Such workers hold no static credentials and
+// use gateway-brokered access for images and caches.
+func (m PoolMode) AgentHosted() bool {
+	return m == PoolModePrivate || m == PoolModeMarketplace
+}
+
 type WorkerPoolConfig struct {
 	GPUType                   string                            `key:"gpuType" json:"gpu_type"`
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
@@ -459,8 +466,6 @@ type WorkerPoolConfig struct {
 	RequiresPoolSelector      bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority                  int32                             `key:"priority" json:"priority"`
 	Preemptable               bool                              `key:"preemptable" json:"preemptable"`
-	MarketplaceListingID      string                            `key:"marketplaceListingID" json:"marketplace_listing_id"`
-	MarketplaceSellerID       string                            `key:"marketplaceSellerID" json:"marketplace_seller_id"`
 	UserData                  string                            `key:"userData" json:"user_data"`
 	CRIUEnabled               bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit              string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
@@ -672,6 +677,11 @@ type ManagedComputeConfig struct {
 	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
+	// Marketplace identity of the machine this worker runs on, set by the
+	// agent in the generated worker config. Buyer usage on the worker is
+	// billed against this listing.
+	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
+	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
 }
 
 func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {

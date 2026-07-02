@@ -65,9 +65,13 @@ type ContainerNvidiaManager struct {
 	resolvedVisibleDevices string
 }
 
-func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
+func NewContainerNvidiaManager(gpuCount uint32, runtimeName string) GPUManager {
 	if gpuCount > 0 {
-		if err := ensureNvidiaCDIConfig(); err != nil {
+		// Only gvisor needs the sanitized spec: nvproxy cannot run
+		// createContainer hooks and seller machines lack nvidia-persistenced.
+		// runc workers keep the stock nvidia-ctk spec.
+		sanitizeForGvisor := runtimeName == types.ContainerRuntimeGvisor.String()
+		if err := ensureNvidiaCDIConfig(sanitizeForGvisor); err != nil {
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
 	}
@@ -85,7 +89,7 @@ func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	}
 }
 
-func ensureNvidiaCDIConfig() error {
+func ensureNvidiaCDIConfig(sanitizeForGvisor bool) error {
 	failures := make([]string, 0, len(nvidiaCDIConfigPaths))
 	for _, path := range nvidiaCDIConfigPaths {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -98,9 +102,11 @@ func ensureNvidiaCDIConfig() error {
 			failures = append(failures, fmt.Sprintf("%s: %s", path, nvidiaCDICommandError(output, err)))
 			continue
 		}
-		if err := sanitizeNvidiaCDIConfig(path); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: sanitize generated spec: %v", path, err))
-			continue
+		if sanitizeForGvisor {
+			if err := sanitizeNvidiaCDIConfig(path); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: sanitize generated spec: %v", path, err))
+				continue
+			}
 		}
 
 		if err := configureNvidiaCDICache(path); err != nil {

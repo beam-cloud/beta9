@@ -1192,6 +1192,14 @@ class AgentWorkerSlot(betterproto.Message):
     """
 
     container_runtime: str = betterproto.string_field(15)
+    marketplace_listing_id: str = betterproto.string_field(16)
+    """
+    Marketplace identity of the machine backing this slot. Machines join a
+     (possibly shared) pool through exactly one listing; the worker reports
+     buyer usage against it, so the request itself carries no billing fields.
+    """
+
+    seller_workspace_id: str = betterproto.string_field(17)
 
 
 @dataclass(eq=False, repr=False)

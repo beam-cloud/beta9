@@ -65,9 +65,6 @@ type Worker struct {
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 	Runtime              string       `json:"runtime" redis:"runtime"`
-	// MarketplaceListingID attributes usage on this worker to the listing its
-	// machine joined through; pools can be shared by several listings.
-	MarketplaceListingID string `json:"marketplace_listing_id,omitempty" redis:"marketplace_listing_id"`
 }
 
 type WorkerKeepAlive struct {
@@ -106,7 +103,6 @@ func (w *Worker) ToProto() *pb.Worker {
 		BuildVersion:         w.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              w.Runtime,
-		MarketplaceListingId: w.MarketplaceListingID,
 	}
 }
 
@@ -135,7 +131,6 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		BuildVersion:         in.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              in.Runtime,
-		MarketplaceListingID: in.MarketplaceListingId,
 	}
 }
 
@@ -260,11 +255,6 @@ type ContainerRequest struct {
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
 	AllowMarketplace         bool            `json:"allow_marketplace"`
-	MarketplaceListingID     string          `json:"marketplace_listing_id,omitempty"`
-	MarketplaceSellerID      string          `json:"marketplace_seller_id,omitempty"`
-	MarketplacePoolName      string          `json:"marketplace_pool_name,omitempty"`
-	MarketplaceMachineID     string          `json:"marketplace_machine_id,omitempty"`
-	MarketplaceRuntime       string          `json:"marketplace_runtime,omitempty"`
 }
 
 type ContainerNetworkPolicy string
@@ -562,11 +552,6 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		AllowMarketplace:         c.AllowMarketplace,
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
-		MarketplaceListingId:     c.MarketplaceListingID,
-		MarketplaceSellerId:      c.MarketplaceSellerID,
-		MarketplacePoolName:      c.MarketplacePoolName,
-		MarketplaceMachineId:     c.MarketplaceMachineID,
-		MarketplaceRuntime:       c.MarketplaceRuntime,
 	}
 }
 
@@ -624,11 +609,6 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		AllowMarketplace:         in.AllowMarketplace,
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
-		MarketplaceListingID:     in.MarketplaceListingId,
-		MarketplaceSellerID:      in.MarketplaceSellerId,
-		MarketplacePoolName:      in.MarketplacePoolName,
-		MarketplaceMachineID:     in.MarketplaceMachineId,
-		MarketplaceRuntime:       in.MarketplaceRuntime,
 	}
 }
 

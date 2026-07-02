@@ -104,8 +104,10 @@ type agentConfigCostHook struct {
 }
 
 type agentConfigManagedCompute struct {
-	BillableMarginPct float64            `json:"billableMarginPct"`
-	Billing           agentConfigBilling `json:"billing"`
+	BillableMarginPct    float64            `json:"billableMarginPct"`
+	Billing              agentConfigBilling `json:"billing"`
+	MarketplaceListingID string             `json:"marketplaceListingID"`
+	SellerWorkspaceID    string             `json:"sellerWorkspaceID"`
 }
 
 type agentConfigBilling struct {
@@ -300,7 +302,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 				},
 			},
 		},
-		ManagedCompute: managedComputeConfigForSlot(bootstrap, poolMode),
+		ManagedCompute: managedComputeConfigForSlot(bootstrap, slot, poolMode),
 	}
 }
 
@@ -336,17 +338,22 @@ func costHookConfigForSlot(bootstrap bootstrapConfig, poolMode string) *agentCon
 	}
 }
 
-func managedComputeConfigForSlot(bootstrap bootstrapConfig, poolMode string) *agentConfigManagedCompute {
+func managedComputeConfigForSlot(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, poolMode string) *agentConfigManagedCompute {
 	if poolMode != string(types.PoolModeMarketplace) || bootstrap.Billing == nil || bootstrap.Billing.UsageEndpoint == "" {
 		return nil
 	}
-	return &agentConfigManagedCompute{
+	config := &agentConfigManagedCompute{
 		BillableMarginPct: bootstrap.Billing.BillableMarginPct,
 		Billing: agentConfigBilling{
 			Endpoint:  bootstrap.Billing.UsageEndpoint,
 			AuthToken: bootstrap.Billing.UsageToken,
 		},
 	}
+	if slot != nil {
+		config.MarketplaceListingID = slot.MarketplaceListingId
+		config.SellerWorkspaceID = slot.SellerWorkspaceId
+	}
+	return config
 }
 
 func agentCacheLocality(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) string {

@@ -340,33 +340,6 @@ func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status types
 	return nil
 }
 
-// SetWorkerMarketplaceListingID re-points a live worker at the marketplace
-// listing its machine currently belongs to. Pools can be shared by several
-// listings, and a machine can re-join the same pool through a different one.
-func (r *WorkerRedisRepository) SetWorkerMarketplaceListingID(workerId, listingID string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
-	if err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-
-	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
-	worker, err := r.getWorkerFromKey(stateKey)
-	if err != nil {
-		return err
-	}
-	if worker.MarketplaceListingID == listingID {
-		return nil
-	}
-
-	worker.MarketplaceListingID = listingID
-	worker.ResourceVersion++
-	if err := r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err(); err != nil {
-		return fmt.Errorf("failed to update worker marketplace listing <%s>: %v", stateKey, err)
-	}
-	return nil
-}
-
 type workerReservedCapacity struct {
 	cpu    int64
 	memory int64

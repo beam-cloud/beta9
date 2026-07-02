@@ -1261,18 +1261,14 @@ func (c *ImageClient) brokeredImageAccessRequest(request *types.ContainerRequest
 	}
 	if request != nil && request.PoolSelector != "" {
 		if pool, ok := c.config.Worker.Pools[request.PoolSelector]; ok {
-			return brokeredImageAccessPoolMode(pool.Mode)
+			return pool.Mode.AgentHosted()
 		}
 	}
 	if c.workerPoolName == "" {
 		return false
 	}
 	pool, ok := c.config.Worker.Pools[c.workerPoolName]
-	return ok && brokeredImageAccessPoolMode(pool.Mode)
-}
-
-func brokeredImageAccessPoolMode(mode types.PoolMode) bool {
-	return mode == types.PoolModePrivate || mode == types.PoolModeMarketplace
+	return ok && pool.Mode.AgentHosted()
 }
 
 // pullImageArchiveFromBrokeredOrigin pulls the image archive using

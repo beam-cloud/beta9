@@ -15,19 +15,17 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 	var conn net.Conn = nil
 
 	if tsConfig.Enabled && tailscale != nil && strings.Contains(host, tsConfig.HostName) {
-		// Confirm the peer is in our netmap first; dialing an unknown MagicDNS
-		// name can fall back to the system resolver and fail with a misleading
-		// NXDOMAIN. Treat the netmap check as advisory though: tsnet.Status can
-		// omit peers that tsnet.Dial can still reach.
+		// Advisory netmap check: a MagicDNS dial for a peer missing from the
+		// netmap falls back to the system resolver and fails with a misleading
+		// NXDOMAIN, but tsnet.Status can also omit peers that tsnet.Dial can
+		// still reach — so enrich the error rather than gate the dial.
 		var peerErr error
 		if peerHost := tailnetHostFromAddr(host); peerHost != "" {
-			peerWait := timeout
-			if peerWait <= 0 || peerWait > tailnetPeerAdvisoryTimeout {
-				peerWait = tailnetPeerAdvisoryTimeout
+			peerWait := tailnetPeerAdvisoryTimeout
+			if timeout > 0 {
+				peerWait = min(peerWait, timeout)
 			}
-			if err := tailscale.WaitForPeer(ctx, peerHost, peerWait); err != nil {
-				peerErr = err
-			}
+			peerErr = tailscale.WaitForPeer(ctx, peerHost, peerWait)
 		}
 
 		conn, err := tailscale.DialContextTimeout(ctx, "tcp", host, timeout)

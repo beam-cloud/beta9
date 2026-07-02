@@ -308,11 +308,13 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 
 func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
-		PoolName:         "marketplace-listing-1",
-		Mode:             string(types.PoolModeMarketplace),
-		ContainerRuntime: types.ContainerRuntimeRunc.String(),
-		Cpu:              4000,
-		Memory:           8192,
+		PoolName:             "marketplace-listing-1",
+		Mode:                 string(types.PoolModeMarketplace),
+		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
+		MarketplaceListingId: "listing-1",
+		SellerWorkspaceId:    "seller-1",
+		Cpu:                  4000,
+		Memory:               8192,
 	}
 	bootstrap := bootstrapConfig{
 		Billing: &billingBootstrapConfig{
@@ -346,6 +348,12 @@ func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testin
 	}
 	if config.ManagedCompute.BillableMarginPct != 0.1 {
 		t.Fatalf("billable margin = %f, want 0.1", config.ManagedCompute.BillableMarginPct)
+	}
+	// The worker attributes buyer usage to itself, so the slot's marketplace
+	// identity must land in its generated config.
+	if config.ManagedCompute.MarketplaceListingID != "listing-1" || config.ManagedCompute.SellerWorkspaceID != "seller-1" {
+		t.Fatalf("managed compute identity = %q/%q, want listing-1/seller-1",
+			config.ManagedCompute.MarketplaceListingID, config.ManagedCompute.SellerWorkspaceID)
 	}
 	if config.Monitoring.ContainerCostHook == nil || config.Monitoring.ContainerCostHook.Endpoint != bootstrap.Billing.CostHookEndpoint {
 		t.Fatalf("cost hook config = %+v, want endpoint threaded through", config.Monitoring.ContainerCostHook)

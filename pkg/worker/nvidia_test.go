@@ -101,7 +101,7 @@ func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
 		return true
 	}
 
-	if err := ensureNvidiaCDIConfig(); err != nil {
+	if err := ensureNvidiaCDIConfig(false); err != nil {
 		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
 	}
 	if len(calls) != 2 {
@@ -146,7 +146,7 @@ func TestEnsureNvidiaCDIConfigUsesBeamRuntimeDir(t *testing.T) {
 		return true
 	}
 
-	if err := ensureNvidiaCDIConfig(); err != nil {
+	if err := ensureNvidiaCDIConfig(false); err != nil {
 		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
 	}
 	if len(calls) != 1 || calls[0] != beamPath {
@@ -191,11 +191,46 @@ func TestEnsureNvidiaCDIConfigFallsBackWhenGeneratedDeviceIsUnresolvable(t *test
 		return resolveCalls > 1
 	}
 
-	if err := ensureNvidiaCDIConfig(); err != nil {
+	if err := ensureNvidiaCDIConfig(true); err != nil {
 		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
 	}
 	if len(calls) != 2 {
 		t.Fatalf("nvidia-ctk calls = %v, want retry after unresolvable generated spec", calls)
+	}
+}
+
+// runc workers must keep the stock nvidia-ctk spec: hooks and persistenced
+// mounts are only stripped for gvisor, where nvproxy cannot honor them.
+func TestEnsureNvidiaCDIConfigLeavesSpecIntactForRunc(t *testing.T) {
+	originalPaths := nvidiaCDIConfigPaths
+	originalGenerate := runNvidiaCTKCDIGenerate
+	originalConfigure := configureNvidiaCDICache
+	originalResolvable := nvidiaCDIDeviceResolvable
+	t.Cleanup(func() {
+		nvidiaCDIConfigPaths = originalPaths
+		runNvidiaCTKCDIGenerate = originalGenerate
+		configureNvidiaCDICache = originalConfigure
+		nvidiaCDIDeviceResolvable = originalResolvable
+	})
+
+	path := filepath.Join(t.TempDir(), "nvidia.yaml")
+	nvidiaCDIConfigPaths = []string{path}
+	runNvidiaCTKCDIGenerate = writeTestNvidiaCDISpec
+	configureNvidiaCDICache = func(string) error { return nil }
+	nvidiaCDIDeviceResolvable = func() bool { return true }
+
+	if err := ensureNvidiaCDIConfig(false); err != nil {
+		t.Fatalf("ensureNvidiaCDIConfig() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"update-ldcache", "/run/nvidia-persistenced/socket"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("runc spec should keep %q:\n%s", want, data)
+		}
 	}
 }
 

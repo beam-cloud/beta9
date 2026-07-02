@@ -1349,6 +1349,11 @@ message AgentWorkerSlot {
   // to runc for GPU families that are not compatible with gVisor GPU support.
   string mode = 14;
   string container_runtime = 15;
+  // Marketplace identity of the machine backing this slot. Machines join a
+  // (possibly shared) pool through exactly one listing; the worker reports
+  // buyer usage against it, so the request itself carries no billing fields.
+  string marketplace_listing_id = 16;
+  string seller_workspace_id = 17;
 }
 
 message StreamAgentRequest { string agent_token = 1; }
