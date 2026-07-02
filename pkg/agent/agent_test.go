@@ -306,11 +306,11 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 	}
 }
 
-func TestAgentWorkerConfigMarketplaceSlotRunsGvisorWithBilling(t *testing.T) {
+func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
 		PoolName:         "marketplace-listing-1",
 		Mode:             string(types.PoolModeMarketplace),
-		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+		ContainerRuntime: types.ContainerRuntimeRunc.String(),
 		Cpu:              4000,
 		Memory:           8192,
 	}
@@ -332,14 +332,14 @@ func TestAgentWorkerConfigMarketplaceSlotRunsGvisorWithBilling(t *testing.T) {
 	if pool.Mode != string(types.PoolModeMarketplace) {
 		t.Fatalf("pool mode = %q, want marketplace (must survive sanitize)", pool.Mode)
 	}
-	if pool.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
-		t.Fatalf("pool runtime = %q, want gvisor for marketplace isolation", pool.ContainerRuntime)
+	if pool.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("pool runtime = %q, want gateway-provided runtime", pool.ContainerRuntime)
 	}
 	if pool.RequiresPoolSelector {
 		t.Fatal("marketplace pool must not require pool selector")
 	}
-	if config.Worker.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
-		t.Fatalf("worker runtime = %q, want gvisor", config.Worker.ContainerRuntime)
+	if config.Worker.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("worker runtime = %q, want gateway-provided runtime", config.Worker.ContainerRuntime)
 	}
 	if config.ManagedCompute == nil || config.ManagedCompute.Billing.Endpoint != bootstrap.Billing.UsageEndpoint {
 		t.Fatalf("marketplace billing config = %+v, want usage endpoint threaded through", config.ManagedCompute)
@@ -352,21 +352,22 @@ func TestAgentWorkerConfigMarketplaceSlotRunsGvisorWithBilling(t *testing.T) {
 	}
 }
 
-// Marketplace slots run gvisor no matter what the gateway sends: buyer
-// workloads must never run under runc on seller machines, whether the runtime
-// field is missing (older gateway) or wrong (gateway bug).
-func TestAgentWorkerConfigMarketplaceSlotAlwaysGvisor(t *testing.T) {
+func TestAgentWorkerConfigMarketplaceRuntimeDefaultsAndOverrides(t *testing.T) {
 	for name, slot := range map[string]*pb.AgentWorkerSlot{
-		"missing runtime": {PoolName: "marketplace-listing-1", Mode: string(types.PoolModeMarketplace)},
-		"runc sent by gateway": {
+		"missing runtime defaults to gvisor": {
+			PoolName: "marketplace-listing-1",
+			Mode:     string(types.PoolModeMarketplace),
+		},
+		"runc sent by gateway is respected": {
 			PoolName:         "marketplace-listing-1",
 			Mode:             string(types.PoolModeMarketplace),
 			ContainerRuntime: types.ContainerRuntimeRunc.String(),
 		},
 	} {
 		config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
-		if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != types.ContainerRuntimeGvisor.String() {
-			t.Fatalf("%s: pool runtime = %q, want gvisor enforced", name, got)
+		want := firstNonEmpty(slot.ContainerRuntime, types.ContainerRuntimeGvisor.String())
+		if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != want {
+			t.Fatalf("%s: pool runtime = %q, want %q", name, got, want)
 		}
 	}
 }

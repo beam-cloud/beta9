@@ -263,6 +263,53 @@ func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
+	state := &compute.PoolState{
+		Mode: string(types.PoolModeMarketplace),
+		Config: &pb.PoolConfig{
+			Gpu: []string{"V100"},
+		},
+	}
+	config := normalizeAgentWorkerPoolConfig(state)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), config.ContainerRuntime)
+
+	state.Config.Gpu = []string{"A10G"}
+	config = normalizeAgentWorkerPoolConfig(state)
+	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
+}
+
+func TestMarketplacePlacementUsesWorkerRuntime(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
+		Mode:                 types.PoolModeMarketplace,
+		ContainerRuntime:     types.ContainerRuntimeGvisor.String(),
+		MarketplaceListingID: "listing-1",
+		MarketplaceSellerID:  "seller-1",
+	}, nil)
+
+	request := &types.ContainerRequest{}
+	scheduler.annotateMarketplacePlacement(&types.Worker{
+		PoolName:  "marketplace",
+		MachineId: "machine-1",
+		Gpu:       "V100",
+		Runtime:   types.ContainerRuntimeRunc.String(),
+	}, request)
+
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), request.MarketplaceRuntime)
+	assert.Equal(t, "listing-1", request.MarketplaceListingID)
+
+	// Shared pools: the worker's own listing (from the machine that joined)
+	// wins over the pool-level listing for usage attribution.
+	request = &types.ContainerRequest{}
+	scheduler.annotateMarketplacePlacement(&types.Worker{
+		PoolName:             "marketplace",
+		MachineId:            "machine-2",
+		Gpu:                  "V100",
+		MarketplaceListingID: "listing-2",
+	}, request)
+	assert.Equal(t, "listing-2", request.MarketplaceListingID)
+}
+
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string

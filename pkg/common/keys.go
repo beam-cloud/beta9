@@ -5,32 +5,34 @@ import (
 )
 
 var (
-	schedulerPrefix                  string = "scheduler:"
-	schedulerContainerRequests       string = "scheduler:container_requests"
-	schedulerWorkerLock              string = "scheduler:worker:lock:%s"
-	schedulerWorkerRequests          string = "scheduler:worker:requests:%s"
-	schedulerWorkerIndex             string = "scheduler:worker:worker_index"
-	schedulerWorkerPoolIndex         string = "scheduler:worker:pool_index:%s"
-	schedulerWorkerMachineIndex      string = "scheduler:worker:machine_index:%s"
-	schedulerWorkerState             string = "scheduler:worker:state:%s"
-	schedulerContainerConfig         string = "scheduler:container:config:%s"
-	schedulerContainerState          string = "scheduler:container:state:%s"
-	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
-	schedulerContainerAddressMap     string = "scheduler:container:container_addr_map:%s"
-	schedulerBackendRoute            string = "scheduler:route:%s"
-	schedulerBackendRouteIndex       string = "scheduler:route:index:%s"
-	schedulerBackendRouteMachine     string = "scheduler:route:machine:{%s}:%s:%s"
-	schedulerBackendRouteMachineRev  string = "scheduler:route:machine:{%s}:%s:%s:rev"
-	schedulerContainerRequestStatus  string = "scheduler:container:request_status:%s"
-	schedulerContainerIndex          string = "scheduler:container:index:%s"
-	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
-	schedulerContainerWorkspaceIndex string = "scheduler:container:workspace:index:%s"
-	schedulerWorkerAddress           string = "scheduler:container:worker_addr:%s"
-	schedulerContainerLock           string = "scheduler:container:lock:%s"
-	schedulerContainerExitCode       string = "scheduler:container:exit_code:%s"
-	schedulerCheckpointState         string = "scheduler:checkpoint_state:%s:%s"
-	schedulerServeLock               string = "scheduler:serve:lock:%s:%s"
-	schedulerStubState               string = "scheduler:stub:state:%s"
+	schedulerPrefix                   string = "scheduler:"
+	schedulerContainerRequests        string = "scheduler:container_requests"
+	schedulerWorkerLock               string = "scheduler:worker:lock:%s"
+	schedulerWorkerRequests           string = "scheduler:worker:requests:%s"
+	schedulerWorkerIndex              string = "scheduler:worker:worker_index"
+	schedulerWorkerPoolIndex          string = "scheduler:worker:pool_index:%s"
+	schedulerWorkerMachineIndex       string = "scheduler:worker:machine_index:%s"
+	schedulerWorkerState              string = "scheduler:worker:state:%s"
+	schedulerContainerConfig          string = "scheduler:container:config:%s"
+	schedulerContainerState           string = "scheduler:container:state:%s"
+	schedulerContainerAddress         string = "scheduler:container:container_addr:%s"
+	schedulerContainerAddressMap      string = "scheduler:container:container_addr_map:%s"
+	schedulerBackendRoute             string = "scheduler:route:%s"
+	schedulerBackendRouteIndex        string = "scheduler:route:index:%s"
+	schedulerBackendRouteMachine      string = "scheduler:route:machine:{%s}:%s:%s"
+	schedulerBackendRouteMachineRev   string = "scheduler:route:machine:{%s}:%s:%s:rev"
+	schedulerBackendRouteMachineID    string = "scheduler:route:machine_id:{%s}"
+	schedulerBackendRouteMachineIDRev string = "scheduler:route:machine_id:{%s}:rev"
+	schedulerContainerRequestStatus   string = "scheduler:container:request_status:%s"
+	schedulerContainerIndex           string = "scheduler:container:index:%s"
+	schedulerContainerWorkerIndex     string = "scheduler:container:worker:index:%s"
+	schedulerContainerWorkspaceIndex  string = "scheduler:container:workspace:index:%s"
+	schedulerWorkerAddress            string = "scheduler:container:worker_addr:%s"
+	schedulerContainerLock            string = "scheduler:container:lock:%s"
+	schedulerContainerExitCode        string = "scheduler:container:exit_code:%s"
+	schedulerCheckpointState          string = "scheduler:checkpoint_state:%s:%s"
+	schedulerServeLock                string = "scheduler:serve:lock:%s:%s"
+	schedulerStubState                string = "scheduler:stub:state:%s"
 )
 
 var (
@@ -223,6 +225,14 @@ func (rk *redisKeys) SchedulerBackendRouteMachineIndex(workspaceID, poolName, ma
 
 func (rk *redisKeys) SchedulerBackendRouteMachineRevision(workspaceID, poolName, machineID string) string {
 	return fmt.Sprintf(schedulerBackendRouteMachineRev, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteMachineIDIndex(machineID string) string {
+	return fmt.Sprintf(schedulerBackendRouteMachineID, machineID)
+}
+
+func (rk *redisKeys) SchedulerBackendRouteMachineIDRevision(machineID string) string {
+	return fmt.Sprintf(schedulerBackendRouteMachineIDRev, machineID)
 }
 
 func (rk *redisKeys) SchedulerContainerRequestStatus(containerId string) string {

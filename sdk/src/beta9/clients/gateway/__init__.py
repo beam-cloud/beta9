@@ -753,6 +753,7 @@ class MarketplaceListing(betterproto.Message):
     machine_count: int = betterproto.uint32_field(13)
     ready_machine_count: int = betterproto.uint32_field(14)
     region: str = betterproto.string_field(15)
+    runtime: str = betterproto.string_field(16)
 
 
 @dataclass(eq=False, repr=False)
@@ -790,6 +791,11 @@ class CreateMarketplaceListingRequest(betterproto.Message):
     preemptible: bool = betterproto.bool_field(5)
     public: bool = betterproto.bool_field(6)
     region: str = betterproto.string_field(7)
+    pool_name: str = betterproto.string_field(8)
+    """
+    Optional pool the listing's machines join. Reusing a pool across listings
+     shares machine caches; defaults to a name derived from the GPU type.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -1181,7 +1187,8 @@ class AgentWorkerSlot(betterproto.Message):
     mode: str = betterproto.string_field(14)
     """
     Pool mode ("private" / "marketplace") and the container runtime the
-     worker must run with. Marketplace slots require gvisor isolation.
+     worker must run with. Marketplace slots prefer gVisor but can fall back
+     to runc for GPU families that are not compatible with gVisor GPU support.
     """
 
     container_runtime: str = betterproto.string_field(15)

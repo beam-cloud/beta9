@@ -44,6 +44,7 @@ type agentMachineWorker struct {
 	gpuCount             uint32
 	poolName             string
 	machineID            string
+	marketplaceListingID string
 	requiresPoolSelector bool
 	priority             int32
 	preemptable          bool
@@ -406,6 +407,7 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		gpuCount:             machine.GPUCount,
 		poolName:             wpc.name,
 		machineID:            machine.MachineID,
+		marketplaceListingID: machine.MarketplaceListingID,
 		requiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
 		priority:             wpc.workerPoolConfig.Priority,
 		preemptable:          wpc.workerPoolConfig.Preemptable,
@@ -427,6 +429,7 @@ func (m agentMachineWorker) worker() *types.Worker {
 		Gpu:                  m.gpu,
 		PoolName:             m.poolName,
 		MachineId:            m.machineID,
+		MarketplaceListingID: m.marketplaceListingID,
 		RequiresPoolSelector: m.requiresPoolSelector,
 		Priority:             m.priority,
 		Preemptable:          m.preemptable,

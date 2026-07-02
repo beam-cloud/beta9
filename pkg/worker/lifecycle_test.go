@@ -199,6 +199,29 @@ func TestGetContainerEnvironmentUsesGatewayConfigFallback(t *testing.T) {
 	require.Equal(t, "user-token", envMap["BETA9_TOKEN"])
 }
 
+func TestApplyRuntimeEnvironmentOverridesClampsNvidiaCapabilitiesForGVisorGPU(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+	env := worker.applyRuntimeEnvironmentOverrides(
+		[]string{"NVIDIA_DRIVER_CAPABILITIES=all", "OTHER=value"},
+		&types.ContainerRequest{Gpu: "V100", GpuCount: 1},
+	)
+	envMap := envListToMap(env)
+
+	require.Equal(t, gvisorNvidiaDriverCapabilities, envMap["NVIDIA_DRIVER_CAPABILITIES"])
+	require.Equal(t, "value", envMap["OTHER"])
+}
+
+func TestApplyRuntimeEnvironmentOverridesLeavesRuncNvidiaCapabilities(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	env := worker.applyRuntimeEnvironmentOverrides(
+		[]string{"NVIDIA_DRIVER_CAPABILITIES=all"},
+		&types.ContainerRequest{Gpu: "V100", GpuCount: 1},
+	)
+	envMap := envListToMap(env)
+
+	require.Equal(t, "all", envMap["NVIDIA_DRIVER_CAPABILITIES"])
+}
+
 func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	containerID := "container-route"
 	repoClient := &fakeContainerRepoClient{}

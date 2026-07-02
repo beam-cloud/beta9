@@ -56,6 +56,7 @@ type ContainerRepository interface {
 	SetBackendRoute(ctx context.Context, route types.BackendRoute) error
 	GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error)
 	ListBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) ([]types.BackendRoute, error)
+	ListBackendRoutesByMachineID(ctx context.Context, machineID string) ([]types.BackendRoute, error)
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error

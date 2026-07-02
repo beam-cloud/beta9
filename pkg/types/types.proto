@@ -251,6 +251,7 @@ message Worker {
   string build_version = 16;
   repeated Container active_containers = 17;
   string runtime = 18;
+  string marketplace_listing_id = 19;
 }
 
 message WorkerPoolState {

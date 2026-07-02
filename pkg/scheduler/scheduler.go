@@ -208,7 +208,7 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 	}
 	if state.Mode == string(types.PoolModeMarketplace) {
 		config.Mode = types.PoolModeMarketplace
-		config.ContainerRuntime = types.ContainerRuntimeGvisor.String()
+		config.ContainerRuntime = marketplacePoolRuntime(state)
 		config.RequiresPoolSelector = false
 		config.Priority = int32(100)
 		config.Preemptable = state.Preemptible
@@ -227,6 +227,13 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		}
 	}
 	return config
+}
+
+func marketplacePoolRuntime(state *compute.PoolState) string {
+	if state != nil && state.Config != nil && len(state.Config.Gpu) > 0 {
+		return types.MarketplaceContainerRuntimeForGPU(state.Config.Gpu[0])
+	}
+	return types.ContainerRuntimeGvisor.String()
 }
 
 func firstNonEmpty(values ...string) string {
@@ -523,11 +530,13 @@ func (s *Scheduler) annotateMarketplacePlacement(worker *types.Worker, request *
 	}
 
 	request.AllowMarketplace = true
-	request.MarketplaceListingID = pool.Config.MarketplaceListingID
+	// Prefer the worker's own listing: pools can be shared by several listings,
+	// and each machine joined through exactly one of them.
+	request.MarketplaceListingID = firstNonEmpty(worker.MarketplaceListingID, pool.Config.MarketplaceListingID)
 	request.MarketplaceSellerID = pool.Config.MarketplaceSellerID
 	request.MarketplacePoolName = worker.PoolName
 	request.MarketplaceMachineID = worker.MachineId
-	request.MarketplaceRuntime = firstNonEmpty(pool.Config.ContainerRuntime, types.ContainerRuntimeGvisor.String())
+	request.MarketplaceRuntime = firstNonEmpty(worker.Runtime, pool.Config.ContainerRuntime, types.MarketplaceContainerRuntimeForGPU(worker.Gpu))
 }
 
 func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, attrs map[string]string) {

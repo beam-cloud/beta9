@@ -29,11 +29,19 @@ func MarketplaceListingID(workspaceID, displayName string) string {
 	return shortComputeID("marketplace\x00" + workspaceID + "\x00" + displayName + "\x00" + fmt.Sprintf("%d", time.Now().UnixNano()))
 }
 
-func MarketplacePoolName(listingID string) string {
-	if listingID = strings.TrimSpace(listingID); listingID != "" {
-		return "marketplace-" + listingID
+// MarketplacePoolName builds the pool name behind a marketplace listing from a
+// seller-provided name or the listing's GPU type (e.g. "marketplace-a100").
+// Pool names feed cache locality keys, so they are stable and human-readable;
+// sellers can point multiple listings at one pool to share machine caches.
+func MarketplacePoolName(slug string) string {
+	slug = strings.Trim(strings.TrimPrefix(cleanNodeNamePart(slug), "marketplace"), "-")
+	if slug == "" {
+		return ""
 	}
-	return ""
+	if len(slug) > 40 {
+		slug = strings.Trim(slug[:40], "-")
+	}
+	return "marketplace-" + slug
 }
 
 func AgentMachineWorkerID(machineID string) string {

@@ -763,6 +763,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
+	env = s.applyRuntimeEnvironmentOverrides(env, request)
 
 	// Environment is already assembled in getContainerEnvironment (includes InitialSpec.Env if present)
 	spec.Process.Env = env

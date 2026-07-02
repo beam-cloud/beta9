@@ -2330,7 +2330,7 @@
         },
         "mode": {
           "type": "string",
-          "description": "Pool mode (\"private\" / \"marketplace\") and the container runtime the\nworker must run with. Marketplace slots require gvisor isolation."
+          "description": "Pool mode (\"private\" / \"marketplace\") and the container runtime the\nworker must run with. Marketplace slots prefer gVisor but can fall back\nto runc for GPU families that are not compatible with gVisor GPU support."
         },
         "containerRuntime": {
           "type": "string"
@@ -2612,6 +2612,10 @@
         },
         "region": {
           "type": "string"
+        },
+        "poolName": {
+          "type": "string",
+          "description": "Optional pool the listing's machines join. Reusing a pool across listings\nshares machine caches; defaults to a name derived from the GPU type."
         }
       }
     },
@@ -3997,6 +4001,9 @@
         },
         "region": {
           "type": "string"
+        },
+        "runtime": {
+          "type": "string"
         }
       }
     },
@@ -5078,6 +5085,9 @@
           }
         },
         "runtime": {
+          "type": "string"
+        },
+        "marketplaceListingId": {
           "type": "string"
         }
       }

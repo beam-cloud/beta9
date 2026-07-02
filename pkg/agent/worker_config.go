@@ -314,15 +314,14 @@ func slotPoolMode(slot *pb.AgentWorkerSlot) string {
 }
 
 // slotContainerRuntime returns the runtime the gateway assigned to this slot.
-// Marketplace slots run gvisor unconditionally — buyer workloads on seller
-// hardware must be isolated, so the agent enforces the invariant locally
-// rather than trusting whatever runtime the gateway sent.
+// Marketplace listings can fall back to runc for GPU families that do not run
+// correctly under gVisor; the listing and offer surfaces expose that runtime.
 func slotContainerRuntime(slot *pb.AgentWorkerSlot) string {
-	if slotPoolMode(slot) == string(types.PoolModeMarketplace) {
-		return types.ContainerRuntimeGvisor.String()
-	}
 	if slot != nil && slot.ContainerRuntime != "" {
 		return slot.ContainerRuntime
+	}
+	if slotPoolMode(slot) == string(types.PoolModeMarketplace) {
+		return types.ContainerRuntimeGvisor.String()
 	}
 	return types.ContainerRuntimeRunc.String()
 }

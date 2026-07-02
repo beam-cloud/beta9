@@ -257,7 +257,7 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 
 	events := make(chan common.KeyEvent, 32)
 	if s.keyEventManager != nil {
-		routeRevisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+		routeRevisionKey := agentRouteRevisionKey(agentState)
 		if err := s.keyEventManager.ListenForPublishedPattern(ctx, routeRevisionKey, events); err != nil {
 			return err
 		}
@@ -338,19 +338,52 @@ func coalesceAgentStreamEvents(ctx context.Context, events <-chan common.KeyEven
 }
 
 func (s *Service) agentRoutesForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentRoute, error) {
-	routes, err := s.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+	routes, err := s.listAgentRoutesForMachine(ctx, agentState)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]*pb.AgentRoute, 0, len(routes))
 	for _, route := range routes {
+		if !agentCanManageRoute(agentState, route) {
+			continue
+		}
 		if route.State == types.BackendRouteStateClosing {
 			continue
 		}
 		out = append(out, agentRouteToProto(route))
 	}
 	return out, nil
+}
+
+func (s *Service) listAgentRoutesForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]types.BackendRoute, error) {
+	if agentMarketplaceMode(agentState) {
+		return s.containerRepo.ListBackendRoutesByMachineID(ctx, agentState.MachineID)
+	}
+	return s.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+}
+
+func agentRouteRevisionKey(agentState *model.AgentTokenState) string {
+	if agentMarketplaceMode(agentState) {
+		return common.RedisKeys.SchedulerBackendRouteMachineIDRevision(agentState.MachineID)
+	}
+	return common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+}
+
+func agentMarketplaceMode(agentState *model.AgentTokenState) bool {
+	return agentState != nil && agentState.Mode == string(types.PoolModeMarketplace)
+}
+
+func agentCanManageRoute(agentState *model.AgentTokenState, route types.BackendRoute) bool {
+	if agentState == nil {
+		return false
+	}
+	if agentMarketplaceMode(agentState) {
+		return route.MachineID == agentState.MachineID && route.PoolName == agentState.PoolName
+	}
+	return route.WorkspaceID == agentState.WorkspaceID &&
+		route.PoolName == agentState.PoolName &&
+		route.MachineID == agentState.MachineID
 }
 
 func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
@@ -503,7 +536,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		PoolName:                  agentState.PoolName,
 		MachineID:                 agentState.MachineID,
 		Mode:                      firstNonEmpty(agentState.Mode, string(types.PoolModePrivate)),
-		ContainerRuntime:          agentWorkerRuntime(agentState),
+		ContainerRuntime:          agentWorkerRuntime(agentState, worker),
 		CPU:                       worker.TotalCpu,
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
@@ -517,23 +550,37 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 }
 
 // agentWorkerRuntime picks the container runtime for an agent worker slot.
-// Marketplace machines run untrusted buyer workloads on seller hardware, so
-// they must use gvisor; private machines keep the runc default.
-func agentWorkerRuntime(agentState *model.AgentTokenState) string {
+// Marketplace machines prefer gVisor, but GPU families without gVisor CUDA
+// support fall back to runc and are advertised as such.
+func agentWorkerRuntime(agentState *model.AgentTokenState, worker *types.Worker) string {
 	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
-		return types.ContainerRuntimeGvisor.String()
+		return types.MarketplaceContainerRuntimeForGPU(agentWorkerGPU(agentState, worker))
 	}
 	return types.ContainerRuntimeRunc.String()
 }
 
+func agentWorkerGPU(agentState *model.AgentTokenState, worker *types.Worker) string {
+	if worker != nil && worker.Gpu != "" {
+		return worker.Gpu
+	}
+	if agentState != nil && len(agentState.GPUs) > 0 {
+		return agentState.GPUs[0]
+	}
+	return ""
+}
+
 func agentWorkerImage(config types.AppConfig) string {
+	return agentWorkerImageWithTag(config, config.Worker.ImageTag)
+}
+
+func agentWorkerImageWithTag(config types.AppConfig, tag string) string {
 	image := strings.TrimSuffix(config.Worker.ImageRegistry, "/")
 	if image != "" {
 		image += "/"
 	}
 	image += config.Worker.ImageName
-	if config.Worker.ImageTag != "" {
-		image += ":" + config.Worker.ImageTag
+	if tag != "" {
+		image += ":" + tag
 	}
 	return image
 }
@@ -568,7 +615,7 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 	if err != nil {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if route.WorkspaceID != agentState.WorkspaceID || route.PoolName != agentState.PoolName || route.MachineID != agentState.MachineID {
+	if !agentCanManageRoute(agentState, *route) {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: "route does not belong to this agent"}, nil
 	}
 

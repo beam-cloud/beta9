@@ -18,6 +18,8 @@ type gatewayContainerEnvironment struct {
 	httpPort string
 }
 
+const gvisorNvidiaDriverCapabilities = "compute,utility"
+
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
 	gatewayEnv := s.gatewayContainerEnvironment()
 
@@ -40,6 +42,16 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	}
 
 	return env
+}
+
+func (s *Worker) applyRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest) []string {
+	if request == nil || !request.RequiresGPU() || s == nil || s.runtime == nil {
+		return env
+	}
+	if s.runtime.Name() != types.ContainerRuntimeGvisor.String() {
+		return env
+	}
+	return upsertEnvVars(env, []string{"NVIDIA_DRIVER_CAPABILITIES=" + gvisorNvidiaDriverCapabilities})
 }
 
 func (s *Worker) gatewayContainerEnvironment() gatewayContainerEnvironment {

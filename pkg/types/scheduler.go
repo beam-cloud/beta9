@@ -65,6 +65,9 @@ type Worker struct {
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 	Runtime              string       `json:"runtime" redis:"runtime"`
+	// MarketplaceListingID attributes usage on this worker to the listing its
+	// machine joined through; pools can be shared by several listings.
+	MarketplaceListingID string `json:"marketplace_listing_id,omitempty" redis:"marketplace_listing_id"`
 }
 
 type WorkerKeepAlive struct {

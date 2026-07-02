@@ -15,7 +15,6 @@ import (
 const (
 	defaultMarketplacePriority    = int32(100)
 	defaultMarketplaceSource      = "operator"
-	defaultMarketplaceRuntime     = string(types.ContainerRuntimeGvisor)
 	marketplaceErrMissingAuth     = "missing workspace auth"
 	marketplaceErrListingNotFound = "listing not found"
 )
@@ -54,9 +53,12 @@ func (s *Service) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMar
 	}
 	now := time.Now().UTC()
 	listing.ID = model.MarketplaceListingID(authCtx.workspaceID, listing.DisplayName)
-	listing.PoolName = model.MarketplacePoolName(listing.ID)
+	listing.PoolName = model.MarketplacePoolName(firstNonEmpty(in.GetPoolName(), listing.GPU))
 	listing.CreatedAt = now
 	listing.UpdatedAt = now
+	if err := s.validateMarketplacePoolAssignment(ctx, listing); err != nil {
+		return &pb.CreateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
 	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID); err != nil {
 		return &pb.CreateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -68,12 +70,9 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 	if !authCtx.hasOwner() {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
-	listing, err := s.computeRepo.GetMarketplaceListing(ctx, authCtx.workspaceID, strings.TrimSpace(in.GetListingId()))
-	if err != nil {
-		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if listing == nil {
-		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrListingNotFound}, nil
+	listing, errMsg := s.marketplaceListing(ctx, authCtx.workspaceID, in.GetListingId())
+	if errMsg != "" {
+		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 
 	if err := applyMarketplaceListingUpdate(listing, in); err != nil {
@@ -100,19 +99,83 @@ func (s *Service) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMar
 	if listing == nil {
 		return &pb.DeleteMarketplaceListingResponse{Ok: true}, nil
 	}
-	if err := s.releasePrivatePoolMachines(ctx, authCtx.workspaceID, listing.PoolName); err != nil {
+	// A pool can back several listings (shared machine caches); only tear it
+	// down with the last listing that references it.
+	others, err := s.otherListingsSharingPool(ctx, listing)
+	if err != nil {
 		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if err := s.deletePrivatePoolState(ctx, authCtx.workspaceID, listing.PoolName); err != nil {
-		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
+	poolShared := len(others) > 0
+	if !poolShared {
+		if err := s.releasePrivatePoolMachines(ctx, authCtx.workspaceID, listing.PoolName); err != nil {
+			return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		if err := s.deletePrivatePoolState(ctx, authCtx.workspaceID, listing.PoolName); err != nil {
+			return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
 	}
 	if err := s.computeRepo.DeleteMarketplaceListing(ctx, authCtx.workspaceID, listing.ID); err != nil {
 		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if s.scheduler != nil {
+	if !poolShared && s.scheduler != nil {
 		s.scheduler.DeleteAgentPool(listing.PoolName)
 	}
 	return &pb.DeleteMarketplaceListingResponse{Ok: true}, nil
+}
+
+// marketplaceListing resolves a listing owned by the workspace, returning a
+// user-facing error message on failure. Shared by every listing-scoped RPC.
+func (s *Service) marketplaceListing(ctx context.Context, workspaceID, rawListingID string) (*model.MarketplaceListingState, string) {
+	listing, err := s.computeRepo.GetMarketplaceListing(ctx, workspaceID, strings.TrimSpace(rawListingID))
+	if err != nil {
+		return nil, err.Error()
+	}
+	if listing == nil {
+		return nil, marketplaceErrListingNotFound
+	}
+	return listing, ""
+}
+
+// otherListingsSharingPool returns the workspace's other listings that point at
+// the same pool as this one.
+func (s *Service) otherListingsSharingPool(ctx context.Context, listing *model.MarketplaceListingState) ([]*model.MarketplaceListingState, error) {
+	listings, err := s.computeRepo.ListMarketplaceListings(ctx, listing.SellerWorkspaceID, 0)
+	if err != nil {
+		return nil, err
+	}
+	shared := listings[:0]
+	for _, other := range listings {
+		if other != nil && other.ID != listing.ID && other.PoolName == listing.PoolName {
+			shared = append(shared, other)
+		}
+	}
+	return shared, nil
+}
+
+// validateMarketplacePoolAssignment guards the listing's pool choice: listings
+// sharing a pool must sell the same GPU type (the pool schedules as one GPU
+// class), and marketplace listings can never take over a non-marketplace pool.
+func (s *Service) validateMarketplacePoolAssignment(ctx context.Context, listing *model.MarketplaceListingState) error {
+	if listing.PoolName == "" {
+		return fmt.Errorf("pool name is required")
+	}
+	poolState, err := s.computeRepo.GetPoolState(ctx, listing.SellerWorkspaceID, listing.PoolName)
+	if err != nil {
+		return err
+	}
+	if poolState != nil && poolState.Mode != string(types.PoolModeMarketplace) {
+		return fmt.Errorf("pool %q is already used by a non-marketplace pool", listing.PoolName)
+	}
+	others, err := s.otherListingsSharingPool(ctx, listing)
+	if err != nil {
+		return err
+	}
+	for _, other := range others {
+		if other.GPU != listing.GPU {
+			return fmt.Errorf("pool %q hosts %s listings; pick a different pool for %s hardware", listing.PoolName, other.GPU, listing.GPU)
+		}
+	}
+	return nil
 }
 
 func (s *Service) ListMarketplaceListings(ctx context.Context, in *pb.ListMarketplaceListingsRequest) (*pb.ListMarketplaceListingsResponse, error) {
@@ -136,12 +199,9 @@ func (s *Service) GetMarketplaceJoinCommand(ctx context.Context, in *pb.GetMarke
 	if !authCtx.hasOwner() {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
-	listing, err := s.computeRepo.GetMarketplaceListing(ctx, authCtx.workspaceID, strings.TrimSpace(in.GetListingId()))
-	if err != nil {
-		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if listing == nil {
-		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: marketplaceErrListingNotFound}, nil
+	listing, errMsg := s.marketplaceListing(ctx, authCtx.workspaceID, in.GetListingId())
+	if errMsg != "" {
+		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 	if err := s.ensureMarketplacePoolState(ctx, listing, authCtx.ownerTokenID); err != nil {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -230,7 +290,7 @@ func marketplaceOfferProto(listing *model.MarketplaceListingState, stats marketp
 		Public:            listing.Public,
 		MachineCount:      stats.total,
 		ReadyMachineCount: stats.ready,
-		Runtime:           defaultMarketplaceRuntime,
+		Runtime:           marketplaceListingRuntime(listing),
 		Region:            listing.Region,
 		CpuCores:          stats.cpuCores,
 		MemoryMb:          stats.memoryMB,
@@ -246,12 +306,9 @@ func (s *Service) ListMarketplaceMachines(ctx context.Context, in *pb.ListMarket
 	if !authCtx.hasWorkspace() {
 		return &pb.ListMarketplaceMachinesResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
-	listing, err := s.computeRepo.GetMarketplaceListing(ctx, authCtx.workspaceID, strings.TrimSpace(in.GetListingId()))
-	if err != nil {
-		return &pb.ListMarketplaceMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if listing == nil {
-		return &pb.ListMarketplaceMachinesResponse{Ok: false, ErrMsg: marketplaceErrListingNotFound}, nil
+	listing, errMsg := s.marketplaceListing(ctx, authCtx.workspaceID, in.GetListingId())
+	if errMsg != "" {
+		return &pb.ListMarketplaceMachinesResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 	machines, err := s.computeRepo.ListAgentTokenStates(ctx, authCtx.workspaceID, listing.PoolName)
 	if err != nil {
@@ -368,7 +425,7 @@ func validateMarketplaceListing(listing *model.MarketplaceListingState) error {
 		return fmt.Errorf("unsupported listing status")
 	}
 	if listing.PoolName == "" && listing.ID != "" {
-		listing.PoolName = model.MarketplacePoolName(listing.ID)
+		listing.PoolName = model.MarketplacePoolName(firstNonEmpty(listing.GPU, listing.ID))
 	}
 	return nil
 }
@@ -450,6 +507,13 @@ func marketplacePoolConfig(listing *model.MarketplaceListingState) *pb.PoolConfi
 	}
 }
 
+func marketplaceListingRuntime(listing *model.MarketplaceListingState) string {
+	if listing == nil {
+		return types.ContainerRuntimeGvisor.String()
+	}
+	return types.MarketplaceContainerRuntimeForGPU(listing.GPU)
+}
+
 func (s *Service) createMarketplaceJoinTokenState(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID, ttlValue string) (string, *model.JoinTokenState, error) {
 	ttl, err := model.ParseTTL(ttlValue)
 	if err != nil {
@@ -500,6 +564,7 @@ func (s *Service) marketplaceListingToProto(ctx context.Context, listing *model.
 		Status:            listing.Status,
 		PoolName:          listing.PoolName,
 		Region:            listing.Region,
+		Runtime:           marketplaceListingRuntime(listing),
 		CreatedAt:         timestampOrNil(listing.CreatedAt),
 		UpdatedAt:         timestampOrNil(listing.UpdatedAt),
 		MachineCount:      stats.total,
@@ -519,6 +584,8 @@ func (s *Service) marketplaceOfferStats(ctx context.Context, listing *model.Mark
 	stats.total = uint32(len(machines))
 	now := time.Now()
 	reliabilitySum := float64(0)
+	readyMachineIDs := map[string]struct{}{}
+	metricFreeGPUCount := uint32(0)
 	for _, machine := range machines {
 		if machine == nil {
 			continue
@@ -528,6 +595,7 @@ func (s *Service) marketplaceOfferStats(ctx context.Context, listing *model.Mark
 			continue
 		}
 		stats.ready++
+		readyMachineIDs[machine.MachineID] = struct{}{}
 		if machine.CPUCount > stats.cpuCores {
 			stats.cpuCores = machine.CPUCount
 		}
@@ -537,12 +605,43 @@ func (s *Service) marketplaceOfferStats(ctx context.Context, listing *model.Mark
 		if diskGB := machine.Metrics.DiskTotalMB / 1024; diskGB > stats.diskGB {
 			stats.diskGB = diskGB
 		}
-		stats.freeGPUCount += machine.Metrics.FreeGPUCount
+		metricFreeGPUCount += machine.Metrics.FreeGPUCount
+	}
+	if freeGPUCount, ok := s.marketplaceWorkerFreeGPUCount(listing.PoolName, readyMachineIDs); ok {
+		stats.freeGPUCount = freeGPUCount
+	} else {
+		stats.freeGPUCount = metricFreeGPUCount
 	}
 	if stats.total > 0 {
 		stats.reliability = float32(reliabilitySum / float64(stats.total))
 	}
 	return stats
+}
+
+func (s *Service) marketplaceWorkerFreeGPUCount(poolName string, readyMachineIDs map[string]struct{}) (uint32, bool) {
+	if s == nil || s.workerRepo == nil || poolName == "" || len(readyMachineIDs) == 0 {
+		return 0, false
+	}
+	workers, err := s.workerRepo.GetAllWorkersInPool(poolName)
+	if err != nil {
+		return 0, false
+	}
+	var freeGPUCount uint32
+	matched := false
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		if _, ok := readyMachineIDs[worker.MachineId]; !ok {
+			continue
+		}
+		if worker.Status != "" && worker.Status != types.WorkerStatusAvailable {
+			continue
+		}
+		matched = true
+		freeGPUCount += worker.FreeGpuCount
+	}
+	return freeGPUCount, matched
 }
 
 // marketplaceMachineReliability scores a machine's current health in 0..1.

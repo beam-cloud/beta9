@@ -984,6 +984,7 @@ message MarketplaceListing {
   uint32 machine_count = 13;
   uint32 ready_machine_count = 14;
   string region = 15;
+  string runtime = 16;
 }
 
 message MarketplaceOffer {
@@ -1017,6 +1018,9 @@ message CreateMarketplaceListingRequest {
   bool preemptible = 5;
   bool public = 6;
   string region = 7;
+  // Optional pool the listing's machines join. Reusing a pool across listings
+  // shares machine caches; defaults to a name derived from the GPU type.
+  string pool_name = 8;
 }
 
 message CreateMarketplaceListingResponse {
@@ -1341,7 +1345,8 @@ message AgentWorkerSlot {
   uint32 network_slot_pool_size = 12;
   uint32 container_start_concurrency = 13;
   // Pool mode ("private" / "marketplace") and the container runtime the
-  // worker must run with. Marketplace slots require gvisor isolation.
+  // worker must run with. Marketplace slots prefer gVisor but can fall back
+  // to runc for GPU families that are not compatible with gVisor GPU support.
   string mode = 14;
   string container_runtime = 15;
 }
