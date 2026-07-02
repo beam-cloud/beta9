@@ -32,6 +32,35 @@ func TestAuthInterceptorLetsCacheRepositoryMethodsSelfAuthenticate(t *testing.T)
 	}
 }
 
+// Marketplace browse (search + direct share links) is public; every other
+// marketplace RPC (seller/management) still requires interceptor auth.
+func TestAuthInterceptorAllowsPublicMarketplaceBrowse(t *testing.T) {
+	interceptor := NewAuthInterceptor(types.AppConfig{}, nil, nil)
+
+	for _, method := range []string{
+		pb.GatewayService_ListMarketplaceOffers_FullMethodName,
+		pb.GatewayService_GetMarketplaceOffer_FullMethodName,
+	} {
+		if interceptor.isAuthRequired(method) {
+			t.Fatalf("method %s requires auth, want public marketplace browse", method)
+		}
+	}
+
+	for _, method := range []string{
+		pb.GatewayService_ListMarketplaceListings_FullMethodName,
+		pb.GatewayService_CreateMarketplaceListing_FullMethodName,
+		pb.GatewayService_UpdateMarketplaceListing_FullMethodName,
+		pb.GatewayService_DeleteMarketplaceListing_FullMethodName,
+		pb.GatewayService_GetMarketplaceJoinCommand_FullMethodName,
+		pb.GatewayService_ListMarketplaceMachines_FullMethodName,
+		pb.GatewayService_ListMachineContainers_FullMethodName,
+	} {
+		if !interceptor.isAuthRequired(method) {
+			t.Fatalf("method %s does not require auth, want seller RPCs gated", method)
+		}
+	}
+}
+
 func TestAuthInterceptorStillRequiresAuthForNonCacheRepositoryMethods(t *testing.T) {
 	interceptor := NewAuthInterceptor(types.AppConfig{}, nil, nil)
 

@@ -6,12 +6,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
+	"sigs.k8s.io/yaml"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
+	cdispecs "tags.cncf.io/container-device-interface/specs-go"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -19,8 +22,10 @@ import (
 )
 
 const (
-	nvidiaDeviceKindPrefix string = "nvidia.com/gpu"
-	nvidiaFirstDevice      string = nvidiaDeviceKindPrefix + "=0"
+	nvidiaDeviceKindPrefix     string = "nvidia.com/gpu"
+	nvidiaFirstDevice          string = nvidiaDeviceKindPrefix + "=0"
+	nvidiaCDIHookBinary        string = "nvidia-cdi-hook"
+	nvidiaCDIUpdateLdcacheHook string = "update-ldcache"
 )
 
 var (
@@ -29,6 +34,7 @@ var (
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 	// Keep generated CDI specs isolated from provider or host-managed CDI specs.
 	nvidiaCDIConfigPaths    []string = []string{"/var/run/beam/cdi/nvidia.yaml", "/var/run/cdi/nvidia.yaml", "/etc/cdi/nvidia.yaml"}
+	nvidiaCDIMountDenylist  []string = []string{"/run/nvidia-persistenced/socket", "/var/run/nvidia-persistenced/socket"}
 	runNvidiaCTKCDIGenerate          = func(outputPath string) ([]byte, error) {
 		return exec.Command("nvidia-ctk", "cdi", "generate", "--output", outputPath).CombinedOutput()
 	}
@@ -44,7 +50,9 @@ type GPUManager interface {
 	AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error)
 	GetContainerGPUDevices(containerId string) []int
 	UnassignGPUDevices(containerId string)
+	CDIDevices(assignedDevices []int) []string
 	InjectEnvVars(env []string) []string
+	InjectAssignedEnvVars(env []string, assignedDevices []int) []string
 	InjectMounts(mounts []specs.Mount) []specs.Mount
 }
 
@@ -90,6 +98,10 @@ func ensureNvidiaCDIConfig() error {
 			failures = append(failures, fmt.Sprintf("%s: %s", path, nvidiaCDICommandError(output, err)))
 			continue
 		}
+		if err := sanitizeNvidiaCDIConfig(path); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: sanitize generated spec: %v", path, err))
+			continue
+		}
 
 		if err := configureNvidiaCDICache(path); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: configure cache: %v", path, err))
@@ -108,6 +120,78 @@ func ensureNvidiaCDIConfig() error {
 	}
 
 	return fmt.Errorf("%s", strings.Join(failures, "; "))
+}
+
+func sanitizeNvidiaCDIConfig(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var spec cdispecs.Spec
+	if err := yaml.Unmarshal(data, &spec); err != nil {
+		return err
+	}
+
+	changed := sanitizeNvidiaCDIContainerEdits(&spec.ContainerEdits)
+	for i := range spec.Devices {
+		if sanitizeNvidiaCDIContainerEdits(&spec.Devices[i].ContainerEdits) {
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	output, err := yaml.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, output, 0644)
+}
+
+func sanitizeNvidiaCDIContainerEdits(edits *cdispecs.ContainerEdits) bool {
+	if edits == nil {
+		return false
+	}
+
+	changed := false
+
+	if len(edits.Mounts) > 0 {
+		count := len(edits.Mounts)
+		edits.Mounts = slices.DeleteFunc(edits.Mounts, isDeniedNvidiaCDIMount)
+		changed = changed || len(edits.Mounts) != count
+	}
+
+	if len(edits.Hooks) > 0 {
+		count := len(edits.Hooks)
+		edits.Hooks = slices.DeleteFunc(edits.Hooks, isDeniedNvidiaCDIHook)
+		changed = changed || len(edits.Hooks) != count
+	}
+
+	return changed
+}
+
+func isDeniedNvidiaCDIMount(mount *cdispecs.Mount) bool {
+	if mount == nil {
+		return false
+	}
+	for _, denied := range nvidiaCDIMountDenylist {
+		if mount.HostPath == denied || mount.ContainerPath == denied {
+			return true
+		}
+	}
+	return false
+}
+
+func isDeniedNvidiaCDIHook(hook *cdispecs.Hook) bool {
+	if hook == nil || hook.HookName != cdi.CreateContainerHook {
+		return false
+	}
+	if filepath.Base(hook.Path) != nvidiaCDIHookBinary {
+		return false
+	}
+	return slices.Contains(hook.Args, nvidiaCDIUpdateLdcacheHook)
 }
 
 func nvidiaCDICommandError(output []byte, err error) string {
@@ -183,6 +267,76 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 	c.gpuAllocationMap.Set(containerId, devicesToAllocate)
 
 	return devicesToAllocate, nil
+}
+
+func (c *ContainerNvidiaManager) CDIDevices(assignedDevices []int) []string {
+	devices := make([]string, 0, len(assignedDevices))
+	for _, device := range assignedDevices {
+		devices = append(devices, fmt.Sprintf("%s=%s", nvidiaDeviceKindPrefix, c.deviceSelector(device)))
+	}
+	return devices
+}
+
+func (c *ContainerNvidiaManager) InjectAssignedEnvVars(env []string, assignedDevices []int) []string {
+	visibleDevices := c.assignedVisibleDevices(assignedDevices)
+	if visibleDevices == "" {
+		return env
+	}
+
+	return upsertEnvVars(env, []string{
+		types.NvidiaVisibleDevicesEnv + "=" + visibleDevices,
+		types.WorkerGPUDevicesEnv + "=" + visibleDevices,
+	})
+}
+
+func (c *ContainerNvidiaManager) assignedVisibleDevices(assignedDevices []int) string {
+	devices := make([]string, 0, len(assignedDevices))
+	for _, device := range assignedDevices {
+		devices = append(devices, c.deviceSelector(device))
+	}
+	return strings.Join(devices, ",")
+}
+
+func (c *ContainerNvidiaManager) deviceSelector(device int) string {
+	index := strconv.Itoa(device)
+	uuid, ok := c.infoClient.DeviceUUID(device)
+	if !ok {
+		return index
+	}
+	if visibleDeviceMatchesUUID(c.resolvedVisibleDevices, uuid) {
+		return uuid
+	}
+	return index
+}
+
+func visibleDeviceMatchesUUID(visibleDevices, uuid string) bool {
+	for _, token := range strings.Split(visibleDevices, ",") {
+		if strings.TrimSpace(token) == uuid {
+			return true
+		}
+	}
+	return false
+}
+
+func upsertEnvVars(env []string, updates []string) []string {
+	for _, update := range updates {
+		name, _, ok := strings.Cut(update, "=")
+		if !ok {
+			continue
+		}
+		replaced := false
+		for i, existing := range env {
+			existingName, _, ok := strings.Cut(existing, "=")
+			if ok && existingName == name {
+				env[i] = update
+				replaced = true
+			}
+		}
+		if !replaced {
+			env = append(env, update)
+		}
+	}
+	return env
 }
 
 func (c *ContainerNvidiaManager) InjectEnvVars(env []string) []string {

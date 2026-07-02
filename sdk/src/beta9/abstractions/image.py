@@ -2,7 +2,17 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
+from typing import (
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    TypedDict,
+    Union,
+)
 
 from beta9.clients.gateway import GatewayServiceStub
 from beta9.sync import FileSyncer
@@ -429,19 +439,23 @@ class Image(BaseAbstraction):
         image.dockerfile = dockerfile
         return image
 
-    def sync_files(self, context_dir: Optional[str] = None, cache_object_id: bool = True) -> None:
+    def sync_files(
+        self, context_dir: Optional[str] = None, cache_object_id: bool = True
+    ) -> None:
         syncer = FileSyncer(
-            gateway_stub=self.gateway_stub, root_dir=context_dir or os.path.dirname("./")
+            gateway_stub=self.gateway_stub,
+            root_dir=context_dir or os.path.dirname("./"),
         )
         result = syncer.sync(
-            include_patterns=self.include_files_patterns, cache_object_id=cache_object_id
+            include_patterns=self.include_files_patterns,
+            cache_object_id=cache_object_id,
         )
         if not result.success:
             raise ValueError("Failed to sync context directory.")
 
         self.build_ctx_object = result.object_id
 
-    def _cache_key(self) -> str:
+    def _cache_key(self, target_platform: str = "") -> str:
         spec = {
             "python_packages": self.python_packages,
             "python_version": self.python_version,
@@ -456,6 +470,7 @@ class Image(BaseAbstraction):
             "ignore_python": self.ignore_python,
             "image_id": self.image_id,
             "include_files_patterns": self.include_files_patterns,
+            "target_platform": target_platform,
         }
         return json.dumps(spec, sort_keys=True, separators=(",", ":"))
 
@@ -463,13 +478,19 @@ class Image(BaseAbstraction):
         result = _image_build_cache.get(cache_key)
         return result if isinstance(result, ImageBuildResult) else None
 
-    def _remember_build_result(self, cache_key: str, result: ImageBuildResult) -> None:
+    def _remember_build_result(
+        self, cache_key: str, result: ImageBuildResult, target_platform: str = ""
+    ) -> None:
         if not result.success:
             return
 
         self.image_id = result.image_id
         self.python_version = result.python_version
-        _image_build_cache.set(cache_key, result, aliases=(self._cache_key(),))
+        _image_build_cache.set(
+            cache_key,
+            result,
+            aliases=(self._cache_key(target_platform=target_platform),),
+        )
 
     @classmethod
     def from_registry(
@@ -541,7 +562,7 @@ class Image(BaseAbstraction):
             image_id=image_id,
         )
 
-    def exists(self) -> Tuple[bool, ImageBuildResult]:
+    def exists(self, target_platform: str = "") -> Tuple[bool, ImageBuildResult]:
         with sdk_timing("image.verify_build"):
             r: VerifyImageBuildResponse = self.stub.verify_image_build(
                 VerifyImageBuildRequest(
@@ -558,18 +579,22 @@ class Image(BaseAbstraction):
                     gpu=self.gpu,
                     ignore_python=self.ignore_python,
                     image_id=self.image_id,
+                    target_platform=target_platform,
                 )
             )
 
         return (
             r.exists,
             ImageBuildResult(
-                success=r.exists, image_id=r.image_id, python_version=self.python_version
+                success=r.exists,
+                image_id=r.image_id,
+                python_version=self.python_version,
             ),
         )
 
     def build(
         self,
+        target_platform: str = "",
     ) -> ImageBuildResult:
         if is_notebook_env():
             if LOCAL_PYTHON_VERSION != self.python_version:
@@ -578,14 +603,16 @@ class Image(BaseAbstraction):
                 )
 
         if self.base_image != "" and self.dockerfile != "":
-            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
+            raise ValueError(
+                "Cannot use from_dockerfile and provide a custom base image."
+            )
 
         if not self.dockerfile and len(self.include_files_patterns) > 0:
             # We don't want to cache the object id for a regular build context, because it doesn't upload all files
             # Compared to a custom Dockerfile build context, which does upload all files.
             self.sync_files(cache_object_id=False)
 
-        cache_key = self._cache_key()
+        cache_key = self._cache_key(target_platform=target_platform)
         if cached_result := self._cached_build_result(cache_key):
             terminal.header("Using cached image")
             self.image_id = cached_result.image_id
@@ -594,7 +621,7 @@ class Image(BaseAbstraction):
 
         terminal.header("Building image")
 
-        exists, exists_response = self.exists()
+        exists, exists_response = self.exists(target_platform=target_platform)
         if exists:
             terminal.header("Using cached image")
             result = ImageBuildResult(
@@ -602,7 +629,9 @@ class Image(BaseAbstraction):
                 image_id=exists_response.image_id,
                 python_version=exists_response.python_version,
             )
-            self._remember_build_result(cache_key, result)
+            self._remember_build_result(
+                cache_key, result, target_platform=target_platform
+            )
             return result
 
         with sdk_timing("image.build_stream"):
@@ -622,6 +651,7 @@ class Image(BaseAbstraction):
                         secrets=self.secrets,
                         gpu=self.gpu,
                         ignore_python=self.ignore_python,
+                        target_platform=target_platform,
                     )
                 ):
                     if r.warning:
@@ -643,7 +673,7 @@ class Image(BaseAbstraction):
             image_id=last_response.image_id,
             python_version=last_response.python_version,
         )
-        self._remember_build_result(cache_key, result)
+        self._remember_build_result(cache_key, result, target_platform=target_platform)
         return result
 
     def get_credentials_from_env(self) -> Dict[str, str]:
@@ -694,13 +724,17 @@ class Image(BaseAbstraction):
 
         # Check if we were given a .txt requirement file
         if isinstance(packages, str):
-            packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+            packages = self._sanitize_python_packages(
+                self._load_requirements_file(packages)
+            )
 
         for package in packages:
             self.build_steps.append(BuildStep(command=package, type="micromamba"))
 
         for channel in channels:
-            self.build_steps.append(BuildStep(command=f"-c {channel}", type="micromamba"))
+            self.build_steps.append(
+                BuildStep(command=f"-c {channel}", type="micromamba")
+            )
 
         return self
 
@@ -737,7 +771,9 @@ class Image(BaseAbstraction):
 
         if isinstance(packages, str):
             try:
-                packages = self._sanitize_python_packages(self._load_requirements_file(packages))
+                packages = self._sanitize_python_packages(
+                    self._load_requirements_file(packages)
+                )
             except FileNotFoundError:
                 raise ValueError(
                     f"Could not find valid requirements.txt file at {packages}. Libraries must be specified as a list of valid package names or a path to a requirements.txt file."
@@ -818,7 +854,9 @@ class Image(BaseAbstraction):
             if not key:
                 raise ValueError(f"Environment variable key cannot be empty: {env_var}")
             if not value:
-                raise ValueError(f"Environment variable value cannot be empty: {env_var}")
+                raise ValueError(
+                    f"Environment variable value cannot be empty: {env_var}"
+                )
             if "=" in value:
                 raise ValueError(
                     f"Environment variable cannot contain multiple '=' characters: {env_var}"

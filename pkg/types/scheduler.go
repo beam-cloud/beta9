@@ -218,6 +218,7 @@ type BuildOptions struct {
 	BuildCtxObject   *string  `json:"build_context"`
 	SourceImageCreds string   `json:"source_image_creds"`
 	BuildSecrets     []string `json:"build_secrets"`
+	TargetPlatform   string   `json:"target_platform"`
 }
 
 // @go2proto
@@ -254,6 +255,12 @@ type ContainerRequest struct {
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
+	AllowMarketplace         bool            `json:"allow_marketplace"`
+	MarketplaceListingID     string          `json:"marketplace_listing_id,omitempty"`
+	MarketplaceSellerID      string          `json:"marketplace_seller_id,omitempty"`
+	MarketplacePoolName      string          `json:"marketplace_pool_name,omitempty"`
+	MarketplaceMachineID     string          `json:"marketplace_machine_id,omitempty"`
+	MarketplaceRuntime       string          `json:"marketplace_runtime,omitempty"`
 }
 
 type ContainerNetworkPolicy string
@@ -511,6 +518,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 			BuildCtxObject:   buildCtxObject,
 			SourceImageCreds: c.BuildOptions.SourceImageCreds,
 			BuildSecrets:     c.BuildOptions.BuildSecrets,
+			TargetPlatform:   c.BuildOptions.TargetPlatform,
 		}
 	}
 
@@ -548,8 +556,14 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		BlockNetwork:             c.BlockNetwork,
 		AllowList:                c.AllowList,
 		DockerEnabled:            c.DockerEnabled,
+		AllowMarketplace:         c.AllowMarketplace,
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
+		MarketplaceListingId:     c.MarketplaceListingID,
+		MarketplaceSellerId:      c.MarketplaceSellerID,
+		MarketplacePoolName:      c.MarketplacePoolName,
+		MarketplaceMachineId:     c.MarketplaceMachineID,
+		MarketplaceRuntime:       c.MarketplaceRuntime,
 	}
 }
 
@@ -567,6 +581,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 			BuildCtxObject:   getPointerOrNil(in.BuildOptions.BuildCtxObject),
 			SourceImageCreds: in.BuildOptions.SourceImageCreds,
 			BuildSecrets:     in.BuildOptions.BuildSecrets,
+			TargetPlatform:   in.BuildOptions.TargetPlatform,
 		}
 	}
 
@@ -604,8 +619,14 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		BlockNetwork:             in.BlockNetwork,
 		AllowList:                in.AllowList,
 		DockerEnabled:            in.DockerEnabled,
+		AllowMarketplace:         in.AllowMarketplace,
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
+		MarketplaceListingID:     in.MarketplaceListingId,
+		MarketplaceSellerID:      in.MarketplaceSellerId,
+		MarketplacePoolName:      in.MarketplacePoolName,
+		MarketplaceMachineID:     in.MarketplaceMachineId,
+		MarketplaceRuntime:       in.MarketplaceRuntime,
 	}
 }
 

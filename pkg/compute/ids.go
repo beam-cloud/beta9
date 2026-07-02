@@ -25,6 +25,17 @@ func ManagedMachineID(workspaceID, poolName, seed string) string {
 	return shortComputeID("managed\x00" + workspaceID + "\x00" + poolName + "\x00" + seed)
 }
 
+func MarketplaceListingID(workspaceID, displayName string) string {
+	return shortComputeID("marketplace\x00" + workspaceID + "\x00" + displayName + "\x00" + fmt.Sprintf("%d", time.Now().UnixNano()))
+}
+
+func MarketplacePoolName(listingID string) string {
+	if listingID = strings.TrimSpace(listingID); listingID != "" {
+		return "marketplace-" + listingID
+	}
+	return ""
+}
+
 func AgentMachineWorkerID(machineID string) string {
 	return shortComputeID(machineID)
 }

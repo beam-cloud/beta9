@@ -437,9 +437,10 @@ type FailoverConfig struct {
 type PoolMode string
 
 var (
-	PoolModeLocal    PoolMode = "local"
-	PoolModeExternal PoolMode = "external"
-	PoolModePrivate  PoolMode = "private"
+	PoolModeLocal       PoolMode = "local"
+	PoolModeExternal    PoolMode = "external"
+	PoolModePrivate     PoolMode = "private"
+	PoolModeMarketplace PoolMode = "marketplace"
 )
 
 type WorkerPoolConfig struct {
@@ -458,6 +459,8 @@ type WorkerPoolConfig struct {
 	RequiresPoolSelector      bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority                  int32                             `key:"priority" json:"priority"`
 	Preemptable               bool                              `key:"preemptable" json:"preemptable"`
+	MarketplaceListingID      string                            `key:"marketplaceListingID" json:"marketplace_listing_id"`
+	MarketplaceSellerID       string                            `key:"marketplaceSellerID" json:"marketplace_seller_id"`
 	UserData                  string                            `key:"userData" json:"user_data"`
 	CRIUEnabled               bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit              string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`

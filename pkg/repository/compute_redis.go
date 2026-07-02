@@ -358,6 +358,93 @@ func (r *ComputeRedisRepository) DeleteAgentWorkerSlotState(ctx context.Context,
 	return r.rdb.SRem(ctx, common.RedisKeys.ComputeAgentSlotIndex(workspaceID, poolName, machineID), workerID).Err()
 }
 
+func (r *ComputeRedisRepository) SaveMarketplaceListing(ctx context.Context, state *compute.MarketplaceListingState) error {
+	if state == nil || state.SellerWorkspaceID == "" || state.ID == "" {
+		return fmt.Errorf("marketplace listing workspace and id are required")
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := r.rdb.Set(ctx, common.RedisKeys.ComputeMarketplaceListing(state.SellerWorkspaceID, state.ID), data, 0).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.SAdd(ctx, common.RedisKeys.ComputeMarketplaceIndex(state.SellerWorkspaceID), state.ID).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SAdd(ctx, common.RedisKeys.ComputeMarketplaceGlobalIndex(), marketplaceListingGlobalMember(state.SellerWorkspaceID, state.ID)).Err()
+}
+
+func (r *ComputeRedisRepository) GetMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) (*compute.MarketplaceListingState, error) {
+	if sellerWorkspaceID == "" || listingID == "" {
+		return nil, nil
+	}
+	data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeMarketplaceListing(sellerWorkspaceID, listingID)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var state compute.MarketplaceListingState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	if state.SellerWorkspaceID == "" {
+		state.SellerWorkspaceID = sellerWorkspaceID
+	}
+	return &state, nil
+}
+
+func (r *ComputeRedisRepository) ListMarketplaceListings(ctx context.Context, sellerWorkspaceID string, limit int) ([]*compute.MarketplaceListingState, error) {
+	ids, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeMarketplaceIndex(sellerWorkspaceID)).Result()
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(ids)
+	if limit > 0 && len(ids) > limit {
+		ids = ids[:limit]
+	}
+	keys := make([]string, 0, len(ids))
+	for _, id := range ids {
+		keys = append(keys, common.RedisKeys.ComputeMarketplaceListing(sellerWorkspaceID, id))
+	}
+	return r.marketplaceListings(ctx, keys)
+}
+
+func (r *ComputeRedisRepository) ListAllMarketplaceListings(ctx context.Context, limit int) ([]*compute.MarketplaceListingState, error) {
+	members, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeMarketplaceGlobalIndex()).Result()
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(members)
+	if limit > 0 && len(members) > limit {
+		members = members[:limit]
+	}
+	keys := make([]string, 0, len(members))
+	for _, member := range members {
+		workspaceID, listingID, ok := splitMarketplaceListingGlobalMember(member)
+		if !ok {
+			continue
+		}
+		keys = append(keys, common.RedisKeys.ComputeMarketplaceListing(workspaceID, listingID))
+	}
+	return r.marketplaceListings(ctx, keys)
+}
+
+func (r *ComputeRedisRepository) DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error {
+	if sellerWorkspaceID == "" || listingID == "" {
+		return nil
+	}
+	if err := r.rdb.Del(ctx, common.RedisKeys.ComputeMarketplaceListing(sellerWorkspaceID, listingID)).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceIndex(sellerWorkspaceID), listingID).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceGlobalIndex(), marketplaceListingGlobalMember(sellerWorkspaceID, listingID)).Err()
+}
+
 func (r *ComputeRedisRepository) poolStates(ctx context.Context, keys []string) ([]*compute.PoolState, error) {
 	if len(keys) == 0 {
 		return []*compute.PoolState{}, nil
@@ -388,6 +475,42 @@ func (r *ComputeRedisRepository) poolStates(ctx context.Context, keys []string) 
 		states = append(states, &state)
 	}
 	return states, nil
+}
+
+func (r *ComputeRedisRepository) marketplaceListings(ctx context.Context, keys []string) ([]*compute.MarketplaceListingState, error) {
+	if len(keys) == 0 {
+		return []*compute.MarketplaceListingState{}, nil
+	}
+	values, err := r.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	states := make([]*compute.MarketplaceListingState, 0, len(values))
+	for i, value := range values {
+		data, ok := stateBytes(value)
+		if !ok {
+			continue
+		}
+		var state compute.MarketplaceListingState
+		if err := json.Unmarshal(data, &state); err != nil {
+			log.Warn().Err(err).Str("key", keys[i]).Msg("skipping corrupt marketplace listing state")
+			continue
+		}
+		states = append(states, &state)
+	}
+	return states, nil
+}
+
+func marketplaceListingGlobalMember(workspaceID, listingID string) string {
+	return workspaceID + "\x00" + listingID
+}
+
+func splitMarketplaceListingGlobalMember(member string) (string, string, bool) {
+	workspaceID, listingID, ok := strings.Cut(member, "\x00")
+	if !ok || workspaceID == "" || listingID == "" {
+		return "", "", false
+	}
+	return workspaceID, listingID, true
 }
 
 func workspaceIDFromComputePoolKey(key string) string {

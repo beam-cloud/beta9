@@ -78,7 +78,7 @@ EOT
 FROM debian:bookworm AS gvisor
 
 ARG TARGETARCH
-ARG GVISOR_VERSION=20250407.0
+ARG GVISOR_VERSION=20260520.0
 
 WORKDIR /tmp
 
@@ -183,6 +183,42 @@ esac
 EOT
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
+RUN <<'EOT'
+set -eux
+mv /usr/bin/nvidia-container-cli /usr/bin/nvidia-container-cli.real
+cat >/usr/local/bin/nvidia-container-cli <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+real_cli="${NVIDIA_CONTAINER_CLI_REAL:-/usr/bin/nvidia-container-cli.real}"
+has_no_persistenced=0
+for arg in "$@"; do
+  if [ "$arg" = "--no-persistenced" ]; then
+    has_no_persistenced=1
+    break
+  fi
+done
+
+if [ "$has_no_persistenced" -eq 0 ]; then
+  args=()
+  inserted=0
+  for arg in "$@"; do
+    args+=("$arg")
+    if [ "$arg" = "configure" ]; then
+      args+=("--no-persistenced")
+      inserted=1
+    fi
+  done
+  if [ "$inserted" -eq 1 ]; then
+    exec "$real_cli" "${args[@]}"
+  fi
+fi
+
+exec "$real_cli" "$@"
+EOF
+chmod +x /usr/local/bin/nvidia-container-cli
+ln -s /usr/local/bin/nvidia-container-cli /usr/bin/nvidia-container-cli
+EOT
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
 RUN apt-get install -y libbtrfs-dev libgpgme11-dev

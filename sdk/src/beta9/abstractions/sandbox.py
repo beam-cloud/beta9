@@ -247,6 +247,7 @@ class Sandbox(Pod):
         docker_enabled: bool = False,
         ports: Optional[List[int]] = [],
         pool: Optional[Union[str, Pool]] = None,
+        allow_marketplace: bool = False,
         context: Optional[ConfigContext] = None,
     ):
         self.debug_buffer = io.StringIO()
@@ -272,6 +273,7 @@ class Sandbox(Pod):
             docker_enabled=docker_enabled,
             ports=ports,
             pool=pool,
+            allow_marketplace=allow_marketplace,
             entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),
         )
         if context is not None:

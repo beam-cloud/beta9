@@ -49,8 +49,8 @@ func RunInstall(ctx context.Context, opts InstallOptions) error {
 		return err
 	}
 
-	hostUnit := vastHostUnit(opts, sentinelTokenFile)
-	gpuUnit := vastGPUUnit(opts, joinTokenFile)
+	hostUnit := compatControllerUnit(opts, sentinelTokenFile)
+	gpuUnit := compatGPUAgentUnit(opts, joinTokenFile)
 	if opts.DryRun {
 		fmt.Fprintf(opts.Stdout, "%s\n", hostUnit)
 		fmt.Fprintf(opts.Stdout, "%s\n", gpuUnit)
@@ -121,10 +121,10 @@ func installSentinelToken(opts InstallOptions) (string, string, error) {
 	return token, path, os.WriteFile(path, []byte(token+"\n"), 0600)
 }
 
-func vastHostUnit(opts InstallOptions, sentinelTokenFile string) string {
+func compatControllerUnit(opts InstallOptions, sentinelTokenFile string) string {
 	args := []string{
 		opts.BinaryPath,
-		"vast", "host",
+		"vast", CommandController,
 		"--gateway", opts.GatewayURL,
 		"--state-dir", opts.StateDir,
 		"--listen", opts.ListenAddr,
@@ -132,16 +132,16 @@ func vastHostUnit(opts InstallOptions, sentinelTokenFile string) string {
 		"--service-template", opts.GPUServicePrefix + "@%s.service",
 	}
 	return systemdUnit(systemdUnitSpec{
-		Description: "Beam Vast host sidecar",
+		Description: "Beam Vast compatibility controller",
 		WorkingDir:  opts.StateDir,
 		ExecStart:   args,
 	})
 }
 
-func vastGPUUnit(opts InstallOptions, joinTokenFile string) string {
+func compatGPUAgentUnit(opts InstallOptions, joinTokenFile string) string {
 	args := []string{
 		opts.BinaryPath,
-		"vast", "gpu-agent",
+		"vast", CommandGPUAgent,
 		"--gateway", opts.GatewayURL,
 		"--join-token-file", joinTokenFile,
 		"--state-dir", opts.StateDir,
@@ -157,7 +157,7 @@ func vastGPUUnit(opts InstallOptions, joinTokenFile string) string {
 		args = append(args, "--container-start-concurrency", strconv.FormatUint(uint64(opts.ContainerStartConcurrency), 10))
 	}
 	return systemdUnit(systemdUnitSpec{
-		Description: "Beam Vast per-GPU agent %i",
+		Description: "Beam Vast compatibility GPU agent %i",
 		WorkingDir:  opts.StateDir,
 		ExecStart:   args,
 	})
@@ -246,6 +246,6 @@ func randomToken() (string, error) {
 func printDefjobCommand(opts InstallOptions, sentinelToken string) {
 	hostURL := firstNonEmpty(strings.TrimSpace(opts.PublicHostURL), "http://"+publicHostFromListen(opts.ListenAddr))
 	machineID := firstNonEmpty(strings.TrimSpace(opts.VastMachineID), "<vast-machine-id>")
-	fmt.Fprintf(opts.Stdout, "\nVast default-job command:\n")
+	fmt.Fprintf(opts.Stdout, "\nVast default-job sentinel command:\n")
 	fmt.Fprintf(opts.Stdout, "vastai set defjob %s --image %s --args --host-url %s --token %s\n", machineID, opts.SentinelImage, hostURL, sentinelToken)
 }

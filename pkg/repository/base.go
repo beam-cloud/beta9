@@ -118,6 +118,11 @@ type ComputeRepository interface {
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
+	SaveMarketplaceListing(ctx context.Context, state *compute.MarketplaceListingState) error
+	GetMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) (*compute.MarketplaceListingState, error)
+	ListMarketplaceListings(ctx context.Context, sellerWorkspaceID string, limit int) ([]*compute.MarketplaceListingState, error)
+	ListAllMarketplaceListings(ctx context.Context, limit int) ([]*compute.MarketplaceListingState, error)
+	DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error
 }
 
 type WorkspaceRepository interface {

@@ -1223,7 +1223,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 
 	// Skopeo should NOT be called for v2 images
 	mockSkopeo := &mockSkopeoClient{
-		inspectFunc: func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
+		inspectFunc: func(ctx context.Context, image string, creds string, platform common.ImagePlatform, logger *slog.Logger) (common.ImageMetadata, error) {
 			t.Fatal("Skopeo should not be called for v2 images")
 			return common.ImageMetadata{}, nil
 		},
@@ -1316,7 +1316,7 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 	}
 
 	mockSkopeo := &mockSkopeoClient{
-		inspectFunc: func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
+		inspectFunc: func(ctx context.Context, image string, creds string, platform common.ImagePlatform, logger *slog.Logger) (common.ImageMetadata, error) {
 			t.Fatal("Skopeo should not be called for v2 images")
 			return common.ImageMetadata{}, nil
 		},
@@ -1380,28 +1380,28 @@ func containsStr(s, substr string) bool {
 
 // Mock skopeo client for testing
 type mockSkopeoClient struct {
-	inspectFunc     func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error)
-	inspectSizeFunc func(ctx context.Context, image string, creds string) (int64, error)
-	copyFunc        func(ctx context.Context, source, dest, creds string, logger *slog.Logger) error
+	inspectFunc     func(ctx context.Context, image string, creds string, platform common.ImagePlatform, logger *slog.Logger) (common.ImageMetadata, error)
+	inspectSizeFunc func(ctx context.Context, image string, creds string, platform common.ImagePlatform) (int64, error)
+	copyFunc        func(ctx context.Context, source, dest, creds string, platform common.ImagePlatform, logger *slog.Logger) error
 }
 
-func (m *mockSkopeoClient) Inspect(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
+func (m *mockSkopeoClient) Inspect(ctx context.Context, image string, creds string, platform common.ImagePlatform, logger *slog.Logger) (common.ImageMetadata, error) {
 	if m.inspectFunc != nil {
-		return m.inspectFunc(ctx, image, creds, logger)
+		return m.inspectFunc(ctx, image, creds, platform, logger)
 	}
 	return common.ImageMetadata{}, nil
 }
 
-func (m *mockSkopeoClient) InspectSizeInBytes(ctx context.Context, image string, creds string) (int64, error) {
+func (m *mockSkopeoClient) InspectSizeInBytes(ctx context.Context, image string, creds string, platform common.ImagePlatform) (int64, error) {
 	if m.inspectSizeFunc != nil {
-		return m.inspectSizeFunc(ctx, image, creds)
+		return m.inspectSizeFunc(ctx, image, creds, platform)
 	}
 	return 0, nil
 }
 
-func (m *mockSkopeoClient) Copy(ctx context.Context, source, dest, creds string, logger *slog.Logger) error {
+func (m *mockSkopeoClient) Copy(ctx context.Context, source, dest, creds string, platform common.ImagePlatform, logger *slog.Logger) error {
 	if m.copyFunc != nil {
-		return m.copyFunc(ctx, source, dest, creds, logger)
+		return m.copyFunc(ctx, source, dest, creds, platform, logger)
 	}
 	return nil
 }
@@ -1418,7 +1418,7 @@ func TestCachedImageMetadata(t *testing.T) {
 	// Create mock skopeo client (should NOT be called when metadata is cached)
 	skopeoCallCount := 0
 	mockSkopeo := &mockSkopeoClient{
-		inspectFunc: func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
+		inspectFunc: func(ctx context.Context, image string, creds string, platform common.ImagePlatform, logger *slog.Logger) (common.ImageMetadata, error) {
 			skopeoCallCount++
 			t.Logf("Skopeo.Inspect called (count: %d) - this should NOT happen when metadata is cached", skopeoCallCount)
 			return common.ImageMetadata{}, nil

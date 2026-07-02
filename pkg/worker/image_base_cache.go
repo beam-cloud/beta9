@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -46,9 +45,10 @@ func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *s
 		return "", false, err
 	}
 
+	platform := targetImagePlatform(request)
 	remoteOpts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}),
+		remote.WithPlatform(v1.Platform{OS: platform.OS, Architecture: platform.Architecture}),
 	}
 	if auth := c.remoteImageAuthenticator(ctx, request, ref); auth != nil {
 		remoteOpts = append(remoteOpts, remote.WithAuth(auth))
@@ -186,7 +186,7 @@ func (c *ImageClient) writeContentCacheBlobToOCI(ctx context.Context, layoutDir 
 
 func (c *ImageClient) remoteImageAuthenticator(ctx context.Context, request *types.ContainerRequest, ref name.Reference) authn.Authenticator {
 	registryHost := ref.Context().RegistryStr()
-	if !c.privateWorkerImageRequest(request) && request.BuildOptions.SourceImageCreds != "" {
+	if !c.brokeredImageAccessRequest(request) && request.BuildOptions.SourceImageCreds != "" {
 		if provider := c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registryHost, request.ImageId, "source image"); provider != nil {
 			if cfg, err := provider.GetCredentials(ctx, registryHost, ref.Context().RepositoryStr()); err == nil && cfg != nil {
 				return authn.FromConfig(*cfg)
@@ -196,7 +196,7 @@ func (c *ImageClient) remoteImageAuthenticator(ctx context.Context, request *typ
 
 	creds := c.gatewayRegistryCredentials(ctx, registryHost, request)
 	if creds == "" {
-		if c.privateWorkerImageRequest(request) {
+		if c.brokeredImageAccessRequest(request) {
 			return authn.Anonymous
 		}
 		return nil
@@ -237,9 +237,10 @@ func (c *ImageClient) seedBaseImageBlobsFromRegistry(request *types.ContainerReq
 		return
 	}
 
+	platform := targetImagePlatform(request)
 	remoteOpts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}),
+		remote.WithPlatform(v1.Platform{OS: platform.OS, Architecture: platform.Architecture}),
 	}
 	if auth := c.remoteImageAuthenticator(ctx, request, ref); auth != nil {
 		remoteOpts = append(remoteOpts, remote.WithAuth(auth))

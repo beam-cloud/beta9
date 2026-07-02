@@ -1097,12 +1097,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// Only use CDI if runtime supports it
 		if s.runtime.Capabilities().CDI {
 			cdiCache := cdi.GetDefaultCache()
-
-			var devicesToInject []string
-			for _, device := range assignedDevices {
-				devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
-				devicesToInject = append(devicesToInject, devicePath)
-			}
+			devicesToInject := s.containerGPUManager.CDIDevices(assignedDevices)
 
 			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
 			if err != nil {
@@ -1113,6 +1108,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
 				return
 			}
+			spec.Process.Env = s.containerGPUManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 		}
 	}
 

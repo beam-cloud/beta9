@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -84,21 +85,28 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 	}
 }
 
-// dialTSNetRoute connects to the agent's tsnet proxy target. It first
-// confirms the agent peer is visible in this node's netmap (a MagicDNS dial
-// for an unknown peer silently falls back to the system resolver and fails
-// with a misleading NXDOMAIN), then dials, retrying transient failures until
-// the dial budget is exhausted so single blips never surface to callers.
+// dialTSNetRoute connects to the agent's tsnet proxy target. A short netmap
+// visibility check is used for diagnostics and stale-control self-healing, but
+// tsnet.Status can omit peers that tsnet.Dial can still reach, so the check
+// must not hard-gate the dial.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
+	recycledAfterLookupMiss := false
+	var lastPeerErr error
 	var lastErr error
 
 	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
+		var peerErr error
 		if host != "" {
-			// Leave headroom for the dial itself: a peer that appears at the
-			// very end of the budget still needs time to handshake.
-			if err := d.tailscale.WaitForPeer(ctx, host, remaining-tsnetDialReserve(remaining)); err != nil {
-				return nil, fmt.Errorf("backend route %s: %w", routeID, err)
+			// Leave headroom for the dial itself and keep the netmap check
+			// advisory. tsnet.Status can omit a peer that tsnet.Dial can still
+			// reach, especially soon after an ephemeral node joins.
+			peerWait := min(remaining-tsnetDialReserve(remaining), tailnetPeerAdvisoryTimeout)
+			if peerWait > 0 {
+				if err := d.tailscale.WaitForPeer(ctx, host, peerWait); err != nil {
+					peerErr = err
+					lastPeerErr = err
+				}
 			}
 			if remaining = time.Until(deadline); remaining <= 0 {
 				break
@@ -109,7 +117,17 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 		if err == nil {
 			return writeBackendRoutePreface(conn, routeID)
 		}
-		lastErr = err
+		if peerErr != nil {
+			lastErr = fmt.Errorf("%w; tsnet dial failed: %w", peerErr, err)
+			if !recycledAfterLookupMiss && isTailnetLookupMiss(err) {
+				d.tailscale.recycleServer(host)
+				recycledAfterLookupMiss = true
+			}
+		} else if lastPeerErr != nil {
+			lastErr = fmt.Errorf("%w; tsnet dial failed: %w", lastPeerErr, err)
+		} else {
+			lastErr = err
+		}
 
 		select {
 		case <-ctx.Done():
@@ -129,6 +147,14 @@ func (d *BackendDialer) dialTSNetTarget(ctx context.Context, addr string, timeou
 		return d.tsnetDial(ctx, addr, timeout)
 	}
 	return d.tailscale.DialContextTimeout(ctx, "tcp", addr, timeout)
+}
+
+func isTailnetLookupMiss(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "no such host")
 }
 
 // tsnetDialReserve is how much of the remaining dial budget is held back for

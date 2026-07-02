@@ -335,7 +335,7 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerRepoClient, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerPoolName, workerRepoClient, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +437,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType, poolConfig.Mode)
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode)
 	if err != nil {
 		cancel()
 		return nil, err

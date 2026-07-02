@@ -42,6 +42,7 @@ message VerifyImageBuildRequest {
   string gpu = 11;
   bool ignore_python = 12;
   optional string image_id = 13;
+  string target_platform = 14;
 }
 
 message VerifyImageBuildResponse {
@@ -68,6 +69,7 @@ message BuildImageRequest {
   repeated string secrets = 10;
   string gpu = 11;
   bool ignore_python = 12;
+  string target_platform = 13;
 }
 
 message BuildImageResponse {

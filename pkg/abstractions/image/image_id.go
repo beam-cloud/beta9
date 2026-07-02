@@ -23,11 +23,13 @@ func getImageID(opts *BuildOpts) (string, error) {
 			Dockerfile     string
 			BuildCtxObject string
 			EnvVars        []string
+			TargetPlatform string
 		}{
 			ClipVersion:    opts.ClipVersion,
 			Dockerfile:     opts.Dockerfile,
 			BuildCtxObject: opts.BuildCtxObject,
 			EnvVars:        opts.EnvVars,
+			TargetPlatform: opts.TargetPlatform,
 		}
 
 		hash, err := hashstructure.Hash(hashInput, hashstructure.FormatV2, nil)
@@ -54,6 +56,7 @@ func getImageID(opts *BuildOpts) (string, error) {
 		EnvVars           []string
 		Dockerfile        string
 		BuildCtxObject    string
+		TargetPlatform    string
 	}{
 		ClipVersion:       opts.ClipVersion,
 		BaseImageName:     opts.BaseImageName,
@@ -68,6 +71,7 @@ func getImageID(opts *BuildOpts) (string, error) {
 		EnvVars:           opts.EnvVars,
 		Dockerfile:        opts.Dockerfile,
 		BuildCtxObject:    opts.BuildCtxObject,
+		TargetPlatform:    opts.TargetPlatform,
 	}
 
 	hash, err := hashstructure.Hash(hashInput, hashstructure.FormatV2, nil)

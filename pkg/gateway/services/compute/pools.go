@@ -3,6 +3,8 @@ package compute
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -38,6 +40,9 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 	limit := int(in.Limit)
 	out := make([]*pb.PrivatePool, 0, len(states))
 	for _, state := range states {
+		if !poolStateIsPrivate(state) {
+			continue
+		}
 		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -56,6 +61,13 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 		}
 	}
 	return &pb.ListPrivatePoolsResponse{Ok: true, Pools: out}, nil
+}
+
+func poolStateIsPrivate(state *model.PoolState) bool {
+	if state == nil {
+		return false
+	}
+	return state.Mode == "" || state.Mode == string(types.PoolModePrivate)
 }
 
 func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {
@@ -267,7 +279,7 @@ func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesR
 	if err != nil {
 		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if state == nil {
+	if state == nil || !poolStateIsPrivate(state) {
 		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 
@@ -291,6 +303,63 @@ func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesR
 		out = append(out, s.agentMachineToProto(machine))
 	}
 	return &pb.ListPoolMachinesResponse{Ok: true, Machines: out}, nil
+}
+
+// ListMachineContainers lists the active containers scheduled on one machine.
+// Works for private pools and marketplace listing pools alike — both are
+// stored under the owning workspace, so sellers can see what runs on their
+// hardware.
+func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	workspaceID := computeWorkspaceID(authInfo)
+	if workspaceID == "" {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+	poolName := strings.TrimSpace(in.PoolName)
+	machineID := strings.TrimSpace(in.MachineId)
+	if poolName == "" || machineID == "" {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool name and machine id are required"}, nil
+	}
+
+	state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+	if err != nil {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if state == nil {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	}
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, state.Name, machineID)
+	if err != nil {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if machine == nil {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "machine not found"}, nil
+	}
+	if s.containerRepo == nil {
+		return &pb.ListMachineContainersResponse{Ok: true}, nil
+	}
+
+	containers, err := s.containerRepo.GetActiveContainersByWorkerId(model.AgentMachineWorkerID(machine.MachineID))
+	if err != nil {
+		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	out := make([]*pb.MachineContainer, 0, len(containers))
+	for _, container := range containers {
+		out = append(out, &pb.MachineContainer{
+			ContainerId: container.ContainerId,
+			StubId:      container.StubId,
+			Status:      string(container.Status),
+			WorkspaceId: container.WorkspaceId,
+			Gpu:         container.Gpu,
+			GpuCount:    container.GpuCount,
+			Cpu:         container.Cpu,
+			Memory:      container.Memory,
+			ScheduledAt: container.ScheduledAt,
+			StartedAt:   container.StartedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ScheduledAt > out[j].ScheduledAt })
+	return &pb.ListMachineContainersResponse{Ok: true, Containers: out}, nil
 }
 
 func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineRequest) (bool, *pb.DeleteMachineResponse, error) {
@@ -393,7 +462,7 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 func (s *Service) privateMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, machineID string) (*model.AgentTokenState, bool, error) {
 	if poolName != "" {
 		pool, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
-		if err != nil || pool == nil {
+		if err != nil || pool == nil || !poolStateIsPrivate(pool) {
 			return nil, pool != nil, err
 		}
 		if !computePoolCreatedByAuth(pool, authInfo) {

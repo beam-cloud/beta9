@@ -543,6 +543,7 @@ type StubConfigV1 struct {
 	BlockNetwork       bool              `json:"block_network"`
 	AllowList          []string          `json:"allow_list"`
 	DockerEnabled      bool              `json:"docker_enabled"`
+	AllowMarketplace   bool              `json:"allow_marketplace"`
 	IsService          bool              `json:"is_service"`
 	Serving            *ServingConfig    `json:"serving,omitempty"`
 	Pool               *PoolConfig       `json:"pool,omitempty"`

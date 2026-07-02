@@ -552,6 +552,275 @@
         ]
       }
     },
+    "/marketplace/listings": {
+      "get": {
+        "operationId": "GatewayService_ListMarketplaceListings",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListMarketplaceListingsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      },
+      "post": {
+        "operationId": "GatewayService_CreateMarketplaceListing",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateMarketplaceListingResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateMarketplaceListingRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/listings/{listingId}": {
+      "delete": {
+        "operationId": "GatewayService_DeleteMarketplaceListing",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDeleteMarketplaceListingResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "listingId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      },
+      "post": {
+        "operationId": "GatewayService_UpdateMarketplaceListing",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateMarketplaceListingResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "listingId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceUpdateMarketplaceListingBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/listings/{listingId}/join-command": {
+      "post": {
+        "operationId": "GatewayService_GetMarketplaceJoinCommand",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetMarketplaceJoinCommandResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "listingId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceGetMarketplaceJoinCommandBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/listings/{listingId}/machines": {
+      "get": {
+        "operationId": "GatewayService_ListMarketplaceMachines",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListMarketplaceMachinesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "listingId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/offers": {
+      "get": {
+        "operationId": "GatewayService_ListMarketplaceOffers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListMarketplaceOffersResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "gpu",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/offers/{listingId}": {
+      "get": {
+        "operationId": "GatewayService_GetMarketplaceOffer",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetMarketplaceOfferResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "listingId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/objects": {
       "post": {
         "operationId": "GatewayService_CreateObject",
@@ -1030,6 +1299,42 @@
             "required": false,
             "type": "integer",
             "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/pools/{poolName}/machines/{machineId}/containers": {
+      "get": {
+        "operationId": "GatewayService_ListMachineContainers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListMachineContainersResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "machineId",
+            "in": "path",
+            "required": true,
+            "type": "string"
           }
         ],
         "tags": [
@@ -1617,6 +1922,14 @@
         }
       }
     },
+    "GatewayServiceGetMarketplaceJoinCommandBody": {
+      "type": "object",
+      "properties": {
+        "ttl": {
+          "type": "string"
+        }
+      }
+    },
     "GatewayServiceGetPoolJoinCommandBody": {
       "type": "object",
       "properties": {
@@ -1644,6 +1957,57 @@
         "containers": {
           "type": "integer",
           "format": "int64"
+        }
+      }
+    },
+    "GatewayServiceUpdateMarketplaceListingBody": {
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "type": "string"
+        },
+        "preemptible": {
+          "type": "boolean"
+        },
+        "public": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayAgentBillingConfig": {
+      "type": "object",
+      "properties": {
+        "usageEndpoint": {
+          "type": "string"
+        },
+        "usageToken": {
+          "type": "string"
+        },
+        "costHookEndpoint": {
+          "type": "string"
+        },
+        "costHookToken": {
+          "type": "string"
+        },
+        "billableMarginPct": {
+          "type": "number",
+          "format": "double"
         }
       }
     },
@@ -1696,6 +2060,10 @@
         },
         "telemetry": {
           "$ref": "#/definitions/gatewayAgentTelemetryConfig"
+        },
+        "billing": {
+          "$ref": "#/definitions/gatewayAgentBillingConfig",
+          "description": "Only set for marketplace pools: lets workers on seller machines meter\nbuyer usage and report it to the billing service."
         }
       }
     },
@@ -1959,6 +2327,13 @@
         "containerStartConcurrency": {
           "type": "integer",
           "format": "int64"
+        },
+        "mode": {
+          "type": "string",
+          "description": "Pool mode (\"private\" / \"marketplace\") and the container runtime the\nworker must run with. Marketplace slots require gvisor isolation."
+        },
+        "containerRuntime": {
+          "type": "string"
         }
       }
     },
@@ -2213,6 +2588,47 @@
         }
       }
     },
+    "gatewayCreateMarketplaceListingRequest": {
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "type": "string"
+        },
+        "preemptible": {
+          "type": "boolean"
+        },
+        "public": {
+          "type": "boolean"
+        },
+        "region": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCreateMarketplaceListingResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "listing": {
+          "$ref": "#/definitions/gatewayMarketplaceListing"
+        }
+      }
+    },
     "gatewayCreateObjectRequest": {
       "type": "object",
       "properties": {
@@ -2362,6 +2778,17 @@
       }
     },
     "gatewayDeleteMachineResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeleteMarketplaceListingResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -2617,6 +3044,41 @@
         }
       }
     },
+    "gatewayGetMarketplaceJoinCommandResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "gatewayGetMarketplaceOfferResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "offer": {
+          "$ref": "#/definitions/gatewayMarketplaceOffer"
+        }
+      }
+    },
     "gatewayGetOrCreateStubRequest": {
       "type": "object",
       "properties": {
@@ -2782,6 +3244,9 @@
             "type": "object",
             "$ref": "#/definitions/gatewayDurableDisk"
           }
+        },
+        "allowMarketplace": {
+          "type": "boolean"
         }
       }
     },
@@ -3081,6 +3546,24 @@
         }
       }
     },
+    "gatewayListMachineContainersResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "containers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMachineContainer"
+          }
+        }
+      }
+    },
     "gatewayListMachinesResponse": {
       "type": "object",
       "properties": {
@@ -3101,6 +3584,60 @@
           "type": "object",
           "additionalProperties": {
             "type": "boolean"
+          }
+        }
+      }
+    },
+    "gatewayListMarketplaceListingsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "listings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMarketplaceListing"
+          }
+        }
+      }
+    },
+    "gatewayListMarketplaceMachinesResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMachine"
+          }
+        }
+      }
+    },
+    "gatewayListMarketplaceOffersResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "offers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMarketplaceOffer"
           }
         }
       }
@@ -3299,6 +3836,46 @@
         }
       }
     },
+    "gatewayMachineContainer": {
+      "type": "object",
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "scheduledAt": {
+          "type": "string",
+          "format": "int64"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
     "gatewayMachineMetrics": {
       "type": "object",
       "properties": {
@@ -3365,6 +3942,130 @@
         "diskUsagePct": {
           "type": "number",
           "format": "float"
+        }
+      }
+    },
+    "gatewayMarketplaceListing": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sellerWorkspaceId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "type": "string"
+        },
+        "preemptible": {
+          "type": "boolean"
+        },
+        "public": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "machineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "region": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayMarketplaceOffer": {
+      "type": "object",
+      "properties": {
+        "listingId": {
+          "type": "string"
+        },
+        "sellerWorkspaceId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "type": "string"
+        },
+        "preemptible": {
+          "type": "boolean"
+        },
+        "machineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "readyMachineCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "cpuCores": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "memoryMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "diskGb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "freeGpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "reliability": {
+          "type": "number",
+          "format": "float"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "public": {
+          "type": "boolean",
+          "description": "False for unlisted offers: reachable via direct share link only, never\nreturned by marketplace search."
         }
       }
     },
@@ -4170,6 +4871,20 @@
         },
         "errMsg": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayUpdateMarketplaceListingResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "listing": {
+          "$ref": "#/definitions/gatewayMarketplaceListing"
         }
       }
     },

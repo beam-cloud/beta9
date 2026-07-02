@@ -122,6 +122,7 @@ class Function(RunnerAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
+        allow_marketplace: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -144,6 +145,7 @@ class Function(RunnerAbstraction):
             inputs=inputs,
             outputs=outputs,
             pool=pool,
+            allow_marketplace=allow_marketplace,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

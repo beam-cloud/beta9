@@ -65,7 +65,7 @@ func TestHostStartsAndPreemptsPerGPUService(t *testing.T) {
 
 	host.handleHeartbeat(httptest.NewRecorder(), sentinelRequest(t, "/heartbeat", "sentinel-token", gpu.UUID))
 	host.reconcile(context.Background(), time.Now().UTC())
-	if got, want := strings.Join(services.starts, ","), "beam-agent-vast-gpu@0.service"; got != want {
+	if got, want := strings.Join(services.starts, ","), "beam-agent-vast-compat-gpu@0.service"; got != want {
 		t.Fatalf("starts = %q, want %q", got, want)
 	}
 
@@ -74,7 +74,7 @@ func TestHostStartsAndPreemptsPerGPUService(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("preempt status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if got, want := strings.Join(services.stops, ","), "beam-agent-vast-gpu@0.service"; got != want {
+	if got, want := strings.Join(services.stops, ","), "beam-agent-vast-compat-gpu@0.service"; got != want {
 		t.Fatalf("stops = %q, want %q", got, want)
 	}
 	if got, want := strings.Join(cleaner.machines, ","), "machine-one"; got != want {
@@ -83,7 +83,7 @@ func TestHostStartsAndPreemptsPerGPUService(t *testing.T) {
 	if len(availability) != 1 {
 		t.Fatalf("availability calls = %d, want 1", len(availability))
 	}
-	if availability[0].AgentToken != "agent-token" || availability[0].Schedulable || availability[0].Reason != "vast_preempt" {
+	if availability[0].AgentToken != "agent-token" || availability[0].Schedulable || availability[0].Reason != PreemptReason {
 		t.Fatalf("availability request = %#v", availability[0])
 	}
 }
@@ -124,7 +124,7 @@ func TestHostStopsUnknownServiceOnceWithoutLease(t *testing.T) {
 	host.reconcile(context.Background(), time.Now().UTC())
 	host.reconcile(context.Background(), time.Now().UTC())
 
-	if got, want := strings.Join(services.stops, ","), "beam-agent-vast-gpu@0.service"; got != want {
+	if got, want := strings.Join(services.stops, ","), "beam-agent-vast-compat-gpu@0.service"; got != want {
 		t.Fatalf("stops = %q, want %q", got, want)
 	}
 }

@@ -151,6 +151,9 @@
         },
         "ignorePython": {
           "type": "boolean"
+        },
+        "targetPlatform": {
+          "type": "string"
         }
       }
     },
@@ -244,6 +247,9 @@
           "type": "boolean"
         },
         "imageId": {
+          "type": "string"
+        },
+        "targetPlatform": {
           "type": "string"
         }
       }

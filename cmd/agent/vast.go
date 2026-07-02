@@ -11,19 +11,23 @@ import (
 
 func runVast(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: %s vast <install|host|sentinel>", os.Args[0])
+		return fmt.Errorf("usage: %s vast <install|sentinel>", os.Args[0])
 	}
 	switch args[0] {
-	case "install":
+	case agentvast.CommandInstall:
 		return runVastInstall(ctx, args[1:])
-	case "host":
-		return runVastHost(ctx, args[1:])
-	case "sentinel":
+	case agentvast.CommandSentinel:
 		return runVastSentinel(ctx, args[1:])
-	case "gpu-agent":
+	case agentvast.CommandController:
+		return runVastController(ctx, args[1:])
+	case agentvast.CommandGPUAgent:
+		return runVastGPUAgent(ctx, args[1:])
+	case agentvast.LegacyCommandHost:
+		return runVastController(ctx, args[1:])
+	case agentvast.LegacyCommandAgent:
 		return runVastGPUAgent(ctx, args[1:])
 	default:
-		return fmt.Errorf("usage: %s vast <install|host|sentinel>", os.Args[0])
+		return fmt.Errorf("usage: %s vast <install|sentinel>", os.Args[0])
 	}
 }
 
@@ -33,12 +37,12 @@ func runVastInstall(ctx context.Context, args []string) error {
 	flags.StringVar(&opts.GatewayURL, "gateway", "", "public gateway HTTP URL")
 	flags.StringVar(&opts.JoinToken, "join-token", "", "pool join token")
 	flags.StringVar(&opts.JoinTokenFile, "join-token-file", "", "file containing a pool join token")
-	flags.StringVar(&opts.StateDir, "state-dir", agentvast.DefaultStateDir, "vast integration state directory")
+	flags.StringVar(&opts.StateDir, "state-dir", agentvast.DefaultStateDir, "Vast compatibility state directory")
 	flags.StringVar(&opts.ListenAddr, "listen", agentvast.DefaultListenAddr, "host sentinel listener address")
 	flags.StringVar(&opts.SentinelToken, "sentinel-token", "", "shared sentinel bearer token")
 	flags.StringVar(&opts.SentinelTokenFile, "sentinel-token-file", "", "file containing the shared sentinel bearer token")
-	flags.StringVar(&opts.HostServiceName, "host-service-name", agentvast.DefaultHostServiceName, "systemd service name for the vast host sidecar")
-	flags.StringVar(&opts.GPUServicePrefix, "gpu-service-prefix", agentvast.DefaultGPUServicePrefix, "systemd template prefix for per-GPU agents")
+	flags.StringVar(&opts.HostServiceName, "host-service-name", agentvast.DefaultHostServiceName, "systemd service name for the Vast compatibility controller")
+	flags.StringVar(&opts.GPUServicePrefix, "gpu-service-prefix", agentvast.DefaultGPUServicePrefix, "systemd template prefix for compatibility per-GPU agents")
 	flags.StringVar(&opts.UnitDir, "unit-dir", "", "systemd unit directory")
 	flags.StringVar(&opts.BinaryPath, "binary", "", "agent binary path for generated systemd units")
 	flags.StringVar(&opts.MaxCPU, "max-cpu-per-gpu", "", "maximum CPU cores advertised by each per-GPU agent")
@@ -56,11 +60,11 @@ func runVastInstall(ctx context.Context, args []string) error {
 	return agentvast.RunInstall(ctx, opts)
 }
 
-func runVastHost(ctx context.Context, args []string) error {
-	opts := agentvast.HostOptions{Stdout: os.Stdout, Stderr: os.Stderr}
-	flags := flag.NewFlagSet("vast host", flag.ExitOnError)
+func runVastController(ctx context.Context, args []string) error {
+	opts := agentvast.ControllerOptions{Stdout: os.Stdout, Stderr: os.Stderr}
+	flags := flag.NewFlagSet("vast _controller", flag.ExitOnError)
 	flags.StringVar(&opts.GatewayURL, "gateway", "", "public gateway HTTP URL")
-	flags.StringVar(&opts.StateDir, "state-dir", agentvast.DefaultStateDir, "vast integration state directory")
+	flags.StringVar(&opts.StateDir, "state-dir", agentvast.DefaultStateDir, "Vast compatibility state directory")
 	flags.StringVar(&opts.ListenAddr, "listen", agentvast.DefaultListenAddr, "host sentinel listener address")
 	flags.StringVar(&opts.SentinelToken, "sentinel-token", "", "shared sentinel bearer token")
 	flags.StringVar(&opts.SentinelTokenFile, "sentinel-token-file", "", "file containing the shared sentinel bearer token")
@@ -70,13 +74,13 @@ func runVastHost(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	return agentvast.RunHost(ctx, opts)
+	return agentvast.RunController(ctx, opts)
 }
 
 func runVastSentinel(ctx context.Context, args []string) error {
 	opts := agentvast.SentinelOptions{Stdout: os.Stdout, Stderr: os.Stderr}
 	flags := flag.NewFlagSet("vast sentinel", flag.ExitOnError)
-	flags.StringVar(&opts.HostURL, "host-url", "", "vast host sidecar URL")
+	flags.StringVar(&opts.HostURL, "host-url", "", "Vast compatibility controller URL")
 	flags.StringVar(&opts.Token, "token", "", "shared sentinel bearer token")
 	flags.StringVar(&opts.TokenFile, "token-file", "", "file containing the shared sentinel bearer token")
 	flags.StringVar(&opts.GPUUUID, "gpu-uuid", "", "assigned GPU UUID override")
@@ -90,7 +94,7 @@ func runVastSentinel(ctx context.Context, args []string) error {
 
 func runVastGPUAgent(ctx context.Context, args []string) error {
 	opts := agentvast.GPUAgentOptions{Stdout: os.Stdout, Stderr: os.Stderr}
-	flags := flag.NewFlagSet("vast gpu-agent", flag.ExitOnError)
+	flags := flag.NewFlagSet("vast _gpu-agent", flag.ExitOnError)
 	flags.StringVar(&opts.GatewayURL, "gateway", "", "public gateway HTTP URL")
 	flags.StringVar(&opts.JoinToken, "join-token", "", "pool join token")
 	flags.StringVar(&opts.JoinTokenFile, "join-token-file", "", "file containing a pool join token")

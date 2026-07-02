@@ -8,14 +8,22 @@ import (
 )
 
 const (
+	CommandInstall          = "install"
+	CommandSentinel         = "sentinel"
+	CommandController       = "_controller"
+	CommandGPUAgent         = "_gpu-agent"
+	LegacyCommandHost       = "host"
+	LegacyCommandAgent      = "gpu-agent"
+	PreemptReason           = "vast_preempt"
+	LeaseLostReason         = "vast_sentinel_lost"
 	DefaultStateDir         = "/var/lib/beam/agent-vast"
 	DefaultListenAddr       = "0.0.0.0:48888"
 	DefaultLeaseTTL         = 15 * time.Second
 	DefaultHeartbeat        = 5 * time.Second
 	DefaultPreemptTimeout   = 60 * time.Second
 	DefaultReconcilePeriod  = 2 * time.Second
-	DefaultHostServiceName  = "beam-agent-vast-host"
-	DefaultGPUServicePrefix = "beam-agent-vast-gpu"
+	DefaultHostServiceName  = "beam-agent-vast-compat"
+	DefaultGPUServicePrefix = "beam-agent-vast-compat-gpu"
 	DefaultGPUServiceName   = DefaultGPUServicePrefix + "@%s.service"
 	DefaultSentinelImage    = "beam/vast-sentinel:latest"
 )
@@ -35,7 +43,7 @@ type ContainerCleaner interface {
 	RemoveManagedWorkerContainersForMachine(machineID string) error
 }
 
-type HostOptions struct {
+type ControllerOptions struct {
 	GatewayURL        string
 	StateDir          string
 	ListenAddr        string
@@ -51,6 +59,8 @@ type HostOptions struct {
 	Stdout            io.Writer
 	Stderr            io.Writer
 }
+
+type HostOptions = ControllerOptions
 
 type SentinelOptions struct {
 	HostURL        string

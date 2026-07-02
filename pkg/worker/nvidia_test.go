@@ -22,6 +22,7 @@ import (
 
 type GPUInfoClientForTest struct {
 	GpuCount int
+	UUIDs    map[int]string
 }
 
 func NewContainerNvidiaManagerForTest(gpuCount int) GPUManager {
@@ -46,6 +47,17 @@ func (c *GPUInfoClientForTest) AvailableGPUDevices() ([]int, error) {
 	}
 
 	return gpus, nil
+}
+
+func (c *GPUInfoClientForTest) DeviceUUID(deviceIndex int) (string, bool) {
+	if c.UUIDs != nil {
+		uuid, ok := c.UUIDs[deviceIndex]
+		return uuid, ok
+	}
+	if deviceIndex < 0 || deviceIndex >= c.GpuCount {
+		return "", false
+	}
+	return fmt.Sprintf("GPU-%d", deviceIndex), true
 }
 
 func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats, error) {
@@ -76,10 +88,7 @@ func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
 		if outputPath == firstPath {
 			return []byte("first path failed"), errors.New("exit status 1")
 		}
-		if err := os.WriteFile(outputPath, []byte("cdi"), 0644); err != nil {
-			return nil, err
-		}
-		return []byte("ok"), nil
+		return writeTestNvidiaCDISpec(outputPath)
 	}
 	configureNvidiaCDICache = func(specPath string) error {
 		configureCalls = append(configureCalls, specPath)
@@ -124,10 +133,7 @@ func TestEnsureNvidiaCDIConfigUsesBeamRuntimeDir(t *testing.T) {
 	configureCalls := []string{}
 	runNvidiaCTKCDIGenerate = func(outputPath string) ([]byte, error) {
 		calls = append(calls, outputPath)
-		if err := os.WriteFile(outputPath, []byte("cdi"), 0644); err != nil {
-			return nil, err
-		}
-		return []byte("ok"), nil
+		return writeTestNvidiaCDISpec(outputPath)
 	}
 	configureNvidiaCDICache = func(specPath string) error {
 		configureCalls = append(configureCalls, specPath)
@@ -171,10 +177,7 @@ func TestEnsureNvidiaCDIConfigFallsBackWhenGeneratedDeviceIsUnresolvable(t *test
 	calls := []string{}
 	runNvidiaCTKCDIGenerate = func(outputPath string) ([]byte, error) {
 		calls = append(calls, outputPath)
-		if err := os.WriteFile(outputPath, []byte("cdi"), 0644); err != nil {
-			return nil, err
-		}
-		return []byte("ok"), nil
+		return writeTestNvidiaCDISpec(outputPath)
 	}
 	resolveCalls := 0
 	configureNvidiaCDICache = func(specPath string) error {
@@ -191,6 +194,92 @@ func TestEnsureNvidiaCDIConfigFallsBackWhenGeneratedDeviceIsUnresolvable(t *test
 	if len(calls) != 2 {
 		t.Fatalf("nvidia-ctk calls = %v, want retry after unresolvable generated spec", calls)
 	}
+}
+
+func TestSanitizeNvidiaCDIConfigRemovesIncompatibleGVisorEdits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nvidia.yaml")
+	if _, err := writeTestNvidiaCDISpec(path); err != nil {
+		t.Fatalf("write test spec: %v", err)
+	}
+
+	if err := sanitizeNvidiaCDIConfig(path); err != nil {
+		t.Fatalf("sanitizeNvidiaCDIConfig() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read sanitized spec: %v", err)
+	}
+	spec := string(data)
+	if strings.Contains(spec, "/run/nvidia-persistenced/socket") {
+		t.Fatalf("persistenced socket mount was not removed:\n%s", spec)
+	}
+	if strings.Contains(spec, "update-ldcache") {
+		t.Fatalf("ldcache hook was not removed:\n%s", spec)
+	}
+	if !strings.Contains(spec, "/usr/bin/nvidia-persistenced") {
+		t.Fatalf("non-socket NVIDIA mount should remain:\n%s", spec)
+	}
+	if !strings.Contains(spec, "/dev/nvidia0") {
+		t.Fatalf("GPU device node should remain:\n%s", spec)
+	}
+	if !strings.Contains(spec, "create-symlinks") {
+		t.Fatalf("compatible NVIDIA CDI hook should remain:\n%s", spec)
+	}
+}
+
+func writeTestNvidiaCDISpec(path string) ([]byte, error) {
+	spec := []byte(`---
+cdiVersion: 0.7.0
+kind: nvidia.com/gpu
+devices:
+  - name: "0"
+    containerEdits:
+      deviceNodes:
+        - path: /dev/nvidia0
+          major: 195
+          minor: 0
+          fileMode: 438
+          permissions: rwm
+      mounts:
+        - hostPath: /run/nvidia-persistenced/socket
+          containerPath: /run/nvidia-persistenced/socket
+        - hostPath: /usr/bin/nvidia-smi
+          containerPath: /usr/bin/nvidia-smi
+      hooks:
+        - hookName: createContainer
+          path: /usr/bin/nvidia-cdi-hook
+          args:
+            - nvidia-cdi-hook
+            - update-ldcache
+            - --folder
+            - /usr/lib/x86_64-linux-gnu
+        - hookName: createContainer
+          path: /usr/bin/nvidia-cdi-hook
+          args:
+            - nvidia-cdi-hook
+            - create-symlinks
+            - --link
+            - ../libGLX_nvidia.so.0::/usr/lib/x86_64-linux-gnu/libGLX_indirect.so.0
+containerEdits:
+  mounts:
+    - hostPath: /run/nvidia-persistenced/socket
+      containerPath: /run/nvidia-persistenced/socket
+    - hostPath: /usr/bin/nvidia-persistenced
+      containerPath: /usr/bin/nvidia-persistenced
+  hooks:
+    - hookName: createContainer
+      path: /usr/bin/nvidia-cdi-hook
+      args:
+        - nvidia-cdi-hook
+        - update-ldcache
+        - --folder
+        - /usr/lib/x86_64-linux-gnu
+`)
+	if err := os.WriteFile(path, spec, 0644); err != nil {
+		return nil, err
+	}
+	return []byte("ok"), nil
 }
 
 func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
@@ -310,6 +399,44 @@ func TestAssignMoreGPUsThanAvailable(t *testing.T) {
 	if err == nil {
 		t.Errorf("Expected an error when requesting more GPUs than available, but got none")
 	}
+}
+
+func TestCDIDevicesPrefersAssignedUUIDs(t *testing.T) {
+	manager := &ContainerNvidiaManager{
+		infoClient: &GPUInfoClientForTest{
+			GpuCount: 2,
+			UUIDs: map[int]string{
+				0: "GPU-a",
+				1: "GPU-b",
+			},
+		},
+		resolvedVisibleDevices: "GPU-a",
+	}
+
+	assert.Equal(t, []string{"nvidia.com/gpu=GPU-a"}, manager.CDIDevices([]int{0}))
+	assert.Equal(t, []string{"nvidia.com/gpu=1"}, manager.CDIDevices([]int{1}))
+}
+
+func TestInjectAssignedEnvVarsRestoresPinnedGPU(t *testing.T) {
+	manager := &ContainerNvidiaManager{
+		infoClient: &GPUInfoClientForTest{
+			GpuCount: 1,
+			UUIDs:    map[int]string{0: "GPU-a"},
+		},
+		resolvedVisibleDevices: "GPU-a",
+	}
+
+	env := manager.InjectAssignedEnvVars([]string{
+		"A=1",
+		"NVIDIA_VISIBLE_DEVICES=void",
+	}, []int{0})
+
+	sort.Strings(env)
+	assert.Equal(t, []string{
+		"A=1",
+		"NVIDIA_VISIBLE_DEVICES=GPU-a",
+		"WORKER_GPU_DEVICES=GPU-a",
+	}, env)
 }
 
 func TestAssignGPUsToMultipleContainers(t *testing.T) {

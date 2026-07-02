@@ -312,6 +312,8 @@ func sameWorkerSlot(a, b *pb.AgentWorkerSlot) bool {
 		a.WorkerToken == b.WorkerToken &&
 		a.PoolName == b.PoolName &&
 		a.MachineId == b.MachineId &&
+		a.Mode == b.Mode &&
+		a.ContainerRuntime == b.ContainerRuntime &&
 		a.Cpu == b.Cpu &&
 		a.Memory == b.Memory &&
 		a.Gpu == b.Gpu &&

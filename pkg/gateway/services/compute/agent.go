@@ -53,6 +53,9 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		TokenHash:                 hashComputeToken(agentToken),
 		WorkspaceID:               tokenState.WorkspaceID,
 		PoolName:                  tokenState.PoolName,
+		Mode:                      firstNonEmpty(tokenState.Mode, poolState.Mode),
+		MarketplaceListingID:      firstNonEmpty(tokenState.MarketplaceListingID, poolState.MarketplaceListingID),
+		SellerWorkspaceID:         firstNonEmpty(tokenState.SellerWorkspaceID, poolState.SellerWorkspaceID),
 		MachineID:                 machineID,
 		MachineFingerprint:        in.MachineFingerprint,
 		Hostname:                  in.Hostname,
@@ -392,11 +395,11 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 		}
 	}
 
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
+	workspace, tokenType, err := s.workerTokenWorkspaceAndType(ctx, agentState)
 	if err != nil {
 		return nil, "", err
 	}
-	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, existing)
+	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, tokenType, existing)
 	if err != nil {
 		return nil, "", err
 	}
@@ -429,14 +432,25 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	return slot, token, nil
 }
 
-// agentWorkerToken mints (or reuses) the worker token for a private-pool
-// worker slot. These tokens are TokenTypeWorkerPrivate: the type itself marks
-// the worker as customer compute so the gateway can scope cache and credential
-// access by workspace without inferring trust from workspace identity.
-func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, existing *model.AgentWorkerSlotState) (string, string, string, error) {
+func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *model.AgentTokenState) (*types.Workspace, string, error) {
+	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
+		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
+		return workspace, types.TokenTypeWorker, err
+	}
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
+	if err != nil {
+		return nil, types.TokenTypeWorkerPrivate, err
+	}
+	return &workspace, types.TokenTypeWorkerPrivate, nil
+}
+
+// agentWorkerToken mints (or reuses) the worker token for an agent worker
+// slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
+// marketplace workers use trusted worker tokens from the admin workspace.
+func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
-		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkerPrivate {
+		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == tokenType {
 			tokenHash := hashComputeToken(token.Key)
 			if existing.WorkerTokenHash == "" || existing.WorkerTokenHash == tokenHash {
 				return token.Key, token.ExternalId, tokenHash, nil
@@ -444,7 +458,7 @@ func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, existi
 		}
 	}
 
-	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkerPrivate, true)
+	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, tokenType, true)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -480,6 +494,8 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		WorkspaceID:               agentState.WorkspaceID,
 		PoolName:                  agentState.PoolName,
 		MachineID:                 agentState.MachineID,
+		Mode:                      firstNonEmpty(agentState.Mode, string(types.PoolModePrivate)),
+		ContainerRuntime:          agentWorkerRuntime(agentState),
 		CPU:                       worker.TotalCpu,
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
@@ -490,6 +506,16 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		NetworkSlotPoolSize:       agentState.NetworkSlotPoolSize,
 		ContainerStartConcurrency: agentState.ContainerStartConcurrency,
 	}
+}
+
+// agentWorkerRuntime picks the container runtime for an agent worker slot.
+// Marketplace machines run untrusted buyer workloads on seller hardware, so
+// they must use gvisor; private machines keep the runc default.
+func agentWorkerRuntime(agentState *model.AgentTokenState) string {
+	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
+		return types.ContainerRuntimeGvisor.String()
+	}
+	return types.ContainerRuntimeRunc.String()
 }
 
 func agentWorkerImage(config types.AppConfig) string {
@@ -510,6 +536,8 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		WorkerToken:               workerToken,
 		PoolName:                  slot.PoolName,
 		MachineId:                 slot.MachineID,
+		Mode:                      slot.Mode,
+		ContainerRuntime:          slot.ContainerRuntime,
 		Cpu:                       slot.CPU,
 		Memory:                    slot.Memory,
 		Gpu:                       slot.GPU,
@@ -655,6 +683,7 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		ImageClipVersion:       s.appConfig.ImageService.ClipVersion,
 		ImageLocalCacheEnabled: s.appConfig.ImageService.LocalCacheEnabled,
 		Telemetry:              telemetryConfig,
+		Billing:                s.agentBillingConfig(poolState),
 		DisabledServices: []string{
 			"redis",
 			"postgres",
@@ -665,6 +694,26 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 			"k3s",
 		},
 	}, nil
+}
+
+// agentBillingConfig ships the marketplace usage endpoint (and container cost
+// hook) to workers on seller machines so they can meter buyer usage. Private
+// pools never receive billing credentials.
+func (s *Service) agentBillingConfig(poolState *model.PoolState) *pb.AgentBillingConfig {
+	if poolState == nil || poolState.Mode != string(types.PoolModeMarketplace) {
+		return nil
+	}
+	billing := s.appConfig.ManagedCompute.Billing
+	if strings.TrimSpace(billing.Endpoint) == "" {
+		return nil
+	}
+	return &pb.AgentBillingConfig{
+		UsageEndpoint:     billing.Endpoint,
+		UsageToken:        billing.AuthToken,
+		CostHookEndpoint:  s.appConfig.Monitoring.ContainerCostHookConfig.Endpoint,
+		CostHookToken:     s.appConfig.Monitoring.ContainerCostHookConfig.Token,
+		BillableMarginPct: s.appConfig.ManagedCompute.BillableMarginPctOrDefault(),
+	}
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {

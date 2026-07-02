@@ -32,8 +32,8 @@ const (
 	serviceStateRunning
 )
 
-type hostServer struct {
-	opts          HostOptions
+type compatController struct {
+	opts          ControllerOptions
 	token         string
 	gpus          []GPU
 	leases        map[string]lease
@@ -48,14 +48,22 @@ type sentinelEvent struct {
 }
 
 func RunHost(ctx context.Context, opts HostOptions) error {
-	server, err := newHostServer(ctx, opts)
+	return RunController(ctx, opts)
+}
+
+func RunController(ctx context.Context, opts ControllerOptions) error {
+	controller, err := newController(ctx, opts)
 	if err != nil {
 		return err
 	}
-	return server.run(ctx)
+	return controller.run(ctx)
 }
 
-func newHostServer(ctx context.Context, opts HostOptions) (*hostServer, error) {
+func newHostServer(ctx context.Context, opts HostOptions) (*compatController, error) {
+	return newController(ctx, opts)
+}
+
+func newController(ctx context.Context, opts ControllerOptions) (*compatController, error) {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
@@ -104,7 +112,7 @@ func newHostServer(ctx context.Context, opts HostOptions) (*hostServer, error) {
 	for _, gpu := range gpus {
 		serviceStates[gpu.UUID] = serviceStateUnknown
 	}
-	return &hostServer{
+	return &compatController{
 		opts:          opts,
 		token:         token,
 		gpus:          gpus,
@@ -113,7 +121,7 @@ func newHostServer(ctx context.Context, opts HostOptions) (*hostServer, error) {
 	}, nil
 }
 
-func (h *hostServer) run(ctx context.Context) error {
+func (h *compatController) run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/heartbeat", h.handleHeartbeat)
 	mux.HandleFunc("/preempt", h.handlePreempt)
@@ -129,7 +137,7 @@ func (h *hostServer) run(ctx context.Context) error {
 		errCh <- nil
 	}()
 
-	fmt.Fprintf(h.opts.Stdout, "vast host listening on %s\n", h.opts.ListenAddr)
+	fmt.Fprintf(h.opts.Stdout, "vast compatibility controller listening on %s\n", h.opts.ListenAddr)
 	ticker := time.NewTicker(h.opts.ReconcilePeriod)
 	defer ticker.Stop()
 	for {
@@ -147,7 +155,7 @@ func (h *hostServer) run(ctx context.Context) error {
 	}
 }
 
-func (h *hostServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+func (h *compatController) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -171,7 +179,7 @@ func (h *hostServer) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-func (h *hostServer) handlePreempt(w http.ResponseWriter, r *http.Request) {
+func (h *compatController) handlePreempt(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -188,14 +196,14 @@ func (h *hostServer) handlePreempt(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	delete(h.leases, event.GPUUUID)
 	h.mu.Unlock()
-	if err := h.withdrawGPU(r.Context(), gpu, "vast_preempt", true); err != nil {
+	if err := h.withdrawGPU(r.Context(), gpu, PreemptReason, true); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-func (h *hostServer) decodeEvent(w http.ResponseWriter, r *http.Request) (sentinelEvent, bool) {
+func (h *compatController) decodeEvent(w http.ResponseWriter, r *http.Request) (sentinelEvent, bool) {
 	if !h.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return sentinelEvent{}, false
@@ -214,7 +222,7 @@ func (h *hostServer) decodeEvent(w http.ResponseWriter, r *http.Request) (sentin
 	return event, true
 }
 
-func (h *hostServer) authorized(r *http.Request) bool {
+func (h *compatController) authorized(r *http.Request) bool {
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 		return strings.TrimSpace(auth[len("bearer "):]) == h.token
@@ -222,7 +230,7 @@ func (h *hostServer) authorized(r *http.Request) bool {
 	return false
 }
 
-func (h *hostServer) reconcile(ctx context.Context, now time.Time) {
+func (h *compatController) reconcile(ctx context.Context, now time.Time) {
 	for _, gpu := range h.gpus {
 		if h.leaseActive(gpu.UUID, now) {
 			if err := h.ensureGPU(ctx, gpu); err != nil {
@@ -230,13 +238,13 @@ func (h *hostServer) reconcile(ctx context.Context, now time.Time) {
 			}
 			continue
 		}
-		if err := h.withdrawGPU(ctx, gpu, "vast_sentinel_lost", false); err != nil {
+		if err := h.withdrawGPU(ctx, gpu, LeaseLostReason, false); err != nil {
 			fmt.Fprintf(h.opts.Stderr, "vast gpu %s withdraw failed: %v\n", gpu.Index, err)
 		}
 	}
 }
 
-func (h *hostServer) leaseActive(uuid string, now time.Time) bool {
+func (h *compatController) leaseActive(uuid string, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	current, ok := h.leases[uuid]
@@ -250,7 +258,7 @@ func (h *hostServer) leaseActive(uuid string, now time.Time) bool {
 	return true
 }
 
-func (h *hostServer) ensureGPU(ctx context.Context, gpu GPU) error {
+func (h *compatController) ensureGPU(ctx context.Context, gpu GPU) error {
 	if !h.markServiceStarting(gpu.UUID) {
 		return nil
 	}
@@ -259,11 +267,11 @@ func (h *hostServer) ensureGPU(ctx context.Context, gpu GPU) error {
 		h.noteServiceStopped(gpu.UUID)
 		return err
 	}
-	fmt.Fprintf(h.opts.Stdout, "started %s for gpu %s\n", unit, gpu.Index)
+	fmt.Fprintf(h.opts.Stdout, "started %s for Vast-compatible gpu %s\n", unit, gpu.Index)
 	return nil
 }
 
-func (h *hostServer) withdrawGPU(ctx context.Context, gpu GPU, reason string, force bool) error {
+func (h *compatController) withdrawGPU(ctx context.Context, gpu GPU, reason string, force bool) error {
 	if !h.markServiceStopping(gpu.UUID, force) {
 		return nil
 	}
@@ -293,11 +301,11 @@ func (h *hostServer) withdrawGPU(ctx context.Context, gpu GPU, reason string, fo
 			fmt.Fprintf(h.opts.Stderr, "failed to clean beam containers for machine %s: %v\n", state.MachineID, err)
 		}
 	}
-	fmt.Fprintf(h.opts.Stdout, "withdrew %s for gpu %s: %s\n", unit, gpu.Index, reason)
+	fmt.Fprintf(h.opts.Stdout, "withdrew %s for Vast-compatible gpu %s: %s\n", unit, gpu.Index, reason)
 	return stopErr
 }
 
-func (h *hostServer) markServiceStarting(gpuUUID string) bool {
+func (h *compatController) markServiceStarting(gpuUUID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.serviceStates[gpuUUID] == serviceStateRunning {
@@ -307,7 +315,7 @@ func (h *hostServer) markServiceStarting(gpuUUID string) bool {
 	return true
 }
 
-func (h *hostServer) markServiceStopping(gpuUUID string, force bool) bool {
+func (h *compatController) markServiceStopping(gpuUUID string, force bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.serviceStates[gpuUUID] == serviceStateStopped && !force {
@@ -317,13 +325,13 @@ func (h *hostServer) markServiceStopping(gpuUUID string, force bool) bool {
 	return true
 }
 
-func (h *hostServer) noteServiceStopped(gpuUUID string) {
+func (h *compatController) noteServiceStopped(gpuUUID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.serviceStates[gpuUUID] = serviceStateStopped
 }
 
-func (h *hostServer) serviceUnit(gpu GPU) string {
+func (h *compatController) serviceUnit(gpu GPU) string {
 	return fmt.Sprintf(h.opts.ServiceTemplate, gpu.Index)
 }
 

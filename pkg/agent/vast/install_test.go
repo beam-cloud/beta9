@@ -6,7 +6,7 @@ import (
 )
 
 func TestVastHostUnitEscapesServiceTemplateSpecifier(t *testing.T) {
-	unit := vastHostUnit(InstallOptions{
+	unit := compatControllerUnit(InstallOptions{
 		BinaryPath:       "/usr/local/bin/agent",
 		GatewayURL:       "https://gateway.example",
 		StateDir:         "/var/lib/beam/agent-vast",
@@ -15,19 +15,25 @@ func TestVastHostUnitEscapesServiceTemplateSpecifier(t *testing.T) {
 	}, "/var/lib/beam/agent-vast/sentinel-token")
 
 	execStart := unitLine(unit, "ExecStart=")
-	if !strings.Contains(execStart, `"--service-template" "beam-agent-vast-gpu@%%s.service"`) {
+	if !strings.Contains(execStart, `"vast" "_controller"`) {
+		t.Fatalf("ExecStart did not use internal controller command: %s", execStart)
+	}
+	if !strings.Contains(execStart, `"--service-template" "beam-agent-vast-compat-gpu@%%s.service"`) {
 		t.Fatalf("ExecStart did not escape service template: %s", execStart)
 	}
 }
 
 func TestVastGPUUnitExpandsSystemdTemplateInstance(t *testing.T) {
-	unit := vastGPUUnit(InstallOptions{
+	unit := compatGPUAgentUnit(InstallOptions{
 		BinaryPath: "/usr/local/bin/agent",
 		GatewayURL: "https://gateway.example",
 		StateDir:   "/var/lib/beam/agent-vast",
 	}, "/var/lib/beam/agent-vast/join-token")
 
 	execStart := unitLine(unit, "ExecStart=")
+	if !strings.Contains(execStart, `"vast" "_gpu-agent"`) {
+		t.Fatalf("ExecStart did not use internal GPU agent command: %s", execStart)
+	}
 	if !strings.Contains(execStart, `"--gpu-index" %i`) {
 		t.Fatalf("ExecStart did not keep systemd instance specifier expandable: %s", execStart)
 	}

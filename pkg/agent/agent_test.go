@@ -143,6 +143,21 @@ func TestNormalizeBootstrapForAgentRuntimeUsesReachableGatewayHost(t *testing.T)
 	}
 }
 
+func TestNormalizeBootstrapForAgentRuntimeUsesHostLoopbackGateway(t *testing.T) {
+	got := normalizeBootstrapForAgentRuntime("http://127.0.0.1:1994", bootstrapConfig{
+		GatewayHTTPURL:  "http://localhost:1994",
+		GatewayGRPCHost: "beta9-gateway",
+		GatewayGRPCPort: 1993,
+	})
+
+	if got.GatewayHTTPURL != "http://127.0.0.1:1994" {
+		t.Fatalf("expected host-loopback http url, got %q", got.GatewayHTTPURL)
+	}
+	if got.GatewayGRPCHost != "127.0.0.1" {
+		t.Fatalf("expected host-loopback grpc host, got %q", got.GatewayGRPCHost)
+	}
+}
+
 func TestNormalizeBootstrapForAgentRuntimePreservesPublicGRPCHost(t *testing.T) {
 	t.Setenv(types.AgentInContainerEnv, "1")
 
@@ -278,6 +293,87 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		if !containsArg(args, "--add-host", want) {
 			t.Fatalf("expected %s host alias in docker args: %#v", want, args)
 		}
+	}
+}
+
+func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{PoolName: "private-dev", Cpu: 4000, Memory: 8192}
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+
+	pool, ok := config.Worker.Pools["private-dev"]
+	if !ok {
+		t.Fatal("pool missing from worker config")
+	}
+	if pool.Mode != string(types.PoolModePrivate) {
+		t.Fatalf("pool mode = %q, want private", pool.Mode)
+	}
+	if pool.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("pool runtime = %q, want runc", pool.ContainerRuntime)
+	}
+	if !pool.RequiresPoolSelector {
+		t.Fatal("private pool should require pool selector")
+	}
+	if config.ManagedCompute != nil {
+		t.Fatal("private workers must not receive billing config")
+	}
+	if config.Monitoring.ContainerCostHook != nil {
+		t.Fatal("private workers must not receive cost hook config")
+	}
+}
+
+func TestAgentWorkerConfigMarketplaceSlotRunsGvisorWithBilling(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:         "marketplace-listing-1",
+		Mode:             string(types.PoolModeMarketplace),
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+		Cpu:              4000,
+		Memory:           8192,
+	}
+	bootstrap := bootstrapConfig{
+		Billing: &billingBootstrapConfig{
+			UsageEndpoint:     "https://api.example.com/v2/payment/marketplace/usage/",
+			UsageToken:        "usage-token",
+			CostHookEndpoint:  "https://api.example.com/v2/cost/",
+			CostHookToken:     "cost-token",
+			BillableMarginPct: 0.1,
+		},
+	}
+	config := newAgentWorkerConfig(bootstrap, slot).sanitizedForAgent()
+
+	pool, ok := config.Worker.Pools["marketplace-listing-1"]
+	if !ok {
+		t.Fatal("pool missing from worker config")
+	}
+	if pool.Mode != string(types.PoolModeMarketplace) {
+		t.Fatalf("pool mode = %q, want marketplace (must survive sanitize)", pool.Mode)
+	}
+	if pool.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("pool runtime = %q, want gvisor for marketplace isolation", pool.ContainerRuntime)
+	}
+	if pool.RequiresPoolSelector {
+		t.Fatal("marketplace pool must not require pool selector")
+	}
+	if config.Worker.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("worker runtime = %q, want gvisor", config.Worker.ContainerRuntime)
+	}
+	if config.ManagedCompute == nil || config.ManagedCompute.Billing.Endpoint != bootstrap.Billing.UsageEndpoint {
+		t.Fatalf("marketplace billing config = %+v, want usage endpoint threaded through", config.ManagedCompute)
+	}
+	if config.ManagedCompute.BillableMarginPct != 0.1 {
+		t.Fatalf("billable margin = %f, want 0.1", config.ManagedCompute.BillableMarginPct)
+	}
+	if config.Monitoring.ContainerCostHook == nil || config.Monitoring.ContainerCostHook.Endpoint != bootstrap.Billing.CostHookEndpoint {
+		t.Fatalf("cost hook config = %+v, want endpoint threaded through", config.Monitoring.ContainerCostHook)
+	}
+}
+
+// Marketplace slots from an older gateway (no runtime field) still fall back
+// to gvisor: buyer workloads must never run under runc on seller machines.
+func TestAgentWorkerConfigMarketplaceSlotDefaultsToGvisor(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{PoolName: "marketplace-listing-1", Mode: string(types.PoolModeMarketplace)}
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("pool runtime = %q, want gvisor fallback", got)
 	}
 }
 

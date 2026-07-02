@@ -29,6 +29,7 @@ class BuildOptions(betterproto.Message):
     build_ctx_object: str = betterproto.string_field(3)
     source_image_creds: str = betterproto.string_field(4)
     build_secrets: List[str] = betterproto.string_field(5)
+    target_platform: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)
@@ -109,6 +110,12 @@ class ContainerRequest(betterproto.Message):
     docker_enabled: bool = betterproto.bool_field(30)
     runtime_secret_names: List[str] = betterproto.string_field(31)
     runtime_token_required: bool = betterproto.bool_field(32)
+    allow_marketplace: bool = betterproto.bool_field(33)
+    marketplace_listing_id: str = betterproto.string_field(34)
+    marketplace_seller_id: str = betterproto.string_field(35)
+    marketplace_pool_name: str = betterproto.string_field(36)
+    marketplace_machine_id: str = betterproto.string_field(37)
+    marketplace_runtime: str = betterproto.string_field(38)
 
 
 @dataclass(eq=False, repr=False)

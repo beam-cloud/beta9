@@ -141,6 +141,7 @@ type ImageClient struct {
 	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
 	workerId           string
+	workerPoolName     string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
@@ -162,7 +163,7 @@ type ImageClient struct {
 	clipAggregates    map[string]*clipReadAggregate
 }
 
-func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId, workerPoolName string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
 	registry, err := reg.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
@@ -185,6 +186,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		imageCachePath:     imageCachePath,
 		imageMountPath:     imageMountPath,
 		workerId:           workerId,
+		workerPoolName:     workerPoolName,
 		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
@@ -755,11 +757,11 @@ func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *typ
 }
 
 // downloadV1ArchiveDataFromBrokeredURL restores the CLIP v1 data archive
-// through a gateway-presigned URL when no S3 source is available; private-pool
-// workers hold no S3 credentials. The archive lands on local disk and is then
-// seeded into the embedded cache off the hot path.
+// through a gateway-presigned URL when no S3 source is available. Agent-hosted
+// pools hold no image registry credentials, so the archive lands on local disk
+// and is then seeded into the embedded cache off the hot path.
 func (c *ImageClient) downloadV1ArchiveDataFromBrokeredURL(ctx context.Context, request *types.ContainerRequest, targetPath, cachePath string) bool {
-	if !c.privateWorkerImageRequest(request) {
+	if !c.brokeredImageAccessRequest(request) {
 		return false
 	}
 	creds := c.originCredentials(ctx, request, request.ImageId, "")
@@ -968,9 +970,9 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 	return nil, false
 }
 
-// getCredentialProviderForImage determines the appropriate credentials for an image.
-// Private workers are gateway-only: request-embedded credentials are stripped
-// before scheduling and ignored here as a second guardrail.
+// getCredentialProviderForImage determines the appropriate credentials for an
+// image. Agent-hosted pools are gateway-only: request-embedded credentials are
+// stripped before scheduling and ignored here as a second guardrail.
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
@@ -982,14 +984,14 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return nil
 	}
 
-	if c.privateWorkerImageRequest(request) {
+	if c.brokeredImageAccessRequest(request) {
 		if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
 			return provider
 		}
 		log.Warn().
 			Str("image_id", imageId).
 			Str("registry", registry).
-			Msg("private worker has no gateway-vended registry credentials; using anonymous auth and avoiding ambient keychain")
+			Msg("agent worker has no gateway-vended registry credentials; using anonymous auth and avoiding ambient keychain")
 		return privateWorkerAnonymousRegistryProvider{}
 	}
 
@@ -1147,8 +1149,8 @@ func isBenignUnmountError(output string, err error) bool {
 func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, request *types.ContainerRequest) (*types.S3ImageRegistryConfig, error) {
 	imageId := request.ImageId
 	sourceRegistry := c.config.ImageService.Registries.S3
-	if c.privateWorkerImageRequest(request) {
-		// Private workers never hold valid static S3 credentials; any config
+	if c.brokeredImageAccessRequest(request) {
+		// Agent-hosted workers never hold valid static S3 credentials; any config
 		// values are placeholder defaults and must not reach the clip mount.
 		sourceRegistry = types.S3ImageRegistryConfig{}
 	}
@@ -1184,7 +1186,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	tempPath := archivePath + ".tmp"
 	defer os.Remove(tempPath)
 
-	if c.privateWorkerImageRequest(request) {
+	if c.brokeredImageAccessRequest(request) {
 		if pulled, brokeredRegistry, err := c.pullImageArchiveFromBrokeredOrigin(ctx, tempPath, request); err == nil && pulled {
 			if err := os.Rename(tempPath, archivePath); err != nil {
 				return nil, err
@@ -1192,14 +1194,14 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 			go c.publishImageArchiveToEmbeddedCache(archivePath, imageId)
 			return brokeredRegistry, nil
 		} else if err != nil {
-			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable for private worker")
+			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable for agent worker")
 			return nil, err
 		}
-		return nil, fmt.Errorf("gateway-brokered image archive origin is unavailable for private worker image %s", imageId)
+		return nil, fmt.Errorf("gateway-brokered image archive origin is unavailable for agent worker image %s", imageId)
 	}
 
 	err = c.registry.Pull(ctx, tempPath, imageId)
-	if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore && !c.privateWorkerImageRequest(request) {
+	if err != nil && c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore && !c.brokeredImageAccessRequest(request) {
 		if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
 			_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
 			if err2 := c.registry.Pull(ctx, tempPath, imageId); err2 == nil {
@@ -1253,12 +1255,24 @@ func logImageRegistryPullFailure(err error, imageId string, request *types.Conta
 		Msg("failed to pull image from registry")
 }
 
-func (c *ImageClient) privateWorkerImageRequest(request *types.ContainerRequest) bool {
-	if c == nil || request == nil {
+func (c *ImageClient) brokeredImageAccessRequest(request *types.ContainerRequest) bool {
+	if c == nil {
 		return false
 	}
-	pool, ok := c.config.Worker.Pools[request.PoolSelector]
-	return ok && pool.Mode == types.PoolModePrivate
+	if request != nil && request.PoolSelector != "" {
+		if pool, ok := c.config.Worker.Pools[request.PoolSelector]; ok {
+			return brokeredImageAccessPoolMode(pool.Mode)
+		}
+	}
+	if c.workerPoolName == "" {
+		return false
+	}
+	pool, ok := c.config.Worker.Pools[c.workerPoolName]
+	return ok && brokeredImageAccessPoolMode(pool.Mode)
+}
+
+func brokeredImageAccessPoolMode(mode types.PoolMode) bool {
+	return mode == types.PoolModePrivate || mode == types.PoolModeMarketplace
 }
 
 // pullImageArchiveFromBrokeredOrigin pulls the image archive using
@@ -1471,11 +1485,11 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 }
 
 func (c *ImageClient) imageArchiveSourceRegistry(ctx context.Context, request *types.ContainerRequest) *types.S3ImageRegistryConfig {
-	// Private workers never hold valid static S3 credentials: their config is
-	// generated by the agent, and any registry values present are placeholder
+	// Agent-hosted workers never hold valid static S3 credentials: their config
+	// is generated by the agent, and any registry values present are placeholder
 	// defaults from the worker image's embedded config. Only gateway-brokered
 	// credentials are usable.
-	if c.privateWorkerImageRequest(request) {
+	if c.brokeredImageAccessRequest(request) {
 		creds := c.originCredentials(ctx, request, request.ImageId, "")
 		if creds == nil || creds.imageArchiveStorage == nil {
 			return nil
@@ -1705,24 +1719,52 @@ func openImageLockFile(lockPath string) (*os.File, error) {
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
-	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, nil)
+	platform := targetImagePlatform(request)
+	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, platform, nil)
 	if err != nil {
 		return err
 	}
 
-	if imageMetadata.Architecture != runtime.GOARCH {
+	if imageMetadata.Architecture != platform.Architecture {
 		return &types.ExitCodeError{
 			ExitCode: types.ContainerExitCodeIncorrectImageArch,
 		}
 	}
 
-	if imageMetadata.Os != runtime.GOOS {
+	if imageMetadata.Os != platform.OS {
 		return &types.ExitCodeError{
 			ExitCode: types.ContainerExitCodeIncorrectImageOs,
 		}
 	}
 
 	return nil
+}
+
+func targetImagePlatform(request *types.ContainerRequest) common.ImagePlatform {
+	platform := common.ImagePlatform{
+		OS:           runtime.GOOS,
+		Architecture: runtime.GOARCH,
+	}
+	if request == nil {
+		return platform
+	}
+	if requested, ok := common.ParseImagePlatform(request.BuildOptions.TargetPlatform); ok {
+		return requested
+	}
+	if request.AllowMarketplace {
+		// Marketplace V1 only admits Linux/amd64 GPU sellers. Keep the normal
+		// private/BYOC image path tied to the image-service runtime.
+		platform.OS = "linux"
+		platform.Architecture = "amd64"
+	}
+	return platform
+}
+
+func buildahPlatformArgs(platform common.ImagePlatform) []string {
+	if platform.String() == "" {
+		return nil
+	}
+	return []string{"--platform", platform.String()}
 }
 
 // getBuildRegistry returns the registry to use for final and intermediate build images
@@ -2210,6 +2252,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
 	}
+	targetPlatform := targetImagePlatform(request)
 	seedSourceImageAfterBuild := false
 	defer func() {
 		if seedSourceImageAfterBuild {
@@ -2231,6 +2274,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		} else {
 			// buildah pull the base image so bud doesn't attempt HTTPS
 			pullArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "pull"}
+			pullArgs = append(pullArgs, buildahPlatformArgs(targetPlatform)...)
 			if insecure {
 				pullArgs = append(pullArgs, "--tls-verify=false")
 			}
@@ -2265,6 +2309,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	f.Close()
 
 	budArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "bud"}
+	budArgs = append(budArgs, buildahPlatformArgs(targetPlatform)...)
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
@@ -2453,7 +2498,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, ociRef)
 
-	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
+	platform := targetImagePlatform(request)
+	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, platform)
 	if err != nil {
 		log.Warn().Err(err).Msg("unable to inspect image size")
 	}
@@ -2461,7 +2507,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageSizeMB))
 	startTime := time.Now()
-	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, outputLogger)
+	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, platform, outputLogger)
 	if err != nil {
 		return err
 	}

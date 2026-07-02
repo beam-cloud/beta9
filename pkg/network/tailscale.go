@@ -57,6 +57,7 @@ var (
 	staleNetmapMissWindow      = time.Minute
 	staleNetmapRestartCooldown = 5 * time.Minute
 	tailnetPeerPollInterval    = 500 * time.Millisecond
+	tailnetPeerAdvisoryTimeout = time.Second
 )
 
 // staleNetmapDetector tracks terminal peer-lookup misses and decides when the

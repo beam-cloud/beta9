@@ -190,83 +190,69 @@ func TestLazyMountOptionsForPrivateClipV2UsesCheckpoints(t *testing.T) {
 	require.True(t, opts.UseCheckpoints)
 }
 
-func TestGetCredentialProviderForPrivateImageUsesGatewayCredentialsOnly(t *testing.T) {
-	repo := &fakeImageCredentialWorkerRepo{
-		resp: &pb.GetCacheOriginCredentialsResponse{
-			Ok:                  true,
-			RegistryCredentials: "gateway-user:gateway-pass",
-		},
-	}
-	client := &ImageClient{
-		workerRepoClient: repo,
-		originCredsCache: make(map[string]*originCredentials),
-		v2ImageRefs:      common.NewSafeMap[string](),
-		config: types.AppConfig{
-			Worker: types.WorkerConfig{
-				Pools: map[string]types.WorkerPoolConfig{
-					"aws-cpu": {Mode: types.PoolModePrivate},
+func TestGetCredentialProviderForAgentPoolImageUsesGatewayCredentialsOnly(t *testing.T) {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace} {
+		t.Run(string(mode), func(t *testing.T) {
+			repo := &fakeImageCredentialWorkerRepo{
+				resp: &pb.GetCacheOriginCredentialsResponse{
+					Ok:                  true,
+					RegistryCredentials: "gateway-user:gateway-pass",
 				},
-			},
-		},
-	}
-	client.v2ImageRefs.Set("image-a", "registry.example.com/team/image:tag")
-	request := &types.ContainerRequest{
-		WorkspaceId: "workspace-id",
-		StubId:      "stub-id",
-		ImageId:     "image-a",
-		// Private requests should never trust credentials embedded in the
-		// scheduler payload, even if a malformed caller supplies them.
-		ImageCredentials: "embedded-user:embedded-pass",
-		BuildOptions: types.BuildOptions{
-			SourceImageCreds: "source-user:source-pass",
-		},
-		PoolSelector: "aws-cpu",
-	}
+			}
+			client := agentPoolImageClient(mode, repo)
+			client.v2ImageRefs.Set("image-a", "registry.example.com/team/image:tag")
+			request := &types.ContainerRequest{
+				WorkspaceId: "workspace-id",
+				StubId:      "stub-id",
+				ImageId:     "image-a",
+				// Agent-pool requests should never trust credentials embedded in
+				// the scheduler payload, even if a malformed caller supplies them.
+				ImageCredentials: "embedded-user:embedded-pass",
+				BuildOptions: types.BuildOptions{
+					SourceImageCreds: "source-user:source-pass",
+				},
+				PoolSelector: "agent-pool",
+			}
 
-	provider := client.getCredentialProviderForImage(context.Background(), "image-a", request)
-	require.NotNil(t, provider)
-	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
-	require.NoError(t, err)
-	require.NotNil(t, cfg)
-	require.Equal(t, "gateway-user", cfg.Username)
-	require.Equal(t, "gateway-pass", cfg.Password)
-	require.Len(t, repo.requests, 1)
-	require.Equal(t, "image-a", repo.requests[0].ImageId)
+			provider := client.getCredentialProviderForImage(context.Background(), "image-a", request)
+			require.NotNil(t, provider)
+			cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			require.Equal(t, "gateway-user", cfg.Username)
+			require.Equal(t, "gateway-pass", cfg.Password)
+			require.Len(t, repo.requests, 1)
+			require.Equal(t, "image-a", repo.requests[0].ImageId)
+		})
+	}
 }
 
-func TestGetCredentialProviderForPrivateImageAvoidsAmbientKeychainWithoutGatewayCredentials(t *testing.T) {
-	repo := &fakeImageCredentialWorkerRepo{
-		resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
-	}
-	client := &ImageClient{
-		workerRepoClient: repo,
-		originCredsCache: make(map[string]*originCredentials),
-		v2ImageRefs:      common.NewSafeMap[string](),
-		config: types.AppConfig{
-			Worker: types.WorkerConfig{
-				Pools: map[string]types.WorkerPoolConfig{
-					"aws-cpu": {Mode: types.PoolModePrivate},
-				},
-			},
-		},
-	}
-	client.v2ImageRefs.Set("image-a", "registry.example.com/team/image:tag")
-	request := &types.ContainerRequest{
-		WorkspaceId:  "workspace-id",
-		StubId:       "stub-id",
-		ImageId:      "image-a",
-		PoolSelector: "aws-cpu",
-	}
+func TestGetCredentialProviderForAgentPoolImageAvoidsAmbientKeychainWithoutGatewayCredentials(t *testing.T) {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace} {
+		t.Run(string(mode), func(t *testing.T) {
+			repo := &fakeImageCredentialWorkerRepo{
+				resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
+			}
+			client := agentPoolImageClient(mode, repo)
+			client.v2ImageRefs.Set("image-a", "registry.example.com/team/image:tag")
+			request := &types.ContainerRequest{
+				WorkspaceId:  "workspace-id",
+				StubId:       "stub-id",
+				ImageId:      "image-a",
+				PoolSelector: "agent-pool",
+			}
 
-	provider := client.getCredentialProviderForImage(context.Background(), "image-a", request)
-	require.NotNil(t, provider)
-	require.Equal(t, "private-worker-anonymous", provider.Name())
-	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
-	require.NoError(t, err)
-	require.NotNil(t, cfg)
-	require.Empty(t, cfg.Username)
-	require.Empty(t, cfg.Password)
-	require.Len(t, repo.requests, 1)
+			provider := client.getCredentialProviderForImage(context.Background(), "image-a", request)
+			require.NotNil(t, provider)
+			require.Equal(t, "private-worker-anonymous", provider.Name())
+			cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+			require.Empty(t, cfg.Username)
+			require.Empty(t, cfg.Password)
+			require.Len(t, repo.requests, 1)
+		})
+	}
 }
 
 func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
@@ -308,27 +294,41 @@ func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
 }
 
-func TestPullImageFromRegistryPrivateRequiresBrokeredOrigin(t *testing.T) {
+func TestPullImageFromRegistryAgentPoolsRequireBrokeredOrigin(t *testing.T) {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace} {
+		t.Run(string(mode), func(t *testing.T) {
+			repo := &fakeImageCredentialWorkerRepo{
+				resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
+			}
+			client := agentPoolImageClient(mode, repo)
+			archivePath := filepath.Join(t.TempDir(), "image-a.rclip")
+			request := &types.ContainerRequest{
+				WorkspaceId:  "workspace-id",
+				StubId:       "stub-id",
+				ImageId:      "image-a",
+				PoolSelector: "agent-pool",
+			}
+
+			_, err := client.pullImageFromRegistry(context.Background(), archivePath, request)
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "gateway-brokered image archive origin is unavailable")
+			require.Len(t, repo.requests, 1)
+			require.Equal(t, "image-a", repo.requests[0].ImageId)
+		})
+	}
+}
+
+func TestPullImageFromRegistryAgentPoolsUseWorkerPoolWhenRequestSelectorIsEmpty(t *testing.T) {
 	repo := &fakeImageCredentialWorkerRepo{
 		resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
 	}
-	client := &ImageClient{
-		workerRepoClient: repo,
-		originCredsCache: make(map[string]*originCredentials),
-		config: types.AppConfig{
-			Worker: types.WorkerConfig{
-				Pools: map[string]types.WorkerPoolConfig{
-					"aws-cpu": {Mode: types.PoolModePrivate},
-				},
-			},
-		},
-	}
+	client := agentPoolImageClient(types.PoolModeMarketplace, repo)
 	archivePath := filepath.Join(t.TempDir(), "image-a.rclip")
 	request := &types.ContainerRequest{
-		WorkspaceId:  "workspace-id",
-		StubId:       "stub-id",
-		ImageId:      "image-a",
-		PoolSelector: "aws-cpu",
+		WorkspaceId: "workspace-id",
+		StubId:      "stub-id",
+		ImageId:     "image-a",
 	}
 
 	_, err := client.pullImageFromRegistry(context.Background(), archivePath, request)
@@ -337,6 +337,22 @@ func TestPullImageFromRegistryPrivateRequiresBrokeredOrigin(t *testing.T) {
 	require.Contains(t, err.Error(), "gateway-brokered image archive origin is unavailable")
 	require.Len(t, repo.requests, 1)
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
+}
+
+func agentPoolImageClient(mode types.PoolMode, repo *fakeImageCredentialWorkerRepo) *ImageClient {
+	return &ImageClient{
+		workerRepoClient: repo,
+		workerPoolName:   "agent-pool",
+		originCredsCache: make(map[string]*originCredentials),
+		v2ImageRefs:      common.NewSafeMap[string](),
+		config: types.AppConfig{
+			Worker: types.WorkerConfig{
+				Pools: map[string]types.WorkerPoolConfig{
+					"agent-pool": {Mode: mode},
+				},
+			},
+		},
+	}
 }
 
 type fakeImageCredentialWorkerRepo struct {

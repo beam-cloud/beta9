@@ -398,6 +398,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     is_service: bool = betterproto.bool_field(42)
     serving: "ServingConfig" = betterproto.message_field(43)
     disks: List["DurableDisk"] = betterproto.message_field(44)
+    allow_marketplace: bool = betterproto.bool_field(45)
 
 
 @dataclass(eq=False, repr=False)
@@ -736,6 +737,192 @@ class ScaleByocPoolResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class MarketplaceListing(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    seller_workspace_id: str = betterproto.string_field(2)
+    display_name: str = betterproto.string_field(3)
+    gpu: str = betterproto.string_field(4)
+    gpu_count: int = betterproto.uint32_field(5)
+    source: str = betterproto.string_field(6)
+    preemptible: bool = betterproto.bool_field(7)
+    public: bool = betterproto.bool_field(8)
+    status: str = betterproto.string_field(9)
+    pool_name: str = betterproto.string_field(10)
+    created_at: datetime = betterproto.message_field(11)
+    updated_at: datetime = betterproto.message_field(12)
+    machine_count: int = betterproto.uint32_field(13)
+    ready_machine_count: int = betterproto.uint32_field(14)
+    region: str = betterproto.string_field(15)
+
+
+@dataclass(eq=False, repr=False)
+class MarketplaceOffer(betterproto.Message):
+    listing_id: str = betterproto.string_field(1)
+    seller_workspace_id: str = betterproto.string_field(2)
+    display_name: str = betterproto.string_field(3)
+    gpu: str = betterproto.string_field(4)
+    gpu_count: int = betterproto.uint32_field(5)
+    source: str = betterproto.string_field(6)
+    preemptible: bool = betterproto.bool_field(7)
+    machine_count: int = betterproto.uint32_field(8)
+    ready_machine_count: int = betterproto.uint32_field(9)
+    runtime: str = betterproto.string_field(10)
+    region: str = betterproto.string_field(11)
+    cpu_cores: int = betterproto.uint32_field(12)
+    memory_mb: int = betterproto.uint64_field(13)
+    disk_gb: int = betterproto.uint64_field(14)
+    free_gpu_count: int = betterproto.uint32_field(15)
+    reliability: float = betterproto.float_field(16)
+    created_at: datetime = betterproto.message_field(17)
+    public: bool = betterproto.bool_field(18)
+    """
+    False for unlisted offers: reachable via direct share link only, never
+     returned by marketplace search.
+    """
+
+
+@dataclass(eq=False, repr=False)
+class CreateMarketplaceListingRequest(betterproto.Message):
+    display_name: str = betterproto.string_field(1)
+    gpu: str = betterproto.string_field(2)
+    gpu_count: int = betterproto.uint32_field(3)
+    source: str = betterproto.string_field(4)
+    preemptible: bool = betterproto.bool_field(5)
+    public: bool = betterproto.bool_field(6)
+    region: str = betterproto.string_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class CreateMarketplaceListingResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    listing: "MarketplaceListing" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateMarketplaceListingRequest(betterproto.Message):
+    listing_id: str = betterproto.string_field(1)
+    display_name: str = betterproto.string_field(2)
+    gpu: str = betterproto.string_field(3)
+    gpu_count: int = betterproto.uint32_field(4)
+    source: str = betterproto.string_field(5)
+    preemptible: Optional[bool] = betterproto.bool_field(6, optional=True)
+    public: Optional[bool] = betterproto.bool_field(7, optional=True)
+    status: str = betterproto.string_field(8)
+    region: str = betterproto.string_field(9)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateMarketplaceListingResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    listing: "MarketplaceListing" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteMarketplaceListingRequest(betterproto.Message):
+    listing_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteMarketplaceListingResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListMarketplaceListingsRequest(betterproto.Message):
+    limit: int = betterproto.uint32_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ListMarketplaceListingsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    listings: List["MarketplaceListing"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class GetMarketplaceJoinCommandRequest(betterproto.Message):
+    listing_id: str = betterproto.string_field(1)
+    ttl: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class GetMarketplaceJoinCommandResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    command: str = betterproto.string_field(3)
+    token: str = betterproto.string_field(4)
+    expires_at: datetime = betterproto.message_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class ListMarketplaceOffersRequest(betterproto.Message):
+    gpu: str = betterproto.string_field(1)
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListMarketplaceOffersResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    offers: List["MarketplaceOffer"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class GetMarketplaceOfferRequest(betterproto.Message):
+    listing_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class GetMarketplaceOfferResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    offer: "MarketplaceOffer" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ListMarketplaceMachinesRequest(betterproto.Message):
+    listing_id: str = betterproto.string_field(1)
+    limit: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ListMarketplaceMachinesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    machines: List["Machine"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ListMachineContainersRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class MachineContainer(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    status: str = betterproto.string_field(3)
+    workspace_id: str = betterproto.string_field(4)
+    gpu: str = betterproto.string_field(5)
+    gpu_count: int = betterproto.uint32_field(6)
+    cpu: int = betterproto.int64_field(7)
+    memory: int = betterproto.int64_field(8)
+    scheduled_at: int = betterproto.int64_field(9)
+    started_at: int = betterproto.int64_field(10)
+
+
+@dataclass(eq=False, repr=False)
+class ListMachineContainersResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    containers: List["MachineContainer"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class CreatePoolRequest(betterproto.Message):
     pool: "PoolConfig" = betterproto.message_field(1)
 
@@ -841,6 +1028,20 @@ class AgentBootstrapConfig(betterproto.Message):
     image_clip_version: int = betterproto.uint32_field(12)
     image_local_cache_enabled: bool = betterproto.bool_field(13)
     telemetry: "AgentTelemetryConfig" = betterproto.message_field(14)
+    billing: "AgentBillingConfig" = betterproto.message_field(15)
+    """
+    Only set for marketplace pools: lets workers on seller machines meter
+     buyer usage and report it to the billing service.
+    """
+
+
+@dataclass(eq=False, repr=False)
+class AgentBillingConfig(betterproto.Message):
+    usage_endpoint: str = betterproto.string_field(1)
+    usage_token: str = betterproto.string_field(2)
+    cost_hook_endpoint: str = betterproto.string_field(3)
+    cost_hook_token: str = betterproto.string_field(4)
+    billable_margin_pct: float = betterproto.double_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -977,6 +1178,13 @@ class AgentWorkerSlot(betterproto.Message):
     worker_image: str = betterproto.string_field(11)
     network_slot_pool_size: int = betterproto.uint32_field(12)
     container_start_concurrency: int = betterproto.uint32_field(13)
+    mode: str = betterproto.string_field(14)
+    """
+    Pool mode ("private" / "marketplace") and the container runtime the
+     worker must run with. Marketplace slots require gvisor isolation.
+    """
+
+    container_runtime: str = betterproto.string_field(15)
 
 
 @dataclass(eq=False, repr=False)
@@ -1519,6 +1727,87 @@ class GatewayServiceStub(SyncServiceStub):
             ScaleByocPoolRequest,
             ScaleByocPoolResponse,
         )(scale_byoc_pool_request)
+
+    def create_marketplace_listing(
+        self, create_marketplace_listing_request: "CreateMarketplaceListingRequest"
+    ) -> "CreateMarketplaceListingResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateMarketplaceListing",
+            CreateMarketplaceListingRequest,
+            CreateMarketplaceListingResponse,
+        )(create_marketplace_listing_request)
+
+    def update_marketplace_listing(
+        self, update_marketplace_listing_request: "UpdateMarketplaceListingRequest"
+    ) -> "UpdateMarketplaceListingResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/UpdateMarketplaceListing",
+            UpdateMarketplaceListingRequest,
+            UpdateMarketplaceListingResponse,
+        )(update_marketplace_listing_request)
+
+    def delete_marketplace_listing(
+        self, delete_marketplace_listing_request: "DeleteMarketplaceListingRequest"
+    ) -> "DeleteMarketplaceListingResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteMarketplaceListing",
+            DeleteMarketplaceListingRequest,
+            DeleteMarketplaceListingResponse,
+        )(delete_marketplace_listing_request)
+
+    def list_marketplace_listings(
+        self, list_marketplace_listings_request: "ListMarketplaceListingsRequest"
+    ) -> "ListMarketplaceListingsResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListMarketplaceListings",
+            ListMarketplaceListingsRequest,
+            ListMarketplaceListingsResponse,
+        )(list_marketplace_listings_request)
+
+    def get_marketplace_join_command(
+        self, get_marketplace_join_command_request: "GetMarketplaceJoinCommandRequest"
+    ) -> "GetMarketplaceJoinCommandResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetMarketplaceJoinCommand",
+            GetMarketplaceJoinCommandRequest,
+            GetMarketplaceJoinCommandResponse,
+        )(get_marketplace_join_command_request)
+
+    def list_marketplace_offers(
+        self, list_marketplace_offers_request: "ListMarketplaceOffersRequest"
+    ) -> "ListMarketplaceOffersResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListMarketplaceOffers",
+            ListMarketplaceOffersRequest,
+            ListMarketplaceOffersResponse,
+        )(list_marketplace_offers_request)
+
+    def get_marketplace_offer(
+        self, get_marketplace_offer_request: "GetMarketplaceOfferRequest"
+    ) -> "GetMarketplaceOfferResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetMarketplaceOffer",
+            GetMarketplaceOfferRequest,
+            GetMarketplaceOfferResponse,
+        )(get_marketplace_offer_request)
+
+    def list_marketplace_machines(
+        self, list_marketplace_machines_request: "ListMarketplaceMachinesRequest"
+    ) -> "ListMarketplaceMachinesResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListMarketplaceMachines",
+            ListMarketplaceMachinesRequest,
+            ListMarketplaceMachinesResponse,
+        )(list_marketplace_machines_request)
+
+    def list_machine_containers(
+        self, list_machine_containers_request: "ListMachineContainersRequest"
+    ) -> "ListMachineContainersResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListMachineContainers",
+            ListMachineContainersRequest,
+            ListMachineContainersResponse,
+        )(list_machine_containers_request)
 
     def create_pool(
         self, create_pool_request: "CreatePoolRequest"

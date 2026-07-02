@@ -138,7 +138,7 @@ func (wpc *AgentWorkerPoolController) RequiresPoolSelector() bool {
 }
 
 func (wpc *AgentWorkerPoolController) Mode() types.PoolMode {
-	return types.PoolModePrivate
+	return wpc.workerPoolConfig.Mode
 }
 
 func (wpc *AgentWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {

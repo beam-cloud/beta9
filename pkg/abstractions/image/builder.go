@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -588,7 +589,7 @@ func (b *Builder) calculateContainerSpinupTimeout(ctx context.Context, opts *Bui
 		return dockerfileContainerSpinupTimeout
 	case opts.ExistingImageUri != "":
 		sourceImage := getSourceImage(opts)
-		imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
+		imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, buildTargetPlatform(opts), nil)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to inspect image")
 			return defaultContainerSpinupTimeout
@@ -606,6 +607,15 @@ func (b *Builder) calculateContainerSpinupTimeout(ctx context.Context, opts *Bui
 	default:
 		return defaultContainerSpinupTimeout
 	}
+}
+
+func buildTargetPlatform(opts *BuildOpts) common.ImagePlatform {
+	if opts != nil {
+		if platform, ok := common.ParseImagePlatform(opts.TargetPlatform); ok {
+			return platform
+		}
+	}
+	return common.ImagePlatform{OS: runtime.GOOS, Architecture: runtime.GOARCH}
 }
 
 func getSourceImage(opts *BuildOpts) string {
