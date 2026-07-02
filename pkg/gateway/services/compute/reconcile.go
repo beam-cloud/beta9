@@ -18,12 +18,13 @@ const (
 	reconcileStatusCheckInterval = time.Minute
 	minManagedUsageRecordCents   = 1
 
-	reconcileReasonAgentDisconnected   = "agent_disconnected"
-	reconcileReasonBillingUnreachable  = "billing_unreachable"
-	reconcileReasonCreditExhausted     = "credit_exhausted"
-	reconcileReasonMachineDisconnected = "machine_disconnected"
-	reconcileReasonMachineReleased     = "machine_released"
-	reconcileReasonReservationExpired  = "expired"
+	reconcileReasonAgentDisconnected    = "agent_disconnected"
+	reconcileReasonBillingUnreachable   = "billing_unreachable"
+	reconcileReasonCreditExhausted      = "credit_exhausted"
+	reconcileReasonExternalAvailability = "external_availability"
+	reconcileReasonMachineDisconnected  = "machine_disconnected"
+	reconcileReasonMachineReleased      = "machine_released"
+	reconcileReasonReservationExpired   = "expired"
 )
 
 func (s *Service) runReconciler(ctx context.Context) {

@@ -3,7 +3,7 @@ package compute
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,18 +11,36 @@ import (
 const managedNodeNameMaxLen = 63
 
 func AgentMachineID(workspaceID, poolName, fingerprint string) string {
-	seed := fingerprint
-	if seed == "" {
-		seed = fmt.Sprintf("%d", time.Now().UnixNano())
+	if fingerprint == "" {
+		fingerprint = nowSeed()
 	}
-	return shortComputeID(workspaceID + "\x00" + poolName + "\x00" + seed)
+	return shortComputeID(workspaceID, poolName, fingerprint)
 }
 
 func ManagedMachineID(workspaceID, poolName, seed string) string {
 	if seed == "" {
-		seed = fmt.Sprintf("%d", time.Now().UnixNano())
+		seed = nowSeed()
 	}
-	return shortComputeID("managed\x00" + workspaceID + "\x00" + poolName + "\x00" + seed)
+	return shortComputeID("managed", workspaceID, poolName, seed)
+}
+
+func MarketplaceListingID(workspaceID, displayName string) string {
+	return shortComputeID("marketplace", workspaceID, displayName, nowSeed())
+}
+
+// MarketplacePoolName builds the pool name behind a marketplace listing from a
+// seller-provided name or the listing's GPU type (e.g. "marketplace-a100").
+// Pool names feed cache locality keys, so they are stable and human-readable;
+// sellers can point multiple listings at one pool to share machine caches.
+func MarketplacePoolName(slug string) string {
+	slug = strings.Trim(strings.TrimPrefix(cleanNodeNamePart(slug), "marketplace"), "-")
+	if slug == "" {
+		return ""
+	}
+	if len(slug) > 40 {
+		slug = strings.Trim(slug[:40], "-")
+	}
+	return "marketplace-" + slug
 }
 
 func AgentMachineWorkerID(machineID string) string {
@@ -37,7 +55,7 @@ func ManagedNodeName(workspaceID, poolName, machineID string) string {
 	pool := cleanNodeNamePart(poolName)
 	machine := cleanNodeNamePart(machineID)
 	if machine == "" {
-		machine = shortComputeID(workspaceID + "\x00" + poolName)
+		machine = shortComputeID(workspaceID, poolName)
 	} else if len(machine) >= managedNodeNameMaxLen {
 		machine = shortComputeID(machine)
 	}
@@ -71,9 +89,16 @@ func ReservationNodeName(req ReservationRequest) string {
 	return ManagedNodeName("", req.PoolName, req.MachineID)
 }
 
-func shortComputeID(seed string) string {
-	sum := sha256.Sum256([]byte(seed))
+// shortComputeID derives a stable 8-hex-char id from its parts. Parts are
+// joined with NUL — which cannot appear in any of them — so ("ab","c") and
+// ("a","bc") never hash the same.
+func shortComputeID(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])[:8]
+}
+
+func nowSeed() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
 func cleanNodeNamePart(value string) string {

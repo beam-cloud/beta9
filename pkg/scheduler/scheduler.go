@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -28,6 +29,25 @@ const (
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
+)
+
+var (
+	marketplaceBlockedHostMounts = map[string]struct{}{
+		"/":     {},
+		"/home": {},
+		"/var":  {},
+	}
+
+	marketplaceBlockedHostMountPrefixes = []string{
+		"/dev",
+		"/etc",
+		"/proc",
+		"/root",
+		"/run",
+		"/sys",
+		"/var/lib",
+		"/var/run",
+	}
 )
 
 type Scheduler struct {
@@ -102,8 +122,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				Tailscale:      tailscale,
 				EventRepo:      eventRepo,
 			})
-		case types.PoolModePrivate:
-			log.Debug().Str("pool_name", name).Msg("skipping static private pool without workspace state")
+		case types.PoolModePrivate, types.PoolModeMarketplace:
+			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
 			continue
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
@@ -186,6 +206,13 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 	if state == nil {
 		return config
 	}
+	if state.Mode == string(types.PoolModeMarketplace) {
+		config.Mode = types.PoolModeMarketplace
+		config.ContainerRuntime = marketplacePoolRuntime(state)
+		config.RequiresPoolSelector = false
+		config.Priority = int32(100)
+		config.Preemptable = state.Preemptible
+	}
 	if state.Priority != 0 {
 		config.Priority = state.Priority
 	}
@@ -198,6 +225,13 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		}
 	}
 	return config
+}
+
+func marketplacePoolRuntime(state *compute.PoolState) string {
+	if state != nil && state.Config != nil && len(state.Config.Gpu) > 0 {
+		return types.MarketplaceContainerRuntimeForGPU(state.Config.Gpu[0])
+	}
+	return types.ContainerRuntimeGvisor.String()
 }
 
 func firstNonEmpty(values ...string) string {
@@ -721,7 +755,14 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
-		if !request.Preemptable && controller.IsPreemptable() {
+		if !marketplaceControllerAllowed(controller, request) {
+			continue
+		}
+
+		// Marketplace capacity is inherently interruptible (seller machines can
+		// vanish); opting in with AllowMarketplace implies accepting preemption,
+		// so the preemptable gate only applies to non-marketplace pools.
+		if !request.Preemptable && controller.IsPreemptable() && controller.Mode() != types.PoolModeMarketplace {
 			continue
 		}
 
@@ -734,6 +775,16 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 	}
 
 	return filteredControllers
+}
+
+func marketplaceControllerAllowed(controller WorkerPoolController, request *types.ContainerRequest) bool {
+	if controller == nil || controller.Mode() != types.PoolModeMarketplace {
+		return true
+	}
+	if request == nil || !request.AllowMarketplace {
+		return false
+	}
+	return marketplaceRequestSafe(request)
 }
 
 func filterWorkersByPoolSelector(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
@@ -814,10 +865,13 @@ func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
 	return (request.Memory*125 + 99) / 100
 }
 
-func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+func (s *Scheduler) filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
-		if !request.Preemptable && worker.Preemptable {
+		// Preemptible marketplace workers stay eligible: reaching this filter
+		// means the request already opted in with AllowMarketplace, which
+		// implies accepting seller-side preemption.
+		if !request.Preemptable && worker.Preemptable && !s.isMarketplaceWorker(worker) {
 			continue
 		}
 
@@ -874,9 +928,10 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	}
 
 	filteredWorkers := filterWorkersByPoolSelector(workers, request) // Filter workers by pool selector
+	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
-	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
+	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)    // Filter workers by flags
 	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
@@ -899,6 +954,95 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if len(workers) == 0 || s == nil || s.workerPoolManager == nil {
+		return workers
+	}
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		if !s.isMarketplaceWorker(worker) {
+			filtered = append(filtered, worker)
+			continue
+		}
+		if request != nil && request.AllowMarketplace && marketplaceRequestSafe(request) {
+			filtered = append(filtered, worker)
+		}
+	}
+	return filtered
+}
+
+func (s *Scheduler) isMarketplaceWorker(worker *types.Worker) bool {
+	if s == nil || s.workerPoolManager == nil || worker == nil {
+		return false
+	}
+	pool, ok := s.workerPoolManager.GetPool(worker.PoolName)
+	return ok && pool.Config.Mode == types.PoolModeMarketplace
+}
+
+func marketplaceRequestSafe(request *types.ContainerRequest) bool {
+	if request == nil {
+		return false
+	}
+	if request.DockerEnabled {
+		return false
+	}
+	if request.PoolSelector != "" {
+		return false
+	}
+	if marketplaceRequestHasUnsafeMount(request) {
+		return false
+	}
+	return true
+}
+
+func marketplaceRequestHasUnsafeMount(request *types.ContainerRequest) bool {
+	if request == nil {
+		return false
+	}
+	for _, mount := range request.Mounts {
+		if mount.MountType == types.StorageModeDurableDisk || mount.DurableDisk != nil {
+			return true
+		}
+		if marketplaceMountUnsafe(mount) {
+			return true
+		}
+	}
+	return false
+}
+
+func marketplaceMountUnsafe(mount types.Mount) bool {
+	localPath := cleanMarketplaceMountPath(mount.LocalPath)
+	mountPath := cleanMarketplaceMountPath(mount.MountPath)
+	return strings.Contains(localPath, "docker.sock") ||
+		strings.Contains(mountPath, "docker.sock") ||
+		marketplaceBroadHostPath(localPath)
+}
+
+func cleanMarketplaceMountPath(value string) string {
+	return path.Clean(strings.TrimSpace(value))
+}
+
+func marketplaceBroadHostPath(localPath string) bool {
+	if localPath == "" || localPath == "." {
+		return false
+	}
+	if _, ok := marketplaceBlockedHostMounts[localPath]; ok {
+		return true
+	}
+	for _, prefix := range marketplaceBlockedHostMountPrefixes {
+		if localPath == prefix {
+			return true
+		}
+		if strings.HasPrefix(localPath, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {

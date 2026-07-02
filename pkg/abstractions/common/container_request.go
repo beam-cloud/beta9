@@ -27,5 +27,6 @@ func ConfigureContainerRequestNetwork(request *types.ContainerRequest, stubConfi
 	request.BlockNetwork = stubConfig.BlockNetwork
 	request.AllowList = append([]string(nil), stubConfig.AllowList...)
 	request.DockerEnabled = stubConfig.DockerEnabled
+	request.AllowMarketplace = stubConfig.AllowMarketplace
 	return nil
 }

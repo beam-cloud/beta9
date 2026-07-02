@@ -418,6 +418,118 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	}
 }
 
+func TestBackendRoutesAreIndexedByMachineID(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	revisionKey := common.RedisKeys.SchedulerBackendRouteMachineIDRevision("machine-one")
+	pubsubCtx, cancelPubsub := context.WithCancel(ctx)
+	defer cancelPubsub()
+	messages, errs := rdb.Subscribe(pubsubCtx, revisionKey)
+
+	route := types.BackendRoute{
+		RouteID:     "route-one",
+		WorkspaceID: "buyer-one",
+		PoolName:    "marketplace-one",
+		MachineID:   "machine-one",
+		WorkerID:    "worker-one",
+		ContainerID: "container-one",
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8001,
+		Transport:   types.BackendRouteTransportTSNet,
+		State:       types.BackendRouteStateOpening,
+	}
+	if err := repo.SetBackendRoute(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+	if rev := rdb.Get(ctx, revisionKey).Val(); rev != "1" {
+		t.Fatalf("route machine id revision after create = %q, want 1", rev)
+	}
+	select {
+	case message := <-messages:
+		if message.Channel != revisionKey {
+			t.Fatalf("route machine id event channel = %q, want %q", message.Channel, revisionKey)
+		}
+		if message.Payload != common.KeyOperationSet {
+			t.Fatalf("route machine id event payload = %q, want %q", message.Payload, common.KeyOperationSet)
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for route machine id event")
+	}
+
+	if err := repo.SetBackendRoute(ctx, types.BackendRoute{
+		RouteID:     "route-two",
+		WorkspaceID: "buyer-one",
+		PoolName:    "marketplace-one",
+		MachineID:   "machine-two",
+		ContainerID: "container-two",
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8001,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	routes, err := repo.ListBackendRoutesByMachineID(ctx, "machine-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 || routes[0].RouteID != route.RouteID {
+		t.Fatalf("routes = %#v, want only %s", routes, route.RouteID)
+	}
+}
+
+func TestDeleteBackendRoutesByMachineRemovesRoutesIndexedUnderBuyerWorkspace(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	route := types.BackendRoute{
+		RouteID:     "route-one",
+		WorkspaceID: "buyer-one",
+		PoolName:    "marketplace-one",
+		MachineID:   "machine-one",
+		WorkerID:    "worker-one",
+		ContainerID: "container-one",
+		Kind:        types.BackendRouteKindContainer,
+		Port:        8001,
+		Transport:   types.BackendRouteTransportTSNet,
+		State:       types.BackendRouteStateReady,
+	}
+	if err := repo.SetBackendRoute(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteBackendRoutesByMachine(ctx, "seller-one", "marketplace-one", "machine-one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetBackendRoute(ctx, route.RouteID); err == nil {
+		t.Fatal("route still exists after machine release")
+	}
+	routes, err := repo.ListBackendRoutesByMachineID(ctx, "machine-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("machine id routes after delete = %#v, want empty", routes)
+	}
+	routes, err = repo.ListBackendRoutesByMachine(ctx, "buyer-one", "marketplace-one", "machine-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("buyer workspace routes after delete = %#v, want empty", routes)
+	}
+}
+
 func TestDeleteBackendRoutesByContainerIDKeepsSiblingContainerRoutesOnSameMachine(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

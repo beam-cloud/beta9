@@ -162,6 +162,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
+		AllowMarketplace:   in.AllowMarketplace,
 		IsService:          in.IsService,
 		Serving:            servingConfig,
 		Pool:               poolConfig,

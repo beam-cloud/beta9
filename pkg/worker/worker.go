@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
@@ -335,7 +336,7 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerRepoClient, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerPoolName, workerRepoClient, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +384,7 @@ func NewWorker() (_ *Worker, err error) {
 		cacheManager:            cacheManager,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
-		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
+		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config, poolConfig),
 		podAddr:                 podAddr,
@@ -437,7 +438,19 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType, poolConfig.Mode)
+	// Only agent-provisioned workers on billable machines get a usage
+	// recorder; everyone else records nothing beyond the usual metrics.
+	var usageRecorder ContainerUsageRecorder
+	if recorder := clients.NewManagedComputeUsageRecorder(config.ManagedCompute, clients.WorkerIdentity{
+		WorkerID:  workerId,
+		PoolName:  workerPoolName,
+		MachineID: machineID,
+		Runtime:   defaultRuntime.Name(),
+	}); recorder != nil {
+		usageRecorder = recorder
+	}
+
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode, usageRecorder)
 	if err != nil {
 		cancel()
 		return nil, err

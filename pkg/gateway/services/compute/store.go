@@ -94,7 +94,7 @@ func (s *Service) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.A
 	if err != nil {
 		return nil, err
 	}
-	if state == nil || !computePoolCreatedByAuth(state, authInfo) {
+	if state == nil || !poolStateIsPrivate(state) || !computePoolCreatedByAuth(state, authInfo) {
 		return nil, nil
 	}
 	return state, nil

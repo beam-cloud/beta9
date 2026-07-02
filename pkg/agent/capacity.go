@@ -95,6 +95,12 @@ func resolveAgentCapacity(opts types.AgentJoinOptions, preflight preflightResult
 	return capacity, checks, schedulable
 }
 
+// SystemCPUCount and SystemMemoryMB expose detected host capacity for
+// callers (e.g. the vast compat shim) that derive per-GPU capacity shares.
+func SystemCPUCount() int { return systemCPUCount() }
+
+func SystemMemoryMB() uint64 { return systemMemoryMB() }
+
 func systemCPUCount() int {
 	count := runtime.NumCPU()
 	if count <= 0 {

@@ -32,19 +32,30 @@ type joinResponse struct {
 }
 
 type bootstrapConfig struct {
-	GatewayHTTPURL         string          `json:"gatewayHttpUrl"`
-	GatewayGRPCHost        string          `json:"gatewayGrpcHost"`
-	GatewayGRPCPort        int             `json:"gatewayGrpcPort"`
-	GatewayGRPCTLS         bool            `json:"gatewayGrpcTls"`
-	WorkspaceID            string          `json:"workspaceId"`
-	PoolName               string          `json:"poolName"`
-	Transport              string          `json:"transport"`
-	Executor               string          `json:"executor"`
-	Fallback               string          `json:"fallback"`
-	ImageRegistryStore     string          `json:"imageRegistryStore"`
-	ImageClipVersion       uint32          `json:"imageClipVersion"`
-	ImageLocalCacheEnabled bool            `json:"imageLocalCacheEnabled"`
-	Telemetry              telemetryConfig `json:"telemetry"`
+	GatewayHTTPURL         string                  `json:"gatewayHttpUrl"`
+	GatewayGRPCHost        string                  `json:"gatewayGrpcHost"`
+	GatewayGRPCPort        int                     `json:"gatewayGrpcPort"`
+	GatewayGRPCTLS         bool                    `json:"gatewayGrpcTls"`
+	WorkspaceID            string                  `json:"workspaceId"`
+	PoolName               string                  `json:"poolName"`
+	Transport              string                  `json:"transport"`
+	Executor               string                  `json:"executor"`
+	Fallback               string                  `json:"fallback"`
+	ImageRegistryStore     string                  `json:"imageRegistryStore"`
+	ImageClipVersion       uint32                  `json:"imageClipVersion"`
+	ImageLocalCacheEnabled bool                    `json:"imageLocalCacheEnabled"`
+	Telemetry              telemetryConfig         `json:"telemetry"`
+	Billing                *billingBootstrapConfig `json:"billing,omitempty"`
+}
+
+// billingBootstrapConfig is only present for marketplace pools; it lets the
+// worker meter buyer usage and report it to the billing service.
+type billingBootstrapConfig struct {
+	UsageEndpoint     string  `json:"usageEndpoint"`
+	UsageToken        string  `json:"usageToken"`
+	CostHookEndpoint  string  `json:"costHookEndpoint"`
+	CostHookToken     string  `json:"costHookToken"`
+	BillableMarginPct float64 `json:"billableMarginPct"`
 }
 
 type telemetryConfig struct {

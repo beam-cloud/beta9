@@ -129,6 +129,7 @@ class RunnerAbstraction(BaseAbstraction):
         block_network: bool = False,
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
+        allow_marketplace: bool = False,
         pool: Optional[Union[str, Pool]] = None,
         app_kind: str = "",
         serving_protocol: str = "",
@@ -183,6 +184,7 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.checkpoint_enabled = checkpoint_enabled
         self.docker_enabled = docker_enabled
+        self.allow_marketplace = allow_marketplace
         self.is_service = False
         self.serving = ServingConfig.from_options(
             app_kind=app_kind,
@@ -723,6 +725,7 @@ class RunnerAbstraction(BaseAbstraction):
             inputs=inputs,
             outputs=outputs,
             docker_enabled=self.docker_enabled,
+            allow_marketplace=self.allow_marketplace,
             tcp=self.tcp,
             block_network=self.block_network,
             allow_list=self.allow_list,

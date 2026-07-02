@@ -53,6 +53,9 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		TokenHash:                 hashComputeToken(agentToken),
 		WorkspaceID:               tokenState.WorkspaceID,
 		PoolName:                  tokenState.PoolName,
+		Mode:                      firstNonEmpty(tokenState.Mode, poolState.Mode),
+		MarketplaceListingID:      firstNonEmpty(tokenState.MarketplaceListingID, poolState.MarketplaceListingID),
+		SellerWorkspaceID:         firstNonEmpty(tokenState.SellerWorkspaceID, poolState.SellerWorkspaceID),
 		MachineID:                 machineID,
 		MachineFingerprint:        in.MachineFingerprint,
 		Hostname:                  in.Hostname,
@@ -150,13 +153,24 @@ func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *mode
 	return nil
 }
 
-func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
+// requireAgentState resolves an agent token to its current machine state,
+// returning a user-facing error message when the token is invalid or stale.
+// Shared by every agent-token-authenticated RPC in this file.
+func (s *Service) requireAgentState(ctx context.Context, token string) (*model.AgentTokenState, string) {
+	agentState, err := s.getCurrentComputeAgentTokenState(ctx, token)
 	if err != nil {
-		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return nil, err.Error()
 	}
 	if agentState == nil {
-		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+		return nil, "invalid agent token"
+	}
+	return agentState, ""
+}
+
+func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
+	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return &pb.RequestAgentTransportCredentialResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 
 	transport := types.NormalizeBackendRouteTransport(in.Transport)
@@ -183,12 +197,9 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 
 func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	ctx := stream.Context()
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
-	if err != nil {
-		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
-	}
-	if agentState == nil {
-		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: "invalid agent token"})
+	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: errMsg})
 	}
 	// Record disconnect on any stream exit; recordAgentDisconnect no-ops
 	// while the heartbeat is still fresh.
@@ -246,7 +257,7 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 
 	events := make(chan common.KeyEvent, 32)
 	if s.keyEventManager != nil {
-		routeRevisionKey := common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+		routeRevisionKey := agentRouteRevisionKey(agentState)
 		if err := s.keyEventManager.ListenForPublishedPattern(ctx, routeRevisionKey, events); err != nil {
 			return err
 		}
@@ -327,19 +338,52 @@ func coalesceAgentStreamEvents(ctx context.Context, events <-chan common.KeyEven
 }
 
 func (s *Service) agentRoutesForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentRoute, error) {
-	routes, err := s.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+	routes, err := s.listAgentRoutesForMachine(ctx, agentState)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]*pb.AgentRoute, 0, len(routes))
 	for _, route := range routes {
+		if !agentCanManageRoute(agentState, route) {
+			continue
+		}
 		if route.State == types.BackendRouteStateClosing {
 			continue
 		}
 		out = append(out, agentRouteToProto(route))
 	}
 	return out, nil
+}
+
+func (s *Service) listAgentRoutesForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]types.BackendRoute, error) {
+	if agentMarketplaceMode(agentState) {
+		return s.containerRepo.ListBackendRoutesByMachineID(ctx, agentState.MachineID)
+	}
+	return s.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+}
+
+func agentRouteRevisionKey(agentState *model.AgentTokenState) string {
+	if agentMarketplaceMode(agentState) {
+		return common.RedisKeys.SchedulerBackendRouteMachineIDRevision(agentState.MachineID)
+	}
+	return common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+}
+
+func agentMarketplaceMode(agentState *model.AgentTokenState) bool {
+	return agentState != nil && agentState.Mode == string(types.PoolModeMarketplace)
+}
+
+func agentCanManageRoute(agentState *model.AgentTokenState, route types.BackendRoute) bool {
+	if agentState == nil {
+		return false
+	}
+	if agentMarketplaceMode(agentState) {
+		return route.MachineID == agentState.MachineID && route.PoolName == agentState.PoolName
+	}
+	return route.WorkspaceID == agentState.WorkspaceID &&
+		route.PoolName == agentState.PoolName &&
+		route.MachineID == agentState.MachineID
 }
 
 func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
@@ -392,11 +436,11 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 		}
 	}
 
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
+	workspace, tokenType, err := s.workerTokenWorkspaceAndType(ctx, agentState)
 	if err != nil {
 		return nil, "", err
 	}
-	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, existing)
+	token, tokenID, tokenHash, err := s.agentWorkerToken(ctx, workspace.Id, tokenType, existing)
 	if err != nil {
 		return nil, "", err
 	}
@@ -429,14 +473,25 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	return slot, token, nil
 }
 
-// agentWorkerToken mints (or reuses) the worker token for a private-pool
-// worker slot. These tokens are TokenTypeWorkerPrivate: the type itself marks
-// the worker as customer compute so the gateway can scope cache and credential
-// access by workspace without inferring trust from workspace identity.
-func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, existing *model.AgentWorkerSlotState) (string, string, string, error) {
+func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *model.AgentTokenState) (*types.Workspace, string, error) {
+	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
+		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
+		return workspace, types.TokenTypeWorker, err
+	}
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
+	if err != nil {
+		return nil, types.TokenTypeWorkerPrivate, err
+	}
+	return &workspace, types.TokenTypeWorkerPrivate, nil
+}
+
+// agentWorkerToken mints (or reuses) the worker token for an agent worker
+// slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
+// marketplace workers use trusted worker tokens from the admin workspace.
+func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
-		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkerPrivate {
+		if err == nil && token != nil && token.Active && !token.DisabledByClusterAdmin && token.TokenType == tokenType {
 			tokenHash := hashComputeToken(token.Key)
 			if existing.WorkerTokenHash == "" || existing.WorkerTokenHash == tokenHash {
 				return token.Key, token.ExternalId, tokenHash, nil
@@ -444,7 +499,7 @@ func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, existi
 		}
 	}
 
-	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkerPrivate, true)
+	createdToken, err := s.backendRepo.CreateToken(ctx, workspaceID, tokenType, true)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -480,6 +535,10 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		WorkspaceID:               agentState.WorkspaceID,
 		PoolName:                  agentState.PoolName,
 		MachineID:                 agentState.MachineID,
+		Mode:                      firstNonEmpty(agentState.Mode, string(types.PoolModePrivate)),
+		ContainerRuntime:          agentWorkerRuntime(agentState, worker),
+		MarketplaceListingID:      agentState.MarketplaceListingID,
+		SellerWorkspaceID:         agentState.SellerWorkspaceID,
 		CPU:                       worker.TotalCpu,
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
@@ -492,14 +551,38 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 	}
 }
 
+// agentWorkerRuntime picks the container runtime for an agent worker slot.
+// Marketplace machines prefer gVisor, but GPU families without gVisor CUDA
+// support fall back to runc and are advertised as such.
+func agentWorkerRuntime(agentState *model.AgentTokenState, worker *types.Worker) string {
+	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
+		return types.MarketplaceContainerRuntimeForGPU(agentWorkerGPU(agentState, worker))
+	}
+	return types.ContainerRuntimeRunc.String()
+}
+
+func agentWorkerGPU(agentState *model.AgentTokenState, worker *types.Worker) string {
+	if worker != nil && worker.Gpu != "" {
+		return worker.Gpu
+	}
+	if agentState != nil && len(agentState.GPUs) > 0 {
+		return agentState.GPUs[0]
+	}
+	return ""
+}
+
 func agentWorkerImage(config types.AppConfig) string {
+	return agentWorkerImageWithTag(config, config.Worker.ImageTag)
+}
+
+func agentWorkerImageWithTag(config types.AppConfig, tag string) string {
 	image := strings.TrimSuffix(config.Worker.ImageRegistry, "/")
 	if image != "" {
 		image += "/"
 	}
 	image += config.Worker.ImageName
-	if config.Worker.ImageTag != "" {
-		image += ":" + config.Worker.ImageTag
+	if tag != "" {
+		image += ":" + tag
 	}
 	return image
 }
@@ -510,6 +593,10 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		WorkerToken:               workerToken,
 		PoolName:                  slot.PoolName,
 		MachineId:                 slot.MachineID,
+		Mode:                      slot.Mode,
+		ContainerRuntime:          slot.ContainerRuntime,
+		MarketplaceListingId:      slot.MarketplaceListingID,
+		SellerWorkspaceId:         slot.SellerWorkspaceID,
 		Cpu:                       slot.CPU,
 		Memory:                    slot.Memory,
 		Gpu:                       slot.GPU,
@@ -523,19 +610,16 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 }
 
 func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest) (*pb.UpdateAgentRouteStatusResponse, error) {
-	agentState, err := s.getCurrentComputeAgentTokenState(ctx, in.AgentToken)
-	if err != nil {
-		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if agentState == nil {
-		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: "invalid agent token"}, nil
+	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 
 	route, err := s.containerRepo.GetBackendRoute(ctx, in.RouteId)
 	if err != nil {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if route.WorkspaceID != agentState.WorkspaceID || route.PoolName != agentState.PoolName || route.MachineID != agentState.MachineID {
+	if !agentCanManageRoute(agentState, *route) {
 		return &pb.UpdateAgentRouteStatusResponse{Ok: false, ErrMsg: "route does not belong to this agent"}, nil
 	}
 
@@ -581,6 +665,58 @@ func (s *Service) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgent
 	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
 }
 
+func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgentAvailabilityRequest) (*pb.UpdateAgentAvailabilityResponse, error) {
+	// requireAgentState already resolves to the current machine state.
+	current, errMsg := s.requireAgentState(ctx, in.AgentToken)
+	if errMsg != "" {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: errMsg}, nil
+	}
+	if in.Schedulable && model.AgentPreflightFailed(current.Preflight) {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: "machine has failed preflight checks"}, nil
+	}
+
+	observedAt := time.Now().UTC()
+	if in.ObservedAtUnixNano > 0 {
+		observedAt = time.Unix(0, in.ObservedAtUnixNano).UTC()
+	}
+	current.Schedulable = in.Schedulable
+	current.AvailabilityReason = strings.TrimSpace(in.Reason)
+	current.AvailabilityUpdatedAt = observedAt
+	if current.Schedulable {
+		current.LastDisconnectAt = time.Time{}
+	}
+	if err := s.saveComputeAgentTokenState(ctx, current); err != nil {
+		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if !current.Schedulable {
+		s.disableMachineWorker(ctx, current, reconcileReasonExternalAvailability)
+	} else if s.scheduler != nil {
+		// The worker was disabled while the machine was unschedulable;
+		// re-registering the pool re-runs ensureMachineWorkers, which recreates
+		// it immediately instead of waiting for the next agent stream refresh.
+		if poolState, err := s.getPrivatePoolState(ctx, current.WorkspaceID, current.PoolName); err == nil && poolState != nil {
+			_ = s.scheduler.RegisterAgentPool(current.WorkspaceID, poolState)
+		}
+	}
+
+	status := "unschedulable"
+	if current.Schedulable {
+		status = "schedulable"
+	}
+	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
+		Timestamp:   observedAt,
+		WorkspaceID: current.WorkspaceID,
+		PoolName:    current.PoolName,
+		MachineID:   current.MachineID,
+		Action:      types.EventComputeActionMachineAvailabilityUpdated,
+		Status:      status,
+		Schedulable: boolPtr(current.Schedulable),
+		Message:     "agent availability updated: " + firstNonEmpty(current.AvailabilityReason, "unspecified"),
+	})
+
+	return &pb.UpdateAgentAvailabilityResponse{Ok: true}, nil
+}
+
 func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, poolState *model.PoolState) (*pb.AgentBootstrapConfig, error) {
 	config := normalizePoolConfig(poolState.Config)
 	telemetryConfig, err := s.scopedTelemetryConfig(ctx, workspaceID)
@@ -601,6 +737,7 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		ImageClipVersion:       s.appConfig.ImageService.ClipVersion,
 		ImageLocalCacheEnabled: s.appConfig.ImageService.LocalCacheEnabled,
 		Telemetry:              telemetryConfig,
+		Billing:                s.agentBillingConfig(poolState),
 		DisabledServices: []string{
 			"redis",
 			"postgres",
@@ -611,6 +748,26 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 			"k3s",
 		},
 	}, nil
+}
+
+// agentBillingConfig ships the marketplace usage endpoint (and container cost
+// hook) to workers on seller machines so they can meter buyer usage. Private
+// pools never receive billing credentials.
+func (s *Service) agentBillingConfig(poolState *model.PoolState) *pb.AgentBillingConfig {
+	if poolState == nil || poolState.Mode != string(types.PoolModeMarketplace) {
+		return nil
+	}
+	billing := s.appConfig.ManagedCompute.Billing
+	if strings.TrimSpace(billing.Endpoint) == "" {
+		return nil
+	}
+	return &pb.AgentBillingConfig{
+		UsageEndpoint:     billing.Endpoint,
+		UsageToken:        billing.AuthToken,
+		CostHookEndpoint:  s.appConfig.Monitoring.ContainerCostHookConfig.Endpoint,
+		CostHookToken:     s.appConfig.Monitoring.ContainerCostHookConfig.Token,
+		BillableMarginPct: s.appConfig.ManagedCompute.BillableMarginPctOrDefault(),
+	}
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {

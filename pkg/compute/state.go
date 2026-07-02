@@ -21,6 +21,9 @@ type PoolState struct {
 	Transport            string         `json:"transport"`
 	Fallback             string         `json:"fallback"`
 	Priority             int32          `json:"priority"`
+	Preemptible          bool           `json:"preemptible,omitempty"`
+	MarketplaceListingID string         `json:"marketplace_listing_id,omitempty"`
+	SellerWorkspaceID    string         `json:"seller_workspace_id,omitempty"`
 	CreatedByTokenID     string         `json:"created_by_token_id"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
@@ -29,6 +32,27 @@ type PoolState struct {
 	// reservations terminate once the grace period is exceeded.
 	BillingDegradedSince time.Time          `json:"billing_degraded_since,omitempty"`
 	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
+}
+
+const (
+	MarketplaceListingStatusActive   = "active"
+	MarketplaceListingStatusInactive = "inactive"
+)
+
+type MarketplaceListingState struct {
+	ID                string    `json:"id"`
+	SellerWorkspaceID string    `json:"seller_workspace_id"`
+	DisplayName       string    `json:"display_name"`
+	GPU               string    `json:"gpu"`
+	GPUCount          uint32    `json:"gpu_count"`
+	Source            string    `json:"source"`
+	Preemptible       bool      `json:"preemptible"`
+	Public            bool      `json:"public"`
+	Status            string    `json:"status"`
+	PoolName          string    `json:"pool_name"`
+	Region            string    `json:"region,omitempty"` // seller-declared, e.g. "us-east"
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type BYOCProviderState struct {
@@ -42,12 +66,15 @@ type BYOCProviderState struct {
 }
 
 type JoinTokenState struct {
-	TokenHash        string    `json:"token_hash"`
-	WorkspaceID      string    `json:"workspace_id"`
-	PoolName         string    `json:"pool_name"`
-	MachineID        string    `json:"machine_id,omitempty"`
-	CreatedByTokenID string    `json:"created_by_token_id"`
-	CreatedAt        time.Time `json:"created_at"`
+	TokenHash            string    `json:"token_hash"`
+	WorkspaceID          string    `json:"workspace_id"`
+	PoolName             string    `json:"pool_name"`
+	MachineID            string    `json:"machine_id,omitempty"`
+	CreatedByTokenID     string    `json:"created_by_token_id"`
+	CreatedAt            time.Time `json:"created_at"`
+	Mode                 string    `json:"mode,omitempty"`
+	MarketplaceListingID string    `json:"marketplace_listing_id,omitempty"`
+	SellerWorkspaceID    string    `json:"seller_workspace_id,omitempty"`
 	// A zero ExpiresAt is a persistent bootstrap token; it must be explicitly
 	// revoked when the owning resource is deleted.
 	ExpiresAt time.Time `json:"expires_at"`
@@ -61,6 +88,9 @@ type AgentTokenState struct {
 	TokenHash                 string                `json:"token_hash"`
 	WorkspaceID               string                `json:"workspace_id"`
 	PoolName                  string                `json:"pool_name"`
+	Mode                      string                `json:"mode,omitempty"`
+	MarketplaceListingID      string                `json:"marketplace_listing_id,omitempty"`
+	SellerWorkspaceID         string                `json:"seller_workspace_id,omitempty"`
 	MachineID                 string                `json:"machine_id"`
 	MachineFingerprint        string                `json:"machine_fingerprint"`
 	Hostname                  string                `json:"hostname"`
@@ -76,6 +106,8 @@ type AgentTokenState struct {
 	NetworkSlotPoolSize       uint32                `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32                `json:"container_start_concurrency"`
 	Schedulable               bool                  `json:"schedulable"`
+	AvailabilityReason        string                `json:"availability_reason,omitempty"`
+	AvailabilityUpdatedAt     time.Time             `json:"availability_updated_at,omitempty"`
 	Preflight                 []PreflightCheckState `json:"preflight"`
 	Metrics                   AgentMachineMetrics   `json:"metrics"`
 	CreatedAt                 time.Time             `json:"created_at"`
@@ -107,6 +139,10 @@ type AgentWorkerSlotState struct {
 	WorkspaceID               string    `json:"workspace_id"`
 	PoolName                  string    `json:"pool_name"`
 	MachineID                 string    `json:"machine_id"`
+	Mode                      string    `json:"mode,omitempty"`
+	ContainerRuntime          string    `json:"container_runtime,omitempty"`
+	MarketplaceListingID      string    `json:"marketplace_listing_id,omitempty"`
+	SellerWorkspaceID         string    `json:"seller_workspace_id,omitempty"`
 	CPU                       int64     `json:"cpu"`
 	Memory                    int64     `json:"memory"`
 	GPU                       string    `json:"gpu"`
@@ -141,7 +177,7 @@ func AgentMachineStatus(state *AgentTokenState, now time.Time) string {
 	if AgentMachineConnected(state, now) {
 		return types.AgentMachineStatusSchedulable
 	}
-	if state != nil && !state.Schedulable && hasPreflightFailure(state.Preflight) {
+	if state != nil && !state.Schedulable && AgentPreflightFailed(state.Preflight) {
 		return types.AgentMachineStatusPreflightFail
 	}
 	return types.AgentMachineStatusDisconnected
@@ -177,7 +213,7 @@ func AgentMachineLastSeen(state *AgentTokenState) time.Time {
 	return state.LastJoinAt
 }
 
-func hasPreflightFailure(checks []PreflightCheckState) bool {
+func AgentPreflightFailed(checks []PreflightCheckState) bool {
 	for _, check := range checks {
 		if check.Severity == "error" && !check.OK {
 			return true

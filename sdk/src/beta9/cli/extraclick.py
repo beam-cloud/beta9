@@ -368,6 +368,13 @@ def override_config_options(func: click.Command):
         required=False,
     )(f)
     f = click.option(
+        "--allow-marketplace/--no-allow-marketplace",
+        default=None,
+        show_default=False,
+        help="Allow this workload to run on public marketplace hardware.",
+        required=False,
+    )(f)
+    f = click.option(
         "--keep-warm-seconds",
         type=click.INT,
         help="Seconds to retain idle containers. Use 0 for immediate scale-to-zero; -1 keeps idle containers warm indefinitely where supported.",

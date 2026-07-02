@@ -45,12 +45,13 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 	}
 	if t.fs.scheduler != nil {
 		if err := t.fs.scheduler.CheckConcurrencyLimit(&types.ContainerRequest{
-			Cpu:         cpu,
-			GpuCount:    uint32(gpuCount),
-			WorkspaceId: stub.Workspace.ExternalId,
-			Workspace:   stub.Workspace,
-			StubId:      stub.ExternalId,
-			Stub:        *stub,
+			Cpu:              cpu,
+			GpuCount:         uint32(gpuCount),
+			WorkspaceId:      stub.Workspace.ExternalId,
+			Workspace:        stub.Workspace,
+			StubId:           stub.ExternalId,
+			Stub:             *stub,
+			AllowMarketplace: stubConfig.AllowMarketplace,
 		}); err != nil {
 			if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 				log.Info().Str("task_id", taskId).Str("reason", err.Error()).Msg("task rejected due to concurrency limit")

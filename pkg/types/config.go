@@ -437,10 +437,18 @@ type FailoverConfig struct {
 type PoolMode string
 
 var (
-	PoolModeLocal    PoolMode = "local"
-	PoolModeExternal PoolMode = "external"
-	PoolModePrivate  PoolMode = "private"
+	PoolModeLocal       PoolMode = "local"
+	PoolModeExternal    PoolMode = "external"
+	PoolModePrivate     PoolMode = "private"
+	PoolModeMarketplace PoolMode = "marketplace"
 )
+
+// AgentHosted reports whether pools of this mode run on agent-managed
+// machines outside the cluster. Such workers hold no static credentials and
+// use gateway-brokered access for images and caches.
+func (m PoolMode) AgentHosted() bool {
+	return m == PoolModePrivate || m == PoolModeMarketplace
+}
 
 type WorkerPoolConfig struct {
 	GPUType                   string                            `key:"gpuType" json:"gpu_type"`
@@ -669,6 +677,11 @@ type ManagedComputeConfig struct {
 	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
+	// Marketplace identity of the machine this worker runs on, set by the
+	// agent in the generated worker config. Buyer usage on the worker is
+	// billed against this listing.
+	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
+	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
 }
 
 func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {

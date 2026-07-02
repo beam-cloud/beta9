@@ -11,16 +11,17 @@ import (
 )
 
 type agentWorkerConfig struct {
-	ClusterName string                `json:"clusterName"`
-	DebugMode   bool                  `json:"debugMode"`
-	PrettyLogs  bool                  `json:"prettyLogs"`
-	Database    agentConfigDatabase   `json:"database"`
-	Gateway     agentConfigGateway    `json:"gateway"`
-	Storage     agentConfigStorage    `json:"storage"`
-	Image       agentConfigImage      `json:"imageService"`
-	Monitoring  agentConfigMonitoring `json:"monitoring"`
-	Worker      agentConfigWorker     `json:"worker"`
-	Cache       agentConfigCache      `json:"cache"`
+	ClusterName    string                     `json:"clusterName"`
+	DebugMode      bool                       `json:"debugMode"`
+	PrettyLogs     bool                       `json:"prettyLogs"`
+	Database       agentConfigDatabase        `json:"database"`
+	Gateway        agentConfigGateway         `json:"gateway"`
+	Storage        agentConfigStorage         `json:"storage"`
+	Image          agentConfigImage           `json:"imageService"`
+	Monitoring     agentConfigMonitoring      `json:"monitoring"`
+	Worker         agentConfigWorker          `json:"worker"`
+	Cache          agentConfigCache           `json:"cache"`
+	ManagedCompute *agentConfigManagedCompute `json:"managedCompute,omitempty"`
 }
 
 type agentConfigDatabase struct {
@@ -94,6 +95,24 @@ type agentConfigMonitoring struct {
 	MetricsCollector         string                `json:"metricsCollector"`
 	ContainerMetricsInterval string                `json:"containerMetricsInterval"`
 	Prometheus               agentConfigPrometheus `json:"prometheus"`
+	ContainerCostHook        *agentConfigCostHook  `json:"containerCostHook,omitempty"`
+}
+
+type agentConfigCostHook struct {
+	Endpoint string `json:"endpoint"`
+	Token    string `json:"token"`
+}
+
+type agentConfigManagedCompute struct {
+	BillableMarginPct    float64            `json:"billableMarginPct"`
+	Billing              agentConfigBilling `json:"billing"`
+	MarketplaceListingID string             `json:"marketplaceListingID"`
+	SellerWorkspaceID    string             `json:"sellerWorkspaceID"`
+}
+
+type agentConfigBilling struct {
+	Endpoint  string `json:"endpoint"`
+	AuthToken string `json:"authToken"`
 }
 
 type agentConfigPrometheus struct {
@@ -186,6 +205,8 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
 	cacheFSEnabled := !envBool(types.AgentInContainerEnv)
 	cacheLocality := agentCacheLocality(bootstrap, slot)
+	poolMode := slotPoolMode(slot)
+	poolRuntime := slotContainerRuntime(slot)
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
@@ -232,11 +253,12 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			MetricsCollector:         string(types.MetricsCollectorNone),
 			ContainerMetricsInterval: "3s",
 			Prometheus:               agentConfigPrometheus{ScrapeWorkers: false, Port: 0},
+			ContainerCostHook:        costHookConfigForSlot(bootstrap, poolMode),
 		},
 		Worker: agentConfigWorker{
 			HostNetwork:                true,
 			UseHostResolvConf:          true,
-			ContainerRuntime:           types.ContainerRuntimeRunc.String(),
+			ContainerRuntime:           poolRuntime,
 			CacheEnabled:               true,
 			TerminationGracePeriod:     30,
 			ContainerLogLinesPerHour:   6000,
@@ -247,13 +269,13 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			},
 			Pools: map[string]agentConfigPool{
 				slot.PoolName: {
-					Mode:                      string(types.PoolModePrivate),
+					Mode:                      poolMode,
 					GPUType:                   slot.Gpu,
-					ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+					ContainerRuntime:          poolRuntime,
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
 					NetworkPreallocation:      true,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),
-					RequiresPoolSelector:      true,
+					RequiresPoolSelector:      poolMode != string(types.PoolModeMarketplace),
 					Priority:                  1000,
 					CRIUEnabled:               true,
 					TmpSizeLimit:              types.AgentTmpSizeLimit,
@@ -280,7 +302,58 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 				},
 			},
 		},
+		ManagedCompute: managedComputeConfigForSlot(bootstrap, slot, poolMode),
 	}
+}
+
+// slotPoolMode returns the pool mode the gateway assigned to this worker slot,
+// defaulting to private for older gateways that don't send one.
+func slotPoolMode(slot *pb.AgentWorkerSlot) string {
+	if slot != nil && slot.Mode == string(types.PoolModeMarketplace) {
+		return string(types.PoolModeMarketplace)
+	}
+	return string(types.PoolModePrivate)
+}
+
+// slotContainerRuntime returns the runtime the gateway assigned to this slot.
+// Marketplace listings can fall back to runc for GPU families that do not run
+// correctly under gVisor; the listing and offer surfaces expose that runtime.
+func slotContainerRuntime(slot *pb.AgentWorkerSlot) string {
+	if slot != nil && slot.ContainerRuntime != "" {
+		return slot.ContainerRuntime
+	}
+	if slotPoolMode(slot) == string(types.PoolModeMarketplace) {
+		return types.ContainerRuntimeGvisor.String()
+	}
+	return types.ContainerRuntimeRunc.String()
+}
+
+func costHookConfigForSlot(bootstrap bootstrapConfig, poolMode string) *agentConfigCostHook {
+	if poolMode != string(types.PoolModeMarketplace) || bootstrap.Billing == nil || bootstrap.Billing.CostHookEndpoint == "" {
+		return nil
+	}
+	return &agentConfigCostHook{
+		Endpoint: bootstrap.Billing.CostHookEndpoint,
+		Token:    bootstrap.Billing.CostHookToken,
+	}
+}
+
+func managedComputeConfigForSlot(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, poolMode string) *agentConfigManagedCompute {
+	if poolMode != string(types.PoolModeMarketplace) || bootstrap.Billing == nil || bootstrap.Billing.UsageEndpoint == "" {
+		return nil
+	}
+	config := &agentConfigManagedCompute{
+		BillableMarginPct: bootstrap.Billing.BillableMarginPct,
+		Billing: agentConfigBilling{
+			Endpoint:  bootstrap.Billing.UsageEndpoint,
+			AuthToken: bootstrap.Billing.UsageToken,
+		},
+	}
+	if slot != nil {
+		config.MarketplaceListingID = slot.MarketplaceListingId
+		config.SellerWorkspaceID = slot.SellerWorkspaceId
+	}
+	return config
 }
 
 func agentCacheLocality(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) string {
@@ -302,9 +375,13 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 	c.Worker.UseHostResolvConf = true
 	c.Worker.CacheEnabled = true
 	for name, pool := range c.Worker.Pools {
-		pool.Mode = string(types.PoolModePrivate)
+		// Agent workers only ever run in private or marketplace mode; anything
+		// else collapses to private so cluster-only modes can't leak in.
+		if pool.Mode != string(types.PoolModeMarketplace) {
+			pool.Mode = string(types.PoolModePrivate)
+			pool.RequiresPoolSelector = true
+		}
 		pool.CRIUEnabled = true
-		pool.RequiresPoolSelector = true
 		pool.Cache.Enabled = true
 		pool.Cache.Disk.Enabled = true
 		c.Worker.Pools[name] = pool

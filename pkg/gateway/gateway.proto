@@ -176,6 +176,63 @@ service GatewayService {
       body : "*"
     };
   }
+  rpc CreateMarketplaceListing(CreateMarketplaceListingRequest)
+      returns (CreateMarketplaceListingResponse) {
+    option (google.api.http) = {
+      post : "/marketplace/listings"
+      body : "*"
+    };
+  }
+  rpc UpdateMarketplaceListing(UpdateMarketplaceListingRequest)
+      returns (UpdateMarketplaceListingResponse) {
+    option (google.api.http) = {
+      post : "/marketplace/listings/{listing_id}"
+      body : "*"
+    };
+  }
+  rpc DeleteMarketplaceListing(DeleteMarketplaceListingRequest)
+      returns (DeleteMarketplaceListingResponse) {
+    option (google.api.http) = {
+      delete : "/marketplace/listings/{listing_id}"
+    };
+  }
+  rpc ListMarketplaceListings(ListMarketplaceListingsRequest)
+      returns (ListMarketplaceListingsResponse) {
+    option (google.api.http) = {
+      get : "/marketplace/listings"
+    };
+  }
+  rpc GetMarketplaceJoinCommand(GetMarketplaceJoinCommandRequest)
+      returns (GetMarketplaceJoinCommandResponse) {
+    option (google.api.http) = {
+      post : "/marketplace/listings/{listing_id}/join-command"
+      body : "*"
+    };
+  }
+  rpc ListMarketplaceOffers(ListMarketplaceOffersRequest)
+      returns (ListMarketplaceOffersResponse) {
+    option (google.api.http) = {
+      get : "/marketplace/offers"
+    };
+  }
+  rpc GetMarketplaceOffer(GetMarketplaceOfferRequest)
+      returns (GetMarketplaceOfferResponse) {
+    option (google.api.http) = {
+      get : "/marketplace/offers/{listing_id}"
+    };
+  }
+  rpc ListMarketplaceMachines(ListMarketplaceMachinesRequest)
+      returns (ListMarketplaceMachinesResponse) {
+    option (google.api.http) = {
+      get : "/marketplace/listings/{listing_id}/machines"
+    };
+  }
+  rpc ListMachineContainers(ListMachineContainersRequest)
+      returns (ListMachineContainersResponse) {
+    option (google.api.http) = {
+      get : "/pools/{pool_name}/machines/{machine_id}/containers"
+    };
+  }
   rpc CreatePool(CreatePoolRequest)
       returns (CreatePoolResponse) {
     option (google.api.http) = {
@@ -247,6 +304,13 @@ service GatewayService {
       returns (UpdateAgentRouteStatusResponse) {
     option (google.api.http) = {
       post : "/agent/routes/status"
+      body : "*"
+    };
+  }
+  rpc UpdateAgentAvailability(UpdateAgentAvailabilityRequest)
+      returns (UpdateAgentAvailabilityResponse) {
+    option (google.api.http) = {
+      post : "/agent/availability"
       body : "*"
     };
   }
@@ -614,6 +678,7 @@ message GetOrCreateStubRequest {
   bool is_service = 42;
   ServingConfig serving = 43;
   repeated DurableDisk disks = 44;
+  bool allow_marketplace = 45;
 }
 
 message GetOrCreateStubResponse {
@@ -903,6 +968,167 @@ message ScaleBYOCPoolResponse {
   BYOCPoolState byoc = 4;
 }
 
+message MarketplaceListing {
+  string id = 1;
+  string seller_workspace_id = 2;
+  string display_name = 3;
+  string gpu = 4;
+  uint32 gpu_count = 5;
+  string source = 6;
+  bool preemptible = 7;
+  bool public = 8;
+  string status = 9;
+  string pool_name = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  uint32 machine_count = 13;
+  uint32 ready_machine_count = 14;
+  string region = 15;
+  string runtime = 16;
+}
+
+message MarketplaceOffer {
+  string listing_id = 1;
+  string seller_workspace_id = 2;
+  string display_name = 3;
+  string gpu = 4;
+  uint32 gpu_count = 5;
+  string source = 6;
+  bool preemptible = 7;
+  uint32 machine_count = 8;
+  uint32 ready_machine_count = 9;
+  string runtime = 10;
+  string region = 11;
+  uint32 cpu_cores = 12;
+  uint64 memory_mb = 13;
+  uint64 disk_gb = 14;
+  uint32 free_gpu_count = 15;
+  float reliability = 16;
+  google.protobuf.Timestamp created_at = 17;
+  // False for unlisted offers: reachable via direct share link only, never
+  // returned by marketplace search.
+  bool public = 18;
+}
+
+message CreateMarketplaceListingRequest {
+  string display_name = 1;
+  string gpu = 2;
+  uint32 gpu_count = 3;
+  string source = 4;
+  bool preemptible = 5;
+  bool public = 6;
+  string region = 7;
+  // Optional pool the listing's machines join. Reusing a pool across listings
+  // shares machine caches; defaults to a name derived from the GPU type.
+  string pool_name = 8;
+}
+
+message CreateMarketplaceListingResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  MarketplaceListing listing = 3;
+}
+
+message UpdateMarketplaceListingRequest {
+  string listing_id = 1;
+  string display_name = 2;
+  string gpu = 3;
+  uint32 gpu_count = 4;
+  string source = 5;
+  optional bool preemptible = 6;
+  optional bool public = 7;
+  string status = 8;
+  string region = 9;
+}
+
+message UpdateMarketplaceListingResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  MarketplaceListing listing = 3;
+}
+
+message DeleteMarketplaceListingRequest { string listing_id = 1; }
+
+message DeleteMarketplaceListingResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message ListMarketplaceListingsRequest { uint32 limit = 1; }
+
+message ListMarketplaceListingsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated MarketplaceListing listings = 3;
+}
+
+message GetMarketplaceJoinCommandRequest {
+  string listing_id = 1;
+  string ttl = 2;
+}
+
+message GetMarketplaceJoinCommandResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string command = 3;
+  string token = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message ListMarketplaceOffersRequest {
+  string gpu = 1;
+  uint32 limit = 2;
+}
+
+message ListMarketplaceOffersResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated MarketplaceOffer offers = 3;
+}
+
+message GetMarketplaceOfferRequest { string listing_id = 1; }
+
+message GetMarketplaceOfferResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  MarketplaceOffer offer = 3;
+}
+
+message ListMarketplaceMachinesRequest {
+  string listing_id = 1;
+  uint32 limit = 2;
+}
+
+message ListMarketplaceMachinesResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated Machine machines = 3;
+}
+
+message ListMachineContainersRequest {
+  string pool_name = 1;
+  string machine_id = 2;
+}
+
+message MachineContainer {
+  string container_id = 1;
+  string stub_id = 2;
+  string status = 3;
+  string workspace_id = 4;
+  string gpu = 5;
+  uint32 gpu_count = 6;
+  int64 cpu = 7;
+  int64 memory = 8;
+  int64 scheduled_at = 9;
+  int64 started_at = 10;
+}
+
+message ListMachineContainersResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated MachineContainer containers = 3;
+}
+
 message CreatePoolRequest { PoolConfig pool = 1; }
 
 message CreatePoolResponse {
@@ -988,6 +1214,17 @@ message AgentBootstrapConfig {
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
   AgentTelemetryConfig telemetry = 14;
+  // Only set for marketplace pools: lets workers on seller machines meter
+  // buyer usage and report it to the billing service.
+  AgentBillingConfig billing = 15;
+}
+
+message AgentBillingConfig {
+  string usage_endpoint = 1;
+  string usage_token = 2;
+  string cost_hook_endpoint = 3;
+  string cost_hook_token = 4;
+  double billable_margin_pct = 5;
 }
 
 message AgentTelemetryConfig {
@@ -1107,6 +1344,16 @@ message AgentWorkerSlot {
   string worker_image = 11;
   uint32 network_slot_pool_size = 12;
   uint32 container_start_concurrency = 13;
+  // Pool mode ("private" / "marketplace") and the container runtime the
+  // worker must run with. Marketplace slots prefer gVisor but can fall back
+  // to runc for GPU families that are not compatible with gVisor GPU support.
+  string mode = 14;
+  string container_runtime = 15;
+  // Marketplace identity of the machine backing this slot. Machines join a
+  // (possibly shared) pool through exactly one listing; the worker reports
+  // buyer usage against it, so the request itself carries no billing fields.
+  string marketplace_listing_id = 16;
+  string seller_workspace_id = 17;
 }
 
 message StreamAgentRequest { string agent_token = 1; }
@@ -1330,4 +1577,18 @@ message ExportWorkspaceConfigResponse {
   int32 gateway_grpc_port = 5;
   bool gateway_grpc_tls = 6;
   string workspace_id = 7;
+}
+
+message UpdateAgentAvailabilityRequest {
+  string agent_token = 1;
+  bool schedulable = 2;
+  string reason = 3;
+  // Unix nanoseconds, matching the *_unix_nano convention used elsewhere in
+  // this file (e.g. AgentLogRecord.timestamp_unix_nano).
+  int64 observed_at_unix_nano = 4;
+}
+
+message UpdateAgentAvailabilityResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }

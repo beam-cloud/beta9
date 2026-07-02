@@ -763,6 +763,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
+	env = s.applyRuntimeEnvironmentOverrides(env, request)
 
 	// Environment is already assembled in getContainerEnvironment (includes InitialSpec.Env if present)
 	spec.Process.Env = env
@@ -1097,12 +1098,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// Only use CDI if runtime supports it
 		if s.runtime.Capabilities().CDI {
 			cdiCache := cdi.GetDefaultCache()
-
-			var devicesToInject []string
-			for _, device := range assignedDevices {
-				devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
-				devicesToInject = append(devicesToInject, devicePath)
-			}
+			devicesToInject := s.containerGPUManager.CDIDevices(assignedDevices)
 
 			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
 			if err != nil {
@@ -1114,6 +1110,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 		}
+
+		// Pin env vars to the assigned devices regardless of CDI support; for
+		// non-CDI runtimes this is the only thing scoping the container's GPUs.
+		spec.Process.Env = s.containerGPUManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
 	// Expose the bind ports

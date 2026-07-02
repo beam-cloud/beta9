@@ -109,6 +109,7 @@ class ContainerRequest(betterproto.Message):
     docker_enabled: bool = betterproto.bool_field(30)
     runtime_secret_names: List[str] = betterproto.string_field(31)
     runtime_token_required: bool = betterproto.bool_field(32)
+    allow_marketplace: bool = betterproto.bool_field(33)
 
 
 @dataclass(eq=False, repr=False)

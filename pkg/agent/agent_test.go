@@ -281,6 +281,105 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	}
 }
 
+func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{PoolName: "private-dev", Cpu: 4000, Memory: 8192}
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+
+	pool, ok := config.Worker.Pools["private-dev"]
+	if !ok {
+		t.Fatal("pool missing from worker config")
+	}
+	if pool.Mode != string(types.PoolModePrivate) {
+		t.Fatalf("pool mode = %q, want private", pool.Mode)
+	}
+	if pool.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("pool runtime = %q, want runc", pool.ContainerRuntime)
+	}
+	if !pool.RequiresPoolSelector {
+		t.Fatal("private pool should require pool selector")
+	}
+	if config.ManagedCompute != nil {
+		t.Fatal("private workers must not receive billing config")
+	}
+	if config.Monitoring.ContainerCostHook != nil {
+		t.Fatal("private workers must not receive cost hook config")
+	}
+}
+
+func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:             "marketplace-listing-1",
+		Mode:                 string(types.PoolModeMarketplace),
+		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
+		MarketplaceListingId: "listing-1",
+		SellerWorkspaceId:    "seller-1",
+		Cpu:                  4000,
+		Memory:               8192,
+	}
+	bootstrap := bootstrapConfig{
+		Billing: &billingBootstrapConfig{
+			UsageEndpoint:     "https://api.example.com/v2/payment/marketplace/usage/",
+			UsageToken:        "usage-token",
+			CostHookEndpoint:  "https://api.example.com/v2/cost/",
+			CostHookToken:     "cost-token",
+			BillableMarginPct: 0.1,
+		},
+	}
+	config := newAgentWorkerConfig(bootstrap, slot).sanitizedForAgent()
+
+	pool, ok := config.Worker.Pools["marketplace-listing-1"]
+	if !ok {
+		t.Fatal("pool missing from worker config")
+	}
+	if pool.Mode != string(types.PoolModeMarketplace) {
+		t.Fatalf("pool mode = %q, want marketplace (must survive sanitize)", pool.Mode)
+	}
+	if pool.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("pool runtime = %q, want gateway-provided runtime", pool.ContainerRuntime)
+	}
+	if pool.RequiresPoolSelector {
+		t.Fatal("marketplace pool must not require pool selector")
+	}
+	if config.Worker.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("worker runtime = %q, want gateway-provided runtime", config.Worker.ContainerRuntime)
+	}
+	if config.ManagedCompute == nil || config.ManagedCompute.Billing.Endpoint != bootstrap.Billing.UsageEndpoint {
+		t.Fatalf("marketplace billing config = %+v, want usage endpoint threaded through", config.ManagedCompute)
+	}
+	if config.ManagedCompute.BillableMarginPct != 0.1 {
+		t.Fatalf("billable margin = %f, want 0.1", config.ManagedCompute.BillableMarginPct)
+	}
+	// The worker attributes buyer usage to itself, so the slot's marketplace
+	// identity must land in its generated config.
+	if config.ManagedCompute.MarketplaceListingID != "listing-1" || config.ManagedCompute.SellerWorkspaceID != "seller-1" {
+		t.Fatalf("managed compute identity = %q/%q, want listing-1/seller-1",
+			config.ManagedCompute.MarketplaceListingID, config.ManagedCompute.SellerWorkspaceID)
+	}
+	if config.Monitoring.ContainerCostHook == nil || config.Monitoring.ContainerCostHook.Endpoint != bootstrap.Billing.CostHookEndpoint {
+		t.Fatalf("cost hook config = %+v, want endpoint threaded through", config.Monitoring.ContainerCostHook)
+	}
+}
+
+func TestAgentWorkerConfigMarketplaceRuntimeDefaultsAndOverrides(t *testing.T) {
+	for name, slot := range map[string]*pb.AgentWorkerSlot{
+		"missing runtime defaults to gvisor": {
+			PoolName: "marketplace-listing-1",
+			Mode:     string(types.PoolModeMarketplace),
+		},
+		"runc sent by gateway is respected": {
+			PoolName:         "marketplace-listing-1",
+			Mode:             string(types.PoolModeMarketplace),
+			ContainerRuntime: types.ContainerRuntimeRunc.String(),
+		},
+	} {
+		config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+		want := firstNonEmpty(slot.ContainerRuntime, types.ContainerRuntimeGvisor.String())
+		if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != want {
+			t.Fatalf("%s: pool runtime = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestAgentCacheLocalityScopesPoolByWorkspace(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{PoolName: "aws-cpu-pool"}
 
@@ -410,6 +509,53 @@ func TestShouldRemoveManagedWorkerContainer(t *testing.T) {
 			got := shouldRemoveManagedWorkerContainer(tt.inspect, tt.desired, slot)
 			if got != tt.wantRemove {
 				t.Fatalf("remove = %v, want %v", got, tt.wantRemove)
+			}
+		})
+	}
+}
+
+func TestDockerContainerManagedByMachine(t *testing.T) {
+	tests := []struct {
+		name      string
+		inspect   *dockerContainerInspect
+		machineID string
+		want      bool
+	}{
+		{
+			name: "matches managed machine",
+			inspect: dockerInspectWithLabels("/beam-agent-worker", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelMachineID: "machine-one",
+			}),
+			machineID: "machine-one",
+			want:      true,
+		},
+		{
+			name: "ignores unmanaged same machine label",
+			inspect: dockerInspectWithLabels("/other", map[string]string{
+				types.AgentDockerLabelMachineID: "machine-one",
+			}),
+			machineID: "machine-one",
+		},
+		{
+			name: "ignores different machine",
+			inspect: dockerInspectWithLabels("/beam-agent-worker", map[string]string{
+				types.AgentDockerLabelManaged:   "true",
+				types.AgentDockerLabelMachineID: "machine-two",
+			}),
+			machineID: "machine-one",
+		},
+		{
+			name:      "ignores nil inspect",
+			machineID: "machine-one",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dockerContainerManagedByMachine(tt.inspect, tt.machineID)
+			if got != tt.want {
+				t.Fatalf("managed = %v, want %v", got, tt.want)
 			}
 		})
 	}

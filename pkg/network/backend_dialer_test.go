@@ -54,6 +54,13 @@ func withFastRoutePolling(t *testing.T) {
 	t.Cleanup(func() { backendRouteReadyPollInterval = previous })
 }
 
+func withFastPeerAdvisory(t *testing.T) {
+	t.Helper()
+	previous := tailnetPeerAdvisoryTimeout
+	tailnetPeerAdvisoryTimeout = 5 * time.Millisecond
+	t.Cleanup(func() { tailnetPeerAdvisoryTimeout = previous })
+}
+
 // A dial that races route warm-up (cold start or agent stream reconnect after
 // idle) must wait for readiness within its budget instead of failing with
 // "backend route ... is opening".
@@ -202,25 +209,86 @@ func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
 	}
 }
 
-func TestBackendDialerTSNetFailsClearlyWhenPeerMissing(t *testing.T) {
+// newMissingPeerBackendDialer builds a dialer whose tsnet route targets a peer
+// that is absent from the tailscale netmap, with fast polling for tests.
+// Shared by the netmap-miss tests below.
+func newMissingPeerBackendDialer(t *testing.T, dialTimeout time.Duration) (*Tailscale, *BackendDialer) {
+	t.Helper()
 	withFastRoutePolling(t)
 	withFastPeerPolling(t)
+	withFastPeerAdvisory(t)
 
 	ts := testTailscale(t, statusWithPeers("some-other-agent"))
 	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-missing.tailnet.ts.net:29443"}
+	return ts, NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, dialTimeout)
+}
 
-	dialer := NewBackendDialer(ts, types.TailscaleConfig{Enabled: true}, resolver, 300*time.Millisecond)
+func TestBackendDialerTSNetDialsWhenPeerMissingFromStatus(t *testing.T) {
+	_, dialer := newMissingPeerBackendDialer(t, 300*time.Millisecond)
+	serverSide := make(chan net.Conn, 1)
 	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
-		t.Fatal("dial must not be attempted when the peer is missing from the netmap")
-		return nil, nil
+		client, server := net.Pipe()
+		serverSide <- server
+		return client, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		conn, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+		if conn != nil {
+			defer conn.Close()
+		}
+		done <- err
+	}()
+
+	var server net.Conn
+	select {
+	case server = <-serverSide:
+	case err := <-done:
+		t.Fatalf("dial finished early: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("dial was not attempted after netmap miss")
+	}
+	buf := make([]byte, 64)
+	if _, err := server.Read(buf); err != nil {
+		t.Fatalf("read preface: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+}
+
+func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
+	_, dialer := newMissingPeerBackendDialer(t, 250*time.Millisecond)
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		return nil, context.DeadlineExceeded
 	}
 
 	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
 	if err == nil {
-		t.Fatal("dial succeeded, want netmap visibility error")
+		t.Fatal("dial succeeded, want error")
 	}
-	if !strings.Contains(err.Error(), "netmap") {
-		t.Fatalf("dial error = %v, want mention of netmap", err)
+	if !strings.Contains(err.Error(), "netmap") || !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("dial error = %v, want netmap miss and dial failure", err)
+	}
+}
+
+// A dead peer (offline seller machine) produces netmap miss + NXDOMAIN on
+// every dial. That must feed the rate-limited stale-netmap detector only —
+// recycling the shared tsnet server per dial would drop every other route.
+func TestBackendDialerTSNetDeadPeerDoesNotRecycleServer(t *testing.T) {
+	ts, dialer := newMissingPeerBackendDialer(t, 250*time.Millisecond)
+	originalServer := ts.currentServer()
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "beam-agent-missing", IsNotFound: true}
+	}
+
+	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+	if err == nil {
+		t.Fatal("dial succeeded, want error")
+	}
+	if ts.currentServer() != originalServer {
+		t.Fatal("a single dead peer must not recycle the shared tsnet server")
 	}
 }
 

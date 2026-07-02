@@ -84,21 +84,25 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 	}
 }
 
-// dialTSNetRoute connects to the agent's tsnet proxy target. It first
-// confirms the agent peer is visible in this node's netmap (a MagicDNS dial
-// for an unknown peer silently falls back to the system resolver and fails
-// with a misleading NXDOMAIN), then dials, retrying transient failures until
-// the dial budget is exhausted so single blips never surface to callers.
+// dialTSNetRoute connects to the agent's tsnet proxy target. The netmap check
+// is advisory: tsnet.Status can omit peers that tsnet.Dial can still reach
+// (especially soon after an ephemeral node joins), so it never gates the dial.
+// It enriches dial errors and feeds the rate-limited stale-netmap detector
+// inside WaitForPeer; a dead peer must never recycle the shared tsnet server
+// directly, since that would drop every other route's connections.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
+	var lastPeerErr error
 	var lastErr error
 
 	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
 		if host != "" {
-			// Leave headroom for the dial itself: a peer that appears at the
-			// very end of the budget still needs time to handshake.
-			if err := d.tailscale.WaitForPeer(ctx, host, remaining-tsnetDialReserve(remaining)); err != nil {
-				return nil, fmt.Errorf("backend route %s: %w", routeID, err)
+			// Leave headroom for the dial itself.
+			peerWait := min(remaining-tsnetDialReserve(remaining), tailnetPeerAdvisoryTimeout)
+			if peerWait > 0 {
+				if err := d.tailscale.WaitForPeer(ctx, host, peerWait); err != nil {
+					lastPeerErr = err
+				}
 			}
 			if remaining = time.Until(deadline); remaining <= 0 {
 				break
@@ -108,6 +112,9 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 		conn, err := d.dialTSNetTarget(ctx, route.ProxyTarget, remaining)
 		if err == nil {
 			return writeBackendRoutePreface(conn, routeID)
+		}
+		if lastPeerErr != nil {
+			err = fmt.Errorf("%w; tsnet dial failed: %w", lastPeerErr, err)
 		}
 		lastErr = err
 

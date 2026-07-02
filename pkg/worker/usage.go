@@ -12,11 +12,21 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
+const usageRecordTimeout = 5 * time.Second
+
+// ContainerUsageRecorder reports billable container usage to an external
+// system. Implementations carry their own attribution (who is billed, who is
+// paid out); the worker only supplies the container and the interval.
+type ContainerUsageRecorder interface {
+	RecordContainerUsage(ctx context.Context, request *types.ContainerRequest, start, end time.Time, costCents float64) error
+}
+
 type WorkerUsageMetrics struct {
 	workerId            string
 	metricsRepo         repo.UsageMetricsRepository
 	ctx                 context.Context
 	containerCostClient *clients.ContainerCostClient
+	usageRecorder       ContainerUsageRecorder
 	gpuType             string
 	poolMode            types.PoolMode
 }
@@ -24,16 +34,15 @@ type WorkerUsageMetrics struct {
 func NewWorkerUsageMetrics(
 	ctx context.Context,
 	workerId string,
-	config types.MonitoringConfig,
+	config types.AppConfig,
 	gpuType string,
 	poolMode types.PoolMode,
+	usageRecorder ContainerUsageRecorder,
 ) (*WorkerUsageMetrics, error) {
-	metricsRepo, err := usage.NewUsageMetricsRepository(config, string(usage.MetricsSourceWorker))
+	metricsRepo, err := usage.NewUsageMetricsRepository(config.Monitoring, string(usage.MetricsSourceWorker))
 	if err != nil {
 		return nil, err
 	}
-
-	containerCostClient := clients.NewContainerCostClient(config.ContainerCostHookConfig)
 
 	return &WorkerUsageMetrics{
 		ctx:                 ctx,
@@ -41,40 +50,29 @@ func NewWorkerUsageMetrics(
 		gpuType:             gpuType,
 		poolMode:            poolMode,
 		metricsRepo:         metricsRepo,
-		containerCostClient: containerCostClient,
+		containerCostClient: clients.NewContainerCostClient(config.Monitoring.ContainerCostHookConfig),
+		usageRecorder:       usageRecorder,
 	}, nil
 }
 
 func (wm *WorkerUsageMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
-	wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{
-		"container_id":   request.ContainerId,
-		"worker_id":      wm.workerId,
-		"stub_id":        request.StubId,
-		"app_id":         request.AppId,
-		"workspace_id":   request.WorkspaceId,
-		"cpu_millicores": request.Cpu,
-		"mem_mb":         request.Memory,
-		"gpu":            request.Gpu,
-		"gpu_count":      request.GpuCount,
-		"duration_ms":    duration.Milliseconds(),
-	}, float64(duration.Milliseconds()))
+	wm.metricsRepo.IncrementCounter(
+		types.UsageMetricsWorkerContainerDuration,
+		wm.containerMetricLabels(request, duration),
+		float64(duration.Milliseconds()),
+	)
 }
 
 func (wm *WorkerUsageMetrics) metricsContainerCost(request *types.ContainerRequest, duration time.Duration) {
-	wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerCost, map[string]interface{}{
-		"container_id":      request.ContainerId,
-		"worker_id":         wm.workerId,
-		"stub_id":           request.StubId,
-		"app_id":            request.AppId,
-		"workspace_id":      request.WorkspaceId,
-		"cpu_millicores":    request.Cpu,
-		"mem_mb":            request.Memory,
-		"gpu":               request.Gpu,
-		"gpu_count":         request.GpuCount,
-		"cost_per_ms":       request.CostPerMs,
-		"cost_for_duration": request.CostPerMs * float64(duration.Milliseconds()),
-		"duration_ms":       duration.Milliseconds(),
-	}, request.CostPerMs*float64(duration.Milliseconds()))
+	cost := request.CostPerMs * float64(duration.Milliseconds())
+	labels := wm.containerMetricLabels(request, duration)
+	labels["cost_per_ms"] = request.CostPerMs
+	labels["cost_for_duration"] = cost
+	wm.metricsRepo.IncrementCounter(
+		types.UsageMetricsWorkerContainerCost,
+		labels,
+		cost,
+	)
 }
 
 // Periodically send metrics to track container duration
@@ -92,17 +90,54 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 	for {
 		select {
 		case <-ticker.C:
-			duration := time.Since(cursorTime)
-			wm.metricsContainerDuration(request, duration)
-			wm.metricsContainerCost(request, duration)
-			cursorTime = time.Now()
+			end := time.Now()
+			wm.emitContainerUsageInterval(request, cursorTime, end)
+			cursorTime = end
 		case <-ctx.Done():
 			// Consolidate any remaining time
-			duration := time.Since(cursorTime)
-			wm.metricsContainerDuration(request, duration)
-			wm.metricsContainerCost(request, duration)
+			wm.emitContainerUsageInterval(request, cursorTime, time.Now())
 			return
 		}
+	}
+}
+
+func (wm *WorkerUsageMetrics) emitContainerUsageInterval(request *types.ContainerRequest, start, end time.Time) {
+	if request == nil || end.Before(start) {
+		return
+	}
+	duration := end.Sub(start)
+	wm.metricsContainerDuration(request, duration)
+	wm.metricsContainerCost(request, duration)
+	wm.recordExternalUsage(request, start, end, duration)
+}
+
+// recordExternalUsage forwards the interval to the configured usage recorder,
+// if any. Attribution is the recorder's concern, not the worker's.
+func (wm *WorkerUsageMetrics) recordExternalUsage(request *types.ContainerRequest, start, end time.Time, duration time.Duration) {
+	if wm.usageRecorder == nil {
+		return
+	}
+
+	cost := request.CostPerMs * float64(duration.Milliseconds())
+	recordCtx, cancel := context.WithTimeout(context.Background(), usageRecordTimeout)
+	defer cancel()
+	if err := wm.usageRecorder.RecordContainerUsage(recordCtx, request, start, end, cost); err != nil {
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to record container usage")
+	}
+}
+
+func (wm *WorkerUsageMetrics) containerMetricLabels(request *types.ContainerRequest, duration time.Duration) map[string]interface{} {
+	return map[string]interface{}{
+		"container_id":   request.ContainerId,
+		"worker_id":      wm.workerId,
+		"stub_id":        request.StubId,
+		"app_id":         request.AppId,
+		"workspace_id":   request.WorkspaceId,
+		"cpu_millicores": request.Cpu,
+		"mem_mb":         request.Memory,
+		"gpu":            request.Gpu,
+		"gpu_count":      request.GpuCount,
+		"duration_ms":    duration.Milliseconds(),
 	}
 }
 

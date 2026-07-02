@@ -22,6 +22,42 @@ func (gws *GatewayService) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPo
 	return gws.computeService.ScaleBYOCPool(ctx, in)
 }
 
+func (gws *GatewayService) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMarketplaceListingRequest) (*pb.CreateMarketplaceListingResponse, error) {
+	return gws.computeService.CreateMarketplaceListing(ctx, in)
+}
+
+func (gws *GatewayService) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMarketplaceListingRequest) (*pb.UpdateMarketplaceListingResponse, error) {
+	return gws.computeService.UpdateMarketplaceListing(ctx, in)
+}
+
+func (gws *GatewayService) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMarketplaceListingRequest) (*pb.DeleteMarketplaceListingResponse, error) {
+	return gws.computeService.DeleteMarketplaceListing(ctx, in)
+}
+
+func (gws *GatewayService) ListMarketplaceListings(ctx context.Context, in *pb.ListMarketplaceListingsRequest) (*pb.ListMarketplaceListingsResponse, error) {
+	return gws.computeService.ListMarketplaceListings(ctx, in)
+}
+
+func (gws *GatewayService) GetMarketplaceJoinCommand(ctx context.Context, in *pb.GetMarketplaceJoinCommandRequest) (*pb.GetMarketplaceJoinCommandResponse, error) {
+	return gws.computeService.GetMarketplaceJoinCommand(ctx, in)
+}
+
+func (gws *GatewayService) ListMarketplaceOffers(ctx context.Context, in *pb.ListMarketplaceOffersRequest) (*pb.ListMarketplaceOffersResponse, error) {
+	return gws.computeService.ListMarketplaceOffers(ctx, in)
+}
+
+func (gws *GatewayService) GetMarketplaceOffer(ctx context.Context, in *pb.GetMarketplaceOfferRequest) (*pb.GetMarketplaceOfferResponse, error) {
+	return gws.computeService.GetMarketplaceOffer(ctx, in)
+}
+
+func (gws *GatewayService) ListMarketplaceMachines(ctx context.Context, in *pb.ListMarketplaceMachinesRequest) (*pb.ListMarketplaceMachinesResponse, error) {
+	return gws.computeService.ListMarketplaceMachines(ctx, in)
+}
+
+func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
+	return gws.computeService.ListMachineContainers(ctx, in)
+}
+
 func (gws *GatewayService) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {
 	return gws.computeService.CreatePool(ctx, in)
 }
@@ -72,6 +108,10 @@ func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.Gate
 
 func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest) (*pb.UpdateAgentRouteStatusResponse, error) {
 	return gws.computeService.UpdateAgentRouteStatus(ctx, in)
+}
+
+func (gws *GatewayService) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgentAvailabilityRequest) (*pb.UpdateAgentAvailabilityResponse, error) {
+	return gws.computeService.UpdateAgentAvailability(ctx, in)
 }
 
 func (gws *GatewayService) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelemetryServer) error {

@@ -3017,6 +3017,72 @@ func TestRecordAgentMetricsKeepsAgentAliveWhenNodeUsageMetricsFail(t *testing.T)
 	}
 }
 
+func TestUpdateAgentAvailabilityDisablesMachineWorker(t *testing.T) {
+	now := time.Now().UTC()
+	agentToken := "agent-token"
+	machine := &model.AgentTokenState{
+		TokenHash:       hashComputeToken(agentToken),
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Hostname:        "node-1",
+		OS:              "linux",
+		Arch:            "amd64",
+		CPUCount:        4,
+		CPUMillicores:   4000,
+		MemoryMB:        8192,
+		GPUs:            []string{"A10G"},
+		GPUIDs:          []string{"GPU-one"},
+		GPUCount:        1,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastJoinAt:      now,
+		LastHeartbeatAt: now,
+	}
+	computeRepo := &fakeComputeRepo{
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "pool-1"): {machine},
+		},
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	workerRepo := &fakeWorkerRepo{worker: &types.Worker{
+		Id:        workerID,
+		MachineId: machine.MachineID,
+		PoolName:  machine.PoolName,
+		Status:    types.WorkerStatusAvailable,
+	}}
+	containerRepo := &fakeContainerRepo{containers: []types.ContainerState{{
+		ContainerId: "container-one",
+		Status:      types.ContainerStatusRunning,
+	}}}
+	service := &Service{computeRepo: computeRepo, workerRepo: workerRepo, containerRepo: containerRepo}
+
+	resp, err := service.UpdateAgentAvailability(context.Background(), &pb.UpdateAgentAvailabilityRequest{
+		AgentToken:         agentToken,
+		Schedulable:        false,
+		Reason:             "vast_preempt",
+		ObservedAtUnixNano: now.UnixNano(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Ok {
+		t.Fatalf("response not ok: %s", resp.ErrMsg)
+	}
+	if machine.Schedulable {
+		t.Fatal("machine is still schedulable")
+	}
+	if machine.AvailabilityReason != "vast_preempt" {
+		t.Fatalf("availability reason = %q", machine.AvailabilityReason)
+	}
+	if workerRepo.worker.Status != types.WorkerStatusDisabled {
+		t.Fatalf("worker status = %s, want %s", workerRepo.worker.Status, types.WorkerStatusDisabled)
+	}
+	if got, want := strings.Join(containerRepo.stopped, ","), "container-one"; got != want {
+		t.Fatalf("stopped containers = %q, want %q", got, want)
+	}
+}
+
 func TestRecordAgentDisconnectIgnoresFreshHeartbeat(t *testing.T) {
 	now := time.Now().UTC()
 	machine := &model.AgentTokenState{
@@ -4454,6 +4520,7 @@ type fakeComputeRepo struct {
 	pools      map[string][]*model.PoolState
 	machines   map[string][]*model.AgentTokenState
 	joinTokens map[string]*model.JoinTokenState
+	listings   map[string][]*model.MarketplaceListingState
 	savedPool  bool
 }
 
@@ -4571,6 +4638,13 @@ func (r *fakeComputeRepo) SaveAgentTokenState(ctx context.Context, state *model.
 }
 
 func (r *fakeComputeRepo) GetAgentTokenState(ctx context.Context, tokenHash string) (*model.AgentTokenState, error) {
+	for _, machines := range r.machines {
+		for _, machine := range machines {
+			if machine != nil && machine.TokenHash == tokenHash {
+				return machine, nil
+			}
+		}
+	}
 	return nil, nil
 }
 
@@ -4627,6 +4701,80 @@ func (r *fakeComputeRepo) ListAgentWorkerSlotStates(ctx context.Context, workspa
 }
 
 func (r *fakeComputeRepo) DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error {
+	return nil
+}
+
+func (r *fakeComputeRepo) SaveMarketplaceListing(ctx context.Context, state *model.MarketplaceListingState) error {
+	if state == nil {
+		return nil
+	}
+	if r.listings == nil {
+		r.listings = map[string][]*model.MarketplaceListingState{}
+	}
+	for i, listing := range r.listings[state.SellerWorkspaceID] {
+		if listing != nil && listing.ID == state.ID {
+			r.listings[state.SellerWorkspaceID][i] = state
+			return nil
+		}
+	}
+	r.listings[state.SellerWorkspaceID] = append(r.listings[state.SellerWorkspaceID], state)
+	return nil
+}
+
+func (r *fakeComputeRepo) GetMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) (*model.MarketplaceListingState, error) {
+	for _, listing := range r.listings[sellerWorkspaceID] {
+		if listing != nil && listing.ID == listingID {
+			return listing, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeComputeRepo) GetMarketplaceListingByID(ctx context.Context, listingID string) (*model.MarketplaceListingState, error) {
+	for _, listings := range r.listings {
+		for _, listing := range listings {
+			if listing != nil && listing.ID == listingID {
+				return listing, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeComputeRepo) ListMarketplaceListings(ctx context.Context, sellerWorkspaceID string, limit int) ([]*model.MarketplaceListingState, error) {
+	listings := append([]*model.MarketplaceListingState(nil), r.listings[sellerWorkspaceID]...)
+	if limit > 0 && len(listings) > limit {
+		listings = listings[:limit]
+	}
+	return listings, nil
+}
+
+func (r *fakeComputeRepo) ListAllMarketplaceListings(ctx context.Context, limit int) ([]*model.MarketplaceListingState, error) {
+	listings := []*model.MarketplaceListingState{}
+	for _, states := range r.listings {
+		for _, state := range states {
+			listings = append(listings, state)
+			if limit > 0 && len(listings) >= limit {
+				return listings, nil
+			}
+		}
+	}
+	return listings, nil
+}
+
+func (r *fakeComputeRepo) DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error {
+	states := r.listings[sellerWorkspaceID]
+	kept := states[:0]
+	for _, state := range states {
+		if state == nil || state.ID != listingID {
+			kept = append(kept, state)
+		}
+	}
+	if len(kept) == 0 {
+		delete(r.listings, sellerWorkspaceID)
+		return nil
+	}
+	r.listings[sellerWorkspaceID] = kept
 	return nil
 }
 
@@ -4711,8 +4859,9 @@ func (r *fakeUsageMetricsRepo) SetGauge(name string, metadata map[string]interfa
 
 type fakeWorkerRepo struct {
 	repository.WorkerRepository
-	worker *types.Worker
-	status types.WorkerStatus
+	worker  *types.Worker
+	workers []*types.Worker
+	status  types.WorkerStatus
 }
 
 func (r *fakeWorkerRepo) GetWorkerById(workerID string) (*types.Worker, error) {
@@ -4720,6 +4869,20 @@ func (r *fakeWorkerRepo) GetWorkerById(workerID string) (*types.Worker, error) {
 		return nil, &types.ErrWorkerNotFound{WorkerId: workerID}
 	}
 	return r.worker, nil
+}
+
+func (r *fakeWorkerRepo) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
+	workers := r.workers
+	if len(workers) == 0 && r.worker != nil {
+		workers = []*types.Worker{r.worker}
+	}
+	out := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if worker != nil && worker.PoolName == poolName {
+			out = append(out, worker)
+		}
+	}
+	return out, nil
 }
 
 func (r *fakeWorkerRepo) UpdateWorkerStatus(workerID string, status types.WorkerStatus) error {
@@ -4733,9 +4896,11 @@ func (r *fakeWorkerRepo) UpdateWorkerStatus(workerID string, status types.Worker
 
 type fakeContainerRepo struct {
 	repository.ContainerRepository
-	containers    []types.ContainerState
-	stopped       []string
-	deletedRoutes []string
+	containers        []types.ContainerState
+	stopped           []string
+	deletedRoutes     []string
+	routesByMachine   map[string][]types.BackendRoute
+	routesByMachineID map[string][]types.BackendRoute
 }
 
 func (r *fakeContainerRepo) GetActiveContainersByWorkerId(string) ([]types.ContainerState, error) {
@@ -4752,4 +4917,932 @@ func (r *fakeContainerRepo) UpdateContainerStatus(containerID string, status typ
 func (r *fakeContainerRepo) DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error {
 	r.deletedRoutes = append(r.deletedRoutes, workspaceID+"/"+poolName+"/"+machineID)
 	return nil
+}
+
+func (r *fakeContainerRepo) ListBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) ([]types.BackendRoute, error) {
+	return append([]types.BackendRoute(nil), r.routesByMachine[workspaceID+"/"+poolName+"/"+machineID]...), nil
+}
+
+func (r *fakeContainerRepo) ListBackendRoutesByMachineID(ctx context.Context, machineID string) ([]types.BackendRoute, error) {
+	return append([]types.BackendRoute(nil), r.routesByMachineID[machineID]...), nil
+}
+
+func TestMarketplaceAgentRoutesUseMachineIndex(t *testing.T) {
+	buyerRoute := types.BackendRoute{
+		RouteID:     "route-buyer",
+		WorkspaceID: "buyer-1",
+		PoolName:    "marketplace-listing-1",
+		MachineID:   "machine-1",
+		Kind:        types.BackendRouteKindContainer,
+		State:       types.BackendRouteStateOpening,
+	}
+	repo := &fakeContainerRepo{
+		routesByMachine: map[string][]types.BackendRoute{
+			"seller-1/marketplace-listing-1/machine-1": {
+				{RouteID: "seller-scoped-route", WorkspaceID: "seller-1", PoolName: "marketplace-listing-1", MachineID: "machine-1"},
+			},
+		},
+		routesByMachineID: map[string][]types.BackendRoute{
+			"machine-1": {
+				buyerRoute,
+				{RouteID: "other-pool", WorkspaceID: "buyer-1", PoolName: "other-pool", MachineID: "machine-1"},
+				{RouteID: "other-machine", WorkspaceID: "buyer-1", PoolName: "marketplace-listing-1", MachineID: "machine-2"},
+			},
+		},
+	}
+	service := &Service{containerRepo: repo}
+
+	routes, err := service.agentRoutesForMachine(context.Background(), &model.AgentTokenState{
+		WorkspaceID: "seller-1",
+		PoolName:    "marketplace-listing-1",
+		MachineID:   "machine-1",
+		Mode:        string(types.PoolModeMarketplace),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 || routes[0].RouteId != buyerRoute.RouteID {
+		t.Fatalf("routes = %#v, want only buyer route from machine index", routes)
+	}
+}
+
+func TestPrivateAgentRoutesRemainWorkspaceScoped(t *testing.T) {
+	repo := &fakeContainerRepo{
+		routesByMachine: map[string][]types.BackendRoute{
+			"workspace-1/private-pool/machine-1": {
+				{RouteID: "private-route", WorkspaceID: "workspace-1", PoolName: "private-pool", MachineID: "machine-1"},
+			},
+		},
+		routesByMachineID: map[string][]types.BackendRoute{
+			"machine-1": {
+				{RouteID: "buyer-route", WorkspaceID: "buyer-1", PoolName: "private-pool", MachineID: "machine-1"},
+			},
+		},
+	}
+	service := &Service{containerRepo: repo}
+
+	routes, err := service.agentRoutesForMachine(context.Background(), &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "private-pool",
+		MachineID:   "machine-1",
+		Mode:        string(types.PoolModePrivate),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 || routes[0].RouteId != "private-route" {
+		t.Fatalf("routes = %#v, want only workspace-scoped private route", routes)
+	}
+}
+
+func TestMarketplaceAgentCanManageBuyerRouteOnOwnMachine(t *testing.T) {
+	agentState := &model.AgentTokenState{
+		WorkspaceID: "seller-1",
+		PoolName:    "marketplace-listing-1",
+		MachineID:   "machine-1",
+		Mode:        string(types.PoolModeMarketplace),
+	}
+	buyerRoute := types.BackendRoute{WorkspaceID: "buyer-1", PoolName: "marketplace-listing-1", MachineID: "machine-1"}
+	if !agentCanManageRoute(agentState, buyerRoute) {
+		t.Fatal("marketplace agent could not manage buyer route on its own machine")
+	}
+	for _, route := range []types.BackendRoute{
+		{WorkspaceID: "buyer-1", PoolName: "other-pool", MachineID: "machine-1"},
+		{WorkspaceID: "buyer-1", PoolName: "marketplace-listing-1", MachineID: "machine-2"},
+	} {
+		if agentCanManageRoute(agentState, route) {
+			t.Fatalf("marketplace agent managed out-of-scope route: %#v", route)
+		}
+	}
+	privateState := &model.AgentTokenState{WorkspaceID: "seller-1", PoolName: "marketplace-listing-1", MachineID: "machine-1"}
+	if agentCanManageRoute(privateState, buyerRoute) {
+		t.Fatal("private agent managed a route from another workspace")
+	}
+}
+
+func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
+	config := types.AppConfig{}
+	config.Worker.ImageName = "beta9-worker"
+	config.Worker.ImageRegistry = "registry.example.com"
+	config.Worker.ImageTag = "same-tag"
+
+	marketplaceState := &model.AgentTokenState{
+		WorkspaceID:          "seller-1",
+		PoolName:             "marketplace-listing-1",
+		MachineID:            "machine-1",
+		Mode:                 string(types.PoolModeMarketplace),
+		MarketplaceListingID: "listing-1",
+		SellerWorkspaceID:    "seller-1",
+	}
+	worker := &types.Worker{Id: "worker-1", TotalCpu: 4000, TotalMemory: 8192, Gpu: "A10G", TotalGpuCount: 1}
+	slot := agentWorkerSlotState(config, marketplaceState, worker, "token-id", "token-hash")
+	if slot.Mode != string(types.PoolModeMarketplace) {
+		t.Fatalf("slot mode = %q, want marketplace", slot.Mode)
+	}
+	// The slot carries the machine's marketplace identity so the worker can
+	// attribute buyer usage without billing fields on container requests.
+	if slot.MarketplaceListingID != "listing-1" || slot.SellerWorkspaceID != "seller-1" {
+		t.Fatalf("slot marketplace identity = %q/%q, want listing-1/seller-1", slot.MarketplaceListingID, slot.SellerWorkspaceID)
+	}
+	if slot.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("slot runtime = %q, want gvisor for supported marketplace GPU", slot.ContainerRuntime)
+	}
+	if slot.WorkerImage != "registry.example.com/beta9-worker:same-tag" {
+		t.Fatalf("marketplace slot worker image = %q, want configured image", slot.WorkerImage)
+	}
+
+	worker.Gpu = "V100"
+	slot = agentWorkerSlotState(config, marketplaceState, worker, "token-id", "token-hash")
+	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("slot runtime = %q, want runc fallback for V100", slot.ContainerRuntime)
+	}
+
+	privateState := &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "private-pool",
+		MachineID:   "machine-2",
+	}
+	slot = agentWorkerSlotState(config, privateState, worker, "token-id", "token-hash")
+	if slot.Mode != string(types.PoolModePrivate) {
+		t.Fatalf("slot mode = %q, want private default", slot.Mode)
+	}
+	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("slot runtime = %q, want runc default", slot.ContainerRuntime)
+	}
+	if slot.WorkerImage != "registry.example.com/beta9-worker:same-tag" {
+		t.Fatalf("private slot worker image = %q, want configured image", slot.WorkerImage)
+	}
+}
+
+func TestAgentBillingConfigOnlyForMarketplacePools(t *testing.T) {
+	service := &Service{
+		appConfig: types.AppConfig{
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{
+					Endpoint:  "https://api.example.com/v2/payment/managed-compute/",
+					AuthToken: "usage-token",
+				},
+			},
+			Monitoring: types.MonitoringConfig{
+				ContainerCostHookConfig: types.ContainerCostHookConfig{
+					Endpoint: "https://api.example.com/v2/cost/",
+					Token:    "cost-token",
+				},
+			},
+		},
+	}
+
+	marketplacePool := &model.PoolState{Name: "marketplace-listing-1", Mode: string(types.PoolModeMarketplace)}
+	billing := service.agentBillingConfig(marketplacePool)
+	if billing == nil {
+		t.Fatal("marketplace pools should receive billing config")
+	}
+	if billing.UsageEndpoint != "https://api.example.com/v2/payment/managed-compute/" || billing.UsageToken != "usage-token" {
+		t.Fatalf("billing usage config = %+v, want endpoint and token", billing)
+	}
+	if billing.CostHookEndpoint != "https://api.example.com/v2/cost/" || billing.CostHookToken != "cost-token" {
+		t.Fatalf("billing cost hook config = %+v, want endpoint and token", billing)
+	}
+	if billing.BillableMarginPct != types.ManagedComputeDefaultBillableMarginPct {
+		t.Fatalf("billable margin = %f, want default", billing.BillableMarginPct)
+	}
+
+	privatePool := &model.PoolState{Name: "private-pool", Mode: string(types.PoolModePrivate)}
+	if service.agentBillingConfig(privatePool) != nil {
+		t.Fatal("private pools must never receive billing credentials")
+	}
+
+	unconfigured := &Service{appConfig: types.AppConfig{}}
+	if unconfigured.agentBillingConfig(marketplacePool) != nil {
+		t.Fatal("billing config should be omitted when no endpoint is configured")
+	}
+}
+
+func TestListMachineContainersReturnsActiveContainers(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					WorkspaceID:      "workspace-1",
+					Name:             "marketplace-listing-1",
+					Mode:             string(types.PoolModeMarketplace),
+					Config:           &pb.PoolConfig{Name: "marketplace-listing-1"},
+					CreatedByTokenID: "owner-token",
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "marketplace-listing-1"): {
+				{
+					WorkspaceID: "workspace-1",
+					PoolName:    "marketplace-listing-1",
+					MachineID:   "machine-1",
+					Schedulable: true,
+				},
+			},
+		},
+	}
+	containerRepo := &fakeContainerRepo{
+		containers: []types.ContainerState{
+			{
+				ContainerId: "container-1",
+				StubId:      "stub-1",
+				Status:      types.ContainerStatusRunning,
+				WorkspaceId: "buyer-1",
+				Gpu:         "RTX5090",
+				GpuCount:    1,
+				Cpu:         1000,
+				Memory:      1024,
+				ScheduledAt: 100,
+			},
+			{
+				ContainerId: "container-2",
+				StubId:      "stub-2",
+				Status:      types.ContainerStatusPending,
+				WorkspaceId: "buyer-2",
+				ScheduledAt: 200,
+			},
+		},
+	}
+	service := &Service{computeRepo: repo, containerRepo: containerRepo}
+
+	res, err := service.ListMachineContainers(ctx, &pb.ListMachineContainersRequest{
+		PoolName:  "marketplace-listing-1",
+		MachineId: "machine-1",
+	})
+	if err != nil {
+		t.Fatalf("ListMachineContainers() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListMachineContainers() not ok: %s", res.ErrMsg)
+	}
+	if len(res.Containers) != 2 {
+		t.Fatalf("container count = %d, want 2", len(res.Containers))
+	}
+	// Most recently scheduled first.
+	if res.Containers[0].ContainerId != "container-2" || res.Containers[1].ContainerId != "container-1" {
+		t.Fatalf("container order = %s, %s; want container-2 first", res.Containers[0].ContainerId, res.Containers[1].ContainerId)
+	}
+	if res.Containers[1].WorkspaceId != "buyer-1" || res.Containers[1].Gpu != "RTX5090" {
+		t.Fatalf("container fields = %+v, want buyer workspace and gpu mapped", res.Containers[1])
+	}
+
+	missing, err := service.ListMachineContainers(ctx, &pb.ListMachineContainersRequest{
+		PoolName:  "marketplace-listing-1",
+		MachineId: "machine-unknown",
+	})
+	if err != nil {
+		t.Fatalf("ListMachineContainers() error = %v", err)
+	}
+	if missing.Ok {
+		t.Fatal("ListMachineContainers() should reject unknown machines")
+	}
+}
+
+// Full seller flow: publish a listing, generate the join command, then join
+// machines. The join must enforce the listing's declared GPU type — machines
+// without that GPU are rejected — while raw nvidia-smi names are accepted.
+func TestMarketplaceJoinEnforcesListingGPUType(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	created, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "rtx-5090-rig",
+		Gpu:         "RTX5090",
+		GpuCount:    2,
+		Public:      true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if !created.Ok {
+		t.Fatalf("CreateMarketplaceListing() not ok: %s", created.ErrMsg)
+	}
+
+	command, err := service.GetMarketplaceJoinCommand(ctx, &pb.GetMarketplaceJoinCommandRequest{
+		ListingId: created.Listing.Id,
+	})
+	if err != nil {
+		t.Fatalf("GetMarketplaceJoinCommand() error = %v", err)
+	}
+	if !command.Ok {
+		t.Fatalf("GetMarketplaceJoinCommand() not ok: %s", command.ErrMsg)
+	}
+
+	// Raw nvidia-smi GPU names must normalize onto the listing's GPU type.
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          command.Token,
+		MachineFingerprint: "fingerprint-match",
+		Gpu:                []string{"NVIDIA GeForce RTX 5090", "NVIDIA GeForce RTX 5090"},
+		GpuCount:           2,
+		CpuCount:           16,
+		MemoryMb:           65536,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("JoinAgent() rejected a matching machine: %s", res.ErrMsg)
+	}
+
+	// A machine with a different GPU must be rejected.
+	res, err = service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          command.Token,
+		MachineFingerprint: "fingerprint-wrong-gpu",
+		Gpu:                []string{"Tesla T4"},
+		GpuCount:           1,
+		CpuCount:           8,
+		MemoryMb:           16384,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("JoinAgent() accepted a machine without the listed GPU type")
+	}
+	if !strings.Contains(res.ErrMsg, `requires GPU type "RTX5090"`) {
+		t.Fatalf("JoinAgent() error = %q, want listing GPU mismatch", res.ErrMsg)
+	}
+
+	// A machine with no GPUs at all must also be rejected.
+	res, err = service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          command.Token,
+		MachineFingerprint: "fingerprint-no-gpu",
+		CpuCount:           8,
+		MemoryMb:           16384,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("JoinAgent() accepted a CPU-only machine into a GPU listing")
+	}
+}
+
+func TestMarketplaceJoinCommandUsesPoolOwnerToken(t *testing.T) {
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	created, err := service.CreateMarketplaceListing(
+		testAuthContext("seller-1", "listing-owner-token"),
+		&pb.CreateMarketplaceListingRequest{
+			DisplayName: "v100-rig",
+			Gpu:         "V100",
+			GpuCount:    1,
+			Public:      true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if !created.Ok {
+		t.Fatalf("CreateMarketplaceListing() not ok: %s", created.ErrMsg)
+	}
+
+	command, err := service.GetMarketplaceJoinCommand(
+		testAuthContext("seller-1", "different-owner-token"),
+		&pb.GetMarketplaceJoinCommandRequest{ListingId: created.Listing.Id},
+	)
+	if err != nil {
+		t.Fatalf("GetMarketplaceJoinCommand() error = %v", err)
+	}
+	if !command.Ok {
+		t.Fatalf("GetMarketplaceJoinCommand() not ok: %s", command.ErrMsg)
+	}
+
+	res, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          command.Token,
+		MachineFingerprint: "fingerprint",
+		Gpu:                []string{"Tesla V100-SXM2-16GB"},
+		GpuCount:           1,
+		CpuCount:           8,
+		MemoryMb:           24576,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatalf("JoinAgent() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("JoinAgent() rejected token from alternate owner token: %s", res.ErrMsg)
+	}
+}
+
+func TestListMarketplaceOffersAggregatesMachineSpecs(t *testing.T) {
+	now := time.Now().UTC()
+	listing := &model.MarketplaceListingState{
+		ID:                "listing-1",
+		SellerWorkspaceID: "seller-1",
+		DisplayName:       "rtx-5090-east",
+		GPU:               "RTX5090",
+		GPUCount:          2,
+		Source:            "operator",
+		Public:            true,
+		Status:            model.MarketplaceListingStatusActive,
+		PoolName:          model.MarketplacePoolName("listing-1"),
+		Region:            "us-east",
+		CreatedAt:         now.Add(-time.Hour),
+	}
+	repo := &fakeComputeRepo{
+		listings: map[string][]*model.MarketplaceListingState{
+			"seller-1": {listing},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("seller-1", listing.PoolName): {
+				{
+					MachineID:       "machine-ready",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Hour),
+					LastHeartbeatAt: now,
+					CPUCount:        32,
+					MemoryMB:        131072,
+					GPUCount:        2,
+					Metrics: model.AgentMachineMetrics{
+						DiskTotalMB:  2 * 1024 * 1024,
+						FreeGPUCount: 2,
+					},
+				},
+				{
+					MachineID:        "machine-offline",
+					Schedulable:      true,
+					LastJoinAt:       now.Add(-2 * time.Hour),
+					LastHeartbeatAt:  now.Add(-time.Hour),
+					LastDisconnectAt: now.Add(-30 * time.Minute),
+					CPUCount:         64,
+					MemoryMB:         262144,
+					Metrics: model.AgentMachineMetrics{
+						DiskTotalMB:  4 * 1024 * 1024,
+						FreeGPUCount: 1,
+					},
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.ListMarketplaceOffers(context.Background(), &pb.ListMarketplaceOffersRequest{})
+	if err != nil {
+		t.Fatalf("ListMarketplaceOffers() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListMarketplaceOffers() not ok: %s", res.ErrMsg)
+	}
+	if len(res.Offers) != 1 {
+		t.Fatalf("offer count = %d, want 1", len(res.Offers))
+	}
+
+	offer := res.Offers[0]
+	if offer.Region != "us-east" {
+		t.Fatalf("offer region = %q, want us-east", offer.Region)
+	}
+	if offer.MachineCount != 2 || offer.ReadyMachineCount != 1 {
+		t.Fatalf("machine counts = %d/%d, want 1/2 ready", offer.ReadyMachineCount, offer.MachineCount)
+	}
+	// Offline machine specs must not leak into the offer.
+	if offer.CpuCores != 32 {
+		t.Fatalf("cpu cores = %d, want 32", offer.CpuCores)
+	}
+	if offer.MemoryMb != 131072 {
+		t.Fatalf("memory mb = %d, want 131072", offer.MemoryMb)
+	}
+	if offer.DiskGb != 2048 {
+		t.Fatalf("disk gb = %d, want 2048", offer.DiskGb)
+	}
+	if offer.FreeGpuCount != 2 {
+		t.Fatalf("free gpu count = %d, want 2", offer.FreeGpuCount)
+	}
+	// One fresh connected machine (score ~1.0) and one disconnected (0), so
+	// the listing-level reliability should land near 0.5.
+	if offer.Reliability < 0.45 || offer.Reliability > 0.5 {
+		t.Fatalf("reliability = %f, want ~0.5", offer.Reliability)
+	}
+	if offer.CreatedAt == nil {
+		t.Fatal("offer created_at is nil")
+	}
+}
+
+func TestListMarketplaceOffersUsesLiveWorkerFreeGPUCount(t *testing.T) {
+	now := time.Now().UTC()
+	listing := &model.MarketplaceListingState{
+		ID:                "listing-1",
+		SellerWorkspaceID: "seller-1",
+		DisplayName:       "v100-west",
+		GPU:               "V100",
+		GPUCount:          8,
+		Source:            "operator",
+		Public:            true,
+		Status:            model.MarketplaceListingStatusActive,
+		PoolName:          model.MarketplacePoolName("listing-1"),
+		Region:            "us-west",
+		CreatedAt:         now.Add(-time.Hour),
+	}
+	repo := &fakeComputeRepo{
+		listings: map[string][]*model.MarketplaceListingState{
+			"seller-1": {listing},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("seller-1", listing.PoolName): {
+				{
+					MachineID:       "machine-ready",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Hour),
+					LastHeartbeatAt: now,
+					CPUCount:        88,
+					MemoryMB:        451439,
+					GPUCount:        8,
+					Metrics: model.AgentMachineMetrics{
+						FreeGPUCount: 0,
+					},
+				},
+			},
+		},
+	}
+	workerRepo := &fakeWorkerRepo{
+		workers: []*types.Worker{
+			{
+				Id:            "worker-ready",
+				PoolName:      listing.PoolName,
+				MachineId:     "machine-ready",
+				Status:        types.WorkerStatusAvailable,
+				Gpu:           "V100",
+				TotalGpuCount: 8,
+				FreeGpuCount:  8,
+			},
+		},
+	}
+	service := &Service{computeRepo: repo, workerRepo: workerRepo}
+
+	res, err := service.ListMarketplaceOffers(context.Background(), &pb.ListMarketplaceOffersRequest{})
+	if err != nil {
+		t.Fatalf("ListMarketplaceOffers() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListMarketplaceOffers() not ok: %s", res.ErrMsg)
+	}
+	if len(res.Offers) != 1 {
+		t.Fatalf("offer count = %d, want 1", len(res.Offers))
+	}
+	if res.Offers[0].FreeGpuCount != 8 {
+		t.Fatalf("free gpu count = %d, want live worker count 8", res.Offers[0].FreeGpuCount)
+	}
+}
+
+// Unlisted (non-public) listings behave like unlisted videos: excluded from
+// marketplace search, but anyone with the direct link can fetch them.
+func TestUnlistedListingsHiddenFromSearchButServedByDirectLink(t *testing.T) {
+	now := time.Now().UTC()
+	unlisted := &model.MarketplaceListingState{
+		ID:                "listing-unlisted",
+		SellerWorkspaceID: "seller-1",
+		DisplayName:       "secret-rig",
+		GPU:               "RTX5090",
+		GPUCount:          2,
+		Public:            false,
+		Status:            model.MarketplaceListingStatusActive,
+		PoolName:          model.MarketplacePoolName("listing-unlisted"),
+		Region:            "us-east",
+	}
+	repo := &fakeComputeRepo{
+		listings: map[string][]*model.MarketplaceListingState{
+			"seller-1": {unlisted},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("seller-1", unlisted.PoolName): {
+				{
+					MachineID:       "machine-1",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Hour),
+					LastHeartbeatAt: now,
+					CPUCount:        32,
+					MemoryMB:        131072,
+					GPUCount:        2,
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	// Hidden from search even with ready machines.
+	search, err := service.ListMarketplaceOffers(context.Background(), &pb.ListMarketplaceOffersRequest{})
+	if err != nil {
+		t.Fatalf("ListMarketplaceOffers() error = %v", err)
+	}
+	if len(search.Offers) != 0 {
+		t.Fatalf("search offer count = %d, want unlisted listings hidden", len(search.Offers))
+	}
+
+	// Served via the direct link.
+	direct, err := service.GetMarketplaceOffer(context.Background(), &pb.GetMarketplaceOfferRequest{ListingId: "listing-unlisted"})
+	if err != nil {
+		t.Fatalf("GetMarketplaceOffer() error = %v", err)
+	}
+	if !direct.Ok || direct.Offer == nil {
+		t.Fatalf("GetMarketplaceOffer() = %+v, want unlisted offer served", direct)
+	}
+	if direct.Offer.Public {
+		t.Fatal("offer public flag = true, want false for unlisted listings")
+	}
+	if direct.Offer.ReadyMachineCount != 1 {
+		t.Fatalf("ready machines = %d, want 1", direct.Offer.ReadyMachineCount)
+	}
+
+	// Inactive listings are not served even with the link.
+	unlisted.Status = model.MarketplaceListingStatusInactive
+	gone, err := service.GetMarketplaceOffer(context.Background(), &pb.GetMarketplaceOfferRequest{ListingId: "listing-unlisted"})
+	if err != nil {
+		t.Fatalf("GetMarketplaceOffer() error = %v", err)
+	}
+	if gone.Ok {
+		t.Fatal("GetMarketplaceOffer() served an inactive listing")
+	}
+}
+
+func TestListMarketplaceOffersSkipsListingsWithoutReadyMachines(t *testing.T) {
+	listing := &model.MarketplaceListingState{
+		ID:                "listing-1",
+		SellerWorkspaceID: "seller-1",
+		DisplayName:       "no-machines",
+		GPU:               "A100-80",
+		GPUCount:          1,
+		Public:            true,
+		Status:            model.MarketplaceListingStatusActive,
+		PoolName:          model.MarketplacePoolName("listing-1"),
+	}
+	repo := &fakeComputeRepo{
+		listings: map[string][]*model.MarketplaceListingState{
+			"seller-1": {listing},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.ListMarketplaceOffers(context.Background(), &pb.ListMarketplaceOffersRequest{})
+	if err != nil {
+		t.Fatalf("ListMarketplaceOffers() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("ListMarketplaceOffers() not ok: %s", res.ErrMsg)
+	}
+	if len(res.Offers) != 0 {
+		t.Fatalf("offer count = %d, want 0", len(res.Offers))
+	}
+}
+
+func TestCreateMarketplaceListingStoresRegion(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "rtx-5090-east",
+		Gpu:         "RTX5090",
+		GpuCount:    2,
+		Public:      true,
+		Region:      " us-east ",
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("CreateMarketplaceListing() not ok: %s", res.ErrMsg)
+	}
+	if res.Listing.Region != "us-east" {
+		t.Fatalf("listing region = %q, want us-east (trimmed)", res.Listing.Region)
+	}
+
+	stored, err := repo.GetMarketplaceListing(ctx, "seller-1", res.Listing.Id)
+	if err != nil {
+		t.Fatalf("GetMarketplaceListing() error = %v", err)
+	}
+	if stored == nil || stored.Region != "us-east" {
+		t.Fatalf("stored listing region = %+v, want us-east", stored)
+	}
+}
+
+// Pool names are deterministic and seller-controllable — derived from the GPU
+// type by default, or a name the seller picks — so machines across publishes
+// land in the same pool and keep cache locality.
+func TestCreateMarketplaceListingPoolNaming(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	byGPU, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "a100 rig",
+		Gpu:         "A100-40",
+		GpuCount:    1,
+	})
+	if err != nil || !byGPU.Ok {
+		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, byGPU.GetErrMsg())
+	}
+	if byGPU.Listing.PoolName != "marketplace-a100-40" {
+		t.Fatalf("pool = %q, want gpu-derived marketplace-a100-40", byGPU.Listing.PoolName)
+	}
+
+	// Seller override; "marketplace-" is never doubled, casing/spaces normalize.
+	named, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "west rack",
+		Gpu:         "A100-40",
+		GpuCount:    1,
+		PoolName:    "Marketplace West Rack",
+	})
+	if err != nil || !named.Ok {
+		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, named.GetErrMsg())
+	}
+	if named.Listing.PoolName != "marketplace-west-rack" {
+		t.Fatalf("pool = %q, want marketplace-west-rack", named.Listing.PoolName)
+	}
+}
+
+// Listings can share one pool (shared machine caches) as long as they sell the
+// same GPU type, and the pool only tears down with its last listing.
+func TestMarketplaceListingsSharePool(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	first, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "public a100",
+		Gpu:         "A100-40",
+		GpuCount:    1,
+		PoolName:    "west-rack",
+		Public:      true,
+	})
+	if err != nil || !first.Ok {
+		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, first.GetErrMsg())
+	}
+	second, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "unlisted a100",
+		Gpu:         "A100-40",
+		GpuCount:    1,
+		PoolName:    "west-rack",
+	})
+	if err != nil || !second.Ok {
+		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, second.GetErrMsg())
+	}
+	if first.Listing.PoolName != second.Listing.PoolName {
+		t.Fatalf("pools differ: %q vs %q", first.Listing.PoolName, second.Listing.PoolName)
+	}
+
+	// A different GPU type cannot join the pool: it schedules as one GPU class.
+	mismatch, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "t4 batch",
+		Gpu:         "T4",
+		GpuCount:    1,
+		PoolName:    "west-rack",
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if mismatch.Ok || !strings.Contains(mismatch.ErrMsg, "hosts A100-40 listings") {
+		t.Fatalf("mismatched GPU listing = %+v, want pool GPU conflict error", mismatch)
+	}
+
+	// Updates must respect the shared-pool GPU invariant too: switching one
+	// listing's GPU would leave the pool scheduling two GPU classes.
+	updated, err := service.UpdateMarketplaceListing(ctx, &pb.UpdateMarketplaceListingRequest{
+		ListingId: second.Listing.Id,
+		Gpu:       "T4",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMarketplaceListing() error = %v", err)
+	}
+	if updated.Ok || !strings.Contains(updated.ErrMsg, "hosts A100-40 listings") {
+		t.Fatalf("GPU update on shared pool = %+v, want pool GPU conflict error", updated)
+	}
+
+	// Deleting one listing keeps the shared pool alive for the other.
+	if res, err := service.DeleteMarketplaceListing(ctx, &pb.DeleteMarketplaceListingRequest{ListingId: first.Listing.Id}); err != nil || !res.Ok {
+		t.Fatalf("DeleteMarketplaceListing() = %v, %s", err, res.GetErrMsg())
+	}
+	if state, err := repo.GetPoolState(ctx, "seller-1", "marketplace-west-rack"); err != nil || state == nil {
+		t.Fatalf("shared pool state = %+v, %v; want pool preserved while a listing remains", state, err)
+	}
+
+	// The last listing tears the pool down.
+	if res, err := service.DeleteMarketplaceListing(ctx, &pb.DeleteMarketplaceListingRequest{ListingId: second.Listing.Id}); err != nil || !res.Ok {
+		t.Fatalf("DeleteMarketplaceListing() = %v, %s", err, res.GetErrMsg())
+	}
+	if state, err := repo.GetPoolState(ctx, "seller-1", "marketplace-west-rack"); err != nil || state != nil {
+		t.Fatalf("pool state after last listing = %+v, %v; want deleted", state, err)
+	}
+}
+
+// Marketplace listings must never take over a pool that exists in another mode.
+func TestMarketplaceListingRejectsNonMarketplacePool(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	if err := repo.SavePoolState(ctx, "seller-1", &model.PoolState{
+		Name: "marketplace-web",
+		Mode: string(types.PoolModePrivate),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "web rig",
+		Gpu:         "A100-40",
+		GpuCount:    1,
+		PoolName:    "web",
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if res.Ok || !strings.Contains(res.ErrMsg, "non-marketplace pool") {
+		t.Fatalf("listing over private pool = %+v, want rejection", res)
+	}
+}
+
+func TestMarketplaceListingRuntimeFollowsGPU(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	created, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "a10g-marketplace",
+		Gpu:         "A10G",
+		GpuCount:    1,
+		Public:      true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if !created.Ok {
+		t.Fatalf("CreateMarketplaceListing() not ok: %s", created.ErrMsg)
+	}
+	if created.Listing.Runtime != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("listing runtime = %q, want gvisor for A10G", created.Listing.Runtime)
+	}
+	pool, err := repo.GetPoolState(ctx, "seller-1", created.Listing.PoolName)
+	if err != nil {
+		t.Fatalf("GetPoolState() error = %v", err)
+	}
+	if pool == nil || pool.Config == nil || !sameStrings(pool.Config.Gpu, []string{"A10G"}) {
+		t.Fatalf("pool gpu config = %+v, want A10G", pool)
+	}
+
+	updated, err := service.UpdateMarketplaceListing(ctx, &pb.UpdateMarketplaceListingRequest{
+		ListingId: created.Listing.Id,
+		Gpu:       "Tesla V100-SXM2-16GB",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMarketplaceListing() error = %v", err)
+	}
+	if !updated.Ok {
+		t.Fatalf("UpdateMarketplaceListing() not ok: %s", updated.ErrMsg)
+	}
+	if updated.Listing.Gpu != "V100" {
+		t.Fatalf("listing gpu = %q, want V100", updated.Listing.Gpu)
+	}
+	if updated.Listing.Runtime != types.ContainerRuntimeRunc.String() {
+		t.Fatalf("listing runtime = %q, want runc fallback for V100", updated.Listing.Runtime)
+	}
+
+	pool, err = repo.GetPoolState(ctx, "seller-1", updated.Listing.PoolName)
+	if err != nil {
+		t.Fatalf("GetPoolState() error = %v", err)
+	}
+	if pool == nil || pool.Config == nil || !sameStrings(pool.Config.Gpu, []string{"V100"}) {
+		t.Fatalf("pool gpu config = %+v, want V100", pool)
+	}
+}
+
+func TestUpdateMarketplaceListingUpdatesRegion(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	listing := &model.MarketplaceListingState{
+		ID:                "listing-1",
+		SellerWorkspaceID: "seller-1",
+		DisplayName:       "rtx-5090",
+		GPU:               "RTX5090",
+		GPUCount:          1,
+		Public:            true,
+		Status:            model.MarketplaceListingStatusActive,
+		PoolName:          model.MarketplacePoolName("listing-1"),
+		Region:            "us-east",
+	}
+	repo := &fakeComputeRepo{
+		listings: map[string][]*model.MarketplaceListingState{
+			"seller-1": {listing},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.UpdateMarketplaceListing(ctx, &pb.UpdateMarketplaceListingRequest{
+		ListingId: "listing-1",
+		Region:    "eu-west",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMarketplaceListing() error = %v", err)
+	}
+	if !res.Ok {
+		t.Fatalf("UpdateMarketplaceListing() not ok: %s", res.ErrMsg)
+	}
+	if res.Listing.Region != "eu-west" {
+		t.Fatalf("listing region = %q, want eu-west", res.Listing.Region)
+	}
 }

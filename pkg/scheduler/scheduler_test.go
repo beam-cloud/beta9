@@ -113,13 +113,175 @@ func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
 		{Id: "gvisor-worker", Runtime: types.ContainerRuntimeGvisor.String()},
 	}
 
-	filteredWorkers := filterWorkersByFlags(workers, request)
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	filteredWorkers := scheduler.filterWorkersByFlags(workers, request)
 	assert.Equal(t, workers, filteredWorkers)
+}
+
+// A preemptible marketplace listing (e.g. Vast-listed hardware) must stay
+// schedulable for requests that opted in with AllowMarketplace: joining the
+// marketplace implies accepting seller-side preemption, and nothing else sets
+// request.Preemptable for typical serverless stubs.
+func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.T) {
+	preemptibleMarketplace := &LocalWorkerPoolControllerForTest{
+		name:        "marketplace",
+		mode:        types.PoolModeMarketplace,
+		preemptable: true,
+	}
+	request := &types.ContainerRequest{AllowMarketplace: true}
+	assert.Equal(
+		t,
+		[]WorkerPoolController{preemptibleMarketplace},
+		filterControllersByFlags([]WorkerPoolController{preemptibleMarketplace}, request),
+	)
+
+	// Preemptible capacity outside the marketplace still requires an explicit
+	// request.Preemptable opt-in.
+	preemptibleSpot := &LocalWorkerPoolControllerForTest{name: "spot", preemptable: true}
+	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{preemptibleSpot}, request))
+
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
+		Mode:        types.PoolModeMarketplace,
+		GPUType:     "A10G",
+		Preemptable: true,
+	}, nil)
+
+	preemptibleWorker := &types.Worker{
+		Id:            "marketplace-worker",
+		PoolName:      "marketplace",
+		Status:        types.WorkerStatusAvailable,
+		Preemptable:   true,
+		TotalCpu:      1000,
+		FreeCpu:       1000,
+		TotalMemory:   1024,
+		FreeMemory:    1024,
+		TotalGpuCount: 1,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+	}
+
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{preemptibleWorker}, &types.ContainerRequest{
+		Cpu:              1000,
+		Memory:           512,
+		GpuRequest:       []string{"A10G"},
+		GpuCount:         1,
+		AllowMarketplace: true,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, preemptibleWorker.Id, worker.Id)
+
+	// A preemptible worker outside the marketplace stays unreachable without
+	// request.Preemptable.
+	spotWorker := &types.Worker{
+		Id:          "spot-worker",
+		PoolName:    "spot",
+		Status:      types.WorkerStatusAvailable,
+		Preemptable: true,
+		TotalCpu:    1000,
+		FreeCpu:     1000,
+		TotalMemory: 1024,
+		FreeMemory:  1024,
+	}
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{spotWorker}, &types.ContainerRequest{
+		Cpu:              1000,
+		Memory:           512,
+		AllowMarketplace: true,
+	})
+	assert.Error(t, err)
+}
+
+func TestMarketplaceControllersRequireExplicitSafeOptIn(t *testing.T) {
+	marketplace := &LocalWorkerPoolControllerForTest{name: "marketplace", mode: types.PoolModeMarketplace}
+	regular := &LocalWorkerPoolControllerForTest{name: "regular", mode: types.PoolModeLocal}
+
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{}))
+	assert.Equal(t, []WorkerPoolController{marketplace, regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, DockerEnabled: true}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, PoolSelector: "regular"}))
+}
+
+func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
+	marketplaceWorker := &types.Worker{
+		Id:            "marketplace-worker",
+		PoolName:      "marketplace",
+		Status:        types.WorkerStatusAvailable,
+		TotalCpu:      1000,
+		FreeCpu:       1000,
+		TotalMemory:   1024,
+		FreeMemory:    1024,
+		TotalGpuCount: 1,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+	}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
+		Mode:                 types.PoolModeMarketplace,
+		GPUType:              "A10G",
+		RequiresPoolSelector: false,
+	}, nil)
+
+	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1}
+
+	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, baseRequest.Clone())
+	assert.Error(t, err)
+
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true})
+	assert.NoError(t, err)
+	assert.Equal(t, marketplaceWorker.Id, worker.Id)
+
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true, DockerEnabled: true})
+	assert.Error(t, err)
+
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true, PoolSelector: "marketplace"})
+	assert.Error(t, err)
+
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{
+		Cpu:              1000,
+		Memory:           512,
+		GpuRequest:       []string{"A10G"},
+		GpuCount:         1,
+		AllowMarketplace: true,
+		Mounts: []types.Mount{{
+			LocalPath: "/var/run/docker.sock",
+			MountPath: "/var/run/docker.sock",
+		}},
+	})
+	assert.Error(t, err)
+
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{
+		Cpu:              1000,
+		Memory:           512,
+		GpuRequest:       []string{"A10G"},
+		GpuCount:         1,
+		AllowMarketplace: true,
+		Mounts: []types.Mount{{
+			LocalPath: "/data/objects/workspace/stub",
+			MountPath: "/mnt/code",
+		}},
+	})
+	assert.NoError(t, err)
+}
+
+func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
+	state := &compute.PoolState{
+		Mode: string(types.PoolModeMarketplace),
+		Config: &pb.PoolConfig{
+			Gpu: []string{"V100"},
+		},
+	}
+	config := normalizeAgentWorkerPoolConfig(state)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), config.ContainerRuntime)
+
+	state.Config.Gpu = []string{"A10G"}
+	config = normalizeAgentWorkerPoolConfig(state)
+	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
 }
 
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string
+	mode             types.PoolMode
 	config           types.AppConfig
 	workerRepo       repo.WorkerRepository
 	preemptable      bool
@@ -146,6 +308,9 @@ func (wpc *LocalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, er
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
+	if wpc.mode != "" {
+		return wpc.mode
+	}
 	return types.PoolModeLocal
 }
 

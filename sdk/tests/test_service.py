@@ -458,6 +458,18 @@ class TestService(TestCase):
 
         self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
 
+    def test_cli_allow_marketplace_override_is_explicit(self):
+        service = Service(image=Image.from_id("img-123"), ports=[8080], allow_marketplace=True)
+
+        self.assertTrue(handle_config_override(service, {"allow_marketplace": None}))
+        self.assertTrue(service.allow_marketplace)
+
+        self.assertTrue(handle_config_override(service, {"allow_marketplace": False}))
+        self.assertFalse(service.allow_marketplace)
+
+        self.assertTrue(handle_config_override(service, {"allow_marketplace": True}))
+        self.assertTrue(service.allow_marketplace)
+
     def test_service_image_option_rejects_image_and_dockerfile_together(self):
         kwargs = {"dockerfile": "Dockerfile", "image": Image.from_id("img-123")}
 
