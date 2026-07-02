@@ -67,7 +67,10 @@ func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats
 	return GPUMemoryUsageStats{}, nil
 }
 
-func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
+// restoreNvidiaCDIStubs restores the package-level CDI hooks that
+// TestEnsureNvidiaCDIConfig* tests stub out.
+func restoreNvidiaCDIStubs(t *testing.T) {
+	t.Helper()
 	originalPaths := nvidiaCDIConfigPaths
 	originalGenerate := runNvidiaCTKCDIGenerate
 	originalConfigure := configureNvidiaCDICache
@@ -78,6 +81,10 @@ func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
 		configureNvidiaCDICache = originalConfigure
 		nvidiaCDIDeviceResolvable = originalResolvable
 	})
+}
+
+func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
+	restoreNvidiaCDIStubs(t)
 
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "beam", "cdi", "nvidia.yaml")
@@ -116,16 +123,7 @@ func TestEnsureNvidiaCDIConfigFallsBackToRuntimeDir(t *testing.T) {
 }
 
 func TestEnsureNvidiaCDIConfigUsesBeamRuntimeDir(t *testing.T) {
-	originalPaths := nvidiaCDIConfigPaths
-	originalGenerate := runNvidiaCTKCDIGenerate
-	originalConfigure := configureNvidiaCDICache
-	originalResolvable := nvidiaCDIDeviceResolvable
-	t.Cleanup(func() {
-		nvidiaCDIConfigPaths = originalPaths
-		runNvidiaCTKCDIGenerate = originalGenerate
-		configureNvidiaCDICache = originalConfigure
-		nvidiaCDIDeviceResolvable = originalResolvable
-	})
+	restoreNvidiaCDIStubs(t)
 
 	dir := t.TempDir()
 	beamPath := filepath.Join(dir, "beam", "cdi", "nvidia.yaml")
@@ -161,16 +159,7 @@ func TestEnsureNvidiaCDIConfigUsesBeamRuntimeDir(t *testing.T) {
 }
 
 func TestEnsureNvidiaCDIConfigFallsBackWhenGeneratedDeviceIsUnresolvable(t *testing.T) {
-	originalPaths := nvidiaCDIConfigPaths
-	originalGenerate := runNvidiaCTKCDIGenerate
-	originalConfigure := configureNvidiaCDICache
-	originalResolvable := nvidiaCDIDeviceResolvable
-	t.Cleanup(func() {
-		nvidiaCDIConfigPaths = originalPaths
-		runNvidiaCTKCDIGenerate = originalGenerate
-		configureNvidiaCDICache = originalConfigure
-		nvidiaCDIDeviceResolvable = originalResolvable
-	})
+	restoreNvidiaCDIStubs(t)
 
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "beam", "cdi", "nvidia.yaml")
@@ -202,16 +191,7 @@ func TestEnsureNvidiaCDIConfigFallsBackWhenGeneratedDeviceIsUnresolvable(t *test
 // runc workers must keep the stock nvidia-ctk spec: hooks and persistenced
 // mounts are only stripped for gvisor, where nvproxy cannot honor them.
 func TestEnsureNvidiaCDIConfigLeavesSpecIntactForRunc(t *testing.T) {
-	originalPaths := nvidiaCDIConfigPaths
-	originalGenerate := runNvidiaCTKCDIGenerate
-	originalConfigure := configureNvidiaCDICache
-	originalResolvable := nvidiaCDIDeviceResolvable
-	t.Cleanup(func() {
-		nvidiaCDIConfigPaths = originalPaths
-		runNvidiaCTKCDIGenerate = originalGenerate
-		configureNvidiaCDICache = originalConfigure
-		nvidiaCDIDeviceResolvable = originalResolvable
-	})
+	restoreNvidiaCDIStubs(t)
 
 	path := filepath.Join(t.TempDir(), "nvidia.yaml")
 	nvidiaCDIConfigPaths = []string{path}
