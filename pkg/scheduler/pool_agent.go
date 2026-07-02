@@ -380,6 +380,14 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 		return nil, err
 	}
 	if worker != nil && worker.Status != types.WorkerStatusDisabled {
+		// The machine's listing can change without a worker restart (re-joining
+		// a shared pool through another listing); keep attribution current.
+		if worker.MarketplaceListingID != machine.MarketplaceListingID {
+			if err := wpc.workerRepo.SetWorkerMarketplaceListingID(worker.Id, machine.MarketplaceListingID); err != nil {
+				return nil, err
+			}
+			worker.MarketplaceListingID = machine.MarketplaceListingID
+		}
 		return worker, nil
 	}
 

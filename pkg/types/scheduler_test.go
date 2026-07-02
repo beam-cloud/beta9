@@ -45,11 +45,14 @@ func TestWorkerStartConcurrencyCapsByWorkerCPU(t *testing.T) {
 
 func TestWorkerProtoRoundTripPreservesRuntime(t *testing.T) {
 	worker := &Worker{
-		Id:      "worker-1",
-		Runtime: ContainerRuntimeRunc.String(),
+		Id:                   "worker-1",
+		Runtime:              ContainerRuntimeRunc.String(),
+		MarketplaceListingID: "listing-1",
 	}
 
-	require.Equal(t, ContainerRuntimeRunc.String(), NewWorkerFromProto(worker.ToProto()).Runtime)
+	roundTripped := NewWorkerFromProto(worker.ToProto())
+	require.Equal(t, ContainerRuntimeRunc.String(), roundTripped.Runtime)
+	require.Equal(t, "listing-1", roundTripped.MarketplaceListingID)
 }
 
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {

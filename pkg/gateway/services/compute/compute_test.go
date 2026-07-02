@@ -5694,6 +5694,19 @@ func TestMarketplaceListingsSharePool(t *testing.T) {
 		t.Fatalf("mismatched GPU listing = %+v, want pool GPU conflict error", mismatch)
 	}
 
+	// Updates must respect the shared-pool GPU invariant too: switching one
+	// listing's GPU would leave the pool scheduling two GPU classes.
+	updated, err := service.UpdateMarketplaceListing(ctx, &pb.UpdateMarketplaceListingRequest{
+		ListingId: second.Listing.Id,
+		Gpu:       "T4",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMarketplaceListing() error = %v", err)
+	}
+	if updated.Ok || !strings.Contains(updated.ErrMsg, "hosts A100-40 listings") {
+		t.Fatalf("GPU update on shared pool = %+v, want pool GPU conflict error", updated)
+	}
+
 	// Deleting one listing keeps the shared pool alive for the other.
 	if res, err := service.DeleteMarketplaceListing(ctx, &pb.DeleteMarketplaceListingRequest{ListingId: first.Listing.Id}); err != nil || !res.Ok {
 		t.Fatalf("DeleteMarketplaceListing() = %v, %s", err, res.GetErrMsg())

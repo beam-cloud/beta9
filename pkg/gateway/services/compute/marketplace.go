@@ -78,6 +78,11 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 	if err := applyMarketplaceListingUpdate(listing, in); err != nil {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	// Updates can change the GPU type, so shared-pool invariants must hold
+	// here just as on create.
+	if err := s.validateMarketplacePoolAssignment(ctx, listing); err != nil {
+		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
 	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID); err != nil {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}

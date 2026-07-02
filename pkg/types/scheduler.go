@@ -106,6 +106,7 @@ func (w *Worker) ToProto() *pb.Worker {
 		BuildVersion:         w.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              w.Runtime,
+		MarketplaceListingId: w.MarketplaceListingID,
 	}
 }
 
@@ -134,6 +135,7 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		BuildVersion:         in.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              in.Runtime,
+		MarketplaceListingID: in.MarketplaceListingId,
 	}
 }
 
