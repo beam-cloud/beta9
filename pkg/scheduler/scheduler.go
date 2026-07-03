@@ -787,7 +787,28 @@ func marketplaceControllerAllowed(controller WorkerPoolController, request *type
 	return marketplaceRequestSafe(request)
 }
 
+// filterWorkersByMachine restricts machine-pinned requests (marketplace
+// rentals) to the pinned machine's worker. The pin is stronger than any pool
+// selector: it identifies exactly one worker.
+func filterWorkersByMachine(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if request.MachineId == "" {
+		return workers
+	}
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		if worker.MachineId == request.MachineId {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
+}
+
 func filterWorkersByPoolSelector(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if request.MachineId != "" {
+		// The machine pin already selected the worker; its pool may require a
+		// selector the request doesn't carry.
+		return workers
+	}
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
 		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
@@ -927,7 +948,8 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request) // Filter workers by pool selector
+	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
+	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
@@ -960,6 +982,11 @@ func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *t
 	if len(workers) == 0 || s == nil || s.workerPoolManager == nil {
 		return workers
 	}
+	// Loaded once per filter pass (single indexed read), only when a
+	// serverless marketplace candidate actually needs it.
+	var rentedByMachine map[string]uint32
+	rentedLoaded := false
+
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, worker := range workers {
 		if worker == nil {
@@ -969,11 +996,69 @@ func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *t
 			filtered = append(filtered, worker)
 			continue
 		}
-		if request != nil && request.AllowMarketplace && marketplaceRequestSafe(request) {
-			filtered = append(filtered, worker)
+		if request == nil || !request.AllowMarketplace || !marketplaceRequestSafe(request) {
+			continue
 		}
+		// Rented GPUs are invisible to serverless requests; only the renter's
+		// machine-pinned workloads may consume them. Machine-pinned requests
+		// are entitled to the rented capacity, so no subtraction applies.
+		if request.MachineId == "" {
+			if !rentedLoaded {
+				rentedByMachine = s.rentedGPUsByMachine()
+				rentedLoaded = true
+			}
+			// Fail closed: without rental visibility we can't prove this
+			// capacity isn't exclusively held by a renter.
+			if rentedByMachine == nil {
+				continue
+			}
+			if !workerFitsWithRentals(worker, request, rentedByMachine[worker.MachineId]) {
+				continue
+			}
+		}
+		filtered = append(filtered, worker)
 	}
 	return filtered
+}
+
+// rentedGPUsByMachine sums active rental GPUs per machine. Returns nil when
+// the lookup fails so callers can fail closed; a scheduler without a compute
+// repo (no marketplace support) reports no rentals.
+func (s *Scheduler) rentedGPUsByMachine() map[string]uint32 {
+	rented := map[string]uint32{}
+	if s.computeRepo == nil {
+		return rented
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rentals, err := s.computeRepo.ListAllMarketplaceRentals(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list marketplace rentals; hiding marketplace capacity from serverless requests")
+		return nil
+	}
+	for _, rental := range rentals {
+		if rental != nil && rental.MachineID != "" {
+			rented[rental.MachineID] += rental.GPUCount
+		}
+	}
+	return rented
+}
+
+// workerFitsWithRentals reports whether a serverless request still fits after
+// subtracting the machine's rented GPUs from free capacity. Free already
+// accounts for running containers (including rental workloads), so
+// subtracting full rentals is conservative: rented-but-idle GPUs are held
+// back, rented-and-busy GPUs are never double counted below zero fit.
+func workerFitsWithRentals(worker *types.Worker, request *types.ContainerRequest, rented uint32) bool {
+	if rented == 0 || !request.RequiresGPU() {
+		return true
+	}
+	if worker.FreeGpuCount < rented {
+		return false
+	}
+	return worker.FreeGpuCount-rented >= gpuCountForScheduling(request)
 }
 
 func (s *Scheduler) isMarketplaceWorker(worker *types.Worker) bool {

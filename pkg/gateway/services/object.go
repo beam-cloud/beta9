@@ -1,18 +1,14 @@
 package gatewayservices
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"io"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -26,49 +22,8 @@ const (
 	workspaceObjectHashMetadataKey = "--content-sha256"
 )
 
-func emptyStubObjectBytes() ([]byte, string, error) {
-	var buf bytes.Buffer
-	if err := zip.NewWriter(&buf).Close(); err != nil {
-		return nil, "", err
-	}
-	sum := sha256.Sum256(buf.Bytes())
-	return buf.Bytes(), hex.EncodeToString(sum[:]), nil
-}
-
 func (gws *GatewayService) ensureEmptyStubObject(ctx context.Context, workspace *types.Workspace) (types.Object, error) {
-	data, hash, err := emptyStubObjectBytes()
-	if err != nil {
-		return types.Object{}, err
-	}
-
-	object, err := gws.backendRepo.GetObjectByHash(ctx, hash, workspace.Id)
-	if err != nil {
-		if err != sql.ErrNoRows {
-			return types.Object{}, err
-		}
-		object, err = gws.backendRepo.CreateObject(ctx, hash, int64(len(data)), workspace.Id)
-		if err != nil {
-			return types.Object{}, err
-		}
-	}
-
-	key := path.Join(types.DefaultObjectPrefix, object.ExternalId)
-	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
-		if err != nil {
-			return types.Object{}, err
-		}
-		if err := storageClient.EnsureLocalBucket(ctx); err != nil {
-			return types.Object{}, err
-		}
-		return *object, storageClient.Upload(ctx, key, data)
-	}
-
-	objectPath := path.Join(types.DefaultObjectPath, workspace.Name)
-	if err := os.MkdirAll(objectPath, 0755); err != nil {
-		return types.Object{}, err
-	}
-	return *object, os.WriteFile(path.Join(objectPath, object.ExternalId), data, 0644)
+	return abstractions.EnsureEmptyStubObject(ctx, gws.backendRepo, workspace)
 }
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {

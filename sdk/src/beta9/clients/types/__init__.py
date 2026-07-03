@@ -110,6 +110,7 @@ class ContainerRequest(betterproto.Message):
     runtime_secret_names: List[str] = betterproto.string_field(31)
     runtime_token_required: bool = betterproto.bool_field(32)
     allow_marketplace: bool = betterproto.bool_field(33)
+    machine_id: str = betterproto.string_field(34)
 
 
 @dataclass(eq=False, repr=False)

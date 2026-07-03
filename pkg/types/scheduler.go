@@ -255,6 +255,9 @@ type ContainerRequest struct {
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
 	AllowMarketplace         bool            `json:"allow_marketplace"`
+	// MachineId pins scheduling to a single agent machine (e.g. a marketplace
+	// rental); empty means any machine.
+	MachineId string `json:"machine_id,omitempty"`
 }
 
 type ContainerNetworkPolicy string
@@ -550,6 +553,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		AllowList:                c.AllowList,
 		DockerEnabled:            c.DockerEnabled,
 		AllowMarketplace:         c.AllowMarketplace,
+		MachineId:                c.MachineId,
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
 	}
@@ -607,6 +611,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		AllowList:                in.AllowList,
 		DockerEnabled:            in.DockerEnabled,
 		AllowMarketplace:         in.AllowMarketplace,
+		MachineId:                in.MachineId,
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
 	}

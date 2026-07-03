@@ -40,6 +40,12 @@ func (s *Service) runReconciler(ctx context.Context) {
 			if err := s.ReconcileManagedCompute(ctx); err != nil {
 				log.Warn().Err(err).Msg("managed compute reconcile failed")
 			}
+			// Bounded so a slow billing endpoint can't stall the reconcile
+			// loop; missed intervals roll into the next tick (billing resumes
+			// from each rental's LastBilledAt cursor).
+			usageCtx, cancel := context.WithTimeout(ctx, rentalUsageEmitTimeout)
+			s.emitRentalUsage(usageCtx, time.Now().UTC())
+			cancel()
 			timer.Reset(interval)
 		}
 	}

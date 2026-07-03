@@ -76,6 +76,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		UsageMetricsRepo: opts.UsageMetricsRepo,
 		ComputeRepo:      computeRepo,
 		KeyEventManager:  keyEventManager,
+		RedisClient:      opts.RedisClient,
 		Tailscale:        opts.Tailscale,
 	})
 	computeService.Start(opts.Ctx)

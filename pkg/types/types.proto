@@ -101,6 +101,7 @@ message ContainerRequest {
   repeated string runtime_secret_names = 31;
   bool runtime_token_required = 32;
   bool allow_marketplace = 33;
+  string machine_id = 34;
 }
 
 message ContainerState {

@@ -42,6 +42,14 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 		return
 	}
 
+	// A machine-pinned request can only ever run on its machine's worker;
+	// provisioning elsewhere can't help, so wait for capacity to free up.
+	if a.request.MachineId != "" {
+		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "pinned_machine_busy")
+		a.requeueForWorkerWait()
+		return
+	}
+
 	if a.tryPrivatePoolFallback() {
 		return
 	}

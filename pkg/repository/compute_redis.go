@@ -466,6 +466,130 @@ func (r *ComputeRedisRepository) DeleteMarketplaceListing(ctx context.Context, s
 	return r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceGlobalIndex(), marketplaceListingGlobalMember(sellerWorkspaceID, listingID)).Err()
 }
 
+// LockMachineRentals serializes rental capacity checks and writes for one
+// machine, so concurrent reserves can't both claim the same free GPUs.
+func (r *ComputeRedisRepository) LockMachineRentals(ctx context.Context, machineID string) error {
+	return r.lock.Acquire(ctx, common.RedisKeys.ComputeMarketplaceRentalMachineLock(machineID), common.RedisLockOptions{
+		TtlS:          30,
+		Retries:       50,
+		RetryInterval: 100 * time.Millisecond,
+	})
+}
+
+func (r *ComputeRedisRepository) UnlockMachineRentals(machineID string) error {
+	return r.lock.Release(common.RedisKeys.ComputeMarketplaceRentalMachineLock(machineID))
+}
+
+func (r *ComputeRedisRepository) SaveMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error {
+	if state == nil || state.BuyerWorkspaceID == "" || state.ID == "" || state.MachineID == "" {
+		return fmt.Errorf("rental buyer workspace, id, and machine are required")
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	if err := r.rdb.Set(ctx, common.RedisKeys.ComputeMarketplaceRental(state.BuyerWorkspaceID, state.ID), data, 0).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.SAdd(ctx, common.RedisKeys.ComputeMarketplaceRentalIndex(state.BuyerWorkspaceID), state.ID).Err(); err != nil {
+		return err
+	}
+	member := marketplaceListingGlobalMember(state.BuyerWorkspaceID, state.ID)
+	if err := r.rdb.SAdd(ctx, common.RedisKeys.ComputeMarketplaceRentalMachineIndex(state.MachineID), member).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SAdd(ctx, common.RedisKeys.ComputeMarketplaceRentalGlobalIndex(), member).Err()
+}
+
+func (r *ComputeRedisRepository) GetMarketplaceRental(ctx context.Context, buyerWorkspaceID, rentalID string) (*compute.MarketplaceRentalState, error) {
+	if buyerWorkspaceID == "" || rentalID == "" {
+		return nil, nil
+	}
+	data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeMarketplaceRental(buyerWorkspaceID, rentalID)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var state compute.MarketplaceRentalState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (r *ComputeRedisRepository) ListMarketplaceRentals(ctx context.Context, buyerWorkspaceID string) ([]*compute.MarketplaceRentalState, error) {
+	ids, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeMarketplaceRentalIndex(buyerWorkspaceID)).Result()
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(ids)
+	rentals := make([]*compute.MarketplaceRentalState, 0, len(ids))
+	for _, id := range ids {
+		rental, err := r.GetMarketplaceRental(ctx, buyerWorkspaceID, id)
+		if err != nil {
+			return nil, err
+		}
+		if rental != nil {
+			rentals = append(rentals, rental)
+		}
+	}
+	return rentals, nil
+}
+
+// ListMarketplaceRentalsForMachine returns every buyer's active rental on one
+// machine — the scheduler subtracts these from serverless-visible capacity.
+func (r *ComputeRedisRepository) ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*compute.MarketplaceRentalState, error) {
+	return r.rentalsFromMembers(ctx, common.RedisKeys.ComputeMarketplaceRentalMachineIndex(machineID))
+}
+
+// ListAllMarketplaceRentals returns every active rental across buyers — used
+// by the gateway's rental billing ticker.
+func (r *ComputeRedisRepository) ListAllMarketplaceRentals(ctx context.Context) ([]*compute.MarketplaceRentalState, error) {
+	return r.rentalsFromMembers(ctx, common.RedisKeys.ComputeMarketplaceRentalGlobalIndex())
+}
+
+func (r *ComputeRedisRepository) rentalsFromMembers(ctx context.Context, indexKey string) ([]*compute.MarketplaceRentalState, error) {
+	members, err := r.rdb.SMembers(ctx, indexKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(members)
+	rentals := make([]*compute.MarketplaceRentalState, 0, len(members))
+	for _, member := range members {
+		buyerWorkspaceID, rentalID, ok := splitMarketplaceListingGlobalMember(member)
+		if !ok {
+			continue
+		}
+		rental, err := r.GetMarketplaceRental(ctx, buyerWorkspaceID, rentalID)
+		if err != nil {
+			return nil, err
+		}
+		if rental != nil {
+			rentals = append(rentals, rental)
+		}
+	}
+	return rentals, nil
+}
+
+func (r *ComputeRedisRepository) DeleteMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error {
+	if state == nil || state.BuyerWorkspaceID == "" || state.ID == "" {
+		return nil
+	}
+	if err := r.rdb.Del(ctx, common.RedisKeys.ComputeMarketplaceRental(state.BuyerWorkspaceID, state.ID)).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceRentalIndex(state.BuyerWorkspaceID), state.ID).Err(); err != nil {
+		return err
+	}
+	member := marketplaceListingGlobalMember(state.BuyerWorkspaceID, state.ID)
+	if err := r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceRentalMachineIndex(state.MachineID), member).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceRentalGlobalIndex(), member).Err()
+}
+
 func (r *ComputeRedisRepository) poolStates(ctx context.Context, keys []string) ([]*compute.PoolState, error) {
 	if len(keys) == 0 {
 		return []*compute.PoolState{}, nil

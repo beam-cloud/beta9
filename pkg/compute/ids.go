@@ -28,6 +28,10 @@ func MarketplaceListingID(workspaceID, displayName string) string {
 	return shortComputeID("marketplace", workspaceID, displayName, nowSeed())
 }
 
+func MarketplaceRentalID(buyerWorkspaceID, machineID string) string {
+	return shortComputeID("rental", buyerWorkspaceID, machineID, nowSeed())
+}
+
 // MarketplacePoolName builds the pool name behind a marketplace listing from a
 // seller-provided name or the listing's GPU type (e.g. "marketplace-a100").
 // Pool names feed cache locality keys, so they are stable and human-readable;
