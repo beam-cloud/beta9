@@ -9,20 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTouchStubCodeReadyRefreshesMtime(t *testing.T) {
-	root := t.TempDir()
-	readyPath := filepath.Join(root, stubCodeReadyMarker)
-	require.NoError(t, os.WriteFile(readyPath, []byte("ok"), 0644))
-	old := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(readyPath, old, old))
-
-	touchStubCodeReady(readyPath)
-
-	info, err := os.Stat(readyPath)
-	require.NoError(t, err)
-	require.True(t, info.ModTime().After(old))
-}
-
 func TestPruneStubCodeCacheRemovesExpiredAndTempEntries(t *testing.T) {
 	root := t.TempDir()
 	oldReady := writeStubCodeCacheEntry(t, root, "old", time.Now().Add(-8*24*time.Hour))

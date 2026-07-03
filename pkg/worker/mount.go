@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
@@ -173,13 +174,15 @@ func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request
 	cachePath := filepath.Join(c.codeCacheRoot, cacheKey)
 	readyPath := filepath.Join(cachePath, ".beta9-cache-ready")
 	if pathExists(readyPath) {
-		touchStubCodeReady(readyPath)
+		now := time.Now()
+		_ = os.Chtimes(readyPath, now, now)
 		return cachePath, nil
 	}
 
 	value, err, _ := c.codeCacheGroup.Do(cacheKey, func() (any, error) {
 		if pathExists(readyPath) {
-			touchStubCodeReady(readyPath)
+			now := time.Now()
+			_ = os.Chtimes(readyPath, now, now)
 			return cachePath, nil
 		}
 

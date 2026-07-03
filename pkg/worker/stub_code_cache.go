@@ -22,11 +22,6 @@ type stubCodeEntry struct {
 	temporary bool
 }
 
-func touchStubCodeReady(readyPath string) {
-	now := time.Now()
-	_ = os.Chtimes(readyPath, now, now)
-}
-
 func (m *WorkerCacheManager) pruneOwnerStubCodeCache(server *cache.Server) {
 	if m == nil || server == nil {
 		return
