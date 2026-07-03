@@ -1486,6 +1486,7 @@ message AgentMetricSnapshot {
   uint32 worker_count = 10;
   uint32 container_count = 11;
   uint32 free_gpu_count = 12;
+  repeated MachinePathMetrics path_metrics = 13;
 }
 
 message AgentEventRecord {
@@ -1545,6 +1546,16 @@ message MachineMetrics {
   int64 disk_used_mb = 14;
   int64 disk_total_mb = 15;
   float disk_usage_pct = 16;
+  repeated MachinePathMetrics path_metrics = 17;
+}
+
+message MachinePathMetrics {
+  string label = 1;
+  string path = 2;
+  uint64 used_mb = 3;
+  uint64 total_mb = 4;
+  uint64 available_mb = 5;
+  float usage_pct = 6;
 }
 
 message ListMachinesRequest {

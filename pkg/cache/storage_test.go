@@ -57,6 +57,38 @@ func TestGetFilesystemDiskMetricsMb(t *testing.T) {
 	require.LessOrEqual(t, usagePct, 1.0)
 }
 
+func TestNewStoreDoesNotStartDiskMonitor(t *testing.T) {
+	store := newTestStore(t, 5)
+
+	require.False(t, store.diskMonitorStarted.Load())
+}
+
+func TestDiskPressureExceededUsesUsageAndFreeByteReserve(t *testing.T) {
+	store := &Store{
+		serverConfig: ServerConfig{DiskCacheMaxUsagePct: 0.95},
+		diskConfig:   DiskConfig{MinFreeBytes: 100},
+	}
+
+	require.False(t, store.diskPressureExceeded(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      940,
+		availableBytes: 100,
+		usagePct:       0.94,
+	}))
+	require.True(t, store.diskPressureExceeded(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      960,
+		availableBytes: 40,
+		usagePct:       0.96,
+	}))
+	require.True(t, store.diskPressureExceeded(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      920,
+		availableBytes: 80,
+		usagePct:       0.92,
+	}))
+}
+
 func TestStoreAddReaderStreamsToDiskCAS(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("streamed content spanning several cache pages")

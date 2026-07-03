@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -322,10 +323,53 @@ func (t *agentTelemetry) collectMetrics() *pb.AgentMetricSnapshot {
 		snapshot.DiskUsagePct = float32(usage.UsedPercent)
 		snapshot.DiskPath = usage.Path
 	}
+	snapshot.PathMetrics = t.collectPathMetrics()
 	if t.stats != nil {
 		snapshot.WorkerCount = t.stats().WorkerCount
 	}
 	return snapshot
+}
+
+func (t *agentTelemetry) collectPathMetrics() []*pb.MachinePathMetrics {
+	if t == nil {
+		return nil
+	}
+	candidates := []struct {
+		label string
+		path  string
+	}{
+		{label: "root", path: "/"},
+		{label: "state", path: t.stateDir},
+		{label: "images", path: filepath.Join(t.stateDir, "images")},
+		{label: "images_cache", path: filepath.Join(t.stateDir, "images", "cache")},
+		{label: "cache", path: filepath.Join(t.stateDir, "cache")},
+		{label: "checkpoints", path: filepath.Join(t.stateDir, "checkpoints")},
+	}
+	seen := map[string]struct{}{}
+	metrics := make([]*pb.MachinePathMetrics, 0, len(candidates))
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.path) == "" {
+			continue
+		}
+		cleanPath := filepath.Clean(candidate.path)
+		if _, ok := seen[cleanPath]; ok {
+			continue
+		}
+		seen[cleanPath] = struct{}{}
+		usage, err := disk.Usage(cleanPath)
+		if err != nil || usage == nil {
+			continue
+		}
+		metrics = append(metrics, &pb.MachinePathMetrics{
+			Label:       candidate.label,
+			Path:        usage.Path,
+			UsedMb:      bytesToMiB(usage.Used),
+			TotalMb:     bytesToMiB(usage.Total),
+			AvailableMb: bytesToMiB(usage.Free),
+			UsagePct:    float32(usage.UsedPercent),
+		})
+	}
+	return metrics
 }
 
 func bytesToMiB(value uint64) uint64 {

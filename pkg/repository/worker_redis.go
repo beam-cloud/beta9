@@ -964,15 +964,6 @@ func (r *WorkerRedisRepository) setWorkerCapacityLocked(ctx context.Context, wor
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	ctx := context.TODO()
-	queuedRequest := *request
-	queuedRequest.Timestamp = time.Now()
-
-	// Serialize the ContainerRequest -> JSON
-	requestJSON, err := json.Marshal(&queuedRequest)
-	if err != nil {
-		return fmt.Errorf("failed to serialize request: %w", err)
-	}
-
 	if err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions); err != nil {
 		return err
 	}
@@ -991,8 +982,26 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		return err
 	}
 
-	// Push the serialized ContainerRequest
-	if err := r.rdb.RPush(ctx, common.RedisKeys.SchedulerWorkerRequests(worker.Id), requestJSON).Err(); err != nil {
+	queuedRequest := *request
+	queuedRequest.Timestamp = time.Now()
+	queuedRequest.MachineId = currentWorker.MachineId
+	request.MachineId = currentWorker.MachineId
+	requestJSON, err := json.Marshal(&queuedRequest)
+	if err != nil {
+		return fmt.Errorf("failed to serialize request: %w", err)
+	}
+
+	containerStateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	queueKey := common.RedisKeys.SchedulerWorkerRequests(worker.Id)
+	workerContainerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id)
+
+	// Push the serialized ContainerRequest and stamp the selected node together
+	// so container state can be correlated to the worker before runtime start.
+	pipe := r.rdb.TxPipeline()
+	pipe.RPush(ctx, queueKey, requestJSON)
+	pipe.HSet(ctx, containerStateKey, "worker_id", currentWorker.Id, "machine_id", currentWorker.MachineId)
+	pipe.SAdd(ctx, workerContainerIndexKey, containerStateKey)
+	if _, err := pipe.Exec(ctx); err != nil {
 		rollbackWorker := &types.Worker{}
 		if copyErr := common.CopyStruct(updatedWorker, rollbackWorker); copyErr != nil {
 			return errors.Join(fmt.Errorf("failed to push request: %w", err), fmt.Errorf("failed to copy worker for queue push rollback: %w", copyErr))
@@ -1024,7 +1033,13 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerId string) error {
 	containerStateKey := common.RedisKeys.SchedulerContainerState(containerId)
 
-	err := r.rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerStateKey).Err()
+	ctx := context.TODO()
+	pipe := r.rdb.TxPipeline()
+	pipe.SAdd(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId), containerStateKey)
+	if worker, err := r.getWorkerFromKey(common.RedisKeys.SchedulerWorkerState(workerId)); err == nil && worker != nil {
+		pipe.HSet(ctx, containerStateKey, "worker_id", worker.Id, "machine_id", worker.MachineId)
+	}
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}

@@ -251,7 +251,7 @@ func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.Stream
 
 func (r *S2EventRepository) machineLogStreams(query types.LogQuery) []s2.StreamName {
 	if query.WorkspaceID != "" {
-		return []s2.StreamName{r.workspaceLogStreamName(query.WorkspaceID)}
+		return []s2.StreamName{r.workspaceMachineLogStreamName(query.WorkspaceID, query.MachineID)}
 	}
 	return []s2.StreamName{
 		r.platformLogStreamName(eventMetadata{
@@ -407,6 +407,7 @@ func logRecordFromS2(record s2.SequencedRecord) (types.LogRecord, bool) {
 		TaskID:      firstNonEmpty(entry.TaskID, eventRecord.TaskID),
 		WorkspaceID: firstNonEmpty(entry.WorkspaceID, eventRecord.WorkspaceID),
 		AppID:       firstNonEmpty(entry.AppID, eventRecord.AppID),
+		MachineID:   firstNonEmpty(entry.MachineID, eventRecord.MachineID),
 		WorkerID:    firstNonEmpty(entry.WorkerID, eventRecord.WorkerID),
 		PID:         entry.PID,
 		ProcessArgs: entry.ProcessArgs,

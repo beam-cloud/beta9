@@ -130,6 +130,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		cancel()
 		return nil, err
 	}
+	cas.StartDiskMonitor()
 
 	for _, sourceConfig := range cfg.Server.Sources {
 		_, err := NewSource(sourceConfig)
@@ -188,6 +189,61 @@ func (cs *Server) UsagePct() float64 {
 		return 0
 	}
 	return cs.usagePct()
+}
+
+func (cs *Server) AvailableDiskBytes() int64 {
+	if cs == nil || cs.cas == nil {
+		return 0
+	}
+	return cs.cas.CachedDiskAvailableBytes()
+}
+
+func (cs *Server) RefreshDiskUsage() (DiskUsage, error) {
+	if cs == nil || cs.cas == nil {
+		return DiskUsage{}, fmt.Errorf("cache server store is not available")
+	}
+	snapshot, err := cs.cas.refreshDiskCacheUsage(false)
+	if err != nil {
+		return DiskUsage{}, err
+	}
+	return diskUsageFromSnapshot(snapshot), nil
+}
+
+func (cs *Server) DiskPressureExceeded() bool {
+	if cs == nil || cs.cas == nil {
+		return false
+	}
+	cs.cas.mu.Lock()
+	defer cs.cas.mu.Unlock()
+	return cs.cas.diskCachedUsageExceeded
+}
+
+func (cs *Server) DiskMinFreeBytes() int64 {
+	if cs == nil || cs.cas == nil {
+		return 0
+	}
+	return cs.cas.diskConfig.MinFreeBytes
+}
+
+func (cs *Server) PruneContentNotProtected(protected map[string]struct{}, ttl time.Duration) (int, int64) {
+	if cs == nil || cs.cas == nil {
+		return 0, 0
+	}
+	return cs.cas.PruneContentNotProtected(protected, ttl)
+}
+
+func (cs *Server) SetProtectedContent(protected map[string]struct{}) {
+	if cs == nil || cs.cas == nil {
+		return
+	}
+	cs.cas.SetProtectedContent(protected)
+}
+
+func (cs *Server) PressureEvictContent(protected map[string]struct{}, bytesToFree int64) (int, int64) {
+	if cs == nil || cs.cas == nil {
+		return 0, 0
+	}
+	return cs.cas.PressureEvictContent(protected, bytesToFree)
 }
 
 // HostID returns the logical host id this server registers under, or "".

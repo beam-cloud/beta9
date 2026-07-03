@@ -508,6 +508,9 @@ containerRequestStream:
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				if request.MachineId == "" {
+					request.MachineId = s.machineID
+				}
 				log.Info().Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("worker received container request")
 				if !request.Timestamp.IsZero() {
 					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
@@ -994,11 +997,7 @@ func (s *Worker) keepalive() {
 	for {
 		select {
 		case <-ticker.C:
-			_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
-				WorkerId:  s.workerId,
-				MachineId: s.machineID,
-			}))
-			if err != nil {
+			if err := s.setWorkerKeepAlive(); err != nil {
 				consecutiveFailures++
 				if consecutiveFailures == 1 || consecutiveFailures%20 == 0 {
 					log.Warn().Err(err).Int("consecutive_failures", consecutiveFailures).Str("worker_id", s.workerId).Msg("worker keepalive failed")
@@ -1013,6 +1012,14 @@ func (s *Worker) keepalive() {
 			return
 		}
 	}
+}
+
+func (s *Worker) setWorkerKeepAlive() error {
+	_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+		WorkerId:  s.workerId,
+		MachineId: s.machineID,
+	}))
+	return err
 }
 
 func (s *Worker) profile() {
@@ -1048,6 +1055,9 @@ func (s *Worker) profile() {
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
 
+	if err := s.setWorkerKeepAlive(); err != nil {
+		return err
+	}
 	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
 		WorkerId: s.workerId,
 	}))

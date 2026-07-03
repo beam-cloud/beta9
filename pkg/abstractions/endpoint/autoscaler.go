@@ -126,6 +126,8 @@ func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscaler
 			StubType:    string(i.Stub.Type.Kind()),
 			WorkspaceID: container.WorkspaceId,
 			AppID:       appID,
+			WorkerID:    container.WorkerId,
+			MachineID:   container.MachineId,
 			Reason:      reason,
 			Source:      types.EventSourceEndpointAutoscaler.String(),
 			Message:     types.EventMessageAutoscalerScaleDecision.String(),

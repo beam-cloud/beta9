@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	diskCacheUsageCheckInterval = 1 * time.Minute
+	diskCacheUsageCheckInterval = 30 * time.Second
+	diskCacheWriteGuardInterval = 5 * time.Second
 	pageLockStripeCount         = 4096
 	cacheCompleteMarkerName     = "_complete"
 )
@@ -42,6 +43,7 @@ type Store struct {
 	locality                string
 	cache                   *ristretto.Cache[string, interface{}]
 	serverConfig            ServerConfig
+	diskConfig              DiskConfig
 	globalConfig            GlobalConfig
 	prefetchConfig          ReadPrefetchConfig
 	metadataStore           CacheMetadataStore
@@ -50,14 +52,18 @@ type Store struct {
 	diskCachedUsageExceeded bool
 	memoryCacheEnabled      bool
 	mu                      sync.Mutex
-	metrics                 CacheMetrics
 	bufferPool              *BufferPool
 	prefetcher              *Prefetcher
 	pageLocks               [pageLockStripeCount]sync.RWMutex
 	closing                 atomic.Bool
 	diskUsagePctBits        atomic.Uint64
+	diskAvailableBytes      atomic.Int64
+	diskMonitorStarted      atomic.Bool
+	lastDiskGuardCheckNanos atomic.Int64
 	accessTouchMu           sync.Mutex
 	accessTouches           map[string]time.Time
+	protectedMu             sync.RWMutex
+	protectedContent        map[string]struct{}
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -67,6 +73,7 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 	cas := &Store{
 		ctx:                ctx,
 		serverConfig:       config.Server,
+		diskConfig:         config.Disk,
 		globalConfig:       config.Global,
 		prefetchConfig:     config.Client.Prefetch,
 		metadataStore:      metadataStore,
@@ -75,8 +82,8 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 		diskCacheDir:       config.Server.DiskCacheDir,
 		memoryCacheEnabled: config.Server.MaxCachePct > 0,
 		mu:                 sync.Mutex{},
-		metrics:            initMetrics(ctx, config.Metrics, currentHost, locality),
 		accessTouches:      make(map[string]time.Time),
+		protectedContent:   make(map[string]struct{}),
 	}
 
 	Logger.Infof("Disk cache directory located at: '%s'", cas.diskCacheDir)
@@ -117,11 +124,6 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 			Metrics:     false,
 		})
 		cas.cache = cache
-	}
-
-	// Only start disk monitor if we have a metrics URL (not in benchmarks/tests)
-	if config.Metrics.URL != "" {
-		go cas.monitorDiskCacheUsage()
 	}
 
 	// Initialize buffer pool for reduced allocations
@@ -213,7 +215,11 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	}
 
 	dirPath := cas.pageDir(hash)
-	if !cas.diskCachedUsageExceeded {
+	writeToDisk := cas.diskWriteAllowed()
+	if !writeToDisk && !cas.memoryCacheEnabled {
+		return errors.New("disk cache capacity exceeded")
+	}
+	if writeToDisk {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
 			return fmt.Errorf("failed to create cache directory: %w", err)
 		}
@@ -233,7 +239,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 		chunkKey := cas.pageKey(hash, chunkIdx)
 
 		// Write through to disk cache if we still have storage available
-		if !cas.diskCachedUsageExceeded {
+		if writeToDisk {
 			filePath := filepath.Join(dirPath, chunkKey)
 			pageLock := cas.pageLock(hash, chunkIdx)
 			pageLock.Lock()
@@ -269,7 +275,7 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 			return errors.New("unable to cache: set dropped")
 		}
 	}
-	if !cas.diskCachedUsageExceeded {
+	if writeToDisk {
 		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil {
 			return err
 		}
@@ -286,7 +292,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	if cas.serverConfig.PageSizeBytes <= 0 {
 		return "", 0, errors.New("invalid page size")
 	}
-	if cas.diskCachedUsageExceeded {
+	if !cas.diskWriteAllowed() {
 		if !cas.memoryCacheEnabled {
 			return "", 0, errors.New("disk cache capacity exceeded")
 		}
@@ -403,7 +409,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 	if cas.serverConfig.PageSizeBytes <= 0 {
 		return "", 0, errors.New("invalid page size")
 	}
-	if cas.diskCachedUsageExceeded {
+	if !cas.diskWriteAllowed() {
 		if !cas.memoryCacheEnabled {
 			return "", 0, errors.New("disk cache capacity exceeded")
 		}
@@ -499,7 +505,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 	if cas.serverConfig.PageSizeBytes <= 0 {
 		return "", 0, errors.New("invalid page size")
 	}
-	if cas.diskCachedUsageExceeded {
+	if !cas.diskWriteAllowed() {
 		return "", 0, errors.New("disk cache capacity exceeded")
 	}
 	tmpDir, err := cas.newExpectedHashTempDir(expectedHash)
@@ -709,7 +715,7 @@ func (cas *Store) PutPageRange(hash string, offset int64, data []byte) {
 }
 
 func (cas *Store) putPages(hash string, offset int64, data []byte, includePartialTail bool) {
-	if hash == "" || offset < 0 || len(data) == 0 || cas.serverConfig.PageSizeBytes <= 0 || cas.diskCachedUsageExceeded {
+	if hash == "" || offset < 0 || len(data) == 0 || cas.serverConfig.PageSizeBytes <= 0 || !cas.diskWriteAllowed() {
 		return
 	}
 
@@ -1016,14 +1022,8 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err
 	o := offset
 	dstOffset := int64(0)
 
-	// Track metrics
-	cas.metrics.TotalReads.Inc()
 	start := time.Now()
 	defer func() {
-		if dstOffset > 0 {
-			throughputMBps := (float64(dstOffset) / (1024 * 1024)) / (float64(time.Since(start).Microseconds()) / 1e6)
-			cas.metrics.ReadThroughputMBps.Update(throughputMBps)
-		}
 		// Record read recency so LRU eviction prefers newer content
 		if read > 0 {
 			cas.touchContentAccess(hash)
@@ -1031,8 +1031,6 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err
 		if elapsed := time.Since(start); elapsed > time.Second || (err != nil && !errors.Is(err, ErrContentNotFound)) {
 			Logger.Warnf("cache store read-at result: hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
 		}
-		// Update hit ratios
-		cas.updateHitRatios()
 	}()
 
 	// Notify prefetcher about this read
@@ -1057,21 +1055,15 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err
 		if cas.memoryCacheEnabled {
 			value, found = cas.cache.Get(chunkKey)
 			fromMemory = found
-			if found {
-				cas.metrics.L0Hits.Inc()
-			}
 		}
 
 		// Not found in memory, check disk cache (L1) before giving up
 		if !found {
 			readLength, err := cas.readPageFromDisk(hash, chunkIdx, pageOffset, remainingLength, dst[dstOffset:])
 			if err != nil {
-				cas.metrics.L2Misses.Inc()
 				atomic.AddInt64(&cachePathStats.storeMisses, 1)
 				return 0, ErrContentNotFound
 			}
-			cas.metrics.L1Hits.Inc()
-			cas.metrics.L1BytesServed.Add(int(readLength))
 
 			remainingLength -= readLength
 			o += readLength
@@ -1103,11 +1095,8 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err
 
 		// Track bytes served from appropriate tier
 		if fromMemory {
-			cas.metrics.L0BytesServed.Add(int(readLength))
 			atomic.AddInt64(&cachePathStats.storeMemoryPages, 1)
 			atomic.AddInt64(&cachePathStats.storeMemoryBytes, readLength)
-		} else {
-			cas.metrics.L1BytesServed.Add(int(readLength))
 		}
 
 		remainingLength -= readLength
@@ -1355,7 +1344,11 @@ func (cas *Store) Cleanup() {
 }
 
 func (cas *Store) GetDiskCacheMetrics() (int64, int64, float64, error) {
-	return getFilesystemDiskMetricsMb(cas.diskCacheDir)
+	snapshot, err := getFilesystemDiskUsage(cas.diskCacheDir)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return int64(snapshot.usedBytes / (1024 * 1024)), int64(snapshot.totalBytes / (1024 * 1024)), snapshot.usagePct, nil
 }
 
 func (cas *Store) CachedDiskUsagePct() float64 {
@@ -1369,28 +1362,72 @@ func (cas *Store) setCachedDiskUsagePct(usagePercentage float64) {
 	cas.diskUsagePctBits.Store(math.Float64bits(usagePercentage))
 }
 
+func (cas *Store) CachedDiskAvailableBytes() int64 {
+	if cas == nil {
+		return 0
+	}
+	return cas.diskAvailableBytes.Load()
+}
+
 func min(a, b int64) int64 {
 	if a < b {
 		return a
 	}
 	return b
 }
-func getFilesystemDiskMetricsMb(path string) (int64, int64, float64, error) {
+
+type diskUsageSnapshot struct {
+	path           string
+	totalBytes     uint64
+	availableBytes uint64
+	usedBytes      uint64
+	usagePct       float64
+}
+
+type DiskUsage struct {
+	TotalBytes     uint64
+	AvailableBytes uint64
+	UsedBytes      uint64
+	UsagePct       float64
+}
+
+func diskUsageFromSnapshot(snapshot diskUsageSnapshot) DiskUsage {
+	return DiskUsage{
+		TotalBytes:     snapshot.totalBytes,
+		AvailableBytes: snapshot.availableBytes,
+		UsedBytes:      snapshot.usedBytes,
+		UsagePct:       snapshot.usagePct,
+	}
+}
+
+func getFilesystemDiskUsage(path string) (diskUsageSnapshot, error) {
 	var stat syscall.Statfs_t
 	err := syscall.Statfs(path, &stat)
 	if err != nil {
-		return 0, 0, 0, err
+		return diskUsageSnapshot{}, err
 	}
 	totalBytes := uint64(stat.Blocks) * uint64(stat.Bsize)
 	availableBytes := uint64(stat.Bavail) * uint64(stat.Bsize)
 	usedBytes := totalBytes - availableBytes
-	totalDiskSpaceMb := int64(totalBytes / (1024 * 1024))
-	diskUsageMb := int64(usedBytes / (1024 * 1024))
 	usagePercentage := 0.0
 	if totalBytes > 0 {
 		usagePercentage = float64(usedBytes) / float64(totalBytes)
 	}
-	return diskUsageMb, totalDiskSpaceMb, usagePercentage, nil
+	return diskUsageSnapshot{
+		path:           path,
+		totalBytes:     totalBytes,
+		availableBytes: availableBytes,
+		usedBytes:      usedBytes,
+		usagePct:       usagePercentage,
+	}, nil
+}
+
+func getFilesystemDiskMetricsMb(path string) (int64, int64, float64, error) {
+	snapshot, err := getFilesystemDiskUsage(path)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return int64(snapshot.usedBytes / (1024 * 1024)), int64(snapshot.totalBytes / (1024 * 1024)), snapshot.usagePct, nil
 }
 
 func getMemoryMb() (int64, int64) {
@@ -1399,6 +1436,88 @@ func getMemoryMb() (int64, int64) {
 		log.Fatalf("Unable to retrieve host memory info: %v", err)
 	}
 	return int64(v.Available / (1024 * 1024)), int64(v.Total / (1024 * 1024))
+}
+
+func (cas *Store) StartDiskMonitor() {
+	if cas == nil || !cas.diskMonitorStarted.CompareAndSwap(false, true) {
+		return
+	}
+	// Set the fast write gate immediately, but don't evict on this first
+	// accounting pass. The embedded cache owner computes the protected set
+	// from recent stubs during reconciliation; evicting before that pass can
+	// drop old-but-required content during startup pressure.
+	cas.refreshDiskCacheUsage(false)
+	go cas.monitorDiskCacheUsage()
+}
+
+func (cas *Store) diskWriteAllowed() bool {
+	if cas == nil {
+		return false
+	}
+	cas.mu.Lock()
+	exceeded := cas.diskCachedUsageExceeded
+	cas.mu.Unlock()
+	now := time.Now().UnixNano()
+	last := cas.lastDiskGuardCheckNanos.Load()
+	if exceeded && last == 0 {
+		return false
+	}
+	if last == 0 || time.Duration(now-last) >= diskCacheWriteGuardInterval {
+		if cas.lastDiskGuardCheckNanos.CompareAndSwap(last, now) {
+			cas.refreshDiskCacheUsage(false)
+		}
+	}
+	cas.mu.Lock()
+	defer cas.mu.Unlock()
+	return !cas.diskCachedUsageExceeded
+}
+
+func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {
+	snapshot, err := getFilesystemDiskUsage(cas.diskCacheDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			Logger.Errorf("Failed to fetch disk cache usage: %v", err)
+		}
+		return snapshot, err
+	}
+
+	cas.setCachedDiskUsagePct(snapshot.usagePct)
+	cas.diskAvailableBytes.Store(int64(snapshot.availableBytes))
+
+	Logger.Debugf("Disk Cache Usage: %dMB / %dMB (%.2f%%, avail=%dMB)",
+		snapshot.usedBytes/(1024*1024),
+		snapshot.totalBytes/(1024*1024),
+		snapshot.usagePct*100,
+		snapshot.availableBytes/(1024*1024),
+	)
+
+	if evict && cas.maybeEvictDiskCache(snapshot) {
+		if refreshed, err := getFilesystemDiskUsage(cas.diskCacheDir); err == nil {
+			snapshot = refreshed
+			cas.setCachedDiskUsagePct(snapshot.usagePct)
+			cas.diskAvailableBytes.Store(int64(snapshot.availableBytes))
+		}
+	}
+
+	cas.mu.Lock()
+	cas.diskCachedUsageExceeded = cas.diskPressureExceeded(snapshot)
+	cas.mu.Unlock()
+	return snapshot, nil
+}
+
+func (cas *Store) diskPressureExceeded(snapshot diskUsageSnapshot) bool {
+	maxUsagePct := normalizedPct(cas.serverConfig.DiskCacheMaxUsagePct)
+	if maxUsagePct <= 0 {
+		maxUsagePct = defaultHostStorageCapacityThresholdPct
+	}
+	if snapshot.usagePct >= maxUsagePct {
+		return true
+	}
+	return cas.diskConfig.MinFreeBytes > 0 && int64(snapshot.availableBytes) < cas.diskConfig.MinFreeBytes
+}
+
+func normalizedPct(pct float64) float64 {
+	return pct
 }
 
 func (cas *Store) monitorDiskCacheUsage() {
@@ -1410,58 +1529,7 @@ func (cas *Store) monitorDiskCacheUsage() {
 		case <-cas.ctx.Done():
 			return
 		case <-ticker.C:
-			currentUsage, totalDiskSpace, usagePercentage, err := cas.GetDiskCacheMetrics()
-			if err != nil {
-				// Silently skip if directory doesn't exist (common in tests/benchmarks)
-				if !os.IsNotExist(err) {
-					Logger.Errorf("Failed to fetch disk cache metrics: %v", err)
-				}
-				continue
-			}
-
-			availableMemoryMb, totalMemoryMb := getMemoryMb()
-			usedMemoryMb := totalMemoryMb - availableMemoryMb
-			cas.metrics.MemCacheUsageMB.Update(float64(usedMemoryMb))
-			cas.metrics.MemCacheUsagePct.Update(float64(usedMemoryMb) / float64(totalMemoryMb) * 100)
-			cas.metrics.DiskCacheUsageMB.Update(float64(currentUsage))
-			cas.metrics.DiskCacheUsagePct.Update(float64(usagePercentage))
-			cas.setCachedDiskUsagePct(usagePercentage)
-
-			Logger.Debugf("Memory Cache Usage: %dMB / %dMB (%.2f%%)", availableMemoryMb, totalMemoryMb, float64(availableMemoryMb)/float64(totalMemoryMb)*100)
-			Logger.Debugf("Disk Cache Usage: %dMB / %dMB (%.2f%%)", currentUsage, totalDiskSpace, usagePercentage*100)
-
-			// Evict least-recently-read content when above the eviction
-			// watermark, then refresh usage so the write gate below reflects
-			// the post-eviction state
-			if cas.maybeEvictDiskCache(usagePercentage, totalDiskSpace) {
-				if _, _, refreshedPct, err := cas.GetDiskCacheMetrics(); err == nil {
-					usagePercentage = refreshedPct
-					cas.setCachedDiskUsagePct(usagePercentage)
-				}
-			}
-
-			// Update internal state for disk usage exceeded
-			cas.mu.Lock()
-			cas.diskCachedUsageExceeded = usagePercentage > cas.serverConfig.DiskCacheMaxUsagePct
-			cas.mu.Unlock()
+			cas.refreshDiskCacheUsage(true)
 		}
-	}
-}
-
-// updateHitRatios calculates and updates cache hit ratio metrics
-func (cas *Store) updateHitRatios() {
-	l0Hits := cas.metrics.L0Hits.Get()
-	l1Hits := cas.metrics.L1Hits.Get()
-	l2Misses := cas.metrics.L2Misses.Get()
-	total := l0Hits + l1Hits + l2Misses
-
-	if total > 0 {
-		l0Ratio := float64(l0Hits) / float64(total) * 100
-		l1Ratio := float64(l1Hits) / float64(total) * 100
-		l2Ratio := float64(l2Misses) / float64(total) * 100
-
-		cas.metrics.L0HitRatio.Update(l0Ratio)
-		cas.metrics.L1HitRatio.Update(l1Ratio)
-		cas.metrics.L2MissRatio.Update(l2Ratio)
 	}
 }

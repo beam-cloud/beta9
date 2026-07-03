@@ -1341,6 +1341,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 		}
 		streams := []s2.StreamName{stream}
 		if metadata.WorkspaceID != "" {
+			if metadata.MachineID != "" {
+				streams = append(streams, r.workspaceMachineLogStreamName(metadata.WorkspaceID, metadata.MachineID))
+			}
 			streams = append(streams, r.workspaceLogStreamName(metadata.WorkspaceID))
 		}
 		return streams
@@ -1382,6 +1385,9 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 			add(r.appNamespaceStreamName(metadata.WorkspaceID, metadata.AppID))
 		}
 	}
+	if isMachineScopedEvent(eventType, metadata) {
+		add(r.workspaceMachineStreamName(metadata.WorkspaceID, metadata.MachineID))
+	}
 	if isComputeEvent(eventType) && metadata.WorkspaceID != "" {
 		// Workspace stream powers the live workspace SSE; the compute stream keeps
 		// a dense history for fast compute-only history queries. Heartbeats fire
@@ -1413,6 +1419,13 @@ func isWorkspaceContainerRealtimeEvent(eventType string) bool {
 	return eventType == types.EventContainerMetrics ||
 		eventType == types.EventContainerEvent ||
 		eventType == types.EventContainerLifecycle
+}
+
+func isMachineScopedEvent(eventType string, metadata eventMetadata) bool {
+	if metadata.WorkspaceID == "" || metadata.MachineID == "" {
+		return false
+	}
+	return isWorkspaceContainerRealtimeEvent(eventType) || isComputeEvent(eventType)
 }
 
 func appendUniqueS2Stream(streams []s2.StreamName, stream s2.StreamName) []s2.StreamName {
@@ -1479,6 +1492,9 @@ func (r *S2EventRepository) logStreamNamesForEvent(metadata eventMetadata) []s2.
 	if metadata.AppID != "" {
 		add(r.appNamespaceLogStreamName(metadata.WorkspaceID, metadata.AppID))
 	}
+	if metadata.MachineID != "" {
+		add(r.workspaceMachineLogStreamName(metadata.WorkspaceID, metadata.MachineID))
+	}
 	add(r.workspaceLogStreamName(metadata.WorkspaceID))
 	return streams
 }
@@ -1511,6 +1527,15 @@ func (r *S2EventRepository) containerAliasStreamName(workspaceID, containerID st
 		r.streamPrefix,
 		eventStreamPart(workspaceID),
 		eventStreamPart(containerID),
+	))
+}
+
+func (r *S2EventRepository) workspaceMachineStreamName(workspaceID, machineID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf(
+		"%s/workspaces/%s/machines/%s",
+		r.streamPrefix,
+		eventStreamPart(workspaceID),
+		eventStreamPart(machineID),
 	))
 }
 
@@ -1789,6 +1814,10 @@ func (r *S2EventRepository) workspaceLogStreamName(workspaceID string) s2.Stream
 	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s", r.streamPrefix, eventStreamPart(workspaceID)))
 }
 
+func (r *S2EventRepository) workspaceMachineLogStreamName(workspaceID, machineID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/logs/workspaces/%s/machines/%s", r.streamPrefix, eventStreamPart(workspaceID), eventStreamPart(machineID)))
+}
+
 func (r *S2EventRepository) platformLogStreamName(metadata eventMetadata) s2.StreamName {
 	switch {
 	case metadata.WorkerID != "":
@@ -1900,6 +1929,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.WorkspaceID = lifecycle.WorkspaceID
 		record.AppID = firstNonEmpty(lifecycle.AppID, record.AppID)
 		record.WorkerID = lifecycle.WorkerID
+		record.MachineID = lifecycle.MachineID
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = lifecycle.WorkspaceID
 		}
@@ -1925,6 +1955,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.WorkspaceID = event.WorkspaceID
 		record.AppID = firstNonEmpty(event.AppID, record.AppID)
 		record.WorkerID = event.WorkerID
+		record.MachineID = event.MachineID
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = event.WorkspaceID
 		}
@@ -1944,6 +1975,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.WorkspaceID = entry.WorkspaceID
 		record.AppID = entry.AppID
 		record.WorkerID = entry.WorkerID
+		record.MachineID = entry.MachineID
 		record.Stream = entry.Stream
 		record.Line = entry.Line
 		record.PID = entry.PID
@@ -1967,6 +1999,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		record.WorkspaceID = metrics.WorkspaceID
 		record.AppID = metrics.AppID
 		record.WorkerID = metrics.WorkerID
+		record.MachineID = metrics.MachineID
 		if response.WorkspaceID == "" {
 			response.WorkspaceID = metrics.WorkspaceID
 		}

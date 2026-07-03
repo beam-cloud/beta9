@@ -384,6 +384,7 @@ func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *ty
 		WorkspaceID: request.WorkspaceId,
 		AppID:       request.AppId,
 		WorkerID:    workerID,
+		MachineID:   request.MachineId,
 		CPU:         request.Cpu,
 		GPUCount:    request.GpuCount,
 		Reason:      opts.Reason,
@@ -415,6 +416,7 @@ func (r *EventClientRepo) PushContainerRequestLifecycle(workerID string, request
 		WorkspaceID: request.WorkspaceId,
 		AppID:       request.AppId,
 		WorkerID:    workerID,
+		MachineID:   request.MachineId,
 		Success:     &success,
 		Source:      opts.Source.String(),
 		Attrs:       attrs,
@@ -548,6 +550,7 @@ func (r *EventClientRepo) PushContainerRequestLogLine(workerID string, request *
 		WorkspaceID: request.WorkspaceId,
 		AppID:       request.AppId,
 		WorkerID:    workerID,
+		MachineID:   request.MachineId,
 		Stream:      stream,
 		Line:        line,
 	})
@@ -592,6 +595,7 @@ func (r *EventClientRepo) PushContainerRunnerEvent(workerID string, request *typ
 			WorkspaceID: request.WorkspaceId,
 			AppID:       request.AppId,
 			WorkerID:    workerID,
+			MachineID:   request.MachineId,
 			Success:     &success,
 			Source:      types.EventSourceRunnerStdout.String(),
 			Attrs:       copyEventAttrs(event.Attrs),
@@ -616,6 +620,7 @@ func (r *EventClientRepo) PushContainerRunnerEvent(workerID string, request *typ
 			WorkspaceID: request.WorkspaceId,
 			AppID:       request.AppId,
 			WorkerID:    workerID,
+			MachineID:   request.MachineId,
 			Source:      types.EventSourceRunnerStdout.String(),
 			Message:     event.Message,
 			Attrs:       copyEventAttrs(event.Attrs),
@@ -834,6 +839,7 @@ func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, req
 		types.EventContainerMetricsSchemaVersion,
 		types.EventContainerMetricsSchema{
 			WorkerID:         workerID,
+			MachineID:        request.MachineId,
 			ContainerID:      request.ContainerId,
 			WorkspaceID:      request.WorkspaceId,
 			StubID:           request.StubId,
@@ -1136,13 +1142,13 @@ func firstNonEmpty(values ...string) string {
 func eventMetadataFromData(data interface{}) eventMetadata {
 	switch d := data.(type) {
 	case types.EventContainerMetricsSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, MachineID: d.MachineID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerLifecycleSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, MachineID: d.MachineID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerEventSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, MachineID: d.MachineID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventContainerLogSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, MachineID: d.MachineID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventPlatformLogSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID, WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName, ServiceName: d.Service, InstanceID: d.InstanceID}
 	case types.EventLLMRouteSchema:

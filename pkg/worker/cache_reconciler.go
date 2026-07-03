@@ -453,10 +453,6 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
-	if m.reconcileGatedByDiskUsage(server, localHostID) {
-		return
-	}
-
 	m.pruneReconcileFailures()
 	m.pruneReconcileSuccesses()
 
@@ -473,24 +469,30 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
-	activeCheckpointIDs := map[string]struct{}{}
+	stubContent, requiredContentComplete := m.loadRecentRequiredContent(stubs)
+	protectedContent, activeCheckpointIDs := protectedContentFromRecentStubs(stubContent, m.accelerator)
+	protectedSetComplete := requiredContentComplete && len(stubs) < maxStubs
+	server.SetProtectedContent(protectedContent)
+	if protectedSetComplete {
+		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
+	}
+	m.pruneOwnerStubCodeCache(server)
+
+	if m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, protectedSetComplete) {
+		return
+	}
+
 	budget := newReconcileBudget(m.reconcileMaxItemsPerCycle())
-	for _, stub := range stubs {
+	for _, content := range stubContent {
 		select {
 		case <-m.ctx.Done():
 			return
 		default:
 		}
-		for _, checkpointID := range m.reconcileStub(server, localHostID, stub, budget) {
-			activeCheckpointIDs[checkpointID] = struct{}{}
-		}
+		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget)
 		if budget.exhausted() {
 			break
 		}
-	}
-	if len(stubs) < maxStubs && !budget.exhausted() {
-		m.pruneLocalCheckpoints(activeCheckpointIDs)
-		m.pruneStaleCacheCheckpoints()
 	}
 }
 
@@ -500,7 +502,10 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 		return nil
 	}
+	return m.reconcileStubContent(server, localHostID, stub, items, budget)
+}
 
+func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget) []string {
 	checkpointIDs := []string{}
 	for _, item := range items {
 		select {
@@ -547,21 +552,116 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 	return checkpointIDs
 }
 
-// reconcileGatedByDiskUsage pauses proactive materialization while local disk
-// usage is above the reconciliation watermark, so reconciliation can never
-// push a node into kubelet DiskPressure territory. Demand-driven reads are
-// unaffected. Transitions are logged once, not every cycle.
-func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string) bool {
-	usage := server.UsagePct()
-	if usage > m.reconcileMaxDiskUsagePct() {
+type recentStubContent struct {
+	stub  cache.RecentStub
+	items []types.CacheRequiredContentItem
+}
+
+func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub) ([]recentStubContent, bool) {
+	content := make([]recentStubContent, 0, len(stubs))
+	complete := true
+	for _, stub := range stubs {
+		items, err := m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
+		if err != nil {
+			log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
+			complete = false
+			continue
+		}
+		content = append(content, recentStubContent{stub: stub, items: items})
+	}
+	return content, complete
+}
+
+func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator string) (map[string]struct{}, map[string]struct{}) {
+	protected := map[string]struct{}{}
+	activeCheckpointIDs := map[string]struct{}{}
+	for _, stub := range stubs {
+		for _, item := range stub.items {
+			if item.Hash != "" {
+				protected[item.Hash] = struct{}{}
+			}
+			if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" && (item.Accelerator == "" || strings.EqualFold(item.Accelerator, accelerator)) {
+				activeCheckpointIDs[item.CheckpointID] = struct{}{}
+			}
+		}
+	}
+	return protected, activeCheckpointIDs
+}
+
+func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protected map[string]struct{}, activeCheckpointIDs map[string]struct{}) {
+	if server == nil {
+		return
+	}
+	if evicted, freed := server.PruneContentNotProtected(protected, m.recentStubTTL()); evicted > 0 {
+		log.Info().
+			Int("evicted", evicted).
+			Int64("freed_bytes", freed).
+			Dur("recent_stub_ttl", m.recentStubTTL()).
+			Msg("pruned stale embedded cache content")
+	}
+	m.pruneLocalCheckpoints(activeCheckpointIDs)
+	m.pruneStaleCacheCheckpoints()
+}
+
+// reconcileGatedByDiskUsage keeps reconciliation balanced under pressure:
+// first evict unprotected LRU content toward the soft reconciliation watermark,
+// then pause only when the cache store's hard write gate is active. This lets
+// recent-stub content, especially checkpoints, keep materializing as long as
+// the node can still safely write cache data.
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, protectedSetComplete bool) bool {
+	usage, err := server.RefreshDiskUsage()
+	if err != nil {
+		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("cache reconciliation failed to refresh disk usage")
+		usage = cache.DiskUsage{
+			UsagePct:       server.UsagePct(),
+			AvailableBytes: uint64(maxInt64(server.AvailableDiskBytes(), 0)),
+		}
+	}
+
+	softWatermark := m.reconcileMaxDiskUsagePct()
+	bytesToFree := reconcilePressureBytesToFree(usage, softWatermark, server.DiskMinFreeBytes())
+	if bytesToFree > 0 && !protectedSetComplete {
 		if m.reconcilePausedAt.IsZero() {
 			m.reconcilePausedAt = time.Now()
 			log.Warn().
 				Str("locality", m.locality).
 				Str("logical_host", localHostID).
-				Float64("disk_usage_pct", usage).
-				Float64("max_disk_usage_pct", m.reconcileMaxDiskUsagePct()).
-				Msg("cache reconciliation paused: disk usage above watermark")
+				Int64("target_free_bytes", bytesToFree).
+				Float64("disk_usage_pct", usage.UsagePct).
+				Float64("soft_watermark_pct", softWatermark).
+				Msg("cache reconciliation paused: protected content set incomplete under disk pressure")
+		}
+		return true
+	}
+	if bytesToFree > 0 {
+		evicted, freed := server.PressureEvictContent(protected, bytesToFree)
+		if evicted > 0 {
+			log.Warn().
+				Str("locality", m.locality).
+				Str("logical_host", localHostID).
+				Int("evicted", evicted).
+				Int64("freed_bytes", freed).
+				Int64("target_free_bytes", bytesToFree).
+				Float64("disk_usage_pct", usage.UsagePct).
+				Float64("soft_watermark_pct", softWatermark).
+				Msg("pressure-evicted unprotected cache content before reconciliation")
+			if refreshed, refreshErr := server.RefreshDiskUsage(); refreshErr == nil {
+				usage = refreshed
+			}
+		}
+	}
+
+	if server.DiskPressureExceeded() {
+		if m.reconcilePausedAt.IsZero() {
+			m.reconcilePausedAt = time.Now()
+			log.Warn().
+				Str("locality", m.locality).
+				Str("logical_host", localHostID).
+				Float64("disk_usage_pct", usage.UsagePct).
+				Uint64("available_bytes", usage.AvailableBytes).
+				Float64("soft_watermark_pct", softWatermark).
+				Int64("min_free_bytes", server.DiskMinFreeBytes()).
+				Msg("cache reconciliation paused: hard disk write gate active")
 		}
 		return true
 	}
@@ -571,10 +671,33 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 			Str("locality", m.locality).
 			Str("logical_host", localHostID).
 			Dur("paused_for", time.Since(m.reconcilePausedAt)).
-			Msg("cache reconciliation resumed: disk usage back below watermark")
+			Msg("cache reconciliation resumed: disk write gate cleared")
 		m.reconcilePausedAt = time.Time{}
 	}
 	return false
+}
+
+func reconcilePressureBytesToFree(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
+	bytesToFree := int64(0)
+	if softWatermark > 0 && softWatermark < 1 && usage.TotalBytes > 0 && usage.UsagePct > softWatermark {
+		targetUsed := int64(softWatermark * float64(usage.TotalBytes))
+		if deficit := int64(usage.UsedBytes) - targetUsed; deficit > bytesToFree {
+			bytesToFree = deficit
+		}
+	}
+	if minFreeBytes > 0 {
+		if deficit := minFreeBytes - int64(usage.AvailableBytes); deficit > bytesToFree {
+			bytesToFree = deficit
+		}
+	}
+	return bytesToFree
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // localHostOwnsForReconcile reports whether this host should proactively

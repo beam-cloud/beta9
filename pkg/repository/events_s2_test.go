@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -363,6 +364,27 @@ func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	}
 }
 
+func TestS2ContainerMetricsFanOutToWorkspaceMachineStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerMetrics, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+		MachineID:   "machine-abc",
+	})
+
+	want := s2.StreamName("events/workspaces/workspace-123/machines/machine-abc")
+	if !slices.Contains(streams, want) {
+		t.Fatalf("machine stream %q missing from %#v", want, streams)
+	}
+	for _, stream := range streams {
+		if strings.Contains(string(stream), "machines/") && !strings.HasPrefix(string(stream), "events/workspaces/workspace-123/") {
+			t.Fatalf("machine stream escaped workspace prefix: %q", stream)
+		}
+	}
+}
+
 func TestS2StubEventsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -410,6 +432,27 @@ func TestS2ContainerLogsUseContainerStubLookupBeforeAppNamespaceIndex(t *testing
 	for i := range want {
 		if streams[i] != want[i] {
 			t.Fatalf("unexpected log stream at %d: got %q want %q", i, streams[i], want[i])
+		}
+	}
+}
+
+func TestS2ContainerLogsFanOutToWorkspaceMachineLogStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventContainerLog, eventMetadata{
+		WorkspaceID: "workspace-123",
+		StubID:      "stub-456",
+		ContainerID: "container-789",
+		MachineID:   "machine-abc",
+	})
+
+	want := s2.StreamName("events/logs/workspaces/workspace-123/machines/machine-abc")
+	if !slices.Contains(streams, want) {
+		t.Fatalf("machine log stream %q missing from %#v", want, streams)
+	}
+	for _, stream := range streams {
+		if strings.Contains(string(stream), "machines/") && !strings.HasPrefix(string(stream), "events/logs/workspaces/workspace-123/") {
+			t.Fatalf("machine log stream escaped workspace log prefix: %q", stream)
 		}
 	}
 }
@@ -499,7 +542,7 @@ func TestResolveMachineLogStreamsUsesAgentAndWorkerStreams(t *testing.T) {
 	}
 }
 
-func TestResolveWorkspaceMachineLogHistoryUsesSingleAggregateStream(t *testing.T) {
+func TestResolveWorkspaceMachineLogHistoryUsesMachineStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams, err := repo.resolveLogStreams(types.LogQuery{
@@ -511,13 +554,13 @@ func TestResolveWorkspaceMachineLogHistoryUsesSingleAggregateStream(t *testing.T
 		t.Fatal(err)
 	}
 
-	want := []s2.StreamName{"events/logs/workspaces/workspace-123"}
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123/machines/machine-123"}
 	if !reflect.DeepEqual(streams, want) {
 		t.Fatalf("unexpected machine history stream target: got %q want %q", streams, want)
 	}
 }
 
-func TestStreamMachineLogsUsesWorkspaceAggregateStream(t *testing.T) {
+func TestStreamMachineLogsUsesMachineStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
 	streams := repo.machineLogStreams(types.LogQuery{
@@ -526,7 +569,7 @@ func TestStreamMachineLogsUsesWorkspaceAggregateStream(t *testing.T) {
 		WorkerID:    "agent-worker-123",
 	})
 
-	want := []s2.StreamName{"events/logs/workspaces/workspace-123"}
+	want := []s2.StreamName{"events/logs/workspaces/workspace-123/machines/machine-123"}
 	if !reflect.DeepEqual(streams, want) {
 		t.Fatalf("unexpected machine stream target: got %q want %q", streams, want)
 	}
@@ -1061,8 +1104,14 @@ func TestScopedS2EventRepositoryRoutesOnlyWorkspacePrefixes(t *testing.T) {
 	if target := repo.targetForStream("events/logs/workspaces/workspace-123/stubs/stub-123"); target == nil || target.name != "logs" {
 		t.Fatalf("expected workspace log stream to use logs target, got %#v", target)
 	}
+	if target := repo.targetForStream("events/logs/workspaces/workspace-123/machines/machine-123"); target == nil || target.name != "logs" {
+		t.Fatalf("expected workspace machine log stream to use logs target, got %#v", target)
+	}
 	if target := repo.targetForStream("events/workspaces/workspace-123/stubs/stub-123"); target == nil || target.name != "events" {
 		t.Fatalf("expected workspace event stream to use events target, got %#v", target)
+	}
+	if target := repo.targetForStream("events/workspaces/workspace-123/machines/machine-123"); target == nil || target.name != "events" {
+		t.Fatalf("expected workspace machine event stream to use events target, got %#v", target)
 	}
 	if target := repo.targetForStream("events/workspaces/workspace-1234/stubs/stub-123"); target != nil {
 		t.Fatalf("expected adjacent workspace prefix to be outside scoped targets, got %q", target.name)

@@ -194,6 +194,8 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 		"gpu_count", state.GpuCount,
 		"cpu", state.Cpu,
 		"memory", state.Memory,
+		"worker_id", state.WorkerId,
+		"machine_id", state.MachineId,
 	)
 	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	pipe.SAdd(ctx, stubIndexKey, stateKey)

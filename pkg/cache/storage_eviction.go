@@ -73,22 +73,37 @@ func (cas *Store) touchContentAccess(hash string) {
 }
 
 // maybeEvictDiskCache evicts least-recently-read content when filesystem usage
-// is above the eviction watermark. It reports whether anything was evicted.
-func (cas *Store) maybeEvictDiskCache(usagePct float64, totalDiskMb int64) bool {
+// is above the eviction watermark or below the configured free-byte reserve. It
+// reports whether anything was evicted.
+func (cas *Store) maybeEvictDiskCache(snapshot diskUsageSnapshot) bool {
 	watermark := cas.evictWatermarkPct()
-	if usagePct <= watermark || totalDiskMb <= 0 {
+	if snapshot.totalBytes <= 0 {
 		return false
 	}
 
-	bytesToFree := int64((usagePct - watermark) * float64(totalDiskMb) * 1024 * 1024)
+	bytesToFree := int64(0)
+	if snapshot.usagePct > watermark {
+		targetUsedBytes := int64(watermark * float64(snapshot.totalBytes))
+		bytesToFree = int64(snapshot.usedBytes) - targetUsedBytes
+	}
+	if cas.diskConfig.MinFreeBytes > 0 {
+		reserveDeficit := cas.diskConfig.MinFreeBytes - int64(snapshot.availableBytes)
+		if reserveDeficit > bytesToFree {
+			bytesToFree = reserveDeficit
+		}
+	}
+	if bytesToFree <= 0 {
+		return false
+	}
+
 	started := time.Now()
-	evicted, freed := cas.evictLRU(bytesToFree)
+	evicted, freed := cas.evictLRUWithProtected(bytesToFree, cas.protectedContentSnapshot(), false)
 	if evicted == 0 {
-		Logger.Warnf("disk cache eviction found nothing evictable: usage=%.2f watermark=%.2f want_free=%d bytes", usagePct, watermark, bytesToFree)
+		Logger.Warnf("disk cache eviction found nothing evictable: usage=%.2f watermark=%.2f available=%d reserve=%d want_free=%d bytes", snapshot.usagePct, watermark, snapshot.availableBytes, cas.diskConfig.MinFreeBytes, bytesToFree)
 		return false
 	}
 
-	Logger.Infof("disk cache eviction freed %d bytes across %d objects in %s (usage=%.2f watermark=%.2f)", freed, evicted, time.Since(started).Truncate(time.Millisecond), usagePct, watermark)
+	Logger.Infof("disk cache eviction freed %d bytes across %d objects in %s (usage=%.2f watermark=%.2f available=%d reserve=%d)", freed, evicted, time.Since(started).Truncate(time.Millisecond), snapshot.usagePct, watermark, snapshot.availableBytes, cas.diskConfig.MinFreeBytes)
 	return true
 }
 
@@ -96,6 +111,10 @@ func (cas *Store) maybeEvictDiskCache(usagePct float64, totalDiskMb int64) bool 
 // have been reclaimed. Returns the number of objects evicted and the bytes
 // freed.
 func (cas *Store) evictLRU(bytesToFree int64) (int, int64) {
+	return cas.evictLRUWithProtected(bytesToFree, nil, false)
+}
+
+func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]struct{}, allowRecent bool) (int, int64) {
 	if bytesToFree <= 0 {
 		return 0, 0
 	}
@@ -112,9 +131,12 @@ func (cas *Store) evictLRU(bytesToFree int64) (int, int64) {
 		if freed >= bytesToFree {
 			break
 		}
+		if _, ok := protected[candidate.hash]; ok {
+			continue
+		}
 		// Oldest-first order: once we reach recently-read content, nothing
 		// after it is evictable either.
-		if candidate.lastAccess.After(cutoff) {
+		if !allowRecent && candidate.lastAccess.After(cutoff) {
 			break
 		}
 		if err := cas.removeContent(candidate); err != nil {
@@ -125,6 +147,73 @@ func (cas *Store) evictLRU(bytesToFree int64) (int, int64) {
 		freed += candidate.sizeBytes
 	}
 	return evicted, freed
+}
+
+// PruneContentNotProtected removes content that has not been used inside ttl
+// and is not required by any recent stub. It is intentionally driven by the
+// embedded cache owner so non-owner workers never run prune loops.
+func (cas *Store) PruneContentNotProtected(protected map[string]struct{}, ttl time.Duration) (int, int64) {
+	if cas == nil || ttl <= 0 {
+		return 0, 0
+	}
+	candidates := cas.evictionCandidates()
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].lastAccess.Before(candidates[j].lastAccess)
+	})
+
+	cutoff := time.Now().Add(-ttl)
+	evicted := 0
+	var freed int64
+	for _, candidate := range candidates {
+		if _, ok := protected[candidate.hash]; ok {
+			continue
+		}
+		if candidate.lastAccess.After(cutoff) {
+			break
+		}
+		if err := cas.removeContent(candidate); err != nil {
+			Logger.Warnf("disk cache stale prune failed to remove %s: %v", candidate.hash, err)
+			continue
+		}
+		evicted++
+		freed += candidate.sizeBytes
+	}
+	return evicted, freed
+}
+
+func (cas *Store) PressureEvictContent(protected map[string]struct{}, bytesToFree int64) (int, int64) {
+	return cas.evictLRUWithProtected(bytesToFree, protected, true)
+}
+
+func (cas *Store) SetProtectedContent(protected map[string]struct{}) {
+	if cas == nil {
+		return
+	}
+	next := make(map[string]struct{}, len(protected))
+	for hash := range protected {
+		if hash != "" {
+			next[hash] = struct{}{}
+		}
+	}
+	cas.protectedMu.Lock()
+	cas.protectedContent = next
+	cas.protectedMu.Unlock()
+}
+
+func (cas *Store) protectedContentSnapshot() map[string]struct{} {
+	if cas == nil {
+		return nil
+	}
+	cas.protectedMu.RLock()
+	defer cas.protectedMu.RUnlock()
+	if len(cas.protectedContent) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(cas.protectedContent))
+	for hash := range cas.protectedContent {
+		out[hash] = struct{}{}
+	}
+	return out
 }
 
 // evictionCandidates lists all on-disk content with its last access time and

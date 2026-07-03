@@ -125,6 +125,8 @@ class ContainerState(betterproto.Message):
     cpu: int = betterproto.int64_field(8)
     memory: int = betterproto.int64_field(9)
     started_at: int = betterproto.int64_field(10)
+    worker_id: str = betterproto.string_field(11)
+    machine_id: str = betterproto.string_field(12)
 
 
 @dataclass(eq=False, repr=False)

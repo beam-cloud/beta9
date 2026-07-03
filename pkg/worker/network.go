@@ -1234,6 +1234,7 @@ func (m *ContainerNetworkManager) recordNetworkLifecycle(request *types.Containe
 		WorkspaceID: request.WorkspaceId,
 		AppID:       request.AppId,
 		WorkerID:    m.workerId,
+		MachineID:   request.MachineId,
 		Success:     &success,
 		Source:      types.EventSourceWorkerNetwork.String(),
 		Attrs:       attrs,

@@ -62,6 +62,24 @@ func TestServerDrainRejectsNewRPCs(t *testing.T) {
 	require.Equal(t, codes.Unavailable, status.Code(err))
 }
 
+func TestNewServerStartsDiskMonitor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, err := NewServerWithOptions(ctx, Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+	}, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("owner-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	require.True(t, server.cas.diskMonitorStarted.Load())
+}
+
 func TestStoreContentFromSourceWithExpectedHashIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, 4)
