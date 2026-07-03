@@ -139,27 +139,6 @@ end
 return requests
 `)
 
-var cleanupScheduledContainerRequestScript = redis.NewScript(`
-if ARGV[2] == "1" then
-	redis.call("LREM", KEYS[1], 1, ARGV[1])
-end
-
-redis.call("SREM", KEYS[2], KEYS[3])
-
-local assignment_id = redis.pcall("HGET", KEYS[3], "schedule_assignment_id")
-if type(assignment_id) == "table" and assignment_id.err then
-	return 1
-end
-local worker_id = redis.pcall("HGET", KEYS[3], "worker_id")
-if type(worker_id) == "table" and worker_id.err then
-	return 1
-end
-if assignment_id == ARGV[3] and worker_id == ARGV[4] then
-	redis.call("HDEL", KEYS[3], "worker_id", "machine_id", "schedule_assignment_id")
-end
-return 1
-`)
-
 func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
 	lock := common.NewRedisLock(r)
 	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
@@ -1044,7 +1023,15 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	pipe.HSet(ctx, containerStateKey, "worker_id", currentWorker.Id, "machine_id", currentWorker.MachineId, schedulerAssignmentIDField, assignmentID)
 	pipe.SAdd(ctx, workerContainerIndexKey, containerStateKey)
 	if _, err := pipe.Exec(ctx); err != nil {
-		cleanupErr := r.cleanupScheduledContainerRequest(ctx, queueKey, requestJSON, pushCmd.Err() == nil, containerStateKey, workerContainerIndexKey, assignmentID, currentWorker.Id)
+		cleanupErr := r.cleanupScheduledContainerRequest(ctx, scheduleCleanup{
+			queue:   queueKey,
+			index:   workerContainerIndexKey,
+			state:   containerStateKey,
+			payload: requestJSON,
+			queued:  pushCmd.Err() == nil,
+			token:   assignmentID,
+			worker:  currentWorker.Id,
+		})
 		rollbackWorker := &types.Worker{}
 		if copyErr := common.CopyStruct(updatedWorker, rollbackWorker); copyErr != nil {
 			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to copy worker for queue push rollback: %w", copyErr))
@@ -1073,12 +1060,42 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	return nil
 }
 
-func (r *WorkerRedisRepository) cleanupScheduledContainerRequest(ctx context.Context, queueKey string, requestJSON []byte, removeQueued bool, containerStateKey, workerContainerIndexKey, assignmentID, workerID string) error {
+type scheduleCleanup struct {
+	queue, index, state string
+	payload             []byte
+	queued              bool
+	token, worker       string
+}
+
+var cleanupScheduledContainerRequestScript = redis.NewScript(`
+if ARGV[2] == "1" then
+	redis.call("LREM", KEYS[1], -1, ARGV[1])
+end
+
+local token = redis.pcall("HGET", KEYS[3], "schedule_assignment_id")
+local worker = redis.pcall("HGET", KEYS[3], "worker_id")
+if type(token) == "table" or type(worker) == "table" then
+	redis.call("SREM", KEYS[2], KEYS[3])
+	return 1
+end
+
+if worker == ARGV[4] and token ~= ARGV[3] then
+	return 1
+end
+
+redis.call("SREM", KEYS[2], KEYS[3])
+if worker == ARGV[4] then
+	redis.call("HDEL", KEYS[3], "worker_id", "machine_id", "schedule_assignment_id")
+end
+return 1
+`)
+
+func (r *WorkerRedisRepository) cleanupScheduledContainerRequest(ctx context.Context, cleanup scheduleCleanup) error {
 	removeQueuedArg := "0"
-	if removeQueued {
+	if cleanup.queued {
 		removeQueuedArg = "1"
 	}
-	if err := cleanupScheduledContainerRequestScript.Run(ctx, r.rdb, []string{queueKey, workerContainerIndexKey, containerStateKey}, string(requestJSON), removeQueuedArg, assignmentID, workerID).Err(); err != nil {
+	if err := cleanupScheduledContainerRequestScript.Run(ctx, r.rdb, []string{cleanup.queue, cleanup.index, cleanup.state}, string(cleanup.payload), removeQueuedArg, cleanup.token, cleanup.worker).Err(); err != nil {
 		return fmt.Errorf("failed to clean up scheduled container request: %w", err)
 	}
 	return nil

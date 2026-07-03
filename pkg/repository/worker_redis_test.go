@@ -887,7 +887,15 @@ func TestCleanupScheduledContainerRequestPreservesNewerAssignment(t *testing.T) 
 	).Err()
 	assert.Nil(t, err)
 
-	err = repo.cleanupScheduledContainerRequest(context.TODO(), queueKey, requestJSON, true, containerStateKey, oldWorkerIndexKey, "assignment-old", "worker-old")
+	err = repo.cleanupScheduledContainerRequest(context.TODO(), scheduleCleanup{
+		queue:   queueKey,
+		index:   oldWorkerIndexKey,
+		state:   containerStateKey,
+		payload: requestJSON,
+		queued:  true,
+		token:   "assignment-old",
+		worker:  "worker-old",
+	})
 	assert.Nil(t, err)
 
 	queueDepth, err := rdb.LLen(context.TODO(), queueKey).Result()
@@ -904,6 +912,34 @@ func TestCleanupScheduledContainerRequestPreservesNewerAssignment(t *testing.T) 
 	assert.Equal(t, "worker-new", stateFields["worker_id"])
 	assert.Equal(t, "machine-new", stateFields["machine_id"])
 	assert.Equal(t, "assignment-old", stateFields["schedule_assignment_id"])
+
+	sameWorkerStateKey := common.RedisKeys.SchedulerContainerState("container-same-worker-newer-assignment")
+	sameWorkerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex("worker-same")
+	err = rdb.SAdd(context.TODO(), sameWorkerIndexKey, sameWorkerStateKey).Err()
+	assert.Nil(t, err)
+	err = rdb.HSet(context.TODO(), sameWorkerStateKey,
+		"worker_id", "worker-same",
+		"machine_id", "machine-same",
+		"schedule_assignment_id", "assignment-new",
+	).Err()
+	assert.Nil(t, err)
+
+	err = repo.cleanupScheduledContainerRequest(context.TODO(), scheduleCleanup{
+		index:  sameWorkerIndexKey,
+		state:  sameWorkerStateKey,
+		token:  "assignment-old",
+		worker: "worker-same",
+	})
+	assert.Nil(t, err)
+
+	indexedSameWorker, err := rdb.SIsMember(context.TODO(), sameWorkerIndexKey, sameWorkerStateKey).Result()
+	assert.Nil(t, err)
+	assert.True(t, indexedSameWorker)
+	sameWorkerFields, err := rdb.HGetAll(context.TODO(), sameWorkerStateKey).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, "worker-same", sameWorkerFields["worker_id"])
+	assert.Equal(t, "machine-same", sameWorkerFields["machine_id"])
+	assert.Equal(t, "assignment-new", sameWorkerFields["schedule_assignment_id"])
 }
 
 func TestScheduleContainerRequestRejectsDisabledWorker(t *testing.T) {
