@@ -1439,3 +1439,31 @@ func TestValidateRestoredImageArchiveAcceptsClipV1WhenDefaultIsV2(t *testing.T) 
 	}
 	require.NoError(t, client.validateRestoredImageArchive(archivePath, "legacy-image", info.Size()))
 }
+
+func TestPruneStubCodeCacheRemovesExpiredAndTempEntries(t *testing.T) {
+	root := t.TempDir()
+	oldReady := writeStubCodeCacheEntry(t, root, "old", time.Now().Add(-8*24*time.Hour))
+	recentReady := writeStubCodeCacheEntry(t, root, "recent", time.Now())
+	tmpDir := filepath.Join(root, "old.tmp.container")
+	require.NoError(t, os.MkdirAll(tmpDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.py"), []byte("tmp"), 0644))
+
+	pruned, freed := pruneStubCodeCache(root, 7*24*time.Hour)
+
+	require.Equal(t, 2, pruned)
+	require.Positive(t, freed)
+	require.NoFileExists(t, oldReady)
+	require.NoDirExists(t, tmpDir)
+	require.FileExists(t, recentReady)
+}
+
+func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Time) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	readyPath := filepath.Join(dir, stubCodeReadyMarker)
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.py"), []byte("print('ok')"), 0644))
+	require.NoError(t, os.WriteFile(readyPath, []byte("ok"), 0644))
+	require.NoError(t, os.Chtimes(readyPath, readyTime, readyTime))
+	return readyPath
+}
