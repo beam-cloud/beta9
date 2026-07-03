@@ -1447,6 +1447,11 @@ func TestPruneStubCodeCacheRemovesExpiredAndTempEntries(t *testing.T) {
 	tmpDir := filepath.Join(root, "old.tmp.container")
 	require.NoError(t, os.MkdirAll(tmpDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.py"), []byte("tmp"), 0644))
+	oldTempTime := time.Now().Add(-stubCodeTempDirGraceTime - time.Minute)
+	require.NoError(t, os.Chtimes(tmpDir, oldTempTime, oldTempTime))
+	activeTmpDir := filepath.Join(root, "active.tmp.container")
+	require.NoError(t, os.MkdirAll(activeTmpDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(activeTmpDir, "file.py"), []byte("tmp"), 0644))
 
 	pruned, freed := pruneStubCodeCache(root, 7*24*time.Hour)
 
@@ -1454,7 +1459,23 @@ func TestPruneStubCodeCacheRemovesExpiredAndTempEntries(t *testing.T) {
 	require.Positive(t, freed)
 	require.NoFileExists(t, oldReady)
 	require.NoDirExists(t, tmpDir)
+	require.DirExists(t, activeTmpDir)
 	require.FileExists(t, recentReady)
+}
+
+func TestPressureEvictStubCodeCacheSkipsActiveTempEntries(t *testing.T) {
+	root := t.TempDir()
+	oldReady := writeStubCodeCacheEntry(t, root, "old", time.Now().Add(-8*24*time.Hour))
+	activeTmpDir := filepath.Join(root, "active.tmp.container")
+	require.NoError(t, os.MkdirAll(activeTmpDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(activeTmpDir, "file.py"), []byte("tmp"), 0644))
+
+	evicted, freed := pressureEvictStubCodeCache(root, 1<<30)
+
+	require.Equal(t, 1, evicted)
+	require.Positive(t, freed)
+	require.NoFileExists(t, oldReady)
+	require.DirExists(t, activeTmpDir)
 }
 
 func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Time) string {

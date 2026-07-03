@@ -88,16 +88,19 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 	require.True(t, store.Exists(hash))
 }
 
-func TestPruneContentNotProtectedKeepsRecentStubContent(t *testing.T) {
+func TestPruneContentNotProtectedKeepsExplicitlyProtectedAndRecentContent(t *testing.T) {
 	store := newTestStore(t, 5)
 
 	old := time.Now().Add(-8 * 24 * time.Hour)
+	recentAccess := time.Now().Add(-time.Hour)
 	protected := addEvictionTestContent(t, store, "protected-content", old)
 	stale := addEvictionTestContent(t, store, "stale-content", old)
+	recent := addEvictionTestContent(t, store, "recent-content", recentAccess)
 
 	evicted, freed := store.PruneContentNotProtected(map[string]struct{}{protected: struct{}{}}, 7*24*time.Hour)
 	require.Equal(t, 1, evicted)
 	require.Positive(t, freed)
 	require.True(t, store.Exists(protected))
 	require.False(t, store.Exists(stale))
+	require.True(t, store.Exists(recent))
 }

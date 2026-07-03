@@ -282,6 +282,17 @@ func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *te
 	assert.Nil(t, err)
 	err = rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), queuedJSON).Err()
 	assert.Nil(t, err)
+	queuedState := &types.ContainerState{
+		ContainerId: queuedRequest.ContainerId,
+		Status:      types.ContainerStatusPending,
+		Cpu:         queuedRequest.Cpu,
+		Memory:      queuedRequest.Memory,
+	}
+	queuedStateKey := common.RedisKeys.SchedulerContainerState(queuedState.ContainerId)
+	err = rdb.HSet(context.TODO(), queuedStateKey, common.ToSlice(queuedState)).Err()
+	assert.Nil(t, err)
+	err = rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), queuedStateKey).Err()
+	assert.Nil(t, err)
 
 	runningState := &types.ContainerState{
 		ContainerId: "container-reconcile-running",
@@ -803,6 +814,53 @@ func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
 	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
+
+	containerStateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	stateFields, err := rdb.HGetAll(context.TODO(), containerStateKey).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, "", stateFields["worker_id"])
+	assert.Equal(t, "", stateFields["machine_id"])
+	indexed, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), containerStateKey).Result()
+	assert.Nil(t, err)
+	assert.False(t, indexed)
+}
+
+func TestScheduleContainerRequestRemovesQueuedRequestWhenMetadataWriteFails(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-metadata-error",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-metadata-error",
+		Cpu:         100,
+		Memory:      100,
+	}
+	err = rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "wrong-type", 0).Err()
+	assert.Nil(t, err)
+
+	err = repo.ScheduleContainerRequest(worker, request)
+	assert.Error(t, err)
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), queueDepth)
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
+	indexed, err := rdb.SIsMember(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), common.RedisKeys.SchedulerContainerState(request.ContainerId)).Result()
+	assert.Nil(t, err)
+	assert.False(t, indexed)
 }
 
 func TestScheduleContainerRequestRejectsDisabledWorker(t *testing.T) {

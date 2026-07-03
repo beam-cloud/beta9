@@ -87,6 +87,20 @@ func TestDiskPressureExceededUsesUsageAndFreeByteReserve(t *testing.T) {
 		availableBytes: 80,
 		usagePct:       0.92,
 	}))
+
+	store.serverConfig.DiskCacheMaxUsagePct = 95
+	require.False(t, store.diskPressureExceeded(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      940,
+		availableBytes: 100,
+		usagePct:       0.94,
+	}))
+	require.True(t, store.diskPressureExceeded(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      960,
+		availableBytes: 100,
+		usagePct:       0.96,
+	}))
 }
 
 func TestStoreAddReaderStreamsToDiskCAS(t *testing.T) {

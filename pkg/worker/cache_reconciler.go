@@ -605,7 +605,10 @@ func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protecte
 	m.pruneStaleCacheCheckpoints()
 }
 
-const stubCodeReadyMarker = ".beta9-cache-ready"
+const (
+	stubCodeReadyMarker      = ".beta9-cache-ready"
+	stubCodeTempDirGraceTime = 30 * time.Minute
+)
 
 type stubCodeEntry struct {
 	path      string
@@ -651,11 +654,17 @@ func pruneStubCodeCache(root string, ttl time.Duration) (int, int64) {
 		return 0, 0
 	}
 	entries := listStubCodeEntries(root)
-	cutoff := time.Now().Add(-ttl)
+	now := time.Now()
+	cutoff := now.Add(-ttl)
+	tempCutoff := now.Add(-stubCodeTempDirGraceTime)
 	pruned := 0
 	var freed int64
 	for _, entry := range entries {
-		if !entry.temporary && entry.lastUsed.After(cutoff) {
+		if entry.temporary {
+			if entry.lastUsed.After(tempCutoff) {
+				continue
+			}
+		} else if entry.lastUsed.After(cutoff) {
 			continue
 		}
 		if err := os.RemoveAll(entry.path); err != nil {
@@ -673,11 +682,15 @@ func pressureEvictStubCodeCache(root string, bytesToFree int64) (int, int64) {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].lastUsed.Before(entries[j].lastUsed)
 	})
+	tempCutoff := time.Now().Add(-stubCodeTempDirGraceTime)
 	evicted := 0
 	var freed int64
 	for _, entry := range entries {
 		if bytesToFree > 0 && freed >= bytesToFree {
 			break
+		}
+		if entry.temporary && entry.lastUsed.After(tempCutoff) {
+			continue
 		}
 		if err := os.RemoveAll(entry.path); err != nil {
 			log.Debug().Err(err).Str("path", entry.path).Msg("failed to pressure-evict stub-code cache entry")

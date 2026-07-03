@@ -1517,6 +1517,9 @@ func (cas *Store) diskPressureExceeded(snapshot diskUsageSnapshot) bool {
 }
 
 func normalizedPct(pct float64) float64 {
+	if pct > 1 {
+		return pct / 100
+	}
 	return pct
 }
 

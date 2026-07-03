@@ -15,7 +15,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const telemetrySensitiveLogKeyPattern = `[A-Za-z0-9_.-]*(?:access[_-]?key|accesskey|api[_-]?key|apikey|secret|token|password|credentials?)[A-Za-z0-9_.-]*`
+const (
+	telemetrySensitiveLogKeyPattern = `[A-Za-z0-9_.-]*(?:access[_-]?key|accesskey|api[_-]?key|apikey|secret|token|password|credentials?)[A-Za-z0-9_.-]*`
+	telemetryMaxPathMetricAttrs     = 8
+)
 
 var (
 	telemetryAuthorizationPattern     = regexp.MustCompile(`(?i)(["']?authorization["']?\s*[:=]\s*)("?)(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]+)("?)`)
@@ -206,17 +209,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		"container_count":             fmt.Sprintf("%d", capacityMetrics.ContainerCount),
 		"free_gpu_count":              fmt.Sprintf("%d", capacityMetrics.FreeGpuCount),
 	}
-	for _, pathMetric := range metrics.PathMetrics {
-		if pathMetric.Label == "" {
-			continue
-		}
-		prefix := "path_" + pathMetric.Label
-		attrs[prefix+"_path"] = pathMetric.Path
-		attrs[prefix+"_used_mb"] = fmt.Sprintf("%d", pathMetric.UsedMB)
-		attrs[prefix+"_total_mb"] = fmt.Sprintf("%d", pathMetric.TotalMB)
-		attrs[prefix+"_available_mb"] = fmt.Sprintf("%d", pathMetric.AvailableMB)
-		attrs[prefix+"_usage_pct"] = fmt.Sprintf("%.2f", pathMetric.UsagePct)
-	}
+	appendPathMetricAttrs(attrs, metrics.PathMetrics)
 	if poolState != nil {
 		attrs["pool_mode"] = string(poolState.Mode)
 		attrs["transport"] = poolState.Transport
@@ -236,6 +229,27 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		Attrs:       attrs,
 	})
 	return nil
+}
+
+func appendPathMetricAttrs(attrs map[string]string, pathMetrics []model.AgentPathMetric) {
+	count := 0
+	for _, pathMetric := range pathMetrics {
+		if pathMetric.Label == "" {
+			continue
+		}
+		if count >= telemetryMaxPathMetricAttrs {
+			break
+		}
+		prefix := fmt.Sprintf("path_metric_%d", count)
+		attrs[prefix+"_label"] = pathMetric.Label
+		attrs[prefix+"_path"] = pathMetric.Path
+		attrs[prefix+"_used_mb"] = fmt.Sprintf("%d", pathMetric.UsedMB)
+		attrs[prefix+"_total_mb"] = fmt.Sprintf("%d", pathMetric.TotalMB)
+		attrs[prefix+"_available_mb"] = fmt.Sprintf("%d", pathMetric.AvailableMB)
+		attrs[prefix+"_usage_pct"] = fmt.Sprintf("%.2f", pathMetric.UsagePct)
+		count++
+	}
+	attrs["path_metric_count"] = fmt.Sprintf("%d", count)
 }
 
 func agentPathMetricsFromProto(items []*pb.MachinePathMetrics) []model.AgentPathMetric {

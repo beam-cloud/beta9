@@ -375,6 +375,7 @@ func (r *WorkerRedisRepository) reconcileWorkerCapacity(ctx context.Context, wor
 
 func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, workerId string) (workerReservedCapacity, error) {
 	var usage workerReservedCapacity
+	queuedContainerIDs := map[string]struct{}{}
 
 	queuedRequests, err := r.rdb.LRange(ctx, common.RedisKeys.SchedulerWorkerRequests(workerId), 0, -1)
 	if err != nil {
@@ -385,6 +386,9 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		var request types.ContainerRequest
 		if err := json.Unmarshal([]byte(rawRequest), &request); err != nil {
 			return usage, fmt.Errorf("failed to deserialize queued request for worker <%s>: %w", workerId, err)
+		}
+		if request.ContainerId != "" {
+			queuedContainerIDs[request.ContainerId] = struct{}{}
 		}
 		usage.addRequest(&request)
 	}
@@ -402,11 +406,26 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		if !exists || state.Status == types.ContainerStatusStopping {
 			continue
 		}
+		containerID := state.ContainerId
+		if containerID == "" {
+			containerID = containerIDFromStateKey(key)
+		}
+		if _, queued := queuedContainerIDs[containerID]; queued {
+			continue
+		}
 
 		usage.addContainerState(state)
 	}
 
 	return usage, nil
+}
+
+func containerIDFromStateKey(key string) string {
+	prefix := common.RedisKeys.SchedulerContainerState("")
+	if strings.HasPrefix(key, prefix) {
+		return strings.TrimPrefix(key, prefix)
+	}
+	return ""
 }
 
 func (r *WorkerRedisRepository) getIndexedContainerState(ctx context.Context, workerId string, key string) (*types.ContainerState, bool, error) {
@@ -998,21 +1017,22 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	// Push the serialized ContainerRequest and stamp the selected node together
 	// so container state can be correlated to the worker before runtime start.
 	pipe := r.rdb.TxPipeline()
-	pipe.RPush(ctx, queueKey, requestJSON)
+	pushCmd := pipe.RPush(ctx, queueKey, requestJSON)
 	pipe.HSet(ctx, containerStateKey, "worker_id", currentWorker.Id, "machine_id", currentWorker.MachineId)
 	pipe.SAdd(ctx, workerContainerIndexKey, containerStateKey)
 	if _, err := pipe.Exec(ctx); err != nil {
+		cleanupErr := r.cleanupScheduledContainerRequest(ctx, queueKey, requestJSON, pushCmd.Err() == nil, containerStateKey, workerContainerIndexKey)
 		rollbackWorker := &types.Worker{}
 		if copyErr := common.CopyStruct(updatedWorker, rollbackWorker); copyErr != nil {
-			return errors.Join(fmt.Errorf("failed to push request: %w", err), fmt.Errorf("failed to copy worker for queue push rollback: %w", copyErr))
+			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to copy worker for queue push rollback: %w", copyErr))
 		}
 		if rollbackErr := applyWorkerCapacityChange(rollbackWorker, request, types.AddCapacity); rollbackErr != nil {
-			return errors.Join(fmt.Errorf("failed to push request: %w", err), fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
+			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
 		}
 		if rollbackErr := r.setWorkerCapacityLocked(ctx, rollbackWorker); rollbackErr != nil {
-			return errors.Join(fmt.Errorf("failed to push request: %w", err), fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
+			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
 		}
-		return fmt.Errorf("failed to push request: %w", err)
+		return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr)
 	}
 
 	*worker = *updatedWorker
@@ -1027,6 +1047,19 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		Str("machine_id", worker.MachineId).
 		Msg("request for container added")
 
+	return nil
+}
+
+func (r *WorkerRedisRepository) cleanupScheduledContainerRequest(ctx context.Context, queueKey string, requestJSON []byte, removeQueued bool, containerStateKey, workerContainerIndexKey string) error {
+	pipe := r.rdb.Pipeline()
+	if removeQueued {
+		pipe.LRem(ctx, queueKey, 1, requestJSON)
+	}
+	pipe.SRem(ctx, workerContainerIndexKey, containerStateKey)
+	pipe.HDel(ctx, containerStateKey, "worker_id", "machine_id")
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to clean up scheduled container request: %w", err)
+	}
 	return nil
 }
 

@@ -173,16 +173,18 @@ func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request
 	cacheKey := stubCodeCacheKey(request.Workspace.Name, request.Stub.Object.ExternalId)
 	cachePath := filepath.Join(c.codeCacheRoot, cacheKey)
 	readyPath := filepath.Join(cachePath, ".beta9-cache-ready")
-	if pathExists(readyPath) {
+	markReadyUsed := func() {
 		now := time.Now()
 		_ = os.Chtimes(readyPath, now, now)
+	}
+	if pathExists(readyPath) {
+		markReadyUsed()
 		return cachePath, nil
 	}
 
 	value, err, _ := c.codeCacheGroup.Do(cacheKey, func() (any, error) {
 		if pathExists(readyPath) {
-			now := time.Now()
-			_ = os.Chtimes(readyPath, now, now)
+			markReadyUsed()
 			return cachePath, nil
 		}
 

@@ -334,16 +334,21 @@ func (t *agentTelemetry) collectPathMetrics() []*pb.MachinePathMetrics {
 	if t == nil {
 		return nil
 	}
-	candidates := []struct {
+	type pathCandidate struct {
 		label string
 		path  string
-	}{
+	}
+	candidates := []pathCandidate{
 		{label: "root", path: "/"},
-		{label: "state", path: t.stateDir},
-		{label: "images", path: filepath.Join(t.stateDir, "images")},
-		{label: "images_cache", path: filepath.Join(t.stateDir, "images", "cache")},
-		{label: "cache", path: filepath.Join(t.stateDir, "cache")},
-		{label: "checkpoints", path: filepath.Join(t.stateDir, "checkpoints")},
+	}
+	if stateDir := strings.TrimSpace(t.stateDir); stateDir != "" {
+		candidates = append(candidates,
+			pathCandidate{label: "state", path: stateDir},
+			pathCandidate{label: "images", path: filepath.Join(stateDir, "images")},
+			pathCandidate{label: "images_cache", path: filepath.Join(stateDir, "images", "cache")},
+			pathCandidate{label: "cache", path: filepath.Join(stateDir, "cache")},
+			pathCandidate{label: "checkpoints", path: filepath.Join(stateDir, "checkpoints")},
+		)
 	}
 	seen := map[string]struct{}{}
 	metrics := make([]*pb.MachinePathMetrics, 0, len(candidates))
