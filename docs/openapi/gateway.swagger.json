@@ -2326,6 +2326,13 @@
         "freeGpuCount": {
           "type": "integer",
           "format": "int64"
+        },
+        "pathMetrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMachinePathMetrics"
+          }
         }
       }
     },
@@ -4201,6 +4208,40 @@
           "format": "int64"
         },
         "diskUsagePct": {
+          "type": "number",
+          "format": "float"
+        },
+        "pathMetrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMachinePathMetrics"
+          }
+        }
+      }
+    },
+    "gatewayMachinePathMetrics": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "usedMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "totalMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "availableMb": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "usagePct": {
           "type": "number",
           "format": "float"
         }

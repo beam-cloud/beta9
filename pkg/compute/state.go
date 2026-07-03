@@ -141,18 +141,28 @@ type AgentTokenState struct {
 }
 
 type AgentMachineMetrics struct {
-	Timestamp            time.Time `json:"timestamp"`
-	CPUUtilizationPct    float32   `json:"cpu_utilization_pct"`
-	MemoryUsedMB         uint64    `json:"memory_used_mb"`
-	MemoryTotalMB        uint64    `json:"memory_total_mb"`
-	MemoryUtilizationPct float32   `json:"memory_utilization_pct"`
-	DiskUsedMB           uint64    `json:"disk_used_mb"`
-	DiskTotalMB          uint64    `json:"disk_total_mb"`
-	DiskUsagePct         float32   `json:"disk_usage_pct"`
-	DiskPath             string    `json:"disk_path"`
-	WorkerCount          uint32    `json:"worker_count"`
-	ContainerCount       uint32    `json:"container_count"`
-	FreeGPUCount         uint32    `json:"free_gpu_count"`
+	Timestamp            time.Time         `json:"timestamp"`
+	CPUUtilizationPct    float32           `json:"cpu_utilization_pct"`
+	MemoryUsedMB         uint64            `json:"memory_used_mb"`
+	MemoryTotalMB        uint64            `json:"memory_total_mb"`
+	MemoryUtilizationPct float32           `json:"memory_utilization_pct"`
+	DiskUsedMB           uint64            `json:"disk_used_mb"`
+	DiskTotalMB          uint64            `json:"disk_total_mb"`
+	DiskUsagePct         float32           `json:"disk_usage_pct"`
+	DiskPath             string            `json:"disk_path"`
+	WorkerCount          uint32            `json:"worker_count"`
+	ContainerCount       uint32            `json:"container_count"`
+	FreeGPUCount         uint32            `json:"free_gpu_count"`
+	PathMetrics          []AgentPathMetric `json:"path_metrics,omitempty"`
+}
+
+type AgentPathMetric struct {
+	Label       string  `json:"label"`
+	Path        string  `json:"path"`
+	UsedMB      uint64  `json:"used_mb"`
+	TotalMB     uint64  `json:"total_mb"`
+	AvailableMB uint64  `json:"available_mb"`
+	UsagePct    float32 `json:"usage_pct"`
 }
 
 type AgentWorkerSlotState struct {

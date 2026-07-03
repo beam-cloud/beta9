@@ -26,7 +26,6 @@ type Config struct {
 	Server         ServerConfig         `key:"server" json:"server"`
 	Client         ClientConfig         `key:"client" json:"client"`
 	Global         GlobalConfig         `key:"global" json:"global"`
-	Metrics        MetricsConfig        `key:"metrics" json:"metrics"`
 	Reconciliation ReconciliationConfig `key:"reconciliation" json:"reconciliation"`
 }
 
@@ -42,30 +41,23 @@ type ReconciliationConfig struct {
 	MaxItemsPerCycle      int   `key:"maxItemsPerCycle" json:"max_items_per_cycle"`
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
-	// MaxDiskUsagePct pauses proactive materialization on a host whose disk
-	// usage exceeds this fraction (0-1). Proactive cache fill must stop well
-	// before the kubelet's DiskPressure thresholds; demand-driven reads are
-	// unaffected.
+	// MaxDiskUsagePct is the soft pressure watermark (0-1). Above it, the
+	// cache owner evicts unprotected LRU content before reconciling recent
+	// stubs. Reconciliation pauses only when the hard write gate is active.
 	MaxDiskUsagePct float64 `key:"maxDiskUsagePct" json:"max_disk_usage_pct"`
 }
 
 type DiskConfig struct {
-	Enabled     bool    `key:"enabled" json:"enabled"`
-	HostPath    string  `key:"hostPath" json:"host_path"`
-	MountPath   string  `key:"mountPath" json:"mount_path"`
-	MaxUsagePct float64 `key:"maxUsagePct" json:"max_usage_pct"`
+	Enabled      bool    `key:"enabled" json:"enabled"`
+	HostPath     string  `key:"hostPath" json:"host_path"`
+	MountPath    string  `key:"mountPath" json:"mount_path"`
+	MaxUsagePct  float64 `key:"maxUsagePct" json:"max_usage_pct"`
+	MinFreeBytes int64   `key:"minFreeBytes" json:"min_free_bytes"`
 }
 
 type MemoryConfig struct {
 	Enabled     bool  `key:"enabled" json:"enabled"`
 	MaxCachePct int64 `key:"maxCachePct" json:"max_cache_pct"`
-}
-
-type MetricsConfig struct {
-	PushIntervalS int    `key:"pushIntervalS" json:"push_interval_s"`
-	URL           string `key:"url" json:"url"`
-	Username      string `key:"username" json:"username"`
-	Password      string `key:"password" json:"password"`
 }
 
 type CoordinatorConfig struct {

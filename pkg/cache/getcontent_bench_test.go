@@ -31,9 +31,6 @@ func BenchmarkGetContentDiskCache(b *testing.B) {
 		Global: GlobalConfig{
 			DebugMode: false,
 		},
-		Metrics: MetricsConfig{
-			URL: "",
-		},
 	}
 
 	currentHost := &Host{

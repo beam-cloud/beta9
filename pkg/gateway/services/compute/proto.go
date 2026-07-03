@@ -301,7 +301,26 @@ func agentMachineMetrics(state *model.AgentTokenState, worker *types.Worker) *pb
 		DiskUsedMb:           int64(state.Metrics.DiskUsedMB),
 		DiskTotalMb:          int64(state.Metrics.DiskTotalMB),
 		DiskUsagePct:         state.Metrics.DiskUsagePct,
+		PathMetrics:          agentPathMetricsToProto(state.Metrics.PathMetrics),
 	}
+}
+
+func agentPathMetricsToProto(items []model.AgentPathMetric) []*pb.MachinePathMetrics {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]*pb.MachinePathMetrics, 0, len(items))
+	for _, item := range items {
+		out = append(out, &pb.MachinePathMetrics{
+			Label:       item.Label,
+			Path:        item.Path,
+			UsedMb:      item.UsedMB,
+			TotalMb:     item.TotalMB,
+			AvailableMb: item.AvailableMB,
+			UsagePct:    item.UsagePct,
+		})
+	}
+	return out
 }
 
 func capacityUtilizationPct(total, free int64) float32 {

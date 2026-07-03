@@ -53,6 +53,7 @@ const (
 	cacheDefaultRegistrationHeartbeat   = 10 * time.Second
 	cacheDefaultHostWatchInterval       = 5 * time.Second
 	cacheServerDaemonSetMarkerName      = ".beta9-cache-server-daemonset"
+	cacheDefaultDiskMinFreeBytes        = 10 * 1024 * 1024 * 1024
 
 	cacheDefaultReconcileIntervalS      = 60
 	cacheDefaultReconcileRecentStubTTLS = cache.DefaultReconcileRecentStubTTLS
@@ -62,6 +63,7 @@ const (
 	// cacheDefaultReconcileMaxDiskUsagePct pauses proactive materialization
 	// before node-level DiskPressure thresholds can be reached.
 	cacheDefaultReconcileMaxDiskUsagePct = 0.75
+	cacheDefaultStubCodeEvictWatermark   = 0.85
 	// cacheReconcileOwnerGracePeriod is how long a key's HRW owner may be
 	// endpoint-less (rolling deploy, pod cycle) before its keys fail over to
 	// the next-ranked host for proactive materialization. Short blips keep
@@ -204,6 +206,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	m.startReconciliation(cacheConfig)
+	m.requestReconcile()
 
 	return client, nil
 }
@@ -809,6 +812,9 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Disk.MaxUsagePct == 0 {
 		cacheConfig.Disk.MaxUsagePct = cacheDefaultDiskMaxUsage
 	}
+	if cacheConfig.Disk.MinFreeBytes == 0 {
+		cacheConfig.Disk.MinFreeBytes = cacheDefaultDiskMinFreeBytes
+	}
 	applyWorkerPoolCacheOverrides(&cacheConfig, poolConfig)
 	cacheConfig.Disk.MountPath = filepath.Clean(cacheConfig.Disk.MountPath)
 	cacheConfig.Disk.HostPath = filepath.Clean(cacheConfig.Disk.HostPath)
@@ -909,6 +915,9 @@ func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.W
 	}
 	if poolConfig.Cache.Disk.MaxUsagePct > 0 {
 		cacheConfig.Disk.MaxUsagePct = poolConfig.Cache.Disk.MaxUsagePct
+	}
+	if poolConfig.Cache.Disk.MinFreeBytes > 0 {
+		cacheConfig.Disk.MinFreeBytes = poolConfig.Cache.Disk.MinFreeBytes
 	}
 	if poolConfig.Cache.Enabled != nil && !*poolConfig.Cache.Enabled {
 		cacheConfig.Disk.Enabled = false

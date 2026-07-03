@@ -681,6 +681,37 @@ func TestTelemetryEnqueueReportsDroppedRecords(t *testing.T) {
 	}
 }
 
+func TestCollectPathMetricsSkipsStateChildrenWhenStateDirMissing(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "images", "cache"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cache", "checkpoints"} {
+		if err := os.MkdirAll(filepath.Join(tmp, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	metrics := (&agentTelemetry{}).collectPathMetrics()
+	labels := map[string]struct{}{}
+	for _, metric := range metrics {
+		labels[metric.Label] = struct{}{}
+	}
+	for _, label := range []string{"state", "images", "images_cache", "cache", "checkpoints"} {
+		if _, ok := labels[label]; ok {
+			t.Fatalf("unexpected %q path metric with empty state dir", label)
+		}
+	}
+}
+
 type closeTrackingWriter struct {
 	bytes.Buffer
 	closed bool

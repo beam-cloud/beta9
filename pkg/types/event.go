@@ -138,6 +138,7 @@ var EventContainerMetricsSchemaVersion = "1.0"
 
 type EventContainerMetricsSchema struct {
 	WorkerID         string                    `json:"worker_id"`
+	MachineID        string                    `json:"machine_id,omitempty"`
 	ContainerID      string                    `json:"container_id"`
 	WorkspaceID      string                    `json:"workspace_id"`
 	StubID           string                    `json:"stub_id"`
@@ -720,6 +721,7 @@ type EventContainerLifecycleSchema struct {
 	WorkspaceID string               `json:"workspace_id,omitempty"`
 	AppID       string               `json:"app_id,omitempty"`
 	WorkerID    string               `json:"worker_id,omitempty"`
+	MachineID   string               `json:"machine_id,omitempty"`
 	Success     *bool                `json:"success,omitempty"`
 	Source      string               `json:"source,omitempty"`
 	Attrs       map[string]string    `json:"attrs,omitempty"`
@@ -738,6 +740,7 @@ type EventContainerEventSchema struct {
 	WorkspaceID string            `json:"workspace_id,omitempty"`
 	AppID       string            `json:"app_id,omitempty"`
 	WorkerID    string            `json:"worker_id,omitempty"`
+	MachineID   string            `json:"machine_id,omitempty"`
 	CPU         int64             `json:"cpu,omitempty"`
 	GPUCount    uint32            `json:"gpu_count,omitempty"`
 	Reason      string            `json:"reason,omitempty"`
@@ -757,6 +760,7 @@ type EventContainerLogSchema struct {
 	WorkspaceID string    `json:"workspace_id,omitempty"`
 	AppID       string    `json:"app_id,omitempty"`
 	WorkerID    string    `json:"worker_id,omitempty"`
+	MachineID   string    `json:"machine_id,omitempty"`
 	Stream      string    `json:"stream,omitempty"`
 	Line        string    `json:"line"`
 	PID         int32     `json:"pid,omitempty"`

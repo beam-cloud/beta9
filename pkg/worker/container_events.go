@@ -18,6 +18,9 @@ func (s *Worker) recordContainerEvent(ctx context.Context, request *types.Contai
 	if event.WorkerID == "" {
 		event.WorkerID = s.workerId
 	}
+	if event.MachineID == "" {
+		event.MachineID = s.machineID
+	}
 	s.eventRepo.PushContainerEvent(event)
 }
 
@@ -30,6 +33,9 @@ func (s *Worker) recordContainerLifecycle(ctx context.Context, request *types.Co
 	}
 	if lifecycle.WorkerID == "" {
 		lifecycle.WorkerID = s.workerId
+	}
+	if lifecycle.MachineID == "" {
+		lifecycle.MachineID = s.machineID
 	}
 	s.eventRepo.PushContainerLifecycleEvent(lifecycle)
 }
@@ -49,6 +55,9 @@ func populateContainerEventFromRequest(event *types.EventContainerEventSchema, r
 	}
 	if event.AppID == "" {
 		event.AppID = request.AppId
+	}
+	if event.MachineID == "" {
+		event.MachineID = request.MachineId
 	}
 	if event.TaskID == "" {
 		event.TaskID = taskIDFromEnv(request.Env)
@@ -76,6 +85,9 @@ func populateContainerLifecycleFromRequest(lifecycle *types.EventContainerLifecy
 	}
 	if lifecycle.AppID == "" {
 		lifecycle.AppID = request.AppId
+	}
+	if lifecycle.MachineID == "" {
+		lifecycle.MachineID = request.MachineId
 	}
 	if lifecycle.TaskID == "" {
 		lifecycle.TaskID = taskIDFromEnv(request.Env)

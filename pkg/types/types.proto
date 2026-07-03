@@ -115,6 +115,8 @@ message ContainerState {
   int64 cpu = 8;
   int64 memory = 9;
   int64 started_at = 10;
+  string worker_id = 11;
+  string machine_id = 12;
 }
 
 message DurableDiskMountConfig {

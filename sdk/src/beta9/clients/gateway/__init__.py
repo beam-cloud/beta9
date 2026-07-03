@@ -1337,6 +1337,7 @@ class AgentMetricSnapshot(betterproto.Message):
     worker_count: int = betterproto.uint32_field(10)
     container_count: int = betterproto.uint32_field(11)
     free_gpu_count: int = betterproto.uint32_field(12)
+    path_metrics: List["MachinePathMetrics"] = betterproto.message_field(13)
 
 
 @dataclass(eq=False, repr=False)
@@ -1403,6 +1404,17 @@ class MachineMetrics(betterproto.Message):
     disk_used_mb: int = betterproto.int64_field(14)
     disk_total_mb: int = betterproto.int64_field(15)
     disk_usage_pct: float = betterproto.float_field(16)
+    path_metrics: List["MachinePathMetrics"] = betterproto.message_field(17)
+
+
+@dataclass(eq=False, repr=False)
+class MachinePathMetrics(betterproto.Message):
+    label: str = betterproto.string_field(1)
+    path: str = betterproto.string_field(2)
+    used_mb: int = betterproto.uint64_field(3)
+    total_mb: int = betterproto.uint64_field(4)
+    available_mb: int = betterproto.uint64_field(5)
+    usage_pct: float = betterproto.float_field(6)
 
 
 @dataclass(eq=False, repr=False)

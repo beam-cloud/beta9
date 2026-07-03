@@ -484,10 +484,11 @@ type WorkerPoolCacheConfig struct {
 }
 
 type WorkerPoolCacheDiskConfig struct {
-	Enabled     *bool   `key:"enabled" json:"enabled"`
-	HostPath    string  `key:"hostPath" json:"host_path"`
-	MountPath   string  `key:"mountPath" json:"mount_path"`
-	MaxUsagePct float64 `key:"maxUsagePct" json:"max_usage_pct"`
+	Enabled      *bool   `key:"enabled" json:"enabled"`
+	HostPath     string  `key:"hostPath" json:"host_path"`
+	MountPath    string  `key:"mountPath" json:"mount_path"`
+	MaxUsagePct  float64 `key:"maxUsagePct" json:"max_usage_pct"`
+	MinFreeBytes int64   `key:"minFreeBytes" json:"min_free_bytes"`
 }
 
 type RuntimeConfig struct {

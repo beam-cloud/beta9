@@ -31,10 +31,6 @@ func setupBenchmarkCAS(b *testing.B) (*Store, func()) {
 		Global: GlobalConfig{
 			DebugMode: false,
 		},
-		Metrics: MetricsConfig{
-			PushIntervalS: 60,
-			URL:           "",
-		},
 	}
 
 	currentHost := &Host{
