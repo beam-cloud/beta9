@@ -26,6 +26,7 @@ const (
 
 	rentalErrNotFound        = "rental not found"
 	rentalShellWaitTimeout   = 5 * time.Minute
+	rentalUsageEmitTimeout   = 30 * time.Second
 	rentalWorkloadMinCPU     = int64(1000)
 	rentalWorkloadMinMemory  = int64(1024)
 	rentalKeepWarmForever    = -1
@@ -60,6 +61,24 @@ func (s *Service) CreateMarketplaceRental(ctx context.Context, in *pb.CreateMark
 		return &pb.CreateMarketplaceRentalResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 	machineID := machine.MachineID
+
+	// The capacity check and the rental write must be atomic per machine, or
+	// two concurrent reserves could both claim the same free GPUs.
+	if err := s.computeRepo.LockMachineRentals(ctx, machineID); err != nil {
+		return &pb.CreateMarketplaceRentalResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	defer s.computeRepo.UnlockMachineRentals(machineID)
+
+	unrented, errMsg := s.unrentedGPUsOnMachine(ctx, machine)
+	if errMsg != "" {
+		return &pb.CreateMarketplaceRentalResponse{Ok: false, ErrMsg: errMsg}, nil
+	}
+	if gpuCount > unrented {
+		return &pb.CreateMarketplaceRentalResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("requested %d GPUs but only %d are unrented on this machine", gpuCount, unrented),
+		}, nil
+	}
 
 	now := time.Now().UTC()
 	rental := &model.MarketplaceRentalState{
@@ -112,7 +131,7 @@ func (s *Service) DeleteMarketplaceRental(ctx context.Context, in *pb.DeleteMark
 		return &pb.DeleteMarketplaceRentalResponse{Ok: true}, nil
 	}
 
-	s.stopRentalContainers(rental)
+	s.stopRentalContainers(ctx, rental)
 	if err := s.computeRepo.DeleteMarketplaceRental(ctx, rental); err != nil {
 		return &pb.DeleteMarketplaceRentalResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -187,13 +206,7 @@ func (s *Service) rentalMachineForListing(ctx context.Context, listing *model.Ma
 		if machine == nil || !model.AgentMachineConnected(machine, now) {
 			return nil, "machine is not connected"
 		}
-		unrented, errMsg := s.unrentedGPUsOnMachine(ctx, machine)
-		if errMsg != "" {
-			return nil, errMsg
-		}
-		if gpuCount > unrented {
-			return nil, fmt.Sprintf("requested %d GPUs but only %d are unrented on this machine", gpuCount, unrented)
-		}
+		// Capacity is validated by the caller under the machine's rental lock.
 		return machine, ""
 	}
 
@@ -270,8 +283,11 @@ func (s *Service) marketplaceRentalToProto(ctx context.Context, rental *model.Ma
 	return out
 }
 
-// stopRentalContainers stops the buyer's containers on the rental's machine.
-func (s *Service) stopRentalContainers(rental *model.MarketplaceRentalState) {
+// stopRentalContainers stops the released rental's workloads — and only
+// those. The buyer may hold other rentals on the same machine or have
+// serverless containers there; matching on the rental's stub-name prefix
+// keeps them running.
+func (s *Service) stopRentalContainers(ctx context.Context, rental *model.MarketplaceRentalState) {
 	if s.containerRepo == nil || s.scheduler == nil {
 		return
 	}
@@ -279,8 +295,12 @@ func (s *Service) stopRentalContainers(rental *model.MarketplaceRentalState) {
 	if err != nil {
 		return
 	}
+	stubPrefix := fmt.Sprintf("%s-%s-", rentalWorkloadNamePrefix, rental.ID)
 	for _, container := range containers {
 		if container.WorkspaceId != rental.BuyerWorkspaceID {
+			continue
+		}
+		if !s.stubBelongsToRental(ctx, container.StubId, stubPrefix) {
 			continue
 		}
 		_ = s.scheduler.Stop(&types.StopContainerArgs{
@@ -289,6 +309,17 @@ func (s *Service) stopRentalContainers(rental *model.MarketplaceRentalState) {
 			Reason:      types.StopContainerReasonUser,
 		})
 	}
+}
+
+func (s *Service) stubBelongsToRental(ctx context.Context, stubExternalID, stubPrefix string) bool {
+	if s.backendRepo == nil || stubExternalID == "" {
+		return false
+	}
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubExternalID)
+	if err != nil || stub == nil {
+		return false
+	}
+	return strings.HasPrefix(stub.Name, stubPrefix)
 }
 
 // createRentalStub registers the machine-pinned stub backing a rental
@@ -376,6 +407,9 @@ func (s *Service) launchRentalPod(
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if err := s.scheduler.Run(request); err != nil {
+		// The keep-warm lock has no TTL; clear it so failed launches don't
+		// leave permanent keys behind (setting 0 deletes the lock).
+		_ = s.containerRepo.SetPodKeepWarmLock(ctx, authInfo.Workspace.Name, stub.ExternalId, containerId, 0)
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 

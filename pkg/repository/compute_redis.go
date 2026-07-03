@@ -466,6 +466,20 @@ func (r *ComputeRedisRepository) DeleteMarketplaceListing(ctx context.Context, s
 	return r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceGlobalIndex(), marketplaceListingGlobalMember(sellerWorkspaceID, listingID)).Err()
 }
 
+// LockMachineRentals serializes rental capacity checks and writes for one
+// machine, so concurrent reserves can't both claim the same free GPUs.
+func (r *ComputeRedisRepository) LockMachineRentals(ctx context.Context, machineID string) error {
+	return r.lock.Acquire(ctx, common.RedisKeys.ComputeMarketplaceRentalMachineLock(machineID), common.RedisLockOptions{
+		TtlS:          30,
+		Retries:       50,
+		RetryInterval: 100 * time.Millisecond,
+	})
+}
+
+func (r *ComputeRedisRepository) UnlockMachineRentals(machineID string) error {
+	return r.lock.Release(common.RedisKeys.ComputeMarketplaceRentalMachineLock(machineID))
+}
+
 func (r *ComputeRedisRepository) SaveMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error {
 	if state == nil || state.BuyerWorkspaceID == "" || state.ID == "" || state.MachineID == "" {
 		return fmt.Errorf("rental buyer workspace, id, and machine are required")

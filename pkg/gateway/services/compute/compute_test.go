@@ -4526,6 +4526,14 @@ type fakeComputeRepo struct {
 	savedPool  bool
 }
 
+func (r *fakeComputeRepo) LockMachineRentals(ctx context.Context, machineID string) error {
+	return nil
+}
+
+func (r *fakeComputeRepo) UnlockMachineRentals(machineID string) error {
+	return nil
+}
+
 func (r *fakeComputeRepo) SaveMarketplaceRental(ctx context.Context, state *model.MarketplaceRentalState) error {
 	if r.rentals == nil {
 		r.rentals = map[string][]*model.MarketplaceRentalState{}

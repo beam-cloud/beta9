@@ -114,23 +114,24 @@ var (
 )
 
 var (
-	computePoolState          string = "compute:{%s}:pool:%s"
-	computePoolStateLock      string = "compute:{%s}:pool:%s:lock"
-	computePoolIndex          string = "compute:{%s}:pools"
-	computePoolWorkspaceIndex string = "compute:workspaces"
-	computeJoinToken          string = "compute:join:%s"
-	computeAgentToken         string = "compute:agent:token:%s"
-	computeAgentMachine       string = "compute:{%s}:pool:%s:machine:%s"
-	computeAgentMachinePool   string = "compute:{%s}:machine:%s:pool"
-	computeAgentMachineIndex  string = "compute:{%s}:pool:%s:machines"
-	computeAgentSlot          string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
-	computeAgentSlotIndex     string = "compute:{%s}:pool:%s:machine:%s:workers"
+	computePoolState                     string = "compute:{%s}:pool:%s"
+	computePoolStateLock                 string = "compute:{%s}:pool:%s:lock"
+	computePoolIndex                     string = "compute:{%s}:pools"
+	computePoolWorkspaceIndex            string = "compute:workspaces"
+	computeJoinToken                     string = "compute:join:%s"
+	computeAgentToken                    string = "compute:agent:token:%s"
+	computeAgentMachine                  string = "compute:{%s}:pool:%s:machine:%s"
+	computeAgentMachinePool              string = "compute:{%s}:machine:%s:pool"
+	computeAgentMachineIndex             string = "compute:{%s}:pool:%s:machines"
+	computeAgentSlot                     string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
+	computeAgentSlotIndex                string = "compute:{%s}:pool:%s:machine:%s:workers"
 	computeMarketplaceListing            string = "compute:marketplace:{%s}:listing:%s"
 	computeMarketplaceIndex              string = "compute:marketplace:{%s}:listings"
 	computeMarketplaceGlobal             string = "compute:marketplace:listings"
 	computeMarketplaceRental             string = "compute:marketplace:rental:{%s}:%s"
 	computeMarketplaceRentalIndex        string = "compute:marketplace:rental:{%s}:index"
 	computeMarketplaceRentalMachineIndex string = "compute:marketplace:rental:machine:%s"
+	computeMarketplaceRentalMachineLock  string = "compute:marketplace:rental:machine:%s:lock"
 	computeMarketplaceRentalGlobal       string = "compute:marketplace:rentals"
 )
 
@@ -401,6 +402,10 @@ func (rk *redisKeys) ComputeMarketplaceRentalIndex(buyerWorkspaceID string) stri
 
 func (rk *redisKeys) ComputeMarketplaceRentalMachineIndex(machineID string) string {
 	return fmt.Sprintf(computeMarketplaceRentalMachineIndex, machineID)
+}
+
+func (rk *redisKeys) ComputeMarketplaceRentalMachineLock(machineID string) string {
+	return fmt.Sprintf(computeMarketplaceRentalMachineLock, machineID)
 }
 
 func (rk *redisKeys) ComputeMarketplaceRentalGlobalIndex() string {

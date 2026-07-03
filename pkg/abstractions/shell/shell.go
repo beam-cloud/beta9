@@ -432,12 +432,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		gpuCount = 1
 	}
 
-	startupCommand := fmt.Sprintf("%s && %s", createUserScript, fmt.Sprintf(startupScript, types.WorkerShellPort))
-	entryPoint := []string{
-		"/bin/sh",
-		"-c",
-		startupCommand,
-	}
+	entryPoint := StandaloneEntryPoint()
 
 	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", containerWaitTimeoutDurationS).Err()
 	if err != nil {

@@ -982,6 +982,11 @@ func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *t
 	if len(workers) == 0 || s == nil || s.workerPoolManager == nil {
 		return workers
 	}
+	// Loaded once per filter pass (single indexed read), only when a
+	// serverless marketplace candidate actually needs it.
+	var rentedByMachine map[string]uint32
+	rentedLoaded := false
+
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, worker := range workers {
 		if worker == nil {
@@ -997,36 +1002,57 @@ func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *t
 		// Rented GPUs are invisible to serverless requests; only the renter's
 		// machine-pinned workloads may consume them. Machine-pinned requests
 		// are entitled to the rented capacity, so no subtraction applies.
-		if request.MachineId == "" && !s.marketplaceWorkerFitsWithRentals(worker, request) {
-			continue
+		if request.MachineId == "" {
+			if !rentedLoaded {
+				rentedByMachine = s.rentedGPUsByMachine()
+				rentedLoaded = true
+			}
+			// Fail closed: without rental visibility we can't prove this
+			// capacity isn't exclusively held by a renter.
+			if rentedByMachine == nil {
+				continue
+			}
+			if !workerFitsWithRentals(worker, request, rentedByMachine[worker.MachineId]) {
+				continue
+			}
 		}
 		filtered = append(filtered, worker)
 	}
 	return filtered
 }
 
-// marketplaceWorkerFitsWithRentals reports whether a serverless request still
-// fits after subtracting the machine's rented GPUs from free capacity. Free
-// already accounts for running containers (including rental workloads), so
-// subtracting full rentals is conservative: rented-but-idle GPUs are held
-// back, rented-and-busy GPUs are never double counted below zero fit.
-func (s *Scheduler) marketplaceWorkerFitsWithRentals(worker *types.Worker, request *types.ContainerRequest) bool {
-	if worker.MachineId == "" || s.computeRepo == nil {
-		return true
+// rentedGPUsByMachine sums active rental GPUs per machine. Returns nil when
+// the lookup fails so callers can fail closed; a scheduler without a compute
+// repo (no marketplace support) reports no rentals.
+func (s *Scheduler) rentedGPUsByMachine() map[string]uint32 {
+	rented := map[string]uint32{}
+	if s.computeRepo == nil {
+		return rented
 	}
 	ctx := s.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	rentals, err := s.computeRepo.ListMarketplaceRentalsForMachine(ctx, worker.MachineId)
-	if err != nil || len(rentals) == 0 {
-		return true
+	rentals, err := s.computeRepo.ListAllMarketplaceRentals(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to list marketplace rentals; hiding marketplace capacity from serverless requests")
+		return nil
 	}
-	rented := uint32(0)
 	for _, rental := range rentals {
-		rented += rental.GPUCount
+		if rental != nil && rental.MachineID != "" {
+			rented[rental.MachineID] += rental.GPUCount
+		}
 	}
-	if !request.RequiresGPU() {
+	return rented
+}
+
+// workerFitsWithRentals reports whether a serverless request still fits after
+// subtracting the machine's rented GPUs from free capacity. Free already
+// accounts for running containers (including rental workloads), so
+// subtracting full rentals is conservative: rented-but-idle GPUs are held
+// back, rented-and-busy GPUs are never double counted below zero fit.
+func workerFitsWithRentals(worker *types.Worker, request *types.ContainerRequest, rented uint32) bool {
+	if rented == 0 || !request.RequiresGPU() {
 		return true
 	}
 	if worker.FreeGpuCount < rented {

@@ -344,6 +344,16 @@ func TestMarketplaceRentalCapacityHiddenFromServerless(t *testing.T) {
 	pinned := &types.ContainerRequest{AllowMarketplace: true, MachineId: "machine-1", GpuRequest: []string{"A100-40"}, GpuCount: 2}
 	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, pinned), 1,
 		"the renter's machine-pinned workload consumes the rented capacity")
+
+	// Fail closed: if rentals can't be read, serverless requests must not see
+	// marketplace capacity (it may be exclusively rented), while pinned rental
+	// workloads keep working.
+	redisServer.Close()
+	serverless.GpuCount = 1
+	assert.Empty(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, serverless),
+		"rental lookup failure must hide marketplace capacity from serverless requests")
+	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, pinned), 1,
+		"pinned rental workloads don't depend on the rental index")
 }
 
 type LocalWorkerPoolControllerForTest struct {
