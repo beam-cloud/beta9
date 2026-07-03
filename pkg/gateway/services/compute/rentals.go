@@ -67,7 +67,13 @@ func (s *Service) CreateMarketplaceRental(ctx context.Context, in *pb.CreateMark
 	if err := s.computeRepo.LockMachineRentals(ctx, machineID); err != nil {
 		return &pb.CreateMarketplaceRentalResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	defer s.computeRepo.UnlockMachineRentals(machineID)
+	defer func() {
+		// A failed release blocks reserves on this machine until the lock's
+		// TTL lapses; surface it instead of stalling silently.
+		if err := s.computeRepo.UnlockMachineRentals(machineID); err != nil {
+			log.Warn().Err(err).Str("machine_id", machineID).Msg("failed to release machine rental lock")
+		}
+	}()
 
 	unrented, errMsg := s.unrentedGPUsOnMachine(ctx, machine)
 	if errMsg != "" {
