@@ -221,6 +221,32 @@ service GatewayService {
       get : "/marketplace/offers/{listing_id}"
     };
   }
+  rpc CreateMarketplaceRental(CreateMarketplaceRentalRequest)
+      returns (CreateMarketplaceRentalResponse) {
+    option (google.api.http) = {
+      post : "/marketplace/rentals"
+      body : "*"
+    };
+  }
+  rpc ListMarketplaceRentals(ListMarketplaceRentalsRequest)
+      returns (ListMarketplaceRentalsResponse) {
+    option (google.api.http) = {
+      get : "/marketplace/rentals"
+    };
+  }
+  rpc DeleteMarketplaceRental(DeleteMarketplaceRentalRequest)
+      returns (DeleteMarketplaceRentalResponse) {
+    option (google.api.http) = {
+      delete : "/marketplace/rentals/{rental_id}"
+    };
+  }
+  rpc LaunchRentalWorkload(LaunchRentalWorkloadRequest)
+      returns (LaunchRentalWorkloadResponse) {
+    option (google.api.http) = {
+      post : "/marketplace/rentals/{rental_id}/launch"
+      body : "*"
+    };
+  }
   rpc ListMarketplaceMachines(ListMarketplaceMachinesRequest)
       returns (ListMarketplaceMachinesResponse) {
     option (google.api.http) = {
@@ -985,6 +1011,8 @@ message MarketplaceListing {
   uint32 ready_machine_count = 14;
   string region = 15;
   string runtime = 16;
+  // Seller-set on-demand rate, per GPU per hour.
+  uint32 price_per_gpu_hour_cents = 17;
 }
 
 message MarketplaceOffer {
@@ -1008,6 +1036,7 @@ message MarketplaceOffer {
   // False for unlisted offers: reachable via direct share link only, never
   // returned by marketplace search.
   bool public = 18;
+  uint32 price_per_gpu_hour_cents = 19;
 }
 
 message CreateMarketplaceListingRequest {
@@ -1021,6 +1050,7 @@ message CreateMarketplaceListingRequest {
   // Optional pool the listing's machines join. Reusing a pool across listings
   // shares machine caches; defaults to a name derived from the GPU type.
   string pool_name = 8;
+  uint32 price_per_gpu_hour_cents = 9;
 }
 
 message CreateMarketplaceListingResponse {
@@ -1039,6 +1069,7 @@ message UpdateMarketplaceListingRequest {
   optional bool public = 7;
   string status = 8;
   string region = 9;
+  optional uint32 price_per_gpu_hour_cents = 10;
 }
 
 message UpdateMarketplaceListingResponse {
@@ -1092,6 +1123,74 @@ message GetMarketplaceOfferResponse {
   bool ok = 1;
   string err_msg = 2;
   MarketplaceOffer offer = 3;
+}
+
+// A buyer's exclusive hold on GPUs of one seller machine. Billed on-demand
+// while held; workloads are launched onto it machine-pinned.
+message MarketplaceRental {
+  string id = 1;
+  string listing_id = 2;
+  string listing_name = 3;
+  string pool_name = 4;
+  string machine_id = 5;
+  string gpu = 6;
+  uint32 gpu_count = 7;
+  string region = 8;
+  bool machine_connected = 9;
+  google.protobuf.Timestamp created_at = 10;
+  // Rate snapshotted when the rental was created; seller price changes don't
+  // affect rentals already held.
+  uint32 price_per_gpu_hour_cents = 11;
+}
+
+message CreateMarketplaceRentalRequest {
+  string listing_id = 1;
+  string machine_id = 2;
+  uint32 gpu_count = 3;
+}
+
+message CreateMarketplaceRentalResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  MarketplaceRental rental = 3;
+}
+
+message ListMarketplaceRentalsRequest {}
+
+message ListMarketplaceRentalsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated MarketplaceRental rentals = 3;
+}
+
+message DeleteMarketplaceRentalRequest { string rental_id = 1; }
+
+message DeleteMarketplaceRentalResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message LaunchRentalWorkloadRequest {
+  string rental_id = 1;
+  // "pod" runs the image's own entrypoint (e.g. a vLLM server); "shell"
+  // starts an SSH-able container reachable via `beam shell`.
+  string kind = 2;
+  string image_id = 3;
+  repeated string command = 4;
+  repeated uint32 ports = 5;
+  uint32 gpu_count = 6;
+  repeated string env = 7;
+}
+
+message LaunchRentalWorkloadResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string container_id = 3;
+  string stub_id = 4;
+  string url = 5;
+  string shell_command = 6;
+  string username = 7;
+  string password = 8;
 }
 
 message ListMarketplaceMachinesRequest {

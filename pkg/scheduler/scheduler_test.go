@@ -278,6 +278,74 @@ func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
 	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
 }
 
+// Machine-pinned requests (marketplace rentals) must only ever see the pinned
+// machine's worker, regardless of pool selector requirements.
+func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
+	workers := []*types.Worker{
+		{Id: "w1", MachineId: "machine-1", PoolName: "marketplace-a100", RequiresPoolSelector: false},
+		{Id: "w2", MachineId: "machine-2", PoolName: "private-pool", RequiresPoolSelector: true},
+	}
+
+	pinned := filterWorkersByMachine(workers, &types.ContainerRequest{MachineId: "machine-2"})
+	assert.Len(t, pinned, 1)
+	assert.Equal(t, "w2", pinned[0].Id)
+
+	// The pin overrides pool-selector filtering: w2 requires a selector the
+	// request doesn't carry, but it was already selected by the pin.
+	selected := filterWorkersByPoolSelector(pinned, &types.ContainerRequest{MachineId: "machine-2"})
+	assert.Len(t, selected, 1)
+
+	unpinned := filterWorkersByMachine(workers, &types.ContainerRequest{})
+	assert.Len(t, unpinned, 2)
+}
+
+// Rented GPUs are invisible to serverless marketplace requests; machine-pinned
+// rental workloads still see the full machine.
+func TestMarketplaceRentalCapacityHiddenFromServerless(t *testing.T) {
+	redisServer, err := miniredis.Run()
+	assert.NoError(t, err)
+	t.Cleanup(redisServer.Close)
+	redisClient, err := common.NewRedisClient(types.RedisConfig{
+		Addrs: []string{redisServer.Addr()},
+		Mode:  types.RedisModeSingle,
+	})
+	assert.NoError(t, err)
+
+	computeRepo := repo.NewComputeRedisRepository(redisClient)
+	assert.NoError(t, computeRepo.SaveMarketplaceRental(context.Background(), &compute.MarketplaceRentalState{
+		ID:               "rental-1",
+		BuyerWorkspaceID: "buyer-1",
+		MachineID:        "machine-1",
+		GPUCount:         2,
+	}))
+
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false), computeRepo: computeRepo}
+	scheduler.workerPoolManager.SetPool("marketplace-a100", types.WorkerPoolConfig{
+		Mode: types.PoolModeMarketplace,
+	}, nil)
+
+	worker := &types.Worker{
+		Id:            "w1",
+		MachineId:     "machine-1",
+		PoolName:      "marketplace-a100",
+		Gpu:           "A100-40",
+		FreeGpuCount:  8,
+		TotalGpuCount: 8,
+	}
+
+	serverless := &types.ContainerRequest{AllowMarketplace: true, GpuRequest: []string{"A100-40"}, GpuCount: 7}
+	assert.Empty(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, serverless),
+		"7 GPUs must not fit when 2 of 8 are rented")
+
+	serverless.GpuCount = 6
+	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, serverless), 1,
+		"6 GPUs fit alongside the 2-GPU rental")
+
+	pinned := &types.ContainerRequest{AllowMarketplace: true, MachineId: "machine-1", GpuRequest: []string{"A100-40"}, GpuCount: 2}
+	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, pinned), 1,
+		"the renter's machine-pinned workload consumes the rented capacity")
+}
+
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string

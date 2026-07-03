@@ -54,6 +54,22 @@ func (gws *GatewayService) ListMarketplaceMachines(ctx context.Context, in *pb.L
 	return gws.computeService.ListMarketplaceMachines(ctx, in)
 }
 
+func (gws *GatewayService) CreateMarketplaceRental(ctx context.Context, in *pb.CreateMarketplaceRentalRequest) (*pb.CreateMarketplaceRentalResponse, error) {
+	return gws.computeService.CreateMarketplaceRental(ctx, in)
+}
+
+func (gws *GatewayService) ListMarketplaceRentals(ctx context.Context, in *pb.ListMarketplaceRentalsRequest) (*pb.ListMarketplaceRentalsResponse, error) {
+	return gws.computeService.ListMarketplaceRentals(ctx, in)
+}
+
+func (gws *GatewayService) DeleteMarketplaceRental(ctx context.Context, in *pb.DeleteMarketplaceRentalRequest) (*pb.DeleteMarketplaceRentalResponse, error) {
+	return gws.computeService.DeleteMarketplaceRental(ctx, in)
+}
+
+func (gws *GatewayService) LaunchRentalWorkload(ctx context.Context, in *pb.LaunchRentalWorkloadRequest) (*pb.LaunchRentalWorkloadResponse, error) {
+	return gws.computeService.LaunchRentalWorkload(ctx, in)
+}
+
 func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
 	return gws.computeService.ListMachineContainers(ctx, in)
 }

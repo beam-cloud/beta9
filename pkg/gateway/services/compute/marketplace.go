@@ -285,24 +285,25 @@ func (s *Service) GetMarketplaceOffer(ctx context.Context, in *pb.GetMarketplace
 
 func marketplaceOfferProto(listing *model.MarketplaceListingState, stats marketplaceOfferStats) *pb.MarketplaceOffer {
 	return &pb.MarketplaceOffer{
-		ListingId:         listing.ID,
-		SellerWorkspaceId: listing.SellerWorkspaceID,
-		DisplayName:       listing.DisplayName,
-		Gpu:               listing.GPU,
-		GpuCount:          listing.GPUCount,
-		Source:            listing.Source,
-		Preemptible:       listing.Preemptible,
-		Public:            listing.Public,
-		MachineCount:      stats.total,
-		ReadyMachineCount: stats.ready,
-		Runtime:           marketplaceListingRuntime(listing),
-		Region:            listing.Region,
-		CpuCores:          stats.cpuCores,
-		MemoryMb:          stats.memoryMB,
-		DiskGb:            stats.diskGB,
-		FreeGpuCount:      stats.freeGPUCount,
-		Reliability:       stats.reliability,
-		CreatedAt:         timestampOrNil(listing.CreatedAt),
+		ListingId:            listing.ID,
+		SellerWorkspaceId:    listing.SellerWorkspaceID,
+		DisplayName:          listing.DisplayName,
+		Gpu:                  listing.GPU,
+		GpuCount:             listing.GPUCount,
+		Source:               listing.Source,
+		Preemptible:          listing.Preemptible,
+		Public:               listing.Public,
+		MachineCount:         stats.total,
+		ReadyMachineCount:    stats.ready,
+		Runtime:              marketplaceListingRuntime(listing),
+		Region:               listing.Region,
+		CpuCores:             stats.cpuCores,
+		MemoryMb:             stats.memoryMB,
+		DiskGb:               stats.diskGB,
+		FreeGpuCount:         stats.freeGPUCount,
+		Reliability:          stats.reliability,
+		CreatedAt:            timestampOrNil(listing.CreatedAt),
+		PricePerGpuHourCents: listing.PricePerGPUHourCents,
 	}
 }
 
@@ -334,15 +335,16 @@ func newMarketplaceListingState(workspaceID string, in *pb.CreateMarketplaceList
 		in = &pb.CreateMarketplaceListingRequest{}
 	}
 	listing := &model.MarketplaceListingState{
-		SellerWorkspaceID: workspaceID,
-		DisplayName:       strings.TrimSpace(in.GetDisplayName()),
-		GPU:               normalizeMarketplaceGPU(in.GetGpu()),
-		GPUCount:          firstNonZeroUint32(in.GetGpuCount(), 1),
-		Source:            firstNonEmpty(strings.TrimSpace(in.GetSource()), defaultMarketplaceSource),
-		Preemptible:       in.GetPreemptible(),
-		Public:            in.GetPublic(),
-		Region:            strings.TrimSpace(in.GetRegion()),
-		Status:            model.MarketplaceListingStatusActive,
+		SellerWorkspaceID:    workspaceID,
+		DisplayName:          strings.TrimSpace(in.GetDisplayName()),
+		GPU:                  normalizeMarketplaceGPU(in.GetGpu()),
+		GPUCount:             firstNonZeroUint32(in.GetGpuCount(), 1),
+		Source:               firstNonEmpty(strings.TrimSpace(in.GetSource()), defaultMarketplaceSource),
+		Preemptible:          in.GetPreemptible(),
+		Public:               in.GetPublic(),
+		Region:               strings.TrimSpace(in.GetRegion()),
+		PricePerGPUHourCents: in.GetPricePerGpuHourCents(),
+		Status:               model.MarketplaceListingStatusActive,
 	}
 	if err := validateMarketplaceListing(listing); err != nil {
 		return nil, err
@@ -399,6 +401,9 @@ func applyMarketplaceListingUpdate(listing *model.MarketplaceListingState, in *p
 	}
 	if in.Public != nil {
 		listing.Public = in.GetPublic()
+	}
+	if in.PricePerGpuHourCents != nil {
+		listing.PricePerGPUHourCents = in.GetPricePerGpuHourCents()
 	}
 	listing.UpdatedAt = time.Now().UTC()
 	return validateMarketplaceListing(listing)
@@ -558,22 +563,23 @@ func (s *Service) marketplaceListingToProto(ctx context.Context, listing *model.
 	}
 	stats := s.marketplaceOfferStats(ctx, listing)
 	return &pb.MarketplaceListing{
-		Id:                listing.ID,
-		SellerWorkspaceId: listing.SellerWorkspaceID,
-		DisplayName:       listing.DisplayName,
-		Gpu:               listing.GPU,
-		GpuCount:          listing.GPUCount,
-		Source:            listing.Source,
-		Preemptible:       listing.Preemptible,
-		Public:            listing.Public,
-		Status:            listing.Status,
-		PoolName:          listing.PoolName,
-		Region:            listing.Region,
-		Runtime:           marketplaceListingRuntime(listing),
-		CreatedAt:         timestampOrNil(listing.CreatedAt),
-		UpdatedAt:         timestampOrNil(listing.UpdatedAt),
-		MachineCount:      stats.total,
-		ReadyMachineCount: stats.ready,
+		Id:                   listing.ID,
+		SellerWorkspaceId:    listing.SellerWorkspaceID,
+		DisplayName:          listing.DisplayName,
+		Gpu:                  listing.GPU,
+		GpuCount:             listing.GPUCount,
+		Source:               listing.Source,
+		Preemptible:          listing.Preemptible,
+		Public:               listing.Public,
+		Status:               listing.Status,
+		PoolName:             listing.PoolName,
+		Region:               listing.Region,
+		Runtime:              marketplaceListingRuntime(listing),
+		CreatedAt:            timestampOrNil(listing.CreatedAt),
+		UpdatedAt:            timestampOrNil(listing.UpdatedAt),
+		MachineCount:         stats.total,
+		ReadyMachineCount:    stats.ready,
+		PricePerGpuHourCents: listing.PricePerGPUHourCents,
 	}
 }
 

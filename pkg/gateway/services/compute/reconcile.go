@@ -40,6 +40,7 @@ func (s *Service) runReconciler(ctx context.Context) {
 			if err := s.ReconcileManagedCompute(ctx); err != nil {
 				log.Warn().Err(err).Msg("managed compute reconcile failed")
 			}
+			s.emitRentalUsage(ctx, time.Now().UTC())
 			timer.Reset(interval)
 		}
 	}

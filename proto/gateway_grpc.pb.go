@@ -54,6 +54,10 @@ const (
 	GatewayService_GetMarketplaceJoinCommand_FullMethodName       = "/gateway.GatewayService/GetMarketplaceJoinCommand"
 	GatewayService_ListMarketplaceOffers_FullMethodName           = "/gateway.GatewayService/ListMarketplaceOffers"
 	GatewayService_GetMarketplaceOffer_FullMethodName             = "/gateway.GatewayService/GetMarketplaceOffer"
+	GatewayService_CreateMarketplaceRental_FullMethodName         = "/gateway.GatewayService/CreateMarketplaceRental"
+	GatewayService_ListMarketplaceRentals_FullMethodName          = "/gateway.GatewayService/ListMarketplaceRentals"
+	GatewayService_DeleteMarketplaceRental_FullMethodName         = "/gateway.GatewayService/DeleteMarketplaceRental"
+	GatewayService_LaunchRentalWorkload_FullMethodName            = "/gateway.GatewayService/LaunchRentalWorkload"
 	GatewayService_ListMarketplaceMachines_FullMethodName         = "/gateway.GatewayService/ListMarketplaceMachines"
 	GatewayService_ListMachineContainers_FullMethodName           = "/gateway.GatewayService/ListMachineContainers"
 	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
@@ -131,6 +135,10 @@ type GatewayServiceClient interface {
 	GetMarketplaceJoinCommand(ctx context.Context, in *GetMarketplaceJoinCommandRequest, opts ...grpc.CallOption) (*GetMarketplaceJoinCommandResponse, error)
 	ListMarketplaceOffers(ctx context.Context, in *ListMarketplaceOffersRequest, opts ...grpc.CallOption) (*ListMarketplaceOffersResponse, error)
 	GetMarketplaceOffer(ctx context.Context, in *GetMarketplaceOfferRequest, opts ...grpc.CallOption) (*GetMarketplaceOfferResponse, error)
+	CreateMarketplaceRental(ctx context.Context, in *CreateMarketplaceRentalRequest, opts ...grpc.CallOption) (*CreateMarketplaceRentalResponse, error)
+	ListMarketplaceRentals(ctx context.Context, in *ListMarketplaceRentalsRequest, opts ...grpc.CallOption) (*ListMarketplaceRentalsResponse, error)
+	DeleteMarketplaceRental(ctx context.Context, in *DeleteMarketplaceRentalRequest, opts ...grpc.CallOption) (*DeleteMarketplaceRentalResponse, error)
+	LaunchRentalWorkload(ctx context.Context, in *LaunchRentalWorkloadRequest, opts ...grpc.CallOption) (*LaunchRentalWorkloadResponse, error)
 	ListMarketplaceMachines(ctx context.Context, in *ListMarketplaceMachinesRequest, opts ...grpc.CallOption) (*ListMarketplaceMachinesResponse, error)
 	ListMachineContainers(ctx context.Context, in *ListMachineContainersRequest, opts ...grpc.CallOption) (*ListMachineContainersResponse, error)
 	CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error)
@@ -535,6 +543,42 @@ func (c *gatewayServiceClient) GetMarketplaceOffer(ctx context.Context, in *GetM
 	return out, nil
 }
 
+func (c *gatewayServiceClient) CreateMarketplaceRental(ctx context.Context, in *CreateMarketplaceRentalRequest, opts ...grpc.CallOption) (*CreateMarketplaceRentalResponse, error) {
+	out := new(CreateMarketplaceRentalResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateMarketplaceRental_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ListMarketplaceRentals(ctx context.Context, in *ListMarketplaceRentalsRequest, opts ...grpc.CallOption) (*ListMarketplaceRentalsResponse, error) {
+	out := new(ListMarketplaceRentalsResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ListMarketplaceRentals_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) DeleteMarketplaceRental(ctx context.Context, in *DeleteMarketplaceRentalRequest, opts ...grpc.CallOption) (*DeleteMarketplaceRentalResponse, error) {
+	out := new(DeleteMarketplaceRentalResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteMarketplaceRental_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) LaunchRentalWorkload(ctx context.Context, in *LaunchRentalWorkloadRequest, opts ...grpc.CallOption) (*LaunchRentalWorkloadResponse, error) {
+	out := new(LaunchRentalWorkloadResponse)
+	err := c.cc.Invoke(ctx, GatewayService_LaunchRentalWorkload_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) ListMarketplaceMachines(ctx context.Context, in *ListMarketplaceMachinesRequest, opts ...grpc.CallOption) (*ListMarketplaceMachinesResponse, error) {
 	out := new(ListMarketplaceMachinesResponse)
 	err := c.cc.Invoke(ctx, GatewayService_ListMarketplaceMachines_FullMethodName, in, out, opts...)
@@ -882,6 +926,10 @@ type GatewayServiceServer interface {
 	GetMarketplaceJoinCommand(context.Context, *GetMarketplaceJoinCommandRequest) (*GetMarketplaceJoinCommandResponse, error)
 	ListMarketplaceOffers(context.Context, *ListMarketplaceOffersRequest) (*ListMarketplaceOffersResponse, error)
 	GetMarketplaceOffer(context.Context, *GetMarketplaceOfferRequest) (*GetMarketplaceOfferResponse, error)
+	CreateMarketplaceRental(context.Context, *CreateMarketplaceRentalRequest) (*CreateMarketplaceRentalResponse, error)
+	ListMarketplaceRentals(context.Context, *ListMarketplaceRentalsRequest) (*ListMarketplaceRentalsResponse, error)
+	DeleteMarketplaceRental(context.Context, *DeleteMarketplaceRentalRequest) (*DeleteMarketplaceRentalResponse, error)
+	LaunchRentalWorkload(context.Context, *LaunchRentalWorkloadRequest) (*LaunchRentalWorkloadResponse, error)
 	ListMarketplaceMachines(context.Context, *ListMarketplaceMachinesRequest) (*ListMarketplaceMachinesResponse, error)
 	ListMachineContainers(context.Context, *ListMachineContainersRequest) (*ListMachineContainersResponse, error)
 	CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error)
@@ -1025,6 +1073,18 @@ func (UnimplementedGatewayServiceServer) ListMarketplaceOffers(context.Context, 
 }
 func (UnimplementedGatewayServiceServer) GetMarketplaceOffer(context.Context, *GetMarketplaceOfferRequest) (*GetMarketplaceOfferResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMarketplaceOffer not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateMarketplaceRental(context.Context, *CreateMarketplaceRentalRequest) (*CreateMarketplaceRentalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateMarketplaceRental not implemented")
+}
+func (UnimplementedGatewayServiceServer) ListMarketplaceRentals(context.Context, *ListMarketplaceRentalsRequest) (*ListMarketplaceRentalsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListMarketplaceRentals not implemented")
+}
+func (UnimplementedGatewayServiceServer) DeleteMarketplaceRental(context.Context, *DeleteMarketplaceRentalRequest) (*DeleteMarketplaceRentalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteMarketplaceRental not implemented")
+}
+func (UnimplementedGatewayServiceServer) LaunchRentalWorkload(context.Context, *LaunchRentalWorkloadRequest) (*LaunchRentalWorkloadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LaunchRentalWorkload not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListMarketplaceMachines(context.Context, *ListMarketplaceMachinesRequest) (*ListMarketplaceMachinesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMarketplaceMachines not implemented")
@@ -1769,6 +1829,78 @@ func _GatewayService_GetMarketplaceOffer_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_CreateMarketplaceRental_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateMarketplaceRentalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateMarketplaceRental(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateMarketplaceRental_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateMarketplaceRental(ctx, req.(*CreateMarketplaceRentalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ListMarketplaceRentals_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListMarketplaceRentalsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ListMarketplaceRentals(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ListMarketplaceRentals_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ListMarketplaceRentals(ctx, req.(*ListMarketplaceRentalsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_DeleteMarketplaceRental_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteMarketplaceRentalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DeleteMarketplaceRental(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DeleteMarketplaceRental_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DeleteMarketplaceRental(ctx, req.(*DeleteMarketplaceRentalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_LaunchRentalWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LaunchRentalWorkloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).LaunchRentalWorkload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_LaunchRentalWorkload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).LaunchRentalWorkload(ctx, req.(*LaunchRentalWorkloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_ListMarketplaceMachines_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListMarketplaceMachinesRequest)
 	if err := dec(in); err != nil {
@@ -2422,6 +2554,22 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMarketplaceOffer",
 			Handler:    _GatewayService_GetMarketplaceOffer_Handler,
+		},
+		{
+			MethodName: "CreateMarketplaceRental",
+			Handler:    _GatewayService_CreateMarketplaceRental_Handler,
+		},
+		{
+			MethodName: "ListMarketplaceRentals",
+			Handler:    _GatewayService_ListMarketplaceRentals_Handler,
+		},
+		{
+			MethodName: "DeleteMarketplaceRental",
+			Handler:    _GatewayService_DeleteMarketplaceRental_Handler,
+		},
+		{
+			MethodName: "LaunchRentalWorkload",
+			Handler:    _GatewayService_LaunchRentalWorkload_Handler,
 		},
 		{
 			MethodName: "ListMarketplaceMachines",

@@ -125,9 +125,13 @@ var (
 	computeAgentMachineIndex  string = "compute:{%s}:pool:%s:machines"
 	computeAgentSlot          string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
 	computeAgentSlotIndex     string = "compute:{%s}:pool:%s:machine:%s:workers"
-	computeMarketplaceListing string = "compute:marketplace:{%s}:listing:%s"
-	computeMarketplaceIndex   string = "compute:marketplace:{%s}:listings"
-	computeMarketplaceGlobal  string = "compute:marketplace:listings"
+	computeMarketplaceListing            string = "compute:marketplace:{%s}:listing:%s"
+	computeMarketplaceIndex              string = "compute:marketplace:{%s}:listings"
+	computeMarketplaceGlobal             string = "compute:marketplace:listings"
+	computeMarketplaceRental             string = "compute:marketplace:rental:{%s}:%s"
+	computeMarketplaceRentalIndex        string = "compute:marketplace:rental:{%s}:index"
+	computeMarketplaceRentalMachineIndex string = "compute:marketplace:rental:machine:%s"
+	computeMarketplaceRentalGlobal       string = "compute:marketplace:rentals"
 )
 
 var (
@@ -385,6 +389,22 @@ func (rk *redisKeys) ComputeMarketplaceIndex(workspaceID string) string {
 
 func (rk *redisKeys) ComputeMarketplaceGlobalIndex() string {
 	return computeMarketplaceGlobal
+}
+
+func (rk *redisKeys) ComputeMarketplaceRental(buyerWorkspaceID, rentalID string) string {
+	return fmt.Sprintf(computeMarketplaceRental, buyerWorkspaceID, rentalID)
+}
+
+func (rk *redisKeys) ComputeMarketplaceRentalIndex(buyerWorkspaceID string) string {
+	return fmt.Sprintf(computeMarketplaceRentalIndex, buyerWorkspaceID)
+}
+
+func (rk *redisKeys) ComputeMarketplaceRentalMachineIndex(machineID string) string {
+	return fmt.Sprintf(computeMarketplaceRentalMachineIndex, machineID)
+}
+
+func (rk *redisKeys) ComputeMarketplaceRentalGlobalIndex() string {
+	return computeMarketplaceRentalGlobal
 }
 
 // Task keys

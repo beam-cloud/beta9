@@ -15,6 +15,7 @@ import (
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -4521,7 +4522,66 @@ type fakeComputeRepo struct {
 	machines   map[string][]*model.AgentTokenState
 	joinTokens map[string]*model.JoinTokenState
 	listings   map[string][]*model.MarketplaceListingState
+	rentals    map[string][]*model.MarketplaceRentalState
 	savedPool  bool
+}
+
+func (r *fakeComputeRepo) SaveMarketplaceRental(ctx context.Context, state *model.MarketplaceRentalState) error {
+	if r.rentals == nil {
+		r.rentals = map[string][]*model.MarketplaceRentalState{}
+	}
+	kept := r.rentals[state.BuyerWorkspaceID][:0]
+	for _, rental := range r.rentals[state.BuyerWorkspaceID] {
+		if rental.ID != state.ID {
+			kept = append(kept, rental)
+		}
+	}
+	r.rentals[state.BuyerWorkspaceID] = append(kept, state)
+	return nil
+}
+
+func (r *fakeComputeRepo) GetMarketplaceRental(ctx context.Context, buyerWorkspaceID, rentalID string) (*model.MarketplaceRentalState, error) {
+	for _, rental := range r.rentals[buyerWorkspaceID] {
+		if rental.ID == rentalID {
+			return rental, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeComputeRepo) ListMarketplaceRentals(ctx context.Context, buyerWorkspaceID string) ([]*model.MarketplaceRentalState, error) {
+	return r.rentals[buyerWorkspaceID], nil
+}
+
+func (r *fakeComputeRepo) ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*model.MarketplaceRentalState, error) {
+	out := []*model.MarketplaceRentalState{}
+	for _, rentals := range r.rentals {
+		for _, rental := range rentals {
+			if rental.MachineID == machineID {
+				out = append(out, rental)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeComputeRepo) ListAllMarketplaceRentals(ctx context.Context) ([]*model.MarketplaceRentalState, error) {
+	out := []*model.MarketplaceRentalState{}
+	for _, rentals := range r.rentals {
+		out = append(out, rentals...)
+	}
+	return out, nil
+}
+
+func (r *fakeComputeRepo) DeleteMarketplaceRental(ctx context.Context, state *model.MarketplaceRentalState) error {
+	kept := r.rentals[state.BuyerWorkspaceID][:0]
+	for _, rental := range r.rentals[state.BuyerWorkspaceID] {
+		if rental.ID != state.ID {
+			kept = append(kept, rental)
+		}
+	}
+	r.rentals[state.BuyerWorkspaceID] = kept
+	return nil
 }
 
 func (r *fakeComputeRepo) LockPoolState(ctx context.Context, workspaceID, name string) error {
@@ -5728,6 +5788,174 @@ func TestMarketplaceListingsSharePool(t *testing.T) {
 	}
 	if state, err := repo.GetPoolState(ctx, "seller-1", "marketplace-west-rack"); err != nil || state != nil {
 		t.Fatalf("pool state after last listing = %+v, %v; want deleted", state, err)
+	}
+}
+
+// Rentals lock GPUs on one machine: capacity checks respect existing rentals,
+// and release returns the GPUs.
+func TestMarketplaceRentalLifecycle(t *testing.T) {
+	sellerCtx := testAuthContext("seller-1", "seller-token")
+	buyerCtx := testAuthContext("buyer-1", "buyer-token")
+	repo := &fakeComputeRepo{}
+	service := &Service{computeRepo: repo}
+
+	created, err := service.CreateMarketplaceListing(sellerCtx, &pb.CreateMarketplaceListingRequest{
+		DisplayName:          "a100 rack",
+		Gpu:                  "A100-40",
+		GpuCount:             8,
+		Public:               true,
+		PricePerGpuHourCents: 250,
+	})
+	if err != nil || !created.Ok {
+		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, created.GetErrMsg())
+	}
+	listing := created.Listing
+
+	if err := repo.SaveAgentTokenState(context.Background(), &model.AgentTokenState{
+		WorkspaceID: "seller-1",
+		PoolName:    listing.PoolName,
+		MachineID:   "machine-1",
+		GPUCount:    8,
+		Schedulable: true,
+		LastJoinAt:  time.Now(),
+	}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	rental, err := service.CreateMarketplaceRental(buyerCtx, &pb.CreateMarketplaceRentalRequest{
+		ListingId: listing.Id,
+		MachineId: "machine-1",
+		GpuCount:  2,
+	})
+	if err != nil || !rental.Ok {
+		t.Fatalf("CreateMarketplaceRental() = %v, %s", err, rental.GetErrMsg())
+	}
+	if rental.Rental.GpuCount != 2 || rental.Rental.MachineId != "machine-1" {
+		t.Fatalf("rental = %+v, want 2 GPUs on machine-1", rental.Rental)
+	}
+	if rental.Rental.ListingName != "a100 rack" {
+		t.Fatalf("rental listing name = %q, want display name", rental.Rental.ListingName)
+	}
+	if rental.Rental.PricePerGpuHourCents != 250 {
+		t.Fatalf("rental price = %d, want listing price snapshotted", rental.Rental.PricePerGpuHourCents)
+	}
+
+	// Only 6 GPUs remain unrented; 7 must be rejected.
+	over, err := service.CreateMarketplaceRental(buyerCtx, &pb.CreateMarketplaceRentalRequest{
+		ListingId: listing.Id,
+		MachineId: "machine-1",
+		GpuCount:  7,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceRental() error = %v", err)
+	}
+	if over.Ok || !strings.Contains(over.ErrMsg, "only 6 are unrented") {
+		t.Fatalf("over-rental = %+v, want capacity rejection", over)
+	}
+
+	listed, err := service.ListMarketplaceRentals(buyerCtx, &pb.ListMarketplaceRentalsRequest{})
+	if err != nil || !listed.Ok || len(listed.Rentals) != 1 {
+		t.Fatalf("ListMarketplaceRentals() = %v, %+v", err, listed)
+	}
+
+	// Launch validation: bad kind, missing image, pod without command.
+	for name, req := range map[string]*pb.LaunchRentalWorkloadRequest{
+		"bad kind":       {RentalId: rental.Rental.Id, Kind: "vm", ImageId: "image-1"},
+		"missing image":  {RentalId: rental.Rental.Id, Kind: "pod", Command: []string{"python"}},
+		"pod no command": {RentalId: rental.Rental.Id, Kind: "pod", ImageId: "image-1"},
+	} {
+		res, err := service.LaunchRentalWorkload(buyerCtx, req)
+		if err != nil {
+			t.Fatalf("%s: LaunchRentalWorkload() error = %v", name, err)
+		}
+		if res.Ok {
+			t.Fatalf("%s: launch succeeded, want validation error", name)
+		}
+	}
+
+	// Another buyer cannot launch on this rental.
+	otherBuyer := testAuthContext("buyer-2", "other-token")
+	stolen, err := service.LaunchRentalWorkload(otherBuyer, &pb.LaunchRentalWorkloadRequest{
+		RentalId: rental.Rental.Id,
+		Kind:     "shell",
+		ImageId:  "image-1",
+	})
+	if err != nil {
+		t.Fatalf("LaunchRentalWorkload() error = %v", err)
+	}
+	if stolen.Ok || stolen.ErrMsg != rentalErrNotFound {
+		t.Fatalf("cross-buyer launch = %+v, want rental not found", stolen)
+	}
+
+	// Release returns the capacity.
+	deleted, err := service.DeleteMarketplaceRental(buyerCtx, &pb.DeleteMarketplaceRentalRequest{RentalId: rental.Rental.Id})
+	if err != nil || !deleted.Ok {
+		t.Fatalf("DeleteMarketplaceRental() = %v, %s", err, deleted.GetErrMsg())
+	}
+	relisted, err := service.ListMarketplaceRentals(buyerCtx, &pb.ListMarketplaceRentalsRequest{})
+	if err != nil || len(relisted.Rentals) != 0 {
+		t.Fatalf("rentals after release = %+v, want none", relisted.Rentals)
+	}
+	freed, err := service.CreateMarketplaceRental(buyerCtx, &pb.CreateMarketplaceRentalRequest{
+		ListingId: listing.Id,
+		MachineId: "machine-1",
+		GpuCount:  8,
+	})
+	if err != nil || !freed.Ok {
+		t.Fatalf("full-machine rental after release = %v, %s", err, freed.GetErrMsg())
+	}
+}
+
+// Rentals bill wall-clock while held — idle time included — via gateway-emitted
+// usage intervals; the billing cursor advances after each emission.
+func TestEmitRentalUsageBillsHeldTime(t *testing.T) {
+	var got clients.MarketplaceUsageRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode usage: %v", err)
+		}
+		w.Write([]byte(`{"ok": true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	start := time.Now().Add(-10 * time.Minute).UTC()
+	repo := &fakeComputeRepo{}
+	if err := repo.SaveMarketplaceRental(context.Background(), &model.MarketplaceRentalState{
+		ID:                   "rental-1",
+		BuyerWorkspaceID:     "buyer-1",
+		SellerWorkspaceID:    "seller-1",
+		ListingID:            "listing-1",
+		MachineID:            "machine-1",
+		GPU:                  "A100-40",
+		GPUCount:             2,
+		PricePerGPUHourCents: 120,
+		CreatedAt:            start,
+		LastBilledAt:         start,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &Service{
+		computeRepo: repo,
+		rentalUsage: clients.NewMarketplaceUsageClient(types.ManagedComputeBillingConfig{Endpoint: server.URL}),
+	}
+
+	now := time.Now().UTC()
+	service.emitRentalUsage(context.Background(), now)
+
+	if got.UsageKind != marketplaceRentalUsageKind || got.BuyerWorkspaceID != "buyer-1" || got.ListingID != "listing-1" {
+		t.Fatalf("usage = %+v, want rental attribution", got)
+	}
+	if got.DurationSeconds < 9*60 || got.DurationSeconds > 11*60 {
+		t.Fatalf("duration = %f, want ~10 minutes of held time", got.DurationSeconds)
+	}
+	// 2 GPUs x 120¢/GPU/hr x ~10min ≈ 40¢.
+	if got.BuyerCostCents < 39 || got.BuyerCostCents > 41 {
+		t.Fatalf("cost = %f cents, want ~40 for 2 GPUs at 120¢/hr over 10min", got.BuyerCostCents)
+	}
+	rental, _ := repo.GetMarketplaceRental(context.Background(), "buyer-1", "rental-1")
+	if !rental.LastBilledAt.Equal(now) {
+		t.Fatalf("billing cursor = %v, want advanced to %v", rental.LastBilledAt, now)
 	}
 }
 

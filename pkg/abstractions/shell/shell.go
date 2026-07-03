@@ -463,6 +463,8 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		Mounts:       mounts,
 		Stub:         *stub,
 		PoolSelector: stubConfig.PoolSelector(),
+		AllowMarketplace: stubConfig.AllowMarketplace,
+		MachineId:        stubConfig.MachineID,
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return &pb.CreateStandaloneShellResponse{
@@ -502,7 +504,38 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 }
 
 func (ss *SSHShellService) genContainerId(stubId string) string {
+	return ContainerIDForStub(stubId)
+}
+
+// The helpers below let the gateway provision shells outside this service
+// (marketplace rental shells). Containers created with this prefix and TTL
+// key are lifecycle-managed by the running SSHShellService instance exactly
+// like CreateStandaloneShell containers.
+
+func ContainerIDForStub(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
+}
+
+// StandaloneEntryPoint is the dropbear-based startup used by standalone
+// shells: provision the SSH user, then run the SSH server in the foreground.
+func StandaloneEntryPoint() []string {
+	return []string{
+		"/bin/sh",
+		"-c",
+		fmt.Sprintf("%s && %s", createUserScript, fmt.Sprintf(startupScript, types.WorkerShellPort)),
+	}
+}
+
+// SetInitialContainerTTL marks a shell container as pending; the shell
+// service stops the container when the TTL lapses without a client keepalive.
+func SetInitialContainerTTL(ctx context.Context, rdb *common.RedisClient, containerId string) error {
+	return rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", containerWaitTimeoutDurationS).Err()
+}
+
+// CredentialsForToken derives the SSH username/password pair for a token,
+// matching what CreateStandaloneShell issues.
+func CredentialsForToken(token types.Token) (string, string) {
+	return strings.Join(strings.Split(token.ExternalId, "-"), "")[:6], token.Key
 }
 
 func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
@@ -562,7 +595,7 @@ func generateToken(length int) (string, error) {
 }
 
 func (ss *SSHShellService) generateUsernamePassword(token types.Token) (string, string) {
-	return strings.Join(strings.Split(token.ExternalId, "-"), "")[:6], token.Key
+	return CredentialsForToken(token)
 }
 
 // Redis keys

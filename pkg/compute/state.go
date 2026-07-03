@@ -39,20 +39,43 @@ const (
 	MarketplaceListingStatusInactive = "inactive"
 )
 
+// MarketplaceRentalState is a buyer's exclusive hold on GPUs of one seller
+// machine. Rented GPUs are invisible to serverless marketplace scheduling;
+// only the buyer's machine-pinned workloads consume them.
+type MarketplaceRentalState struct {
+	ID                string `json:"id"`
+	BuyerWorkspaceID  string `json:"buyer_workspace_id"`
+	SellerWorkspaceID string `json:"seller_workspace_id"`
+	ListingID         string `json:"listing_id"`
+	PoolName          string `json:"pool_name"`
+	MachineID         string `json:"machine_id"`
+	GPU               string `json:"gpu"`
+	GPUCount          uint32 `json:"gpu_count"`
+	// PricePerGPUHourCents is snapshotted from the listing at reserve time so
+	// seller price changes never reprice a rental already held.
+	PricePerGPUHourCents uint32    `json:"price_per_gpu_hour_cents,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	// LastBilledAt is the end of the last rental usage interval the gateway
+	// emitted; rentals bill wall-clock while held, including idle time.
+	LastBilledAt time.Time `json:"last_billed_at,omitempty"`
+}
+
 type MarketplaceListingState struct {
-	ID                string    `json:"id"`
-	SellerWorkspaceID string    `json:"seller_workspace_id"`
-	DisplayName       string    `json:"display_name"`
-	GPU               string    `json:"gpu"`
-	GPUCount          uint32    `json:"gpu_count"`
-	Source            string    `json:"source"`
-	Preemptible       bool      `json:"preemptible"`
-	Public            bool      `json:"public"`
-	Status            string    `json:"status"`
-	PoolName          string    `json:"pool_name"`
-	Region            string    `json:"region,omitempty"` // seller-declared, e.g. "us-east"
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                string `json:"id"`
+	SellerWorkspaceID string `json:"seller_workspace_id"`
+	DisplayName       string `json:"display_name"`
+	GPU               string `json:"gpu"`
+	GPUCount          uint32 `json:"gpu_count"`
+	Source            string `json:"source"`
+	Preemptible       bool   `json:"preemptible"`
+	Public            bool   `json:"public"`
+	Status            string `json:"status"`
+	PoolName          string `json:"pool_name"`
+	Region            string `json:"region,omitempty"` // seller-declared, e.g. "us-east"
+	// PricePerGPUHourCents is the seller-set on-demand rate, per GPU per hour.
+	PricePerGPUHourCents uint32    `json:"price_per_gpu_hour_cents,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type BYOCProviderState struct {

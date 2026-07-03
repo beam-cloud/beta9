@@ -544,7 +544,10 @@ type StubConfigV1 struct {
 	AllowList          []string          `json:"allow_list"`
 	DockerEnabled      bool              `json:"docker_enabled"`
 	AllowMarketplace   bool              `json:"allow_marketplace"`
-	IsService          bool              `json:"is_service"`
+	// MachineID pins the stub's containers to one agent machine. Only set by
+	// the gateway for marketplace rental workloads; not exposed to the SDK.
+	MachineID string `json:"machine_id,omitempty"`
+	IsService bool   `json:"is_service"`
 	Serving            *ServingConfig    `json:"serving,omitempty"`
 	Pool               *PoolConfig       `json:"pool,omitempty"`
 	Disks              []*pb.DurableDisk `json:"disks,omitempty"`

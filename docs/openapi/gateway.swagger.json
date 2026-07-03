@@ -821,6 +821,126 @@
         ]
       }
     },
+    "/marketplace/rentals": {
+      "get": {
+        "operationId": "GatewayService_ListMarketplaceRentals",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListMarketplaceRentalsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "GatewayService"
+        ]
+      },
+      "post": {
+        "operationId": "GatewayService_CreateMarketplaceRental",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateMarketplaceRentalResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateMarketplaceRentalRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/rentals/{rentalId}": {
+      "delete": {
+        "operationId": "GatewayService_DeleteMarketplaceRental",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDeleteMarketplaceRentalResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "rentalId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/marketplace/rentals/{rentalId}/launch": {
+      "post": {
+        "operationId": "GatewayService_LaunchRentalWorkload",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayLaunchRentalWorkloadResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "rentalId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceLaunchRentalWorkloadBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/objects": {
       "post": {
         "operationId": "GatewayService_CreateObject",
@@ -1938,6 +2058,41 @@
         }
       }
     },
+    "GatewayServiceLaunchRentalWorkloadBody": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "\"pod\" runs the image's own entrypoint (e.g. a vLLM server); \"shell\"\nstarts an SSH-able container reachable via `beam shell`."
+        },
+        "imageId": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "GatewayServiceScaleBYOCPoolBody": {
       "type": "object",
       "properties": {
@@ -1987,6 +2142,10 @@
         },
         "region": {
           "type": "string"
+        },
+        "pricePerGpuHourCents": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -2623,6 +2782,10 @@
         "poolName": {
           "type": "string",
           "description": "Optional pool the listing's machines join. Reusing a pool across listings\nshares machine caches; defaults to a name derived from the GPU type."
+        },
+        "pricePerGpuHourCents": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -2637,6 +2800,35 @@
         },
         "listing": {
           "$ref": "#/definitions/gatewayMarketplaceListing"
+        }
+      }
+    },
+    "gatewayCreateMarketplaceRentalRequest": {
+      "type": "object",
+      "properties": {
+        "listingId": {
+          "type": "string"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayCreateMarketplaceRentalResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "rental": {
+          "$ref": "#/definitions/gatewayMarketplaceRental"
         }
       }
     },
@@ -2800,6 +2992,17 @@
       }
     },
     "gatewayDeleteMarketplaceListingResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeleteMarketplaceRentalResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -3495,6 +3698,35 @@
         }
       }
     },
+    "gatewayLaunchRentalWorkloadResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "shellCommand": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayListAgentRoutesRequest": {
       "type": "object",
       "properties": {
@@ -3649,6 +3881,24 @@
           "items": {
             "type": "object",
             "$ref": "#/definitions/gatewayMarketplaceOffer"
+          }
+        }
+      }
+    },
+    "gatewayListMarketplaceRentalsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "rentals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMarketplaceRental"
           }
         }
       }
@@ -4011,6 +4261,11 @@
         },
         "runtime": {
           "type": "string"
+        },
+        "pricePerGpuHourCents": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Seller-set on-demand rate, per GPU per hour."
         }
       }
     },
@@ -4080,8 +4335,55 @@
         "public": {
           "type": "boolean",
           "description": "False for unlisted offers: reachable via direct share link only, never\nreturned by marketplace search."
+        },
+        "pricePerGpuHourCents": {
+          "type": "integer",
+          "format": "int64"
         }
       }
+    },
+    "gatewayMarketplaceRental": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "listingId": {
+          "type": "string"
+        },
+        "listingName": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "region": {
+          "type": "string"
+        },
+        "machineConnected": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "pricePerGpuHourCents": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Rate snapshotted when the rental was created; seller price changes don't\naffect rentals already held."
+        }
+      },
+      "description": "A buyer's exclusive hold on GPUs of one seller machine. Billed on-demand\nwhile held; workloads are launched onto it machine-pinned."
     },
     "gatewayObjectMetadata": {
       "type": "object",

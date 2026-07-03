@@ -450,6 +450,8 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		CheckpointEnabled: checkpointEnabled,
 		Checkpoint:        checkpoint,
 		PoolSelector:      stubConfig.PoolSelector(),
+		AllowMarketplace:  stubConfig.AllowMarketplace,
+		MachineId:         stubConfig.MachineID,
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return "", err

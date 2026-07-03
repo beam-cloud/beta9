@@ -125,6 +125,12 @@ type ComputeRepository interface {
 	ListMarketplaceListings(ctx context.Context, sellerWorkspaceID string, limit int) ([]*compute.MarketplaceListingState, error)
 	ListAllMarketplaceListings(ctx context.Context, limit int) ([]*compute.MarketplaceListingState, error)
 	DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error
+	SaveMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
+	GetMarketplaceRental(ctx context.Context, buyerWorkspaceID, rentalID string) (*compute.MarketplaceRentalState, error)
+	ListMarketplaceRentals(ctx context.Context, buyerWorkspaceID string) ([]*compute.MarketplaceRentalState, error)
+	ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*compute.MarketplaceRentalState, error)
+	ListAllMarketplaceRentals(ctx context.Context) ([]*compute.MarketplaceRentalState, error)
+	DeleteMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
 }
 
 type WorkspaceRepository interface {
