@@ -1458,6 +1458,7 @@ func TestPruneStubCodeCacheRemovesExpiredAndTempEntries(t *testing.T) {
 	require.Equal(t, 2, pruned)
 	require.Positive(t, freed)
 	require.NoFileExists(t, oldReady)
+	require.NoDirExists(t, filepath.Dir(oldReady))
 	require.NoDirExists(t, tmpDir)
 	require.DirExists(t, activeTmpDir)
 	require.FileExists(t, recentReady)
@@ -1475,6 +1476,7 @@ func TestPressureEvictStubCodeCacheSkipsActiveTempEntries(t *testing.T) {
 	require.Equal(t, 1, evicted)
 	require.Positive(t, freed)
 	require.NoFileExists(t, oldReady)
+	require.NoDirExists(t, filepath.Dir(oldReady))
 	require.DirExists(t, activeTmpDir)
 }
 
