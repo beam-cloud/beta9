@@ -863,6 +863,85 @@ func TestScheduleContainerRequestRemovesQueuedRequestWhenMetadataWriteFails(t *t
 	assert.False(t, indexed)
 }
 
+func TestCleanupScheduledContainerRequestPreservesNewerAssignment(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
+	containerStateKey := common.RedisKeys.SchedulerContainerState("container-newer-assignment")
+	oldWorkerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex("worker-old")
+	newWorkerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex("worker-new")
+	queueKey := common.RedisKeys.SchedulerWorkerRequests("worker-old")
+	requestJSON := []byte(`{"container_id":"container-newer-assignment"}`)
+	err = rdb.RPush(context.TODO(), queueKey, requestJSON).Err()
+	assert.Nil(t, err)
+	err = rdb.SAdd(context.TODO(), oldWorkerIndexKey, containerStateKey).Err()
+	assert.Nil(t, err)
+	err = rdb.SAdd(context.TODO(), newWorkerIndexKey, containerStateKey).Err()
+	assert.Nil(t, err)
+	err = rdb.HSet(context.TODO(), containerStateKey,
+		"worker_id", "worker-new",
+		"machine_id", "machine-new",
+		"schedule_assignment_id", "assignment-old",
+	).Err()
+	assert.Nil(t, err)
+
+	err = repo.cleanupScheduledContainerRequest(context.TODO(), scheduleCleanup{
+		queue:   queueKey,
+		index:   oldWorkerIndexKey,
+		state:   containerStateKey,
+		payload: requestJSON,
+		queued:  true,
+		token:   "assignment-old",
+		worker:  "worker-old",
+	})
+	assert.Nil(t, err)
+
+	queueDepth, err := rdb.LLen(context.TODO(), queueKey).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), queueDepth)
+	indexedOld, err := rdb.SIsMember(context.TODO(), oldWorkerIndexKey, containerStateKey).Result()
+	assert.Nil(t, err)
+	assert.False(t, indexedOld)
+	indexedNew, err := rdb.SIsMember(context.TODO(), newWorkerIndexKey, containerStateKey).Result()
+	assert.Nil(t, err)
+	assert.True(t, indexedNew)
+	stateFields, err := rdb.HGetAll(context.TODO(), containerStateKey).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, "worker-new", stateFields["worker_id"])
+	assert.Equal(t, "machine-new", stateFields["machine_id"])
+	assert.Equal(t, "assignment-old", stateFields["schedule_assignment_id"])
+
+	sameWorkerStateKey := common.RedisKeys.SchedulerContainerState("container-same-worker-newer-assignment")
+	sameWorkerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex("worker-same")
+	err = rdb.SAdd(context.TODO(), sameWorkerIndexKey, sameWorkerStateKey).Err()
+	assert.Nil(t, err)
+	err = rdb.HSet(context.TODO(), sameWorkerStateKey,
+		"worker_id", "worker-same",
+		"machine_id", "machine-same",
+		"schedule_assignment_id", "assignment-new",
+	).Err()
+	assert.Nil(t, err)
+
+	err = repo.cleanupScheduledContainerRequest(context.TODO(), scheduleCleanup{
+		index:  sameWorkerIndexKey,
+		state:  sameWorkerStateKey,
+		token:  "assignment-old",
+		worker: "worker-same",
+	})
+	assert.Nil(t, err)
+
+	indexedSameWorker, err := rdb.SIsMember(context.TODO(), sameWorkerIndexKey, sameWorkerStateKey).Result()
+	assert.Nil(t, err)
+	assert.True(t, indexedSameWorker)
+	sameWorkerFields, err := rdb.HGetAll(context.TODO(), sameWorkerStateKey).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, "worker-same", sameWorkerFields["worker_id"])
+	assert.Equal(t, "machine-same", sameWorkerFields["machine_id"])
+	assert.Equal(t, "assignment-new", sameWorkerFields["schedule_assignment_id"])
+}
+
 func TestScheduleContainerRequestRejectsDisabledWorker(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
