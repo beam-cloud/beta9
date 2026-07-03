@@ -63,6 +63,7 @@ const (
 	// cacheDefaultReconcileMaxDiskUsagePct pauses proactive materialization
 	// before node-level DiskPressure thresholds can be reached.
 	cacheDefaultReconcileMaxDiskUsagePct = 0.75
+	cacheDefaultStubCodeEvictWatermark   = 0.85
 	// cacheReconcileOwnerGracePeriod is how long a key's HRW owner may be
 	// endpoint-less (rolling deploy, pod cycle) before its keys fail over to
 	// the next-ranked host for proactive materialization. Short blips keep

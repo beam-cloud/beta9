@@ -609,7 +609,6 @@ const stubCodeReadyMarker = ".beta9-cache-ready"
 
 type stubCodeEntry struct {
 	path      string
-	readyPath string
 	lastUsed  time.Time
 	sizeBytes int64
 	temporary bool
@@ -632,18 +631,8 @@ func (m *WorkerCacheManager) pruneOwnerStubCodeCache(server *cache.Server) {
 	if err != nil {
 		return
 	}
-	watermark := cacheDefaultDiskMaxUsage
-	targetFree := int64(0)
-	if usage.usagePct > 0.85 {
-		targetUsed := int64(0.85 * float64(usage.totalBytes))
-		targetFree = int64(usage.usedBytes) - targetUsed
-	}
-	if m.config.Cache.Disk.MinFreeBytes > 0 {
-		if deficit := m.config.Cache.Disk.MinFreeBytes - int64(usage.availableBytes); deficit > targetFree {
-			targetFree = deficit
-		}
-	}
-	if usage.usagePct < watermark && targetFree <= 0 {
+	targetFree := reconcilePressureBytesToFree(usage, cacheDefaultStubCodeEvictWatermark, m.config.Cache.Disk.MinFreeBytes)
+	if targetFree <= 0 {
 		return
 	}
 	evicted, pressureFreed := pressureEvictStubCodeCache(root, targetFree)
@@ -651,7 +640,7 @@ func (m *WorkerCacheManager) pruneOwnerStubCodeCache(server *cache.Server) {
 		log.Warn().
 			Int("evicted", evicted).
 			Int64("freed_bytes", pressureFreed).
-			Float64("disk_usage_pct", usage.usagePct).
+			Float64("disk_usage_pct", usage.UsagePct).
 			Str("root", root).
 			Msg("pressure-evicted stub-code cache entries")
 	}
@@ -725,8 +714,7 @@ func listStubCodeEntries(root string) []stubCodeEntry {
 			out = append(out, item)
 			continue
 		}
-		item.readyPath = filepath.Join(path, stubCodeReadyMarker)
-		if readyInfo, err := os.Stat(item.readyPath); err == nil {
+		if readyInfo, err := os.Stat(filepath.Join(path, stubCodeReadyMarker)); err == nil {
 			item.lastUsed = readyInfo.ModTime()
 			out = append(out, item)
 		}
@@ -748,17 +736,10 @@ func dirSizeBytesRecursive(root string) int64 {
 	return total
 }
 
-type diskUsage struct {
-	totalBytes     uint64
-	availableBytes uint64
-	usedBytes      uint64
-	usagePct       float64
-}
-
-func fastDiskUsage(path string) (diskUsage, error) {
+func fastDiskUsage(path string) (cache.DiskUsage, error) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {
-		return diskUsage{}, err
+		return cache.DiskUsage{}, err
 	}
 	totalBytes := uint64(stat.Blocks) * uint64(stat.Bsize)
 	availableBytes := uint64(stat.Bavail) * uint64(stat.Bsize)
@@ -767,11 +748,11 @@ func fastDiskUsage(path string) (diskUsage, error) {
 	if totalBytes > 0 {
 		usagePct = float64(usedBytes) / float64(totalBytes)
 	}
-	return diskUsage{
-		totalBytes:     totalBytes,
-		availableBytes: availableBytes,
-		usedBytes:      usedBytes,
-		usagePct:       usagePct,
+	return cache.DiskUsage{
+		TotalBytes:     totalBytes,
+		AvailableBytes: availableBytes,
+		UsedBytes:      usedBytes,
+		UsagePct:       usagePct,
 	}, nil
 }
 
