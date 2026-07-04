@@ -1549,6 +1549,23 @@ func TestBuildSpecFromCLIPMetadataDefaultsCwd(t *testing.T) {
 	assert.Equal(t, []string{"python", "-m", "http.server", "8000"}, spec.Process.Args)
 }
 
+func TestBuildSpecFromCLIPMetadataCombinesEntrypointAndCmd(t *testing.T) {
+	worker := &Worker{}
+
+	spec := worker.buildSpecFromCLIPMetadata(&clipCommon.ImageMetadata{
+		Entrypoint: []string{"vllm", "serve"},
+		Cmd:        []string{"--model", "Qwen/Qwen2.5-1.5B-Instruct"},
+	})
+
+	require.NotNil(t, spec.Process)
+	assert.Equal(t, []string{
+		"vllm",
+		"serve",
+		"--model",
+		"Qwen/Qwen2.5-1.5B-Instruct",
+	}, spec.Process.Args)
+}
+
 func TestBuildSpecFromCLIPMetadataPreservesWorkingDir(t *testing.T) {
 	worker := &Worker{}
 

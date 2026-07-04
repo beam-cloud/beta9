@@ -1358,7 +1358,11 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 		return []s2.StreamName{stream}
 	}
 	if eventType == types.EventPlatformCache {
-		return []s2.StreamName{r.platformCacheStreamName()}
+		streams := []s2.StreamName{r.platformCacheStreamName()}
+		if metadata.WorkspaceID != "" && metadata.MachineID != "" {
+			streams = append(streams, r.workspaceMachineStreamName(metadata.WorkspaceID, metadata.MachineID))
+		}
+		return streams
 	}
 
 	streams := []s2.StreamName{}

@@ -627,6 +627,19 @@ func writeCacheContentFile(ctx context.Context, client *cache.Client, filePath, 
 	if client == nil {
 		return fmt.Errorf("cache is unavailable")
 	}
+	return writeCacheContentFileWithReader(ctx, filePath, hash, size, func(ctx context.Context, hash string, offset int64, dst []byte) (int64, error) {
+		return client.ReadContentInto(ctx, hash, offset, dst, cache.ClientOptions{RoutingKey: routingKey})
+	})
+}
+
+func writeLocalCacheContentFile(ctx context.Context, server *cache.Server, filePath, hash string, size int64) error {
+	if server == nil {
+		return fmt.Errorf("cache server is unavailable")
+	}
+	return writeCacheContentFileWithReader(ctx, filePath, hash, size, server.ReadContentInto)
+}
+
+func writeCacheContentFileWithReader(ctx context.Context, filePath, hash string, size int64, read func(context.Context, string, int64, []byte) (int64, error)) error {
 	tmpPath := filePath + ".tmp"
 	_ = os.Remove(tmpPath)
 
@@ -642,7 +655,7 @@ func writeCacheContentFile(ctx context.Context, client *cache.Client, filePath, 
 	buf := make([]byte, 4*1024*1024)
 	for offset := int64(0); offset < size; {
 		length := min(int64(len(buf)), size-offset)
-		n, err := client.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
+		n, err := read(ctx, hash, offset, buf[:length])
 		if err != nil {
 			_ = f.Close()
 			_ = os.Remove(tmpPath)

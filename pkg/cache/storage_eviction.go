@@ -2,26 +2,28 @@ package cache
 
 // LRU disk eviction. Content recency is the complete marker file's
 // mtime, refreshed on read (throttled), so it survives restarts with no extra
-// index. When filesystem usage crosses the eviction watermark, the
-// least-recently-read content is deleted until enough space is reclaimed.
-// Content read very recently is never evicted.
+// index. When filesystem usage crosses the eviction watermark, the store first
+// deletes unprotected stale content. If the node remains under pressure, it can
+// evict newer unprotected content, and only uses protected content to clear the
+// hard write gate.
 
 import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
 const (
 	// defaultDiskCacheEvictWatermarkPct keeps eviction comfortably below
 	// kubelet DiskPressure thresholds (typically ~0.85-0.90).
-	defaultDiskCacheEvictWatermarkPct = 0.85
+	defaultDiskCacheEvictWatermarkPct = 0.80
 	// evictionAccessTouchInterval throttles per-hash marker mtime updates on
 	// the read path.
 	evictionAccessTouchInterval = 5 * time.Minute
-	// evictionRecentAccessGuard prevents evicting content that was read this
-	// recently, regardless of space pressure.
+	// evictionRecentAccessGuard preserves hot content during normal eviction.
+	// Hard disk pressure may still evict it to keep the node healthy.
 	evictionRecentAccessGuard = 10 * time.Minute
 	// accessTouchMapSweepSize bounds the in-memory touch throttle map.
 	accessTouchMapSweepSize = 65536
@@ -35,7 +37,7 @@ type evictionCandidate struct {
 }
 
 func (cas *Store) evictWatermarkPct() float64 {
-	pct := cas.serverConfig.DiskCacheEvictWatermarkPct
+	pct := normalizedPct(cas.serverConfig.DiskCacheEvictWatermarkPct)
 	if pct <= 0 || pct > 1 {
 		pct = defaultDiskCacheEvictWatermarkPct
 	}
@@ -97,14 +99,92 @@ func (cas *Store) maybeEvictDiskCache(snapshot diskUsageSnapshot) bool {
 	}
 
 	started := time.Now()
-	evicted, freed := cas.evictLRUWithProtected(bytesToFree, cas.protectedContentSnapshot(), false)
+	protected := cas.protectedContentSnapshot()
+	evicted, freed := cas.evictLRUWithProtected(bytesToFree, protected, false)
+	if freed < bytesToFree {
+		moreEvicted, moreFreed := cas.evictLRUWithProtected(bytesToFree-freed, protected, true)
+		evicted += moreEvicted
+		freed += moreFreed
+	}
+	protectedEvicted := 0
+	var protectedFreed int64
+	if criticalBytes := cas.criticalDiskPressureBytesToFree(snapshot, freed); criticalBytes > 0 {
+		protectedEvicted, protectedFreed = cas.evictLRUWithProtected(criticalBytes, nil, true)
+		if protectedEvicted > 0 {
+			Logger.Warnf("disk cache evicted protected content under critical pressure: freed %d bytes across %d objects (usage=%.2f watermark=%.2f available=%d reserve=%d)", protectedFreed, protectedEvicted, snapshot.usagePct, watermark, snapshot.availableBytes, cas.diskConfig.MinFreeBytes)
+			evicted += protectedEvicted
+			freed += protectedFreed
+		}
+	}
+
 	if evicted == 0 {
-		Logger.Warnf("disk cache eviction found nothing evictable: usage=%.2f watermark=%.2f available=%d reserve=%d want_free=%d bytes", snapshot.usagePct, watermark, snapshot.availableBytes, cas.diskConfig.MinFreeBytes, bytesToFree)
+		total, protectedCount, recentCount, evictableCount := cas.evictionCandidateStats(protected)
+		Logger.Warnf("disk cache eviction found nothing evictable: usage=%.2f watermark=%.2f available=%d reserve=%d want_free_bytes=%d candidates=%d protected=%d recent=%d eligible=%d", snapshot.usagePct, watermark, snapshot.availableBytes, cas.diskConfig.MinFreeBytes, bytesToFree, total, protectedCount, recentCount, evictableCount)
+		cas.emitDiskEvictionChurn(CacheChurnStatusNothingEvictable, snapshot, watermark, bytesToFree, 0, 0, 0, 0, total, protectedCount, recentCount, evictableCount)
 		return false
 	}
 
 	Logger.Infof("disk cache eviction freed %d bytes across %d objects in %s (usage=%.2f watermark=%.2f available=%d reserve=%d)", freed, evicted, time.Since(started).Truncate(time.Millisecond), snapshot.usagePct, watermark, snapshot.availableBytes, cas.diskConfig.MinFreeBytes)
+	if evicted > 0 {
+		status := CacheChurnStatusEvicted
+		if protectedEvicted > 0 {
+			status = CacheChurnStatusProtectedEvicted
+		}
+		cas.emitDiskEvictionChurn(status, snapshot, watermark, bytesToFree, evicted, freed, protectedEvicted, protectedFreed, 0, 0, 0, 0)
+	}
 	return true
+}
+
+func (cas *Store) emitDiskEvictionChurn(status string, snapshot diskUsageSnapshot, watermark float64, targetFreeBytes int64, evictedObjects int, freedBytes int64, protectedObjects int, protectedFreedBytes int64, totalCandidates int, protectedCandidates int, recentCandidates int, eligibleCandidates int) {
+	cas.emitChurnEvent(CacheChurnEvent{
+		Operation:           CacheChurnOperationDiskEviction,
+		Status:              status,
+		Path:                snapshot.path,
+		EvictedObjects:      evictedObjects,
+		ProtectedObjects:    protectedObjects,
+		FreedBytes:          freedBytes,
+		ProtectedFreedBytes: protectedFreedBytes,
+		UsagePct:            snapshot.usagePct,
+		WatermarkPct:        watermark,
+		AvailableBytes:      snapshot.availableBytes,
+		ReserveBytes:        cas.diskConfig.MinFreeBytes,
+		TargetFreeBytes:     targetFreeBytes,
+		TotalCandidates:     totalCandidates,
+		ProtectedCandidates: protectedCandidates,
+		RecentCandidates:    recentCandidates,
+		EligibleCandidates:  eligibleCandidates,
+		Timestamp:           time.Now().UTC(),
+	})
+}
+
+func (cas *Store) criticalDiskPressureBytesToFree(snapshot diskUsageSnapshot, alreadyFreed int64) int64 {
+	if snapshot.totalBytes <= 0 {
+		return 0
+	}
+
+	projectedUsed := int64(snapshot.usedBytes) - alreadyFreed
+	if projectedUsed < 0 {
+		projectedUsed = 0
+	}
+	projectedAvailable := int64(snapshot.availableBytes) + alreadyFreed
+
+	bytesToFree := int64(0)
+	maxUsagePct := normalizedPct(cas.serverConfig.DiskCacheMaxUsagePct)
+	if maxUsagePct <= 0 {
+		maxUsagePct = defaultHostStorageCapacityThresholdPct
+	}
+	if maxUsagePct > 0 && maxUsagePct < 1 {
+		targetUsedBytes := int64(maxUsagePct * float64(snapshot.totalBytes))
+		if deficit := projectedUsed - targetUsedBytes; deficit > bytesToFree {
+			bytesToFree = deficit
+		}
+	}
+	if cas.diskConfig.MinFreeBytes > 0 {
+		if deficit := cas.diskConfig.MinFreeBytes - projectedAvailable; deficit > bytesToFree {
+			bytesToFree = deficit
+		}
+	}
+	return bytesToFree
 }
 
 // evictLRU deletes least-recently-read content until roughly bytesToFree bytes
@@ -147,6 +227,26 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 		freed += candidate.sizeBytes
 	}
 	return evicted, freed
+}
+
+func (cas *Store) evictionCandidateStats(protected map[string]struct{}) (int, int, int, int) {
+	candidates := cas.evictionCandidates()
+	cutoff := time.Now().Add(-evictionRecentAccessGuard)
+	protectedCount := 0
+	recentCount := 0
+	evictableCount := 0
+	for _, candidate := range candidates {
+		if _, ok := protected[candidate.hash]; ok {
+			protectedCount++
+			continue
+		}
+		if candidate.lastAccess.After(cutoff) {
+			recentCount++
+			continue
+		}
+		evictableCount++
+	}
+	return len(candidates), protectedCount, recentCount, evictableCount
 }
 
 // PruneContentNotProtected removes content that has not been used inside ttl
@@ -230,20 +330,32 @@ func (cas *Store) evictionCandidates() []evictionCandidate {
 		bucketDir := filepath.Join(cas.diskCacheDir, "pages", bucket.Name())
 		entries, _ := os.ReadDir(bucketDir)
 		for _, entry := range entries {
-			if entry.IsDir() {
-				candidates = cas.appendCandidate(candidates, entry.Name(), filepath.Join(bucketDir, entry.Name()))
+			if entry.IsDir() && isCacheContentHash(entry.Name()) {
+				dir := filepath.Join(bucketDir, entry.Name())
+				if _, err := os.Stat(filepath.Join(dir, cacheCompleteMarkerName)); err == nil {
+					candidates = cas.appendCandidate(candidates, entry.Name(), dir)
+				}
 			}
 		}
 	}
 
 	entries, _ := os.ReadDir(cas.diskCacheDir)
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != "pages" && len(entry.Name()) == 64 {
+		if entry.IsDir() && entry.Name() != "pages" && isCacheContentHash(entry.Name()) {
 			candidates = cas.appendCandidate(candidates, entry.Name(), filepath.Join(cas.diskCacheDir, entry.Name()))
 		}
 	}
 
 	return candidates
+}
+
+func isCacheContentHash(name string) bool {
+	if len(name) != 64 {
+		return false
+	}
+	return strings.IndexFunc(name, func(r rune) bool {
+		return (r < '0' || r > '9') && (r < 'a' || r > 'f')
+	}) == -1
 }
 
 func (cas *Store) appendCandidate(candidates []evictionCandidate, hash, dir string) []evictionCandidate {

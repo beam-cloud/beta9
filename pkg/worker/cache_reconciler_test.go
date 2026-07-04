@@ -109,6 +109,118 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 	}
 }
 
+func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
+	t.Setenv(types.WorkerMachineEnv, "machine-a")
+	events := &fakeEventRepo{}
+	manager := &WorkerCacheManager{
+		config: types.AppConfig{
+			ManagedCompute: types.ManagedComputeConfig{SellerWorkspaceID: "workspace-a"},
+		},
+		eventRepo: events,
+		workerID:  "worker-a",
+		poolName:  "pool-a",
+		nodeID:    "node-a",
+		locality:  "default",
+	}
+
+	manager.auditCacheChurnEvent("host-a", cache.CacheChurnEvent{
+		Operation:           cache.CacheChurnOperationDiskEviction,
+		Status:              cache.CacheChurnStatusProtectedEvicted,
+		Path:                "/var/lib/beta9/cache/default/node-a",
+		EvictedObjects:      3,
+		ProtectedObjects:    1,
+		FreedBytes:          1024,
+		ProtectedFreedBytes: 512,
+		UsagePct:            0.88,
+		WatermarkPct:        0.80,
+		AvailableBytes:      32,
+		ReserveBytes:        40,
+		TargetFreeBytes:     8,
+	})
+
+	require.Len(t, events.cacheEvents, 1)
+	event := events.cacheEvents[0]
+	require.Equal(t, "workspace-a", event.WorkspaceID)
+	require.Equal(t, "machine-a", event.MachineID)
+	require.Equal(t, "worker-a", event.WorkerID)
+	require.Equal(t, "pool-a", event.PoolName)
+	require.Equal(t, "node-a", event.NodeID)
+	require.Equal(t, cache.CacheChurnStatusProtectedEvicted, event.Status)
+	require.Equal(t, cache.CacheChurnOperationDiskEviction, event.Operation)
+	require.Equal(t, int64(1024), event.FreedBytes)
+	require.Equal(t, 1, event.ProtectedObjects)
+}
+
+func TestAuditCacheChurnEventUsesScopedS2WorkspacePrefix(t *testing.T) {
+	t.Setenv(types.WorkerMachineEnv, "machine-a")
+	events := &fakeEventRepo{}
+	manager := &WorkerCacheManager{
+		config: types.AppConfig{
+			Database: types.DatabaseConfig{
+				S2: types.S2Config{EventStreamPrefix: "events/workspaces/workspace-private"},
+			},
+		},
+		eventRepo: events,
+		workerID:  "worker-a",
+		poolName:  "pool-a",
+		locality:  "workspace-private/pool-a",
+	}
+
+	manager.auditCacheChurnEvent("host-a", cache.CacheChurnEvent{
+		Operation: cache.CacheChurnOperationDiskEviction,
+		Status:    cache.CacheChurnStatusEvicted,
+	})
+
+	require.Len(t, events.cacheEvents, 1)
+	require.Equal(t, "workspace-private", events.cacheEvents[0].WorkspaceID)
+	require.Equal(t, "machine-a", events.cacheEvents[0].MachineID)
+}
+
+func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
+	now := time.Now()
+	stubs := []recentStubContent{
+		{
+			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "new", LastSeen: now},
+			items: []types.CacheRequiredContentItem{
+				{Hash: "new-volume", Kind: types.CacheContentKindVolume, SizeBytes: 20},
+				{Hash: "new-checkpoint", Kind: types.CacheContentKindCheckpoint, SizeBytes: 40},
+			},
+		},
+		{
+			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-time.Hour)},
+			items: []types.CacheRequiredContentItem{
+				{Hash: "old-checkpoint", Kind: types.CacheContentKindCheckpoint, SizeBytes: 40},
+				{Hash: "old-volume", Kind: types.CacheContentKindVolume, SizeBytes: 20},
+			},
+		},
+	}
+
+	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 100}, 0.75, 0)
+
+	require.Contains(t, protected, "new-checkpoint")
+	require.Contains(t, protected, "new-volume")
+	require.NotContains(t, protected, "old-checkpoint")
+	require.NotContains(t, protected, "old-volume")
+}
+
+func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
+	now := time.Now()
+	stubs := []recentStubContent{
+		{
+			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "stub", LastSeen: now},
+			items: []types.CacheRequiredContentItem{
+				{Hash: "volume", Kind: types.CacheContentKindVolume, SizeBytes: 50},
+				{Hash: "checkpoint", Kind: types.CacheContentKindCheckpoint, SizeBytes: 50},
+			},
+		},
+	}
+
+	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 90}, 0.75, 0)
+
+	require.Contains(t, protected, "checkpoint")
+	require.NotContains(t, protected, "volume")
+}
+
 func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server, *cache.Client) {
 	t.Helper()
 
@@ -981,6 +1093,7 @@ func TestRequiredContentReportedByOneWorkerReconcilesCheckpointOnPeerInLocality(
 		locality:    "locality-a",
 		accelerator: "CPU",
 	})
+	reporter.flush()
 
 	checkpointRoot := filepath.Join(t.TempDir(), "checkpoints")
 	managerB := &WorkerCacheManager{

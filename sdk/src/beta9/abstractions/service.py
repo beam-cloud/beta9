@@ -207,8 +207,6 @@ class Service(Pod):
             gpu_count = 1
 
         service_entrypoint = entrypoint
-        if command is None and not service_entrypoint:
-            service_entrypoint = command_from_dockerfile(image)
 
         service_ports = resolve_service_ports(
             port=port,

@@ -62,8 +62,9 @@ const (
 	cacheDefaultReconcileMaxItemsCycle  = 32
 	// cacheDefaultReconcileMaxDiskUsagePct pauses proactive materialization
 	// before node-level DiskPressure thresholds can be reached.
-	cacheDefaultReconcileMaxDiskUsagePct = 0.75
-	cacheDefaultStubCodeEvictWatermark   = 0.85
+	cacheDefaultReconcileMaxDiskUsagePct = 0.80
+	cacheDefaultStubCodeEvictWatermark   = 0.80
+	cacheReconcileDiskUsageHysteresisPct = 0.03
 	// cacheReconcileOwnerGracePeriod is how long a key's HRW owner may be
 	// endpoint-less (rolling deploy, pod cycle) before its keys fail over to
 	// the next-ranked host for proactive materialization. Short blips keep
@@ -461,6 +462,7 @@ func (s nodeCacheServer) Start() (bool, error) {
 	m.serverLock = lock
 	m.registration = registration
 	m.registrationCancel = registrationCancel
+	m.attachCacheChurnSink(server, registration.logicalHostID)
 	registrationDone := make(chan struct{})
 	m.registrationDone = registrationDone
 	m.wg.Add(1)

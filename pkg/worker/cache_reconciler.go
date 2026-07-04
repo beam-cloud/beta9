@@ -11,8 +11,9 @@ package worker
 //     checkpoints which materialize on every matching accelerator in locality.
 //     Ownership has hysteresis: an owner that is briefly endpoint-less (e.g. a
 //     rolling deploy) keeps its keys; only after a grace period do its keys
-//     fail over to the next-ranked live host. Materialization also pauses
-//     while local disk usage is above the reconciliation watermark.
+//     fail over to the next-ranked live host. Under disk pressure,
+//     materialization is constrained to a ranked recent working set so the
+//     newest high-value content survives before older volume-style cache data.
 //
 // The worker is trustless: all coordinator state (recent stubs, locks) is
 // brokered through the gateway, and all origin credentials are fetched from the
@@ -111,6 +112,14 @@ func (m *WorkerCacheManager) reconcileMaxDiskUsagePct() float64 {
 		pct = cacheDefaultReconcileMaxDiskUsagePct
 	}
 	return pct
+}
+
+func reconcileResumeDiskUsagePct(pct float64) float64 {
+	resume := pct - cacheReconcileDiskUsageHysteresisPct
+	if resume <= 0 || resume >= pct {
+		return pct
+	}
+	return resume
 }
 
 // cacheContentReporter coalesces required-content reports per (stub, kind) and
@@ -480,7 +489,8 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	}
 	m.pruneOwnerStubCodeCache(server)
 
-	if m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, protectedSetComplete) {
+	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent, requiredContentComplete)
+	if gated {
 		return
 	}
 
@@ -491,7 +501,7 @@ func (m *WorkerCacheManager) reconcileOnce() {
 			return
 		default:
 		}
-		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget)
+		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, reconcileAllowlist)
 		if budget.exhausted() {
 			break
 		}
@@ -504,12 +514,12 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 		return nil
 	}
-	return m.reconcileStubContent(server, localHostID, stub, items, budget)
+	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil)
 }
 
-func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget) []string {
+func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}) []string {
 	checkpointIDs := []string{}
-	for _, item := range items {
+	for _, item := range orderedRequiredContentItems(items) {
 		select {
 		case <-m.ctx.Done():
 			return checkpointIDs
@@ -520,9 +530,14 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		if routingKey == "" {
 			routingKey = item.Hash
 		}
+		if allowlist != nil {
+			if _, ok := allowlist[item.Hash]; !ok {
+				continue
+			}
+		}
 
 		if item.Kind == types.CacheContentKindCheckpoint {
-			if !m.checkpointAcceleratorMatches(item) {
+			if !cacheContentAppliesToAccelerator(item, m.accelerator) {
 				continue
 			}
 			if item.CheckpointID != "" {
@@ -588,6 +603,87 @@ func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator stri
 		}
 	}
 	return protected, activeCheckpointIDs
+}
+
+func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelerator string, usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) map[string]struct{} {
+	budget := pressureProtectionBudgetBytes(usage, softWatermark, minFreeBytes)
+	if budget <= 0 {
+		return map[string]struct{}{}
+	}
+
+	orderedStubs := append([]recentStubContent(nil), stubs...)
+	sort.SliceStable(orderedStubs, func(i, j int) bool {
+		return orderedStubs[i].stub.LastSeen.After(orderedStubs[j].stub.LastSeen)
+	})
+
+	protected := map[string]struct{}{}
+	var protectedBytes int64
+	for _, stub := range orderedStubs {
+		for _, item := range orderedRequiredContentItems(stub.items) {
+			if item.Hash == "" || !cacheContentAppliesToAccelerator(item, accelerator) {
+				continue
+			}
+			if _, ok := protected[item.Hash]; ok {
+				continue
+			}
+			sizeBytes := maxInt64(item.SizeBytes, 0)
+			if sizeBytes > 0 && protectedBytes+sizeBytes > budget {
+				continue
+			}
+			protected[item.Hash] = struct{}{}
+			protectedBytes += sizeBytes
+		}
+	}
+	return protected
+}
+
+func pressureProtectionBudgetBytes(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
+	if usage.TotalBytes == 0 {
+		return 0
+	}
+	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
+	budget := int64(resumeWatermark * float64(usage.TotalBytes))
+	if minFreeBytes > 0 {
+		if reserveBudget := int64(usage.TotalBytes) - minFreeBytes; reserveBudget < budget {
+			budget = reserveBudget
+		}
+	}
+	return maxInt64(budget, 0)
+}
+
+func orderedRequiredContentItems(items []types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
+	ordered := append([]types.CacheRequiredContentItem(nil), items...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftPriority := cacheContentKindPriority(ordered[i].Kind)
+		rightPriority := cacheContentKindPriority(ordered[j].Kind)
+		if leftPriority != rightPriority {
+			return leftPriority > rightPriority
+		}
+		if ordered[i].SizeBytes > 0 && ordered[j].SizeBytes > 0 && ordered[i].SizeBytes != ordered[j].SizeBytes {
+			return ordered[i].SizeBytes < ordered[j].SizeBytes
+		}
+		return ordered[i].Hash < ordered[j].Hash
+	})
+	return ordered
+}
+
+func cacheContentKindPriority(kind types.CacheContentKind) int {
+	switch kind {
+	case types.CacheContentKindCheckpoint:
+		return 500
+	case types.CacheContentKindClipV1, types.CacheContentKindClipV2:
+		return 400
+	case types.CacheContentKindDiskSnapshot:
+		return 300
+	case types.CacheContentKindVolume:
+		return 100
+	default:
+		return 0
+	}
+}
+
+func cacheContentAppliesToAccelerator(item types.CacheRequiredContentItem, accelerator string) bool {
+	return item.Kind != types.CacheContentKindCheckpoint || item.Accelerator == "" || strings.EqualFold(item.Accelerator, accelerator)
 }
 
 func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protected map[string]struct{}, activeCheckpointIDs map[string]struct{}) {
@@ -769,12 +865,12 @@ func fastDiskUsage(path string) (cache.DiskUsage, error) {
 	}, nil
 }
 
-// reconcileGatedByDiskUsage keeps reconciliation balanced under pressure:
-// first evict unprotected LRU content toward the soft reconciliation watermark,
-// then pause only when the cache store's hard write gate is active. This lets
-// recent-stub content, especially checkpoints, keep materializing as long as
-// the node can still safely write cache data.
-func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, protectedSetComplete bool) bool {
+// reconcileGatedByDiskUsage keeps reconciliation balanced under pressure. Above
+// the soft watermark it evicts content outside the ranked recent working set and
+// pauses the current cycle; between the resume and soft watermarks it reconciles
+// only that ranked set. This avoids download/evict loops while still favoring
+// the newest useful content on a mostly-full node.
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent, requiredContentComplete bool) (bool, map[string]struct{}) {
 	usage, err := server.RefreshDiskUsage()
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("cache reconciliation failed to refresh disk usage")
@@ -785,8 +881,34 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 	}
 
 	softWatermark := m.reconcileMaxDiskUsagePct()
+	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
+	pressureMode := usage.UsagePct >= resumeWatermark
+	if !m.reconcilePausedAt.IsZero() {
+		if usage.UsagePct > resumeWatermark {
+			pressureMode = true
+		} else {
+			log.Info().
+				Str("locality", m.locality).
+				Str("logical_host", localHostID).
+				Dur("paused_for", time.Since(m.reconcilePausedAt)).
+				Float64("disk_usage_pct", usage.UsagePct).
+				Float64("resume_watermark_pct", resumeWatermark).
+				Msg("cache reconciliation resumed: disk usage below resume watermark")
+			m.reconcilePausedAt = time.Time{}
+		}
+	}
+
+	reconcileAllowlist := map[string]struct{}(nil)
+	protectedForPressure := protected
+	if pressureMode {
+		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, softWatermark, server.DiskMinFreeBytes())
+		protectedForPressure = reconcileAllowlist
+		server.SetProtectedContent(protectedForPressure)
+	}
+
 	bytesToFree := reconcilePressureBytesToFree(usage, softWatermark, server.DiskMinFreeBytes())
-	if bytesToFree > 0 && !protectedSetComplete {
+	if bytesToFree > 0 && !requiredContentComplete {
+		server.SetProtectedContent(protected)
 		if m.reconcilePausedAt.IsZero() {
 			m.reconcilePausedAt = time.Now()
 			log.Warn().
@@ -795,12 +917,12 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Int64("target_free_bytes", bytesToFree).
 				Float64("disk_usage_pct", usage.UsagePct).
 				Float64("soft_watermark_pct", softWatermark).
-				Msg("cache reconciliation paused: protected content set incomplete under disk pressure")
+				Msg("cache reconciliation paused: required content set incomplete under disk pressure")
 		}
-		return true
+		return true, nil
 	}
 	if bytesToFree > 0 {
-		evicted, freed := server.PressureEvictContent(protected, bytesToFree)
+		evicted, freed := server.PressureEvictContent(protectedForPressure, bytesToFree)
 		if evicted > 0 {
 			log.Warn().
 				Str("locality", m.locality).
@@ -810,11 +932,14 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Int64("target_free_bytes", bytesToFree).
 				Float64("disk_usage_pct", usage.UsagePct).
 				Float64("soft_watermark_pct", softWatermark).
-				Msg("pressure-evicted unprotected cache content before reconciliation")
-			if refreshed, refreshErr := server.RefreshDiskUsage(); refreshErr == nil {
-				usage = refreshed
-			}
+				Float64("resume_watermark_pct", resumeWatermark).
+				Int("protected_candidates", len(protectedForPressure)).
+				Msg("pressure-evicted lower-priority cache content before pausing reconciliation")
 		}
+		if m.reconcilePausedAt.IsZero() {
+			m.reconcilePausedAt = time.Now()
+		}
+		return true, nil
 	}
 
 	if server.DiskPressureExceeded() {
@@ -829,18 +954,14 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Int64("min_free_bytes", server.DiskMinFreeBytes()).
 				Msg("cache reconciliation paused: hard disk write gate active")
 		}
-		return true
+		return true, nil
 	}
 
-	if !m.reconcilePausedAt.IsZero() {
-		log.Info().
-			Str("locality", m.locality).
-			Str("logical_host", localHostID).
-			Dur("paused_for", time.Since(m.reconcilePausedAt)).
-			Msg("cache reconciliation resumed: disk write gate cleared")
-		m.reconcilePausedAt = time.Time{}
+	if pressureMode {
+		return false, reconcileAllowlist
 	}
-	return false
+	server.SetProtectedContent(protected)
+	return false, nil
 }
 
 func reconcilePressureBytesToFree(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
@@ -1358,20 +1479,20 @@ func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *
 			return status
 		}
 	}
-	if err := m.extractCheckpointArchive(ctx, item, routingKey); err != nil {
+	if err := m.extractCheckpointArchive(ctx, server, item); err != nil {
 		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint extract failed")
 		return types.CacheAuditStatusOriginFailure
 	}
 	return types.CacheAuditStatusMaterialized
 }
 
-func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, item types.CacheRequiredContentItem, routingKey string) error {
+func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem) error {
 	checkpointPath := filepath.Join(m.checkpointRoot, item.CheckpointID)
 	if checkpointMaterialized(checkpointPath) {
 		return nil
 	}
 	archivePath := filepath.Join(m.checkpointRoot, item.CheckpointID+checkpointArchiveExtension)
-	if err := writeCacheContentFile(ctx, m.client, archivePath, item.Hash, item.SizeBytes, routingKey); err != nil {
+	if err := writeLocalCacheContentFile(ctx, server, archivePath, item.Hash, item.SizeBytes); err != nil {
 		return err
 	}
 	defer os.Remove(archivePath)
@@ -1560,5 +1681,64 @@ func (m *WorkerCacheManager) auditCacheEvent(localHostID string, stub cache.Rece
 		Status:      status,
 		Source:      item.Source,
 		SizeBytes:   item.SizeBytes,
+		Timestamp:   time.Now().UTC(),
 	})
+}
+
+func (m *WorkerCacheManager) attachCacheChurnSink(server *cache.Server, localHostID string) {
+	if server == nil {
+		return
+	}
+	server.SetChurnSink(func(event cache.CacheChurnEvent) {
+		m.auditCacheChurnEvent(localHostID, event)
+	})
+}
+
+func (m *WorkerCacheManager) auditCacheChurnEvent(localHostID string, event cache.CacheChurnEvent) {
+	if m.eventRepo == nil {
+		return
+	}
+
+	machineID := strings.TrimSpace(os.Getenv(types.WorkerMachineEnv))
+	workspaceID := cacheChurnWorkspaceID(m.config)
+	m.eventRepo.PushPlatformCacheEvent(types.EventPlatformCacheSchema{
+		Locality:            m.locality,
+		LogicalHost:         localHostID,
+		WorkspaceID:         workspaceID,
+		WorkerID:            m.workerID,
+		MachineID:           machineID,
+		PoolName:            m.poolName,
+		NodeID:              m.nodeID,
+		Status:              event.Status,
+		Operation:           event.Operation,
+		CachePath:           event.Path,
+		FreedBytes:          event.FreedBytes,
+		ProtectedFreedBytes: event.ProtectedFreedBytes,
+		EvictedObjects:      event.EvictedObjects,
+		ProtectedObjects:    event.ProtectedObjects,
+		UsagePct:            event.UsagePct,
+		WatermarkPct:        event.WatermarkPct,
+		AvailableBytes:      event.AvailableBytes,
+		ReserveBytes:        event.ReserveBytes,
+		TargetFreeBytes:     event.TargetFreeBytes,
+		TotalCandidates:     event.TotalCandidates,
+		ProtectedCandidates: event.ProtectedCandidates,
+		RecentCandidates:    event.RecentCandidates,
+		EligibleCandidates:  event.EligibleCandidates,
+		Timestamp:           event.Timestamp,
+	})
+}
+
+func cacheChurnWorkspaceID(config types.AppConfig) string {
+	if workspaceID := strings.TrimSpace(config.ManagedCompute.SellerWorkspaceID); workspaceID != "" {
+		return workspaceID
+	}
+
+	parts := strings.Split(strings.Trim(config.Database.S2.EventStreamPrefix, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "workspaces" {
+			return parts[i+1]
+		}
+	}
+	return ""
 }

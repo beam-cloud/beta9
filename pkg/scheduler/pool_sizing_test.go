@@ -127,6 +127,43 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 	}
 }
 
+func TestAddWorkerIfNeededSkipsGenericExternalProvisioning(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.Nil(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.Nil(t, err)
+
+	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
+	workerPoolRepo := repo.NewWorkerPoolRedisRepositoryForTest(redisClient)
+	controller := &LocalWorkerPoolControllerForTest{
+		name:       "generic-pool",
+		workerRepo: workerRepo,
+	}
+	sizer := &WorkerPoolSizer{
+		controller:     controller,
+		workerPoolRepo: workerPoolRepo,
+		workerPoolConfig: &types.WorkerPoolConfig{
+			Mode:     types.PoolModeExternal,
+			Provider: &types.ProviderGeneric,
+		},
+		workerPoolSizingConfig: &types.WorkerPoolSizingConfig{
+			MinFreeGpu:            1,
+			DefaultWorkerCpu:      2000,
+			DefaultWorkerMemory:   500,
+			DefaultWorkerGpuCount: 1,
+			DefaultWorkerGpuType:  "A10G",
+		},
+	}
+
+	newWorker, err := sizer.addWorkerIfNeeded(&WorkerPoolCapacity{})
+	assert.NoError(t, err)
+	assert.Nil(t, newWorker)
+	assert.Equal(t, 0, controller.AddWorkerCallCount())
+}
+
 func TestParsePoolSizingConfig(t *testing.T) {
 	tests := []struct {
 		name             string

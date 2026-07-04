@@ -339,6 +339,25 @@ func TestS2PlatformCacheUsesPlatformStream(t *testing.T) {
 	}
 }
 
+func TestS2PlatformCacheMachineEventsFanOutToWorkspaceMachineStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+
+	streams := repo.streamNamesForEvent(types.EventPlatformCache, eventMetadata{
+		WorkspaceID: "workspace-123",
+		MachineID:   "machine-456",
+	})
+
+	if got, want := len(streams), 2; got != want {
+		t.Fatalf("unexpected stream count: got %d want %d: %#v", got, want, streams)
+	}
+	if got, want := string(streams[0]), "events/platform/cache"; got != want {
+		t.Fatalf("unexpected platform cache stream name: got %q want %q", got, want)
+	}
+	if got, want := string(streams[1]), "events/workspaces/workspace-123/machines/machine-456"; got != want {
+		t.Fatalf("unexpected machine stream name: got %q want %q", got, want)
+	}
+}
+
 func TestS2ContainerMetricsAlsoUseWorkspaceAggregateStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

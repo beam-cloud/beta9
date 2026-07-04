@@ -143,6 +143,37 @@ func TestWriteInitialSpecFromImageUsesClipWorkingDirWithoutMutatingBase(t *testi
 	require.Equal(t, "/workspace", server.baseConfigSpec.Process.Cwd)
 }
 
+func TestWriteInitialSpecFromImageCombinesEntrypointAndCmd(t *testing.T) {
+	imageId := "image-with-entrypoint-and-cmd"
+	imageClient := &ImageClient{v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata]()}
+	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			ImageMetadata: &clipCommon.ImageMetadata{
+				Entrypoint: []string{"vllm", "serve"},
+				Cmd:        []string{"--model", "Qwen/Qwen2.5-1.5B-Instruct"},
+			},
+		},
+	})
+	server := &ContainerRuntimeServer{
+		baseConfigSpec: specs.Spec{Process: &specs.Process{Cwd: "/workspace", Args: []string{"sh"}}},
+		imageClient:    imageClient,
+	}
+	destPath := filepath.Join(t.TempDir(), "initial_config.json")
+
+	err := server.writeInitialSpecFromImage(context.Background(), &ContainerInstance{
+		Request: &types.ContainerRequest{ImageId: imageId},
+	}, destPath)
+	require.NoError(t, err)
+
+	spec := readSpecFile(t, destPath)
+	require.Equal(t, []string{
+		"vllm",
+		"serve",
+		"--model",
+		"Qwen/Qwen2.5-1.5B-Instruct",
+	}, spec.Process.Args)
+}
+
 func TestWriteInitialSpecFromImageDefaultsEmptyCwd(t *testing.T) {
 	server := &ContainerRuntimeServer{
 		baseConfigSpec: specs.Spec{Process: &specs.Process{Args: []string{"sh"}}},

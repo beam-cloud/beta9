@@ -118,18 +118,37 @@ type EventStubCacheRequiredContentSchema struct {
 // EventPlatformCacheSchema is an operational/audit event for cache
 // materialization status, persisted to the platform cache stream in S2.
 type EventPlatformCacheSchema struct {
-	Locality    string           `json:"locality"`
-	LogicalHost string           `json:"logical_host,omitempty"`
-	WorkspaceID string           `json:"workspace_id,omitempty"`
-	StubID      string           `json:"stub_id,omitempty"`
-	Hash        string           `json:"hash,omitempty"`
-	RoutingKey  string           `json:"routing_key,omitempty"`
-	Kind        CacheContentKind `json:"kind,omitempty"`
-	Status      string           `json:"status"`
-	Source      string           `json:"source,omitempty"`
-	Message     string           `json:"message,omitempty"`
-	SizeBytes   int64            `json:"size_bytes,omitempty"`
-	Timestamp   time.Time        `json:"timestamp"`
+	Locality            string           `json:"locality"`
+	LogicalHost         string           `json:"logical_host,omitempty"`
+	WorkspaceID         string           `json:"workspace_id,omitempty"`
+	StubID              string           `json:"stub_id,omitempty"`
+	WorkerID            string           `json:"worker_id,omitempty"`
+	MachineID           string           `json:"machine_id,omitempty"`
+	PoolName            string           `json:"pool_name,omitempty"`
+	NodeID              string           `json:"node_id,omitempty"`
+	Hash                string           `json:"hash,omitempty"`
+	RoutingKey          string           `json:"routing_key,omitempty"`
+	Kind                CacheContentKind `json:"kind,omitempty"`
+	Status              string           `json:"status"`
+	Operation           string           `json:"operation,omitempty"`
+	Source              string           `json:"source,omitempty"`
+	Message             string           `json:"message,omitempty"`
+	CachePath           string           `json:"cache_path,omitempty"`
+	SizeBytes           int64            `json:"size_bytes,omitempty"`
+	FreedBytes          int64            `json:"freed_bytes,omitempty"`
+	ProtectedFreedBytes int64            `json:"protected_freed_bytes,omitempty"`
+	EvictedObjects      int              `json:"evicted_objects,omitempty"`
+	ProtectedObjects    int              `json:"protected_objects,omitempty"`
+	UsagePct            float64          `json:"usage_pct,omitempty"`
+	WatermarkPct        float64          `json:"watermark_pct,omitempty"`
+	AvailableBytes      uint64           `json:"available_bytes,omitempty"`
+	ReserveBytes        int64            `json:"reserve_bytes,omitempty"`
+	TargetFreeBytes     int64            `json:"target_free_bytes,omitempty"`
+	TotalCandidates     int              `json:"total_candidates,omitempty"`
+	ProtectedCandidates int              `json:"protected_candidates,omitempty"`
+	RecentCandidates    int              `json:"recent_candidates,omitempty"`
+	EligibleCandidates  int              `json:"eligible_candidates,omitempty"`
+	Timestamp           time.Time        `json:"timestamp"`
 }
 
 // Schema versions should be in ISO 8601 format
@@ -505,6 +524,8 @@ const (
 	ContainerLifecycleImageEmbeddedCacheStore     ContainerLifecycleID = "image.embedded_cache_store"
 	ContainerLifecycleImageEmbeddedCacheWait      ContainerLifecycleID = "image.embedded_cache_wait"
 	ContainerLifecycleImageEmbeddedCacheRestore   ContainerLifecycleID = "image.embedded_cache_restore"
+	ContainerLifecycleImageV1DataCacheDeferred    ContainerLifecycleID = "image.v1_data_cache_deferred"
+	ContainerLifecycleImageV1DataCacheRestore     ContainerLifecycleID = "image.v1_data_cache_restore"
 	ContainerLifecycleSetWorkerAddress            ContainerLifecycleID = "worker.set_worker_address"
 	ContainerLifecyclePortAllocation              ContainerLifecycleID = "worker.port_allocation"
 	ContainerLifecycleReadBundleConfig            ContainerLifecycleID = "worker.read_bundle_config"
@@ -585,6 +606,8 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleImageEmbeddedCacheStore:     {ID: ContainerLifecycleImageEmbeddedCacheStore, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache store"},
 	ContainerLifecycleImageEmbeddedCacheWait:      {ID: ContainerLifecycleImageEmbeddedCacheWait, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Wait for embedded image cache"},
 	ContainerLifecycleImageEmbeddedCacheRestore:   {ID: ContainerLifecycleImageEmbeddedCacheRestore, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Embedded image cache restore"},
+	ContainerLifecycleImageV1DataCacheDeferred:    {ID: ContainerLifecycleImageV1DataCacheDeferred, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "Defer v1 data archive restore"},
+	ContainerLifecycleImageV1DataCacheRestore:     {ID: ContainerLifecycleImageV1DataCacheRestore, Domain: EventDomainImage, ParentID: ContainerLifecycleImageLoad, Label: "V1 data archive restore"},
 	ContainerLifecycleSetWorkerAddress:            {ID: ContainerLifecycleSetWorkerAddress, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set worker address"},
 	ContainerLifecyclePortAllocation:              {ID: ContainerLifecyclePortAllocation, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Port allocation"},
 	ContainerLifecycleReadBundleConfig:            {ID: ContainerLifecycleReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Read bundle config"},

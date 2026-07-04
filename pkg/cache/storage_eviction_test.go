@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +55,99 @@ func TestEvictLRUNeverRemovesRecentlyReadContent(t *testing.T) {
 	require.True(t, store.Exists(hash))
 }
 
+func TestEvictWatermarkPctAcceptsWholePercent(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheEvictWatermarkPct = 80
+
+	require.Equal(t, 0.80, store.evictWatermarkPct())
+}
+
+func TestMaybeEvictDiskCacheEvictsRecentUnprotectedBeforeProtectedContent(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
+	var events []CacheChurnEvent
+	store.SetChurnSink(func(event CacheChurnEvent) {
+		events = append(events, event)
+	})
+
+	now := time.Now()
+	protected := addEvictionTestContent(t, store, "protected-hot-content", now.Add(-2*time.Minute))
+	unprotected := addEvictionTestContent(t, store, "unprotected-hot-content", now.Add(-time.Minute))
+	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
+
+	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      850,
+		availableBytes: 150,
+		usagePct:       0.85,
+	})
+
+	require.True(t, evicted)
+	require.True(t, store.Exists(protected))
+	require.False(t, store.Exists(unprotected))
+	require.Len(t, events, 1)
+	require.Equal(t, CacheChurnStatusEvicted, events[0].Status)
+	require.Equal(t, CacheChurnOperationDiskEviction, events[0].Operation)
+	require.Equal(t, 1, events[0].EvictedObjects)
+	require.Zero(t, events[0].ProtectedObjects)
+	require.False(t, events[0].Timestamp.IsZero())
+}
+
+func TestMaybeEvictDiskCachePreservesProtectedContentAboveSoftWatermark(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
+	store.serverConfig.DiskCacheMaxUsagePct = 0.95
+	store.diskConfig.MinFreeBytes = 100
+	var events []CacheChurnEvent
+	store.SetChurnSink(func(event CacheChurnEvent) {
+		events = append(events, event)
+	})
+
+	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Minute))
+	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
+
+	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      850,
+		availableBytes: 150,
+		usagePct:       0.85,
+	})
+
+	require.False(t, evicted)
+	require.True(t, store.Exists(protected))
+	require.Len(t, events, 1)
+	require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
+	require.Equal(t, 1, events[0].ProtectedCandidates)
+}
+
+func TestMaybeEvictDiskCacheEvictsProtectedContentToClearHardReserve(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
+	store.serverConfig.DiskCacheMaxUsagePct = 0.95
+	store.diskConfig.MinFreeBytes = 180
+	var events []CacheChurnEvent
+	store.SetChurnSink(func(event CacheChurnEvent) {
+		events = append(events, event)
+	})
+
+	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Minute))
+	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
+
+	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
+		totalBytes:     1000,
+		usedBytes:      850,
+		availableBytes: 150,
+		usagePct:       0.85,
+	})
+
+	require.True(t, evicted)
+	require.False(t, store.Exists(protected))
+	require.Len(t, events, 1)
+	require.Equal(t, CacheChurnStatusProtectedEvicted, events[0].Status)
+	require.Equal(t, 1, events[0].ProtectedObjects)
+	require.Positive(t, events[0].ProtectedFreedBytes)
+}
+
 func TestTouchContentAccessRefreshesMarkerAndThrottles(t *testing.T) {
 	store := newTestStore(t, 5)
 
@@ -86,6 +181,29 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 	evicted, _ := store.evictLRU(1 << 30)
 	require.Zero(t, evicted)
 	require.True(t, store.Exists(hash))
+}
+
+func TestEvictionSkipsTemporaryAndIncompleteContentDirs(t *testing.T) {
+	store := newTestStore(t, 5)
+
+	stale := time.Now().Add(-time.Hour)
+	complete := addEvictionTestContent(t, store, "complete-content", stale)
+	tempHash := strings.Repeat("a", 64)
+	tempDir := filepath.Join(filepath.Dir(store.pageDir(tempHash)), "."+tempHash+".123.tmp")
+	require.NoError(t, os.MkdirAll(tempDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, store.pageKey(tempHash, 0)), []byte("temp"), 0644))
+
+	incompleteHash := strings.Repeat("b", 64)
+	incompleteDir := store.pageDir(incompleteHash)
+	require.NoError(t, os.MkdirAll(incompleteDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(incompleteDir, store.pageKey(incompleteHash, 0)), []byte("partial"), 0644))
+
+	evicted, _ := store.evictLRU(1 << 30)
+
+	require.Equal(t, 1, evicted)
+	require.False(t, store.Exists(complete))
+	require.DirExists(t, tempDir)
+	require.DirExists(t, incompleteDir)
 }
 
 func TestPruneContentNotProtectedKeepsExplicitlyProtectedAndRecentContent(t *testing.T) {

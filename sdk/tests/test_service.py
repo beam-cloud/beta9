@@ -239,6 +239,7 @@ class TestService(TestCase):
 
         service = _generate_service_module("llm-app", kwargs)
 
+        self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.app_kind, "llm_model")
         self.assertEqual(service.serving_protocol, "openai")
         self.assertEqual(service.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
@@ -492,23 +493,25 @@ class TestService(TestCase):
         self.assertEqual(service.ports, [5000, 9000])
         self.assertIn("PORT=7000", service.env)
 
-    def test_service_infers_exec_form_dockerfile_cmd(self):
+    def test_service_uses_dockerfile_image_process_without_entrypoint(self):
         image = Image()
         image.dockerfile = 'FROM node:20-alpine\nEXPOSE 8080\nCMD ["node", "server.js"]\n'
 
         service = Service(image=image)
 
-        self.assertEqual(service.entrypoint, ["node", "server.js"])
+        self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
+        self.assertEqual(command_from_dockerfile(image), ["node", "server.js"])
 
-    def test_service_infers_shell_form_dockerfile_cmd(self):
+    def test_dockerfile_shell_form_cmd_is_available_for_metadata(self):
         image = Image()
         image.dockerfile = "FROM node:20-alpine\nCMD npm start\n"
 
         service = Service(image=image)
 
-        self.assertEqual(service.entrypoint, ["sh", "-lc", "npm start"])
+        self.assertEqual(service.entrypoint, [])
+        self.assertEqual(command_from_dockerfile(image), ["sh", "-lc", "npm start"])
 
     def test_dockerfile_entrypoint_and_cmd_are_combined(self):
         image = Image()
@@ -530,7 +533,7 @@ class TestService(TestCase):
         self.assertEqual(command_from_dockerfile(image), ["node", "server#prod.js"])
 
     @mock.patch("beta9.abstractions.image.Image.sync_files")
-    def test_generate_service_module_materializes_dockerfile_path_and_infers_command(
+    def test_generate_service_module_materializes_dockerfile_path_without_entrypoint_override(
         self, sync_files_mock
     ):
         with TemporaryDirectory() as tmpdir:
@@ -547,7 +550,7 @@ class TestService(TestCase):
             service = _generate_service_module("dockerfile-app", kwargs)
 
         self.assertIsInstance(kwargs["dockerfile"], Image)
-        self.assertEqual(service.entrypoint, ["node", "server.js"])
+        self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
         sync_files_mock.assert_called_once_with(str(Path(tmpdir)))
