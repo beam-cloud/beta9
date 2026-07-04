@@ -193,17 +193,24 @@ func TestEvictionSkipsTemporaryAndIncompleteContentDirs(t *testing.T) {
 	require.NoError(t, os.MkdirAll(tempDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, store.pageKey(tempHash, 0)), []byte("temp"), 0644))
 
-	incompleteHash := strings.Repeat("b", 64)
-	incompleteDir := store.pageDir(incompleteHash)
-	require.NoError(t, os.MkdirAll(incompleteDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(incompleteDir, store.pageKey(incompleteHash, 0)), []byte("partial"), 0644))
+	recentIncompleteHash := strings.Repeat("b", 64)
+	recentIncompleteDir := store.pageDir(recentIncompleteHash)
+	require.NoError(t, os.MkdirAll(recentIncompleteDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(recentIncompleteDir, store.pageKey(recentIncompleteHash, 0)), []byte("partial"), 0644))
+
+	staleIncompleteHash := strings.Repeat("c", 64)
+	staleIncompleteDir := store.pageDir(staleIncompleteHash)
+	require.NoError(t, os.MkdirAll(staleIncompleteDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(staleIncompleteDir, store.pageKey(staleIncompleteHash, 0)), []byte("partial"), 0644))
+	require.NoError(t, os.Chtimes(staleIncompleteDir, stale.Add(-evictionIncompleteContentGrace), stale.Add(-evictionIncompleteContentGrace)))
 
 	evicted, _ := store.evictLRU(1 << 30)
 
-	require.Equal(t, 1, evicted)
+	require.Equal(t, 2, evicted)
 	require.False(t, store.Exists(complete))
 	require.DirExists(t, tempDir)
-	require.DirExists(t, incompleteDir)
+	require.DirExists(t, recentIncompleteDir)
+	require.NoDirExists(t, staleIncompleteDir)
 }
 
 func TestPruneContentNotProtectedKeepsExplicitlyProtectedAndRecentContent(t *testing.T) {

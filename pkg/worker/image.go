@@ -48,6 +48,7 @@ const (
 	pullLazyBackoff                          = 1000 * time.Millisecond
 	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
+	imageArchiveLockRetryInterval            = 100 * time.Millisecond
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
 )
 
@@ -726,7 +727,7 @@ func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *typ
 }
 
 func (c *ImageClient) materializeV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, imageID, targetPath, cachePath string, sourceRegistry *types.S3ImageRegistryConfig) (string, bool) {
-	unlock, err := lockImageArchiveFile(targetPath)
+	unlock, err := lockImageArchiveFile(ctx, targetPath)
 	if err != nil {
 		log.Debug().Err(err).Str("image_id", imageID).Str("path", targetPath).Msg("v1 image data archive lock failed")
 		return "", false
@@ -1228,18 +1229,11 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		sourceRegistry = types.S3ImageRegistryConfig{}
 	}
 
-	lockPath := archivePath + ".lock"
-	lockFile, err := openImageLockFile(lockPath)
+	unlock, err := lockImageArchiveFile(ctx, archivePath)
 	if err != nil {
 		return nil, err
 	}
-	defer lockFile.Close()
-
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, err
-	}
-
-	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer unlock()
 
 	// Check if file exists now that we have the lock (another worker may have downloaded it)
 	if _, err := os.Stat(archivePath); err == nil {
@@ -1788,20 +1782,37 @@ func openImageLockFile(lockPath string) (*os.File, error) {
 	return nil, lastErr
 }
 
-func lockImageArchiveFile(archivePath string) (func(), error) {
+func lockImageArchiveFile(ctx context.Context, archivePath string) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	lockFile, err := openImageLockFile(archivePath + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		_ = lockFile.Close()
-		return nil, err
-	}
 
-	return func() {
-		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-		_ = lockFile.Close()
-	}, nil
+	for {
+		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			return func() {
+				_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+				_ = lockFile.Close()
+			}, nil
+		} else if !imageArchiveLockBusy(err) {
+			_ = lockFile.Close()
+			return nil, err
+		}
+
+		select {
+		case <-ctx.Done():
+			_ = lockFile.Close()
+			return nil, ctx.Err()
+		case <-time.After(imageArchiveLockRetryInterval):
+		}
+	}
+}
+
+func imageArchiveLockBusy(err error) bool {
+	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {

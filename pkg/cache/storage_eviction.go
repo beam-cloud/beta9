@@ -25,6 +25,9 @@ const (
 	// evictionRecentAccessGuard preserves hot content during normal eviction.
 	// Hard disk pressure may still evict it to keep the node healthy.
 	evictionRecentAccessGuard = 10 * time.Minute
+	// evictionIncompleteContentGrace keeps in-flight writes out of eviction,
+	// while allowing abandoned marker-less v2 dirs to be reclaimed.
+	evictionIncompleteContentGrace = 30 * time.Minute
 	// accessTouchMapSweepSize bounds the in-memory touch throttle map.
 	accessTouchMapSweepSize = 65536
 )
@@ -321,6 +324,7 @@ func (cas *Store) protectedContentSnapshot() map[string]struct{} {
 // layouts.
 func (cas *Store) evictionCandidates() []evictionCandidate {
 	candidates := []evictionCandidate{}
+	now := time.Now()
 
 	buckets, _ := os.ReadDir(filepath.Join(cas.diskCacheDir, "pages"))
 	for _, bucket := range buckets {
@@ -333,6 +337,8 @@ func (cas *Store) evictionCandidates() []evictionCandidate {
 			if entry.IsDir() && isCacheContentHash(entry.Name()) {
 				dir := filepath.Join(bucketDir, entry.Name())
 				if _, err := os.Stat(filepath.Join(dir, cacheCompleteMarkerName)); err == nil {
+					candidates = cas.appendCandidate(candidates, entry.Name(), dir)
+				} else if os.IsNotExist(err) && incompleteContentDirEvictable(dir, now) {
 					candidates = cas.appendCandidate(candidates, entry.Name(), dir)
 				}
 			}
@@ -347,6 +353,14 @@ func (cas *Store) evictionCandidates() []evictionCandidate {
 	}
 
 	return candidates
+}
+
+func incompleteContentDirEvictable(dir string, now time.Time) bool {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+	return now.Sub(info.ModTime()) >= evictionIncompleteContentGrace
 }
 
 func isCacheContentHash(name string) bool {

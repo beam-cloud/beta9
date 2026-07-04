@@ -901,8 +901,10 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 	reconcileAllowlist := map[string]struct{}(nil)
 	protectedForPressure := protected
 	if pressureMode {
-		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, softWatermark, server.DiskMinFreeBytes())
-		protectedForPressure = reconcileAllowlist
+		if usage.TotalBytes > 0 {
+			reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, softWatermark, server.DiskMinFreeBytes())
+			protectedForPressure = reconcileAllowlist
+		}
 		server.SetProtectedContent(protectedForPressure)
 	}
 

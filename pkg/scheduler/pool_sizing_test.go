@@ -17,6 +17,7 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 	s, err := miniredis.Run()
 	assert.NotNil(t, s)
 	assert.Nil(t, err)
+	t.Cleanup(s.Close)
 
 	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	assert.NotNil(t, redisClient)
@@ -131,6 +132,7 @@ func TestAddWorkerIfNeededSkipsGenericExternalProvisioning(t *testing.T) {
 	s, err := miniredis.Run()
 	assert.NotNil(t, s)
 	assert.Nil(t, err)
+	t.Cleanup(s.Close)
 
 	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	assert.NotNil(t, redisClient)
@@ -308,6 +310,7 @@ func TestOccupyAvailableMachines(t *testing.T) {
 	s, err := miniredis.Run()
 	assert.NotNil(t, s)
 	assert.Nil(t, err)
+	t.Cleanup(s.Close)
 
 	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	assert.NotNil(t, redisClient)
@@ -446,6 +449,7 @@ func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
 	s, err := miniredis.Run()
 	assert.NotNil(t, s)
 	assert.Nil(t, err)
+	t.Cleanup(s.Close)
 
 	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
 	assert.NotNil(t, redisClient)
