@@ -403,14 +403,14 @@ def override_config_options(func: click.Command):
         "--checkpoint-readiness-timeout",
         type=click.INT,
         default=None,
-        show_default=False,
+        show_default="600",
         help="Seconds to wait for checkpoint HTTP readiness.",
     )(f)
     f = click.option(
         "--checkpoint-readiness-interval",
         type=click.INT,
         default=None,
-        show_default=False,
+        show_default="1",
         help="Seconds between checkpoint HTTP readiness probes.",
     )(f)
     f = click.option(
