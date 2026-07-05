@@ -45,7 +45,7 @@ func (pb *PodProxyBuffer) incrementContainerConnections(containerId string) erro
 
 func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) error {
 	defer pb.signalWork()
-	go pb.setPodKeepWarmLock(containerId)
+	pb.setPodKeepWarmLock(containerId)
 
 	counter, ok := pb.containerConnectionCounter(containerId)
 	if !ok {

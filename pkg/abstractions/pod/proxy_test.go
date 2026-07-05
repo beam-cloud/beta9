@@ -891,6 +891,93 @@ func TestFlushConnectionStateSkipsIdleSnapshots(t *testing.T) {
 	}
 }
 
+func TestDecrementContainerConnectionsSetsKeepWarmBeforeIdle(t *testing.T) {
+	repo := &blockingKeepWarmRepo{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	pb := &PodProxyBuffer{
+		containerRepo: repo,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
+		stubConfig:    &types.StubConfigV1{KeepWarmSeconds: 30},
+		workReady:     make(chan struct{}, 1),
+	}
+
+	if err := pb.incrementContainerConnections("container-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		if err := pb.decrementContainerConnections("container-1"); err != nil {
+			t.Errorf("decrement container connections: %v", err)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-repo.entered:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("keep-warm lock was not attempted")
+	}
+
+	select {
+	case <-done:
+		t.Fatal("decrement returned before keep-warm lock completed")
+	default:
+	}
+
+	close(repo.release)
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("decrement did not return after keep-warm lock completed")
+	}
+}
+
+func TestStoppableContainersDoesNotUseStartedAtForFiniteKeepWarm(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "pod-stub-container-1"
+
+	if err := repo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateContainerStatus(containerID, types.ContainerStatusRunning, int64(types.ContainerStateTtlS)); err != nil {
+		t.Fatal(err)
+	}
+	state, err := repo.GetContainerState(containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.StartedAt == 0 {
+		t.Fatal("expected running container to have StartedAt set")
+	}
+
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Rdb:           rdb,
+		IsActive:      true,
+		ContainerRepo: repo,
+		Workspace:     &types.Workspace{Name: "workspace"},
+		Stub:          &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub"}},
+		StubConfig:    &types.StubConfigV1{KeepWarmSeconds: 600},
+	}}
+
+	stoppable, err := instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stoppable) != 1 || stoppable[0] != containerID {
+		t.Fatalf("stoppable containers = %v, want [%s]", stoppable, containerID)
+	}
+}
+
 func TestProxyConnectionIndexRefreshIsThrottled(t *testing.T) {
 	pb := &PodProxyBuffer{}
 	now := time.Unix(0, 100)
@@ -969,5 +1056,21 @@ func waitForCondition(t *testing.T, timeout time.Duration, fn func() bool) {
 
 	if !fn() {
 		t.Fatalf("condition not met within %s", timeout)
+	}
+}
+
+type blockingKeepWarmRepo struct {
+	repository.ContainerRepository
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingKeepWarmRepo) SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error {
+	close(r.entered)
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }

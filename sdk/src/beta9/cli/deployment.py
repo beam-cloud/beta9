@@ -8,6 +8,7 @@ from rich.table import Column, Table, box
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.service import (
+    DEFAULT_SERVICE_KEEP_WARM_SECONDS,
     Service,
     resolve_service_ports,
 )
@@ -209,7 +210,11 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         "ports": ports,
         "image": service_image or Image(),
         "env": env_vars_to_dict(kwargs.get("env")),
-        "keep_warm_seconds": 0 if keep_warm_seconds is None else keep_warm_seconds,
+        "keep_warm_seconds": (
+            DEFAULT_SERVICE_KEEP_WARM_SECONDS
+            if keep_warm_seconds is None
+            else keep_warm_seconds
+        ),
         "min_replicas": kwargs.get("min_replicas") or 0,
         "max_replicas": kwargs.get("max_replicas"),
         "always_on": bool(kwargs.get("always_on")),

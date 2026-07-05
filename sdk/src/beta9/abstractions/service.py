@@ -15,6 +15,8 @@ from .base.container import Container
 from .image import Image
 from .pod import Pod, PodInstance
 
+DEFAULT_SERVICE_KEEP_WARM_SECONDS = 600
+
 DEFAULT_SERVICE_PORT = 8000
 
 
@@ -182,7 +184,7 @@ class Service(Pod):
         disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
-        keep_warm_seconds: int = 0,
+        keep_warm_seconds: int = DEFAULT_SERVICE_KEEP_WARM_SECONDS,
         min_replicas: int = 0,
         max_replicas: Optional[int] = None,
         always_on: bool = False,

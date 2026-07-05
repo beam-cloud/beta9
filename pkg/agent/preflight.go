@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,11 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+)
+
+var (
+	nvidiaProcGPUInfoRoot = "/proc/driver/nvidia/gpus"
+	cudaDriverInitProbe   = defaultCUDADriverInitProbe
 )
 
 type preflightResult struct {
@@ -178,6 +184,23 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Message:  "required to pin GPUs into worker containers",
 			Severity: severity(nvidiaRuntime),
 		})
+
+		driverOK, driverMessage := nvidiaProcDriverStateOK(gpuDevices)
+		checks = append(checks, check{
+			Name:     "nvidia-driver-state",
+			Ok:       driverOK,
+			Message:  driverMessage,
+			Severity: severity(driverOK),
+		})
+
+		if cudaOK, cudaMessage, ran := cudaDriverInitProbe(); ran {
+			checks = append(checks, check{
+				Name:     "cuda-driver-init",
+				Ok:       cudaOK,
+				Message:  cudaMessage,
+				Severity: "info",
+			})
+		}
 	}
 
 	return preflightResult{
@@ -207,6 +230,107 @@ func severity(ok bool) string {
 func commandExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+func nvidiaProcDriverStateOK(gpuDevices []gpuDevice) (bool, string) {
+	entries, err := os.ReadDir(nvidiaProcGPUInfoRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, "nvidia procfs GPU state not present"
+		}
+		return false, fmt.Sprintf("unable to read NVIDIA procfs GPU state: %v", err)
+	}
+
+	infoCount := 0
+	stale := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		infoPath := filepath.Join(nvidiaProcGPUInfoRoot, entry.Name(), "information")
+		data, err := os.ReadFile(infoPath)
+		if err != nil {
+			return false, fmt.Sprintf("unable to read NVIDIA GPU information for %s: %v", entry.Name(), err)
+		}
+
+		infoCount++
+		text := string(data)
+		if nvidiaProcInfoLooksFailed(text) {
+			stale = append(stale, entry.Name())
+		}
+	}
+
+	switch {
+	case len(stale) > 0:
+		return true, fmt.Sprintf("NVIDIA procfs reports failed adapter state for %s; those adapters are excluded from advertised GPU capacity", strings.Join(stale, ","))
+	case infoCount > len(gpuDevices):
+		return true, fmt.Sprintf("NVIDIA procfs reports %d GPUs but %d healthy GPUs are advertised", infoCount, len(gpuDevices))
+	case infoCount == 0:
+		return false, "nvidia-smi detected GPUs but NVIDIA procfs has no GPU entries"
+	default:
+		return true, "NVIDIA kernel driver state matches detected GPUs"
+	}
+}
+
+func nvidiaProcGPUInfoHealthy(busID string) (bool, error) {
+	if busID == "" {
+		return true, nil
+	}
+	infoPath := filepath.Join(nvidiaProcGPUInfoRoot, busID, "information")
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if _, rootErr := os.Stat(nvidiaProcGPUInfoRoot); os.IsNotExist(rootErr) {
+				return true, nil
+			}
+			return false, nil
+		}
+		return false, err
+	}
+	return !nvidiaProcInfoLooksFailed(string(data)), nil
+}
+
+func nvidiaProcInfoLooksFailed(info string) bool {
+	for _, line := range strings.Split(info, "\n") {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.TrimSpace(name) {
+		case "Video BIOS":
+			if value == "" || strings.HasPrefix(value, "??") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func defaultCUDADriverInitProbe() (bool, string, bool) {
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		return true, "", false
+	}
+
+	const script = `import ctypes, sys
+lib = ctypes.CDLL("libcuda.so.1")
+rc = lib.cuInit(0)
+count = ctypes.c_int()
+rc_count = lib.cuDeviceGetCount(ctypes.byref(count))
+print(f"cuInit={rc} cuDeviceGetCount={rc_count} count={count.value}")
+sys.exit(0 if rc == 0 and rc_count == 0 else 1)
+`
+	output, err := exec.Command(pythonPath, "-c", script).CombinedOutput()
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		message = "host CUDA driver init probe completed"
+	}
+	if err != nil {
+		return false, message, true
+	}
+	return true, message, true
 }
 
 func pathExists(path string) bool {

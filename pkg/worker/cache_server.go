@@ -72,6 +72,7 @@ func RunCacheServer() error {
 		Msg("cache server process started")
 
 	<-ctx.Done()
+	stop()
 	log.Info().Msg("cache server shutdown signal received")
 	if err := manager.Drain(); err != nil {
 		log.Warn().Err(err).Msg("cache server drain failed")

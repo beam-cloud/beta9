@@ -14,6 +14,7 @@ from beta9 import (
     ServingConfig,
 )
 from beta9.abstractions.service import (
+    DEFAULT_SERVICE_KEEP_WARM_SECONDS,
     command_from_dockerfile,
     ports_from_dockerfile,
     service_image_implies_default_port,
@@ -79,6 +80,7 @@ class TestService(TestCase):
 
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
+        self.assertEqual(service.keep_warm_seconds, DEFAULT_SERVICE_KEEP_WARM_SECONDS)
         self.assertEqual(service.autoscaler.min_containers, 0)
         self.assertEqual(service.autoscaler.max_containers, 1)
 
@@ -182,6 +184,22 @@ class TestService(TestCase):
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
+        self.assertEqual(service.keep_warm_seconds, DEFAULT_SERVICE_KEEP_WARM_SECONDS)
+
+    def test_generate_service_module_preserves_explicit_immediate_scale_to_zero(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": image,
+            "image": None,
+            "entrypoint": None,
+            "ports": [8080],
+            "env": (),
+            "keep_warm_seconds": 0,
+        }
+
+        service = _generate_service_module("dockerfile-app", kwargs)
+
+        self.assertEqual(service.keep_warm_seconds, 0)
 
     def test_generate_service_module_defaults_image_service_to_port_8000(self):
         image = Image.from_id("img-123")

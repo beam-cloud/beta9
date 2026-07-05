@@ -133,14 +133,16 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			return err
 		}
 
-		setPodKeepWarmLock(
-			context.Background(),
-			i.ContainerRepo,
-			i.Workspace.Name,
-			i.Stub.ExternalId,
-			runRequest.ContainerId,
-			i.StubConfig.KeepWarmSeconds,
-		)
+		if i.StubConfig.KeepWarmSeconds < 0 {
+			setPodKeepWarmLock(
+				context.Background(),
+				i.ContainerRepo,
+				i.Workspace.Name,
+				i.Stub.ExternalId,
+				runRequest.ContainerId,
+				i.StubConfig.KeepWarmSeconds,
+			)
+		}
 
 		err = i.Scheduler.Run(runRequest)
 		if err != nil {
@@ -198,13 +200,6 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 		if !i.IsActive {
 			keys = append(keys, container.ContainerId)
 			continue
-		}
-
-		if i.StubConfig.KeepWarmSeconds > 0 && container.StartedAt > 0 {
-			keepWarmUntil := time.Unix(container.StartedAt, 0).Add(time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second)
-			if time.Now().Before(keepWarmUntil) {
-				continue
-			}
 		}
 
 		// Skip containers with keep warm locks
