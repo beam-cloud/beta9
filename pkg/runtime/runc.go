@@ -245,8 +245,7 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 		}
 	}
 
-	finalResult := <-restoreDone
-	return finalResult.exitCode, finalResult.err
+	return 0, nil
 }
 
 func (r *Runc) runcCommand() string {
@@ -363,7 +362,7 @@ func runcWaitResult(err error) runcCommandResult {
 }
 
 func (r *Runc) RestoreWaitsForExit() bool {
-	return true
+	return false
 }
 
 func (r *Runc) Close() error {
