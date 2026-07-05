@@ -1,3 +1,4 @@
+import inspect
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,6 +20,7 @@ from beta9.abstractions.service import (
     ports_from_dockerfile,
     service_image_implies_default_port,
 )
+from beta9.abstractions.base.runner import RunnerAbstraction
 from beta9.cli.deployment import (
     _generate_service_module,
     _merge_port_options,
@@ -33,6 +35,12 @@ from beta9.cli.llm import apply_llm_metadata as _apply_llm_metadata
 
 
 class TestService(TestCase):
+    def test_runner_checkpoint_readiness_args_do_not_shift_existing_positionals(self):
+        parameters = list(inspect.signature(RunnerAbstraction.__init__).parameters)
+
+        self.assertLess(parameters.index("entrypoint"), parameters.index("checkpoint_readiness_path"))
+        self.assertLess(parameters.index("disks"), parameters.index("checkpoint_readiness_path"))
+
     def test_command_string_maps_to_shell_entrypoint(self):
         service = Service(command="npm run start", port=3000)
 
@@ -184,7 +192,7 @@ class TestService(TestCase):
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
-        self.assertEqual(service.keep_warm_seconds, 0)
+        self.assertEqual(service.keep_warm_seconds, DEFAULT_SERVICE_KEEP_WARM_SECONDS)
 
     def test_generate_service_module_preserves_explicit_immediate_scale_to_zero(self):
         image = Image.from_id("img-123")

@@ -121,10 +121,6 @@ class RunnerAbstraction(BaseAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
-        checkpoint_readiness_path: Optional[str] = None,
-        checkpoint_readiness_port: Optional[int] = None,
-        checkpoint_readiness_timeout: int = 600,
-        checkpoint_readiness_interval: int = 1,
         entrypoint: Optional[List[str]] = None,
         ports: Optional[List[int]] = [],
         pricing: Optional[PricingPolicy] = None,
@@ -141,6 +137,10 @@ class RunnerAbstraction(BaseAbstraction):
         llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
         disks: Optional[List[DurableDisk]] = None,
+        checkpoint_readiness_path: Optional[str] = None,
+        checkpoint_readiness_port: Optional[int] = None,
+        checkpoint_readiness_timeout: int = 600,
+        checkpoint_readiness_interval: int = 1,
     ) -> None:
         super().__init__()
 

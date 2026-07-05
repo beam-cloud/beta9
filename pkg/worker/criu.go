@@ -371,9 +371,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		err := s.waitForCheckpointTrigger(ctx, opts.Request, opts.OutputLogger)
 		if err != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to wait for checkpoint signal: %v", err)
-			if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
-				log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", stateErr)
-			}
+			s.markCheckpointFailed(opts)
 			return err
 		}
 	}
@@ -381,9 +379,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
-		if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
-			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", stateErr)
-		}
+		s.markCheckpointFailed(opts)
 
 		if opts.OutputLogger != nil {
 			opts.OutputLogger.Error("Failed to create checkpoint")
@@ -433,6 +429,15 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	return nil
+}
+
+func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts) {
+	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
+		log.Error().
+			Str("container_id", opts.Request.ContainerId).
+			Str("checkpoint_id", opts.CheckpointId).
+			Msgf("failed to create checkpoint state: %v", stateErr)
+	}
 }
 
 func (s *Worker) checkpointPath(checkpointId string) string {

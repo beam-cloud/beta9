@@ -202,7 +202,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 				Name:     "cuda-driver-init",
 				Ok:       cudaOK,
 				Message:  cudaMessage,
-				Severity: severity(cudaOK),
+				Severity: "info",
 			})
 		}
 	}

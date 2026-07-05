@@ -147,6 +147,16 @@ func (i *podInstance) startContainers(containersToRun int) error {
 
 		err = i.Scheduler.Run(runRequest)
 		if err != nil {
+			if i.StubConfig.KeepWarmSeconds != 0 {
+				setPodKeepWarmLock(
+					context.Background(),
+					i.ContainerRepo,
+					i.Workspace.Name,
+					i.Stub.ExternalId,
+					runRequest.ContainerId,
+					0,
+				)
+			}
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
 		}
