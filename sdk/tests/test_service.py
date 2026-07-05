@@ -184,7 +184,7 @@ class TestService(TestCase):
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
-        self.assertEqual(service.keep_warm_seconds, DEFAULT_SERVICE_KEEP_WARM_SECONDS)
+        self.assertEqual(service.keep_warm_seconds, 0)
 
     def test_generate_service_module_preserves_explicit_immediate_scale_to_zero(self):
         image = Image.from_id("img-123")
@@ -236,6 +236,95 @@ class TestService(TestCase):
         self.assertEqual(service.memory, 512)
         self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
         self.assertTrue(service.tcp)
+
+    def test_generate_service_module_applies_checkpoint_readiness(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": None,
+            "image": image,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "checkpoint_enabled": True,
+            "checkpoint_readiness_path": "/v1/models",
+            "checkpoint_readiness_port": 8000,
+            "checkpoint_readiness_timeout": 300,
+            "checkpoint_readiness_interval": 2,
+        }
+
+        service = _generate_service_module("image-app", kwargs)
+
+        self.assertTrue(service.checkpoint_enabled)
+        self.assertEqual(service.checkpoint_readiness_path, "/v1/models")
+        self.assertEqual(service.checkpoint_readiness_port, 8000)
+        self.assertEqual(service.checkpoint_readiness_timeout, 300)
+        self.assertEqual(service.checkpoint_readiness_interval, 2)
+
+    def test_service_serializes_checkpoint_readiness_trigger(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            checkpoint_enabled=True,
+            checkpoint_readiness_path="/ready",
+            checkpoint_readiness_port=8000,
+        )
+
+        request = service._stub_request(
+            stub_type="pod/deployment",
+            stub_name="svc",
+            force_create_stub=False,
+            autoscaler_type="queue_depth",
+            inputs=None,
+            outputs=None,
+        )
+
+        self.assertTrue(request.checkpoint_enabled)
+        self.assertEqual(request.checkpoint_trigger.type, "http")
+        self.assertEqual(request.checkpoint_trigger.http_path, "/ready")
+        self.assertEqual(request.checkpoint_trigger.http_port, 8000)
+
+    def test_pod_checkpoint_enabled_without_readiness_uses_signal_mode(self):
+        pod = Pod(
+            image=Image.from_id("img-123"),
+            entrypoint=["python", "server.py"],
+            ports=[8000],
+            checkpoint_enabled=True,
+        )
+
+        request = pod._stub_request(
+            stub_type="pod/deployment",
+            stub_name="pod",
+            force_create_stub=False,
+            autoscaler_type="queue_depth",
+            inputs=None,
+            outputs=None,
+        )
+
+        self.assertTrue(request.checkpoint_enabled)
+        self.assertIsNone(request.checkpoint_trigger)
+
+    def test_cli_checkpoint_default_does_not_override_python_config(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            checkpoint_enabled=True,
+            checkpoint_readiness_timeout=120,
+            checkpoint_readiness_interval=3,
+        )
+
+        self.assertTrue(
+            handle_config_override(
+                service,
+                {
+                    "checkpoint_enabled": None,
+                    "checkpoint_readiness_timeout": None,
+                    "checkpoint_readiness_interval": None,
+                },
+            )
+        )
+        self.assertTrue(service.checkpoint_enabled)
+        self.assertEqual(service.checkpoint_readiness_timeout, 120)
+        self.assertEqual(service.checkpoint_readiness_interval, 3)
 
     def test_generate_service_module_applies_llm_metadata(self):
         image = Image.from_id("img-123")

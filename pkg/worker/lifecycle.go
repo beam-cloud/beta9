@@ -955,7 +955,7 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 		return true, nil
 	}
 
-	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) {
+	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) && !checkpointModelCacheMount(mount.MountPath) {
 		volumeCacheMap[filepath.Base(mount.MountPath)] = mount.LocalPath
 	}
 
@@ -965,6 +965,10 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 	}
 
 	return true, nil
+}
+
+func checkpointModelCacheMount(mountPath string) bool {
+	return strings.HasPrefix(filepath.Base(mountPath), types.CheckpointModelCacheVolumePrefix)
 }
 
 func ensureBindMountSourceDirs(mounts []types.Mount) error {

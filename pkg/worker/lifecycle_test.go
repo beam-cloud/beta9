@@ -1188,6 +1188,24 @@ func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 	require.Equal(t, []string{"rbind", "ro"}, spec.Mounts[0].Options)
 }
 
+func TestAddRequestMountsSkipsCheckpointModelCacheVolumeCacheMap(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), "volume")
+	spec := getTestBaseSpec()
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Mounts: []types.Mount{{
+			LocalPath: localPath,
+			MountPath: filepath.Join(types.WorkerContainerVolumePath, types.CheckpointModelCacheVolumeName("svc")),
+		}},
+	}
+
+	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
+
+	require.NoError(t, err)
+	require.Empty(t, volumeCacheMap)
+	require.Len(t, spec.Mounts, 1)
+}
+
 func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
 	spec := getTestBaseSpec()
 	missingPath := filepath.Join(t.TempDir(), "missing")

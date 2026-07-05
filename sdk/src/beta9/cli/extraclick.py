@@ -381,6 +381,39 @@ def override_config_options(func: click.Command):
         required=False,
     )(f)
     f = click.option(
+        "--checkpoint-enabled",
+        is_flag=True,
+        default=None,
+        show_default=False,
+        help="Enable checkpoint/restore for supported workloads.",
+    )(f)
+    f = click.option(
+        "--checkpoint-readiness-path",
+        type=click.STRING,
+        help="HTTP path that must return 200 before creating an automatic checkpoint.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--checkpoint-readiness-port",
+        type=click.INT,
+        help="Container port for checkpoint HTTP readiness.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--checkpoint-readiness-timeout",
+        type=click.INT,
+        default=None,
+        show_default=False,
+        help="Seconds to wait for checkpoint HTTP readiness.",
+    )(f)
+    f = click.option(
+        "--checkpoint-readiness-interval",
+        type=click.INT,
+        default=None,
+        show_default=False,
+        help="Seconds between checkpoint HTTP readiness probes.",
+    )(f)
+    f = click.option(
         "--min-replicas",
         "--min-containers",
         type=click.IntRange(min=0),

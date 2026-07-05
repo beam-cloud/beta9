@@ -705,6 +705,7 @@ message GetOrCreateStubRequest {
   ServingConfig serving = 43;
   repeated DurableDisk disks = 44;
   bool allow_marketplace = 45;
+  types.CheckpointTrigger checkpoint_trigger = 46;
 }
 
 message GetOrCreateStubResponse {

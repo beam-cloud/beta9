@@ -45,6 +45,14 @@ message Checkpoint {
   string accelerator = 20;
 }
 
+message CheckpointTrigger {
+  string type = 1;
+  string http_path = 2;
+  uint32 http_port = 3;
+  uint32 timeout_seconds = 4;
+  uint32 interval_seconds = 5;
+}
+
 message ConcurrencyLimit {
   uint32 id = 1;
   string external_id = 2;
@@ -102,6 +110,7 @@ message ContainerRequest {
   bool runtime_token_required = 32;
   bool allow_marketplace = 33;
   string machine_id = 34;
+  CheckpointTrigger checkpoint_trigger = 35;
 }
 
 message ContainerState {

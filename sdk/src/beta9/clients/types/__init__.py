@@ -52,6 +52,15 @@ class Checkpoint(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CheckpointTrigger(betterproto.Message):
+    type: str = betterproto.string_field(1)
+    http_path: str = betterproto.string_field(2)
+    http_port: int = betterproto.uint32_field(3)
+    timeout_seconds: int = betterproto.uint32_field(4)
+    interval_seconds: int = betterproto.uint32_field(5)
+
+
+@dataclass(eq=False, repr=False)
 class ConcurrencyLimit(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     external_id: str = betterproto.string_field(2)
@@ -111,6 +120,7 @@ class ContainerRequest(betterproto.Message):
     runtime_token_required: bool = betterproto.bool_field(32)
     allow_marketplace: bool = betterproto.bool_field(33)
     machine_id: str = betterproto.string_field(34)
+    checkpoint_trigger: "CheckpointTrigger" = betterproto.message_field(35)
 
 
 @dataclass(eq=False, repr=False)

@@ -448,6 +448,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		EntryPoint:        stubConfig.EntryPoint,
 		Ports:             ports,
 		CheckpointEnabled: checkpointEnabled,
+		CheckpointTrigger: stubConfig.CheckpointTrigger,
 		Checkpoint:        checkpoint,
 		PoolSelector:      stubConfig.PoolSelector(),
 		AllowMarketplace:  stubConfig.AllowMarketplace,

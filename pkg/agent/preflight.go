@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -18,6 +20,8 @@ var (
 	nvidiaProcGPUInfoRoot = "/proc/driver/nvidia/gpus"
 	cudaDriverInitProbe   = defaultCUDADriverInitProbe
 )
+
+const cudaDriverInitProbeTimeout = 10 * time.Second
 
 type preflightResult struct {
 	checks      []check
@@ -198,7 +202,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 				Name:     "cuda-driver-init",
 				Ok:       cudaOK,
 				Message:  cudaMessage,
-				Severity: "info",
+				Severity: severity(cudaOK),
 			})
 		}
 	}
@@ -322,10 +326,16 @@ rc_count = lib.cuDeviceGetCount(ctypes.byref(count))
 print(f"cuInit={rc} cuDeviceGetCount={rc_count} count={count.value}")
 sys.exit(0 if rc == 0 and rc_count == 0 else 1)
 `
-	output, err := exec.Command(pythonPath, "-c", script).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), cudaDriverInitProbeTimeout)
+	defer cancel()
+
+	output, err := exec.CommandContext(ctx, pythonPath, "-c", script).CombinedOutput()
 	message := strings.TrimSpace(string(output))
 	if message == "" {
 		message = "host CUDA driver init probe completed"
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return false, "host CUDA driver init probe timed out", true
 	}
 	if err != nil {
 		return false, message, true

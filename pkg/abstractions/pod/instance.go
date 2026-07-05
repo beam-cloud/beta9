@@ -126,6 +126,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Mounts:            mounts,
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
+			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			Ports:             ports,
 			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
@@ -133,7 +134,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			return err
 		}
 
-		if i.StubConfig.KeepWarmSeconds < 0 {
+		if i.StubConfig.KeepWarmSeconds != 0 {
 			setPodKeepWarmLock(
 				context.Background(),
 				i.ContainerRepo,
@@ -210,6 +211,10 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 		}
 
 		if keepWarm {
+			continue
+		}
+
+		if i.buffer != nil && i.buffer.pendingKeepWarmLockExists(container.ContainerId) {
 			continue
 		}
 

@@ -891,7 +891,7 @@ func TestFlushConnectionStateSkipsIdleSnapshots(t *testing.T) {
 	}
 }
 
-func TestDecrementContainerConnectionsSetsKeepWarmBeforeIdle(t *testing.T) {
+func TestDecrementContainerConnectionsDoesNotBlockOnKeepWarmPersistence(t *testing.T) {
 	repo := &blockingKeepWarmRepo{
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
@@ -924,16 +924,17 @@ func TestDecrementContainerConnectionsSetsKeepWarmBeforeIdle(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("decrement returned before keep-warm lock completed")
-	default:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("decrement blocked on keep-warm lock persistence")
+	}
+	if !pb.pendingKeepWarmLockExists("container-1") {
+		t.Fatal("expected pending keep-warm marker while persistence is blocked")
 	}
 
 	close(repo.release)
-	select {
-	case <-done:
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("decrement did not return after keep-warm lock completed")
-	}
+	waitForCondition(t, time.Second, func() bool {
+		return !pb.pendingKeepWarmLockExists("container-1")
+	})
 }
 
 func TestStoppableContainersDoesNotUseStartedAtForFiniteKeepWarm(t *testing.T) {
@@ -975,6 +976,41 @@ func TestStoppableContainersDoesNotUseStartedAtForFiniteKeepWarm(t *testing.T) {
 	}
 	if len(stoppable) != 1 || stoppable[0] != containerID {
 		t.Fatalf("stoppable containers = %v, want [%s]", stoppable, containerID)
+	}
+}
+
+func TestStoppableContainersSkipsPendingKeepWarmLock(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "pod-stub-container-1"
+
+	if err := repo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	buffer := &PodProxyBuffer{}
+	buffer.pendingKeepWarmLocks.Store(containerID, struct{}{})
+
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Rdb:           rdb,
+		IsActive:      true,
+		ContainerRepo: repo,
+		Workspace:     &types.Workspace{Name: "workspace"},
+		Stub:          &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub"}},
+		StubConfig:    &types.StubConfigV1{KeepWarmSeconds: 600},
+	}, buffer: buffer}
+
+	stoppable, err := instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stoppable) != 0 {
+		t.Fatalf("stoppable containers = %v, want none", stoppable)
 	}
 }
 

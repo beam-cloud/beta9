@@ -3468,6 +3468,9 @@
         },
         "allowMarketplace": {
           "type": "boolean"
+        },
+        "checkpointTrigger": {
+          "$ref": "#/definitions/typesCheckpointTrigger"
         }
       }
     },
@@ -5285,6 +5288,29 @@
             "type": "object",
             "$ref": "#/definitions/protobufAny"
           }
+        }
+      }
+    },
+    "typesCheckpointTrigger": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "httpPath": {
+          "type": "string"
+        },
+        "httpPort": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

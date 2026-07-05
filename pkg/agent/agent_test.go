@@ -1211,6 +1211,16 @@ func containsArg(args []string, prefix, value string) bool {
 	return false
 }
 
+func TestNvidiaSMISystemBusIDAcceptsUppercaseDomainPrefix(t *testing.T) {
+	got, ok := nvidiaSMISystemBusID("0X0000", "00000000:01:00.0")
+	if !ok {
+		t.Fatal("expected uppercase 0X domain prefix to parse")
+	}
+	if got != "0000:01:00.0" {
+		t.Fatalf("bus id = %q, want %q", got, "0000:01:00.0")
+	}
+}
+
 func startEchoListener(t *testing.T, addr string) net.Listener {
 	t.Helper()
 

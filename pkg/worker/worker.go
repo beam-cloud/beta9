@@ -82,6 +82,7 @@ type Worker struct {
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	buildCancels            *common.SafeMap[context.CancelFunc]
 	containerLock           sync.Mutex
+	checkpointCreateLocks   sync.Map
 	containerStartSem       chan struct{}
 	containerStartLimit     int
 	containerWg             sync.WaitGroup

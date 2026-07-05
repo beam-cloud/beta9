@@ -291,7 +291,10 @@ func detectNvidiaGPUDevices() []gpuDevice {
 }
 
 func nvidiaSMISystemBusID(domain, smiBusID string) (string, bool) {
-	domain = strings.TrimPrefix(strings.TrimSpace(domain), "0x")
+	domain = strings.TrimSpace(domain)
+	if len(domain) >= 2 && strings.EqualFold(domain[:2], "0x") {
+		domain = domain[2:]
+	}
 	value, err := strconv.ParseUint(domain, 16, 16)
 	if err != nil {
 		return "", false

@@ -152,6 +152,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Autoscaler:         autoscaler,
 		Extra:              json.RawMessage(in.Extra),
 		CheckpointEnabled:  in.CheckpointEnabled,
+		CheckpointTrigger:  types.NewCheckpointTriggerFromProto(in.CheckpointTrigger),
 		EntryPoint:         in.Entrypoint,
 		Ports:              in.Ports,
 		Env:                in.Env,
@@ -585,7 +586,7 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 		return fmt.Errorf("workspace storage is required for checkpoints")
 	}
 
-	volumeName := "checkpoint-model-cache"
+	volumeName := types.CheckpointModelCacheVolumeName(in.Name)
 	modelCachePath := fmt.Sprintf("/%s", volumeName)
 	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
 	if err != nil {

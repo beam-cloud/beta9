@@ -259,7 +259,43 @@ type ContainerRequest struct {
 	AllowMarketplace         bool            `json:"allow_marketplace"`
 	// MachineId pins scheduling to a single agent machine (e.g. a marketplace
 	// rental); empty means any machine.
-	MachineId string `json:"machine_id,omitempty"`
+	MachineId         string             `json:"machine_id,omitempty"`
+	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
+}
+
+// @go2proto
+type CheckpointTrigger struct {
+	Type            string `json:"type,omitempty"`
+	HttpPath        string `json:"http_path,omitempty"`
+	HttpPort        uint32 `json:"http_port,omitempty"`
+	TimeoutSeconds  uint32 `json:"timeout_seconds,omitempty"`
+	IntervalSeconds uint32 `json:"interval_seconds,omitempty"`
+}
+
+func (t *CheckpointTrigger) ToProto() *pb.CheckpointTrigger {
+	if t == nil {
+		return nil
+	}
+	return &pb.CheckpointTrigger{
+		Type:            t.Type,
+		HttpPath:        t.HttpPath,
+		HttpPort:        t.HttpPort,
+		TimeoutSeconds:  t.TimeoutSeconds,
+		IntervalSeconds: t.IntervalSeconds,
+	}
+}
+
+func NewCheckpointTriggerFromProto(in *pb.CheckpointTrigger) *CheckpointTrigger {
+	if in == nil {
+		return nil
+	}
+	return &CheckpointTrigger{
+		Type:            in.Type,
+		HttpPath:        in.HttpPath,
+		HttpPort:        in.HttpPort,
+		TimeoutSeconds:  in.TimeoutSeconds,
+		IntervalSeconds: in.IntervalSeconds,
+	}
 }
 
 type ContainerNetworkPolicy string
@@ -558,6 +594,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		MachineId:                c.MachineId,
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
+		CheckpointTrigger:        c.CheckpointTrigger.ToProto(),
 	}
 }
 
@@ -616,6 +653,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		MachineId:                in.MachineId,
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
+		CheckpointTrigger:        NewCheckpointTriggerFromProto(in.CheckpointTrigger),
 	}
 }
 

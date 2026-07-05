@@ -45,7 +45,8 @@ func (pb *PodProxyBuffer) incrementContainerConnections(containerId string) erro
 
 func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) error {
 	defer pb.signalWork()
-	pb.setPodKeepWarmLock(containerId)
+	pb.markPendingKeepWarmLock(containerId)
+	go pb.setPodKeepWarmLock(containerId)
 
 	counter, ok := pb.containerConnectionCounter(containerId)
 	if !ok {
@@ -210,6 +211,8 @@ func (pb *PodProxyBuffer) shouldRefreshProxyConnectionIndex(now time.Time) bool 
 }
 
 func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
+	defer pb.clearPendingKeepWarmLock(containerID)
+
 	if pb.containerRepo == nil || pb.workspace == nil {
 		return
 	}
@@ -222,6 +225,28 @@ func (pb *PodProxyBuffer) setPodKeepWarmLock(containerID string) {
 	defer cancel()
 
 	setPodKeepWarmLock(ctx, pb.containerRepo, pb.workspace.Name, pb.stubId, containerID, pb.stubConfig.KeepWarmSeconds)
+}
+
+func (pb *PodProxyBuffer) markPendingKeepWarmLock(containerID string) {
+	if containerID == "" || pb.stubConfig == nil || pb.stubConfig.KeepWarmSeconds <= 0 {
+		return
+	}
+	pb.pendingKeepWarmLocks.Store(containerID, struct{}{})
+}
+
+func (pb *PodProxyBuffer) clearPendingKeepWarmLock(containerID string) {
+	if containerID == "" {
+		return
+	}
+	pb.pendingKeepWarmLocks.Delete(containerID)
+}
+
+func (pb *PodProxyBuffer) pendingKeepWarmLockExists(containerID string) bool {
+	if containerID == "" {
+		return false
+	}
+	_, ok := pb.pendingKeepWarmLocks.Load(containerID)
+	return ok
 }
 
 func decrementCounter(counter *atomic.Int64) int64 {
