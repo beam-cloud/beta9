@@ -8,6 +8,7 @@ from rich.table import Column, Table, box
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.service import (
+    DEFAULT_SERVICE_KEEP_WARM_SECONDS,
     Service,
     resolve_service_ports,
 )
