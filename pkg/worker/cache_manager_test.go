@@ -472,6 +472,9 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 				NTopHosts:             3,
 				MaxGetContentAttempts: 1,
 			},
+			Reconciliation: cache.ReconciliationConfig{
+				MaxDiskUsagePct: 0.99,
+			},
 			Global: cache.GlobalConfig{
 				DefaultLocality:         "test",
 				DiscoveryIntervalS:      1,

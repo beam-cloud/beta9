@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -16,6 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
+
+func TestLockImageArchiveFileRespectsContextCancellation(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "image.clip")
+	unlock, err := lockImageArchiveFile(context.Background(), archivePath)
+	require.NoError(t, err)
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err = lockImageArchiveFile(ctx, archivePath)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 500*time.Millisecond)
+}
 
 func TestGatewayCredentialProviderForImageFetchesScopedCredentials(t *testing.T) {
 	repo := &fakeImageCredentialWorkerRepo{

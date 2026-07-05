@@ -82,6 +82,7 @@ type Worker struct {
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	buildCancels            *common.SafeMap[context.CancelFunc]
 	containerLock           sync.Mutex
+	checkpointCreateLocks   sync.Map
 	containerStartSem       chan struct{}
 	containerStartLimit     int
 	containerWg             sync.WaitGroup
@@ -1085,6 +1086,12 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
+	if s.cacheManager != nil {
+		if err := s.cacheManager.Drain(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to drain cache: %v", err))
+		}
+	}
+
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
 

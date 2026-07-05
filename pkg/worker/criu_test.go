@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -28,6 +31,50 @@ type MockRuntime struct {
 	killCalled       bool
 	killSignal       syscall.Signal
 	capabilities     runtime.Capabilities
+}
+
+func TestCheckpointHTTPReadinessRequiresStatusOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ready" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	address := strings.TrimPrefix(server.URL, "http://")
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{ContainerId: "container-1"}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		ContainerAddressMap: map[int32]string{8000: address},
+	})
+
+	err := worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, 8000, "/ready")
+	if err != nil {
+		t.Fatalf("checkCheckpointHTTPReady returned error: %v", err)
+	}
+
+	err = worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, 8000, "/not-ready")
+	if err == nil {
+		t.Fatal("expected non-200 readiness response to fail")
+	}
+}
+
+func TestCheckpointCreateLockIsPerStub(t *testing.T) {
+	worker := &Worker{}
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub"}
+
+	if !worker.acquireCheckpointCreateLock(request) {
+		t.Fatal("first checkpoint lock acquisition failed")
+	}
+	if worker.acquireCheckpointCreateLock(request) {
+		t.Fatal("second checkpoint lock acquisition succeeded")
+	}
+	worker.releaseCheckpointCreateLock(request)
+	if !worker.acquireCheckpointCreateLock(request) {
+		t.Fatal("checkpoint lock was not released")
+	}
 }
 
 func NewMockRuntime(name string, caps runtime.Capabilities) *MockRuntime {

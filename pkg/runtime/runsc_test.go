@@ -32,7 +32,7 @@ case "$cmd" in
     ;;
   restore)
     echo restore-start >> "$RUNSC_FAKE_LOG"
-    sleep 0.5
+    sleep 0.2
     touch "$RUNSC_FAKE_READY"
     echo restore-ready >> "$RUNSC_FAKE_LOG"
     sleep 5

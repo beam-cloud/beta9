@@ -1178,7 +1178,7 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 	case types.EventStubCacheRequiredContentSchema:
 		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
 	case types.EventPlatformCacheSchema:
-		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
+		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID, WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
 	default:
 		return eventMetadata{}
 	}

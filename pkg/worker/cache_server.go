@@ -18,8 +18,8 @@ import (
 // containers. It uses the same worker image and cache registration path as a
 // normal worker, but never starts the container runtime.
 func RunCacheServer() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
@@ -57,11 +57,9 @@ func RunCacheServer() error {
 	manager := NewWorkerCacheManager(ctx, config, poolConfig, workerRepoClient, eventRepo, nil, workerID, poolName, podAddr)
 	client, err := manager.Start()
 	if err != nil {
-		cancel()
 		return err
 	}
 	if client == nil {
-		cancel()
 		return errors.New("cache server mode requires cache to be enabled")
 	}
 
@@ -73,12 +71,11 @@ func RunCacheServer() error {
 		Bool("running_cache_server", manager.runningCacheServer()).
 		Msg("cache server process started")
 
-	terminate := make(chan os.Signal, 1)
-	signal.Notify(terminate, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-terminate:
-		log.Info().Msg("cache server shutdown signal received")
-	case <-ctx.Done():
+	<-ctx.Done()
+	stop()
+	log.Info().Msg("cache server shutdown signal received")
+	if err := manager.Drain(); err != nil {
+		log.Warn().Err(err).Msg("cache server drain failed")
 	}
 
 	return manager.Close()

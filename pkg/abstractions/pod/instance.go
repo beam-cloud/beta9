@@ -126,6 +126,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Mounts:            mounts,
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
+			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			Ports:             ports,
 			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
@@ -133,17 +134,29 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			return err
 		}
 
-		setPodKeepWarmLock(
-			context.Background(),
-			i.ContainerRepo,
-			i.Workspace.Name,
-			i.Stub.ExternalId,
-			runRequest.ContainerId,
-			i.StubConfig.KeepWarmSeconds,
-		)
+		if i.StubConfig.KeepWarmSeconds != 0 {
+			setPodKeepWarmLock(
+				context.Background(),
+				i.ContainerRepo,
+				i.Workspace.Name,
+				i.Stub.ExternalId,
+				runRequest.ContainerId,
+				i.StubConfig.KeepWarmSeconds,
+			)
+		}
 
 		err = i.Scheduler.Run(runRequest)
 		if err != nil {
+			if i.StubConfig.KeepWarmSeconds != 0 {
+				setPodKeepWarmLock(
+					context.Background(),
+					i.ContainerRepo,
+					i.Workspace.Name,
+					i.Stub.ExternalId,
+					runRequest.ContainerId,
+					0,
+				)
+			}
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
 		}
@@ -200,13 +213,6 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		if i.StubConfig.KeepWarmSeconds > 0 && container.StartedAt > 0 {
-			keepWarmUntil := time.Unix(container.StartedAt, 0).Add(time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second)
-			if time.Now().Before(keepWarmUntil) {
-				continue
-			}
-		}
-
 		// Skip containers with keep warm locks
 		keepWarm, err := i.ContainerRepo.PodKeepWarmLockExists(context.TODO(), i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
 		if err != nil {
@@ -215,6 +221,10 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 		}
 
 		if keepWarm {
+			continue
+		}
+
+		if i.buffer != nil && i.buffer.pendingKeepWarmLockExists(container.ContainerId) {
 			continue
 		}
 

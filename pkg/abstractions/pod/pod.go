@@ -448,6 +448,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		EntryPoint:        stubConfig.EntryPoint,
 		Ports:             ports,
 		CheckpointEnabled: checkpointEnabled,
+		CheckpointTrigger: stubConfig.CheckpointTrigger,
 		Checkpoint:        checkpoint,
 		PoolSelector:      stubConfig.PoolSelector(),
 		AllowMarketplace:  stubConfig.AllowMarketplace,
@@ -459,6 +460,14 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 	err = s.scheduler.Run(runRequest)
 	if err != nil {
+		setPodKeepWarmLock(
+			context.Background(),
+			s.containerRepo,
+			workspace.Name,
+			stub.ExternalId,
+			containerId,
+			0,
+		)
 		return "", err
 	}
 

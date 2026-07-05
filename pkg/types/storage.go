@@ -16,7 +16,8 @@ const (
 )
 
 const (
-	DurableDiskDriverSnapshot = "snapshot"
+	DurableDiskDriverSnapshot        = "snapshot"
+	CheckpointModelCacheVolumePrefix = "checkpoint-model-cache"
 )
 
 func NormalizeDurableDiskDriver(driver string) string {
@@ -31,6 +32,14 @@ func SafeDurableDiskName(name string) string {
 		return "disk"
 	}
 	return name
+}
+
+func CheckpointModelCacheVolumeName(stubName string) string {
+	name := SafeDurableDiskName(stubName)
+	if name == "disk" {
+		return CheckpointModelCacheVolumePrefix
+	}
+	return fmt.Sprintf("%s-%s", CheckpointModelCacheVolumePrefix, name)
 }
 
 func IsDiskSnapshotFilesystemFormat(format string) bool {

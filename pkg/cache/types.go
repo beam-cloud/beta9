@@ -42,8 +42,9 @@ type ReconciliationConfig struct {
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 	// MaxDiskUsagePct is the soft pressure watermark (0-1). Above it, the
-	// cache owner evicts unprotected LRU content before reconciling recent
-	// stubs. Reconciliation pauses only when the hard write gate is active.
+	// cache owner evicts lower-priority content and pauses proactive
+	// reconciliation. Near it, reconciliation is limited to the ranked recent
+	// working set so eviction and materialization do not churn.
 	MaxDiskUsagePct float64 `key:"maxDiskUsagePct" json:"max_disk_usage_pct"`
 }
 
@@ -54,6 +55,36 @@ type DiskConfig struct {
 	MaxUsagePct  float64 `key:"maxUsagePct" json:"max_usage_pct"`
 	MinFreeBytes int64   `key:"minFreeBytes" json:"min_free_bytes"`
 }
+
+const (
+	CacheChurnOperationDiskEviction = "disk_eviction"
+
+	CacheChurnStatusEvicted          = "evicted"
+	CacheChurnStatusProtectedEvicted = "protected_evicted"
+	CacheChurnStatusNothingEvictable = "nothing_evictable"
+)
+
+type CacheChurnEvent struct {
+	Operation           string
+	Status              string
+	Path                string
+	EvictedObjects      int
+	ProtectedObjects    int
+	FreedBytes          int64
+	ProtectedFreedBytes int64
+	UsagePct            float64
+	WatermarkPct        float64
+	AvailableBytes      uint64
+	ReserveBytes        int64
+	TargetFreeBytes     int64
+	TotalCandidates     int
+	ProtectedCandidates int
+	RecentCandidates    int
+	EligibleCandidates  int
+	Timestamp           time.Time
+}
+
+type CacheChurnSink func(CacheChurnEvent)
 
 type MemoryConfig struct {
 	Enabled     bool  `key:"enabled" json:"enabled"`
@@ -105,7 +136,7 @@ type ServerConfig struct {
 	// DiskCacheEvictWatermarkPct is the filesystem usage fraction (0-1) above
 	// which the store evicts least-recently-accessed content until usage
 	// falls back below the watermark. It must sit below the kubelet's
-	// DiskPressure thresholds so the node never reaches them. Defaults to 0.85.
+	// DiskPressure thresholds so the node never reaches them. Defaults to 0.80.
 	DiskCacheEvictWatermarkPct   float64                   `key:"diskCacheEvictWatermarkPct" json:"disk_cache_evict_watermark_pct"`
 	ObjectTtlS                   int                       `key:"objectTtlS" json:"object_ttl_s"`
 	MaxCachePct                  int64                     `key:"maxCachePct" json:"max_cache_pct"`

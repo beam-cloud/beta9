@@ -64,6 +64,8 @@ type Store struct {
 	accessTouches           map[string]time.Time
 	protectedMu             sync.RWMutex
 	protectedContent        map[string]struct{}
+	churnMu                 sync.RWMutex
+	churnSink               CacheChurnSink
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -1448,6 +1450,31 @@ func (cas *Store) StartDiskMonitor() {
 	// drop old-but-required content during startup pressure.
 	cas.refreshDiskCacheUsage(false)
 	go cas.monitorDiskCacheUsage()
+}
+
+func (cas *Store) SetChurnSink(sink CacheChurnSink) {
+	if cas == nil {
+		return
+	}
+	cas.churnMu.Lock()
+	cas.churnSink = sink
+	cas.churnMu.Unlock()
+}
+
+func (cas *Store) emitChurnEvent(event CacheChurnEvent) {
+	if cas == nil {
+		return
+	}
+	cas.churnMu.RLock()
+	sink := cas.churnSink
+	cas.churnMu.RUnlock()
+	if sink == nil {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	sink(event)
 }
 
 func (cas *Store) diskWriteAllowed() bool {

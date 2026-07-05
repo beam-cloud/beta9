@@ -33,6 +33,7 @@ from ...clients.gateway import (
 )
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
+from ...clients.types import CheckpointTrigger
 from ...clients.types import PricingPolicy as PricingPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
@@ -136,6 +137,10 @@ class RunnerAbstraction(BaseAbstraction):
         llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
         disks: Optional[List[DurableDisk]] = None,
+        checkpoint_readiness_path: Optional[str] = None,
+        checkpoint_readiness_port: Optional[int] = None,
+        checkpoint_readiness_timeout: int = 600,
+        checkpoint_readiness_interval: int = 1,
     ) -> None:
         super().__init__()
 
@@ -183,6 +188,10 @@ class RunnerAbstraction(BaseAbstraction):
             ttl=task_policy.ttl,
         )
         self.checkpoint_enabled = checkpoint_enabled
+        self.checkpoint_readiness_path = checkpoint_readiness_path
+        self.checkpoint_readiness_port = checkpoint_readiness_port
+        self.checkpoint_readiness_timeout = checkpoint_readiness_timeout
+        self.checkpoint_readiness_interval = checkpoint_readiness_interval
         self.docker_enabled = docker_enabled
         self.allow_marketplace = allow_marketplace
         self.is_service = False
@@ -711,6 +720,7 @@ class RunnerAbstraction(BaseAbstraction):
             ),
             concurrent_requests=self.concurrent_requests,
             checkpoint_enabled=self.checkpoint_enabled,
+            checkpoint_trigger=self._checkpoint_trigger_proto(),
             extra=json.dumps(self.extra),
             entrypoint=self.entrypoint,
             ports=self.ports,
@@ -733,6 +743,18 @@ class RunnerAbstraction(BaseAbstraction):
             is_service=self.is_service,
             serving=self._serving_config_proto(),
             disks=[disk.export() for disk in self.disks],
+        )
+
+    def _checkpoint_trigger_proto(self) -> Optional[CheckpointTrigger]:
+        if not self.checkpoint_enabled or not self.checkpoint_readiness_path:
+            return None
+
+        return CheckpointTrigger(
+            type="http",
+            http_path=self.checkpoint_readiness_path,
+            http_port=int(self.checkpoint_readiness_port or 0),
+            timeout_seconds=int(self.checkpoint_readiness_timeout),
+            interval_seconds=int(self.checkpoint_readiness_interval),
         )
 
     def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:

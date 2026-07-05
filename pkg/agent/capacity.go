@@ -12,9 +12,10 @@ import (
 )
 
 type gpuDevice struct {
-	ID   string
-	UUID string
-	Name string
+	ID    string
+	UUID  string
+	Name  string
+	BusID string
 }
 
 type agentCapacity struct {
@@ -37,6 +38,7 @@ func resolveAgentCapacity(opts types.AgentJoinOptions, preflight preflightResult
 		CPUMillicores:             int64(systemCPUCount()) * 1000,
 		MemoryMB:                  systemMemoryMB(),
 		GPUs:                      types.NormalizeGPUStrings(preflight.gpus),
+		GPUIDs:                    gpuDeviceIDs(preflight.gpuDevices),
 		GPUCount:                  uint32(len(preflight.gpus)),
 		NetworkSlotPoolSize:       uint32(opts.NetworkSlots),
 		ContainerStartConcurrency: uint32(opts.ContainerStartConcurrency),
@@ -233,6 +235,16 @@ func findGPUDevice(devices []gpuDevice, id string) (gpuDevice, bool) {
 	return gpuDevice{}, false
 }
 
+func gpuDeviceIDs(devices []gpuDevice) []string {
+	ids := make([]string, 0, len(devices))
+	for _, device := range devices {
+		if device.ID != "" {
+			ids = append(ids, device.ID)
+		}
+	}
+	return ids
+}
+
 func capacityCheckMessage(ok bool, success string, err error) string {
 	if ok {
 		return success
@@ -243,9 +255,12 @@ func capacityCheckMessage(ok bool, success string, err error) string {
 	return "requested capacity exceeds detected machine capacity"
 }
 
+var queryNvidiaGPUDevices = func() ([]byte, error) {
+	return exec.Command("nvidia-smi", "--query-gpu=index,uuid,name,pci.domain,pci.bus_id", "--format=csv,noheader,nounits").Output()
+}
+
 func detectNvidiaGPUDevices() []gpuDevice {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=index,uuid,name", "--format=csv,noheader")
-	out, err := cmd.Output()
+	out, err := queryNvidiaGPUDevices()
 	if err != nil {
 		return nil
 	}
@@ -253,17 +268,42 @@ func detectNvidiaGPUDevices() []gpuDevice {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	devices := make([]gpuDevice, 0, len(lines))
 	for _, line := range lines {
-		fields := strings.SplitN(line, ",", 3)
-		if len(fields) != 3 {
+		fields := strings.SplitN(line, ",", 5)
+		if len(fields) != 5 {
 			continue
 		}
 		id := strings.TrimSpace(fields[0])
 		uuid := strings.TrimSpace(fields[1])
 		name := string(types.NormalizeGPUType(fields[2]))
+		busID, ok := nvidiaSMISystemBusID(fields[3], fields[4])
 		if id == "" || name == "" {
 			continue
 		}
-		devices = append(devices, gpuDevice{ID: id, UUID: uuid, Name: name})
+		if ok {
+			healthy, err := nvidiaProcGPUInfoHealthy(busID)
+			if err != nil || !healthy {
+				continue
+			}
+		}
+		devices = append(devices, gpuDevice{ID: id, UUID: uuid, Name: name, BusID: busID})
 	}
 	return devices
+}
+
+func nvidiaSMISystemBusID(domain, smiBusID string) (string, bool) {
+	domain = strings.TrimSpace(domain)
+	if len(domain) >= 2 && strings.EqualFold(domain[:2], "0x") {
+		domain = domain[2:]
+	}
+	value, err := strconv.ParseUint(domain, 16, 16)
+	if err != nil {
+		return "", false
+	}
+	domain = fmt.Sprintf("%04x", value)
+
+	parts := strings.Split(strings.TrimSpace(smiBusID), ":")
+	if len(parts) != 3 {
+		return "", false
+	}
+	return strings.ToLower(strings.Join([]string{domain, parts[1], parts[2]}, ":")), true
 }

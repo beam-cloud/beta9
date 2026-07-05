@@ -246,6 +246,13 @@ func (cs *Server) PressureEvictContent(protected map[string]struct{}, bytesToFre
 	return cs.cas.PressureEvictContent(protected, bytesToFree)
 }
 
+func (cs *Server) SetChurnSink(sink CacheChurnSink) {
+	if cs == nil || cs.cas == nil {
+		return
+	}
+	cs.cas.SetChurnSink(sink)
+}
+
 // HostID returns the logical host id this server registers under, or "".
 func (cs *Server) HostID() string {
 	host := cs.Host()
@@ -278,6 +285,22 @@ func (cs *Server) StoreReader(ctx context.Context, reader io.Reader, expectedHas
 		return "", 0, err
 	}
 	return cs.storeReaderWithExpectedHash(ctx, reader, expectedHash)
+}
+
+// ReadContentInto reads from this server's local store without cluster host
+// selection. It is intended for in-process callers that just materialized
+// content locally and need to consume that exact replica.
+func (cs *Server) ReadContentInto(ctx context.Context, hash string, offset int64, dst []byte) (int64, error) {
+	if cs == nil || cs.cas == nil {
+		return 0, fmt.Errorf("cache server store is not available")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := cs.rejectIfDraining(); err != nil {
+		return 0, err
+	}
+	return cs.cas.ReadAt(hash, offset, dst)
 }
 
 func newMetadataStore(cfg Config) (CacheMetadataStore, ServerConfig, error) {

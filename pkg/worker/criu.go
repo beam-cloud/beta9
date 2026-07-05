@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -34,6 +35,7 @@ const (
 	checkpointFsDir            = "filesystem"
 	checkpointArchiveExtension = ".tar"
 	checkpointOriginPrefix     = "checkpoints"
+	checkpointTriggerHTTP      = "http"
 )
 
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
@@ -96,6 +98,12 @@ func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.Conta
 
 	// If checkpointing is enabled and there is no existing checkpoint, attempt to create a checkpoint
 	if s.shouldCreateCheckpoint(request) {
+		if !s.acquireCheckpointCreateLock(request) {
+			log.Info().Str("container_id", request.ContainerId).Str("stub_id", request.StubId).Msg("checkpoint creation already in progress")
+			return
+		}
+		defer s.releaseCheckpointCreateLock(request)
+
 		outputLogger.Info("Attempting to create container checkpoint...")
 
 		containerIp := ""
@@ -360,9 +368,10 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("creating checkpoint")
 
 	if opts.WaitForSignal {
-		err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
+		err := s.waitForCheckpointTrigger(ctx, opts.Request, opts.OutputLogger)
 		if err != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to wait for checkpoint signal: %v", err)
+			s.markCheckpointFailed(opts)
 			return err
 		}
 	}
@@ -370,9 +379,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
-		if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
-			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", stateErr)
-		}
+		s.markCheckpointFailed(opts)
 
 		if opts.OutputLogger != nil {
 			opts.OutputLogger.Error("Failed to create checkpoint")
@@ -422,6 +429,15 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	return nil
+}
+
+func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts) {
+	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp); stateErr != nil {
+		log.Error().
+			Str("container_id", opts.Request.ContainerId).
+			Str("checkpoint_id", opts.CheckpointId).
+			Msgf("failed to create checkpoint state: %v", stateErr)
+	}
 }
 
 func (s *Worker) checkpointPath(checkpointId string) string {
@@ -627,6 +643,19 @@ func writeCacheContentFile(ctx context.Context, client *cache.Client, filePath, 
 	if client == nil {
 		return fmt.Errorf("cache is unavailable")
 	}
+	return writeCacheContentFileWithReader(ctx, filePath, hash, size, func(ctx context.Context, hash string, offset int64, dst []byte) (int64, error) {
+		return client.ReadContentInto(ctx, hash, offset, dst, cache.ClientOptions{RoutingKey: routingKey})
+	})
+}
+
+func writeLocalCacheContentFile(ctx context.Context, server *cache.Server, filePath, hash string, size int64) error {
+	if server == nil {
+		return fmt.Errorf("cache server is unavailable")
+	}
+	return writeCacheContentFileWithReader(ctx, filePath, hash, size, server.ReadContentInto)
+}
+
+func writeCacheContentFileWithReader(ctx context.Context, filePath, hash string, size int64, read func(context.Context, string, int64, []byte) (int64, error)) error {
 	tmpPath := filePath + ".tmp"
 	_ = os.Remove(tmpPath)
 
@@ -642,7 +671,7 @@ func writeCacheContentFile(ctx context.Context, client *cache.Client, filePath, 
 	buf := make([]byte, 4*1024*1024)
 	for offset := int64(0); offset < size; {
 		length := min(int64(len(buf)), size-offset)
-		n, err := client.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
+		n, err := read(ctx, hash, offset, buf[:length])
 		if err != nil {
 			_ = f.Close()
 			_ = os.Remove(tmpPath)
@@ -791,6 +820,23 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 	return true
 }
 
+func (s *Worker) acquireCheckpointCreateLock(request *types.ContainerRequest) bool {
+	if request == nil {
+		return false
+	}
+	key := fmt.Sprintf("%s:%s", request.WorkspaceId, request.StubId)
+	_, loaded := s.checkpointCreateLocks.LoadOrStore(key, struct{}{})
+	return !loaded
+}
+
+func (s *Worker) releaseCheckpointCreateLock(request *types.ContainerRequest) {
+	if request == nil {
+		return
+	}
+	key := fmt.Sprintf("%s:%s", request.WorkspaceId, request.StubId)
+	s.checkpointCreateLocks.Delete(key)
+}
+
 func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	if err := s.requireCRIUManager(); err != nil {
 		log.Warn().Err(err).Msg("C/R unavailable")
@@ -865,6 +911,89 @@ func (s *Worker) updateCheckpointRestored(checkpointId string) error {
 		LastRestoredAt: timestamppb.Now(),
 	}))
 	return err
+}
+
+func (s *Worker) waitForCheckpointTrigger(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
+	trigger := request.CheckpointTrigger
+	if trigger != nil && strings.EqualFold(trigger.Type, checkpointTriggerHTTP) && trigger.HttpPath != "" {
+		return s.waitForCheckpointHTTPReadiness(ctx, request, trigger, outputLogger)
+	}
+
+	return s.waitForCheckpointSignal(ctx, request, outputLogger)
+}
+
+func (s *Worker) waitForCheckpointHTTPReadiness(ctx context.Context, request *types.ContainerRequest, trigger *types.CheckpointTrigger, outputLogger *slog.Logger) error {
+	timeout := time.Duration(trigger.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = defaultCheckpointDeadline
+	}
+	interval := time.Duration(trigger.IntervalSeconds) * time.Second
+	if interval <= 0 {
+		interval = time.Second
+	}
+
+	port := int32(trigger.HttpPort)
+	if port == 0 && len(request.Ports) > 0 {
+		port = int32(request.Ports[0])
+	}
+	if port == 0 {
+		return fmt.Errorf("checkpoint HTTP readiness port is required")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	client := &http.Client{Timeout: min(interval, 5*time.Second)}
+	sampledLogger := log.Sample(&zerolog.BasicSampler{N: readyLogRate})
+
+	for {
+		if err := s.checkCheckpointHTTPReady(ctx, client, request, port, trigger.HttpPath); err == nil {
+			outputLogger.Info("Container HTTP readiness reached for checkpoint")
+			return nil
+		} else {
+			sampledLogger.Info().Str("container_id", request.ContainerId).Int32("port", port).Str("path", trigger.HttpPath).Err(err).Msg("container not ready for checkpoint")
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("checkpoint HTTP readiness deadline exceeded")
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Worker) checkCheckpointHTTPReady(ctx context.Context, client *http.Client, request *types.ContainerRequest, port int32, readinessPath string) error {
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return fmt.Errorf("container instance not found yet")
+	}
+
+	address := instance.containerAddress(port)
+	if address == "" {
+		return fmt.Errorf("container address for port %d not registered yet", port)
+	}
+
+	if !strings.HasPrefix(readinessPath, "/") {
+		readinessPath = "/" + readinessPath
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+readinessPath, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("checkpoint HTTP readiness returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (s *Worker) waitForCheckpointSignal(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {

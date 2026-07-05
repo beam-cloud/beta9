@@ -1,3 +1,4 @@
+import inspect
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,10 +15,12 @@ from beta9 import (
     ServingConfig,
 )
 from beta9.abstractions.service import (
+    DEFAULT_SERVICE_KEEP_WARM_SECONDS,
     command_from_dockerfile,
     ports_from_dockerfile,
     service_image_implies_default_port,
 )
+from beta9.abstractions.base.runner import RunnerAbstraction
 from beta9.cli.deployment import (
     _generate_service_module,
     _merge_port_options,
@@ -32,6 +35,12 @@ from beta9.cli.llm import apply_llm_metadata as _apply_llm_metadata
 
 
 class TestService(TestCase):
+    def test_runner_checkpoint_readiness_args_do_not_shift_existing_positionals(self):
+        parameters = list(inspect.signature(RunnerAbstraction.__init__).parameters)
+
+        self.assertLess(parameters.index("entrypoint"), parameters.index("checkpoint_readiness_path"))
+        self.assertLess(parameters.index("disks"), parameters.index("checkpoint_readiness_path"))
+
     def test_command_string_maps_to_shell_entrypoint(self):
         service = Service(command="npm run start", port=3000)
 
@@ -79,6 +88,7 @@ class TestService(TestCase):
 
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
+        self.assertEqual(service.keep_warm_seconds, DEFAULT_SERVICE_KEEP_WARM_SECONDS)
         self.assertEqual(service.autoscaler.min_containers, 0)
         self.assertEqual(service.autoscaler.max_containers, 1)
 
@@ -182,6 +192,22 @@ class TestService(TestCase):
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
+        self.assertEqual(service.keep_warm_seconds, DEFAULT_SERVICE_KEEP_WARM_SECONDS)
+
+    def test_generate_service_module_preserves_explicit_immediate_scale_to_zero(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": image,
+            "image": None,
+            "entrypoint": None,
+            "ports": [8080],
+            "env": (),
+            "keep_warm_seconds": 0,
+        }
+
+        service = _generate_service_module("dockerfile-app", kwargs)
+
+        self.assertEqual(service.keep_warm_seconds, 0)
 
     def test_generate_service_module_defaults_image_service_to_port_8000(self):
         image = Image.from_id("img-123")
@@ -219,6 +245,95 @@ class TestService(TestCase):
         self.assertEqual([secret.name for secret in service.secrets], ["API_TOKEN"])
         self.assertTrue(service.tcp)
 
+    def test_generate_service_module_applies_checkpoint_readiness(self):
+        image = Image.from_id("img-123")
+        kwargs = {
+            "dockerfile": None,
+            "image": image,
+            "entrypoint": None,
+            "ports": [8000],
+            "env": (),
+            "checkpoint_enabled": True,
+            "checkpoint_readiness_path": "/v1/models",
+            "checkpoint_readiness_port": 8000,
+            "checkpoint_readiness_timeout": 300,
+            "checkpoint_readiness_interval": 2,
+        }
+
+        service = _generate_service_module("image-app", kwargs)
+
+        self.assertTrue(service.checkpoint_enabled)
+        self.assertEqual(service.checkpoint_readiness_path, "/v1/models")
+        self.assertEqual(service.checkpoint_readiness_port, 8000)
+        self.assertEqual(service.checkpoint_readiness_timeout, 300)
+        self.assertEqual(service.checkpoint_readiness_interval, 2)
+
+    def test_service_serializes_checkpoint_readiness_trigger(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            checkpoint_enabled=True,
+            checkpoint_readiness_path="/ready",
+            checkpoint_readiness_port=8000,
+        )
+
+        request = service._stub_request(
+            stub_type="pod/deployment",
+            stub_name="svc",
+            force_create_stub=False,
+            autoscaler_type="queue_depth",
+            inputs=None,
+            outputs=None,
+        )
+
+        self.assertTrue(request.checkpoint_enabled)
+        self.assertEqual(request.checkpoint_trigger.type, "http")
+        self.assertEqual(request.checkpoint_trigger.http_path, "/ready")
+        self.assertEqual(request.checkpoint_trigger.http_port, 8000)
+
+    def test_pod_checkpoint_enabled_without_readiness_uses_signal_mode(self):
+        pod = Pod(
+            image=Image.from_id("img-123"),
+            entrypoint=["python", "server.py"],
+            ports=[8000],
+            checkpoint_enabled=True,
+        )
+
+        request = pod._stub_request(
+            stub_type="pod/deployment",
+            stub_name="pod",
+            force_create_stub=False,
+            autoscaler_type="queue_depth",
+            inputs=None,
+            outputs=None,
+        )
+
+        self.assertTrue(request.checkpoint_enabled)
+        self.assertIsNone(request.checkpoint_trigger)
+
+    def test_cli_checkpoint_default_does_not_override_python_config(self):
+        service = Service(
+            image=Image.from_id("img-123"),
+            ports=[8000],
+            checkpoint_enabled=True,
+            checkpoint_readiness_timeout=120,
+            checkpoint_readiness_interval=3,
+        )
+
+        self.assertTrue(
+            handle_config_override(
+                service,
+                {
+                    "checkpoint_enabled": None,
+                    "checkpoint_readiness_timeout": None,
+                    "checkpoint_readiness_interval": None,
+                },
+            )
+        )
+        self.assertTrue(service.checkpoint_enabled)
+        self.assertEqual(service.checkpoint_readiness_timeout, 120)
+        self.assertEqual(service.checkpoint_readiness_interval, 3)
+
     def test_generate_service_module_applies_llm_metadata(self):
         image = Image.from_id("img-123")
         kwargs = {
@@ -239,6 +354,7 @@ class TestService(TestCase):
 
         service = _generate_service_module("llm-app", kwargs)
 
+        self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.app_kind, "llm_model")
         self.assertEqual(service.serving_protocol, "openai")
         self.assertEqual(service.llm.model_id, "Qwen/Qwen2.5-0.5B-Instruct")
@@ -492,23 +608,25 @@ class TestService(TestCase):
         self.assertEqual(service.ports, [5000, 9000])
         self.assertIn("PORT=7000", service.env)
 
-    def test_service_infers_exec_form_dockerfile_cmd(self):
+    def test_service_uses_dockerfile_image_process_without_entrypoint(self):
         image = Image()
         image.dockerfile = 'FROM node:20-alpine\nEXPOSE 8080\nCMD ["node", "server.js"]\n'
 
         service = Service(image=image)
 
-        self.assertEqual(service.entrypoint, ["node", "server.js"])
+        self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
+        self.assertEqual(command_from_dockerfile(image), ["node", "server.js"])
 
-    def test_service_infers_shell_form_dockerfile_cmd(self):
+    def test_dockerfile_shell_form_cmd_is_available_for_metadata(self):
         image = Image()
         image.dockerfile = "FROM node:20-alpine\nCMD npm start\n"
 
         service = Service(image=image)
 
-        self.assertEqual(service.entrypoint, ["sh", "-lc", "npm start"])
+        self.assertEqual(service.entrypoint, [])
+        self.assertEqual(command_from_dockerfile(image), ["sh", "-lc", "npm start"])
 
     def test_dockerfile_entrypoint_and_cmd_are_combined(self):
         image = Image()
@@ -530,7 +648,7 @@ class TestService(TestCase):
         self.assertEqual(command_from_dockerfile(image), ["node", "server#prod.js"])
 
     @mock.patch("beta9.abstractions.image.Image.sync_files")
-    def test_generate_service_module_materializes_dockerfile_path_and_infers_command(
+    def test_generate_service_module_materializes_dockerfile_path_without_entrypoint_override(
         self, sync_files_mock
     ):
         with TemporaryDirectory() as tmpdir:
@@ -547,7 +665,7 @@ class TestService(TestCase):
             service = _generate_service_module("dockerfile-app", kwargs)
 
         self.assertIsInstance(kwargs["dockerfile"], Image)
-        self.assertEqual(service.entrypoint, ["node", "server.js"])
+        self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
         sync_files_mock.assert_called_once_with(str(Path(tmpdir)))

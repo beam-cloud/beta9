@@ -165,12 +165,27 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 	if !shouldAddWorker(freeCapacity, s.workerPoolSizingConfig) {
 		return nil, nil
 	}
+	if !s.poolSupportsProvisioning() {
+		return nil, nil
+	}
 
 	return s.controller.AddWorker(
 		s.workerPoolSizingConfig.DefaultWorkerCpu,
 		s.workerPoolSizingConfig.DefaultWorkerMemory,
 		s.workerPoolSizingConfig.DefaultWorkerGpuCount,
 	)
+}
+
+func (s *WorkerPoolSizer) poolSupportsProvisioning() bool {
+	if s == nil || s.workerPoolConfig == nil {
+		return true
+	}
+	if s.workerPoolConfig.Mode == types.PoolModeExternal &&
+		s.workerPoolConfig.Provider != nil &&
+		*s.workerPoolConfig.Provider == types.ProviderGeneric {
+		return false
+	}
+	return true
 }
 
 // shouldAddWorker checks if the conditions are met for a new worker to be added

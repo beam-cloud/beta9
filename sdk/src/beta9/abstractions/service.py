@@ -15,6 +15,8 @@ from .base.container import Container
 from .image import Image
 from .pod import Pod, PodInstance
 
+DEFAULT_SERVICE_KEEP_WARM_SECONDS = 600
+
 DEFAULT_SERVICE_PORT = 8000
 
 
@@ -182,7 +184,7 @@ class Service(Pod):
         disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
-        keep_warm_seconds: int = 0,
+        keep_warm_seconds: int = DEFAULT_SERVICE_KEEP_WARM_SECONDS,
         min_replicas: int = 0,
         max_replicas: Optional[int] = None,
         always_on: bool = False,
@@ -193,6 +195,11 @@ class Service(Pod):
         docker_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
         allow_marketplace: bool = False,
+        checkpoint_enabled: bool = False,
+        checkpoint_readiness_path: Optional[str] = None,
+        checkpoint_readiness_port: Optional[int] = None,
+        checkpoint_readiness_timeout: int = 600,
+        checkpoint_readiness_interval: int = 1,
         app_kind: str = "",
         serving_protocol: str = "",
         llm: Optional[LLMConfig] = None,
@@ -207,8 +214,6 @@ class Service(Pod):
             gpu_count = 1
 
         service_entrypoint = entrypoint
-        if command is None and not service_entrypoint:
-            service_entrypoint = command_from_dockerfile(image)
 
         service_ports = resolve_service_ports(
             port=port,
@@ -243,6 +248,11 @@ class Service(Pod):
             docker_enabled=docker_enabled,
             pool=pool,
             allow_marketplace=allow_marketplace,
+            checkpoint_enabled=checkpoint_enabled,
+            checkpoint_readiness_path=checkpoint_readiness_path,
+            checkpoint_readiness_port=checkpoint_readiness_port,
+            checkpoint_readiness_timeout=checkpoint_readiness_timeout,
+            checkpoint_readiness_interval=checkpoint_readiness_interval,
             app_kind=app_kind,
             serving_protocol=serving_protocol,
             llm=llm,

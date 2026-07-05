@@ -881,6 +881,102 @@ func TestResolveAgentCapacitySelectsGPUIDs(t *testing.T) {
 	}
 }
 
+func TestResolveAgentCapacityDefaultsToDetectedGPUIDs(t *testing.T) {
+	capacity, _, schedulable := resolveAgentCapacity(types.AgentJoinOptions{}, preflightResult{
+		gpus: []string{"NVIDIA RTX A4000", "NVIDIA RTX A4000"},
+		gpuDevices: []gpuDevice{
+			{ID: "0", UUID: "GPU-a", Name: "NVIDIA RTX A4000"},
+			{ID: "1", UUID: "GPU-b", Name: "NVIDIA RTX A4000"},
+		},
+		schedulable: true,
+	})
+
+	if !schedulable {
+		t.Fatal("expected detected GPU IDs to be schedulable")
+	}
+	if got := strings.Join(capacity.GPUIDs, ","); got != "0,1" {
+		t.Fatalf("gpu ids = %q, want 0,1", got)
+	}
+}
+
+func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
+	previousQuery := queryNvidiaGPUDevices
+	queryNvidiaGPUDevices = func() ([]byte, error) {
+		return []byte(`0, GPU-bad, NVIDIA GeForce RTX 4090, 0x0000, 00000000:01:00.0
+1, GPU-good, NVIDIA GeForce RTX 4090, 0x0000, 00000000:24:00.0`), nil
+	}
+	t.Cleanup(func() { queryNvidiaGPUDevices = previousQuery })
+
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+
+	previousRoot := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previousRoot })
+
+	devices := detectNvidiaGPUDevices()
+	if len(devices) != 1 {
+		t.Fatalf("devices = %#v, want one healthy GPU", devices)
+	}
+	if devices[0].ID != "1" || devices[0].UUID != "GPU-good" {
+		t.Fatalf("device = %#v, want healthy GPU", devices[0])
+	}
+}
+
+func TestNvidiaProcDriverStateReportsFailedAdapterWithoutHardFail(t *testing.T) {
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+
+	previous := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previous })
+
+	ok, message := nvidiaProcDriverStateOK([]gpuDevice{{ID: "0", UUID: "GPU-good", Name: "RTX4090"}})
+	if !ok {
+		t.Fatal("expected failed adapter state to be reported without failing the whole node")
+	}
+	if !strings.Contains(message, "0000:01:00.0") {
+		t.Fatalf("message = %q, want failed bus id", message)
+	}
+	if !strings.Contains(message, "excluded") {
+		t.Fatalf("message = %q, want exclusion message", message)
+	}
+}
+
+func TestNvidiaProcDriverStateReportsProcSmiMismatchWithoutHardFail(t *testing.T) {
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:41:00.0", "GPU-b", "580.126.18", "95.02.3c.40.b8")
+
+	previous := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previous })
+
+	ok, message := nvidiaProcDriverStateOK([]gpuDevice{{ID: "0", UUID: "GPU-a", Name: "RTX4090"}})
+	if !ok {
+		t.Fatal("expected procfs/nvidia-smi mismatch to be reported without failing the whole node")
+	}
+	if !strings.Contains(message, "2 GPUs") {
+		t.Fatalf("message = %q, want count mismatch", message)
+	}
+}
+
+func TestNvidiaProcDriverStateAllowsHealthyDetectedGPUs(t *testing.T) {
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8")
+
+	previous := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previous })
+
+	ok, message := nvidiaProcDriverStateOK([]gpuDevice{{ID: "0", UUID: "GPU-a", Name: "RTX4090"}})
+	if !ok {
+		t.Fatalf("expected healthy driver state, got %q", message)
+	}
+}
+
 func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	slot := &pb.AgentWorkerSlot{
@@ -1002,6 +1098,25 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 }
 
+func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string) {
+	t.Helper()
+	dir := filepath.Join(root, busID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	info := strings.Join([]string{
+		"Model: \t\t NVIDIA GeForce RTX 4090",
+		"GPU UUID: \t " + uuid,
+		"Video BIOS: \t " + videoBIOS,
+		"Bus Location: \t " + busID,
+		"Device Minor: \t 0",
+		"GPU Firmware: \t " + firmware,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "information"), []byte(info), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The worker image embeds config.default.yaml, which contains placeholder
 // registry credentials (e.g. accessKey "test"). The agent-generated config must
 // explicitly clear them so private workers never send placeholder credentials
@@ -1094,6 +1209,16 @@ func containsArg(args []string, prefix, value string) bool {
 		}
 	}
 	return false
+}
+
+func TestNvidiaSMISystemBusIDAcceptsUppercaseDomainPrefix(t *testing.T) {
+	got, ok := nvidiaSMISystemBusID("0X0000", "00000000:01:00.0")
+	if !ok {
+		t.Fatal("expected uppercase 0X domain prefix to parse")
+	}
+	if got != "0000:01:00.0" {
+		t.Fatalf("bus id = %q, want %q", got, "0000:01:00.0")
+	}
 }
 
 func startEchoListener(t *testing.T, addr string) net.Listener {

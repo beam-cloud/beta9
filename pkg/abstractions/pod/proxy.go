@@ -90,6 +90,7 @@ type PodProxyBuffer struct {
 	availableContainersLock sync.RWMutex
 	totalConnections        atomic.Int64
 	containerConnections    sync.Map
+	pendingKeepWarmLocks    sync.Map
 	llmMetricsRefreshAfter  sync.Map
 	llmRouteCounter         atomic.Uint64
 	idleSnapshotUntil       atomic.Int64

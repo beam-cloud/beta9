@@ -399,6 +399,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     serving: "ServingConfig" = betterproto.message_field(43)
     disks: List["DurableDisk"] = betterproto.message_field(44)
     allow_marketplace: bool = betterproto.bool_field(45)
+    checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
 
 
 @dataclass(eq=False, repr=False)

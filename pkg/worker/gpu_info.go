@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,10 @@ type NvidiaInfoClient struct {
 }
 
 const defaultDeviceCheckpointPath = types.HostKubeletDeviceCheckpointPath
+
+var (
+	nvidiaProcGPUInfoRoot = "/proc/driver/nvidia/gpus"
+)
 
 type kubeletCheckpoint struct {
 	Data struct {
@@ -121,9 +126,17 @@ var queryDevices = func() ([]byte, error) {
 }
 
 var checkGPUExists = func(busId string) (bool, error) {
-	_, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId))
+	path := filepath.Join(nvidiaProcGPUInfoRoot, busId)
+	_, err := os.Stat(path)
 	if err == nil {
-		return true, nil
+		data, err := os.ReadFile(filepath.Join(path, "information"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return true, nil
+			}
+			return false, err
+		}
+		return !nvidiaProcInfoLooksFailed(string(data)), nil
 	}
 
 	if os.IsNotExist(err) {
@@ -193,6 +206,23 @@ func nvidiaSMIDevices() ([]nvidiaSMIDevice, error) {
 		return nil, err
 	}
 	return parseNvidiaSMIDevices(devices)
+}
+
+func nvidiaProcInfoLooksFailed(info string) bool {
+	for _, line := range strings.Split(info, "\n") {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.TrimSpace(name) {
+		case "Video BIOS":
+			if value == "" || strings.HasPrefix(value, "??") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseNvidiaSMIDevices(devices []byte) ([]nvidiaSMIDevice, error) {

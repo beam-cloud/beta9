@@ -122,6 +122,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Mounts:            mounts,
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
+			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			Preemptable:       true,
 			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
