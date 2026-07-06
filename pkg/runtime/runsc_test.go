@@ -113,6 +113,7 @@ set -u
 for arg in "$@"; do
   if [ "$arg" = "exec" ]; then
 `+execBody+`
+    exit 0
   fi
 done
 echo "unexpected args: $*" >&2
@@ -124,11 +125,19 @@ exit 1
 
 func TestFindCUDAProcessesReturnsPIDs(t *testing.T) {
 	rt := newFakeRunsc(t, `    printf '12\n345\n'
-    exit 0`)
+	    exit 0`)
 
 	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
 	require.NoError(t, err)
 	require.Equal(t, []int{12, 345}, pids)
+}
+
+func TestFindCUDAProcessesExecBodyMayFallThrough(t *testing.T) {
+	rt := newFakeRunsc(t, `    printf '7\n'`)
+
+	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
+	require.NoError(t, err)
+	require.Equal(t, []int{7}, pids)
 }
 
 func TestFindCUDAProcessesEmptyOutputIsNotAnError(t *testing.T) {
@@ -139,11 +148,30 @@ func TestFindCUDAProcessesEmptyOutputIsNotAnError(t *testing.T) {
 	require.Empty(t, pids)
 }
 
-func TestFindCUDAProcessesExecFailureReturnsError(t *testing.T) {
+func TestFindCUDAProcessesNoMatchExitOneIsNotAnError(t *testing.T) {
 	rt := newFakeRunsc(t, `    exit 1`)
+
+	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
+	require.NoError(t, err)
+	require.Empty(t, pids)
+}
+
+func TestFindCUDAProcessesExitOneWithPIDsReturnsPIDs(t *testing.T) {
+	rt := newFakeRunsc(t, `    printf '12\n'
+	    exit 1`)
+
+	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
+	require.NoError(t, err)
+	require.Equal(t, []int{12}, pids)
+}
+
+func TestFindCUDAProcessesExecFailureReturnsError(t *testing.T) {
+	rt := newFakeRunsc(t, `    echo boom >&2
+	    exit 1`)
 
 	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to enumerate CUDA processes")
+	require.ErrorContains(t, err, "boom")
 	require.Nil(t, pids)
 }

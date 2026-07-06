@@ -581,17 +581,28 @@ func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]in
 			"[ -d \"$pid/fd\" ] && ls -l $pid/fd 2>/dev/null | grep -q nvidia && basename $pid; "+
 			"done")
 
-	output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w", containerID, err)
-	}
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 
-	// An empty result is valid - it means no processes have nvidia devices open
 	var pids []int
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && pid > 0 {
 			pids = append(pids, pid)
 		}
+	}
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			if len(pids) > 0 || (strings.TrimSpace(string(output)) == "" && strings.TrimSpace(stderr.String()) == "") {
+				return pids, nil
+			}
+		}
+
+		if message := strings.TrimSpace(stderr.String()); message != "" {
+			return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w (output: %s)", containerID, err, message)
+		}
+		return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w", containerID, err)
 	}
 
 	return pids, nil
