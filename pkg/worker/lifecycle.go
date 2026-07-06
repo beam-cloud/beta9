@@ -771,6 +771,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
+		disableIOUringForCheckpoint(spec)
+
 		err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
 		if err != nil {
 			return nil, err

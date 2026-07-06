@@ -25,6 +25,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -41,7 +42,67 @@ const (
 	checkpointTriggerHTTP      = "http"
 )
 
+var checkpointRuntimeEnvOverrides = []string{
+	"UV_USE_IO_URING=0",
+	"TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=1",
+}
+
+var checkpointDisabledIOUringSyscalls = []string{
+	"io_uring_setup",
+	"io_uring_enter",
+	"io_uring_register",
+}
+
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
+
+func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest) []string {
+	if request == nil || !request.CheckpointEnabled {
+		return env
+	}
+	return upsertEnvVars(env, checkpointRuntimeEnvOverrides)
+}
+
+func disableIOUringForCheckpoint(spec *specs.Spec) {
+	if spec == nil {
+		return
+	}
+	if spec.Linux == nil {
+		spec.Linux = &specs.Linux{}
+	}
+	if spec.Linux.Seccomp == nil {
+		spec.Linux.Seccomp = &specs.LinuxSeccomp{DefaultAction: specs.ActAllow}
+	}
+	if spec.Linux.Seccomp.DefaultAction == "" {
+		spec.Linux.Seccomp.DefaultAction = specs.ActAllow
+	}
+
+	blocked := make(map[string]struct{}, len(checkpointDisabledIOUringSyscalls))
+	for _, name := range checkpointDisabledIOUringSyscalls {
+		blocked[name] = struct{}{}
+	}
+
+	syscalls := spec.Linux.Seccomp.Syscalls[:0]
+	for _, syscallRule := range spec.Linux.Seccomp.Syscalls {
+		names := syscallRule.Names[:0]
+		for _, name := range syscallRule.Names {
+			if _, ok := blocked[name]; !ok {
+				names = append(names, name)
+			}
+		}
+		if len(names) == 0 {
+			continue
+		}
+		syscallRule.Names = names
+		syscalls = append(syscalls, syscallRule)
+	}
+
+	errno := uint(syscall.ENOSYS)
+	spec.Linux.Seccomp.Syscalls = append([]specs.LinuxSyscall{{
+		Names:    append([]string(nil), checkpointDisabledIOUringSyscalls...),
+		Action:   specs.ActErrno,
+		ErrnoRet: &errno,
+	}}, syscalls...)
+}
 
 type checkpointCacheMetadata struct {
 	hash        string
