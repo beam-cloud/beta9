@@ -112,7 +112,21 @@ func copyDirectory(src, dst string, excludePaths []string) error {
 	return nil
 }
 
+func normalizedCopyExcludePaths(excludePaths []string) map[string]struct{} {
+	excludes := map[string]struct{}{}
+	for _, excludePath := range excludePaths {
+		cleanPath := filepath.ToSlash(filepath.Clean(excludePath))
+		if cleanPath == "." || cleanPath == "" {
+			continue
+		}
+		excludes[cleanPath] = struct{}{}
+	}
+	return excludes
+}
+
 func copyDirectoryWalk(src, dst string, excludePaths []string) error {
+	excludes := normalizedCopyExcludePaths(excludePaths)
+
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -125,14 +139,13 @@ func copyDirectoryWalk(src, dst string, excludePaths []string) error {
 		if relPath == "." {
 			return nil
 		}
+		relPath = filepath.ToSlash(relPath)
 
-		for _, excludePath := range excludePaths {
-			if relPath == excludePath {
-				if info.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
+		if _, excluded := excludes[relPath]; excluded {
+			if info.IsDir() {
+				return filepath.SkipDir
 			}
+			return nil
 		}
 
 		dstPath := filepath.Join(dst, relPath)

@@ -79,3 +79,22 @@ func TestCopyDirectoryExcludesOnlyRootPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "keep", string(data))
 }
+
+func TestCopyDirectoryNormalizesNestedExcludePaths(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "workspace", "outputs"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "workspace", "outputs", "drop.txt"), []byte("drop"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "workspace", "data"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "workspace", "data", "keep.txt"), []byte("keep"), 0644))
+
+	require.NoError(t, copyDirectory(src, dst, []string{"./workspace/outputs/"}))
+
+	_, err := os.Stat(filepath.Join(dst, "workspace", "outputs", "drop.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	data, err := os.ReadFile(filepath.Join(dst, "workspace", "data", "keep.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "keep", string(data))
+}
