@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +33,7 @@ import (
 const (
 	gpuCntEnvKey               = types.WorkerGPUCountEnv
 	defaultCheckpointDeadline  = 10 * time.Minute
+	defaultCheckpointCreateTTL = 10 * time.Minute
 	readyLogRate               = 10
 	checkpointFsDir            = "filesystem"
 	checkpointArchiveExtension = ".tar"
@@ -362,7 +365,21 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	if opts.CheckpointPIDChan != nil {
-		<-opts.CheckpointPIDChan
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Info("Waiting for container runtime to start before checkpoint")
+		}
+		select {
+		case pid, ok := <-opts.CheckpointPIDChan:
+			if !ok {
+				return fmt.Errorf("container runtime exited before checkpoint could start")
+			}
+			if pid <= 0 {
+				return fmt.Errorf("container runtime reported invalid PID %d before checkpoint", pid)
+			}
+			log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Int("pid", pid).Msg("container runtime started for checkpoint")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("creating checkpoint")
@@ -371,39 +388,58 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		err := s.waitForCheckpointTrigger(ctx, opts.Request, opts.OutputLogger)
 		if err != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to wait for checkpoint signal: %v", err)
+			if opts.OutputLogger != nil {
+				opts.OutputLogger.Error(fmt.Sprintf("Failed to wait for checkpoint readiness: %v", err))
+			}
 			s.markCheckpointFailed(opts)
 			return err
 		}
 	}
 
 	// Proceed to create the checkpoint
-	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
+	if opts.OutputLogger != nil {
+		opts.OutputLogger.Info("Creating container checkpoint snapshot")
+	}
+	checkpointCtx, checkpointCancel := context.WithTimeout(ctx, defaultCheckpointCreateTTL)
+	defer checkpointCancel()
+	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
+		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("checkpoint snapshot timed out after %s: %w", defaultCheckpointCreateTTL, err)
+		}
 		s.markCheckpointFailed(opts)
 
 		if opts.OutputLogger != nil {
-			opts.OutputLogger.Error("Failed to create checkpoint")
+			opts.OutputLogger.Error(fmt.Sprintf("Failed to create checkpoint: %v", err))
 		}
 
 		return err
 	}
-
 	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
 	upperDir := path.Join(parentDir, "upper")
 
 	err = copyDirectory(upperDir, path.Join(checkpointPath, checkpointFsDir), []string{"config.json", "outputs", "snapshot"})
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Error(fmt.Sprintf("Failed to copy checkpoint filesystem state: %v", err))
+		}
 		return err
 	}
 	if !checkpointMaterialized(checkpointPath) {
 		return fmt.Errorf("checkpoint missing runtime or filesystem payload")
 	}
 
+	if opts.OutputLogger != nil {
+		opts.OutputLogger.Info("Persisting container checkpoint")
+	}
 	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
 	if err != nil {
 		_ = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to persist checkpoint: %v", err)
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Error(fmt.Sprintf("Failed to persist checkpoint: %v", err))
+		}
 		return err
 	}
 
@@ -425,9 +461,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	if opts.OutputLogger != nil {
 		opts.OutputLogger.Info("Checkpoint created successfully")
+	} else {
+		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	}
-
-	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	return nil
 }
 
@@ -940,6 +976,14 @@ func (s *Worker) waitForCheckpointHTTPReadiness(ctx context.Context, request *ty
 		return fmt.Errorf("checkpoint HTTP readiness port is required")
 	}
 
+	readinessPath := trigger.HttpPath
+	if !strings.HasPrefix(readinessPath, "/") {
+		readinessPath = "/" + readinessPath
+	}
+	if outputLogger != nil {
+		outputLogger.Info(fmt.Sprintf("Waiting for container HTTP readiness before checkpoint (port %d, path %s)", port, readinessPath))
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -950,11 +994,13 @@ func (s *Worker) waitForCheckpointHTTPReadiness(ctx context.Context, request *ty
 	sampledLogger := log.Sample(&zerolog.BasicSampler{N: readyLogRate})
 
 	for {
-		if err := s.checkCheckpointHTTPReady(ctx, client, request, port, trigger.HttpPath); err == nil {
-			outputLogger.Info("Container HTTP readiness reached for checkpoint")
+		if err := s.checkCheckpointHTTPReady(ctx, client, request, port, readinessPath); err == nil {
+			if outputLogger != nil {
+				outputLogger.Info("Container HTTP readiness reached for checkpoint")
+			}
 			return nil
 		} else {
-			sampledLogger.Info().Str("container_id", request.ContainerId).Int32("port", port).Str("path", trigger.HttpPath).Err(err).Msg("container not ready for checkpoint")
+			sampledLogger.Info().Str("container_id", request.ContainerId).Int32("port", port).Str("path", readinessPath).Err(err).Msg("container not ready for checkpoint")
 		}
 
 		select {
@@ -971,29 +1017,86 @@ func (s *Worker) checkCheckpointHTTPReady(ctx context.Context, client *http.Clie
 		return fmt.Errorf("container instance not found yet")
 	}
 
-	address := instance.containerAddress(port)
-	if address == "" {
+	addresses := checkpointHTTPReadinessAddresses(instance, port)
+	if len(addresses) == 0 {
 		return fmt.Errorf("container address for port %d not registered yet", port)
 	}
 
 	if !strings.HasPrefix(readinessPath, "/") {
 		readinessPath = "/" + readinessPath
 	}
+
+	var firstErr error
+	for _, address := range addresses {
+		if err := checkCheckpointHTTPReadyAt(ctx, client, address, readinessPath); err == nil {
+			return nil
+		} else if firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", address, err)
+		}
+	}
+
+	return fmt.Errorf("checkpoint HTTP readiness failed at %w", firstErr)
+}
+
+func checkCheckpointHTTPReadyAt(ctx context.Context, client *http.Client, address, readinessPath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+readinessPath, nil)
 	if err != nil {
 		return err
 	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("checkpoint HTTP readiness returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func checkpointHTTPReadinessAddresses(instance *ContainerInstance, port int32) []string {
+	if instance == nil {
+		return nil
+	}
+	portText := strconv.Itoa(int(port))
+	addresses := []string{}
+	addAddress := func(address string) {
+		if address == "" {
+			return
+		}
+		for _, existing := range addresses {
+			if existing == address {
+				return
+			}
+		}
+		addresses = append(addresses, address)
+	}
+	addHost := func(host string) {
+		if host != "" {
+			addAddress(net.JoinHostPort(host, portText))
+		}
+	}
+
+	addHost(instance.ContainerIp)
+	addHost(checkpointContainerIPv6(instance.ContainerIp))
+	addAddress(instance.containerAddress(port))
+	return addresses
+}
+
+func checkpointContainerIPv6(containerIP string) string {
+	ip := net.ParseIP(containerIP)
+	if ip == nil || ip.To4() == nil {
+		return ""
+	}
+	_, ipv6Net, err := net.ParseCIDR(containerSubnetIPv6)
+	if err != nil {
+		return ""
+	}
+	ipv6Address, err := containerIPv6Address(ip, ipv6Net)
+	if err != nil {
+		return ""
+	}
+	return ipv6Address.String()
 }
 
 func (s *Worker) waitForCheckpointSignal(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
