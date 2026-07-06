@@ -167,6 +167,48 @@ func TestSetupContainerMountsPrefersDirectWorkspaceStorageForStubCode(t *testing
 	require.Equal(t, "direct\n", string(workspaceBytes))
 }
 
+func TestSetupContainerMountsUsesWorkspaceStorageForCheckpointModelCacheVolume(t *testing.T) {
+	workspace := "workspace-checkpoint"
+	volumeID := "volume-123"
+	storageID := uint(1)
+	storageRoot := t.TempDir()
+	manager := NewContainerMountManager(types.AppConfig{
+		Storage: types.StorageConfig{
+			WorkspaceStorage: types.WorkspaceStorageConfig{
+				BaseMountPath: storageRoot,
+			},
+		},
+	})
+	cacheVolumeName := types.CheckpointModelCacheVolumeName("qwen")
+	legacyVolumePath := filepath.Join(types.DefaultVolumesPath, workspace, volumeID)
+	request := &types.ContainerRequest{
+		ContainerId: "container-checkpoint-volume",
+		Workspace: types.Workspace{
+			Name:    workspace,
+			Storage: &types.WorkspaceStorage{Id: &storageID},
+		},
+		Mounts: []types.Mount{
+			{
+				LocalPath: legacyVolumePath,
+				MountPath: filepath.Join(types.WorkerContainerVolumePath, cacheVolumeName),
+			},
+			{
+				LocalPath: legacyVolumePath,
+				MountPath: "/" + cacheVolumeName,
+			},
+		},
+	}
+
+	require.True(t, manager.RequiresWorkspaceStorageMount(request))
+	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
+
+	expectedWorkspaceVolumePath := filepath.Join(storageRoot, workspace, types.DefaultVolumesPrefix, volumeID)
+	require.Equal(t, expectedWorkspaceVolumePath, request.Mounts[0].LocalPath)
+	require.Equal(t, expectedWorkspaceVolumePath, request.Mounts[1].LocalPath)
+	require.NotContains(t, request.Mounts[0].LocalPath, types.DefaultVolumesPath)
+	require.NotContains(t, request.Mounts[1].LocalPath, types.DefaultVolumesPath)
+}
+
 func TestStubCodeCacheRootUsesDiskCacheWhenEnabled(t *testing.T) {
 	cacheRoot := t.TempDir()
 	config := types.AppConfig{

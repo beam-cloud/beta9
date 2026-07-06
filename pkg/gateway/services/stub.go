@@ -570,6 +570,8 @@ func sanitizePoolSelector(value string) string {
 // HTTP readiness polling and the runner signal file (see pkg/worker/criu.go)
 const checkpointTriggerTypeHTTP = "http"
 
+const checkpointCompileCacheRoot = "/tmp/beam-checkpoint-compile-cache"
+
 func appendWarning(existing, warning string) string {
 	if existing == "" {
 		return warning
@@ -586,6 +588,43 @@ func checkpointModelCacheVolumeName(in *pb.GetOrCreateStubRequest) string {
 		name = in.AppName
 	}
 	return types.CheckpointModelCacheVolumeName(name)
+}
+
+func checkpointCacheEnv(modelCachePath string) []string {
+	// Persist model files across checkpoint boots, but keep compiler/JIT artifacts on
+	// local disk so Triton/TorchInductor can compile before the checkpoint is created.
+	return []string{
+		fmt.Sprintf("HF_HOME=%s", modelCachePath),
+		fmt.Sprintf("HF_HUB_CACHE=%s/hub", modelCachePath),
+		fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath),
+		fmt.Sprintf("TRITON_CACHE_DIR=%s/triton", checkpointCompileCacheRoot),
+		fmt.Sprintf("TORCHINDUCTOR_CACHE_DIR=%s/torchinductor", checkpointCompileCacheRoot),
+		fmt.Sprintf("VLLM_CACHE_ROOT=%s/vllm", checkpointCompileCacheRoot),
+		fmt.Sprintf("CUDA_CACHE_PATH=%s/cuda", checkpointCompileCacheRoot),
+		"HF_HUB_DISABLE_XET=1",
+		"HF_HUB_ENABLE_HF_TRANSFER=0",
+	}
+}
+
+func upsertCheckpointEnv(env []string, updates []string) []string {
+	for _, update := range updates {
+		name, _, ok := strings.Cut(update, "=")
+		if !ok {
+			continue
+		}
+		replaced := false
+		for i, existing := range env {
+			existingName, _, ok := strings.Cut(existing, "=")
+			if ok && existingName == name {
+				env[i] = update
+				replaced = true
+			}
+		}
+		if !replaced {
+			env = append(env, update)
+		}
+	}
+	return env
 }
 
 // handleCheckpointEnabled validates and configures a stub request that has checkpointing
@@ -628,12 +667,7 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 		return "", err
 	}
 
-	// Force set cache vars
-	in.Env = append(in.Env, fmt.Sprintf("TRITON_CACHE_DIR=%s", modelCachePath))
-	in.Env = append(in.Env, fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath))
-	in.Env = append(in.Env, fmt.Sprintf("HF_HOME=%s", modelCachePath))
-	in.Env = append(in.Env, "HF_HUB_DISABLE_XET=1")
-	in.Env = append(in.Env, "HF_HUB_ENABLE_HF_TRANSFER=0")
+	in.Env = upsertCheckpointEnv(in.Env, checkpointCacheEnv(modelCachePath))
 
 	in.Volumes = append(in.Volumes, &pb.Volume{
 		Id:        volume.ExternalId,
