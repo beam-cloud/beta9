@@ -575,8 +575,10 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 
 func TestCreateCheckpointFailsWhenRuntimeStartSignalCloses(t *testing.T) {
 	containerID := "container-no-runtime-start"
+	backendRepoClient := &fakeBackendRepoClient{}
 	worker := &Worker{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		backendRepoClient:  backendRepoClient,
 		criuManager:        &NvidiaCRIUManager{checkpointRoot: t.TempDir(), available: true},
 	}
 	worker.containerInstances.Set(containerID, &ContainerInstance{
@@ -587,12 +589,18 @@ func TestCreateCheckpointFailsWhenRuntimeStartSignalCloses(t *testing.T) {
 	close(checkpointPIDChan)
 
 	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
-		Request:           &types.ContainerRequest{ContainerId: containerID},
+		Request:           &types.ContainerRequest{ContainerId: containerID, Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-no-runtime-start"}}},
 		CheckpointId:      "checkpoint-no-runtime-start",
 		CheckpointPIDChan: checkpointPIDChan,
 	})
 	if err == nil || !strings.Contains(err.Error(), "container runtime exited before checkpoint could start") {
 		t.Fatalf("createCheckpoint error = %v, want runtime start signal error", err)
+	}
+	if backendRepoClient.createCalls != 1 {
+		t.Fatalf("CreateCheckpoint calls = %d, want 1", backendRepoClient.createCalls)
+	}
+	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
+		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
 	}
 }
 

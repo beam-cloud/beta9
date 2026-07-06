@@ -368,17 +368,25 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		if opts.OutputLogger != nil {
 			opts.OutputLogger.Info("Waiting for container runtime to start before checkpoint")
 		}
+		failBeforeRuntimeStart := func(err error) error {
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Err(err).Msg("checkpoint failed before container runtime started")
+			if opts.OutputLogger != nil {
+				opts.OutputLogger.Error(fmt.Sprintf("Failed to start checkpoint: %v", err))
+			}
+			s.markCheckpointFailed(opts)
+			return err
+		}
 		select {
 		case pid, ok := <-opts.CheckpointPIDChan:
 			if !ok {
-				return fmt.Errorf("container runtime exited before checkpoint could start")
+				return failBeforeRuntimeStart(fmt.Errorf("container runtime exited before checkpoint could start"))
 			}
 			if pid <= 0 {
-				return fmt.Errorf("container runtime reported invalid PID %d before checkpoint", pid)
+				return failBeforeRuntimeStart(fmt.Errorf("container runtime reported invalid PID %d before checkpoint", pid))
 			}
 			log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Int("pid", pid).Msg("container runtime started for checkpoint")
 		case <-ctx.Done():
-			return ctx.Err()
+			return failBeforeRuntimeStart(ctx.Err())
 		}
 	}
 

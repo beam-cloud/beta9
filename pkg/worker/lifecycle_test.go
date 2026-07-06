@@ -1856,6 +1856,8 @@ func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePat
 type fakeBackendRepoClient struct {
 	updateCalls int
 	lastUpdate  *pb.UpdateCheckpointRequest
+	createCalls int
+	lastCreate  *pb.CreateCheckpointRequest
 }
 
 func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
@@ -1871,6 +1873,8 @@ func (f *fakeBackendRepoClient) ListCheckpoints(ctx context.Context, in *pb.List
 }
 
 func (f *fakeBackendRepoClient) CreateCheckpoint(ctx context.Context, in *pb.CreateCheckpointRequest, opts ...grpc.CallOption) (*pb.CreateCheckpointResponse, error) {
+	f.createCalls++
+	f.lastCreate = in
 	return &pb.CreateCheckpointResponse{Ok: true}, nil
 }
 
