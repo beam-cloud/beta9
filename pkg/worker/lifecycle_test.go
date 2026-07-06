@@ -222,6 +222,31 @@ func TestApplyRuntimeEnvironmentOverridesLeavesRuncNvidiaCapabilities(t *testing
 	require.Equal(t, "all", envMap["NVIDIA_DRIVER_CAPABILITIES"])
 }
 
+func TestApplyRuntimeEnvironmentOverridesDisablesLibuvIOUringForCheckpoints(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	env := worker.applyRuntimeEnvironmentOverrides(
+		[]string{"UV_USE_IO_URING=1", "TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=0", "OTHER=value"},
+		&types.ContainerRequest{CheckpointEnabled: true},
+	)
+	envMap := envListToMap(env)
+
+	require.Equal(t, "0", envMap["UV_USE_IO_URING"])
+	require.Equal(t, "1", envMap["TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL"])
+	require.Equal(t, "value", envMap["OTHER"])
+}
+
+func TestApplyRuntimeEnvironmentOverridesLeavesCheckpointEnvWithoutCheckpoints(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	env := worker.applyRuntimeEnvironmentOverrides(
+		[]string{"UV_USE_IO_URING=1", "TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=0"},
+		&types.ContainerRequest{},
+	)
+	envMap := envListToMap(env)
+
+	require.Equal(t, "1", envMap["UV_USE_IO_URING"])
+	require.Equal(t, "0", envMap["TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL"])
+}
+
 func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	containerID := "container-route"
 	repoClient := &fakeContainerRepoClient{}
@@ -533,6 +558,93 @@ func TestSpecFromRequestRejectsRunnerStubWithoutRunnerEnv(t *testing.T) {
 
 	require.Nil(t, spec)
 	require.ErrorContains(t, err, "empty process args")
+}
+
+func TestSpecFromRequestDisablesIOUringForCheckpoints(t *testing.T) {
+	t.Setenv(types.WorkerPoolEnv, "default")
+
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		podAddr:     "127.0.0.1",
+		runtime:     &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+		criuManager: &startedCRIUManager{},
+	}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId:       "container-checkpoint",
+		EntryPoint:        []string{"python", "app.py"},
+		CheckpointEnabled: true,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeFunction),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}, HostBindPort: 30001})
+
+	require.NoError(t, err)
+	require.NotNil(t, spec.Linux)
+	require.NotNil(t, spec.Linux.Seccomp)
+
+	rule := findSeccompRule(t, spec.Linux.Seccomp, checkpointDisabledIOUringSyscalls)
+	require.Equal(t, specs.ActErrno, rule.Action)
+	require.NotNil(t, rule.ErrnoRet)
+	require.Equal(t, uint(syscall.ENOSYS), *rule.ErrnoRet)
+}
+
+func TestDisableIOUringForCheckpointPreservesExistingSeccompRules(t *testing.T) {
+	spec := &specs.Spec{Linux: &specs.Linux{Seccomp: &specs.LinuxSeccomp{
+		DefaultAction: specs.ActErrno,
+		Syscalls: []specs.LinuxSyscall{
+			{Names: []string{"read", "io_uring_setup", "write"}, Action: specs.ActAllow},
+			{Names: []string{"io_uring_enter"}, Action: specs.ActAllow},
+		},
+	}}}
+
+	disableIOUringForCheckpoint(spec)
+
+	blockRule := findSeccompRule(t, spec.Linux.Seccomp, checkpointDisabledIOUringSyscalls)
+	require.Equal(t, specs.ActErrno, blockRule.Action)
+	require.NotNil(t, blockRule.ErrnoRet)
+	require.Equal(t, uint(syscall.ENOSYS), *blockRule.ErrnoRet)
+
+	allowRule := findSeccompRule(t, spec.Linux.Seccomp, []string{"read", "write"})
+	require.Equal(t, specs.ActAllow, allowRule.Action)
+	for _, syscallRule := range spec.Linux.Seccomp.Syscalls {
+		if syscallRule.Action == specs.ActAllow {
+			require.NotContains(t, syscallRule.Names, "io_uring_setup")
+			require.NotContains(t, syscallRule.Names, "io_uring_enter")
+			require.NotContains(t, syscallRule.Names, "io_uring_register")
+		}
+	}
+}
+
+func findSeccompRule(t *testing.T, seccomp *specs.LinuxSeccomp, names []string) specs.LinuxSyscall {
+	t.Helper()
+	require.NotNil(t, seccomp)
+	for _, rule := range seccomp.Syscalls {
+		if sameStringSet(rule.Names, names) {
+			return rule
+		}
+	}
+	t.Fatalf("seccomp rule for %v not found in %#v", names, seccomp.Syscalls)
+	return specs.LinuxSyscall{}
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, value := range a {
+		seen[value]++
+	}
+	for _, value := range b {
+		seen[value]--
+		if seen[value] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.T) {
