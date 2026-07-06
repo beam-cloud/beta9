@@ -273,16 +273,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	caps := s.runtime.Capabilities()
 
-	// Gate features based on runtime capabilities
-	if request.CheckpointEnabled && !caps.CheckpointRestore {
-		log.Info().Str("container_id", containerId).
-			Str("runtime", s.runtime.Name()).
-			Msg("disabling checkpoint for runtime without CRIU support")
-
-		request.CheckpointEnabled = false
-		request.Checkpoint = nil
-	}
-
 	if request.RequiresGPU() && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
@@ -326,6 +316,17 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle stdout/stderr
 	go s.containerLogger.CaptureLogs(request, logChan)
+
+	// Gate checkpointing based on runtime capabilities, and let the user know if it was disabled
+	if request.CheckpointEnabled && !caps.CheckpointRestore {
+		log.Info().Str("container_id", containerId).
+			Str("runtime", s.runtime.Name()).
+			Msg("disabling checkpoint for runtime without CRIU support")
+		outputLogger.Info("Checkpointing is enabled for this container, but the runtime on this worker does not support checkpoint/restore - disabling checkpointing\n")
+
+		request.CheckpointEnabled = false
+		request.Checkpoint = nil
+	}
 
 	_, imageLoaded, err := s.loadContainerImage(ctx, request, outputLogger)
 	if err != nil {

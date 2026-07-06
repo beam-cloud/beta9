@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	runscRestoreStateTimeout      = 2 * time.Second
+	runscRestoreStateTimeout      = 30 * time.Second
 	runscRestoreStatePollInterval = 25 * time.Millisecond
 )
 
@@ -310,13 +310,11 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		return fmt.Errorf("checkpoint options cannot be nil")
 	}
 
-	// Freeze CUDA processes before checkpointing (non-fatal)
+	// Freeze CUDA processes before checkpointing. A failure here means GPU state
+	// cannot be captured, so fail the checkpoint instead of producing a broken image.
 	if r.nvproxyEnabled {
 		if err := r.cudaCheckpointProcesses(ctx, containerID, "checkpoint", opts.OutputWriter); err != nil {
-			// Log but don't fail - CUDA checkpoint is optional
-			if opts.OutputWriter != nil {
-				fmt.Fprintf(opts.OutputWriter, "Warning: CUDA checkpoint failed: %v\n", err)
-			}
+			return fmt.Errorf("cuda checkpoint failed: %w", err)
 		}
 	}
 
@@ -454,13 +452,12 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	// Unfreeze CUDA processes after restore (non-fatal)
+	// Unfreeze CUDA processes after restore. A failure leaves GPU state frozen/broken,
+	// so propagate it and let the caller fall back to a cold boot (restore_failed path).
 	if r.nvproxyEnabled {
 		if err := r.cudaCheckpointProcesses(ctx, containerID, "restore", opts.OutputWriter); err != nil {
-			// Log but don't fail - CUDA restore is optional
-			if opts.OutputWriter != nil {
-				fmt.Fprintf(opts.OutputWriter, "Warning: CUDA restore failed: %v\n", err)
-			}
+			killRestoreProcess()
+			return -1, fmt.Errorf("cuda restore failed: %w", err)
 		}
 	}
 
@@ -550,8 +547,12 @@ func (r *Runsc) cudaCheckpointProcesses(ctx context.Context, containerID, action
 	}
 
 	pids, err := r.findCUDAProcesses(ctx, containerID)
-	if err != nil || len(pids) == 0 {
-		return nil // No CUDA processes, skip
+	if err != nil {
+		return err
+	}
+	if len(pids) == 0 {
+		// No CUDA processes is legitimate (e.g. GPU attached but not used yet)
+		return nil
 	}
 
 	for _, pid := range pids {
@@ -580,10 +581,10 @@ func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]in
 			"[ -d \"$pid/fd\" ] && ls -l $pid/fd 2>/dev/null | grep -q nvidia && basename $pid; "+
 			"done")
 
-	output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).Output()
-	if err != nil {
-		return []int{1}, nil // Fallback to PID 1
-	}
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 
 	var pids []int
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
@@ -591,9 +592,17 @@ func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]in
 			pids = append(pids, pid)
 		}
 	}
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			if len(pids) > 0 || (strings.TrimSpace(string(output)) == "" && strings.TrimSpace(stderr.String()) == "") {
+				return pids, nil
+			}
+		}
 
-	if len(pids) == 0 {
-		return []int{1}, nil // Fallback to PID 1
+		if message := strings.TrimSpace(stderr.String()); message != "" {
+			return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w (output: %s)", containerID, err, message)
+		}
+		return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w", containerID, err)
 	}
 
 	return pids, nil
