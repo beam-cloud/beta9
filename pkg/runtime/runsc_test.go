@@ -100,3 +100,50 @@ esac
 	require.Contains(t, string(logData), "restore-ready\n")
 	require.NotContains(t, string(logData), "restore-done\n")
 }
+
+// newFakeRunsc writes a fake runsc script whose `exec` subcommand runs the given
+// shell body, and returns a Runsc wired to it.
+func newFakeRunsc(t *testing.T, execBody string) *Runsc {
+	t.Helper()
+
+	dir := t.TempDir()
+	runscPath := filepath.Join(dir, "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
+set -u
+for arg in "$@"; do
+  if [ "$arg" = "exec" ]; then
+`+execBody+`
+  fi
+done
+echo "unexpected args: $*" >&2
+exit 1
+`), 0o755))
+
+	return &Runsc{cfg: Config{RunscPath: runscPath, RunscRoot: filepath.Join(dir, "root")}}
+}
+
+func TestFindCUDAProcessesReturnsPIDs(t *testing.T) {
+	rt := newFakeRunsc(t, `    printf '12\n345\n'
+    exit 0`)
+
+	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
+	require.NoError(t, err)
+	require.Equal(t, []int{12, 345}, pids)
+}
+
+func TestFindCUDAProcessesEmptyOutputIsNotAnError(t *testing.T) {
+	rt := newFakeRunsc(t, `    exit 0`)
+
+	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
+	require.NoError(t, err)
+	require.Empty(t, pids)
+}
+
+func TestFindCUDAProcessesExecFailureReturnsError(t *testing.T) {
+	rt := newFakeRunsc(t, `    exit 1`)
+
+	pids, err := rt.findCUDAProcesses(context.Background(), "container-1")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to enumerate CUDA processes")
+	require.Nil(t, pids)
+}

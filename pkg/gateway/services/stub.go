@@ -102,13 +102,14 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	// If checkpoint/restore is enabled, we need to handle a few additional things to ensure dump/restore will work properly
 	if in.CheckpointEnabled {
-		err := gws.handleCheckpointEnabled(ctx, authInfo, in, gpus)
+		checkpointWarning, err := gws.handleCheckpointEnabled(ctx, authInfo, in, gpus)
 		if err != nil {
 			return &pb.GetOrCreateStubResponse{
 				Ok:     false,
 				ErrMsg: err.Error(),
 			}, nil
 		}
+		warning = appendWarning(warning, checkpointWarning)
 	}
 
 	var inputs *types.Schema = nil
@@ -232,7 +233,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 
 		if len(lowCapacityGpus) > 0 {
-			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", "))
+			warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 		}
 	}
 
@@ -565,32 +566,66 @@ func sanitizePoolSelector(value string) string {
 	return out
 }
 
-func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest, gpus []types.GpuType) error {
+// checkpointTriggerTypeHTTP mirrors the trigger type the worker uses to decide between
+// HTTP readiness polling and the runner signal file (see pkg/worker/criu.go)
+const checkpointTriggerTypeHTTP = "http"
+
+func appendWarning(existing, warning string) string {
+	if existing == "" {
+		return warning
+	}
+	if warning == "" {
+		return existing
+	}
+	return existing + " " + warning
+}
+
+func checkpointModelCacheVolumeName(in *pb.GetOrCreateStubRequest) string {
+	name := in.Name
+	if in.AppName != "" {
+		name = in.AppName
+	}
+	return types.CheckpointModelCacheVolumeName(name)
+}
+
+// handleCheckpointEnabled validates and configures a stub request that has checkpointing
+// enabled. It returns a user-facing warning message (empty if none) and an error.
+func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest, gpus []types.GpuType) (string, error) {
 	workspace := authInfo.Workspace
 
 	if in.GpuCount > 1 {
-		return fmt.Errorf("Checkpoints are yet not supported for multi-GPU")
+		return "", fmt.Errorf("Checkpoints are yet not supported for multi-GPU")
 	}
 
 	if len(gpus) > 1 {
-		return fmt.Errorf("Checkpoints are yet not supported between multiple GPUs")
+		return "", fmt.Errorf("Checkpoints are yet not supported between multiple GPUs")
 	}
 
-	// Disable checkpoint for serves
+	// Disable checkpoint for serves, but let the user know instead of failing silently
 	if types.StubType(in.StubType).IsServe() {
 		in.CheckpointEnabled = false
-		return nil
+		return "checkpointing is not supported for serve sessions; it has been disabled", nil
+	}
+
+	// Pods have no beta9 runner process to write the checkpoint readiness signal file,
+	// so automatic checkpoints require an HTTP readiness path. Sandboxes are exempt
+	// because they checkpoint via the manual snapshot APIs instead.
+	if types.StubType(in.StubType).Kind() == types.StubTypePod {
+		trigger := in.CheckpointTrigger
+		if trigger == nil || !strings.EqualFold(trigger.Type, checkpointTriggerTypeHTTP) || trigger.HttpPath == "" {
+			return "", fmt.Errorf("pods with checkpoint_enabled require checkpoint_readiness_path to be set (there is no runner to signal readiness)")
+		}
 	}
 
 	if !workspace.StorageAvailable() {
-		return fmt.Errorf("workspace storage is required for checkpoints")
+		return "", fmt.Errorf("workspace storage is required for checkpoints")
 	}
 
-	volumeName := types.CheckpointModelCacheVolumeName(in.Name)
+	volumeName := checkpointModelCacheVolumeName(in)
 	modelCachePath := fmt.Sprintf("/%s", volumeName)
 	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Force set cache vars
@@ -605,7 +640,7 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 		MountPath: modelCachePath,
 	})
 
-	return nil
+	return "", nil
 }
 
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {
