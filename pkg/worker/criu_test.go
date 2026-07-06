@@ -1,13 +1,18 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -43,7 +48,7 @@ func TestCheckpointHTTPReadinessRequiresStatusOK(t *testing.T) {
 	}))
 	defer server.Close()
 
-	address := strings.TrimPrefix(server.URL, "http://")
+	address := testHTTPServerAddress(t, server)
 	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
 	request := &types.ContainerRequest{ContainerId: "container-1"}
 	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
@@ -59,6 +64,134 @@ func TestCheckpointHTTPReadinessRequiresStatusOK(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-200 readiness response to fail")
 	}
+}
+
+func TestCheckpointHTTPReadinessPrefersContainerIP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	host, port := testHTTPServerHostPort(t, server)
+
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{ContainerId: "container-direct-ip"}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		ContainerIp:         host,
+		ContainerAddressMap: map[int32]string{port: "127.0.0.1:1"},
+	})
+
+	err := worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, port, "/ready")
+	if err != nil {
+		t.Fatalf("checkCheckpointHTTPReady returned error: %v", err)
+	}
+}
+
+func TestCheckpointHTTPReadinessAddresses(t *testing.T) {
+	tests := []struct {
+		name     string
+		instance *ContainerInstance
+		want     []string
+	}{
+		{
+			name: "container IPv4 before published route",
+			instance: &ContainerInstance{
+				ContainerIp:         "192.168.0.65",
+				ContainerAddressMap: map[int32]string{8000: "10.42.0.215:43131"},
+			},
+			want: []string{
+				"192.168.0.65:8000",
+				"[fd00:abcd::41]:8000",
+				"10.42.0.215:43131",
+			},
+		},
+		{
+			name: "container IPv6 before published route",
+			instance: &ContainerInstance{
+				ContainerIp:         "fd00:abcd::41",
+				ContainerAddressMap: map[int32]string{8000: "[2600:1f18::1]:43131"},
+			},
+			want: []string{
+				"[fd00:abcd::41]:8000",
+				"[2600:1f18::1]:43131",
+			},
+		},
+		{
+			name: "published route only",
+			instance: &ContainerInstance{
+				ContainerAddressMap: map[int32]string{8000: "10.42.0.215:43131"},
+			},
+			want: []string{"10.42.0.215:43131"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkpointHTTPReadinessAddresses(tt.instance, 8000)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("checkpoint readiness addresses = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWaitForCheckpointHTTPReadinessLogsWaitingAndReady(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	address := testHTTPServerAddress(t, server)
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{
+		ContainerId: "container-ready-log",
+		Ports:       []uint32{8000},
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		ContainerAddressMap: map[int32]string{8000: address},
+	})
+	trigger := &types.CheckpointTrigger{
+		Type:           checkpointTriggerHTTP,
+		HttpPath:       "v1/models",
+		TimeoutSeconds: 1,
+	}
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+
+	if err := worker.waitForCheckpointHTTPReadiness(context.Background(), request, trigger, logger); err != nil {
+		t.Fatalf("waitForCheckpointHTTPReadiness returned error: %v", err)
+	}
+
+	logs := output.String()
+	if !strings.Contains(logs, "Waiting for container HTTP readiness before checkpoint (port 8000, path /v1/models)") {
+		t.Fatalf("expected waiting log, got: %s", logs)
+	}
+	if !strings.Contains(logs, "Container HTTP readiness reached for checkpoint") {
+		t.Fatalf("expected ready log, got: %s", logs)
+	}
+}
+
+func testHTTPServerAddress(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	return strings.TrimPrefix(server.URL, "http://")
+}
+
+func testHTTPServerHostPort(t *testing.T, server *httptest.Server) (string, int32) {
+	t.Helper()
+
+	host, portText, err := net.SplitHostPort(testHTTPServerAddress(t, server))
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse test server port: %v", err)
+	}
+	return host, int32(port)
 }
 
 func TestCheckpointCreateLockIsPerStub(t *testing.T) {
@@ -437,6 +570,37 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 	})
 	if !errors.Is(err, errCRIUManagerUnavailable) {
 		t.Fatalf("createCheckpoint error = %v, want %v", err, errCRIUManagerUnavailable)
+	}
+}
+
+func TestCreateCheckpointFailsWhenRuntimeStartSignalCloses(t *testing.T) {
+	containerID := "container-no-runtime-start"
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		backendRepoClient:  backendRepoClient,
+		criuManager:        &NvidiaCRIUManager{checkpointRoot: t.TempDir(), available: true},
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: NewMockRuntime("runc", runtime.Capabilities{CheckpointRestore: true}),
+	})
+	checkpointPIDChan := make(chan int)
+	close(checkpointPIDChan)
+
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request:           &types.ContainerRequest{ContainerId: containerID, Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-no-runtime-start"}}},
+		CheckpointId:      "checkpoint-no-runtime-start",
+		CheckpointPIDChan: checkpointPIDChan,
+	})
+	if err == nil || !strings.Contains(err.Error(), "container runtime exited before checkpoint could start") {
+		t.Fatalf("createCheckpoint error = %v, want runtime start signal error", err)
+	}
+	if backendRepoClient.createCalls != 1 {
+		t.Fatalf("CreateCheckpoint calls = %d, want 1", backendRepoClient.createCalls)
+	}
+	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
+		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
 	}
 }
 
