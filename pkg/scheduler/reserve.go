@@ -466,6 +466,10 @@ func (s *Scheduler) workerCPUForRequest(request *types.ContainerRequest) int64 {
 }
 
 func (s *Scheduler) workerCPUForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) int64 {
+	if controllerUsesAgentCapacity(controller) {
+		return request.Cpu
+	}
+
 	cpu := s.workerCPUForRequest(request)
 	sizing, ok := s.workerPoolSizingForController(controller)
 	if !ok {
@@ -486,6 +490,10 @@ func (s *Scheduler) workerMemoryForRequest(request *types.ContainerRequest) int6
 }
 
 func (s *Scheduler) workerMemoryForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) int64 {
+	if controllerUsesAgentCapacity(controller) {
+		return capacityMemoryForScheduling(request)
+	}
+
 	memory := s.workerMemoryForRequest(request)
 	sizing, ok := s.workerPoolSizingForController(controller)
 	if !ok {
@@ -502,6 +510,10 @@ func (s *Scheduler) workerGPUCountForRequest(request *types.ContainerRequest) ui
 }
 
 func (s *Scheduler) workerGPUCountForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) uint32 {
+	if controllerUsesAgentCapacity(controller) {
+		return gpuCountForScheduling(request)
+	}
+
 	gpuCount := s.workerGPUCountForRequest(request)
 	sizing, ok := s.workerPoolSizingForController(controller)
 	if !ok {
@@ -511,6 +523,10 @@ func (s *Scheduler) workerGPUCountForControllerRequest(controller WorkerPoolCont
 		return sizing.DefaultWorkerGpuCount
 	}
 	return gpuCount
+}
+
+func controllerUsesAgentCapacity(controller WorkerPoolController) bool {
+	return controller != nil && controller.Mode().AgentHosted()
 }
 
 func (s *Scheduler) workerPoolSizingForController(controller WorkerPoolController) (*types.WorkerPoolSizingConfig, bool) {

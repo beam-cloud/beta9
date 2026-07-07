@@ -1,12 +1,10 @@
 package gatewayservices
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -17,56 +15,56 @@ const (
 
 	rolloutActionBlueGreen = "blue-green"
 	rolloutActionReplace   = "replace"
-	rolloutActionBlocked   = "blocked"
 )
 
-type privatePodRolloutDecision struct {
-	action       string
-	warning      string
-	errorMessage string
+type deploymentRolloutPlan struct {
+	action     string
+	warning    string
+	stopLatest bool
 }
 
-func (gws *GatewayService) privatePodRolloutDecision(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated, config *types.StubConfigV1, latest *types.DeploymentWithRelated, mode string) privatePodRolloutDecision {
-	mode = normalizeRolloutMode(mode)
-	if mode == "" {
-		return privatePodRolloutDecision{errorMessage: "unsupported rollout mode"}
+type deploymentRolloutInput struct {
+	workspace *types.Workspace
+	stub      *types.StubWithRelated
+	config    *types.StubConfigV1
+	latest    *types.DeploymentWithRelated
+	mode      string
+}
+
+func (gws *GatewayService) planDeploymentRollout(in deploymentRolloutInput) (deploymentRolloutPlan, error) {
+	mode := normalizeRolloutMode(in.mode)
+	if !validRolloutMode(mode) {
+		return deploymentRolloutPlan{}, fmt.Errorf("unsupported rollout mode; expected auto, blue-green, or replace")
 	}
-	if !gws.shouldCheckPrivatePodRollout(ctx, workspace, stub, config, latest) {
-		return privatePodRolloutDecision{}
+	if in.latest != nil && in.stub != nil && in.stub.Type == types.StubType(types.StubTypeScheduledJobDeployment) {
+		return deploymentRolloutPlan{stopLatest: true}, nil
+	}
+	if mode == rolloutModeAuto || !deploymentRolloutApplies(in) {
+		return deploymentRolloutPlan{}, nil
 	}
 
-	request := containerRequestForRolloutCapacity(workspace, stub, config)
-	replicas := config.Autoscaler.MinContainers
-
-	if mode != rolloutModeReplace {
-		spare := gws.checkRolloutCapacity(request, replicas, "", nil)
-		if spare.CanSchedule {
-			return privatePodRolloutDecision{action: rolloutActionBlueGreen}
+	request := rolloutContainerRequest(in)
+	replicas := rolloutReplicas(in.config)
+	if mode == rolloutModeBlueGreen {
+		if gws.rolloutCapacityAvailable(request, replicas, "", nil) {
+			return deploymentRolloutPlan{action: rolloutActionBlueGreen}, nil
 		}
-		if mode == rolloutModeBlueGreen {
-			return privatePodRolloutDecision{
-				action:       rolloutActionBlocked,
-				errorMessage: "private pool rollout blocked: blue-green rollout requires enough spare capacity to start the new revision before stopping the current revision",
-			}
-		}
+		return deploymentRolloutPlan{}, fmt.Errorf("blue-green rollout requires enough spare capacity to start the new revision before stopping the current revision")
 	}
 
-	activeContainers, err := gws.containerRepo.GetActiveContainersByStubId(latest.Stub.ExternalId)
+	activeContainers, err := gws.containerRepo.GetActiveContainersByStubId(in.latest.Stub.ExternalId)
 	if err != nil {
-		return privatePodRolloutDecision{action: rolloutActionBlocked, errorMessage: "failed to check active private pool containers before rollout"}
+		return deploymentRolloutPlan{}, fmt.Errorf("failed to check active containers before rollout")
 	}
-	replacement := gws.checkRolloutCapacity(request, replicas, latest.Stub.ExternalId, activeContainers)
-	if !replacement.CanSchedule {
-		return privatePodRolloutDecision{
-			action:       rolloutActionBlocked,
-			errorMessage: "private pool rollout blocked: the new revision is not predicted to fit even after replacing the current always-on revision",
-		}
+	if !gws.rolloutCapacityAvailable(request, replicas, in.latest.Stub.ExternalId, activeContainers) {
+		return deploymentRolloutPlan{}, fmt.Errorf("rollout blocked: the new revision is not predicted to fit even after replacing the current always-on revision")
 	}
 
-	return privatePodRolloutDecision{
-		action:  rolloutActionReplace,
-		warning: "Private pool rollout will replace the current always-on revision before starting the new revision. Expected downtime is possible; spare capacity is insufficient for blue-green, but the new revision is predicted to fit after replacement.",
-	}
+	return deploymentRolloutPlan{
+		action:     rolloutActionReplace,
+		stopLatest: true,
+		warning:    "Rollout will replace the current always-on revision before starting the new revision. Expected downtime is possible; the new revision is predicted to fit after replacement.",
+	}, nil
 }
 
 func normalizeRolloutMode(mode string) string {
@@ -74,58 +72,74 @@ func normalizeRolloutMode(mode string) string {
 	if mode == "" {
 		return rolloutModeAuto
 	}
+	return mode
+}
+
+func validRolloutMode(mode string) bool {
 	switch mode {
 	case rolloutModeAuto, rolloutModeBlueGreen, rolloutModeReplace:
-		return mode
+		return true
 	default:
-		return ""
+		return false
 	}
 }
 
-func (gws *GatewayService) shouldCheckPrivatePodRollout(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated, config *types.StubConfigV1, latest *types.DeploymentWithRelated) bool {
-	if workspace == nil || stub == nil || config == nil || latest == nil || !latest.Active {
+func deploymentRolloutApplies(in deploymentRolloutInput) bool {
+	if in.stub == nil || in.config == nil || in.latest == nil || !in.latest.Active {
 		return false
 	}
-	if stub.Type != types.StubType(types.StubTypePodDeployment) || latest.Stub.Type != types.StubType(types.StubTypePodDeployment) {
+	if !in.stub.Type.IsDeployment() || !in.latest.Stub.Type.IsDeployment() {
 		return false
 	}
-	if !podDeploymentAlwaysOn(config) {
-		return false
-	}
+	return alwaysOnDeploymentConfig(in.config) && latestAlwaysOnDeployment(in.latest)
+}
+
+func latestAlwaysOnDeployment(deployment *types.DeploymentWithRelated) bool {
 	var latestConfig types.StubConfigV1
-	if err := json.Unmarshal([]byte(latest.Stub.Config), &latestConfig); err != nil {
+	if deployment == nil || json.Unmarshal([]byte(deployment.Stub.Config), &latestConfig) != nil {
 		return false
 	}
-	return podDeploymentAlwaysOn(&latestConfig) && gws.usesPrivatePool(ctx, workspace.ExternalId, config)
+	return alwaysOnDeploymentConfig(&latestConfig)
 }
 
-func podDeploymentAlwaysOn(config *types.StubConfigV1) bool {
-	return config != nil && config.Autoscaler != nil && config.Autoscaler.MinContainers > 0
+func alwaysOnDeploymentConfig(config *types.StubConfigV1) bool {
+	return rolloutReplicas(config) > 0
 }
 
-func containerRequestForRolloutCapacity(workspace *types.Workspace, stub *types.StubWithRelated, config *types.StubConfigV1) *types.ContainerRequest {
+func rolloutReplicas(config *types.StubConfigV1) uint {
+	if config == nil {
+		return 0
+	}
+	if config.Autoscaler != nil && config.Autoscaler.MinContainers > 0 {
+		return config.Autoscaler.MinContainers
+	}
+	if config.KeepWarmSeconds < 0 {
+		return 1
+	}
+	return 0
+}
+
+func rolloutContainerRequest(in deploymentRolloutInput) *types.ContainerRequest {
 	workspaceID := ""
-	if workspace != nil {
-		workspaceID = workspace.ExternalId
+	if in.workspace != nil {
+		workspaceID = in.workspace.ExternalId
 	}
 	return &types.ContainerRequest{
-		Cpu:          config.Runtime.Cpu,
-		Memory:       config.Runtime.Memory,
-		Gpu:          string(config.Runtime.Gpu),
-		GpuRequest:   types.GpuTypesToStrings(config.Runtime.Gpus),
-		GpuCount:     config.Runtime.GpuCount,
-		ImageId:      config.Runtime.ImageId,
-		StubId:       stub.ExternalId,
+		Cpu:          in.config.Runtime.Cpu,
+		Memory:       in.config.Runtime.Memory,
+		Gpu:          string(in.config.Runtime.Gpu),
+		GpuRequest:   types.GpuTypesToStrings(in.config.Runtime.Gpus),
+		GpuCount:     in.config.Runtime.GpuCount,
+		ImageId:      in.config.Runtime.ImageId,
+		StubId:       in.stub.ExternalId,
 		WorkspaceId:  workspaceID,
-		Stub:         *stub,
-		PoolSelector: config.PoolSelector(),
-		MachineId:    config.MachineID,
+		Stub:         *in.stub,
+		PoolSelector: in.config.PoolSelector(),
+		MachineId:    in.config.MachineID,
 	}
 }
 
-func (gws *GatewayService) checkRolloutCapacity(request *types.ContainerRequest, replicas uint, ignoreStubID string, activeContainers []types.ContainerState) scheduler.CapacityCheckResult {
-	if gws == nil || gws.scheduler == nil {
-		return scheduler.CapacityCheckResult{Err: fmt.Errorf("scheduler unavailable")}
-	}
-	return gws.scheduler.CheckCapacity(request, replicas, ignoreStubID, activeContainers)
+func (gws *GatewayService) rolloutCapacityAvailable(request *types.ContainerRequest, replicas uint, replacedStubID string, activeContainers []types.ContainerState) bool {
+	return gws != nil && gws.scheduler != nil &&
+		gws.scheduler.CheckCapacity(request, replicas, replacedStubID, activeContainers).CanSchedule
 }

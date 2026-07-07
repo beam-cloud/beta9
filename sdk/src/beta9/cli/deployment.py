@@ -103,7 +103,7 @@ def common(**_):
     type=click.Choice(["auto", "blue-green", "replace"]),
     default="auto",
     show_default=True,
-    help="Rollout strategy for private-pool always-on pod redeploys.",
+    help="Rollout strategy for always-on deployments.",
 )
 @override_config_options
 @extraclick.config_context_option
@@ -331,7 +331,7 @@ def _release_deployment_grpc_refs(user_obj) -> None:
     type=click.Choice(["auto", "blue-green", "replace"]),
     default="auto",
     show_default=True,
-    help="Rollout strategy for private-pool always-on pod redeploys.",
+    help="Rollout strategy for always-on deployments.",
 )
 @override_config_options
 @extraclick.pass_service_client

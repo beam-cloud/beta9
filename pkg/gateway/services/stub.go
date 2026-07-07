@@ -781,7 +781,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), false)
+	latestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), false)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
@@ -789,9 +789,8 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}
 
 	version := uint(1)
-	rolloutDecision := privatePodRolloutDecision{}
-	if lastestDeployment != nil {
-		version = lastestDeployment.Version + 1
+	if latestDeployment != nil {
+		version = latestDeployment.Version + 1
 	}
 
 	var config types.StubConfigV1
@@ -801,30 +800,26 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 			ErrMsg: "Unable to parse stub configuration",
 		}, nil
 	}
-	rolloutMode := normalizeRolloutMode(in.Rollout)
-	if rolloutMode == "" {
+
+	rolloutPlan, err := gws.planDeploymentRollout(deploymentRolloutInput{
+		workspace: authInfo.Workspace,
+		stub:      stub,
+		config:    &config,
+		latest:    latestDeployment,
+		mode:      normalizeRolloutMode(in.Rollout),
+	})
+	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok:     false,
-			ErrMsg: "unsupported rollout mode; expected auto, blue-green, or replace",
+			ErrMsg: err.Error(),
 		}, nil
 	}
-
-	if lastestDeployment != nil {
-		rolloutDecision = gws.privatePodRolloutDecision(ctx, authInfo.Workspace, stub, &config, lastestDeployment, rolloutMode)
-		if rolloutDecision.errorMessage != "" {
+	if rolloutPlan.stopLatest {
+		if err := gws.stopDeployments([]types.DeploymentWithRelated{*latestDeployment}, ctx); err != nil {
 			return &pb.DeployStubResponse{
 				Ok:     false,
-				ErrMsg: rolloutDecision.errorMessage,
+				ErrMsg: "Unable to stop previous deployment before rollout",
 			}, nil
-		}
-
-		if stub.Type == types.StubType(types.StubTypeScheduledJobDeployment) || rolloutDecision.action == rolloutActionReplace {
-			if err := gws.stopDeployments([]types.DeploymentWithRelated{*lastestDeployment}, ctx); err != nil {
-				return &pb.DeployStubResponse{
-					Ok:     false,
-					ErrMsg: "Unable to stop previous deployment before rollout",
-				}, nil
-			}
 		}
 	}
 
@@ -857,8 +852,8 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		DeploymentId:  deployment.ExternalId,
 		Version:       uint32(deployment.Version),
 		InvokeUrl:     invokeUrl,
-		WarnMsg:       rolloutDecision.warning,
-		RolloutAction: rolloutDecision.action,
+		WarnMsg:       rolloutPlan.warning,
+		RolloutAction: rolloutPlan.action,
 	}, nil
 }
 

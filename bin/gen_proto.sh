@@ -45,7 +45,12 @@ ensure_go_tool_version protoc-gen-openapiv2 "github.com/grpc-ecosystem/grpc-gate
 ensure_go_tool_version go2proto "github.com/beam-cloud/go2proto" "$GO2PROTO_VERSION"
 
 if command -v uv >/dev/null 2>&1; then
-    sdk_bin="$(uv run --project ./sdk --locked python -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+    sdk_bin="$(
+        uv run --project ./sdk --locked \
+            --with "black==${PYTHON_BLACK_VERSION}" \
+            --with "isort==${PYTHON_ISORT_VERSION}" \
+            python -c 'import sysconfig; print(sysconfig.get_path("scripts"))'
+    )"
     export PATH="$sdk_bin:$PATH"
 elif ! command -v protoc-gen-python_betterproto_beta9 >/dev/null 2>&1; then
     echo "protoc-gen-python_betterproto_beta9 is not installed and uv is unavailable" >&2

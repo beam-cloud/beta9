@@ -56,12 +56,12 @@ def test_pool_string_routes_to_manual_pool():
     assert fn.pool_config.selector == "manual-training"
 
 
-def test_function_routes_b200_x8_to_private_pool():
-    fn = Function(gpu="B200", gpu_count=8, pool="b200-pool")
+def test_function_routes_multi_gpu_to_private_pool():
+    fn = Function(gpu="H100", gpu_count=8, pool="gpu-pool")
 
-    assert fn.gpu == "B200"
+    assert fn.gpu == "H100"
     assert fn.gpu_count == 8
-    assert fn.pool_config.name == "b200-pool"
+    assert fn.pool_config.name == "gpu-pool"
 
 
 def test_sandbox_pool_string_routes_to_manual_pool():
@@ -191,11 +191,11 @@ def test_pool_managed_capacity_commands_are_exposed():
     assert "create" in management.commands
 
 
-def test_pool_create_config_accepts_b200():
-    pool = _pool_config("b200-pool", gpu=("B200",))
+def test_pool_create_config_accepts_gpu_type():
+    pool = _pool_config("gpu-pool", gpu=("H100",))
 
-    assert pool.name == "b200-pool"
-    assert pool.gpu == ["B200"]
+    assert pool.name == "gpu-pool"
+    assert pool.gpu == ["H100"]
     assert pool.mode == "private"
 
 

@@ -1872,6 +1872,53 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 	assert.Equal(t, int64(16384), workers[0].FreeMemory)
 }
 
+func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	wb.config.Worker.DefaultWorkerCPURequest = 16000
+	wb.config.Worker.DefaultWorkerMemoryRequest = 16 * 1024
+
+	poolConfig := types.WorkerPoolConfig{
+		Mode: types.PoolModePrivate,
+		PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{
+			DefaultWorkerCPU:      "32000m",
+			DefaultWorkerMemory:   "32Gi",
+			DefaultWorkerGpuCount: "8",
+		},
+	}
+	wb.workerPoolManager.SetPool("private-pool", poolConfig, &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "private-pool",
+		mode:       types.PoolModePrivate,
+		config:     wb.config,
+		workerRepo: wb.workerRepo,
+	})
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		GpuRequest:   []string{"H100"},
+		GpuCount:     1,
+		PoolSelector: "private-pool",
+		Timestamp:    time.Now(),
+	}
+
+	controllers, err := wb.getControllers(request)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(controllers))
+
+	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	wb.provisioning.mu.Lock()
+	reservation := wb.provisioning.reservations[reservationID]
+	assert.NotNil(t, reservation)
+	assert.Equal(t, request.Cpu, reservation.worker.TotalCpu)
+	assert.Equal(t, capacityMemoryForScheduling(request), reservation.worker.TotalMemory)
+	assert.Equal(t, request.GpuCount, reservation.worker.TotalGpuCount)
+	wb.provisioning.mu.Unlock()
+}
+
 func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
