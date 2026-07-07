@@ -389,6 +389,13 @@ func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineReq
 			if released {
 				return true, &pb.DeleteMachineResponse{Ok: true}, nil
 			}
+			deleted, err := s.missingOwnedPrivateMachineDeleted(ctx, authInfo, in.PoolName)
+			if err != nil {
+				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+			}
+			if deleted {
+				return true, &pb.DeleteMachineResponse{Ok: true}, nil
+			}
 			return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine not found"}, nil
 		}
 		return false, nil, nil
@@ -398,6 +405,14 @@ func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineReq
 		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return true, &pb.DeleteMachineResponse{Ok: true}, nil
+}
+
+func (s *Service) missingOwnedPrivateMachineDeleted(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (bool, error) {
+	if poolName == "" {
+		return false, nil
+	}
+	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	return state != nil, err
 }
 
 func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName string) (bool, error) {

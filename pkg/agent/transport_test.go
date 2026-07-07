@@ -27,7 +27,7 @@ func (c *fakeTSNetStatusClient) StatusWithoutPeers(context.Context) (*ipnstate.S
 }
 
 func TestTSNetSnapshotSuppressesTransientTimeouts(t *testing.T) {
-	telemetry := newAgentTelemetry(nil, "", bootstrapConfig{}, nil)
+	telemetry := newAgentTelemetry(nil, "", bootstrapConfig{}, "", nil)
 	client := &fakeTSNetStatusClient{err: context.DeadlineExceeded}
 	reporter := &tsnetSnapshotReporter{
 		telemetry:   telemetry,
@@ -54,7 +54,7 @@ func TestTSNetSnapshotSuppressesTransientTimeouts(t *testing.T) {
 }
 
 func TestTSNetSnapshotDoesNotEmitCanceledProbe(t *testing.T) {
-	telemetry := newAgentTelemetry(nil, "", bootstrapConfig{}, nil)
+	telemetry := newAgentTelemetry(nil, "", bootstrapConfig{}, "", nil)
 	client := &fakeTSNetStatusClient{err: context.Canceled}
 	reporter := &tsnetSnapshotReporter{
 		telemetry:   telemetry,
@@ -69,7 +69,7 @@ func TestTSNetSnapshotDoesNotEmitCanceledProbe(t *testing.T) {
 }
 
 func TestTSNetSnapshotUsesLightweightStatusBetweenFullSnapshots(t *testing.T) {
-	telemetry := newAgentTelemetry(nil, "", bootstrapConfig{}, nil)
+	telemetry := newAgentTelemetry(nil, "", bootstrapConfig{}, "", nil)
 	client := &fakeTSNetStatusClient{status: &ipnstate.Status{BackendState: "Running"}}
 	reporter := &tsnetSnapshotReporter{
 		telemetry:   telemetry,

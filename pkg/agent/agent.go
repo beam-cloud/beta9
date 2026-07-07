@@ -45,7 +45,7 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	}
 	defer grpcConn.Close()
 
-	telemetry := newAgentTelemetry(grpcClient, res.AgentToken, res.Bootstrap, opts.Stderr)
+	telemetry := newAgentTelemetry(grpcClient, res.AgentToken, res.Bootstrap, opts.CacheDir, opts.Stderr)
 	go telemetry.run(ctx)
 	agentStdout := telemetry.teeLogWriter(opts.Stdout, types.AgentTelemetrySourceAgent, "", types.EventLogStreamStdout)
 	defer agentStdout.Close()

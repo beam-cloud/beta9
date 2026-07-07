@@ -160,7 +160,7 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	if err != nil {
 		return err
 	}
-	dirs := agentWorkerDirs(stateDir, slot.WorkerId)
+	dirs := agentWorkerDirs(stateDir, r.opts.CacheDir, slot.WorkerId)
 	for _, dir := range []string{dirs.Tmp} {
 		_ = os.RemoveAll(dir)
 	}

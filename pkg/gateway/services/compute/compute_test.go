@@ -4172,6 +4172,32 @@ func TestDeletePoolMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *
 	}
 }
 
+func TestDeletePoolMachineMissingOwnedPrivateMachineIsIdempotent(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "pool-1",
+					CreatedByTokenID: "owner-token",
+					Mode:             string(types.PoolModePrivate),
+				},
+			},
+		},
+	}
+
+	_, res, err := (&Service{computeRepo: repo}).DeletePoolMachine(
+		ctx,
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-already-deleted"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+}
+
 func TestDeletePoolMachineReleasesManagedMachineID(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{

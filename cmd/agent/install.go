@@ -75,7 +75,7 @@ func (f *installFlags) serviceSpec() (agentservice.Manager, agentservice.Spec, e
 		Description: types.DefaultAgentServiceDescription,
 		BinaryPath:  executablePath(),
 		Args:        f.args(),
-		Env:         serviceEnv(f.WorkerImage, f.stateDir),
+		Env:         serviceEnv(f.WorkerImage, f.stateDir, f.CacheDir),
 		StateDir:    f.stateDir,
 	}, nil
 }
@@ -99,12 +99,18 @@ func executablePath() string {
 	return path
 }
 
-func serviceEnv(workerImage, stateDir string) map[string]string {
+func serviceEnv(workerImage, stateDir, cacheDir string) map[string]string {
 	env := map[string]string{types.AgentStateDirEnv: stateDir}
 	if workerImage != "" {
 		env[types.AgentWorkerImageEnv] = workerImage
 	}
+	if strings.TrimSpace(cacheDir) != "" {
+		env[types.AgentCacheDirEnv] = cacheDir
+	}
 	for _, key := range serviceEnvKeys {
+		if _, exists := env[key]; exists {
+			continue
+		}
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			env[key] = value
 		}
@@ -118,6 +124,7 @@ var serviceEnvKeys = []string{
 	types.AgentTargetHostEnv,
 	types.AgentFingerprintEnv,
 	types.AgentHostnameEnv,
+	types.AgentCacheDirEnv,
 	types.AgentStorageModeEnv,
 }
 

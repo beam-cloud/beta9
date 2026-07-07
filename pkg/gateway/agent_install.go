@@ -31,6 +31,7 @@ BACKGROUND="${BEAM_AGENT_BACKGROUND:-auto}"
 SERVICE_MANAGER="${BEAM_AGENT_SERVICE_MANAGER:-auto}"
 SERVICE_NAME="${BEAM_AGENT_SERVICE_NAME:-beam-agent}"
 STATE_DIR="${BEAM_AGENT_STATE_DIR:-}"
+CACHE_DIR="${BEAM_AGENT_CACHE_DIR:-}"
 INSTALL_DOCKER="${BEAM_AGENT_INSTALL_DOCKER:-auto}"
 TRANSPORT=""
 EXECUTOR="${BEAM_AGENT_EXECUTOR:-}"
@@ -57,6 +58,7 @@ main() {
   [ -n "$TRANSPORT" ] && set -- "$@" --transport "$TRANSPORT"
   [ -n "$EXECUTOR" ] && set -- "$@" --executor "$EXECUTOR"
   [ -n "$WORKER_IMAGE" ] && set -- "$@" --worker-image "$WORKER_IMAGE"
+  [ -n "$CACHE_DIR" ] && set -- "$@" --cache-dir "$CACHE_DIR"
   [ -n "$MAX_CPU" ] && set -- "$@" --max-cpu "$MAX_CPU"
   [ -n "$MAX_MEMORY" ] && set -- "$@" --max-memory "$MAX_MEMORY"
   [ -n "$MAX_GPUS" ] && set -- "$@" --max-gpus "$MAX_GPUS"
@@ -96,6 +98,7 @@ parse_args() {
       --service-manager) require_value "$1" "${2:-}"; SERVICE_MANAGER="$2"; shift 2 ;;
       --service-name) require_value "$1" "${2:-}"; SERVICE_NAME="$2"; shift 2 ;;
       --state-dir) require_value "$1" "${2:-}"; STATE_DIR="$2"; shift 2 ;;
+      --cache-dir) require_value "$1" "${2:-}"; CACHE_DIR="$2"; shift 2 ;;
       --transport) require_value "$1" "${2:-}"; TRANSPORT="$2"; shift 2 ;;
       --executor) require_value "$1" "${2:-}"; EXECUTOR="$2"; shift 2 ;;
       --worker-image) require_value "$1" "${2:-}"; WORKER_IMAGE="$2"; shift 2 ;;
@@ -132,6 +135,9 @@ validate_input() {
   fi
   if [ -n "$STATE_DIR" ]; then
     export BEAM_AGENT_STATE_DIR="$STATE_DIR"
+  fi
+  if [ -n "$CACHE_DIR" ]; then
+    export BEAM_AGENT_CACHE_DIR="$CACHE_DIR"
   fi
 }
 
@@ -223,13 +229,14 @@ run_macos_docker_agent() {
   HOST_HOME="$(agent_host_home)"
   AGENT_LINUX_BIN="${BEAM_AGENT_LINUX_BIN:-${HOST_HOME}/.beam/bin/beam-agent-linux-${ARCH}}"
   HOST_STATE_DIR="${BEAM_AGENT_STATE_DIR:-${HOST_HOME}/.beam/agent}"
+  HOST_CACHE_DIR="${BEAM_AGENT_CACHE_DIR:-${HOST_STATE_DIR}/cache}"
   HOSTNAME_VALUE="$(hostname 2>/dev/null || echo macos-agent)"
   HOST_FINGERPRINT="$(host_fingerprint "$HOSTNAME_VALUE")"
   if [ -z "${BEAM_AGENT_WORKER_PLATFORM:-}" ]; then
     export BEAM_AGENT_WORKER_PLATFORM="linux/amd64"
   fi
 
-  mkdir -p "$(dirname "$AGENT_LINUX_BIN")" "$HOST_STATE_DIR"
+  mkdir -p "$(dirname "$AGENT_LINUX_BIN")" "$HOST_STATE_DIR" "$HOST_CACHE_DIR"
   install_linux_agent_for_docker "$AGENT_LINUX_BIN"
 
   say "Starting Beam agent"
@@ -240,10 +247,12 @@ run_macos_docker_agent() {
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$AGENT_LINUX_BIN:/usr/local/bin/beam-agent:ro" \
     -v "$HOST_STATE_DIR:$HOST_STATE_DIR" \
+    -v "$HOST_CACHE_DIR:$HOST_CACHE_DIR" \
     -e BEAM_AGENT_CONTAINER=1 \
     -e BEAM_AGENT_HOSTNAME="$HOSTNAME_VALUE" \
     -e BEAM_AGENT_MACHINE_FINGERPRINT="$HOST_FINGERPRINT" \
     -e BEAM_AGENT_STATE_DIR="$HOST_STATE_DIR" \
+    -e BEAM_AGENT_CACHE_DIR="$HOST_CACHE_DIR" \
     -e BEAM_WORKER_IMAGE="$WORKER_IMAGE" \
     -e BEAM_AGENT_DOCKER_HOST_ALIASES \
     -e BEAM_AGENT_LOCAL_REGISTRY_FORWARD \

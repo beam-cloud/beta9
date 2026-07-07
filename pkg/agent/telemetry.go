@@ -33,6 +33,7 @@ type agentTelemetry struct {
 	bootstrap  bootstrapConfig
 	stderr     io.Writer
 	stateDir   string
+	cacheDir   string
 	stats      func() agentWorkerStats
 	dropped    atomic.Uint64
 
@@ -45,7 +46,7 @@ type agentWorkerStats struct {
 	WorkerCount uint32
 }
 
-func newAgentTelemetry(client pb.GatewayServiceClient, agentToken string, bootstrap bootstrapConfig, stderr io.Writer) *agentTelemetry {
+func newAgentTelemetry(client pb.GatewayServiceClient, agentToken string, bootstrap bootstrapConfig, cacheDir string, stderr io.Writer) *agentTelemetry {
 	stateDir, _ := agentStateDir()
 	if stderr == nil {
 		stderr = io.Discard
@@ -56,6 +57,7 @@ func newAgentTelemetry(client pb.GatewayServiceClient, agentToken string, bootst
 		bootstrap:  bootstrap,
 		stderr:     stderr,
 		stateDir:   stateDir,
+		cacheDir:   agentCacheDir(stateDir, cacheDir),
 		ch:         make(chan *pb.AgentTelemetryRequest, agentTelemetryBuffer),
 	}
 }
@@ -346,7 +348,7 @@ func (t *agentTelemetry) collectPathMetrics() []*pb.MachinePathMetrics {
 			pathCandidate{label: "state", path: stateDir},
 			pathCandidate{label: "images", path: filepath.Join(stateDir, "images")},
 			pathCandidate{label: "images_cache", path: filepath.Join(stateDir, "images", "cache")},
-			pathCandidate{label: "cache", path: filepath.Join(stateDir, "cache")},
+			pathCandidate{label: "cache", path: t.cacheDir},
 			pathCandidate{label: "checkpoints", path: filepath.Join(stateDir, "checkpoints")},
 		)
 	}

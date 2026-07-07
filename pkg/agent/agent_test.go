@@ -216,7 +216,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		NetworkPrefix:             "10.0.0.0/24",
 		NetworkSlotPoolSize:       64,
 		ContainerStartConcurrency: 12,
-	}, agentWorkerDirs("/tmp/agent-state", "worker-one"))
+	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"))
 
 	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
 		t.Fatalf("expected route target host env in docker args: %#v", args)
@@ -257,7 +257,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	if !containsArg(args, "--shm-size", "256m") {
 		t.Fatalf("expected shm size to track worker memory: %#v", args)
 	}
-	if !containsArg(args, "--gpus", "device=0,1") {
+	if !containsArg(args, "--gpus", `"device=0,1"`) {
 		t.Fatalf("expected GPU device assignment: %#v", args)
 	}
 	for _, want := range []string{
@@ -568,6 +568,19 @@ func dockerInspectWithLabels(name string, labels map[string]string) *dockerConta
 	inspect := &dockerContainerInspect{Name: name}
 	inspect.Config.Labels = labels
 	return inspect
+}
+
+func TestAgentWorkerDirsUsesOptionalCacheDir(t *testing.T) {
+	t.Setenv(types.AgentCacheDirEnv, "")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if got := agentWorkerDirs(stateDir, "", "worker-one").Cache; got != filepath.Join(stateDir, "cache") {
+		t.Fatalf("default cache dir = %q, want state cache dir", got)
+	}
+
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	if got := agentWorkerDirs(stateDir, cacheDir, "worker-one").Cache; got != cacheDir {
+		t.Fatalf("cache dir = %q, want override %q", got, cacheDir)
+	}
 }
 
 func TestWorkerImagePullKeyIncludesPlatform(t *testing.T) {
