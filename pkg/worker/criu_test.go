@@ -511,7 +511,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				}
 			})
 
-			t.Run("RestoreCheckpoint pod preserves open TCP", func(t *testing.T) {
+			t.Run("RestoreCheckpoint pod closes TCP", func(t *testing.T) {
 				mockRuntime.Reset()
 
 				request := &types.ContainerRequest{
@@ -539,8 +539,8 @@ func TestNvidiaCRIUManager(t *testing.T) {
 					t.Errorf("RestoreCheckpoint failed: %v", err)
 				}
 
-				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
-					t.Errorf("Expected pod NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
+				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
+					t.Errorf("Expected pod NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
 
 				if exitCode != 0 {

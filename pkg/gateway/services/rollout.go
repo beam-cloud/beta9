@@ -54,7 +54,7 @@ func (gws *GatewayService) planDeploymentRollout(in deploymentRolloutInput) (dep
 
 	activeContainers, err := gws.containerRepo.GetActiveContainersByStubId(in.latest.Stub.ExternalId)
 	if err != nil {
-		return deploymentRolloutPlan{}, fmt.Errorf("failed to check active containers before rollout")
+		return deploymentRolloutPlan{}, fmt.Errorf("failed to check active containers before rollout: %w", err)
 	}
 	if !gws.rolloutCapacityAvailable(request, replicas, in.latest.Stub.ExternalId, activeContainers) {
 		return deploymentRolloutPlan{}, fmt.Errorf("rollout blocked: the new revision is not predicted to fit even after replacing the current always-on revision")

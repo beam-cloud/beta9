@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -578,15 +579,51 @@ func (gws *GatewayService) lookupPrivatePoolPolicy(ctx context.Context, workspac
 		if err != nil {
 			return false, "", err
 		}
-		if state == nil || (state.Mode != "" && state.Mode != string(types.PoolModePrivate)) {
-			continue
+		if privatePoolStateMatches(state, name) {
+			return true, privatePoolStateFallback(state), nil
 		}
-		if state.Config != nil && state.Config.Fallback != "" {
-			return true, state.Config.Fallback, nil
-		}
-		return true, state.Fallback, nil
 	}
+
+	states, err := gws.computeRepo.ListPoolStates(ctx, workspaceID, 0)
+	if err != nil {
+		return false, "", err
+	}
+	for _, state := range states {
+		if privatePoolStateMatchesAny(state, pool.Name, pool.Selector) {
+			return true, privatePoolStateFallback(state), nil
+		}
+	}
+
 	return false, "", nil
+}
+
+func privatePoolStateMatchesAny(state *compute.PoolState, names ...string) bool {
+	for _, name := range names {
+		if privatePoolStateMatches(state, strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
+}
+
+func privatePoolStateMatches(state *compute.PoolState, name string) bool {
+	if state == nil || name == "" || (state.Mode != "" && state.Mode != string(types.PoolModePrivate)) {
+		return false
+	}
+	if state.Name == name || state.Selector == name {
+		return true
+	}
+	return state.Config != nil && (state.Config.Name == name || state.Config.Selector == name)
+}
+
+func privatePoolStateFallback(state *compute.PoolState) string {
+	if state != nil && state.Config != nil && state.Config.Fallback != "" {
+		return state.Config.Fallback
+	}
+	if state != nil {
+		return state.Fallback
+	}
+	return ""
 }
 
 func (gws *GatewayService) managedStubLimitError(in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {

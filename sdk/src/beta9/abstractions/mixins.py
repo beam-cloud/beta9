@@ -41,8 +41,8 @@ class DeployableMixin:
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
-        rollout: str = "auto",
         invocation_details_func: Optional[Callable[..., None]] = None,
+        rollout: str = "auto",
         **invocation_details_options: Any,
     ) -> Tuple[Dict[str, Any], bool]:
         self._validate()

@@ -198,7 +198,7 @@ func shouldPreservePodTCPOnRestore(opts *RestoreOpts) bool {
 		return false
 	}
 
-	return isPodRequest(opts.request)
+	return isPodServiceRequest(opts.request)
 }
 
 func restoreFailureError(runtimeName string, err error, stderr string) error {

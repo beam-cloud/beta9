@@ -278,8 +278,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
-        rollout: str = "auto",
         invocation_details_func: Optional[Callable[..., None]] = None,
+        rollout: str = "auto",
         **invocation_details_options: Dict[str, Any],
     ) -> Tuple[Dict[str, Any], bool]:
         """
@@ -289,6 +289,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             name (Optional[str]): The name of the pod.
             context (Optional[ConfigContext]): The context of the pod.
             invocation_details_func (Optional[Callable[..., None]]): The function to call to print invocation details.
+            rollout (str): Rollout strategy for always-on deployments.
             **invocation_details_options: The options to pass to the invocation details function.
 
         Returns:

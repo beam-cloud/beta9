@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"bytes"
 	"context"
 	"net/url"
 	"testing"
@@ -70,13 +71,24 @@ func TestPresignEndpointForStorage(t *testing.T) {
 }
 
 func TestStorageMultipartUploaderConfig(t *testing.T) {
-	uploader := newStorageMultipartUploader(nil)
+	uploader := newStorageMultipartUploader(nil, bytes.NewReader(nil))
 
 	if uploader.PartSize != storageMultipartUploadPartSize {
 		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, storageMultipartUploadPartSize)
 	}
 	if uploader.Concurrency != storageMultipartUploadWorkers {
 		t.Fatalf("uploader Concurrency = %d, want %d", uploader.Concurrency, storageMultipartUploadWorkers)
+	}
+}
+
+func TestStorageMultipartUploaderLimitsStreamingConcurrency(t *testing.T) {
+	uploader := newStorageMultipartUploader(nil, bytes.NewBuffer(nil))
+
+	if uploader.PartSize != storageMultipartUploadPartSize {
+		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, storageMultipartUploadPartSize)
+	}
+	if uploader.Concurrency != storageStreamingUploadWorkers {
+		t.Fatalf("uploader Concurrency = %d, want %d", uploader.Concurrency, storageStreamingUploadWorkers)
 	}
 }
 

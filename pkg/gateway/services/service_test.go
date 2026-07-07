@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
@@ -17,6 +18,16 @@ type privatePoolPolicyComputeRepo struct {
 
 func (r *privatePoolPolicyComputeRepo) GetPoolState(_ context.Context, workspaceID, name string) (*model.PoolState, error) {
 	return r.pools[workspaceID+"/"+name], nil
+}
+
+func (r *privatePoolPolicyComputeRepo) ListPoolStates(_ context.Context, workspaceID string, _ int) ([]*model.PoolState, error) {
+	pools := []*model.PoolState{}
+	for key, pool := range r.pools {
+		if strings.HasPrefix(key, workspaceID+"/") {
+			pools = append(pools, pool)
+		}
+	}
+	return pools, nil
 }
 
 func TestNewGatewayServiceRequiresComputeRepoOrRedis(t *testing.T) {
@@ -56,6 +67,7 @@ func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing
 		computeRepo: &privatePoolPolicyComputeRepo{pools: map[string]*model.PoolState{
 			"workspace-1/large-gpu-pool":      {Name: "large-gpu-pool", Mode: string(types.PoolModePrivate)},
 			"workspace-1/large-gpu-pool-fail": {Name: "large-gpu-pool-fail", Mode: string(types.PoolModePrivate), Fallback: types.PrivatePoolFallbackFail},
+			"workspace-1/stored-pool":         {Name: "stored-pool", Selector: "selector-only", Mode: string(types.PoolModePrivate), Fallback: types.PrivatePoolFallbackFail},
 		}},
 	}
 
@@ -86,6 +98,14 @@ func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing
 	}
 	if got := failPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
 		t.Fatalf("managed limit error = %q, want empty", got)
+	}
+
+	selectorPolicy, err := gws.stubResourcePolicy(context.Background(), "workspace-1", &pb.PoolConfig{Selector: "selector-only"}, "handler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !selectorPolicy.privatePoolOnly() {
+		t.Fatal("expected selector-only private pool lookup to bypass managed limits")
 	}
 }
 

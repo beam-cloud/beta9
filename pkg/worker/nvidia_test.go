@@ -418,6 +418,11 @@ func TestAssignEightGPUDevices(t *testing.T) {
 	if len(assignedDevices) != 8 {
 		t.Fatalf("assigned devices = %v, want 8 devices", assignedDevices)
 	}
+	for i, device := range assignedDevices {
+		if device != i {
+			t.Fatalf("assigned devices = %v, want [0 1 2 3 4 5 6 7]", assignedDevices)
+		}
+	}
 }
 
 func TestAssignMoreGPUsThanAvailable(t *testing.T) {
