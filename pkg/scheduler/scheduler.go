@@ -309,6 +309,10 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 		return nil, nil
 	}
 
+	return s.managedConcurrencyLimit(request)
+}
+
+func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
 	// First try to get the cached quota
 	var quota *types.ConcurrencyLimit
 	quota, err := s.workspaceRepo.GetConcurrencyLimitByWorkspaceId(request.WorkspaceId)
@@ -339,12 +343,12 @@ func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool
 		return false
 	}
 
-	stubConfig, err := request.Stub.UnmarshalConfig()
-	if err != nil || stubConfig == nil || stubConfig.Pool == nil {
-		return false
-	}
 	poolSelector := request.PoolSelector
 	if poolSelector == "" {
+		stubConfig, err := request.Stub.UnmarshalConfig()
+		if err != nil || stubConfig == nil {
+			return false
+		}
 		poolSelector = stubConfig.PoolSelector()
 	}
 	if poolSelector == "" {
@@ -354,8 +358,7 @@ func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool
 	if !ok || pool.Config.Mode != types.PoolModePrivate {
 		return false
 	}
-	fallback := stubConfig.Pool.Fallback
-	return fallback == types.PrivatePoolFallbackFail || fallback == types.PrivatePoolFallbackWait
+	return true
 }
 
 func (s *Scheduler) CheckConcurrencyLimit(request *types.ContainerRequest) error {
