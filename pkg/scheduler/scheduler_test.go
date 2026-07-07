@@ -103,10 +103,11 @@ func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
 	manager.SetPool("private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 	scheduler := &Scheduler{workerPoolManager: manager}
 	stubConfig, err := json.Marshal(types.StubConfigV1{
-		Pool: &types.PoolConfig{Name: "private-gpu-pool", Selector: "private-gpu-pool", Fallback: types.PrivatePoolFallbackFail},
+		Pool: &types.PoolConfig{Name: "private-gpu-pool", Selector: "private-gpu-pool", Fallback: types.PrivatePoolFallbackInternal},
 	})
 	assert.NoError(t, err)
 
+	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{PoolSelector: "private-gpu-pool"}))
 	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{
 		PoolSelector: "private-gpu-pool",
 		Stub:         types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
