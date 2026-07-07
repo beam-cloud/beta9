@@ -335,15 +335,23 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
-	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
+	if s == nil || request == nil || s.workerPoolManager == nil {
 		return false
 	}
-	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
-	if !ok || pool.Config.Mode != types.PoolModePrivate {
-		return false
-	}
+
 	stubConfig, err := request.Stub.UnmarshalConfig()
 	if err != nil || stubConfig == nil || stubConfig.Pool == nil {
+		return false
+	}
+	poolSelector := request.PoolSelector
+	if poolSelector == "" {
+		poolSelector = stubConfig.PoolSelector()
+	}
+	if poolSelector == "" {
+		return false
+	}
+	pool, ok := s.workerPoolManager.GetPool(poolSelector)
+	if !ok || pool.Config.Mode != types.PoolModePrivate {
 		return false
 	}
 	fallback := stubConfig.Pool.Fallback

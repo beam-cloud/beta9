@@ -1,6 +1,7 @@
 package gatewayservices
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -39,7 +40,10 @@ func (gws *GatewayService) planDeploymentRollout(in deploymentRolloutInput) (dep
 	if in.latest != nil && in.stub != nil && in.stub.Type == types.StubType(types.StubTypeScheduledJobDeployment) {
 		return deploymentRolloutPlan{stopLatest: true}, nil
 	}
-	if mode == rolloutModeAuto || !deploymentRolloutApplies(in) {
+	if !deploymentRolloutTarget(in) {
+		return deploymentRolloutPlan{}, nil
+	}
+	if mode == rolloutModeAuto {
 		return deploymentRolloutPlan{}, nil
 	}
 
@@ -67,6 +71,38 @@ func (gws *GatewayService) planDeploymentRollout(in deploymentRolloutInput) (dep
 	}, nil
 }
 
+func (gws *GatewayService) activeDeploymentsForRollout(ctx context.Context, workspaceID uint, name, stubType string) ([]types.DeploymentWithRelated, error) {
+	active := true
+	deployments, err := gws.backendRepo.ListDeploymentsWithRelated(ctx, types.DeploymentFilter{
+		WorkspaceID: workspaceID,
+		StubType:    types.StringSlice{stubType},
+		Name:        name,
+		Active:      &active,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	activeDeployments := make([]types.DeploymentWithRelated, 0, len(deployments))
+	for _, deployment := range deployments {
+		if deployment.Active && deployment.Deployment.WorkspaceId == workspaceID && deployment.Name == name && deployment.StubType == stubType {
+			activeDeployments = append(activeDeployments, deployment)
+		}
+	}
+	return activeDeployments, nil
+}
+
+func latestActiveDeployment(deployments []types.DeploymentWithRelated) *types.DeploymentWithRelated {
+	var latest *types.DeploymentWithRelated
+	for i := range deployments {
+		deployment := deployments[i]
+		if latest == nil || deployment.Version > latest.Version {
+			latest = &deployment
+		}
+	}
+	return latest
+}
+
 func normalizeRolloutMode(mode string) string {
 	mode = strings.TrimSpace(strings.ToLower(mode))
 	if mode == "" {
@@ -85,13 +121,20 @@ func validRolloutMode(mode string) bool {
 }
 
 func deploymentRolloutApplies(in deploymentRolloutInput) bool {
+	if !deploymentRolloutTarget(in) {
+		return false
+	}
+	return alwaysOnDeploymentConfig(in.config) && latestAlwaysOnDeployment(in.latest)
+}
+
+func deploymentRolloutTarget(in deploymentRolloutInput) bool {
 	if in.stub == nil || in.config == nil || in.latest == nil || !in.latest.Active {
 		return false
 	}
 	if !in.stub.Type.IsDeployment() || !in.latest.Stub.Type.IsDeployment() {
 		return false
 	}
-	return alwaysOnDeploymentConfig(in.config) && latestAlwaysOnDeployment(in.latest)
+	return true
 }
 
 func latestAlwaysOnDeployment(deployment *types.DeploymentWithRelated) bool {
