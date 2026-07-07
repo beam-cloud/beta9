@@ -414,6 +414,7 @@ class GetOrCreateStubResponse(betterproto.Message):
 class DeployStubRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
+    rollout: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -422,6 +423,9 @@ class DeployStubResponse(betterproto.Message):
     deployment_id: str = betterproto.string_field(2)
     version: int = betterproto.uint32_field(3)
     invoke_url: str = betterproto.string_field(4)
+    err_msg: str = betterproto.string_field(5)
+    warn_msg: str = betterproto.string_field(6)
+    rollout_action: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)

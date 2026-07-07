@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest import TestCase, mock
 from unittest.mock import MagicMock
 
@@ -185,6 +186,38 @@ class TestDeployment(TestCase):
 
         self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)
         self.assertEqual(resp["deployment_id"], gateway_stub_mock.deploy_stub().deployment_id)
+
+    @mock.patch(
+        "beta9.abstractions.pod.Pod.prepare_runtime",
+        return_value=True,
+    )
+    @mock.patch(
+        "beta9.abstractions.pod.Pod.gateway_stub",
+        return_value=MagicMock(),
+    )
+    def test_pod_deploy_passes_rollout_mode(self, gateway_stub_mock, prepare_runtime_mock):
+        gateway_stub_mock.deploy_stub.return_value = SimpleNamespace(
+            deployment_id="test-deployment-id",
+            ok=True,
+            invoke_url="",
+            version=1,
+            warn_msg="",
+            rollout_action="replace",
+        )
+        test_pod = Pod(
+            name="test-pod",
+            cpu=1,
+            memory=128,
+            image=Image(python_version="python3.8"),
+            entrypoint=["python", "app.py"],
+        )
+
+        resp, ok = test_pod.deploy(rollout="replace")
+
+        self.assertTrue(ok)
+        self.assertEqual(resp["rollout_action"], "replace")
+        request = gateway_stub_mock.deploy_stub.call_args.args[0]
+        self.assertEqual(request.rollout, "replace")
 
     @mock.patch(
         "beta9.abstractions.pod.Pod.prepare_runtime",

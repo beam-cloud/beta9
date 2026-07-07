@@ -718,6 +718,7 @@ message GetOrCreateStubResponse {
 message DeployStubRequest {
   string stub_id = 1;
   string name = 2;
+  string rollout = 3;
 }
 
 message DeployStubResponse {
@@ -725,6 +726,9 @@ message DeployStubResponse {
   string deployment_id = 2;
   uint32 version = 3;
   string invoke_url = 4;
+  string err_msg = 5;
+  string warn_msg = 6;
+  string rollout_action = 7;
 }
 
 message Deployment {

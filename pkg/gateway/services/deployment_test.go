@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -19,8 +21,10 @@ import (
 type deploymentLifecycleBackendRepo struct {
 	repository.BackendRepository
 	deployments map[string]types.DeploymentWithRelated
+	stubs       map[string]types.StubWithRelated
 	stubConfigs map[uint]*types.StubConfigV1
 	snapshots   map[string]*types.DiskSnapshot
+	created     []types.Deployment
 }
 
 func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLifecycleBackendRepo) {
@@ -86,6 +90,13 @@ func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLi
 		deployments: map[string]types.DeploymentWithRelated{
 			deployment.ExternalId: deployment,
 		},
+		stubs: map[string]types.StubWithRelated{
+			deployment.Stub.ExternalId: {
+				Stub:      deployment.Stub,
+				Workspace: deployment.Workspace,
+				App:       &deployment.App,
+			},
+		},
 		stubConfigs: map[uint]*types.StubConfigV1{},
 		snapshots:   map[string]*types.DiskSnapshot{},
 	}
@@ -99,7 +110,10 @@ func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLi
 		},
 		backendRepo:   backend,
 		containerRepo: &deploymentLifecycleContainerRepo{},
-		redisClient:   rdb,
+		computeRepo: &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{
+			"private-gpu": {Name: "private-gpu", Mode: string(types.PoolModePrivate)},
+		}},
+		redisClient: rdb,
 	}, backend
 }
 
@@ -122,6 +136,44 @@ func (r *deploymentLifecycleBackendRepo) GetDeploymentByExternalId(_ context.Con
 	if !ok || deployment.Deployment.WorkspaceId != workspaceID {
 		return nil, nil
 	}
+	return &deployment, nil
+}
+
+func (r *deploymentLifecycleBackendRepo) GetLatestDeploymentByName(_ context.Context, workspaceID uint, name string, stubType string, _ bool) (*types.DeploymentWithRelated, error) {
+	var latest *types.DeploymentWithRelated
+	for _, deployment := range r.deployments {
+		if deployment.Deployment.WorkspaceId != workspaceID || deployment.Name != name || deployment.StubType != stubType {
+			continue
+		}
+		if latest == nil || deployment.Version > latest.Version {
+			next := deployment
+			latest = &next
+		}
+	}
+	return latest, nil
+}
+
+func (r *deploymentLifecycleBackendRepo) GetStubByExternalId(_ context.Context, stubExternalID string, _ ...types.QueryFilter) (*types.StubWithRelated, error) {
+	stub, ok := r.stubs[stubExternalID]
+	if !ok {
+		return nil, nil
+	}
+	return &stub, nil
+}
+
+func (r *deploymentLifecycleBackendRepo) CreateDeployment(_ context.Context, workspaceID uint, name string, version uint, stubID uint, stubType string, appID uint) (*types.Deployment, error) {
+	deployment := types.Deployment{
+		Id:          uint(100 + len(r.created)),
+		ExternalId:  fmt.Sprintf("deployment-%d", version),
+		Name:        name,
+		Active:      true,
+		WorkspaceId: workspaceID,
+		StubId:      stubID,
+		StubType:    stubType,
+		Version:     version,
+		AppId:       appID,
+	}
+	r.created = append(r.created, deployment)
 	return &deployment, nil
 }
 
@@ -169,6 +221,9 @@ func setDeploymentStubConfig(t *testing.T, backend *deploymentLifecycleBackendRe
 	deployment := backend.deployments["deployment-id"]
 	deployment.Stub.Config = string(configBytes)
 	backend.deployments[deployment.ExternalId] = deployment
+	stub := backend.stubs[deployment.Stub.ExternalId]
+	stub.Stub.Config = string(configBytes)
+	backend.stubs[deployment.Stub.ExternalId] = stub
 }
 
 type deploymentLifecycleComputeRepo struct {
@@ -182,10 +237,54 @@ func (r *deploymentLifecycleComputeRepo) GetPoolState(_ context.Context, _ strin
 
 type deploymentLifecycleContainerRepo struct {
 	repository.ContainerRepository
+	active []types.ContainerState
 }
 
-func (r *deploymentLifecycleContainerRepo) GetActiveContainersByStubId(string) ([]types.ContainerState, error) {
-	return nil, nil
+func (r *deploymentLifecycleContainerRepo) GetActiveContainersByStubId(stubID string) ([]types.ContainerState, error) {
+	out := []types.ContainerState{}
+	for _, container := range r.active {
+		if container.StubId == stubID {
+			out = append(out, container)
+		}
+	}
+	return out, nil
+}
+
+type deploymentRolloutWorkerRepo struct {
+	repository.WorkerRepository
+	workers []*types.Worker
+}
+
+func (r *deploymentRolloutWorkerRepo) GetAllWorkers() ([]*types.Worker, error) {
+	return r.workers, nil
+}
+
+func configurePrivateRolloutTest(t *testing.T, gws *GatewayService, backend *deploymentLifecycleBackendRepo, cpu int64, memory int64, workers []*types.Worker, active []types.ContainerState) {
+	t.Helper()
+
+	config := types.StubConfigV1{
+		Runtime: types.Runtime{
+			Cpu:    cpu,
+			Memory: memory,
+		},
+		Autoscaler: &types.Autoscaler{
+			Type:              types.QueueDepthAutoscaler,
+			MinContainers:     1,
+			MaxContainers:     1,
+			TasksPerContainer: 1,
+		},
+		Pool: &types.PoolConfig{Name: "private-gpu", Selector: "private-gpu", Fallback: types.PrivatePoolFallbackFail},
+	}
+	setDeploymentStubConfig(t, backend, config)
+
+	containerRepo := &deploymentLifecycleContainerRepo{active: active}
+	workerRepo := &deploymentRolloutWorkerRepo{workers: workers}
+	manager := scheduler.NewWorkerPoolManager(false)
+	manager.SetPool("private-gpu", types.WorkerPoolConfig{Mode: types.PoolModePrivate, RequiresPoolSelector: true}, nil)
+
+	gws.containerRepo = containerRepo
+	gws.workerRepo = workerRepo
+	gws.scheduler = scheduler.NewSchedulerForCapacityChecks(workerRepo, gws.computeRepo, manager)
 }
 
 func TestPodDeploymentLifecycleUsesListedDeploymentID(t *testing.T) {
@@ -209,6 +308,123 @@ func TestPodDeploymentLifecycleUsesListedDeploymentID(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, deleteResp.Ok, deleteResp.ErrMsg)
 	require.Empty(t, backend.deployments)
+}
+
+func TestPrivatePoolRedeployReportsBlueGreenWhenSpareCapacityExists(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	configurePrivateRolloutTest(t, gws, backend, 1000, 1024, []*types.Worker{{
+		Id:                   "worker-1",
+		PoolName:             "private-gpu",
+		Status:               types.WorkerStatusAvailable,
+		TotalCpu:             2000,
+		FreeCpu:              1000,
+		TotalMemory:          4096,
+		FreeMemory:           2048,
+		RequiresPoolSelector: true,
+	}}, []types.ContainerState{{
+		StubId:   "stub-id",
+		WorkerId: "worker-1",
+		Cpu:      1000,
+		Memory:   1024,
+	}})
+
+	resp, err := gws.DeployStub(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.DeployStubRequest{
+		StubId: "stub-id",
+		Name:   "service-probe",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Equal(t, rolloutActionBlueGreen, resp.RolloutAction)
+	require.Empty(t, resp.WarnMsg)
+	require.True(t, backend.deployments["deployment-id"].Active)
+}
+
+func TestPrivatePoolRedeployWarnsAndReplacesWhenOnlyOldCapacityFits(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	configurePrivateRolloutTest(t, gws, backend, 1000, 1024, []*types.Worker{{
+		Id:                   "worker-1",
+		PoolName:             "private-gpu",
+		Status:               types.WorkerStatusAvailable,
+		TotalCpu:             1000,
+		FreeCpu:              0,
+		TotalMemory:          2048,
+		FreeMemory:           768,
+		RequiresPoolSelector: true,
+	}}, []types.ContainerState{{
+		StubId:   "stub-id",
+		WorkerId: "worker-1",
+		Cpu:      1000,
+		Memory:   1280,
+	}})
+
+	resp, err := gws.DeployStub(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.DeployStubRequest{
+		StubId: "stub-id",
+		Name:   "service-probe",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	require.Equal(t, rolloutActionReplace, resp.RolloutAction)
+	require.Contains(t, resp.WarnMsg, "Expected downtime")
+	require.False(t, backend.deployments["deployment-id"].Active)
+}
+
+func TestPrivatePoolRedeployBlocksWhenReplacementCannotFit(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	configurePrivateRolloutTest(t, gws, backend, 2000, 1024, []*types.Worker{{
+		Id:                   "worker-1",
+		PoolName:             "private-gpu",
+		Status:               types.WorkerStatusAvailable,
+		TotalCpu:             1000,
+		FreeCpu:              0,
+		TotalMemory:          2048,
+		FreeMemory:           768,
+		RequiresPoolSelector: true,
+	}}, []types.ContainerState{{
+		StubId:   "stub-id",
+		WorkerId: "worker-1",
+		Cpu:      1000,
+		Memory:   1280,
+	}})
+
+	resp, err := gws.DeployStub(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.DeployStubRequest{
+		StubId: "stub-id",
+		Name:   "service-probe",
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrMsg, "not predicted to fit")
+	require.Empty(t, backend.created)
+	require.True(t, backend.deployments["deployment-id"].Active)
+}
+
+func TestPrivatePoolRedeployBlueGreenModeFailsWithoutSpareCapacity(t *testing.T) {
+	gws, backend := newDeploymentLifecycleGateway(t)
+	configurePrivateRolloutTest(t, gws, backend, 1000, 1024, []*types.Worker{{
+		Id:                   "worker-1",
+		PoolName:             "private-gpu",
+		Status:               types.WorkerStatusAvailable,
+		TotalCpu:             1000,
+		FreeCpu:              0,
+		TotalMemory:          2048,
+		FreeMemory:           768,
+		RequiresPoolSelector: true,
+	}}, []types.ContainerState{{
+		StubId:   "stub-id",
+		WorkerId: "worker-1",
+		Cpu:      1000,
+		Memory:   1280,
+	}})
+
+	resp, err := gws.DeployStub(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.DeployStubRequest{
+		StubId:  "stub-id",
+		Name:    "service-probe",
+		Rollout: rolloutModeBlueGreen,
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrMsg, "blue-green rollout requires enough spare capacity")
+	require.Empty(t, backend.created)
+	require.True(t, backend.deployments["deployment-id"].Active)
 }
 
 func TestListDeploymentsIncludesDatabaseMetadata(t *testing.T) {

@@ -1,11 +1,23 @@
 package gatewayservices
 
 import (
+	"context"
 	"testing"
 
+	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
+
+type privatePoolPolicyComputeRepo struct {
+	repository.ComputeRepository
+	pools map[string]*model.PoolState
+}
+
+func (r *privatePoolPolicyComputeRepo) GetPoolState(_ context.Context, workspaceID, name string) (*model.PoolState, error) {
+	return r.pools[workspaceID+"/"+name], nil
+}
 
 func TestNewGatewayServiceRequiresComputeRepoOrRedis(t *testing.T) {
 	_, err := NewGatewayService(&GatewayServiceOpts{})
@@ -31,6 +43,49 @@ func TestConfigurePoolSelectorNamesReservedPool(t *testing.T) {
 	}
 	if got, want := pool.Name, pool.Selector; got != want {
 		t.Fatalf("name = %q, want selector %q", got, want)
+	}
+}
+
+func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing.T) {
+	gws := &GatewayService{
+		appConfig: types.AppConfig{GatewayService: types.GatewayServiceConfig{StubLimits: types.StubLimits{
+			Cpu:         1000,
+			Memory:      1024,
+			MaxGpuCount: 1,
+		}}},
+		computeRepo: &privatePoolPolicyComputeRepo{pools: map[string]*model.PoolState{
+			"workspace-1/large-gpu-pool":      {Name: "large-gpu-pool", Mode: string(types.PoolModePrivate)},
+			"workspace-1/large-gpu-pool-fail": {Name: "large-gpu-pool-fail", Mode: string(types.PoolModePrivate), Fallback: types.PrivatePoolFallbackFail},
+		}},
+	}
+
+	policy, err := gws.stubResourcePolicy(context.Background(), "workspace-1", &pb.PoolConfig{Name: "large-gpu-pool"}, "handler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.privatePoolTargeted {
+		t.Fatal("expected existing private pool to be targeted")
+	}
+	if policy.privatePoolOnly() {
+		t.Fatal("expected internal fallback to keep managed limits enforced")
+	}
+	if policy.fallback != types.PrivatePoolFallbackInternal {
+		t.Fatal("expected omitted fallback to default to internal")
+	}
+	request := &pb.GetOrCreateStubRequest{Cpu: 2000, Memory: 2048, Gpu: "H100", GpuCount: 8}
+	if got := policy.validateManagedLimits(gws, request, &types.Workspace{}); got == "" {
+		t.Fatal("expected managed stub limit error")
+	}
+
+	failPolicy, err := gws.stubResourcePolicy(context.Background(), "workspace-1", &pb.PoolConfig{Name: "large-gpu-pool-fail"}, "handler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !failPolicy.privatePoolOnly() {
+		t.Fatal("expected fail fallback private pool to bypass managed limits")
+	}
+	if got := failPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
+		t.Fatalf("managed limit error = %q, want empty", got)
 	}
 }
 

@@ -98,6 +98,13 @@ def common(**_):
     default=False,
     help="Output deployment details as JSON.",
 )
+@click.option(
+    "--rollout",
+    type=click.Choice(["auto", "blue-green", "replace"]),
+    default="auto",
+    show_default=True,
+    help="Rollout strategy for private-pool always-on pod redeploys.",
+)
 @override_config_options
 @extraclick.config_context_option
 @click.pass_context
@@ -108,6 +115,7 @@ def deploy(
     url_type: str,
     format: str,
     json_output: bool,
+    rollout: str,
     context: str = None,
     **kwargs,
 ):
@@ -118,6 +126,7 @@ def deploy(
         url_type=url_type,
         format="json" if json_output else format,
         json_output=False,
+        rollout=rollout,
         context=context,
         **kwargs,
     )
@@ -317,6 +326,13 @@ def _release_deployment_grpc_refs(user_obj) -> None:
     default=False,
     help="Output deployment details as JSON.",
 )
+@click.option(
+    "--rollout",
+    type=click.Choice(["auto", "blue-green", "replace"]),
+    default="auto",
+    show_default=True,
+    help="Rollout strategy for private-pool always-on pod redeploys.",
+)
 @override_config_options
 @extraclick.pass_service_client
 def create_deployment(
@@ -326,6 +342,7 @@ def create_deployment(
     url_type: str,
     format: str,
     json_output: bool,
+    rollout: str,
     **kwargs,
 ):
     if json_output:
@@ -372,6 +389,7 @@ def create_deployment(
             response, ok = user_obj.deploy(
                 name=name,
                 context=service._config,
+                rollout=rollout,
                 url_type=url_type,
             )
             if not ok:

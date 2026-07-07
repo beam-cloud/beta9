@@ -41,6 +41,7 @@ class DeployableMixin:
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
+        rollout: str = "auto",
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
     ) -> Tuple[Dict[str, Any], bool]:
@@ -71,11 +72,20 @@ class DeployableMixin:
             DeployStubRequest(
                 stub_id=self.parent.stub_id,
                 name=self.parent.name,
+                rollout=rollout,
             )
         )
 
         self.parent.deployment_id = deploy_response.deployment_id
+        warn_msg = deploy_response.warn_msg if isinstance(deploy_response.warn_msg, str) else ""
+        rollout_action = (
+            deploy_response.rollout_action
+            if isinstance(deploy_response.rollout_action, str)
+            else ""
+        )
         if deploy_response.ok:
+            if warn_msg:
+                terminal.warn(warn_msg)
             terminal.header("Deployed 🎉")
             if invocation_details_func:
                 invocation_details_func(
@@ -89,6 +99,8 @@ class DeployableMixin:
             "deployment_name": self.parent.name,
             "invoke_url": deploy_response.invoke_url,
             "version": deploy_response.version,
+            "warning": warn_msg,
+            "rollout_action": rollout_action,
         }, deploy_response.ok
 
     def _attach_and_sync(self, container_id: str, sync_dir: str):

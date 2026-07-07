@@ -278,6 +278,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
+        rollout: str = "auto",
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Dict[str, Any],
     ) -> Tuple[Dict[str, Any], bool]:
@@ -332,12 +333,20 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.stub_id, name=self.name)
+            DeployStubRequest(stub_id=self.stub_id, name=self.name, rollout=rollout)
         )
 
         self.deployment_id = deploy_response.deployment_id
         invoke_url = deploy_response.invoke_url
+        warn_msg = deploy_response.warn_msg if isinstance(deploy_response.warn_msg, str) else ""
+        rollout_action = (
+            deploy_response.rollout_action
+            if isinstance(deploy_response.rollout_action, str)
+            else ""
+        )
         if deploy_response.ok:
+            if warn_msg:
+                terminal.warn(warn_msg)
             terminal.header("Deployed 🎉")
             if invocation_details_func:
                 invocation_details_func(
@@ -354,6 +363,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
             "deployment_name": self.name,
             "invoke_url": invoke_url,
             "version": deploy_response.version,
+            "warning": warn_msg,
+            "rollout_action": rollout_action,
         }, deploy_response.ok
 
     def generate_deployment_artifacts(self, **kwargs):

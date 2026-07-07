@@ -74,3 +74,9 @@ if __name__ == "__main__":
 ```
 
 When invoked, this function will run on the on-prem worker pool specified above.
+
+For large models loaded from mounted volumes, size the node's backing mount,
+local cache, and temporary storage above the model footprint plus runtime
+overhead. For example, a 1.5T model should be read from its mounted volume path
+inside the workload container rather than packaged into the stub object or
+staged through `/tmp` unless those paths are explicitly sized for it.
