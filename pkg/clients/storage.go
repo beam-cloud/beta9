@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -21,7 +22,9 @@ import (
 )
 
 const (
-	testObjectKey = "test-access-object"
+	testObjectKey                  = "test-access-object"
+	storageMultipartUploadPartSize = 64 * 1024 * 1024
+	storageMultipartUploadWorkers  = 8
 )
 
 type StorageClient struct {
@@ -313,12 +316,20 @@ func (c *StorageClient) UploadToBucket(ctx context.Context, key string, data []b
 }
 
 func (c *StorageClient) UploadToBucketWithReader(ctx context.Context, key string, data io.Reader, bucket string) error {
-	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
+	uploader := newStorageMultipartUploader(c.s3Client)
+	_, err := uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   data,
 	})
 	return err
+}
+
+func newStorageMultipartUploader(client *s3.Client) *manager.Uploader {
+	return manager.NewUploader(client, func(u *manager.Uploader) {
+		u.PartSize = storageMultipartUploadPartSize
+		u.Concurrency = storageMultipartUploadWorkers
+	})
 }
 
 func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bool, *s3.HeadObjectOutput, error) {

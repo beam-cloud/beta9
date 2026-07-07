@@ -69,6 +69,17 @@ func TestPresignEndpointForStorage(t *testing.T) {
 	}
 }
 
+func TestStorageMultipartUploaderConfig(t *testing.T) {
+	uploader := newStorageMultipartUploader(nil)
+
+	if uploader.PartSize != storageMultipartUploadPartSize {
+		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, storageMultipartUploadPartSize)
+	}
+	if uploader.Concurrency != storageMultipartUploadWorkers {
+		t.Fatalf("uploader Concurrency = %d, want %d", uploader.Concurrency, storageMultipartUploadWorkers)
+	}
+}
+
 func TestWorkspaceStorageClientPresignedURLRejectsLoopbackOverrideForRemoteStorage(t *testing.T) {
 	storageClient, err := NewWorkspaceStorageClientWithPresignEndpoint(
 		context.Background(),
