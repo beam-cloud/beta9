@@ -57,12 +57,12 @@ def test_pool_string_routes_to_manual_pool():
 
 
 def test_function_stores_multi_gpu_private_pool_config():
-	fn = Function(gpu="H100", gpu_count=8, pool="gpu-pool")
+    fn = Function(gpu="H100", gpu_count=8, pool="gpu-pool")
 
-	assert fn.gpu == "H100"
-	assert fn.gpu_count == 8
-	assert fn.pool_config.name == "gpu-pool"
-	assert fn.pool_config.selector == "gpu-pool"
+    assert fn.gpu == "H100"
+    assert fn.gpu_count == 8
+    assert fn.pool_config.name == "gpu-pool"
+    assert fn.pool_config.selector == "gpu-pool"
 
 
 def test_sandbox_pool_string_routes_to_manual_pool():
