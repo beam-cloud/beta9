@@ -10,6 +10,7 @@ type AgentJoinOptions struct {
 	ExecutorOverride          string
 	TransportOverride         string
 	WorkerImage               string
+	CacheDir                  string
 	MaxCPU                    string
 	MaxMemory                 string
 	MaxGPUs                   uint

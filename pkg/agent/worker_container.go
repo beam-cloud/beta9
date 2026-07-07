@@ -44,7 +44,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	}
 	if slot.GpuCount > 0 {
 		if slot.GpuAssignment != "" {
-			args = append(args, "--gpus", "device="+slot.GpuAssignment)
+			args = append(args, "--gpus", fmt.Sprintf("%q", "device="+slot.GpuAssignment))
 		} else {
 			args = append(args, "--gpus", types.NvidiaVisibleDevicesAll)
 		}

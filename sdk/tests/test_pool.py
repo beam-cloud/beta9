@@ -133,12 +133,14 @@ def test_pool_join_appends_agent_flags():
         service_manager="systemd",
         service_name="beam-private",
         state_dir="/var/lib/beam/private",
+        cache_dir="/mnt/cache",
     )
 
     assert "--foreground" in command
     assert "--service-manager systemd" in command
     assert "--service-name beam-private" in command
     assert "--state-dir /var/lib/beam/private" in command
+    assert "--cache-dir /mnt/cache" in command
     assert "--agent-bin '/tmp/beam agent'" in command
     assert "--executor worker-container" in command
     assert "--worker-image registry.localhost:5000/beta9-worker:latest" in command

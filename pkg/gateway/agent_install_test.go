@@ -31,6 +31,8 @@ func TestAgentInstallScriptDownloadsAgentFromGateway(t *testing.T) {
 		"${GATEWAY}/install/agent/${OS_NAME}/${ARCH_NAME}",
 		"${GATEWAY}/install/agent/linux/${ARCH}",
 		"ensure_linux_docker",
+		"--cache-dir",
+		"BEAM_AGENT_CACHE_DIR",
 	} {
 		if !strings.Contains(agentInstallScript, want) {
 			t.Fatalf("install script missing %q", want)

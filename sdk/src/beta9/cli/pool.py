@@ -709,6 +709,7 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 )
 @click.option("--service-name", default="", help="Background service name.")
 @click.option("--state-dir", default="", help="Agent state directory.")
+@click.option("--cache-dir", default="", help="Agent host cache directory.")
 @click.option("--print-only", is_flag=True, help="Only print the generated join command.")
 @extraclick.pass_service_client
 def join(
@@ -731,6 +732,7 @@ def join(
     service_manager: Optional[str],
     service_name: str,
     state_dir: str,
+    cache_dir: str,
     print_only: bool,
 ):
     if gpu_ids and max_gpus:
@@ -773,6 +775,7 @@ def join(
         service_manager=service_manager,
         service_name=service_name,
         state_dir=state_dir,
+        cache_dir=cache_dir,
     )
     if print_only:
         terminal.detail(command, crop=False, overflow="ignore")
@@ -814,6 +817,7 @@ def _append_join_args(
     service_manager: Optional[str] = None,
     service_name: str = "",
     state_dir: str = "",
+    cache_dir: str = "",
 ) -> str:
     extra = []
     if background is True:
@@ -826,6 +830,8 @@ def _append_join_args(
         extra.extend(["--service-name", service_name])
     if state_dir:
         extra.extend(["--state-dir", state_dir])
+    if cache_dir:
+        extra.extend(["--cache-dir", cache_dir])
     if agent_bin:
         extra.extend(["--agent-bin", agent_bin])
     if executor:
