@@ -2,6 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -207,22 +209,55 @@ func copyFile(src, dst string) error {
 }
 
 func createTar(srcDir, destTar string) error {
+	_, _, err := createTarWithSHA256(srcDir, destTar)
+	return err
+}
+
+func createTarWithSHA256(srcDir, destTar string) (string, int64, error) {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		_ = os.Remove(destTar)
 
-		cmd := exec.Command("tar", "-cf", destTar, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			lastErr = err
+		out, err := os.OpenFile(destTar, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			return "", 0, err
+		}
+
+		hasher := sha256.New()
+		counter := &countingWriter{}
+		cmd := exec.Command("tar", "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		var stderr bytes.Buffer
+		cmd.Stdout = io.MultiWriter(out, hasher, counter)
+		cmd.Stderr = &stderr
+
+		runErr := cmd.Run()
+		closeErr := out.Close()
+		if runErr != nil {
+			_ = os.Remove(destTar)
+			lastErr = tarCommandError(fmt.Sprintf("archive directory %s", srcDir), runErr, stderr)
+			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+			continue
+		}
+		if closeErr != nil {
+			_ = os.Remove(destTar)
+			lastErr = fmt.Errorf("close tar archive %s: %w", destTar, closeErr)
 			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
 			continue
 		}
 
-		return nil
+		return hex.EncodeToString(hasher.Sum(nil)), counter.n, nil
 	}
 
-	return lastErr
+	return "", 0, lastErr
+}
+
+type countingWriter struct {
+	n int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
 }
 
 func untarTar(srcTar, destDir string) error {

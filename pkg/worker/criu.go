@@ -636,47 +636,62 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		return nil, fmt.Errorf("checkpoint archive path is unavailable")
 	}
 	_ = os.Remove(archivePath)
-	defer os.Remove(archivePath)
 
-	if err := createTar(checkpointPath, archivePath); err != nil {
-		return nil, err
-	}
-	hash, size, err := fileSHA256(archivePath)
+	hash, size, err := createTarWithSHA256(checkpointPath, archivePath)
 	if err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 
 	originKey := checkpointOriginKey(checkpointId)
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	f, err := os.Open(archivePath)
 	if err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	if err := storageClient.UploadWithReader(ctx, originKey, f); err != nil {
 		_ = f.Close()
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	if err := f.Close(); err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 
-	if _, err := s.cacheManager.client.StoreContentFromLocalFile(cache.LocalContentSource{
-		Path:      archivePath,
-		CachePath: originKey,
-	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
-		log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
-	}
-
-	return &checkpointCacheMetadata{
+	metadata := &checkpointCacheMetadata{
 		hash:        hash,
 		sizeBytes:   size,
 		originKey:   originKey,
 		locality:    s.cacheManager.locality,
 		accelerator: checkpointAccelerator(request),
-	}, nil
+	}
+	s.storeCheckpointArchiveInCacheFromLocalFile(checkpointId, archivePath, originKey, hash)
+
+	return metadata, nil
+}
+
+func (s *Worker) storeCheckpointArchiveInCacheFromLocalFile(checkpointId, archivePath, originKey, hash string) {
+	if s.cacheManager == nil || s.cacheManager.client == nil {
+		_ = os.Remove(archivePath)
+		return
+	}
+	client := s.cacheManager.client
+
+	go func() {
+		defer os.Remove(archivePath)
+		if _, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
+			Path:      archivePath,
+			CachePath: originKey,
+		}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
+			log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
+		}
+	}()
 }
 
 func (s *Worker) ensureCheckpointMaterialized(ctx context.Context, request *types.ContainerRequest, checkpoint *types.Checkpoint) (string, error) {
