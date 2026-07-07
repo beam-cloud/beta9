@@ -47,6 +47,12 @@ var checkpointRuntimeEnvOverrides = []string{
 	"TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=1",
 }
 
+var checkpointServiceLoopbackEnvOverrides = []string{
+	"MASTER_ADDR=127.0.0.1",
+	"NCCL_SOCKET_IFNAME=lo",
+	"GLOO_SOCKET_IFNAME=lo",
+}
+
 var checkpointDisabledIOUringSyscalls = []string{
 	"io_uring_setup",
 	"io_uring_enter",
@@ -55,11 +61,58 @@ var checkpointDisabledIOUringSyscalls = []string{
 
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
 
-func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest) []string {
+func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest, processArgs []string) []string {
 	if request == nil || !request.CheckpointEnabled {
 		return env
 	}
-	return upsertEnvVars(env, checkpointRuntimeEnvOverrides)
+	env = upsertEnvVars(env, checkpointRuntimeEnvOverrides)
+	if shouldUseLoopbackForPodServiceCheckpoint(request, processArgs, env) {
+		env = upsertEnvVars(env, checkpointServiceLoopbackEnvOverrides)
+	}
+	return env
+}
+
+func shouldUseLoopbackForPodServiceCheckpoint(request *types.ContainerRequest, processArgs, env []string) bool {
+	if request == nil || !request.RequiresGPU() {
+		return false
+	}
+	if !isPodServiceRequest(request) {
+		return false
+	}
+	return hasLoopbackSensitiveGPUBackend(processArgs, env)
+}
+
+func isPodRequest(request *types.ContainerRequest) bool {
+	return request != nil && request.Stub.Type.Kind() == types.StubTypePod
+}
+
+func isPodServiceRequest(request *types.ContainerRequest) bool {
+	if !isPodRequest(request) {
+		return false
+	}
+	config, err := request.Stub.UnmarshalConfig()
+	if err != nil || config == nil {
+		return false
+	}
+	return config.IsService
+}
+
+func hasLoopbackSensitiveGPUBackend(processArgs, env []string) bool {
+	for _, value := range append(append([]string{}, processArgs...), env...) {
+		name, _, hasValue := strings.Cut(value, "=")
+		if hasValue && strings.HasPrefix(strings.ToUpper(name), "VLLM_") {
+			return true
+		}
+		lower := strings.ToLower(value)
+		if lower == "vllm" ||
+			strings.Contains(lower, "/vllm") ||
+			strings.Contains(lower, "vllm.") ||
+			strings.Contains(lower, "vllm_") ||
+			strings.Contains(lower, "vllm-") {
+			return true
+		}
+	}
+	return false
 }
 
 func disableIOUringForCheckpoint(spec *specs.Spec) {

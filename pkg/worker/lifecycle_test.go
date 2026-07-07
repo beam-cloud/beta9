@@ -204,6 +204,7 @@ func TestApplyRuntimeEnvironmentOverridesClampsNvidiaCapabilitiesForGVisorGPU(t 
 	env := worker.applyRuntimeEnvironmentOverrides(
 		[]string{"NVIDIA_DRIVER_CAPABILITIES=all", "OTHER=value"},
 		&types.ContainerRequest{Gpu: "V100", GpuCount: 1},
+		nil,
 	)
 	envMap := envListToMap(env)
 
@@ -216,6 +217,7 @@ func TestApplyRuntimeEnvironmentOverridesLeavesRuncNvidiaCapabilities(t *testing
 	env := worker.applyRuntimeEnvironmentOverrides(
 		[]string{"NVIDIA_DRIVER_CAPABILITIES=all"},
 		&types.ContainerRequest{Gpu: "V100", GpuCount: 1},
+		nil,
 	)
 	envMap := envListToMap(env)
 
@@ -227,6 +229,7 @@ func TestApplyRuntimeEnvironmentOverridesDisablesLibuvIOUringForCheckpoints(t *t
 	env := worker.applyRuntimeEnvironmentOverrides(
 		[]string{"UV_USE_IO_URING=1", "TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=0", "OTHER=value"},
 		&types.ContainerRequest{CheckpointEnabled: true},
+		nil,
 	)
 	envMap := envListToMap(env)
 
@@ -240,6 +243,7 @@ func TestApplyRuntimeEnvironmentOverridesLeavesCheckpointEnvWithoutCheckpoints(t
 	env := worker.applyRuntimeEnvironmentOverrides(
 		[]string{"UV_USE_IO_URING=1", "TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=0"},
 		&types.ContainerRequest{},
+		nil,
 	)
 	envMap := envListToMap(env)
 

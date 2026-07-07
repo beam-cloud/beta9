@@ -33,6 +33,28 @@ func TestRestoreArgs(t *testing.T) {
 	}, args)
 }
 
+func TestRestoreArgsOpenTCP(t *testing.T) {
+	rt := &Runc{}
+	args := rt.restoreArgs("container-1", &RestoreOpts{
+		ImagePath:    "/checkpoints/container-1",
+		WorkDir:      "/tmp/restore-work",
+		BundlePath:   "/tmp/bundle",
+		AllowOpenTCP: true,
+		TCPClose:     true,
+	})
+
+	require.Equal(t, []string{
+		"restore",
+		"--image-path", "/checkpoints/container-1",
+		"--work-path", "/tmp/restore-work",
+		"--link-remap",
+		"--manage-cgroups-mode", "soft",
+		"--tcp-established",
+		"--bundle", "/tmp/bundle",
+		"container-1",
+	}, args)
+}
+
 func TestPollRestoredContainerPIDWaitsForState(t *testing.T) {
 	attempts := 0
 	pid, result, err := pollRestoredContainerPID(

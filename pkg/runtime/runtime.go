@@ -71,6 +71,7 @@ type RestoreOpts struct {
 	BundlePath   string       // Path to container bundle
 	OutputWriter OutputWriter // Writer for restore output
 	Started      chan<- int   // PID channel
+	AllowOpenTCP bool         // Restore established TCP connections
 	TCPClose     bool         // Close TCP connections on restore
 }
 

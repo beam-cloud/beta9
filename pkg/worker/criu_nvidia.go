@@ -145,6 +145,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.checkpointRoot, opts.checkpoint.CheckpointId)
 	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.CheckpointId)
+	preserveOpenTCP := shouldPreservePodTCPOnRestore(opts)
 
 	// Setup work directory for restore files
 	err := c.setupRestoreWorkDir(workDir)
@@ -162,12 +163,13 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 
 	// Restore with all required options for proper CUDA restore
 	exitCode, err := rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
-		ImagePath:    imagePath,    // Path to checkpoint image
-		WorkDir:      workDir,      // Working directory for restore files
-		BundlePath:   bundlePath,   // Container bundle path
-		OutputWriter: outputWriter, // Output writer for logs
-		Started:      opts.started, // Channel to signal process start
-		TCPClose:     true,         // Close TCP connections on restore
+		ImagePath:    imagePath,       // Path to checkpoint image
+		WorkDir:      workDir,         // Working directory for restore files
+		BundlePath:   bundlePath,      // Container bundle path
+		OutputWriter: outputWriter,    // Output writer for logs
+		Started:      opts.started,    // Channel to signal process start
+		AllowOpenTCP: preserveOpenTCP, // Preserve service-local TCP connections across restore
+		TCPClose:     !preserveOpenTCP,
 	})
 
 	if err != nil {
@@ -189,6 +191,14 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		Msg("checkpoint restored successfully")
 
 	return exitCode, nil
+}
+
+func shouldPreservePodTCPOnRestore(opts *RestoreOpts) bool {
+	if opts == nil {
+		return false
+	}
+
+	return isPodRequest(opts.request)
 }
 
 func restoreFailureError(runtimeName string, err error, stderr string) error {
