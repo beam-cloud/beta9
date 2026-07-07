@@ -74,10 +74,21 @@ func (c *capacityCheck) restoreReplacedCapacity() {
 		if worker == nil {
 			continue
 		}
+		replacedRequest := containerRequestFromState(container)
 		worker.FreeCpu += container.Cpu
-		worker.FreeMemory += container.Memory
-		worker.FreeGpuCount += container.GpuCount
+		worker.FreeMemory += capacityMemoryForScheduling(replacedRequest)
+		worker.FreeGpuCount += gpuCountForScheduling(replacedRequest)
 		c.capFreeCapacity(worker)
+	}
+}
+
+func containerRequestFromState(container types.ContainerState) *types.ContainerRequest {
+	return &types.ContainerRequest{
+		Cpu:        container.Cpu,
+		Memory:     container.Memory,
+		Gpu:        container.Gpu,
+		GpuRequest: types.GpuTypesToStrings(types.GPUTypesFromString(container.Gpu)),
+		GpuCount:   container.GpuCount,
 	}
 }
 
