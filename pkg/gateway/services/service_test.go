@@ -107,6 +107,9 @@ func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing
 	if !selectorPolicy.privatePoolOnly() {
 		t.Fatal("expected selector-only private pool lookup to bypass managed limits")
 	}
+	if got := selectorPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
+		t.Fatalf("selector managed limit error = %q, want empty", got)
+	}
 }
 
 func TestNormalizeKeepWarmSeconds(t *testing.T) {
