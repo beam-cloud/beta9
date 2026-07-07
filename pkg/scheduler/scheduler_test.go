@@ -111,6 +111,9 @@ func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
 		PoolSelector: "private-gpu-pool",
 		Stub:         types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
 	}))
+	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{
+		Stub: types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
+	}))
 	assert.False(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{}))
 }
 

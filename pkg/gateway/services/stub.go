@@ -830,6 +830,18 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		version = latestDeployment.Version + 1
 	}
 
+	activeDeployments, err := gws.activeDeploymentsForRollout(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type))
+	if err != nil {
+		return &pb.DeployStubResponse{
+			Ok:     false,
+			ErrMsg: "Unable to check active deployments before rollout",
+		}, nil
+	}
+	rolloutLatestDeployment := latestDeployment
+	if rolloutLatestDeployment == nil || !rolloutLatestDeployment.Active {
+		rolloutLatestDeployment = latestActiveDeployment(activeDeployments)
+	}
+
 	var config types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
 		return &pb.DeployStubResponse{
@@ -842,7 +854,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		workspace: authInfo.Workspace,
 		stub:      stub,
 		config:    &config,
-		latest:    latestDeployment,
+		latest:    rolloutLatestDeployment,
 		mode:      normalizeRolloutMode(in.Rollout),
 	})
 	if err != nil {
@@ -852,7 +864,11 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 	if rolloutPlan.stopLatest {
-		if err := gws.stopDeployments([]types.DeploymentWithRelated{*latestDeployment}, ctx); err != nil {
+		deploymentsToStop := activeDeployments
+		if len(deploymentsToStop) == 0 && rolloutLatestDeployment != nil {
+			deploymentsToStop = []types.DeploymentWithRelated{*rolloutLatestDeployment}
+		}
+		if err := gws.stopDeployments(deploymentsToStop, ctx); err != nil {
 			return &pb.DeployStubResponse{
 				Ok:     false,
 				ErrMsg: "Unable to stop previous deployment before rollout",
@@ -874,7 +890,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 	}
 
-	if config.Autoscaler.MinContainers > 0 {
+	if rolloutReplicas(&config) > 0 {
 		// Publish reload instance event
 		eventBus := common.NewEventBus(gws.redisClient)
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
