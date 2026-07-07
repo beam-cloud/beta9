@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,9 +34,87 @@ type MockRuntime struct {
 	checkpointErrors []error
 	restoreError     error
 	restoreExitCode  int
+	restoreOpts      *runtime.RestoreOpts
 	killCalled       bool
 	killSignal       syscall.Signal
 	capabilities     runtime.Capabilities
+}
+
+func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
+	gpuRequest := &types.ContainerRequest{
+		CheckpointEnabled: true,
+		Gpu:               "RTX4090",
+		Stub:              testServiceStub(t),
+	}
+	gpuEnv := applyCheckpointRuntimeEnvironmentOverrides([]string{
+		"UV_USE_IO_URING=1",
+		"MASTER_ADDR=10.0.0.1",
+		"VLLM_USAGE_SOURCE=production-docker-image",
+	}, gpuRequest, []string{"python", "-m", "vllm.entrypoints.openai.api_server"})
+
+	for _, want := range []string{
+		"UV_USE_IO_URING=0",
+		"TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=1",
+		"MASTER_ADDR=127.0.0.1",
+		"NCCL_SOCKET_IFNAME=lo",
+		"GLOO_SOCKET_IFNAME=lo",
+	} {
+		if !slices.Contains(gpuEnv, want) {
+			t.Fatalf("GPU checkpoint env missing %q in %v", want, gpuEnv)
+		}
+	}
+	if slices.Contains(gpuEnv, "UV_USE_IO_URING=1") || slices.Contains(gpuEnv, "MASTER_ADDR=10.0.0.1") {
+		t.Fatalf("GPU checkpoint env did not override conflicting values: %v", gpuEnv)
+	}
+
+	genericGPUEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
+		CheckpointEnabled: true,
+		Gpu:               "RTX4090",
+		Stub:              testServiceStub(t),
+	}, []string{"python", "app.py"})
+	if !slices.Contains(genericGPUEnv, "UV_USE_IO_URING=0") ||
+		slices.Contains(genericGPUEnv, "MASTER_ADDR=127.0.0.1") ||
+		slices.Contains(genericGPUEnv, "NCCL_SOCKET_IFNAME=lo") ||
+		slices.Contains(genericGPUEnv, "GLOO_SOCKET_IFNAME=lo") {
+		t.Fatalf("generic GPU checkpoint env should not include pod-service loopback overrides: %v", genericGPUEnv)
+	}
+
+	nonServiceEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
+		CheckpointEnabled: true,
+		Gpu:               "RTX4090",
+	}, []string{"vllm", "serve"})
+	if slices.Contains(nonServiceEnv, "MASTER_ADDR=127.0.0.1") ||
+		slices.Contains(nonServiceEnv, "NCCL_SOCKET_IFNAME=lo") ||
+		slices.Contains(nonServiceEnv, "GLOO_SOCKET_IFNAME=lo") {
+		t.Fatalf("non-service checkpoint env should not include pod-service loopback overrides: %v", nonServiceEnv)
+	}
+
+	disabledEnv := applyCheckpointRuntimeEnvironmentOverrides([]string{"UV_USE_IO_URING=1"}, &types.ContainerRequest{
+		CheckpointEnabled: false,
+		Gpu:               "RTX4090",
+	}, []string{"vllm", "serve"})
+	if !slices.Contains(disabledEnv, "UV_USE_IO_URING=1") || slices.Contains(disabledEnv, "UV_USE_IO_URING=0") {
+		t.Fatalf("checkpoint-disabled request should leave env unchanged: %v", disabledEnv)
+	}
+}
+
+func testServiceStub(t *testing.T) types.StubWithRelated {
+	t.Helper()
+	return testPodStub(t, true)
+}
+
+func testPodStub(t *testing.T, isService bool) types.StubWithRelated {
+	t.Helper()
+	config, err := json.Marshal(&types.StubConfigV1{IsService: isService})
+	if err != nil {
+		t.Fatalf("failed to marshal stub config: %v", err)
+	}
+	return types.StubWithRelated{
+		Stub: types.Stub{
+			Type:   types.StubType(types.StubTypePodDeployment),
+			Config: string(config),
+		},
+	}
 }
 
 func TestCheckpointHTTPReadinessRequiresStatusOK(t *testing.T) {
@@ -279,6 +358,7 @@ func (m *MockRuntime) Checkpoint(ctx context.Context, containerID string, opts *
 
 func (m *MockRuntime) Restore(ctx context.Context, containerID string, opts *runtime.RestoreOpts) (int, error) {
 	m.restoreCalled = true
+	m.restoreOpts = opts
 	if m.restoreError != nil {
 		return m.restoreExitCode, m.restoreError
 	}
@@ -297,6 +377,7 @@ func (m *MockRuntime) Reset() {
 	m.checkpointCalled = false
 	m.checkpointCalls = 0
 	m.restoreCalled = false
+	m.restoreOpts = nil
 	m.killCalled = false
 	m.killSignal = 0
 }
@@ -419,6 +500,84 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				if !mockRuntime.restoreCalled {
 					t.Error("Expected Restore to be called on runtime")
+				}
+
+				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
+					t.Errorf("Expected generic NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
+				}
+
+				if exitCode != 0 {
+					t.Errorf("Expected exit code 0, got %d", exitCode)
+				}
+			})
+
+			t.Run("RestoreCheckpoint pod closes TCP", func(t *testing.T) {
+				mockRuntime.Reset()
+
+				request := &types.ContainerRequest{
+					ContainerId: fmt.Sprintf("%s-pod-container", tc.runtimeName),
+					Gpu:         "RTX4090",
+					Stub:        testPodStub(t, false),
+				}
+
+				checkpoint := &types.Checkpoint{
+					CheckpointId: "checkpoint-pod",
+				}
+
+				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+				os.MkdirAll(checkpointPath, 0755)
+
+				opts := &RestoreOpts{
+					request:    request,
+					checkpoint: checkpoint,
+					configPath: filepath.Join(tmpDir, "pod-config.json"),
+					started:    make(chan int, 1),
+				}
+
+				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
+				if err != nil {
+					t.Errorf("RestoreCheckpoint failed: %v", err)
+				}
+
+				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
+					t.Errorf("Expected pod NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
+				}
+
+				if exitCode != 0 {
+					t.Errorf("Expected exit code 0, got %d", exitCode)
+				}
+			})
+
+			t.Run("RestoreCheckpoint service preserves open TCP", func(t *testing.T) {
+				mockRuntime.Reset()
+
+				request := &types.ContainerRequest{
+					ContainerId: fmt.Sprintf("%s-service-container", tc.runtimeName),
+					Gpu:         "RTX4090",
+					Stub:        testServiceStub(t),
+				}
+
+				checkpoint := &types.Checkpoint{
+					CheckpointId: "checkpoint-service",
+				}
+
+				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+				os.MkdirAll(checkpointPath, 0755)
+
+				opts := &RestoreOpts{
+					request:    request,
+					checkpoint: checkpoint,
+					configPath: filepath.Join(tmpDir, "service-config.json"),
+					started:    make(chan int, 1),
+				}
+
+				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
+				if err != nil {
+					t.Errorf("RestoreCheckpoint failed: %v", err)
+				}
+
+				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
+					t.Errorf("Expected service NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
 
 				if exitCode != 0 {

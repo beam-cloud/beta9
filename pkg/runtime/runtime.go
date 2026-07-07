@@ -71,7 +71,11 @@ type RestoreOpts struct {
 	BundlePath   string       // Path to container bundle
 	OutputWriter OutputWriter // Writer for restore output
 	Started      chan<- int   // PID channel
-	TCPClose     bool         // Close TCP connections on restore
+	// AllowOpenTCP restores established TCP connections. It is mutually
+	// exclusive with TCPClose and takes precedence if both are true.
+	AllowOpenTCP bool
+	// TCPClose closes TCP connections on restore unless AllowOpenTCP is true.
+	TCPClose bool
 }
 
 // OutputWriter is an interface for writing container output

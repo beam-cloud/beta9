@@ -161,6 +161,14 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}, nil
 }
 
+func NewSchedulerForCapacityChecks(workerRepo repo.WorkerRepository, computeRepo repo.ComputeRepository, workerPoolManager *WorkerPoolManager) *Scheduler {
+	return &Scheduler{
+		workerRepo:        workerRepo,
+		computeRepo:       computeRepo,
+		workerPoolManager: workerPoolManager,
+	}
+}
+
 func (s *Scheduler) RegisterAgentPool(workspaceID string, state *compute.PoolState) error {
 	if s == nil || state == nil {
 		return nil
@@ -297,6 +305,10 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 }
 
 func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
+	if s.privatePoolQuotaExempt(request) {
+		return nil, nil
+	}
+
 	// First try to get the cached quota
 	var quota *types.ConcurrencyLimit
 	quota, err := s.workspaceRepo.GetConcurrencyLimitByWorkspaceId(request.WorkspaceId)
@@ -320,6 +332,22 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 	}
 
 	return quota, nil
+}
+
+func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
+	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
+		return false
+	}
+	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
+	if !ok || pool.Config.Mode != types.PoolModePrivate {
+		return false
+	}
+	stubConfig, err := request.Stub.UnmarshalConfig()
+	if err != nil || stubConfig == nil || stubConfig.Pool == nil {
+		return false
+	}
+	fallback := stubConfig.Pool.Fallback
+	return fallback == types.PrivatePoolFallbackFail || fallback == types.PrivatePoolFallbackWait
 }
 
 func (s *Scheduler) CheckConcurrencyLimit(request *types.ContainerRequest) error {

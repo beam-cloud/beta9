@@ -47,6 +47,12 @@ var checkpointRuntimeEnvOverrides = []string{
 	"TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=1",
 }
 
+var checkpointServiceLoopbackEnvOverrides = []string{
+	"MASTER_ADDR=127.0.0.1",
+	"NCCL_SOCKET_IFNAME=lo",
+	"GLOO_SOCKET_IFNAME=lo",
+}
+
 var checkpointDisabledIOUringSyscalls = []string{
 	"io_uring_setup",
 	"io_uring_enter",
@@ -55,11 +61,58 @@ var checkpointDisabledIOUringSyscalls = []string{
 
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
 
-func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest) []string {
+func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest, processArgs []string) []string {
 	if request == nil || !request.CheckpointEnabled {
 		return env
 	}
-	return upsertEnvVars(env, checkpointRuntimeEnvOverrides)
+	env = upsertEnvVars(env, checkpointRuntimeEnvOverrides)
+	if shouldUseLoopbackForPodServiceCheckpoint(request, processArgs, env) {
+		env = upsertEnvVars(env, checkpointServiceLoopbackEnvOverrides)
+	}
+	return env
+}
+
+func shouldUseLoopbackForPodServiceCheckpoint(request *types.ContainerRequest, processArgs, env []string) bool {
+	if request == nil || !request.RequiresGPU() {
+		return false
+	}
+	if !isPodServiceRequest(request) {
+		return false
+	}
+	return hasLoopbackSensitiveGPUBackend(processArgs, env)
+}
+
+func isPodRequest(request *types.ContainerRequest) bool {
+	return request != nil && request.Stub.Type.Kind() == types.StubTypePod
+}
+
+func isPodServiceRequest(request *types.ContainerRequest) bool {
+	if !isPodRequest(request) {
+		return false
+	}
+	config, err := request.Stub.UnmarshalConfig()
+	if err != nil || config == nil {
+		return false
+	}
+	return config.IsService
+}
+
+func hasLoopbackSensitiveGPUBackend(processArgs, env []string) bool {
+	for _, value := range append(append([]string{}, processArgs...), env...) {
+		name, _, hasValue := strings.Cut(value, "=")
+		if hasValue && strings.HasPrefix(strings.ToUpper(name), "VLLM_") {
+			return true
+		}
+		lower := strings.ToLower(value)
+		if lower == "vllm" ||
+			strings.Contains(lower, "/vllm") ||
+			strings.Contains(lower, "vllm.") ||
+			strings.Contains(lower, "vllm_") ||
+			strings.Contains(lower, "vllm-") {
+			return true
+		}
+	}
+	return false
 }
 
 func disableIOUringForCheckpoint(spec *specs.Spec) {
@@ -583,47 +636,62 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		return nil, fmt.Errorf("checkpoint archive path is unavailable")
 	}
 	_ = os.Remove(archivePath)
-	defer os.Remove(archivePath)
 
-	if err := createTar(checkpointPath, archivePath); err != nil {
-		return nil, err
-	}
-	hash, size, err := fileSHA256(archivePath)
+	hash, size, err := createTarWithSHA256(checkpointPath, archivePath)
 	if err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 
 	originKey := checkpointOriginKey(checkpointId)
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	f, err := os.Open(archivePath)
 	if err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	if err := storageClient.UploadWithReader(ctx, originKey, f); err != nil {
 		_ = f.Close()
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 	if err := f.Close(); err != nil {
+		_ = os.Remove(archivePath)
 		return nil, err
 	}
 
-	if _, err := s.cacheManager.client.StoreContentFromLocalFile(cache.LocalContentSource{
-		Path:      archivePath,
-		CachePath: originKey,
-	}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
-		log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
-	}
-
-	return &checkpointCacheMetadata{
+	metadata := &checkpointCacheMetadata{
 		hash:        hash,
 		sizeBytes:   size,
 		originKey:   originKey,
 		locality:    s.cacheManager.locality,
 		accelerator: checkpointAccelerator(request),
-	}, nil
+	}
+	s.storeCheckpointArchiveInCacheFromLocalFile(checkpointId, archivePath, originKey, hash)
+
+	return metadata, nil
+}
+
+func (s *Worker) storeCheckpointArchiveInCacheFromLocalFile(checkpointId, archivePath, originKey, hash string) {
+	if s.cacheManager == nil || s.cacheManager.client == nil {
+		_ = os.Remove(archivePath)
+		return
+	}
+	client := s.cacheManager.client
+
+	go func() {
+		defer os.Remove(archivePath)
+		if _, err := client.StoreContentFromLocalFile(cache.LocalContentSource{
+			Path:      archivePath,
+			CachePath: originKey,
+		}, cache.StoreContentOptions{RoutingKey: hash, Lock: true}); err != nil {
+			log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
+		}
+	}()
 }
 
 func (s *Worker) ensureCheckpointMaterialized(ctx context.Context, request *types.ContainerRequest, checkpoint *types.Checkpoint) (string, error) {

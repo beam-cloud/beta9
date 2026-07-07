@@ -259,7 +259,9 @@ func (r *Runc) restoreArgs(containerID string, opts *RestoreOpts) []string {
 	args := r.globalArgs()
 	args = append(args, "restore")
 	args = append(args, restoreCheckpointArgs(opts)...)
-	if opts.TCPClose {
+	if opts.AllowOpenTCP {
+		args = append(args, "--tcp-established")
+	} else if opts.TCPClose {
 		args = append(args, "--tcp-close")
 	}
 	args = append(args, "--bundle", opts.BundlePath, containerID)

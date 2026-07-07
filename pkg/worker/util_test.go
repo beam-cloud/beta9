@@ -98,3 +98,21 @@ func TestCopyDirectoryNormalizesNestedExcludePaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "keep", string(data))
 }
+
+func TestCreateTarWithSHA256ReturnsArchiveHashAndSize(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "checkpoint")
+	archivePath := filepath.Join(root, "checkpoint.tar")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "nested"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "nested", "state.txt"), []byte("checkpoint payload"), 0644))
+
+	hash, size, err := createTarWithSHA256(src, archivePath)
+	require.NoError(t, err)
+	require.NotZero(t, size)
+
+	actualHash, actualSize, err := fileSHA256(archivePath)
+	require.NoError(t, err)
+	require.Equal(t, actualHash, hash)
+	require.Equal(t, actualSize, size)
+}

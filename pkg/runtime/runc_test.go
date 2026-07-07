@@ -13,24 +13,39 @@ import (
 )
 
 func TestRestoreArgs(t *testing.T) {
-	rt := &Runc{}
-	args := rt.restoreArgs("container-1", &RestoreOpts{
-		ImagePath:  "/checkpoints/container-1",
-		WorkDir:    "/tmp/restore-work",
-		BundlePath: "/tmp/bundle",
-		TCPClose:   true,
-	})
+	tests := []struct {
+		name         string
+		allowOpenTCP bool
+		tcpClose     bool
+		wantTCPFlag  string
+	}{
+		{name: "close TCP", tcpClose: true, wantTCPFlag: "--tcp-close"},
+		{name: "open TCP", allowOpenTCP: true, tcpClose: true, wantTCPFlag: "--tcp-established"},
+	}
 
-	require.Equal(t, []string{
-		"restore",
-		"--image-path", "/checkpoints/container-1",
-		"--work-path", "/tmp/restore-work",
-		"--link-remap",
-		"--manage-cgroups-mode", "soft",
-		"--tcp-close",
-		"--bundle", "/tmp/bundle",
-		"container-1",
-	}, args)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &Runc{}
+			args := rt.restoreArgs("container-1", &RestoreOpts{
+				ImagePath:    "/checkpoints/container-1",
+				WorkDir:      "/tmp/restore-work",
+				BundlePath:   "/tmp/bundle",
+				AllowOpenTCP: tt.allowOpenTCP,
+				TCPClose:     tt.tcpClose,
+			})
+
+			require.Equal(t, []string{
+				"restore",
+				"--image-path", "/checkpoints/container-1",
+				"--work-path", "/tmp/restore-work",
+				"--link-remap",
+				"--manage-cgroups-mode", "soft",
+				tt.wantTCPFlag,
+				"--bundle", "/tmp/bundle",
+				"container-1",
+			}, args)
+		})
+	}
 }
 
 func TestPollRestoredContainerPIDWaitsForState(t *testing.T) {

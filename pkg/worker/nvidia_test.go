@@ -408,6 +408,23 @@ func TestAssignAndUnassignGPUDevices(t *testing.T) {
 	}
 }
 
+func TestAssignEightGPUDevices(t *testing.T) {
+	manager := NewContainerNvidiaManagerForTest(8)
+
+	assignedDevices, err := manager.AssignGPUDevices("container1", 8)
+	if err != nil {
+		t.Fatalf("AssignGPUDevices() error = %v", err)
+	}
+	if len(assignedDevices) != 8 {
+		t.Fatalf("assigned devices = %v, want 8 devices", assignedDevices)
+	}
+	for i, device := range assignedDevices {
+		if device != i {
+			t.Fatalf("assigned devices = %v, want [0 1 2 3 4 5 6 7]", assignedDevices)
+		}
+	}
+}
+
 func TestAssignMoreGPUsThanAvailable(t *testing.T) {
 	manager := NewContainerNvidiaManagerForTest(4) // Assume a machine with 4 GPUs
 	// manager.statFunc = mockStat

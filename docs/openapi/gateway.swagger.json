@@ -3050,6 +3050,9 @@
         },
         "name": {
           "type": "string"
+        },
+        "rollout": {
+          "type": "string"
         }
       }
     },
@@ -3067,6 +3070,15 @@
           "format": "int64"
         },
         "invokeUrl": {
+          "type": "string"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "warnMsg": {
+          "type": "string"
+        },
+        "rolloutAction": {
           "type": "string"
         }
       }

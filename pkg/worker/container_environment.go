@@ -44,8 +44,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	return env
 }
 
-func (s *Worker) applyRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest) []string {
-	env = applyCheckpointRuntimeEnvironmentOverrides(env, request)
+func (s *Worker) applyRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest, processArgs []string) []string {
+	env = applyCheckpointRuntimeEnvironmentOverrides(env, request, processArgs)
 
 	if request == nil || !request.RequiresGPU() || s == nil || s.runtime == nil {
 		return env

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"sync"
@@ -95,6 +96,59 @@ func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
 	assert.True(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "private-pool"}))
 	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "local-pool"}))
 	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "missing-pool"}))
+}
+
+func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
+	manager := NewWorkerPoolManager(false)
+	manager.SetPool("private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	scheduler := &Scheduler{workerPoolManager: manager}
+	stubConfig, err := json.Marshal(types.StubConfigV1{
+		Pool: &types.PoolConfig{Name: "private-gpu-pool", Selector: "private-gpu-pool", Fallback: types.PrivatePoolFallbackFail},
+	})
+	assert.NoError(t, err)
+
+	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{
+		PoolSelector: "private-gpu-pool",
+		Stub:         types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
+	}))
+	assert.False(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{}))
+}
+
+func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler.workerPoolManager.SetPool("private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "H100"}, nil)
+	request := &types.ContainerRequest{
+		Cpu:          1000,
+		Memory:       1024,
+		GpuRequest:   []string{"H100"},
+		GpuCount:     8,
+		PoolSelector: "private-gpu-pool",
+	}
+
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{{
+		Id:                   "eight-gpu-worker",
+		PoolName:             "private-gpu-pool",
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              2000,
+		FreeMemory:           2048,
+		Gpu:                  "H100",
+		FreeGpuCount:         8,
+		RequiresPoolSelector: true,
+	}}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, "eight-gpu-worker", worker.Id)
+
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{{
+		Id:                   "short-worker",
+		PoolName:             "private-gpu-pool",
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              2000,
+		FreeMemory:           2048,
+		Gpu:                  "H100",
+		FreeGpuCount:         7,
+		RequiresPoolSelector: true,
+	}}, request)
+	assert.Error(t, err)
 }
 
 func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
@@ -1816,6 +1870,53 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 	assert.Equal(t, int64(16000), workers[0].FreeCpu)
 	assert.Equal(t, int64(16384), workers[0].TotalMemory)
 	assert.Equal(t, int64(16384), workers[0].FreeMemory)
+}
+
+func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	wb.config.Worker.DefaultWorkerCPURequest = 16000
+	wb.config.Worker.DefaultWorkerMemoryRequest = 16 * 1024
+
+	poolConfig := types.WorkerPoolConfig{
+		Mode: types.PoolModePrivate,
+		PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{
+			DefaultWorkerCPU:      "32000m",
+			DefaultWorkerMemory:   "32Gi",
+			DefaultWorkerGpuCount: "8",
+		},
+	}
+	wb.workerPoolManager.SetPool("private-pool", poolConfig, &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "private-pool",
+		mode:       types.PoolModePrivate,
+		config:     wb.config,
+		workerRepo: wb.workerRepo,
+	})
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		GpuRequest:   []string{"H100"},
+		GpuCount:     1,
+		PoolSelector: "private-pool",
+		Timestamp:    time.Now(),
+	}
+
+	controllers, err := wb.getControllers(request)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(controllers))
+
+	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	wb.provisioning.mu.Lock()
+	reservation := wb.provisioning.reservations[reservationID]
+	assert.NotNil(t, reservation)
+	assert.Equal(t, request.Cpu, reservation.worker.TotalCpu)
+	assert.Equal(t, capacityMemoryForScheduling(request), reservation.worker.TotalMemory)
+	assert.Equal(t, request.GpuCount, reservation.worker.TotalGpuCount)
+	wb.provisioning.mu.Unlock()
 }
 
 func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {

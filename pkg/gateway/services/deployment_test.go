@@ -99,7 +99,10 @@ func newDeploymentLifecycleGateway(t *testing.T) (*GatewayService, *deploymentLi
 		},
 		backendRepo:   backend,
 		containerRepo: &deploymentLifecycleContainerRepo{},
-		redisClient:   rdb,
+		computeRepo: &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{
+			"private-gpu": {Name: "private-gpu", Mode: string(types.PoolModePrivate)},
+		}},
+		redisClient: rdb,
 	}, backend
 }
 

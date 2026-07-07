@@ -8,6 +8,7 @@ from beta9.cli.pool import (
     _append_join_args,
     _get_pool_renderable,
     _pool_capacity_summary,
+    _pool_config,
     _private_pool_compute,
     _join_transport,
     management,
@@ -53,6 +54,19 @@ def test_pool_string_routes_to_manual_pool():
 
     assert fn.pool_config.name == "manual-training"
     assert fn.pool_config.selector == "manual-training"
+
+
+def test_function_stores_multi_gpu_private_pool_config():
+    fn = Function(
+        gpu="H100",
+        gpu_count=8,
+        pool="gpu-pool",
+    )
+
+    assert fn.gpu == "H100"
+    assert fn.gpu_count == 8
+    assert fn.pool_config.name == "gpu-pool"
+    assert fn.pool_config.selector == "gpu-pool"
 
 
 def test_sandbox_pool_string_routes_to_manual_pool():
@@ -180,6 +194,14 @@ def test_pool_managed_capacity_commands_are_exposed():
     assert "offers" in management.commands
     assert "join" in management.commands
     assert "create" in management.commands
+
+
+def test_pool_create_config_accepts_gpu_type():
+    pool = _pool_config("gpu-pool", gpu=("H100",))
+
+    assert pool.name == "gpu-pool"
+    assert pool.gpu == ["H100"]
+    assert pool.mode == "private"
 
 
 def test_pool_capacity_summary_counts_reservations():

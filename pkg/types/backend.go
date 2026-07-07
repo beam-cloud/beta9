@@ -684,6 +684,7 @@ type PoolConfig struct {
 	Regions        []string `json:"regions,omitempty"`
 	MinReliability float64  `json:"min_reliability,omitempty"`
 	Selector       string   `json:"selector,omitempty"`
+	Fallback       string   `json:"fallback,omitempty"`
 }
 
 func (p *PoolConfig) RequiresReservation() bool {

@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -25,11 +26,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	var warning string
 
-	valid, errorMsg := types.ValidateCpuAndMemory(in.Cpu, in.Memory, gws.appConfig.GatewayService.StubLimits)
-	if !valid {
+	resourcePolicy, err := gws.stubResourcePolicy(ctx, authInfo.Workspace.ExternalId, in.Pool, in.Name)
+	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
-			ErrMsg: errorMsg,
+			ErrMsg: err.Error(),
 		}, nil
 	}
 
@@ -47,7 +48,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		if err := configurePodDeploymentAutoscaler(
 			autoscaler,
 			keepWarmSeconds,
-			gws.appConfig.GatewayService.StubLimits.MaxReplicas,
+			resourcePolicy.maxReplicasLimit(gws.appConfig.GatewayService.StubLimits.MaxReplicas),
 		); err != nil {
 			return &pb.GetOrCreateStubResponse{
 				Ok:     false,
@@ -67,27 +68,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		in.Extra = "{}"
 	}
 
-	if in.GpuCount > gws.appConfig.GatewayService.StubLimits.MaxGpuCount {
+	if errMsg := resourcePolicy.validateManagedLimits(gws, in, authInfo.Workspace); errMsg != "" {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
-			ErrMsg: fmt.Sprintf("GPU count must be %d or less.", gws.appConfig.GatewayService.StubLimits.MaxGpuCount),
+			ErrMsg: errMsg,
 		}, nil
-	}
-
-	if in.GpuCount > 1 && !authInfo.Workspace.MultiGpuEnabled {
-		return &pb.GetOrCreateStubResponse{
-			Ok:     false,
-			ErrMsg: "Multi-GPU containers are not enabled for this workspace.",
-		}, nil
-	}
-
-	if len(gws.appConfig.GatewayService.StubLimits.GPUBlackList.GPUTypes) > 0 {
-		if slices.Contains(gws.appConfig.GatewayService.StubLimits.GPUBlackList.GPUTypes, in.Gpu) {
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: gws.appConfig.GatewayService.StubLimits.GPUBlackList.Message,
-			}, nil
-		}
 	}
 
 	var pricing *types.PricingPolicy = nil
@@ -122,10 +107,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		outputs = types.NewSchemaFromProto(in.Outputs)
 	}
 
-	poolConfig := poolConfigFromProto(in.Pool)
-	if poolConfig != nil {
-		configurePoolSelector(poolConfig, authInfo.Workspace.ExternalId, in.Name)
-	}
 	servingConfig := servingConfigFromProto(in.Serving)
 
 	stubConfig := types.StubConfigV1{
@@ -167,7 +148,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		AllowMarketplace:   in.AllowMarketplace,
 		IsService:          in.IsService,
 		Serving:            servingConfig,
-		Pool:               poolConfig,
+		Pool:               resourcePolicy.pool,
 		Disks:              in.Disks,
 	}
 
@@ -178,7 +159,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	if stubConfig.RequiresGPU() {
 		if gws.computeService != nil {
-			if err := gws.computeService.ValidatePrivatePoolGPURequest(ctx, authInfo.Workspace.ExternalId, poolConfigName(poolConfig), gpus); err != nil {
+			if err := gws.computeService.ValidatePrivatePoolGPURequest(ctx, authInfo.Workspace.ExternalId, poolConfigName(resourcePolicy.pool), gpus); err != nil {
 				return &pb.GetOrCreateStubResponse{
 					Ok:     false,
 					ErrMsg: err.Error(),
@@ -186,16 +167,46 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}
 		}
 
-		concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
-		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: "GPU concurrency limit is 0.",
-			}, nil
-		}
+		if resourcePolicy.checkManagedGPUCapacity() {
+			concurrencyLimit, err := gws.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, authInfo.Workspace.ExternalId)
+			if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
+				return &pb.GetOrCreateStubResponse{
+					Ok:     false,
+					ErrMsg: "GPU concurrency limit is 0.",
+				}, nil
+			}
 
-		if types.StubType(in.GetStubType()).IsServe() {
-			hasCapacity, err := gws.anyGpuAvailable(gpus)
+			if types.StubType(in.GetStubType()).IsServe() {
+				hasCapacity, err := gws.anyGpuAvailable(gpus)
+				if err != nil {
+					return &pb.GetOrCreateStubResponse{
+						Ok:     false,
+						ErrMsg: "Failed to check GPU availability.",
+					}, nil
+				}
+
+				if !hasCapacity {
+					errMsg := fmt.Sprintf("There is currently no GPU capacity for %s.", gpuList(gpus))
+					if gws.computeService != nil {
+						msg, err := gws.computeService.MissingPrivatePoolGPUWarning(ctx, authInfo.Workspace.ExternalId, gpus)
+						if err != nil {
+							return &pb.GetOrCreateStubResponse{
+								Ok:     false,
+								ErrMsg: "Failed to check private pool GPU availability.",
+							}, nil
+						}
+						if msg != "" {
+							errMsg = msg
+						}
+					}
+					return &pb.GetOrCreateStubResponse{
+						Ok:     false,
+						ErrMsg: errMsg,
+					}, nil
+				}
+			}
+
+			lowCapacityGpus, err := gws.getLowCapacityGpus(gpus)
 			if err != nil {
 				return &pb.GetOrCreateStubResponse{
 					Ok:     false,
@@ -203,37 +214,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				}, nil
 			}
 
-			if !hasCapacity {
-				errMsg := fmt.Sprintf("There is currently no GPU capacity for %s.", gpuList(gpus))
-				if gws.computeService != nil {
-					msg, err := gws.computeService.MissingPrivatePoolGPUWarning(ctx, authInfo.Workspace.ExternalId, gpus)
-					if err != nil {
-						return &pb.GetOrCreateStubResponse{
-							Ok:     false,
-							ErrMsg: "Failed to check private pool GPU availability.",
-						}, nil
-					}
-					if msg != "" {
-						errMsg = msg
-					}
-				}
-				return &pb.GetOrCreateStubResponse{
-					Ok:     false,
-					ErrMsg: errMsg,
-				}, nil
+			if len(lowCapacityGpus) > 0 {
+				warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 			}
-		}
-
-		lowCapacityGpus, err := gws.getLowCapacityGpus(gpus)
-		if err != nil {
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: "Failed to check GPU availability.",
-			}, nil
-		}
-
-		if len(lowCapacityGpus) > 0 {
-			warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 		}
 	}
 
@@ -258,7 +241,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		})
 	}
 
-	err := gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
+	err = gws.configureVolumes(ctx, in.Volumes, authInfo.Workspace)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
@@ -324,9 +307,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if poolConfig.RequiresReservation() {
+	if resourcePolicy.pool != nil && resourcePolicy.pool.RequiresReservation() {
 		res, err := gws.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
-			Pool: poolConfigToProto(poolConfig),
+			Pool: poolConfigToProto(resourcePolicy.pool),
 		})
 		if err != nil {
 			return nil, err
@@ -428,6 +411,7 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
 		Selector:       in.Selector,
+		Fallback:       in.Fallback,
 	}
 }
 
@@ -504,6 +488,7 @@ func poolConfigToProto(in *types.PoolConfig) *pb.PoolConfig {
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
 		Selector:       in.Selector,
+		Fallback:       in.Fallback,
 	}
 }
 
@@ -512,6 +497,152 @@ func poolConfigName(pool *types.PoolConfig) string {
 		return ""
 	}
 	return pool.Name
+}
+
+type stubResourcePolicy struct {
+	pool                *types.PoolConfig
+	privatePoolTargeted bool
+	fallback            string
+}
+
+func (gws *GatewayService) stubResourcePolicy(ctx context.Context, workspaceID string, protoPool *pb.PoolConfig, stubName string) (stubResourcePolicy, error) {
+	policy := stubResourcePolicy{pool: poolConfigFromProto(protoPool)}
+	if policy.pool == nil {
+		return policy, nil
+	}
+	configurePoolSelector(policy.pool, workspaceID, stubName)
+
+	policy.privatePoolTargeted = policy.pool.RequiresReservation()
+	policy.fallback = privatePoolFallback(policy.pool)
+
+	if !policy.privatePoolTargeted {
+		targeted, fallback, err := gws.lookupPrivatePoolPolicy(ctx, workspaceID, policy.pool)
+		if err != nil {
+			return policy, err
+		}
+		policy.privatePoolTargeted = targeted
+		if policy.pool.Fallback == "" && fallback != "" {
+			policy.fallback = fallback
+		}
+	}
+
+	policy.pool.Fallback = policy.fallback
+	return policy, nil
+}
+
+func (p stubResourcePolicy) privatePoolOnly() bool {
+	return p.privatePoolTargeted && (p.fallback == types.PrivatePoolFallbackFail || p.fallback == types.PrivatePoolFallbackWait)
+}
+
+func (p stubResourcePolicy) checkManagedGPUCapacity() bool {
+	return !p.privatePoolOnly()
+}
+
+func (p stubResourcePolicy) maxReplicasLimit(defaultLimit uint64) uint64 {
+	if p.privatePoolOnly() {
+		return 0
+	}
+	return defaultLimit
+}
+
+func (p stubResourcePolicy) validateManagedLimits(gws *GatewayService, in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {
+	if p.privatePoolOnly() {
+		return ""
+	}
+	errMsg := gws.managedStubLimitError(in, workspace)
+	if errMsg == "" {
+		return ""
+	}
+	if p.privatePoolTargeted {
+		return "private pool workloads that exceed managed stub limits must set pool fallback to fail or wait"
+	}
+	return errMsg
+}
+
+func privatePoolFallback(pool *types.PoolConfig) string {
+	if pool == nil || pool.Fallback == "" {
+		return types.PrivatePoolFallbackInternal
+	}
+	return pool.Fallback
+}
+
+func (gws *GatewayService) lookupPrivatePoolPolicy(ctx context.Context, workspaceID string, pool *types.PoolConfig) (bool, string, error) {
+	if pool == nil || gws == nil || gws.computeRepo == nil || workspaceID == "" {
+		return false, "", nil
+	}
+	for _, name := range []string{pool.Name, pool.Selector} {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		state, err := gws.computeRepo.GetPoolState(ctx, workspaceID, name)
+		if err != nil {
+			return false, "", err
+		}
+		if privatePoolStateMatches(state, name) {
+			return true, privatePoolStateFallback(state), nil
+		}
+	}
+
+	states, err := gws.computeRepo.ListPoolStates(ctx, workspaceID, 0)
+	if err != nil {
+		return false, "", err
+	}
+	for _, state := range states {
+		if privatePoolStateMatchesAny(state, pool.Name, pool.Selector) {
+			return true, privatePoolStateFallback(state), nil
+		}
+	}
+
+	return false, "", nil
+}
+
+func privatePoolStateMatchesAny(state *compute.PoolState, names ...string) bool {
+	for _, name := range names {
+		if privatePoolStateMatches(state, strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
+}
+
+func privatePoolStateMatches(state *compute.PoolState, name string) bool {
+	if state == nil || name == "" || (state.Mode != "" && state.Mode != string(types.PoolModePrivate)) {
+		return false
+	}
+	if state.Name == name || state.Selector == name {
+		return true
+	}
+	return state.Config != nil && (state.Config.Name == name || state.Config.Selector == name)
+}
+
+func privatePoolStateFallback(state *compute.PoolState) string {
+	if state != nil && state.Config != nil && state.Config.Fallback != "" {
+		return state.Config.Fallback
+	}
+	if state != nil {
+		return state.Fallback
+	}
+	return ""
+}
+
+func (gws *GatewayService) managedStubLimitError(in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {
+	valid, errorMsg := types.ValidateCpuAndMemory(in.Cpu, in.Memory, gws.appConfig.GatewayService.StubLimits)
+	if !valid {
+		return errorMsg
+	}
+	if in.GpuCount > gws.appConfig.GatewayService.StubLimits.MaxGpuCount {
+		return fmt.Sprintf("GPU count must be %d or less.", gws.appConfig.GatewayService.StubLimits.MaxGpuCount)
+	}
+	if in.GpuCount > 1 && (workspace == nil || !workspace.MultiGpuEnabled) {
+		return "Multi-GPU containers are not enabled for this workspace."
+	}
+	if len(gws.appConfig.GatewayService.StubLimits.GPUBlackList.GPUTypes) > 0 {
+		if slices.Contains(gws.appConfig.GatewayService.StubLimits.GPUBlackList.GPUTypes, in.Gpu) {
+			return gws.appConfig.GatewayService.StubLimits.GPUBlackList.Message
+		}
+	}
+	return ""
 }
 
 func gpuList(gpus []types.GpuType) string {
@@ -687,7 +818,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	lastestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), false)
+	latestDeployment, err := gws.backendRepo.GetLatestDeploymentByName(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), false)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
@@ -695,16 +826,38 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}
 
 	version := uint(1)
-	if lastestDeployment != nil {
-		if stub.Type == types.StubType(types.StubTypeScheduledJobDeployment) {
-			if err := gws.stopDeployments([]types.DeploymentWithRelated{*lastestDeployment}, ctx); err != nil {
-				return &pb.DeployStubResponse{
-					Ok: false,
-				}, nil
-			}
-		}
+	if latestDeployment != nil {
+		version = latestDeployment.Version + 1
+	}
 
-		version = lastestDeployment.Version + 1
+	var config types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
+		return &pb.DeployStubResponse{
+			Ok:     false,
+			ErrMsg: "Unable to parse stub configuration",
+		}, nil
+	}
+
+	rolloutPlan, err := gws.planDeploymentRollout(deploymentRolloutInput{
+		workspace: authInfo.Workspace,
+		stub:      stub,
+		config:    &config,
+		latest:    latestDeployment,
+		mode:      normalizeRolloutMode(in.Rollout),
+	})
+	if err != nil {
+		return &pb.DeployStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+	if rolloutPlan.stopLatest {
+		if err := gws.stopDeployments([]types.DeploymentWithRelated{*latestDeployment}, ctx); err != nil {
+			return &pb.DeployStubResponse{
+				Ok:     false,
+				ErrMsg: "Unable to stop previous deployment before rollout",
+			}, nil
+		}
 	}
 
 	deployment, err := gws.backendRepo.CreateDeployment(ctx, authInfo.Workspace.Id, in.Name, version, stub.Id, string(stub.Type), stub.AppId)
@@ -717,13 +870,8 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	// TODO: Remove this field once `pkg/api/v1/stub.go:GetURL()` is used by frontend and SDK version can be force upgraded
 	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), common.InvokeUrlTypePath, stub, deployment)
 
-	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
-
-	var config types.StubConfigV1
-	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
-		return &pb.DeployStubResponse{
-			Ok: false,
-		}, nil
+	if gws.eventRepo != nil {
+		go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
 	}
 
 	if config.Autoscaler.MinContainers > 0 {
@@ -737,10 +885,12 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}
 
 	return &pb.DeployStubResponse{
-		Ok:           true,
-		DeploymentId: deployment.ExternalId,
-		Version:      uint32(deployment.Version),
-		InvokeUrl:    invokeUrl,
+		Ok:            true,
+		DeploymentId:  deployment.ExternalId,
+		Version:       uint32(deployment.Version),
+		InvokeUrl:     invokeUrl,
+		WarnMsg:       rolloutPlan.warning,
+		RolloutAction: rolloutPlan.action,
 	}, nil
 }
 

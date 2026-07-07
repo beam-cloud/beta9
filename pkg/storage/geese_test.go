@@ -46,11 +46,12 @@ func TestHandleGeeseContentEventReportsStoredContent(t *testing.T) {
 	reporter := &testVolumeReporter{}
 	storage := &GeeseStorage{}
 	storage.SetVolumeContentReporter("workspace-id", reporter)
+	const modelSizeBytes = int64(1536) << 30
 
 	storage.handleGeeseContentEvent(map[string]interface{}{
 		"content_hash": "hash",
 		"inode":        "/volumes/workspace/files/data.bin",
-		"size_bytes":   uint64(32 << 20),
+		"size_bytes":   uint64(modelSizeBytes),
 	})
 
 	if reporter.workspaceID != "workspace-id" {
@@ -62,7 +63,7 @@ func TestHandleGeeseContentEventReportsStoredContent(t *testing.T) {
 	if reporter.sourcePath != "/volumes/workspace/files/data.bin" {
 		t.Fatalf("sourcePath = %q", reporter.sourcePath)
 	}
-	if reporter.sizeBytes != 32<<20 {
+	if reporter.sizeBytes != modelSizeBytes {
 		t.Fatalf("sizeBytes = %d", reporter.sizeBytes)
 	}
 }
