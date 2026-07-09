@@ -594,10 +594,10 @@ func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator stri
 	activeCheckpointIDs := map[string]struct{}{}
 	for _, stub := range stubs {
 		for _, item := range stub.items {
-			if item.Hash != "" {
+			if item.Hash != "" && cacheContentAppliesToAccelerator(item, accelerator) {
 				protected[item.Hash] = struct{}{}
 			}
-			if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" && (item.Accelerator == "" || strings.EqualFold(item.Accelerator, accelerator)) {
+			if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" && cacheContentAppliesToAccelerator(item, accelerator) {
 				activeCheckpointIDs[item.CheckpointID] = struct{}{}
 			}
 		}
@@ -1463,13 +1463,18 @@ func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item 
 	return server.HasCompleteContent(item.Hash, item.SizeBytes)
 }
 
-func (m *WorkerCacheManager) checkpointAcceleratorMatches(item types.CacheRequiredContentItem) bool {
-	return item.Accelerator == "" || strings.EqualFold(item.Accelerator, m.accelerator)
-}
-
 func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
 	if item.CheckpointID == "" || item.Hash == "" || item.SizeBytes <= 0 {
 		return types.CacheAuditStatusMiss
+	}
+	release, err := m.acquireCheckpointMaterialization(ctx, item.CheckpointID)
+	if err != nil {
+		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint materialization canceled")
+		return types.CacheAuditStatusOriginFailure
+	}
+	defer release()
+	if m.requiredContentComplete(server, item, routingKey) {
+		return types.CacheAuditStatusMaterialized
 	}
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation checkpoint replica copy failed")

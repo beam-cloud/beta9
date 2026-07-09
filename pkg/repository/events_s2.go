@@ -1736,6 +1736,11 @@ func normalizeStubCacheRequiredContentItem(item types.CacheRequiredContentItem) 
 }
 
 func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string {
+	// Keep only the checkpoint most recently reported by a stub. Explicit
+	// restores of older checkpoints still fetch their archive from origin.
+	if item.Kind == types.CacheContentKindCheckpoint {
+		return string(types.CacheContentKindCheckpoint)
+	}
 	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
 		return strings.Join([]string{
 			string(item.Kind),
