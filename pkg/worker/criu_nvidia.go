@@ -168,7 +168,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		BundlePath:   bundlePath,      // Container bundle path
 		OutputWriter: outputWriter,    // Output writer for logs
 		Started:      opts.started,    // Channel to signal process start
-		AllowOpenTCP: preserveOpenTCP, // Preserve service-local TCP connections across restore
+		AllowOpenTCP: preserveOpenTCP, // Preserve pod TCP connections across restore
 		TCPClose:     !preserveOpenTCP,
 	})
 
@@ -198,7 +198,7 @@ func shouldPreservePodTCPOnRestore(opts *RestoreOpts) bool {
 		return false
 	}
 
-	return isPodServiceRequest(opts.request)
+	return isPodRequest(opts.request)
 }
 
 func restoreFailureError(runtimeName string, err error, stderr string) error {

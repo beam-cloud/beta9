@@ -101,6 +101,8 @@ type WorkerCacheManager struct {
 	reconcileFailures     map[string]time.Time
 	reconcileSuccessesMu  sync.Mutex
 	reconcileSuccesses    map[string]time.Time
+	checkpointLocksMu     sync.Mutex
+	checkpointLocks       map[string]*checkpointMaterializationLock
 	ownerLastLiveMu       sync.Mutex
 	ownerLastLive         map[string]time.Time
 	reconcilePausedAt     time.Time
@@ -117,6 +119,11 @@ type WorkerCacheManager struct {
 	wg                    sync.WaitGroup
 	drainOnce             sync.Once
 	drainErr              error
+}
+
+type checkpointMaterializationLock struct {
+	token chan struct{}
+	refs  int
 }
 
 func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, workerRepo pb.WorkerRepositoryServiceClient, eventRepo repo.EventRepository, containerInstances *common.SafeMap[*ContainerInstance], workerID, poolName, podAddr string) *WorkerCacheManager {
@@ -313,6 +320,55 @@ func (m *WorkerCacheManager) CheckpointRoot() string {
 		return ""
 	}
 	return m.checkpointRoot
+}
+
+func (m *WorkerCacheManager) acquireCheckpointMaterialization(ctx context.Context, checkpointID string) (func(), error) {
+	if m == nil {
+		return nil, errors.New("cache manager is unavailable")
+	}
+	if checkpointID == "" {
+		return nil, errors.New("checkpoint ID is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	m.checkpointLocksMu.Lock()
+	if m.checkpointLocks == nil {
+		m.checkpointLocks = make(map[string]*checkpointMaterializationLock)
+	}
+	lock := m.checkpointLocks[checkpointID]
+	if lock == nil {
+		lock = &checkpointMaterializationLock{token: make(chan struct{}, 1)}
+		lock.token <- struct{}{}
+		m.checkpointLocks[checkpointID] = lock
+	}
+	lock.refs++
+	m.checkpointLocksMu.Unlock()
+
+	select {
+	case <-lock.token:
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				lock.token <- struct{}{}
+				m.releaseCheckpointMaterializationRef(checkpointID, lock)
+			})
+		}, nil
+	case <-ctx.Done():
+		m.releaseCheckpointMaterializationRef(checkpointID, lock)
+		return nil, ctx.Err()
+	}
+}
+
+func (m *WorkerCacheManager) releaseCheckpointMaterializationRef(checkpointID string, lock *checkpointMaterializationLock) {
+	m.checkpointLocksMu.Lock()
+	defer m.checkpointLocksMu.Unlock()
+
+	lock.refs--
+	if lock.refs == 0 && m.checkpointLocks[checkpointID] == lock {
+		delete(m.checkpointLocks, checkpointID)
+	}
 }
 
 func (m *WorkerCacheManager) requestReconcile() {

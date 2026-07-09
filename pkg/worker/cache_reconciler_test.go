@@ -62,7 +62,11 @@ func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCache
 		if item.Kind == "" {
 			item.Kind = schema.Kind
 		}
-		bucket[item.Hash+"\x00"+item.RoutingKey] = item
+		key := item.Hash + "\x00" + item.RoutingKey
+		if item.Kind == types.CacheContentKindCheckpoint {
+			key = string(types.CacheContentKindCheckpoint)
+		}
+		bucket[key] = item
 	}
 	f.pushed = append(f.pushed, schema)
 	return nil
@@ -476,12 +480,24 @@ func TestCacheVolumeReportMinBytesDefaultAndOverride(t *testing.T) {
 	require.Equal(t, int64(64<<20), manager.cacheVolumeReportMinBytes())
 }
 
-func TestCheckpointAcceleratorMatch(t *testing.T) {
-	manager := &WorkerCacheManager{accelerator: "A10G"}
+func TestCacheContentAppliesToAccelerator(t *testing.T) {
+	require.True(t, cacheContentAppliesToAccelerator(types.CacheRequiredContentItem{Kind: types.CacheContentKindCheckpoint, Accelerator: "a10g"}, "A10G"))
+	require.True(t, cacheContentAppliesToAccelerator(types.CacheRequiredContentItem{Kind: types.CacheContentKindCheckpoint}, "A10G"))
+	require.False(t, cacheContentAppliesToAccelerator(types.CacheRequiredContentItem{Kind: types.CacheContentKindCheckpoint, Accelerator: "T4"}, "A10G"))
+	require.True(t, cacheContentAppliesToAccelerator(types.CacheRequiredContentItem{Kind: types.CacheContentKindVolume, Accelerator: "T4"}, "A10G"))
+}
 
-	require.True(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{Accelerator: "a10g"}))
-	require.True(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{}))
-	require.False(t, manager.checkpointAcceleratorMatches(types.CacheRequiredContentItem{Accelerator: "T4"}))
+func TestProtectedContentSkipsCheckpointForOtherAccelerator(t *testing.T) {
+	protected, checkpointIDs := protectedContentFromRecentStubs([]recentStubContent{{
+		items: []types.CacheRequiredContentItem{
+			{Hash: "checkpoint", Kind: types.CacheContentKindCheckpoint, CheckpointID: "checkpoint-a", Accelerator: "T4"},
+			{Hash: "volume", Kind: types.CacheContentKindVolume},
+		},
+	}}, "A10G")
+
+	require.NotContains(t, protected, "checkpoint")
+	require.Contains(t, protected, "volume")
+	require.Empty(t, checkpointIDs)
 }
 
 func TestReconcileBackoffIsBypassedByNewStubSighting(t *testing.T) {
@@ -839,6 +855,45 @@ func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T
 	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
 	require.Equal(t, checkpoint.CheckpointId, fake.pushed[0].Items[0].CheckpointID)
 	require.Equal(t, checkpoint.Accelerator, fake.pushed[0].Items[0].Accelerator)
+}
+
+func TestCheckpointMaterializationLockSerializesSameCheckpoint(t *testing.T) {
+	manager := &WorkerCacheManager{}
+	release, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
+	require.NoError(t, err)
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = manager.acquireCheckpointMaterialization(waitCtx, "checkpoint-a")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	releaseOther, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-b")
+	require.NoError(t, err)
+	releaseOther()
+
+	release()
+	releaseAgain, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
+	require.NoError(t, err)
+	releaseAgain()
+	require.Empty(t, manager.checkpointLocks)
+}
+
+func TestCheckpointMaterializationLockCancellationIsSkipped(t *testing.T) {
+	manager := &WorkerCacheManager{}
+	release, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
+	require.NoError(t, err)
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	status := manager.materializeCheckpoint(ctx, nil, cache.RecentStub{}, types.CacheRequiredContentItem{
+		CheckpointID: "checkpoint-a",
+		Hash:         "hash",
+		SizeBytes:    1,
+	}, "hash")
+
+	require.Equal(t, types.CacheAuditStatusSkipped, status)
+	require.False(t, reconcileStatusIsFailure(status))
 }
 
 func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T) {

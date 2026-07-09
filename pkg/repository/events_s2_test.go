@@ -249,6 +249,37 @@ func TestMergeStubCacheRequiredContentRecordKeepsLatestItem(t *testing.T) {
 	}
 }
 
+func TestMergeStubCacheRequiredContentRecordKeepsMostRecentlyReportedCheckpoint(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	writeRecord := func(item types.CacheRequiredContentItem) {
+		body, err := json.Marshal(struct {
+			Type string                                    `json:"type"`
+			Data types.EventStubCacheRequiredContentSchema `json:"data"`
+		}{
+			Type: types.EventStubCacheRequiredContent,
+			Data: types.EventStubCacheRequiredContentSchema{
+				Kind:  types.CacheContentKindCheckpoint,
+				Items: []types.CacheRequiredContentItem{item},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mergeStubCacheRequiredContentRecord(merged, body)
+	}
+
+	writeRecord(types.CacheRequiredContentItem{Hash: "old-hash", RoutingKey: "old-hash", CheckpointID: "old"})
+	writeRecord(types.CacheRequiredContentItem{Hash: "new-hash", RoutingKey: "new-hash", CheckpointID: "new"})
+
+	items := stubCacheRequiredContentItems(merged)
+	if got, want := len(items), 1; got != want {
+		t.Fatalf("unexpected item count: got %d want %d", got, want)
+	}
+	if got, want := items[0].CheckpointID, "new"; got != want {
+		t.Fatalf("unexpected checkpoint: got %q want %q", got, want)
+	}
+}
+
 func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t *testing.T) {
 	merged := map[string]types.CacheRequiredContentItem{}
 	writeRecord := func(items ...types.CacheRequiredContentItem) {

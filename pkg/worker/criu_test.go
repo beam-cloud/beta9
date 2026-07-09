@@ -40,6 +40,22 @@ type MockRuntime struct {
 	capabilities     runtime.Capabilities
 }
 
+type staticCheckpointManager struct {
+	path string
+}
+
+func (m *staticCheckpointManager) Available() bool {
+	return true
+}
+
+func (m *staticCheckpointManager) CreateCheckpoint(context.Context, runtime.Runtime, string, *types.ContainerRequest) (string, error) {
+	return m.path, nil
+}
+
+func (m *staticCheckpointManager) RestoreCheckpoint(context.Context, runtime.Runtime, *RestoreOpts) (int, error) {
+	return -1, errors.New("not implemented")
+}
+
 func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	gpuRequest := &types.ContainerRequest{
 		CheckpointEnabled: true,
@@ -473,9 +489,12 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				}
 			})
 
-			t.Run("RestoreCheckpoint", func(t *testing.T) {
+			t.Run("RestoreCheckpoint endpoint closes TCP", func(t *testing.T) {
 				request := &types.ContainerRequest{
 					ContainerId: fmt.Sprintf("%s-container-2", tc.runtimeName),
+					Stub: types.StubWithRelated{Stub: types.Stub{
+						Type: types.StubType(types.StubTypeEndpointDeployment),
+					}},
 				}
 
 				checkpoint := &types.Checkpoint{
@@ -511,7 +530,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				}
 			})
 
-			t.Run("RestoreCheckpoint pod closes TCP", func(t *testing.T) {
+			t.Run("RestoreCheckpoint pod preserves open TCP", func(t *testing.T) {
 				mockRuntime.Reset()
 
 				request := &types.ContainerRequest{
@@ -539,8 +558,8 @@ func TestNvidiaCRIUManager(t *testing.T) {
 					t.Errorf("RestoreCheckpoint failed: %v", err)
 				}
 
-				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
-					t.Errorf("Expected pod NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
+				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
+					t.Errorf("Expected pod NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
 
 				if exitCode != 0 {
@@ -760,6 +779,75 @@ func TestCreateCheckpointFailsWhenRuntimeStartSignalCloses(t *testing.T) {
 	}
 	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
 		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
+	}
+}
+
+func TestCreateCheckpointMarksFilesystemCopyFailure(t *testing.T) {
+	root := t.TempDir()
+	containerID := "container-copy-failure"
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			ExternalId: "stub-copy-failure",
+		}},
+	}
+	checkpointPath := filepath.Join(root, "checkpoints", "checkpoint-copy-failure")
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		backendRepoClient:  backendRepoClient,
+		criuManager:        &staticCheckpointManager{path: checkpointPath},
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: NewMockRuntime("runc", runtime.Capabilities{CheckpointRestore: true}),
+		Overlay: common.NewContainerOverlay(
+			request,
+			filepath.Join(root, "overlay", "merged"),
+			filepath.Join(root, "overlay-storage"),
+		),
+	})
+
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request:      request,
+		CheckpointId: "checkpoint-copy-failure",
+	})
+	if err == nil || !strings.Contains(err.Error(), "read source directory") {
+		t.Fatalf("createCheckpoint error = %v, want filesystem copy error", err)
+	}
+	if backendRepoClient.createCalls != 1 {
+		t.Fatalf("CreateCheckpoint calls = %d, want 1", backendRepoClient.createCalls)
+	}
+	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
+		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
+	}
+}
+
+func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
+	backendRepoClient := &fakeBackendRepoClient{}
+	worker := &Worker{backendRepoClient: backendRepoClient}
+	metadata := &checkpointCacheMetadata{
+		hash:        "checkpoint-hash",
+		sizeBytes:   42,
+		originKey:   "checkpoints/checkpoint-a.tar",
+		locality:    "locality-a",
+		accelerator: "A10G",
+	}
+
+	worker.markCheckpointFailed(&CreateCheckpointOpts{
+		Request: &types.ContainerRequest{
+			ContainerId: "container-a",
+			Stub:        types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-a"}},
+		},
+		CheckpointId: "checkpoint-a",
+	}, metadata)
+
+	got := backendRepoClient.lastCreate
+	if got == nil || got.Status != string(types.CheckpointStatusCheckpointFailed) {
+		t.Fatalf("checkpoint state = %+v, want failed", got)
+	}
+	if got.CacheHash != metadata.hash || got.CacheSizeBytes != metadata.sizeBytes || got.OriginKey != metadata.originKey || got.Locality != metadata.locality || got.Accelerator != metadata.accelerator {
+		t.Fatalf("checkpoint metadata = %+v, want %+v", got, metadata)
 	}
 }
 
