@@ -878,6 +878,24 @@ func TestCheckpointMaterializationLockSerializesSameCheckpoint(t *testing.T) {
 	require.Empty(t, manager.checkpointLocks)
 }
 
+func TestCheckpointMaterializationLockCancellationIsSkipped(t *testing.T) {
+	manager := &WorkerCacheManager{}
+	release, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
+	require.NoError(t, err)
+	defer release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	status := manager.materializeCheckpoint(ctx, nil, cache.RecentStub{}, types.CacheRequiredContentItem{
+		CheckpointID: "checkpoint-a",
+		Hash:         "hash",
+		SizeBytes:    1,
+	}, "hash")
+
+	require.Equal(t, types.CacheAuditStatusSkipped, status)
+	require.False(t, reconcileStatusIsFailure(status))
+}
+
 func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T) {
 	fake := &fakeEventRepo{}
 	metadata := &claimedMetadataStore{}

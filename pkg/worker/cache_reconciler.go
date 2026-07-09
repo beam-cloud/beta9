@@ -1470,7 +1470,7 @@ func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *
 	release, err := m.acquireCheckpointMaterialization(ctx, item.CheckpointID)
 	if err != nil {
 		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint materialization canceled")
-		return types.CacheAuditStatusOriginFailure
+		return types.CacheAuditStatusSkipped
 	}
 	defer release()
 	if m.requiredContentComplete(server, item, routingKey) {
