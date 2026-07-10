@@ -3,6 +3,7 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 		_ = json.NewEncoder(w).Encode(ContainerCostResponse{
 			CostPerMs:      "0.0000017",
 			PricingVersion: "cpu-only-202607",
+			EffectiveAt:    now.Add(-time.Hour).Format(time.RFC3339Nano),
 			ValidUntil:     now.Add(time.Minute).Format(time.RFC3339Nano),
 		})
 	}))
@@ -44,7 +46,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if err != nil {
 		t.Fatalf("initial quote: %v", err)
 	}
-	if !quote.Valid || quote.CostPerMs != 0.0000017 || quote.PricingVersion != "cpu-only-202607" {
+	if !quote.Valid || quote.CostPerMs != 0.0000017 || quote.PricingVersion != "cpu-only-202607" || !quote.EffectiveAt.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("initial quote = %+v", quote)
 	}
 
@@ -74,11 +76,14 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if cached, err := client.GetContainerCostQuote(context.Background(), request); err != nil || !cached.Valid {
 		t.Fatalf("cached stale quote = %+v, err = %v; want quiet last-good hit", cached, err)
 	}
+	if _, err := client.GetContainerCostPerMs(request); err == nil {
+		t.Fatal("scalar lookup accepted an expired stale quote")
+	}
 	if calls != 2 {
 		t.Fatalf("quote calls = %d, want failed-refresh backoff", calls)
 	}
 
-	now = now.Add(containerCostRetryInitial - time.Millisecond)
+	now = now.Add(containerCostRetryDelay - time.Millisecond)
 	if cached, err := client.GetContainerCostQuote(context.Background(), request); err != nil || !cached.Valid {
 		t.Fatalf("backed-off stale quote = %+v, err = %v; want quiet hit", cached, err)
 	}
@@ -96,7 +101,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	}
 
 	fail = false
-	now = now.Add(2 * containerCostRetryInitial)
+	now = now.Add(2 * containerCostRetryDelay)
 	recovered, err := client.GetContainerCostQuote(context.Background(), request)
 	if err != nil || !recovered.Valid {
 		t.Fatalf("recovered quote = %+v, err = %v", recovered, err)
@@ -144,7 +149,7 @@ func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 		t.Fatalf("quote calls = %d after legacy cached lookup, want 1", calls)
 	}
 
-	now = now.Add(containerCostRetryInitial)
+	now = now.Add(containerCostRetryDelay)
 	quote, err = client.GetContainerCostQuote(context.Background(), request)
 	if err != nil || !quote.Valid || quote.CostPerMs != 0.25 {
 		t.Fatalf("retried quote = %+v, err = %v", quote, err)
@@ -202,7 +207,7 @@ func TestContainerCostClientCoalescesConcurrentRefreshes(t *testing.T) {
 	}
 }
 
-func TestContainerCostClientSurfacesRefreshFailureOnlyToOwner(t *testing.T) {
+func TestContainerCostClientCoalescesFailedRefresh(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -246,8 +251,8 @@ func TestContainerCostClientSurfacesRefreshFailureOnlyToOwner(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("HTTP refreshes = %d, want one coalesced failed attempt", got)
 	}
-	if surfaced != 1 {
-		t.Fatalf("surfaced refresh errors = %d, want only the refresh owner", surfaced)
+	if surfaced == 0 {
+		t.Fatal("coalesced refresh did not surface its error")
 	}
 }
 
@@ -261,7 +266,9 @@ func TestContainerCostClientRejectsInvalidResponses(t *testing.T) {
 		{name: "not a number", status: http.StatusOK, body: `{"cost_per_ms":"NaN"}`},
 		{name: "infinity", status: http.StatusOK, body: `{"cost_per_ms":"+Inf"}`},
 		{name: "negative", status: http.StatusOK, body: `{"cost_per_ms":"-0.1"}`},
+		{name: "invalid effective time", status: http.StatusOK, body: `{"cost_per_ms":"1","effective_at":"yesterday"}`},
 		{name: "invalid expiry", status: http.StatusOK, body: `{"cost_per_ms":"1","valid_until":"tomorrow"}`},
+		{name: "unexpected field", status: http.StatusOK, body: `{"cost_per_ms":"1","extra":true}`},
 		{name: "trailing JSON", status: http.StatusOK, body: `{"cost_per_ms":"1"} {"extra":true}`},
 	}
 
@@ -303,11 +310,42 @@ func TestContainerCostClientUsesBoundedHTTPTimeout(t *testing.T) {
 	}
 }
 
-func TestContainerCostRetryDelayIsBounded(t *testing.T) {
-	if got := containerCostRetryDelay(1); got != containerCostRetryInitial {
-		t.Fatalf("first retry delay = %v, want %v", got, containerCostRetryInitial)
+func TestContainerCostClientWaitersCancelIndependently(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		close(requestStarted)
+		<-releaseRequest
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0.125"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan error, 1)
+	go func() {
+		_, err := client.GetContainerCostQuote(ctx, &types.ContainerRequest{Cpu: 1_000})
+		first <- err
+	}()
+	<-requestStarted
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiter error = %v, want context.Canceled", err)
 	}
-	if got := containerCostRetryDelay(^uint8(0)); got != containerCostRetryMax {
-		t.Fatalf("maximum retry delay = %v, want %v", got, containerCostRetryMax)
+
+	second := make(chan containerCostResult, 1)
+	go func() {
+		quote, err := client.GetContainerCostQuote(context.Background(), &types.ContainerRequest{Cpu: 1_000})
+		second <- containerCostResult{quote: quote, err: err}
+	}()
+	close(releaseRequest)
+	result := <-second
+	if result.err != nil || !result.quote.Valid || result.quote.CostPerMs != 0.125 {
+		t.Fatalf("healthy waiter quote = %+v, err = %v", result.quote, result.err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want one shared refresh", calls.Load())
 	}
 }

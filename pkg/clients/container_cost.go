@@ -20,8 +20,7 @@ import (
 const (
 	containerCostRequestTimeout = 5 * time.Second
 	containerCostQuoteRefresh   = 5 * time.Minute
-	containerCostRetryInitial   = 5 * time.Second
-	containerCostRetryMax       = time.Minute
+	containerCostRetryDelay     = 5 * time.Second
 	containerCostResponseLimit  = 1 << 20
 	containerCostErrorLimit     = 4 << 10
 )
@@ -43,35 +42,6 @@ type ContainerCostQuote struct {
 	Valid          bool
 }
 
-type containerCostCacheEntry struct {
-	quote        ContainerCostQuote
-	refreshAt    time.Time
-	retryAt      time.Time
-	failures     uint8
-	refreshError error
-}
-
-type containerCostRefreshOwner struct {
-	marker byte
-}
-
-type containerCostLookupResult struct {
-	quote        ContainerCostQuote
-	refreshError error
-	owner        *containerCostRefreshOwner
-}
-
-type ContainerCostClient struct {
-	client   *http.Client
-	endpoint string
-	token    string
-
-	mu           sync.RWMutex
-	quotes       map[ContainerCostRequest]containerCostCacheEntry
-	refreshGroup singleflight.Group
-	now          func() time.Time
-}
-
 type ContainerCostRequest struct {
 	Cpu      int64  `json:"cpu"`
 	Memory   int64  `json:"memory"`
@@ -79,11 +49,32 @@ type ContainerCostRequest struct {
 	GpuCount uint32 `json:"gpu_count"`
 }
 
+type containerCostCacheEntry struct {
+	quote     ContainerCostQuote
+	refreshAt time.Time
+	retryAt   time.Time
+}
+
+type containerCostResult struct {
+	quote ContainerCostQuote
+	err   error
+}
+
+type ContainerCostClient struct {
+	client   *http.Client
+	endpoint string
+	token    string
+
+	mu      sync.RWMutex
+	quotes  map[ContainerCostRequest]containerCostCacheEntry
+	refresh singleflight.Group
+	now     func() time.Time
+}
+
 func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCostClient {
 	if config.Endpoint == "" || config.Token == "" {
 		return nil
 	}
-
 	return &ContainerCostClient{
 		client:   &http.Client{Timeout: containerCostRequestTimeout},
 		endpoint: config.Endpoint,
@@ -93,10 +84,8 @@ func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCost
 	}
 }
 
-// GetContainerCostQuote returns a resource-keyed cached quote. Quotes are
-// refreshed every five minutes, or sooner when valid_until says they expire.
-// If a refresh fails, the last validated quote is returned together with the
-// refresh error so callers can continue metering and surface the stale state.
+// GetContainerCostQuote caches by resources for five minutes (or valid_until).
+// A failed refresh returns the last good quote and retries on a later lookup.
 func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request *types.ContainerRequest) (ContainerCostQuote, error) {
 	if c == nil {
 		return ContainerCostQuote{}, fmt.Errorf("container cost client is not configured")
@@ -109,75 +98,72 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 	}
 
 	key := ContainerCostRequest{
-		Cpu:      request.Cpu,
-		Memory:   request.Memory,
-		Gpu:      strings.TrimSpace(request.Gpu),
-		GpuCount: request.GpuCount,
+		Cpu: request.Cpu, Memory: request.Memory,
+		Gpu: strings.TrimSpace(request.Gpu), GpuCount: request.GpuCount,
 	}
-	if quote, ok := c.cachedResult(key, c.now()); ok {
+	if quote, ok := c.cached(key); ok {
 		return quote, nil
 	}
 
-	owner := &containerCostRefreshOwner{marker: 1}
-	result, err, _ := c.refreshGroup.Do(key.singleflightKey(), func() (interface{}, error) {
-		now := c.now()
-		if quote, ok := c.cachedResult(key, now); ok {
-			return containerCostLookupResult{quote: quote}, nil
+	result := c.refresh.DoChan(key.cacheKey(), func() (any, error) {
+		if quote, ok := c.cached(key); ok {
+			return containerCostResult{quote: quote}, nil
 		}
 
-		quote, refreshAt, fetchErr := c.fetchQuote(ctx, key)
-		if fetchErr != nil {
-			quote, refreshErr := c.cacheFailure(key, c.now(), fetchErr)
-			return containerCostLookupResult{quote: quote, refreshError: refreshErr, owner: owner}, nil
+		refreshCtx, cancel := context.WithTimeout(context.Background(), containerCostRequestTimeout)
+		defer cancel()
+		quote, refreshAt, err := c.fetch(refreshCtx, key)
+		if err != nil {
+			stale := c.rememberFailure(key)
+			if stale.Valid {
+				err = fmt.Errorf("refreshing container cost quote: %w", err)
+			}
+			return containerCostResult{quote: stale, err: err}, nil
 		}
 
 		c.mu.Lock()
 		c.quotes[key] = containerCostCacheEntry{quote: quote, refreshAt: refreshAt}
 		c.mu.Unlock()
-		return containerCostLookupResult{quote: quote}, nil
+		return containerCostResult{quote: quote}, nil
 	})
-	if err != nil {
-		return ContainerCostQuote{}, err
+	select {
+	case <-ctx.Done():
+		return c.lastGood(key), ctx.Err()
+	case call := <-result:
+		if call.Err != nil {
+			return ContainerCostQuote{}, call.Err
+		}
+		value, ok := call.Val.(containerCostResult)
+		if !ok {
+			return ContainerCostQuote{}, fmt.Errorf("invalid container cost lookup result")
+		}
+		return value.quote, value.err
 	}
-
-	lookup, ok := result.(containerCostLookupResult)
-	if !ok {
-		return ContainerCostQuote{}, fmt.Errorf("invalid container cost lookup result")
-	}
-	if lookup.owner == owner {
-		return lookup.quote, lookup.refreshError
-	}
-	return lookup.quote, nil
 }
 
-// GetContainerCostPerMs is kept for callers that only need the legacy scalar
-// response. New metering code should retain the quote metadata as well.
+// GetContainerCostPerMs keeps the scalar interface used by older callers.
 func (c *ContainerCostClient) GetContainerCostPerMs(request *types.ContainerRequest) (float64, error) {
 	quote, err := c.GetContainerCostQuote(context.Background(), request)
-	if !quote.Valid {
+	if !quote.Valid || !quote.ValidUntil.IsZero() && !quote.ValidUntil.After(c.now()) {
 		if err == nil {
-			err = fmt.Errorf("container cost quote is unavailable")
+			err = fmt.Errorf("container cost quote is unavailable or expired")
 		}
 		return 0, err
 	}
 	return quote.CostPerMs, err
 }
 
-func (c *ContainerCostClient) fetchQuote(ctx context.Context, request ContainerCostRequest) (ContainerCostQuote, time.Time, error) {
-	var requestBody bytes.Buffer
-	if err := json.NewEncoder(&requestBody).Encode(request); err != nil {
+func (c *ContainerCostClient) fetch(ctx context.Context, request ContainerCostRequest) (ContainerCostQuote, time.Time, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
 		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("encoding container cost request: %w", err)
 	}
-
-	requestCtx, cancel := context.WithTimeout(ctx, containerCostRequestTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, c.endpoint, &requestBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("creating container cost request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Authorization", "Bearer "+c.token)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -186,15 +172,22 @@ func (c *ContainerCostClient) fetchQuote(ctx context.Context, request ContainerC
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, containerCostErrorLimit))
-		detailText := strings.TrimSpace(string(detail))
-		if detailText != "" {
-			return ContainerCostQuote{}, time.Time{}, fmt.Errorf("requesting container cost quote: unexpected HTTP status %s: %q", resp.Status, detailText)
+		if text := strings.TrimSpace(string(detail)); text != "" {
+			return ContainerCostQuote{}, time.Time{}, fmt.Errorf("requesting container cost quote: unexpected HTTP status %s: %q", resp.Status, text)
 		}
 		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("requesting container cost quote: unexpected HTTP status %s", resp.Status)
 	}
 
+	body, err = io.ReadAll(io.LimitReader(resp.Body, containerCostResponseLimit+1))
+	if err != nil {
+		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("reading container cost quote: %w", err)
+	}
+	if len(body) > containerCostResponseLimit {
+		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("container cost quote exceeds %d bytes", containerCostResponseLimit)
+	}
 	var response ContainerCostResponse
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, containerCostResponseLimit))
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&response); err != nil {
 		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("decoding container cost quote: %w", err)
 	}
@@ -202,97 +195,83 @@ func (c *ContainerCostClient) fetchQuote(ctx context.Context, request ContainerC
 		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("decoding container cost quote: %w", err)
 	}
 
-	costPerMs, err := strconv.ParseFloat(response.CostPerMs, 64)
-	if err != nil {
-		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("parsing cost_per_ms: %w", err)
-	}
-	if math.IsNaN(costPerMs) || math.IsInf(costPerMs, 0) || costPerMs < 0 {
+	cost, err := strconv.ParseFloat(response.CostPerMs, 64)
+	if err != nil || math.IsNaN(cost) || math.IsInf(cost, 0) || cost < 0 {
 		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("invalid cost_per_ms %q: must be finite and nonnegative", response.CostPerMs)
 	}
-
-	quote := ContainerCostQuote{
-		CostPerMs:      costPerMs,
-		PricingVersion: response.PricingVersion,
-		Valid:          true,
+	effectiveAt, err := optionalTime(response.EffectiveAt, "effective_at")
+	if err != nil {
+		return ContainerCostQuote{}, time.Time{}, err
 	}
-	validatedAt := c.now()
-	refreshAt := validatedAt.Add(containerCostQuoteRefresh)
-	if response.EffectiveAt != "" {
-		effectiveAt, err := time.Parse(time.RFC3339Nano, response.EffectiveAt)
-		if err != nil {
-			return ContainerCostQuote{}, time.Time{}, fmt.Errorf("parsing effective_at: %w", err)
-		}
-		quote.EffectiveAt = effectiveAt
-	}
-	if response.ValidUntil != "" {
-		validUntil, err := time.Parse(time.RFC3339Nano, response.ValidUntil)
-		if err != nil {
-			return ContainerCostQuote{}, time.Time{}, fmt.Errorf("parsing valid_until: %w", err)
-		}
-		if !validUntil.After(validatedAt) {
-			return ContainerCostQuote{}, time.Time{}, fmt.Errorf("invalid valid_until %q: must be in the future", response.ValidUntil)
-		}
-		quote.ValidUntil = validUntil
-		if validUntil.Before(refreshAt) {
-			refreshAt = validUntil
-		}
+	validUntil, err := optionalTime(response.ValidUntil, "valid_until")
+	if err != nil {
+		return ContainerCostQuote{}, time.Time{}, err
 	}
 
-	return quote, refreshAt, nil
+	now := c.now()
+	if !validUntil.IsZero() && !validUntil.After(now) {
+		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("invalid valid_until %q: must be in the future", response.ValidUntil)
+	}
+	if !effectiveAt.IsZero() && !validUntil.IsZero() && !validUntil.After(effectiveAt) {
+		return ContainerCostQuote{}, time.Time{}, fmt.Errorf("invalid quote interval: valid_until must follow effective_at")
+	}
+	refreshAt := now.Add(containerCostQuoteRefresh)
+	if !validUntil.IsZero() && validUntil.Before(refreshAt) {
+		refreshAt = validUntil
+	}
+	return ContainerCostQuote{
+		CostPerMs: cost, PricingVersion: response.PricingVersion,
+		EffectiveAt: effectiveAt, ValidUntil: validUntil, Valid: true,
+	}, refreshAt, nil
 }
 
-func (c *ContainerCostClient) cachedResult(key ContainerCostRequest, now time.Time) (ContainerCostQuote, bool) {
+func (c *ContainerCostClient) cached(key ContainerCostRequest) (ContainerCostQuote, bool) {
 	c.mu.RLock()
 	entry, ok := c.quotes[key]
 	c.mu.RUnlock()
 	if !ok {
 		return ContainerCostQuote{}, false
 	}
-	if entry.refreshError != nil && now.Before(entry.retryAt) {
-		return entry.quote, true
-	}
-	if entry.quote.Valid && now.Before(entry.refreshAt) {
+	now := c.now()
+	if now.Before(entry.retryAt) || entry.quote.Valid && now.Before(entry.refreshAt) {
 		return entry.quote, true
 	}
 	return ContainerCostQuote{}, false
 }
 
-func (c *ContainerCostClient) cacheFailure(key ContainerCostRequest, failedAt time.Time, refreshErr error) (ContainerCostQuote, error) {
+func (c *ContainerCostClient) rememberFailure(key ContainerCostRequest) ContainerCostQuote {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	entry := c.quotes[key]
-	if entry.failures < ^uint8(0) {
-		entry.failures++
-	}
-	if entry.quote.Valid {
-		refreshErr = fmt.Errorf("refreshing container cost quote: %w", refreshErr)
-	}
-	entry.refreshError = refreshErr
-	entry.retryAt = failedAt.Add(containerCostRetryDelay(entry.failures))
+	entry.retryAt = c.now().Add(containerCostRetryDelay)
 	c.quotes[key] = entry
-	return entry.quote, refreshErr
+	return entry.quote
 }
 
-func containerCostRetryDelay(failures uint8) time.Duration {
-	delay := containerCostRetryInitial
-	for attempt := uint8(1); attempt < failures && delay < containerCostRetryMax; attempt++ {
-		delay *= 2
-		if delay > containerCostRetryMax {
-			return containerCostRetryMax
-		}
+func (c *ContainerCostClient) lastGood(key ContainerCostRequest) ContainerCostQuote {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.quotes[key].quote
+}
+
+func (r ContainerCostRequest) cacheKey() string {
+	return strconv.FormatInt(r.Cpu, 10) + "\x00" + strconv.FormatInt(r.Memory, 10) +
+		"\x00" + r.Gpu + "\x00" + strconv.FormatUint(uint64(r.GpuCount), 10)
+}
+
+func optionalTime(value, name string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
 	}
-	return delay
-}
-
-func (r ContainerCostRequest) singleflightKey() string {
-	return strconv.FormatInt(r.Cpu, 10) + "\x00" +
-		strconv.FormatInt(r.Memory, 10) + "\x00" + r.Gpu + "\x00" +
-		strconv.FormatUint(uint64(r.GpuCount), 10)
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing %s: %w", name, err)
+	}
+	return parsed, nil
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {
-	var trailing interface{}
+	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
 			return fmt.Errorf("multiple JSON values in response")

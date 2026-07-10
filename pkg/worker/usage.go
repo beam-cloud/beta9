@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -15,8 +16,8 @@ import (
 const usageRecordTimeout = 5 * time.Second
 
 // ContainerUsageRecorder reports billable container usage to an external
-// system. Implementations carry their own attribution (who is billed, who is
-// paid out); the worker only supplies the container and the interval.
+// system. Implementations carry their own attribution; the worker supplies
+// the frozen container interval and an optional quoted cost.
 type ContainerUsageRecorder interface {
 	RecordContainerUsage(ctx context.Context, request *types.ContainerRequest, start, end time.Time, costCents *float64) error
 }
@@ -32,7 +33,6 @@ type WorkerUsageMetrics struct {
 	openMeterMetadata   bool
 	now                 func() time.Time
 	newTicker           func(time.Duration) (<-chan time.Time, func())
-	newBoundaryTimer    func(time.Time) (<-chan time.Time, func())
 	quoteProvider       func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error)
 }
 
@@ -43,18 +43,6 @@ type containerUsageInterval struct {
 	duration time.Duration
 	quote    clients.ContainerCostQuote
 	cost     *float64
-}
-
-type activeContainerUsageInterval struct {
-	request      types.ContainerRequest
-	start        time.Time
-	quote        clients.ContainerCostQuote
-	quoteResult  <-chan clients.ContainerCostQuote
-	cancelQuote  context.CancelFunc
-	boundary     <-chan time.Time
-	boundaryAt   time.Time
-	stopBoundary func()
-	nextQuote    *clients.ContainerCostQuote
 }
 
 func NewWorkerUsageMetrics(
@@ -81,8 +69,142 @@ func NewWorkerUsageMetrics(
 		openMeterMetadata:   config.Monitoring.MetricsCollector == string(types.MetricsCollectorOpenMeter),
 		now:                 time.Now,
 		newTicker:           usageTicker,
-		newBoundaryTimer:    usageBoundaryTimer,
 	}, nil
+}
+
+// EmitContainerUsage binds a quote to each interval start. Once an end is
+// captured, a bounded quote refresh cannot change the accounted duration.
+// Any effective-date boundary inside [start,end) becomes a separate segment.
+func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
+	if wm == nil || request == nil || wm.poolMode == types.PoolModePrivate {
+		return
+	}
+
+	requestSnapshot := *request
+	requestSnapshot.Gpu = wm.gpuType
+	requestSnapshot.CostPerMs = 0
+	start := wm.currentTime()
+	ticker, stopTicker := wm.usageTicker(types.ContainerDurationEmissionInterval)
+	defer stopTicker()
+
+	cancelledAt := make(chan time.Time, 1)
+	go func() {
+		<-ctx.Done()
+		cancelledAt <- wm.currentTime()
+	}()
+
+	currentQuote := wm.getContainerCostQuote(&requestSnapshot)
+	for {
+		var end time.Time
+		final := false
+		select {
+		case end = <-ticker:
+			if ctx.Err() != nil {
+				end = <-cancelledAt
+				final = true
+			}
+		case end = <-cancelledAt:
+			final = true
+		}
+
+		// Duration is authoritative and never waits on the optional quote.
+		wm.emitContainerDurationSegments(requestSnapshot, start, end, currentQuote)
+
+		// Resolve after freezing end. Quote latency can delay cost delivery, but
+		// it can never lengthen the interval or hold its duration event.
+		nextQuote := wm.getContainerCostQuote(&requestSnapshot)
+		wm.emitContainerPriceSegments(requestSnapshot, start, end, currentQuote, nextQuote)
+		if final {
+			return
+		}
+		currentQuote = quoteAt(nextQuote, currentQuote, end)
+		start = end
+	}
+}
+
+func containerUsageSegments(request types.ContainerRequest, start, end time.Time, extraBoundaries ...time.Time) []containerUsageInterval {
+	if !end.After(start) {
+		return nil
+	}
+	boundaries := []time.Time{start, end}
+	addBoundary := func(at time.Time) {
+		if at.After(start) && at.Before(end) {
+			boundaries = append(boundaries, at)
+		}
+	}
+	for _, boundary := range extraBoundaries {
+		addBoundary(boundary)
+	}
+	for midnight := nextUTCMidnight(start); midnight.Before(end); midnight = midnight.AddDate(0, 0, 1) {
+		addBoundary(midnight)
+	}
+
+	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
+	remainingMs := end.Sub(start).Milliseconds()
+	segments := make([]containerUsageInterval, 0, len(boundaries)-1)
+	for i := 1; i < len(boundaries); i++ {
+		if boundaries[i].Equal(boundaries[i-1]) {
+			continue
+		}
+		durationMs := boundaries[i].Sub(boundaries[i-1]).Milliseconds()
+		if i == len(boundaries)-1 {
+			durationMs = remainingMs
+		}
+		remainingMs -= durationMs
+		segments = append(segments, containerUsageInterval{
+			request:  request,
+			start:    boundaries[i-1].UTC(),
+			end:      boundaries[i].UTC(),
+			duration: time.Duration(durationMs) * time.Millisecond,
+		})
+	}
+	return segments
+}
+
+func (wm *WorkerUsageMetrics) emitContainerDurationSegments(request types.ContainerRequest, start, end time.Time, quote clients.ContainerCostQuote) {
+	for _, interval := range containerUsageSegments(request, start, end) {
+		interval.quote = quoteAt(quote, clients.ContainerCostQuote{}, interval.start)
+		wm.metricsContainerDuration(interval)
+	}
+}
+
+func (wm *WorkerUsageMetrics) emitContainerPriceSegments(request types.ContainerRequest, start, end time.Time, current, next clients.ContainerCostQuote) {
+	boundaries := []time.Time{
+		current.EffectiveAt, current.ValidUntil,
+		next.EffectiveAt, next.ValidUntil,
+	}
+	for _, interval := range containerUsageSegments(request, start, end, boundaries...) {
+		interval.quote = quoteAt(next, current, interval.start)
+		if interval.quote.Valid {
+			interval.request.CostPerMs = interval.quote.CostPerMs
+			cost := interval.quote.CostPerMs * float64(interval.duration.Milliseconds())
+			interval.cost = &cost
+			wm.metricsContainerCost(interval)
+		}
+		wm.recordExternalUsage(interval)
+	}
+}
+
+func quoteAt(preferred, fallback clients.ContainerCostQuote, at time.Time) clients.ContainerCostQuote {
+	if quoteCovers(preferred, at) {
+		return preferred
+	}
+	if quoteCovers(fallback, at) {
+		return fallback
+	}
+	return clients.ContainerCostQuote{}
+}
+
+func quoteCovers(quote clients.ContainerCostQuote, at time.Time) bool {
+	if !quote.Valid || (!quote.EffectiveAt.IsZero() && quote.EffectiveAt.After(at)) {
+		return false
+	}
+	return quote.ValidUntil.IsZero() || quote.ValidUntil.After(at)
+}
+
+func nextUTCMidnight(at time.Time) time.Time {
+	at = at.UTC()
+	return time.Date(at.Year(), at.Month(), at.Day()+1, 0, 0, 0, 0, time.UTC)
 }
 
 func (wm *WorkerUsageMetrics) metricsContainerDuration(interval containerUsageInterval) {
@@ -99,274 +221,15 @@ func (wm *WorkerUsageMetrics) metricsContainerCost(interval containerUsageInterv
 	labels := wm.containerMetricLabels(interval)
 	labels["cost_per_ms"] = interval.quote.CostPerMs
 	labels["cost_for_duration"] = *interval.cost
-	if err := wm.metricsRepo.IncrementCounter(
-		types.UsageMetricsWorkerContainerCost,
-		labels,
-		*interval.cost,
-	); err != nil {
+	if err := wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerCost, labels, *interval.cost); err != nil {
 		log.Warn().Err(err).Str("container_id", interval.request.ContainerId).Msg("failed to emit container cost")
 	}
 }
 
-// Periodically send metrics to track container duration
-func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
-	if wm == nil || request == nil || wm.poolMode == types.PoolModePrivate {
-		return
-	}
-	cursorTime := wm.currentTime()
-	ticker, stopTicker := wm.usageTicker(types.ContainerDurationEmissionInterval)
-	defer stopTicker()
-	interval := wm.startContainerUsageInterval(request, cursorTime, nil)
-
-	// Capture cancellation independently of quote/event delivery. Otherwise a
-	// slow synchronous retry can postpone observing ctx.Done and inflate the
-	// final authoritative duration by the retry latency.
-	cancelledAt := make(chan time.Time, 1)
-	go func() {
-		<-ctx.Done()
-		cancelledAt <- wm.currentTime()
-	}()
-
-	for {
-		select {
-		case quote := <-interval.quoteResult:
-			interval.quoteResult = nil
-			interval.stopQuoteResolution()
-			wm.bindContainerCostQuote(&interval, quote)
-		case <-interval.boundary:
-			end := interval.boundaryAt
-			nextQuote := interval.nextQuote
-			interval.stopBoundaryTimer()
-			interval.stopQuoteResolution()
-			wm.flushActiveContainerUsageInterval(interval, end)
-			interval = wm.startContainerUsageInterval(request, end, nextQuote)
-		case end := <-ticker:
-			// If cancellation raced with a buffered tick, prefer the captured
-			// cancellation boundary and finish without billing past it.
-			if ctx.Err() != nil {
-				end = <-cancelledAt
-				wm.bindReadyContainerCostQuote(&interval)
-				interval.stopQuoteResolution()
-				wm.flushActiveContainerUsageIntervalThrough(request, interval, end)
-				return
-			}
-			wm.bindReadyContainerCostQuote(&interval)
-			wm.flushActiveContainerUsageIntervalThrough(request, interval, end)
-			cursorTime = end
-			interval = wm.startContainerUsageInterval(request, cursorTime, nil)
-		case end := <-cancelledAt:
-			// Consolidate any remaining time
-			wm.bindReadyContainerCostQuote(&interval)
-			interval.stopQuoteResolution()
-			wm.flushActiveContainerUsageIntervalThrough(request, interval, end)
-			return
-		}
-	}
-}
-
-func (wm *WorkerUsageMetrics) currentTime() time.Time {
-	if wm.now != nil {
-		return wm.now()
-	}
-	return time.Now()
-}
-
-func (wm *WorkerUsageMetrics) usageTicker(interval time.Duration) (<-chan time.Time, func()) {
-	if wm.newTicker != nil {
-		return wm.newTicker(interval)
-	}
-	return usageTicker(interval)
-}
-
-func usageTicker(interval time.Duration) (<-chan time.Time, func()) {
-	ticker := time.NewTicker(interval)
-	return ticker.C, ticker.Stop
-}
-
-func (wm *WorkerUsageMetrics) boundaryTimer(at time.Time) (<-chan time.Time, func()) {
-	if wm.newBoundaryTimer != nil {
-		return wm.newBoundaryTimer(at)
-	}
-	return usageBoundaryTimer(at)
-}
-
-func usageBoundaryTimer(at time.Time) (<-chan time.Time, func()) {
-	delay := time.Until(at)
-	if delay < 0 {
-		delay = 0
-	}
-	timer := time.NewTimer(delay)
-	return timer.C, func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}
-}
-
-func (wm *WorkerUsageMetrics) newActiveContainerUsageInterval(request *types.ContainerRequest, start time.Time) activeContainerUsageInterval {
-	requestSnapshot := *request
-	requestSnapshot.Gpu = wm.gpuType
-	requestSnapshot.CostPerMs = 0
-	return activeContainerUsageInterval{request: requestSnapshot, start: start}
-}
-
-func (wm *WorkerUsageMetrics) startContainerUsageInterval(request *types.ContainerRequest, start time.Time, quote *clients.ContainerCostQuote) activeContainerUsageInterval {
-	interval := wm.newActiveContainerUsageInterval(request, start)
-	if quote != nil {
-		wm.bindContainerCostQuote(&interval, *quote)
-		return interval
-	}
-
-	result := make(chan clients.ContainerCostQuote, 1)
-	interval.quoteResult = result
-	ctx := wm.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	quoteCtx, cancel := context.WithCancel(ctx)
-	interval.cancelQuote = cancel
-	go func(request types.ContainerRequest) {
-		result <- wm.getContainerCostQuoteWithContext(quoteCtx, &request, true)
-	}(interval.request)
-	return interval
-}
-
-func (wm *WorkerUsageMetrics) bindReadyContainerCostQuote(interval *activeContainerUsageInterval) {
-	if interval.quoteResult == nil {
-		return
-	}
-	select {
-	case quote := <-interval.quoteResult:
-		interval.quoteResult = nil
-		interval.stopQuoteResolution()
-		wm.bindContainerCostQuote(interval, quote)
-	default:
-	}
-}
-
-func (wm *WorkerUsageMetrics) bindContainerCostQuote(interval *activeContainerUsageInterval, quote clients.ContainerCostQuote) {
-	if !quote.Valid {
-		return
-	}
-
-	if !quote.EffectiveAt.IsZero() && quote.EffectiveAt.After(interval.start) {
-		nextQuote := quote
-		interval.nextQuote = &nextQuote
-		interval.setBoundaryTimer(wm, quote.EffectiveAt)
-		return
-	}
-
-	interval.quote = quote
-	if quote.ValidUntil.After(interval.start) {
-		interval.setBoundaryTimer(wm, quote.ValidUntil)
-	}
-}
-
-func (interval *activeContainerUsageInterval) setBoundaryTimer(wm *WorkerUsageMetrics, at time.Time) {
-	if !interval.boundaryAt.IsZero() && !at.Before(interval.boundaryAt) {
-		return
-	}
-	interval.stopBoundaryTimer()
-	interval.boundaryAt = at
-	interval.boundary, interval.stopBoundary = wm.boundaryTimer(at)
-}
-
-func (interval *activeContainerUsageInterval) stopBoundaryTimer() {
-	if interval.stopBoundary != nil {
-		interval.stopBoundary()
-	}
-	interval.boundary = nil
-	interval.stopBoundary = nil
-}
-
-func (interval *activeContainerUsageInterval) stopQuoteResolution() {
-	if interval.cancelQuote != nil {
-		interval.cancelQuote()
-	}
-	interval.cancelQuote = nil
-	interval.quoteResult = nil
-}
-
-func (wm *WorkerUsageMetrics) flushActiveContainerUsageInterval(interval activeContainerUsageInterval, end time.Time) {
-	if end.Before(interval.start) {
-		return
-	}
-	completed := containerUsageInterval{
-		request:  interval.request,
-		start:    interval.start.UTC(),
-		end:      end.UTC(),
-		duration: end.Sub(interval.start),
-		quote:    interval.quote,
-	}
-	wm.emitCompletedContainerUsageInterval(completed)
-}
-
-func (wm *WorkerUsageMetrics) flushActiveContainerUsageIntervalThrough(request *types.ContainerRequest, interval activeContainerUsageInterval, end time.Time) {
-	for !interval.boundaryAt.IsZero() && !interval.boundaryAt.After(end) {
-		boundary := interval.boundaryAt
-		nextQuote := interval.nextQuote
-		interval.stopBoundaryTimer()
-		wm.flushActiveContainerUsageInterval(interval, boundary)
-
-		interval = wm.newActiveContainerUsageInterval(request, boundary)
-		if nextQuote != nil {
-			wm.bindContainerCostQuote(&interval, *nextQuote)
-		}
-	}
-	interval.stopBoundaryTimer()
-	wm.flushActiveContainerUsageInterval(interval, end)
-}
-
-func (wm *WorkerUsageMetrics) emitContainerUsageInterval(request *types.ContainerRequest, start, end time.Time) {
-	if request == nil || end.Before(start) {
-		return
-	}
-
-	// Freeze all resource and timing fields before resolving the quote so both
-	// emitted events (and the optional external recorder) describe one exact
-	// interval even if the scheduler-owned request is changed concurrently.
-	requestSnapshot := *request
-	requestSnapshot.Gpu = wm.gpuType
-	requestSnapshot.CostPerMs = 0
-	interval := containerUsageInterval{
-		request:  requestSnapshot,
-		start:    start.UTC(),
-		end:      end.UTC(),
-		duration: end.Sub(start),
-	}
-
-	// Duration is authoritative: send it before any quote HTTP request or
-	// price-derived work can delay the signal.
-	wm.metricsContainerDuration(interval)
-	interval.quote = wm.getContainerCostQuote(&requestSnapshot)
-	wm.emitPriceAndExternalUsage(interval)
-}
-
-func (wm *WorkerUsageMetrics) emitCompletedContainerUsageInterval(interval containerUsageInterval) {
-	wm.metricsContainerDuration(interval)
-	wm.emitPriceAndExternalUsage(interval)
-}
-
-func (wm *WorkerUsageMetrics) emitPriceAndExternalUsage(interval containerUsageInterval) {
-	if interval.quote.Valid {
-		interval.request.CostPerMs = interval.quote.CostPerMs
-		cost := interval.quote.CostPerMs * float64(interval.duration.Milliseconds())
-		interval.cost = &cost
-		wm.metricsContainerCost(interval)
-	}
-	wm.recordExternalUsage(interval)
-}
-
-// recordExternalUsage forwards the interval to the configured usage recorder,
-// if any. Attribution is the recorder's concern, not the worker's.
 func (wm *WorkerUsageMetrics) recordExternalUsage(interval containerUsageInterval) {
 	if wm.usageRecorder == nil {
 		return
 	}
-
 	recordCtx, cancel := context.WithTimeout(context.Background(), usageRecordTimeout)
 	defer cancel()
 	if err := wm.usageRecorder.RecordContainerUsage(recordCtx, &interval.request, interval.start, interval.end, interval.cost); err != nil {
@@ -388,8 +251,6 @@ func (wm *WorkerUsageMetrics) containerMetricLabels(interval containerUsageInter
 		"duration_ms":     interval.duration.Milliseconds(),
 		"pricing_version": interval.quote.PricingVersion,
 	}
-	// Exact interval timestamps are useful OpenMeter event metadata, but would
-	// be unbounded Prometheus label values when that collector is selected.
 	if wm.openMeterMetadata {
 		labels["interval_start"] = interval.start.Format(time.RFC3339Nano)
 		labels["interval_end"] = interval.end.Format(time.RFC3339Nano)
@@ -403,19 +264,33 @@ func (wm *WorkerUsageMetrics) containerMetricLabels(interval containerUsageInter
 	return labels
 }
 
+func (wm *WorkerUsageMetrics) currentTime() time.Time {
+	if wm.now != nil {
+		return wm.now()
+	}
+	return time.Now()
+}
+
+func (wm *WorkerUsageMetrics) usageTicker(interval time.Duration) (<-chan time.Time, func()) {
+	if wm.newTicker != nil {
+		return wm.newTicker(interval)
+	}
+	return usageTicker(interval)
+}
+
+func usageTicker(interval time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(interval)
+	return ticker.C, ticker.Stop
+}
+
 func (wm *WorkerUsageMetrics) getContainerCostQuote(request *types.ContainerRequest) clients.ContainerCostQuote {
+	if wm.containerCostClient == nil && wm.quoteProvider == nil {
+		return clients.ContainerCostQuote{}
+	}
 	ctx := wm.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return wm.getContainerCostQuoteWithContext(ctx, request, false)
-}
-
-func (wm *WorkerUsageMetrics) getContainerCostQuoteWithContext(ctx context.Context, request *types.ContainerRequest, suppressCanceled bool) clients.ContainerCostQuote {
-	if wm.containerCostClient == nil && wm.quoteProvider == nil {
-		return clients.ContainerCostQuote{}
-	}
-
 	var quote clients.ContainerCostQuote
 	var err error
 	if wm.quoteProvider != nil {
@@ -423,13 +298,12 @@ func (wm *WorkerUsageMetrics) getContainerCostQuoteWithContext(ctx context.Conte
 	} else {
 		quote, err = wm.containerCostClient.GetContainerCostQuote(ctx, request)
 	}
-	if err != nil && !(suppressCanceled && ctx.Err() != nil) {
+	if err != nil {
 		logger := log.Error()
 		if quote.Valid {
 			logger = log.Warn()
 		}
 		logger.Str("container_id", request.ContainerId).Err(err).Msg("unable to refresh container cost quote")
 	}
-
 	return quote
 }

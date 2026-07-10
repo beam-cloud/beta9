@@ -59,6 +59,7 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 		ID     string                 `json:"id"`
 		Source string                 `json:"source"`
 		Type   string                 `json:"type"`
+		Time   time.Time              `json:"time"`
 		Data   map[string]interface{} `json:"data"`
 	}
 
@@ -166,7 +167,7 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 
 	// The first logical cost event gets a transient response. The repository
 	// retries the exact CloudEvent, preserving its source and ID.
-	metrics.emitContainerUsageInterval(baseRequest(1_000), start, start.Add(time.Hour))
+	emitResolvedContainerUsageInterval(metrics, baseRequest(1_000), start, start.Add(time.Hour))
 	mu.Lock()
 	firstEvents := append([]capturedEvent(nil), events...)
 	mu.Unlock()
@@ -178,6 +179,9 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 	}
 	if firstEvents[1].ID == "" || firstEvents[1].ID != firstEvents[2].ID || firstEvents[1].Source != firstEvents[2].Source {
 		t.Fatalf("retry identity = %q/%q and %q/%q, want same nonempty source+ID", firstEvents[1].Source, firstEvents[1].ID, firstEvents[2].Source, firstEvents[2].ID)
+	}
+	if !firstEvents[0].Time.Equal(start) || !firstEvents[1].Time.Equal(start) || !firstEvents[2].Time.Equal(start) {
+		t.Fatalf("event times = %v/%v/%v, want interval start %v across retry", firstEvents[0].Time, firstEvents[1].Time, firstEvents[2].Time, start)
 	}
 	if firstEvents[0].Data["value"] != float64(3_600_000) || math.Abs(firstEvents[1].Data["value"].(float64)-6.12) > 1e-12 {
 		t.Fatalf("duration/cost values = %v/%v, want one hour/6.12 cents", firstEvents[0].Data["value"], firstEvents[1].Data["value"])
@@ -196,14 +200,14 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 	}
 	gpuRequest := baseRequest(1_000)
 	gpuRequest.GpuCount = 1
-	gpuMetrics.emitContainerUsageInterval(gpuRequest, start, start.Add(time.Hour))
+	emitResolvedContainerUsageInterval(gpuMetrics, gpuRequest, start, start.Add(time.Hour))
 
 	// An invalid quote emits authoritative duration but no cost. The client
 	// tests exercise deterministic negative-cache expiry and recovery.
 	mu.Lock()
 	before := len(events)
 	mu.Unlock()
-	metrics.emitContainerUsageInterval(baseRequest(2_000), start, start.Add(time.Second))
+	emitResolvedContainerUsageInterval(metrics, baseRequest(2_000), start, start.Add(time.Second))
 	mu.Lock()
 	afterInvalid := append([]capturedEvent(nil), events...)
 	mu.Unlock()
@@ -212,7 +216,7 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 	}
 	missingAgain := baseRequest(2_000)
 	missingAgain.ContainerId = "container-2"
-	metrics.emitContainerUsageInterval(missingAgain, start.Add(time.Second), start.Add(2*time.Second))
+	emitResolvedContainerUsageInterval(metrics, missingAgain, start.Add(time.Second), start.Add(2*time.Second))
 	// A canceled container context still performs the final flush through the
 	// real loop rather than waiting for the periodic ticker.
 	finalCtx, cancel := context.WithCancel(context.Background())
@@ -264,37 +268,25 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 }
 
 func TestEmitContainerUsageFreezesCancellationBoundaryDuringQuoteLatency(t *testing.T) {
-	quoteStarted := make(chan struct{})
-	releaseQuote := make(chan struct{})
-	var startedOnce, releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(releaseQuote) }) }
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		startedOnce.Do(func() { close(quoteStarted) })
-		<-releaseQuote
-		_, _ = w.Write([]byte(`{"cost_per_ms":"0.001","pricing_version":"test"}`))
-	}))
-	t.Cleanup(func() {
-		release()
-		server.Close()
-	})
-
 	start := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	tickAt := start.Add(5 * time.Second)
 	cancelAt := start.Add(7 * time.Second)
 	ticks := make(chan time.Time, 1)
+	initialQuote := make(chan struct{})
+	nextQuoteStarted := make(chan struct{})
+	releaseNextQuote := make(chan struct{})
 
 	cancelCaptured := make(chan struct{})
 	var nowCalls atomic.Int32
+	var quoteCalls atomic.Int32
 	var captureOnce sync.Once
 	repository := &usageMetricsRecorder{notify: make(chan struct{}, 4)}
 	metrics := &WorkerUsageMetrics{
-		ctx:                 context.Background(),
-		workerId:            "worker-1",
-		metricsRepo:         repository,
-		containerCostClient: clients.NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test"}),
-		poolMode:            types.PoolModeLocal,
-		openMeterMetadata:   true,
+		ctx:               context.Background(),
+		workerId:          "worker-1",
+		metricsRepo:       repository,
+		poolMode:          types.PoolModeLocal,
+		openMeterMetadata: true,
 		now: func() time.Time {
 			if nowCalls.Add(1) == 1 {
 				return start
@@ -307,6 +299,16 @@ func TestEmitContainerUsageFreezesCancellationBoundaryDuringQuoteLatency(t *test
 				t.Errorf("ticker interval = %v", interval)
 			}
 			return ticks, func() {}
+		},
+		quoteProvider: func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			switch quoteCalls.Add(1) {
+			case 1:
+				close(initialQuote)
+			case 2:
+				close(nextQuoteStarted)
+				<-releaseNextQuote
+			}
+			return clients.ContainerCostQuote{}, nil
 		},
 	}
 
@@ -323,21 +325,21 @@ func TestEmitContainerUsageFreezesCancellationBoundaryDuringQuoteLatency(t *test
 	}()
 
 	select {
-	case <-quoteStarted:
+	case <-initialQuote:
 	case <-time.After(time.Second):
-		t.Fatal("quote request did not start")
+		t.Fatal("initial quote was not resolved")
 	}
 	ticks <- tickAt
 	select {
-	case <-repository.notify:
+	case <-nextQuoteStarted:
 	case <-time.After(time.Second):
-		t.Fatal("duration was not emitted while quote request was blocked")
+		t.Fatal("post-tick quote did not start")
 	}
 	repository.mu.Lock()
-	eventsBeforeQuoteRelease := append([]recordedUsageMetric(nil), repository.events...)
+	metricsBeforeQuote := append([]recordedUsageMetric(nil), repository.events...)
 	repository.mu.Unlock()
-	if len(eventsBeforeQuoteRelease) != 1 || eventsBeforeQuoteRelease[0].name != types.UsageMetricsWorkerContainerDuration || eventsBeforeQuoteRelease[0].value != 5_000 {
-		t.Fatalf("events while quote blocked = %+v, want authoritative duration first", eventsBeforeQuoteRelease)
+	if len(metricsBeforeQuote) != 1 || metricsBeforeQuote[0].name != types.UsageMetricsWorkerContainerDuration {
+		t.Fatalf("metrics before blocked quote = %+v, want authoritative duration", metricsBeforeQuote)
 	}
 	cancel()
 	select {
@@ -345,11 +347,11 @@ func TestEmitContainerUsageFreezesCancellationBoundaryDuringQuoteLatency(t *test
 	case <-time.After(time.Second):
 		t.Fatal("cancellation boundary was not captured during quote latency")
 	}
-	release()
+	close(releaseNextQuote)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("usage loop did not finish after quote release")
+		t.Fatal("usage loop did not finish after bounded quote release")
 	}
 
 	repository.mu.Lock()
@@ -371,6 +373,252 @@ func TestEmitContainerUsageFreezesCancellationBoundaryDuringQuoteLatency(t *test
 		durations[1].labels["interval_end"] != cancelAt.Format(time.RFC3339Nano) {
 		t.Fatalf("interval ends = %v/%v, want tick/cancellation boundaries", durations[0].labels["interval_end"], durations[1].labels["interval_end"])
 	}
+}
+
+func TestEmitContainerUsageSplitsAtQuoteValidityBoundary(t *testing.T) {
+	transition := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	start := transition.Add(-time.Second)
+	end := transition.Add(4 * time.Second)
+	ticks := make(chan time.Time, 1)
+	initialQuoteProvided := make(chan struct{})
+
+	repository := &usageMetricsRecorder{notify: make(chan struct{}, 16)}
+	external := &containerUsageRecorder{}
+	var quoteCalls atomic.Int32
+	var initialQuoteOnce sync.Once
+	var nowCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		ctx:               context.Background(),
+		workerId:          "worker-1",
+		metricsRepo:       repository,
+		usageRecorder:     external,
+		poolMode:          types.PoolModeLocal,
+		openMeterMetadata: true,
+		now: func() time.Time {
+			if nowCalls.Add(1) == 1 {
+				return start
+			}
+			return end
+		},
+		newTicker: func(time.Duration) (<-chan time.Time, func()) {
+			return ticks, func() {}
+		},
+		quoteProvider: func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			if quoteCalls.Add(1) == 1 {
+				initialQuoteOnce.Do(func() { close(initialQuoteProvided) })
+				return clients.ContainerCostQuote{
+					CostPerMs:      0.001,
+					PricingVersion: "old",
+					EffectiveAt:    start.Add(-time.Hour),
+					ValidUntil:     transition,
+					Valid:          true,
+				}, nil
+			}
+			return clients.ContainerCostQuote{
+				CostPerMs:      0.002,
+				PricingVersion: "new",
+				EffectiveAt:    transition,
+				Valid:          true,
+			}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		metrics.EmitContainerUsage(ctx, &types.ContainerRequest{
+			ContainerId: "container-1",
+			WorkspaceId: "workspace-1",
+			Cpu:         1_000,
+			Memory:      1_024,
+		})
+		close(done)
+	}()
+
+	select {
+	case <-initialQuoteProvided:
+	case <-time.After(time.Second):
+		t.Fatal("old quote was not resolved at interval start")
+	}
+	ticks <- end
+	waitForUsageMetrics(t, repository.notify, 4)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("transition usage loop did not stop")
+	}
+
+	repository.mu.Lock()
+	events := append([]recordedUsageMetric(nil), repository.events...)
+	repository.mu.Unlock()
+	var durationTotal, oldCost, newCost float64
+	for _, event := range events {
+		intervalStart, _ := time.Parse(time.RFC3339Nano, event.labels["interval_start"].(string))
+		intervalEnd, _ := time.Parse(time.RFC3339Nano, event.labels["interval_end"].(string))
+		version, _ := event.labels["pricing_version"].(string)
+		if event.name == types.UsageMetricsWorkerContainerDuration && event.value > 0 {
+			durationTotal += event.value
+		}
+		if event.name != types.UsageMetricsWorkerContainerCost {
+			continue
+		}
+		switch version {
+		case "old":
+			oldCost += event.value
+			if intervalEnd.After(transition) {
+				t.Fatalf("old quote crossed transition: %v to %v", intervalStart, intervalEnd)
+			}
+		case "new":
+			newCost += event.value
+			if intervalStart.Before(transition) {
+				t.Fatalf("new quote applied before transition: %v to %v", intervalStart, intervalEnd)
+			}
+		}
+	}
+	if durationTotal != 5_000 || oldCost != 1 || newCost != 8 {
+		t.Fatalf("duration/old/new = %v/%v/%v, want 5000ms/1/8 cents", durationTotal, oldCost, newCost)
+	}
+	if external.count < 2 || external.invalidCost {
+		t.Fatalf("external transition records = %d, invalid = %t", external.count, external.invalidCost)
+	}
+}
+
+func TestEmitContainerUsageQuoteFailureRemainsDurationOnly(t *testing.T) {
+	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Second)
+	ticks := make(chan time.Time, 1)
+	quoteFailed := make(chan struct{})
+	var quoteFailedOnce sync.Once
+	repository := &usageMetricsRecorder{notify: make(chan struct{}, 4)}
+	metrics := &WorkerUsageMetrics{
+		ctx:         context.Background(),
+		workerId:    "worker-1",
+		metricsRepo: repository,
+		poolMode:    types.PoolModeLocal,
+		now:         func() time.Time { return start },
+		newTicker: func(time.Duration) (<-chan time.Time, func()) {
+			return ticks, func() {}
+		},
+		quoteProvider: func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			quoteFailedOnce.Do(func() { close(quoteFailed) })
+			return clients.ContainerCostQuote{}, context.DeadlineExceeded
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		metrics.EmitContainerUsage(ctx, &types.ContainerRequest{ContainerId: "container-1"})
+		close(done)
+	}()
+	select {
+	case <-quoteFailed:
+	case <-time.After(time.Second):
+		t.Fatal("quote failure was not returned")
+	}
+	ticks <- end
+	waitForUsageMetrics(t, repository.notify, 1)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("failed-quote usage loop did not stop")
+	}
+
+	repository.mu.Lock()
+	events := append([]recordedUsageMetric(nil), repository.events...)
+	repository.mu.Unlock()
+	for _, event := range events {
+		if event.name == types.UsageMetricsWorkerContainerCost {
+			t.Fatalf("failed quote emitted cost event %+v", event)
+		}
+	}
+}
+
+func TestExpiredStaleQuoteDoesNotPriceAfterTransition(t *testing.T) {
+	transition := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	start := transition.Add(-time.Second)
+	end := transition.Add(4 * time.Second)
+	repository := &usageMetricsRecorder{}
+	external := &containerUsageRecorder{}
+	metrics := &WorkerUsageMetrics{
+		workerId:          "worker-1",
+		metricsRepo:       repository,
+		usageRecorder:     external,
+		poolMode:          types.PoolModeLocal,
+		openMeterMetadata: true,
+	}
+	request := types.ContainerRequest{ContainerId: "container-1", Cpu: 1_000, Memory: 1_024}
+	stale := clients.ContainerCostQuote{
+		CostPerMs:      0.001,
+		PricingVersion: "old",
+		EffectiveAt:    start.Add(-time.Hour),
+		ValidUntil:     transition,
+		Valid:          true,
+	}
+
+	metrics.emitContainerDurationSegments(request, start, end, stale)
+	metrics.emitContainerPriceSegments(request, start, end, stale, stale)
+
+	repository.mu.Lock()
+	events := append([]recordedUsageMetric(nil), repository.events...)
+	repository.mu.Unlock()
+	var duration, cost float64
+	var costEvents int
+	for _, event := range events {
+		if event.name == types.UsageMetricsWorkerContainerDuration {
+			duration += event.value
+		}
+		if event.name == types.UsageMetricsWorkerContainerCost {
+			cost += event.value
+			costEvents++
+		}
+	}
+	if duration != 5_000 || cost != 1 || costEvents != 1 {
+		t.Fatalf("duration/cost/events = %v/%v/%d, want 5000ms/1 cent/one pre-transition cost", duration, cost, costEvents)
+	}
+	if external.count != 2 || external.unpriced != 1 || external.invalidCost {
+		t.Fatalf("external records/unpriced/invalid = %d/%d/%t, want two/one/false", external.count, external.unpriced, external.invalidCost)
+	}
+}
+
+func TestContainerUsageSegmentsPreserveWholeIntervalMilliseconds(t *testing.T) {
+	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	middle := start.Add(500 * time.Microsecond)
+	segments := containerUsageSegments(
+		types.ContainerRequest{}, start, start.Add(time.Millisecond), middle,
+	)
+	if len(segments) != 2 {
+		t.Fatalf("segments = %d, want 2", len(segments))
+	}
+	var total int64
+	for _, segment := range segments {
+		total += segment.duration.Milliseconds()
+	}
+	if total != 1 {
+		t.Fatalf("split duration = %dms, want 1ms", total)
+	}
+}
+
+func waitForUsageMetrics(t *testing.T, notifications <-chan struct{}, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		select {
+		case <-notifications:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for usage metric %d/%d", i+1, count)
+		}
+	}
+}
+
+func emitResolvedContainerUsageInterval(metrics *WorkerUsageMetrics, request *types.ContainerRequest, start, end time.Time) {
+	requestSnapshot := *request
+	requestSnapshot.Gpu = metrics.gpuType
+	requestSnapshot.CostPerMs = 0
+	quote := metrics.getContainerCostQuote(&requestSnapshot)
+	metrics.emitContainerDurationSegments(requestSnapshot, start, end, quote)
+	metrics.emitContainerPriceSegments(requestSnapshot, start, end, quote, quote)
 }
 
 type usageMetricsRecorder struct {

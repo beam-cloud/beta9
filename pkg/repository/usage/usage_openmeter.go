@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -72,7 +74,6 @@ func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string
 		subjectId = workspaceId
 	}
 
-	e.SetID(uuid.New().String())
 	e.SetSource(o.source)
 	e.SetType(name)
 	e.SetSubject(subjectId)
@@ -80,6 +81,7 @@ func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string
 	if err := e.SetData("application/json", data); err != nil {
 		return fmt.Errorf("failed to encode OpenMeter event: %w", err)
 	}
+	e.SetID(openMeterEventID(o.source, name, data))
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("invalid OpenMeter event: %w", err)
 	}
@@ -116,6 +118,28 @@ func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string
 	}
 
 	return lastErr
+}
+
+// Interval usage is safe to replay above the HTTP retry layer. Worker and
+// pricing metadata are deliberately excluded: neither changes the logical
+// resource usage if the same container interval is emitted again.
+func openMeterEventID(source, name string, data map[string]interface{}) string {
+	start, startOK := data["interval_start"].(string)
+	if !startOK {
+		return uuid.New().String()
+	}
+	end, endOK := data["interval_end"].(string)
+	if !endOK {
+		return uuid.New().String()
+	}
+	identity, _ := json.Marshal([]interface{}{
+		source, name,
+		data["container_id"], data["workspace_id"], data["stub_id"], data["app_id"],
+		data["cpu_millicores"], data["mem_mb"], data["gpu"], data["gpu_count"],
+		start, end, data["value"],
+	})
+	sum := sha256.Sum256(identity)
+	return fmt.Sprintf("%x", sum)
 }
 
 func eventData(metadata map[string]interface{}, value float64) map[string]interface{} {
