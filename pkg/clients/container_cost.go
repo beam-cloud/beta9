@@ -104,6 +104,9 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 	if quote, ok := c.cached(key); ok {
 		return quote, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return c.lastGood(key), err
+	}
 
 	result := c.refresh.DoChan(key.cacheKey(), func() (any, error) {
 		if quote, ok := c.cached(key); ok {

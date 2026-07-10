@@ -113,6 +113,13 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 		// Resolve after freezing end. Quote latency can delay cost delivery, but
 		// it can never lengthen the interval or hold its duration event.
 		nextQuote := wm.getContainerCostQuote(&requestSnapshot)
+		if nextQuote.Valid && nextQuote.EffectiveAt.IsZero() {
+			nextQuote.EffectiveAt = currentQuote.EffectiveAt
+			if !samePricing(nextQuote, currentQuote) {
+				// Changed undated pricing is prospective; it cannot reprice elapsed usage.
+				nextQuote.EffectiveAt = end.UTC()
+			}
+		}
 		wm.emitContainerPriceSegments(requestSnapshot, start, end, currentQuote, nextQuote)
 		if final {
 			return
@@ -162,7 +169,7 @@ func containerUsageSegments(request types.ContainerRequest, start, end time.Time
 }
 
 func (wm *WorkerUsageMetrics) emitContainerDurationSegments(request types.ContainerRequest, start, end time.Time, quote clients.ContainerCostQuote) {
-	for _, interval := range containerUsageSegments(request, start, end) {
+	for _, interval := range containerUsageSegments(request, start, end, quote.EffectiveAt, quote.ValidUntil) {
 		interval.quote = quoteAt(quote, clients.ContainerCostQuote{}, interval.start)
 		wm.metricsContainerDuration(interval)
 	}
@@ -193,6 +200,10 @@ func quoteAt(preferred, fallback clients.ContainerCostQuote, at time.Time) clien
 		return fallback
 	}
 	return clients.ContainerCostQuote{}
+}
+
+func samePricing(a, b clients.ContainerCostQuote) bool {
+	return a.Valid && b.Valid && a.CostPerMs == b.CostPerMs && a.PricingVersion == b.PricingVersion
 }
 
 func quoteCovers(quote clients.ContainerCostQuote, at time.Time) bool {

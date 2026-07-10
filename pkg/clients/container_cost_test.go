@@ -16,19 +16,38 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+type atomicTestClock struct {
+	nanos atomic.Int64
+}
+
+func newAtomicTestClock(now time.Time) *atomicTestClock {
+	clock := &atomicTestClock{}
+	clock.nanos.Store(now.UnixNano())
+	return clock
+}
+
+func (c *atomicTestClock) Now() time.Time {
+	return time.Unix(0, c.nanos.Load()).UTC()
+}
+
+func (c *atomicTestClock) Add(duration time.Duration) {
+	c.nanos.Add(duration.Nanoseconds())
+}
+
 func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *testing.T) {
-	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	var calls int
-	fail := false
+	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
+	var calls atomic.Int32
+	var fail atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		calls.Add(1)
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			t.Errorf("authorization = %q, want bearer token", r.Header.Get("Authorization"))
 		}
-		if fail {
+		if fail.Load() {
 			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		now := clock.Now()
 		_ = json.NewEncoder(w).Encode(ContainerCostResponse{
 			CostPerMs:      "0.0000017",
 			PricingVersion: "cpu-only-202607",
@@ -39,14 +58,14 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	t.Cleanup(server.Close)
 
 	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
-	client.now = func() time.Time { return now }
+	client.now = clock.Now
 	request := &types.ContainerRequest{ContainerId: "container-1", Cpu: 1_000, Memory: 1_024}
 
 	quote, err := client.GetContainerCostQuote(context.Background(), request)
 	if err != nil {
 		t.Fatalf("initial quote: %v", err)
 	}
-	if !quote.Valid || quote.CostPerMs != 0.0000017 || quote.PricingVersion != "cpu-only-202607" || !quote.EffectiveAt.Equal(now.Add(-time.Hour)) {
+	if !quote.Valid || quote.CostPerMs != 0.0000017 || quote.PricingVersion != "cpu-only-202607" || !quote.EffectiveAt.Equal(clock.Now().Add(-time.Hour)) {
 		t.Fatalf("initial quote = %+v", quote)
 	}
 
@@ -55,12 +74,12 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if _, err := client.GetContainerCostQuote(context.Background(), request); err != nil {
 		t.Fatalf("cached quote: %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("quote calls = %d, want one shared resource-keyed call", calls)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("quote calls = %d, want one shared resource-keyed call", got)
 	}
 
-	now = now.Add(2 * time.Minute)
-	fail = true
+	clock.Add(2 * time.Minute)
+	fail.Store(true)
 	surfacedErrors := 0
 	stale, err := client.GetContainerCostQuote(context.Background(), request)
 	if err == nil {
@@ -70,8 +89,8 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if !stale.Valid || stale.CostPerMs != quote.CostPerMs || stale.PricingVersion != quote.PricingVersion {
 		t.Fatalf("stale quote = %+v, want last good %+v", stale, quote)
 	}
-	if calls != 2 {
-		t.Fatalf("quote calls = %d, want refresh after valid_until", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("quote calls = %d, want refresh after valid_until", got)
 	}
 	if cached, err := client.GetContainerCostQuote(context.Background(), request); err != nil || !cached.Valid {
 		t.Fatalf("cached stale quote = %+v, err = %v; want quiet last-good hit", cached, err)
@@ -79,35 +98,35 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if _, err := client.GetContainerCostPerMs(request); err == nil {
 		t.Fatal("scalar lookup accepted an expired stale quote")
 	}
-	if calls != 2 {
-		t.Fatalf("quote calls = %d, want failed-refresh backoff", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("quote calls = %d, want failed-refresh backoff", got)
 	}
 
-	now = now.Add(containerCostRetryDelay - time.Millisecond)
+	clock.Add(containerCostRetryDelay - time.Millisecond)
 	if cached, err := client.GetContainerCostQuote(context.Background(), request); err != nil || !cached.Valid {
 		t.Fatalf("backed-off stale quote = %+v, err = %v; want quiet hit", cached, err)
 	}
-	if calls != 2 {
-		t.Fatalf("quote calls = %d before retry deadline, want 2", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("quote calls = %d before retry deadline, want 2", got)
 	}
 
-	now = now.Add(time.Millisecond)
+	clock.Add(time.Millisecond)
 	if _, err := client.GetContainerCostQuote(context.Background(), request); err == nil {
 		t.Fatal("second stale refresh error = nil")
 	}
 	surfacedErrors++
-	if calls != 3 {
-		t.Fatalf("quote calls = %d at retry deadline, want 3", calls)
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("quote calls = %d at retry deadline, want 3", got)
 	}
 
-	fail = false
-	now = now.Add(2 * containerCostRetryDelay)
+	fail.Store(false)
+	clock.Add(2 * containerCostRetryDelay)
 	recovered, err := client.GetContainerCostQuote(context.Background(), request)
 	if err != nil || !recovered.Valid {
 		t.Fatalf("recovered quote = %+v, err = %v", recovered, err)
 	}
-	if calls != 4 {
-		t.Fatalf("quote calls = %d after bounded exponential backoff, want 4", calls)
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("quote calls = %d after bounded exponential backoff, want 4", got)
 	}
 	if surfacedErrors != 2 {
 		t.Fatalf("surfaced refresh errors = %d, want one per failed HTTP refresh", surfacedErrors)
@@ -115,11 +134,10 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 }
 
 func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
-	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	var calls int
+	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
+	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		if calls == 1 {
+		if calls.Add(1) == 1 {
 			http.Error(w, "try again", http.StatusServiceUnavailable)
 			return
 		}
@@ -128,7 +146,7 @@ func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
-	client.now = func() time.Time { return now }
+	client.now = clock.Now
 	request := &types.ContainerRequest{Cpu: 1_000, Memory: 1_024}
 	if quote, err := client.GetContainerCostQuote(context.Background(), request); err == nil || quote.Valid {
 		t.Fatalf("first quote = %+v, err = %v; want missing quote", quote, err)
@@ -139,23 +157,23 @@ func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 	if err != nil || quote.Valid {
 		t.Fatalf("negative cached quote = %+v, err = %v; want quiet unavailable hit", quote, err)
 	}
-	if calls != 1 {
-		t.Fatalf("quote calls = %d during negative-cache window, want 1", calls)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("quote calls = %d during negative-cache window, want 1", got)
 	}
 	if _, err := client.GetContainerCostPerMs(request); err == nil {
 		t.Fatal("legacy scalar lookup error = nil for unavailable cached quote")
 	}
-	if calls != 1 {
-		t.Fatalf("quote calls = %d after legacy cached lookup, want 1", calls)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("quote calls = %d after legacy cached lookup, want 1", got)
 	}
 
-	now = now.Add(containerCostRetryDelay)
+	clock.Add(containerCostRetryDelay)
 	quote, err = client.GetContainerCostQuote(context.Background(), request)
 	if err != nil || !quote.Valid || quote.CostPerMs != 0.25 {
 		t.Fatalf("retried quote = %+v, err = %v", quote, err)
 	}
-	if calls != 2 {
-		t.Fatalf("quote calls = %d, want retry on next lookup", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("quote calls = %d, want retry on next lookup", got)
 	}
 }
 
@@ -347,5 +365,40 @@ func TestContainerCostClientWaitersCancelIndependently(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("HTTP calls = %d, want one shared refresh", calls.Load())
+	}
+}
+
+func TestContainerCostClientCanceledLookupUsesCacheWithoutRefreshing(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"cost_per_ms":"0.125"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	cachedRequest := &types.ContainerRequest{Cpu: 1_000}
+	quote, err := client.GetContainerCostQuote(context.Background(), cachedRequest)
+	if err != nil || !quote.Valid {
+		t.Fatalf("priming quote = %+v, err = %v", quote, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	quote, err = client.GetContainerCostQuote(ctx, cachedRequest)
+	if err != nil || !quote.Valid {
+		t.Fatalf("cached canceled lookup = %+v, err = %v; want cached quote", quote, err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("HTTP calls after cached lookup = %d, want 1", got)
+	}
+
+	quote, err = client.GetContainerCostQuote(ctx, &types.ContainerRequest{Cpu: 2_000})
+	if !errors.Is(err, context.Canceled) || quote.Valid {
+		t.Fatalf("uncached canceled lookup = %+v, err = %v; want context.Canceled", quote, err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("HTTP calls after uncached canceled lookup = %d, want 1", got)
 	}
 }

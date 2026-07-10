@@ -484,6 +484,134 @@ func TestEmitContainerUsageSplitsAtQuoteValidityBoundary(t *testing.T) {
 	}
 }
 
+func TestEmitContainerDurationSplitsAtKnownQuoteBoundary(t *testing.T) {
+	boundary := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	start := boundary.Add(-time.Second)
+	end := boundary.Add(4 * time.Second)
+	repository := &usageMetricsRecorder{}
+	metrics := &WorkerUsageMetrics{
+		workerId:          "worker-1",
+		metricsRepo:       repository,
+		openMeterMetadata: true,
+	}
+	quote := clients.ContainerCostQuote{
+		CostPerMs:      0.001,
+		PricingVersion: "old",
+		EffectiveAt:    start.Add(-time.Hour),
+		ValidUntil:     boundary,
+		Valid:          true,
+	}
+
+	metrics.emitContainerDurationSegments(types.ContainerRequest{ContainerId: "container-1"}, start, end, quote)
+
+	if len(repository.events) != 2 {
+		t.Fatalf("duration events = %d, want 2", len(repository.events))
+	}
+	first, second := repository.events[0], repository.events[1]
+	if first.value != 1_000 || second.value != 4_000 {
+		t.Fatalf("duration values = %v/%v, want 1000/4000ms", first.value, second.value)
+	}
+	if first.labels["interval_end"] != boundary.Format(time.RFC3339Nano) ||
+		second.labels["interval_start"] != boundary.Format(time.RFC3339Nano) {
+		t.Fatalf("duration boundary metadata = %v/%v, want %v", first.labels["interval_end"], second.labels["interval_start"], boundary)
+	}
+	if first.labels["pricing_version"] != "old" || second.labels["pricing_version"] != "" {
+		t.Fatalf("duration pricing versions = %q/%q, want old/empty after expiry", first.labels["pricing_version"], second.labels["pricing_version"])
+	}
+}
+
+func TestEmitContainerUsageDoesNotBackdateUndatedRefresh(t *testing.T) {
+	start := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	firstEnd := start.Add(time.Second)
+	secondEnd := firstEnd.Add(time.Second)
+	thirdEnd := secondEnd.Add(time.Second)
+	ticks := make(chan time.Time, 3)
+	repository := &usageMetricsRecorder{notify: make(chan struct{}, 6)}
+	var nowCalls atomic.Int32
+	var quoteCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		workerId:          "worker-1",
+		metricsRepo:       repository,
+		poolMode:          types.PoolModeLocal,
+		openMeterMetadata: true,
+		now: func() time.Time {
+			if nowCalls.Add(1) == 1 {
+				return start
+			}
+			return thirdEnd
+		},
+		newTicker: func(time.Duration) (<-chan time.Time, func()) {
+			return ticks, func() {}
+		},
+		quoteProvider: func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			switch quoteCalls.Add(1) {
+			case 1:
+				return clients.ContainerCostQuote{
+					CostPerMs:      0.001,
+					PricingVersion: "old",
+					EffectiveAt:    start.Add(-time.Hour),
+					Valid:          true,
+				}, nil
+			case 2:
+				return clients.ContainerCostQuote{CostPerMs: 0.001, PricingVersion: "old", Valid: true}, nil
+			}
+			return clients.ContainerCostQuote{
+				CostPerMs:      0.002,
+				PricingVersion: "new",
+				Valid:          true,
+			}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		metrics.EmitContainerUsage(ctx, &types.ContainerRequest{ContainerId: "container-1"})
+		close(done)
+	}()
+	ticks <- firstEnd
+	waitForUsageMetrics(t, repository.notify, 2)
+	ticks <- secondEnd
+	waitForUsageMetrics(t, repository.notify, 2)
+	ticks <- thirdEnd
+	waitForUsageMetrics(t, repository.notify, 2)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("usage loop did not stop")
+	}
+
+	repository.mu.Lock()
+	events := append([]recordedUsageMetric(nil), repository.events...)
+	repository.mu.Unlock()
+	if len(events) != 6 {
+		t.Fatalf("usage events = %d, want three duration/cost pairs", len(events))
+	}
+	for i, want := range []struct {
+		name    string
+		version string
+		value   float64
+	}{
+		{types.UsageMetricsWorkerContainerDuration, "old", 1_000},
+		{types.UsageMetricsWorkerContainerCost, "old", 1},
+		{types.UsageMetricsWorkerContainerDuration, "old", 1_000},
+		{types.UsageMetricsWorkerContainerCost, "old", 1},
+		{types.UsageMetricsWorkerContainerDuration, "new", 1_000},
+		{types.UsageMetricsWorkerContainerCost, "new", 2},
+	} {
+		if events[i].name != want.name || events[i].labels["pricing_version"] != want.version || events[i].value != want.value {
+			t.Fatalf("event %d = %s/%v/%v, want %s/%s/%v", i, events[i].name, events[i].labels["pricing_version"], events[i].value, want.name, want.version, want.value)
+		}
+	}
+	if events[2].labels["pricing_effective_at"] != start.Add(-time.Hour).Format(time.RFC3339Nano) {
+		t.Fatalf("unchanged quote effective_at advanced to %v", events[2].labels["pricing_effective_at"])
+	}
+	if events[4].labels["pricing_effective_at"] != secondEnd.Format(time.RFC3339Nano) {
+		t.Fatalf("new quote effective_at = %v, want frozen second interval end %v", events[4].labels["pricing_effective_at"], secondEnd)
+	}
+}
+
 func TestEmitContainerUsageQuoteFailureRemainsDurationOnly(t *testing.T) {
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Second)
