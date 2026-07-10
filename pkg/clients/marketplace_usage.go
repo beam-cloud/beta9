@@ -46,6 +46,25 @@ type MarketplaceUsageRequest struct {
 	EndAt                     time.Time              `json:"end_at"`
 	ContainerType             string                 `json:"container_type"`
 	RuntimeMetadata           map[string]interface{} `json:"runtime_metadata"`
+	OmitPrice                 bool                   `json:"-"`
+}
+
+func (u MarketplaceUsageRequest) MarshalJSON() ([]byte, error) {
+	type alias MarketplaceUsageRequest
+	var buyerCost, sellerPayout *float64
+	if !u.OmitPrice {
+		buyerCost = &u.BuyerCostCents
+		sellerPayout = &u.SellerPayoutEstimateCents
+	}
+	return json.Marshal(struct {
+		alias
+		BuyerCostCents            *float64 `json:"buyer_cost_cents,omitempty"`
+		SellerPayoutEstimateCents *float64 `json:"seller_payout_estimate_cents,omitempty"`
+	}{
+		alias:                     alias(u),
+		BuyerCostCents:            buyerCost,
+		SellerPayoutEstimateCents: sellerPayout,
+	})
 }
 
 type marketplaceUsageResponse struct {

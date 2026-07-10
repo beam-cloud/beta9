@@ -56,30 +56,35 @@ func NewManagedComputeUsageRecorder(config types.ManagedComputeConfig, worker Wo
 	}
 }
 
-func (r *ManagedComputeUsageRecorder) RecordContainerUsage(ctx context.Context, request *types.ContainerRequest, start, end time.Time, costCents float64) error {
-	return r.client.Record(ctx, MarketplaceUsageRequest{
-		BuyerWorkspaceID:          request.WorkspaceId,
-		SellerWorkspaceID:         r.config.SellerWorkspaceID,
-		ListingID:                 r.config.MarketplaceListingID,
-		MachineID:                 r.worker.MachineID,
-		ContainerID:               request.ContainerId,
-		StubID:                    request.StubId,
-		AppID:                     request.AppId,
-		UsageKind:                 usageKind(request),
-		Runtime:                   r.worker.Runtime,
-		GPU:                       request.Gpu,
-		GPUCount:                  request.GpuCount,
-		DurationSeconds:           end.Sub(start).Seconds(),
-		BuyerCostCents:            costCents,
-		SellerPayoutEstimateCents: math.Max(0, costCents*r.payoutRate),
-		StartAt:                   start.UTC(),
-		EndAt:                     end.UTC(),
-		ContainerType:             request.Stub.Type.Kind(),
+func (r *ManagedComputeUsageRecorder) RecordContainerUsage(ctx context.Context, request *types.ContainerRequest, start, end time.Time, costCents *float64) error {
+	usage := MarketplaceUsageRequest{
+		BuyerWorkspaceID:  request.WorkspaceId,
+		SellerWorkspaceID: r.config.SellerWorkspaceID,
+		ListingID:         r.config.MarketplaceListingID,
+		MachineID:         r.worker.MachineID,
+		ContainerID:       request.ContainerId,
+		StubID:            request.StubId,
+		AppID:             request.AppId,
+		UsageKind:         usageKind(request),
+		Runtime:           r.worker.Runtime,
+		GPU:               request.Gpu,
+		GPUCount:          request.GpuCount,
+		DurationSeconds:   end.Sub(start).Seconds(),
+		StartAt:           start.UTC(),
+		EndAt:             end.UTC(),
+		ContainerType:     request.Stub.Type.Kind(),
 		RuntimeMetadata: map[string]interface{}{
 			"worker_id": r.worker.WorkerID,
 			"pool_name": r.worker.PoolName,
 		},
-	})
+	}
+	if costCents != nil {
+		usage.BuyerCostCents = *costCents
+		usage.SellerPayoutEstimateCents = math.Max(0, *costCents*r.payoutRate)
+	} else {
+		usage.OmitPrice = true
+	}
+	return r.client.Record(ctx, usage)
 }
 
 func usageKind(request *types.ContainerRequest) string {
