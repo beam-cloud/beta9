@@ -359,7 +359,7 @@ func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, wor
 
 func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error) {
 	query := `
-    SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
+    SELECT id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id
     FROM token
     WHERE workspace_id = $1
 	AND token_type != 'worker'

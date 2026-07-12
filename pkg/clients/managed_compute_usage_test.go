@@ -75,7 +75,8 @@ func TestManagedComputeUsageRecorderAttributesFromConfig(t *testing.T) {
 		GpuCount:    1,
 		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}},
 	}
-	if err := recorder.RecordContainerUsage(context.Background(), request, start, end, 100); err != nil {
+	cost := 100.0
+	if err := recorder.RecordContainerUsage(context.Background(), request, start, end, &cost); err != nil {
 		t.Fatalf("RecordContainerUsage() error = %v", err)
 	}
 
@@ -87,5 +88,44 @@ func TestManagedComputeUsageRecorderAttributesFromConfig(t *testing.T) {
 	}
 	if got.BuyerCostCents != 100 || got.SellerPayoutEstimateCents != 90 {
 		t.Fatalf("cost/payout = %v/%v, want 100/90 with 10%% margin", got.BuyerCostCents, got.SellerPayoutEstimateCents)
+	}
+}
+
+func TestManagedComputeUsageRecorderKeepsDurationWithoutPrice(t *testing.T) {
+	var got map[string]json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode usage request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"ok": true}`))
+	}))
+	t.Cleanup(server.Close)
+
+	recorder := NewManagedComputeUsageRecorder(types.ManagedComputeConfig{
+		Billing:              types.ManagedComputeBillingConfig{Endpoint: server.URL},
+		MarketplaceListingID: "listing-1",
+		SellerWorkspaceID:    "seller-1",
+	}, WorkerIdentity{WorkerID: "worker-1", MachineID: "machine-1"})
+	if recorder == nil {
+		t.Fatal("recorder = nil, want configured recorder")
+	}
+
+	start := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	end := start.Add(5 * time.Second)
+	if err := recorder.RecordContainerUsage(context.Background(), &types.ContainerRequest{
+		ContainerId: "container-1",
+		WorkspaceId: "buyer-1",
+	}, start, end, nil); err != nil {
+		t.Fatalf("RecordContainerUsage() error = %v", err)
+	}
+
+	if _, ok := got["duration_seconds"]; !ok {
+		t.Fatal("duration_seconds omitted from unpriced usage")
+	}
+	if _, ok := got["buyer_cost_cents"]; ok {
+		t.Fatal("buyer_cost_cents present without a valid quote")
+	}
+	if _, ok := got["seller_payout_estimate_cents"]; ok {
+		t.Fatal("seller_payout_estimate_cents present without a valid quote")
 	}
 }
