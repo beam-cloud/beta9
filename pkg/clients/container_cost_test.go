@@ -50,7 +50,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 		now := clock.Now()
 		_ = json.NewEncoder(w).Encode(ContainerCostResponse{
 			CostPerMs:      "0.0000017",
-			PricingVersion: "cpu-only-202607",
+			PricingVersion: "rates-test",
 			EffectiveAt:    now.Add(-time.Hour).Format(time.RFC3339Nano),
 			ValidUntil:     now.Add(time.Minute).Format(time.RFC3339Nano),
 		})
@@ -65,7 +65,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if err != nil {
 		t.Fatalf("initial quote: %v", err)
 	}
-	if !quote.Valid || quote.CostPerMs != 0.0000017 || quote.PricingVersion != "cpu-only-202607" || !quote.EffectiveAt.Equal(clock.Now().Add(-time.Hour)) {
+	if !quote.Valid || quote.CostPerMs != 0.0000017 || quote.PricingVersion != "rates-test" || !quote.EffectiveAt.Equal(clock.Now().Add(-time.Hour)) {
 		t.Fatalf("initial quote = %+v", quote)
 	}
 
@@ -130,6 +130,42 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	}
 	if surfacedErrors != 2 {
 		t.Fatalf("surfaced refresh errors = %d, want one per failed HTTP refresh", surfacedErrors)
+	}
+}
+
+func TestContainerCostClientSeparatesSandboxQuotes(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request ContainerCostRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		cost := "0.1"
+		if request.Sandbox {
+			cost = "0.3"
+		}
+		_, _ = fmt.Fprintf(w, `{"cost_per_ms":%q}`, cost)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	standard := &types.ContainerRequest{Cpu: 1_000, Memory: 1_024}
+	sandbox := &types.ContainerRequest{
+		Cpu:    1_000,
+		Memory: 1_024,
+		Stub:   types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+	standardQuote, standardErr := client.GetContainerCostQuote(context.Background(), standard)
+	sandboxQuote, sandboxErr := client.GetContainerCostQuote(context.Background(), sandbox)
+	if standardErr != nil || sandboxErr != nil {
+		t.Fatalf("standard/sandbox quote errors = %v/%v", standardErr, sandboxErr)
+	}
+	if standardQuote.CostPerMs != 0.1 || sandboxQuote.CostPerMs != 0.3 {
+		t.Fatalf("standard/sandbox quotes = %v/%v", standardQuote.CostPerMs, sandboxQuote.CostPerMs)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("quote calls = %d, want separate standard and sandbox quotes", calls.Load())
 	}
 }
 

@@ -100,7 +100,7 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 		case 1_000:
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"cost_per_ms":     "0.00000170",
-				"pricing_version": "cpu-only-202607",
+				"pricing_version": "rates-test",
 				"valid_until":     time.Now().Add(time.Hour).Format(time.RFC3339Nano),
 			})
 		case 2_000:
@@ -188,7 +188,7 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 	}
 	if firstEvents[0].Data["interval_start"] != start.Format(time.RFC3339Nano) ||
 		firstEvents[0].Data["interval_end"] != start.Add(time.Hour).Format(time.RFC3339Nano) ||
-		firstEvents[1].Data["pricing_version"] != "cpu-only-202607" {
+		firstEvents[1].Data["pricing_version"] != "rates-test" {
 		t.Fatalf("interval metadata = %+v", firstEvents[0].Data)
 	}
 
