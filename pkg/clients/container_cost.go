@@ -47,6 +47,7 @@ type ContainerCostRequest struct {
 	Memory   int64  `json:"memory"`
 	Gpu      string `json:"gpu"`
 	GpuCount uint32 `json:"gpu_count"`
+	Sandbox  bool   `json:"sandbox"`
 }
 
 type containerCostCacheEntry struct {
@@ -100,6 +101,7 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 	key := ContainerCostRequest{
 		Cpu: request.Cpu, Memory: request.Memory,
 		Gpu: strings.TrimSpace(request.Gpu), GpuCount: request.GpuCount,
+		Sandbox: request.Stub.Type.Kind() == types.StubTypeSandbox,
 	}
 	if quote, ok := c.cached(key); ok {
 		return quote, nil
