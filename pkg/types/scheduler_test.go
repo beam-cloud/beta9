@@ -55,6 +55,12 @@ func TestWorkerProtoRoundTripPreservesRuntimeAndPoolSelector(t *testing.T) {
 	require.Equal(t, "private-cpu", roundTrip.PoolSelector)
 }
 
+func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
+	request := &ContainerRequest{TaskId: "task-1"}
+
+	require.Equal(t, request.TaskId, NewContainerRequestFromProto(request.ToProto()).TaskId)
+}
+
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {
 	signingKey := "workspace-signing-key"
 	storageID := uint(1)

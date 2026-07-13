@@ -237,7 +237,6 @@ type ContainerRequest struct {
 	GpuCount                 uint32          `json:"gpu_count"`
 	ImageId                  string          `json:"image_id"`
 	StubId                   string          `json:"stub_id"`
-	TaskId                   string          `json:"task_id,omitempty"`
 	WorkspaceId              string          `json:"workspace_id"`
 	Workspace                Workspace       `json:"workspace"`
 	Stub                     StubWithRelated `json:"stub"`
@@ -265,6 +264,7 @@ type ContainerRequest struct {
 	// rental); empty means any machine.
 	MachineId         string             `json:"machine_id,omitempty"`
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
+	TaskId            string             `json:"task_id,omitempty"`
 }
 
 // @go2proto
@@ -577,6 +577,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		ImageId:                  c.ImageId,
 		Mounts:                   mounts,
 		StubId:                   c.StubId,
+		TaskId:                   c.TaskId,
 		AppId:                    c.AppId,
 		WorkspaceId:              c.WorkspaceId,
 		Workspace:                c.Workspace.ToProto(),
@@ -640,6 +641,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Workspace:                *NewWorkspaceFromProto(in.Workspace),
 		Stub:                     *NewStubWithRelatedFromProto(in.Stub),
 		StubId:                   in.StubId,
+		TaskId:                   in.TaskId,
 		Timestamp:                in.GetTimestamp().AsTime(),
 		RetryCount:               int(in.RetryCount),
 		CheckpointEnabled:        in.CheckpointEnabled,

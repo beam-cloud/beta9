@@ -108,11 +108,7 @@ func NewContainerFunctionService(ctx context.Context,
 	registerFunctionRoutes(fs.routeGroup.Group(scheduleRoutePrefix, authMiddleware), fs)
 
 	go fs.listenForScheduledJobs()
-	failureEvents := common.NewEventBus(opts.RedisClient, common.EventBusSubscriber{
-		Type:     common.EventTypeContainerSchedulingFailed,
-		Callback: fs.handleContainerSchedulingFailure,
-	})
-	go failureEvents.ReceiveEvents(ctx)
+	go fs.listenForSchedulingFailures()
 
 	return fs, nil
 }

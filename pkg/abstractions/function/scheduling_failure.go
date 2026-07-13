@@ -12,6 +12,14 @@ import (
 
 const schedulingFailureHandlerTimeout = 10 * time.Second
 
+func (fs *ContainerFunctionService) listenForSchedulingFailures() {
+	events := common.NewEventBus(fs.rdb, common.EventBusSubscriber{
+		Type:     common.EventTypeContainerSchedulingFailed,
+		Callback: fs.handleContainerSchedulingFailure,
+	})
+	events.ReceiveEvents(fs.ctx)
+}
+
 func (fs *ContainerFunctionService) handleContainerSchedulingFailure(event *common.Event) bool {
 	failure, ok := common.ParseContainerSchedulingFailure(event)
 	if !ok {

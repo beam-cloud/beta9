@@ -111,6 +111,7 @@ message ContainerRequest {
   bool allow_marketplace = 33;
   string machine_id = 34;
   CheckpointTrigger checkpoint_trigger = 35;
+  string task_id = 36;
 }
 
 message ContainerState {

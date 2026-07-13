@@ -228,6 +228,13 @@ func (r *RedisClient) handleChannelSubs(
 ) {
 	pubsub := subFn(ctx, channels...)
 	defer pubsub.Close()
+	// Channel starts its receive loop asynchronously. Wait for Redis to confirm
+	// the subscription so callers can safely publish as soon as we return.
+	if _, err := pubsub.Receive(ctx); err != nil {
+		errCh <- err
+		onSubscribe <- true
+		return
+	}
 
 	ch := pubsub.Channel(
 		redis.WithChannelSize(redisPubSubChannelBufferSize),

@@ -121,6 +121,7 @@ class ContainerRequest(betterproto.Message):
     allow_marketplace: bool = betterproto.bool_field(33)
     machine_id: str = betterproto.string_field(34)
     checkpoint_trigger: "CheckpointTrigger" = betterproto.message_field(35)
+    task_id: str = betterproto.string_field(36)
 
 
 @dataclass(eq=False, repr=False)
