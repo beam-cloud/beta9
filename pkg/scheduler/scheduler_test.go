@@ -345,7 +345,7 @@ func TestRegisterAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	err = scheduler.RegisterAgentPool("admin-workspace", &compute.PoolState{
 		Name:             "api-pool",
 		Selector:         "api-pool",
-		ManagementSource: compute.ManagedPoolSourceAPI,
+		ManagementSource: types.WorkerPoolManagementSourceAPI,
 		WorkerConfig: &types.WorkerPoolConfig{
 			Mode:     types.PoolModeLocal,
 			Provider: &provider,
@@ -1987,7 +1987,7 @@ func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, request.TaskId, failure.TaskID)
 		assert.Equal(t, request.ContainerId, failure.ContainerID)
-		assert.Equal(t, "no_controller", failure.Reason)
+		assert.Equal(t, types.ContainerSchedulingFailureNoController, failure.Reason)
 	case <-time.After(time.Second):
 		t.Fatal("expected container scheduling failure event")
 	}

@@ -235,7 +235,7 @@ func (s *Service) savePoolJoinToken(ctx context.Context, state *model.JoinTokenS
 		WorkspaceID: state.WorkspaceID,
 		PoolName:    state.PoolName,
 		Action:      types.EventComputeActionJoinTokenCreated,
-		Status:      "active",
+		Status:      types.ComputePoolStatusActive,
 		Attrs:       attrs,
 	})
 	return nil

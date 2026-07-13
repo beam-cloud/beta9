@@ -58,7 +58,7 @@ func TestTaskSchedulingFailureEndsTaskAndClearsDispatcherState(t *testing.T) {
 		TaskID:       "task-id",
 		ContainerID:  "container-id",
 		PoolSelector: "my-pool",
-		Reason:       "worker_capacity_timeout",
+		Reason:       types.ContainerSchedulingFailureWorkerCapacityTimeout,
 	}))
 
 	require.True(t, handled)
@@ -78,7 +78,7 @@ func TestTaskSchedulingFailureIgnoresStaleContainer(t *testing.T) {
 	handled := handler.handle(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
 		TaskID:      "task-id",
 		ContainerID: "old-container",
-		Reason:      "worker_capacity_timeout",
+		Reason:      types.ContainerSchedulingFailureWorkerCapacityTimeout,
 	}))
 
 	require.True(t, handled)

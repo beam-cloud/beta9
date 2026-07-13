@@ -39,10 +39,18 @@ const (
 )
 
 type ContainerRequestStatus string
+type ContainerSchedulingFailureReason string
 
 const (
 	ContainerRequestStatusFailed ContainerRequestStatus = "failed"
 	ContainerRequestStatusTTL                           = 10 * time.Minute
+
+	ContainerSchedulingFailureBacklogPushFailed               ContainerSchedulingFailureReason = "backlog_push_failed"
+	ContainerSchedulingFailureNoController                    ContainerSchedulingFailureReason = "no_controller"
+	ContainerSchedulingFailureWorkerCapacityTimeout           ContainerSchedulingFailureReason = "worker_capacity_timeout"
+	ContainerSchedulingFailureRetryLimit                      ContainerSchedulingFailureReason = "retry_limit"
+	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
+	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
 )
 
 // @go2proto

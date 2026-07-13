@@ -35,22 +35,13 @@ type PoolState struct {
 	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
 	// ManagementSource marks serverless inventory owned by the control plane
 	// rather than a tenant. WorkerConfig preserves its complete configuration.
-	ManagementSource string `json:"management_source,omitempty"`
+	ManagementSource types.WorkerPoolManagementSource `json:"management_source,omitempty"`
 	// ManagedInstanceID changes whenever a deleted managed pool is
 	// recreated, preventing an unexpired installer for the old pool from
 	// authorizing a machine into the new one.
 	ManagedInstanceID string                  `json:"managed_instance_id,omitempty"`
 	WorkerConfig      *types.WorkerPoolConfig `json:"worker_config,omitempty"`
 }
-
-const (
-	ManagedPoolSourceConfig = "config"
-	ManagedPoolSourceAPI    = "api"
-
-	ManagedPoolControllerLocal          = "local"
-	ManagedPoolControllerAgent          = "agent"
-	ManagedPoolControllerExternalLegacy = "external_legacy"
-)
 
 var (
 	ErrManagedPermissionDenied  = errors.New("cluster admin permission required")
@@ -62,13 +53,13 @@ var (
 )
 
 type ManagedPool struct {
-	Name              string                 `json:"name"`
-	Config            types.WorkerPoolConfig `json:"config"`
-	Source            string                 `json:"source"`
-	Controller        string                 `json:"controller"`
-	State             *types.WorkerPoolState `json:"-"` // Used by the admin CLI, not the HTTP API.
-	MachineCount      int                    `json:"machine_count"`
-	ReadyMachineCount int                    `json:"ready_machine_count"`
+	Name              string                           `json:"name"`
+	Config            types.WorkerPoolConfig           `json:"config"`
+	Source            types.WorkerPoolManagementSource `json:"source"`
+	Controller        types.WorkerPoolController       `json:"controller"`
+	State             *types.WorkerPoolState           `json:"-"` // Used by the admin CLI, not the HTTP API.
+	MachineCount      int                              `json:"machine_count"`
+	ReadyMachineCount int                              `json:"ready_machine_count"`
 }
 
 const (
@@ -289,7 +280,7 @@ func AgentMachineLastSeen(state *AgentTokenState) time.Time {
 
 func AgentPreflightFailed(checks []PreflightCheckState) bool {
 	for _, check := range checks {
-		if check.Severity == "error" && !check.OK {
+		if check.Severity == types.AgentPreflightSeverityError && !check.OK {
 			return true
 		}
 	}

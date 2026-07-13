@@ -122,7 +122,7 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Source != model.ManagedPoolSourceAPI || created.Controller != model.ManagedPoolControllerAgent {
+	if created.Source != types.WorkerPoolManagementSourceAPI || created.Controller != types.WorkerPoolControllerAgent {
 		t.Fatalf("created pool = %+v", created)
 	}
 	if created.Config.Cache.Disk.HostPath != config.Cache.Disk.HostPath || created.Config.ContainerStartConcurrency != 7 {
@@ -132,7 +132,7 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if err != nil || state == nil {
 		t.Fatalf("saved state = %+v, err = %v", state, err)
 	}
-	if state.ManagementSource != model.ManagedPoolSourceAPI || state.Mode != string(types.PoolModeExternal) {
+	if state.ManagementSource != types.WorkerPoolManagementSourceAPI || state.Mode != string(types.PoolModeExternal) {
 		t.Fatalf("saved managed identity = %+v", state)
 	}
 	if state.WorkerConfig == nil || state.WorkerConfig.DurableDisksPath != "/mnt/disks" {
@@ -191,7 +191,7 @@ func TestReconcileManagedPoolsOnlyMaterializesProviderlessExternalPools(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 1 || states[0].Name != "public-agent" || states[0].ManagementSource != model.ManagedPoolSourceConfig {
+	if len(states) != 1 || states[0].Name != "public-agent" || states[0].ManagementSource != types.WorkerPoolManagementSourceConfig {
 		t.Fatalf("reconciled states = %+v", states)
 	}
 }
@@ -223,7 +223,7 @@ func TestManagedPoolReconciliationRetriesStartupFailure(t *testing.T) {
 func TestReconcileManagedPoolsPrunesStaleConfigStateWithoutInventory(t *testing.T) {
 	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{
 		"admin-workspace": {
-			newManagedPoolState("admin-workspace", "removed-agent-pool", model.ManagedPoolSourceConfig, "config", types.WorkerPoolConfig{Mode: types.PoolModeExternal}, time.Now()),
+			newManagedPoolState("admin-workspace", "removed-agent-pool", types.WorkerPoolManagementSourceConfig, string(types.WorkerPoolManagementSourceConfig), types.WorkerPoolConfig{Mode: types.PoolModeExternal}, time.Now()),
 		},
 	}}
 	service := managedPoolTestService(types.AppConfig{}, repo)
@@ -238,7 +238,7 @@ func TestReconcileManagedPoolsPrunesStaleConfigStateWithoutInventory(t *testing.
 }
 
 func TestReconcileManagedPoolsDoesNotActivateStaleConfigStateWithInventory(t *testing.T) {
-	stale := newManagedPoolState("admin-workspace", "changed-to-local", model.ManagedPoolSourceConfig, "config", types.WorkerPoolConfig{Mode: types.PoolModeExternal}, time.Now())
+	stale := newManagedPoolState("admin-workspace", "changed-to-local", types.WorkerPoolManagementSourceConfig, string(types.WorkerPoolManagementSourceConfig), types.WorkerPoolConfig{Mode: types.PoolModeExternal}, time.Now())
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{"admin-workspace": {stale}},
 		machines: map[string][]*model.AgentTokenState{

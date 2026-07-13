@@ -308,21 +308,21 @@ func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoi
 			} else {
 				metric.MachineCount++
 			}
-			metric.ContainerCount += metricAttrUint(sample.Attrs, "container_count")
+			metric.ContainerCount += metricAttrUint(sample.Attrs, types.EventComputeAttrContainerCount)
 			metric.GPUCount += sample.GPUCount
-			metric.FreeGPUCount += metricAttrUint(sample.Attrs, "free_gpu_count")
+			metric.FreeGPUCount += metricAttrUint(sample.Attrs, types.EventComputeAttrFreeGPUCount)
 
 			weight := float64(sample.CPUCount)
 			if weight == 0 {
 				weight = 1
 			}
-			cpuWeighted += metricAttrFloat(sample.Attrs, "cpu_utilization_pct") * weight
+			cpuWeighted += metricAttrFloat(sample.Attrs, types.EventComputeAttrCPUUtilizationPct) * weight
 			cpuWeight += weight
-			memoryUsed += metricAttrFloat(sample.Attrs, "memory_used_mb")
+			memoryUsed += metricAttrFloat(sample.Attrs, types.EventComputeAttrMemoryUsedMB)
 			memoryTotal += float64(sample.MemoryMB)
-			diskUsed += metricAttrFloat(sample.Attrs, "disk_used_mb")
-			diskTotal += metricAttrFloat(sample.Attrs, "disk_total_mb")
-			hourlyCostMicros += metricAttrFloat(sample.Attrs, "hourly_cost_micros")
+			diskUsed += metricAttrFloat(sample.Attrs, types.EventComputeAttrDiskUsedMB)
+			diskTotal += metricAttrFloat(sample.Attrs, types.EventComputeAttrDiskTotalMB)
+			hourlyCostMicros += metricAttrFloat(sample.Attrs, types.EventComputeAttrHourlyCostMicros)
 		}
 		if cpuWeight > 0 {
 			metric.CPUUtilizationPct = cpuWeighted / cpuWeight

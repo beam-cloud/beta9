@@ -436,11 +436,23 @@ type FailoverConfig struct {
 
 type PoolMode string
 
+type WorkerPoolManagementSource string
+type WorkerPoolController string
+
 var (
 	PoolModeLocal       PoolMode = "local"
 	PoolModeExternal    PoolMode = "external"
 	PoolModePrivate     PoolMode = "private"
 	PoolModeMarketplace PoolMode = "marketplace"
+)
+
+const (
+	WorkerPoolManagementSourceConfig WorkerPoolManagementSource = "config"
+	WorkerPoolManagementSourceAPI    WorkerPoolManagementSource = "api"
+
+	WorkerPoolControllerLocal          WorkerPoolController = "local"
+	WorkerPoolControllerAgent          WorkerPoolController = "agent"
+	WorkerPoolControllerExternalLegacy WorkerPoolController = "external_legacy"
 )
 
 // AgentHosted reports whether pools of this mode run on agent-managed

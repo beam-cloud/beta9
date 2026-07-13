@@ -106,7 +106,7 @@ func (a *schedulingAttempt) provisionWorker() {
 		requestLog(log.Error(), a.request).
 			Err(err).
 			Msg("no controller found for request")
-		a.fail("no_controller")
+		a.fail(types.ContainerSchedulingFailureNoController)
 		return
 	}
 
@@ -130,7 +130,7 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 
 func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reason string) {
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
-		a.fail("worker_capacity_timeout")
+		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
 	}
 
@@ -140,7 +140,7 @@ func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reaso
 
 	if err := a.scheduler.pushBacklog(a.request, delay); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
-		a.fail(reason + "_requeue_failed")
+		a.fail(types.ContainerSchedulingFailureReason(reason + "_requeue_failed"))
 	}
 }
 
@@ -150,12 +150,12 @@ func (a *schedulingAttempt) retry(reason string) {
 
 func (a *schedulingAttempt) retrySoon(reason string) {
 	if a.request.RetryCount >= maxScheduleRetryCount {
-		a.fail("retry_limit")
+		a.fail(types.ContainerSchedulingFailureRetryLimit)
 		return
 	}
 
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
-		a.fail("worker_capacity_timeout")
+		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
 	}
 
@@ -166,16 +166,16 @@ func (a *schedulingAttempt) retrySoon(reason string) {
 			Str("reason", reason).
 			Err(err).
 			Msg("failed to requeue request")
-		a.fail(reason + "_requeue_failed")
+		a.fail(types.ContainerSchedulingFailureReason(reason + "_requeue_failed"))
 	}
 }
 
-func (a *schedulingAttempt) fail(reason string) {
+func (a *schedulingAttempt) fail(reason types.ContainerSchedulingFailureReason) {
 	requestLog(log.Error(), a.request).
-		Str("reason", reason).
+		Str("reason", string(reason)).
 		Msg("giving up on request")
 
-	a.recordBacklogWait(false, reason)
+	a.recordBacklogWait(false, string(reason))
 
 	if err := a.scheduler.containerRepo.DeleteContainerState(a.request.ContainerId); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to delete container state after scheduling failure")

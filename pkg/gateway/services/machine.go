@@ -179,7 +179,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 				Machine: &pb.Machine{
 					Id:                bootstrap.MachineID,
 					PoolName:          bootstrap.PoolName,
-					ProviderName:      "agent",
+					ProviderName:      types.DefaultAgentName,
 					RegistrationToken: bootstrap.Token,
 				},
 				InstallCommand: bootstrap.InstallCommand,

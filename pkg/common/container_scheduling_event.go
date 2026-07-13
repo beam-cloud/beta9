@@ -1,20 +1,22 @@
 package common
 
+import "github.com/beam-cloud/beta9/pkg/types"
+
 type ContainerSchedulingFailure struct {
 	TaskID       string
 	ContainerID  string
 	PoolSelector string
-	Reason       string
+	Reason       types.ContainerSchedulingFailureReason
 }
 
 func NewContainerSchedulingFailedEvent(failure ContainerSchedulingFailure) *Event {
 	return &Event{
 		Type: EventTypeContainerSchedulingFailed,
 		Args: map[string]any{
-			"task_id":       failure.TaskID,
-			"container_id":  failure.ContainerID,
-			"pool_selector": failure.PoolSelector,
-			"reason":        failure.Reason,
+			types.EventAttrTaskID:       failure.TaskID,
+			types.EventAttrContainerID:  failure.ContainerID,
+			types.EventAttrPoolSelector: failure.PoolSelector,
+			types.EventAttrReason:       string(failure.Reason),
 		},
 		LockAndDelete: true,
 	}
@@ -26,10 +28,10 @@ func ParseContainerSchedulingFailure(event *Event) (ContainerSchedulingFailure, 
 	}
 
 	failure := ContainerSchedulingFailure{
-		TaskID:       eventString(event.Args, "task_id"),
-		ContainerID:  eventString(event.Args, "container_id"),
-		PoolSelector: eventString(event.Args, "pool_selector"),
-		Reason:       eventString(event.Args, "reason"),
+		TaskID:       eventString(event.Args, types.EventAttrTaskID),
+		ContainerID:  eventString(event.Args, types.EventAttrContainerID),
+		PoolSelector: eventString(event.Args, types.EventAttrPoolSelector),
+		Reason:       types.ContainerSchedulingFailureReason(eventString(event.Args, types.EventAttrReason)),
 	}
 	return failure, failure.TaskID != "" && failure.ContainerID != "" && failure.Reason != ""
 }

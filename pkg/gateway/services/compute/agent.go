@@ -725,9 +725,9 @@ func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgen
 		}
 	}
 
-	status := "unschedulable"
+	status := types.AgentMachineStatusUnschedulable
 	if current.Schedulable {
-		status = "schedulable"
+		status = types.AgentMachineStatusSchedulable
 	}
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		Timestamp:   observedAt,
@@ -838,7 +838,7 @@ func boolPtr(value bool) *bool {
 func preflightSummary(checks []model.PreflightCheckState) string {
 	failed := make([]string, 0)
 	for _, check := range checks {
-		if check.Severity == "error" && !check.OK {
+		if check.Severity == types.AgentPreflightSeverityError && !check.OK {
 			failed = append(failed, check.Name)
 		}
 	}

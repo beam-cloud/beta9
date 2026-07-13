@@ -91,45 +91,32 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
 	for name, pool := range config.Worker.Pools {
+		if pool.AgentHosted() {
+			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("deferring agent-hosted pool until workspace state is reconciled")
+			continue
+		}
+
+		controllerOptions := WorkerPoolControllerOptions{
+			Context:        ctx,
+			Name:           name,
+			Config:         config,
+			BackendRepo:    backendRepo,
+			WorkerRepo:     workerRepo,
+			ProviderRepo:   providerRepo,
+			WorkerPoolRepo: workerPoolRepo,
+			ContainerRepo:  containerRepo,
+			EventRepo:      eventRepo,
+		}
 		var controller WorkerPoolController
 		var err error
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(WorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           name,
-				Config:         config,
-				BackendRepo:    backendRepo,
-				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ContainerRepo:  containerRepo,
-				EventRepo:      eventRepo,
-			})
+			controller, err = NewLocalKubernetesWorkerPoolController(controllerOptions)
 		case types.PoolModeExternal:
-			if pool.Provider == nil {
-				// Agent pools require workspace state and are registered by the
-				// compute service after it reconciles persisted pool ownership.
-				log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
-				continue
-			}
-			controller, err = NewLegacyExternalWorkerPoolController(WorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           name,
-				Config:         config,
-				BackendRepo:    backendRepo,
-				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ContainerRepo:  containerRepo,
-				ProviderName:   pool.Provider,
-				Tailscale:      tailscale,
-				EventRepo:      eventRepo,
-			})
-		case types.PoolModePrivate, types.PoolModeMarketplace:
-			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
-			continue
+			controllerOptions.ProviderName = pool.Provider
+			controllerOptions.Tailscale = tailscale
+			controller, err = NewLegacyExternalWorkerPoolController(controllerOptions)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -309,7 +296,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	})
 	if err != nil {
 		requestLog(log.Error(), request).Err(err).Msg("failed to add request to backlog")
-		newSchedulingAttempt(s, request, nil).fail("backlog_push_failed")
+		newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureBacklogPushFailed)
 		return err
 	}
 
@@ -1287,7 +1274,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	}
 
 	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
-		newSchedulingAttempt(s, request, nil).fail("retry_limit")
+		newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureRetryLimit)
 		return nil
 	}
 

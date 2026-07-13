@@ -78,13 +78,13 @@ func schedulingFailureMessage(failure common.ContainerSchedulingFailure) string 
 	}
 
 	switch failure.Reason {
-	case "worker_capacity_timeout", "retry_limit":
+	case types.ContainerSchedulingFailureWorkerCapacityTimeout, types.ContainerSchedulingFailureRetryLimit:
 		return fmt.Sprintf("No compatible worker%s became available before scheduling timed out. Check that a machine is online and has enough CPU, memory, and GPU capacity.", pool)
-	case "no_controller":
+	case types.ContainerSchedulingFailureNoController:
 		return fmt.Sprintf("The selected compute pool %q is unavailable or has no active controller.", failure.PoolSelector)
-	case "managed_fallback_concurrency_limit":
+	case types.ContainerSchedulingFailureManagedFallbackConcurrencyLimit:
 		return "Private compute had no capacity, and managed fallback exceeded the workspace concurrency limit."
-	case "managed_fallback_no_capacity":
+	case types.ContainerSchedulingFailureManagedFallbackNoCapacity:
 		return "Private compute and managed fallback had no compatible capacity."
 	default:
 		return fmt.Sprintf("The task could not be scheduled (%s).", failure.Reason)

@@ -92,14 +92,14 @@ func managedPoolConfig(name string, config types.WorkerPoolConfig) *pb.PoolConfi
 	return pool
 }
 
-func newManagedPoolState(workspaceID, name, source, createdBy string, config types.WorkerPoolConfig, now time.Time) *model.PoolState {
+func newManagedPoolState(workspaceID, name string, source types.WorkerPoolManagementSource, createdBy string, config types.WorkerPoolConfig, now time.Time) *model.PoolState {
 	configCopy := config
 	return &model.PoolState{
 		WorkspaceID:       workspaceID,
 		Name:              name,
 		Selector:          name,
 		Config:            managedPoolConfig(name, config),
-		Status:            "active",
+		Status:            types.ComputePoolStatusActive,
 		Source:            model.SourceAttached,
 		Mode:              string(types.PoolModeExternal),
 		Transport:         defaultPrivateTransport,
@@ -140,10 +140,10 @@ func (s *Service) ReconcileManagedPools(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if existing != nil && (existing.ManagementSource == "" || existing.ManagementSource == model.ManagedPoolSourceAPI) {
+			if existing != nil && (existing.ManagementSource == "" || existing.ManagementSource == types.WorkerPoolManagementSourceAPI) {
 				return fmt.Errorf("config-managed pool %q conflicts with persisted pool state", name)
 			}
-			state := newManagedPoolState(workspaceID, name, model.ManagedPoolSourceConfig, "config", config, now)
+			state := newManagedPoolState(workspaceID, name, types.WorkerPoolManagementSourceConfig, string(types.WorkerPoolManagementSourceConfig), config, now)
 			if existing != nil {
 				state.CreatedAt = existing.CreatedAt
 				state.CreatedByTokenID = existing.CreatedByTokenID
@@ -189,7 +189,7 @@ func (s *Service) ReconcileManagedPools(ctx context.Context) error {
 		}
 		configured, static := s.appConfig.Worker.Pools[state.Name]
 		switch state.ManagementSource {
-		case model.ManagedPoolSourceConfig:
+		case types.WorkerPoolManagementSourceConfig:
 			active := static && configured.Mode == types.PoolModeExternal && configured.Provider == nil
 			if !active {
 				inUse, inventoryErr := s.managedPoolHasInventory(ctx, state)
@@ -212,7 +212,7 @@ func (s *Service) ReconcileManagedPools(ctx context.Context) error {
 				}
 				continue
 			}
-		case model.ManagedPoolSourceAPI:
+		case types.WorkerPoolManagementSourceAPI:
 			if static {
 				reconcileErrors = append(reconcileErrors, fmt.Errorf("API-managed pool %q conflicts with config", state.Name))
 				continue
@@ -253,7 +253,7 @@ func (s *Service) managedPoolView(ctx context.Context, state *model.PoolState) (
 		Name:       state.Name,
 		Config:     *state.WorkerConfig,
 		Source:     state.ManagementSource,
-		Controller: model.ManagedPoolControllerAgent,
+		Controller: types.WorkerPoolControllerAgent,
 	}
 	if s.workerPoolRepo != nil {
 		poolState, err := s.workerPoolRepo.GetWorkerPoolState(ctx, state.Name)
@@ -275,16 +275,16 @@ func (s *Service) managedPoolView(ctx context.Context, state *model.PoolState) (
 	return view, nil
 }
 
-func configuredManagedPoolController(config types.WorkerPoolConfig) string {
+func configuredManagedPoolController(config types.WorkerPoolConfig) types.WorkerPoolController {
 	switch {
 	case config.Mode == types.PoolModeLocal:
-		return model.ManagedPoolControllerLocal
+		return types.WorkerPoolControllerLocal
 	case config.Mode == types.PoolModeExternal && config.Provider == nil:
-		return model.ManagedPoolControllerAgent
+		return types.WorkerPoolControllerAgent
 	case config.Mode == types.PoolModeExternal:
-		return model.ManagedPoolControllerExternalLegacy
+		return types.WorkerPoolControllerExternalLegacy
 	default:
-		return model.ManagedPoolControllerAgent
+		return types.WorkerPoolControllerAgent
 	}
 }
 
@@ -299,7 +299,7 @@ func (s *Service) ListManagedPools(ctx context.Context, authInfo *auth.AuthInfo)
 		view := &model.ManagedPool{
 			Name:       name,
 			Config:     config,
-			Source:     model.ManagedPoolSourceConfig,
+			Source:     types.WorkerPoolManagementSourceConfig,
 			Controller: configuredManagedPoolController(config),
 		}
 		if s.workerPoolRepo != nil {
@@ -309,7 +309,7 @@ func (s *Service) ListManagedPools(ctx context.Context, authInfo *auth.AuthInfo)
 				view.ReadyMachineCount = int(poolState.ReadyMachines)
 			}
 		}
-		if view.Controller == model.ManagedPoolControllerAgent {
+		if view.Controller == types.WorkerPoolControllerAgent {
 			if state, stateErr := s.computeRepo.GetPoolState(ctx, workspaceID, name); stateErr != nil {
 				return nil, stateErr
 			} else if state != nil && state.ManagementSource != "" && state.WorkerConfig != nil {
@@ -327,7 +327,7 @@ func (s *Service) ListManagedPools(ctx context.Context, authInfo *auth.AuthInfo)
 		return nil, err
 	}
 	for _, state := range states {
-		if state == nil || state.ManagementSource != model.ManagedPoolSourceAPI {
+		if state == nil || state.ManagementSource != types.WorkerPoolManagementSourceAPI {
 			continue
 		}
 		if _, collision := views[state.Name]; collision {
@@ -371,7 +371,7 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}
-	state := newManagedPoolState(workspaceID, name, model.ManagedPoolSourceAPI, computeOwnerTokenID(authInfo), config, time.Now().UTC())
+	state := newManagedPoolState(workspaceID, name, types.WorkerPoolManagementSourceAPI, computeOwnerTokenID(authInfo), config, time.Now().UTC())
 
 	err = s.withPoolStateLock(ctx, workspaceID, name, func() error {
 		existing, err := s.computeRepo.GetPoolState(ctx, workspaceID, name)
@@ -434,7 +434,7 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		if existing == nil || existing.ManagementSource == "" {
 			return model.ErrManagedPoolNotFound
 		}
-		if existing.ManagementSource != model.ManagedPoolSourceAPI {
+		if existing.ManagementSource != types.WorkerPoolManagementSourceAPI {
 			return model.ErrManagedPoolImmutable
 		}
 		if existing.WorkerConfig == nil {
@@ -491,7 +491,7 @@ func (s *Service) DeleteManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		if state == nil || state.ManagementSource == "" {
 			return model.ErrManagedPoolNotFound
 		}
-		if state.ManagementSource != model.ManagedPoolSourceAPI {
+		if state.ManagementSource != types.WorkerPoolManagementSourceAPI {
 			return model.ErrManagedPoolImmutable
 		}
 		inUse, err := s.managedPoolHasInventory(ctx, state)
@@ -527,7 +527,7 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	if state.ManagedInstanceID == "" {
 		return nil, true, fmt.Errorf("pool %q has not completed secure reconciliation", state.Name)
 	}
-	if state.ManagementSource == model.ManagedPoolSourceConfig {
+	if state.ManagementSource == types.WorkerPoolManagementSourceConfig {
 		configured, ok := s.appConfig.Worker.Pools[state.Name]
 		if !ok || configured.Mode != types.PoolModeExternal || configured.Provider != nil {
 			return nil, false, nil

@@ -151,7 +151,7 @@ func logJoinFallback(stderr io.Writer, err error) {
 func preflightFailureSummary(checks []check) string {
 	failed := make([]string, 0, len(checks))
 	for _, check := range checks {
-		if check.Ok || check.Severity != "error" {
+		if check.Ok || check.Severity != types.AgentPreflightSeverityError {
 			continue
 		}
 		if check.Message == "" {

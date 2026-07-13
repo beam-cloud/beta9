@@ -27,7 +27,7 @@ func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 		requestLog(log.Error(), fallbackRequest).
 			Err(err).
 			Msg("private pool fallback blocked by managed concurrency limit")
-		a.fail("managed_fallback_concurrency_limit")
+		a.fail(types.ContainerSchedulingFailureManagedFallbackConcurrencyLimit)
 		return true
 	}
 
@@ -40,7 +40,7 @@ func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 	if !fallback.canProvisionWorker() {
 		requestLog(log.Error(), fallbackRequest).
 			Msg("private pool fallback has no managed capacity path")
-		a.fail("managed_fallback_no_capacity")
+		a.fail(types.ContainerSchedulingFailureManagedFallbackNoCapacity)
 		return true
 	}
 

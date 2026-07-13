@@ -106,7 +106,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 		Name:             config.Name,
 		Selector:         config.Selector,
 		Config:           config,
-		Status:           "active",
+		Status:           types.ComputePoolStatusActive,
 		Source:           model.SourceAttached,
 		Mode:             config.Mode,
 		Transport:        config.Transport,

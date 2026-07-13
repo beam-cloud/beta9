@@ -228,6 +228,29 @@ const (
 	EventComputeActionRouteStatusUpdated         = "route.status_updated"
 )
 
+const (
+	EventComputeAttrAvailableWorkerCount     = "available_worker_count"
+	EventComputeAttrContainerCount           = "container_count"
+	EventComputeAttrCPUUtilizationPct        = "cpu_utilization_pct"
+	EventComputeAttrDiskPath                 = "disk_path"
+	EventComputeAttrDiskTotalMB              = "disk_total_mb"
+	EventComputeAttrDiskUsagePct             = "disk_usage_pct"
+	EventComputeAttrDiskUsedMB               = "disk_used_mb"
+	EventComputeAttrFreeGPUCount             = "free_gpu_count"
+	EventComputeAttrHostCPUUtilizationPct    = "host_cpu_utilization_pct"
+	EventComputeAttrHostMemoryUsedMB         = "host_memory_used_mb"
+	EventComputeAttrHostMemoryUtilizationPct = "host_memory_utilization_pct"
+	EventComputeAttrHourlyCostMicros         = "hourly_cost_micros"
+	EventComputeAttrMemoryUsedMB             = "memory_used_mb"
+	EventComputeAttrMemoryUtilizationPct     = "memory_utilization_pct"
+	EventComputeAttrPendingContainerCount    = "pending_container_count"
+	EventComputeAttrPendingWorkerCount       = "pending_worker_count"
+	EventComputeAttrPoolMode                 = "pool_mode"
+	EventComputeAttrSchedulingLatencyMs      = "scheduling_latency_ms"
+	EventComputeAttrTransport                = "transport"
+	EventComputeAttrWorkerCount              = "worker_count"
+)
+
 type EventComputeSchema struct {
 	Timestamp    time.Time         `json:"timestamp"`
 	WorkspaceID  string            `json:"workspace_id,omitempty"`
@@ -452,6 +475,7 @@ const (
 	EventAttrSource             = "source"
 	EventAttrStatus             = "status"
 	EventAttrTaskID             = "task_id"
+	EventAttrPoolSelector       = "pool_selector"
 	EventAttrTimeoutSeconds     = "timeout_seconds"
 	EventAttrTotalRequests      = "total_requests"
 	EventAttrDurationUs         = "duration_us"

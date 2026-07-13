@@ -195,24 +195,24 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 
 	attrs := map[string]string{
-		"cpu_utilization_pct":         fmt.Sprintf("%.2f", capacityMetrics.CpuUtilizationPct),
-		"memory_used_mb":              fmt.Sprintf("%d", capacityMetrics.MemoryUsedMb),
-		"memory_utilization_pct":      fmt.Sprintf("%.2f", capacityMetrics.MemoryUtilizationPct),
-		"host_cpu_utilization_pct":    fmt.Sprintf("%.2f", metrics.CPUUtilizationPct),
-		"host_memory_used_mb":         fmt.Sprintf("%d", metrics.MemoryUsedMB),
-		"host_memory_utilization_pct": fmt.Sprintf("%.2f", metrics.MemoryUtilizationPct),
-		"disk_used_mb":                fmt.Sprintf("%d", metrics.DiskUsedMB),
-		"disk_total_mb":               fmt.Sprintf("%d", metrics.DiskTotalMB),
-		"disk_usage_pct":              fmt.Sprintf("%.2f", metrics.DiskUsagePct),
-		"disk_path":                   metrics.DiskPath,
-		"worker_count":                fmt.Sprintf("%d", capacityMetrics.WorkerCount),
-		"container_count":             fmt.Sprintf("%d", capacityMetrics.ContainerCount),
-		"free_gpu_count":              fmt.Sprintf("%d", capacityMetrics.FreeGpuCount),
+		types.EventComputeAttrCPUUtilizationPct:        fmt.Sprintf("%.2f", capacityMetrics.CpuUtilizationPct),
+		types.EventComputeAttrMemoryUsedMB:             fmt.Sprintf("%d", capacityMetrics.MemoryUsedMb),
+		types.EventComputeAttrMemoryUtilizationPct:     fmt.Sprintf("%.2f", capacityMetrics.MemoryUtilizationPct),
+		types.EventComputeAttrHostCPUUtilizationPct:    fmt.Sprintf("%.2f", metrics.CPUUtilizationPct),
+		types.EventComputeAttrHostMemoryUsedMB:         fmt.Sprintf("%d", metrics.MemoryUsedMB),
+		types.EventComputeAttrHostMemoryUtilizationPct: fmt.Sprintf("%.2f", metrics.MemoryUtilizationPct),
+		types.EventComputeAttrDiskUsedMB:               fmt.Sprintf("%d", metrics.DiskUsedMB),
+		types.EventComputeAttrDiskTotalMB:              fmt.Sprintf("%d", metrics.DiskTotalMB),
+		types.EventComputeAttrDiskUsagePct:             fmt.Sprintf("%.2f", metrics.DiskUsagePct),
+		types.EventComputeAttrDiskPath:                 metrics.DiskPath,
+		types.EventComputeAttrWorkerCount:              fmt.Sprintf("%d", capacityMetrics.WorkerCount),
+		types.EventComputeAttrContainerCount:           fmt.Sprintf("%d", capacityMetrics.ContainerCount),
+		types.EventComputeAttrFreeGPUCount:             fmt.Sprintf("%d", capacityMetrics.FreeGpuCount),
 	}
 	appendPathMetricAttrs(attrs, metrics.PathMetrics)
 	if poolState != nil {
-		attrs["pool_mode"] = string(poolState.Mode)
-		attrs["transport"] = poolState.Transport
+		attrs[types.EventComputeAttrPoolMode] = string(poolState.Mode)
+		attrs[types.EventComputeAttrTransport] = poolState.Transport
 		hourlyCostMicros := int64(0)
 		for _, reservation := range poolState.Reservations {
 			if reservation.MachineID == agentState.MachineID {
@@ -225,7 +225,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 			hourlyCostMicros = model.DollarsToMicros(poolState.WorkerConfig.DefaultMachineCost * 3600)
 		}
 		if hourlyCostMicros > 0 {
-			attrs["hourly_cost_micros"] = fmt.Sprintf("%d", hourlyCostMicros)
+			attrs[types.EventComputeAttrHourlyCostMicros] = fmt.Sprintf("%d", hourlyCostMicros)
 		}
 	}
 
