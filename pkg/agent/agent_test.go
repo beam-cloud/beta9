@@ -360,6 +360,34 @@ func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testin
 	}
 }
 
+func TestAgentWorkerConfigPlatformExternalPreservesPoolSemantics(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:                  "public-h100",
+		Mode:                      string(types.PoolModeExternal),
+		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		RequiresPoolSelector:      false,
+		Priority:                  250,
+		Preemptable:               true,
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 8,
+	}
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	pool := config.Worker.Pools[slot.PoolName]
+
+	if pool.Mode != string(types.PoolModeExternal) {
+		t.Fatalf("pool mode = %q, want external", pool.Mode)
+	}
+	if pool.RequiresPoolSelector {
+		t.Fatal("public external pool unexpectedly requires a selector")
+	}
+	if pool.Priority != 250 || !pool.Preemptable {
+		t.Fatalf("scheduling config = priority %d preemptable %v", pool.Priority, pool.Preemptable)
+	}
+	if pool.NetworkSlotPoolSize != 64 || pool.ContainerStartConcurrency != 8 {
+		t.Fatalf("agent capacity config = %+v", pool)
+	}
+}
+
 func TestAgentWorkerConfigMarketplaceRuntimeDefaultsAndOverrides(t *testing.T) {
 	for name, slot := range map[string]*pb.AgentWorkerSlot{
 		"missing runtime defaults to gvisor": {

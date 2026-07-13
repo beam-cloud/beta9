@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 type Service struct {
@@ -20,6 +21,7 @@ type Service struct {
 	scheduler            *scheduler.Scheduler
 	eventRepo            repository.EventRepository
 	workerRepo           repository.WorkerRepository
+	workerPoolRepo       repository.WorkerPoolRepository
 	usageMetricsRepo     repository.UsageMetricsRepository
 	computeRepo          repository.ComputeRepository
 	keyEventManager      *common.KeyEventManager
@@ -39,6 +41,7 @@ type Options struct {
 	Scheduler        *scheduler.Scheduler
 	EventRepo        repository.EventRepository
 	WorkerRepo       repository.WorkerRepository
+	WorkerPoolRepo   repository.WorkerPoolRepository
 	UsageMetricsRepo repository.UsageMetricsRepository
 	ComputeRepo      repository.ComputeRepository
 	KeyEventManager  *common.KeyEventManager
@@ -54,6 +57,7 @@ func New(opts Options) *Service {
 		scheduler:        opts.Scheduler,
 		eventRepo:        opts.EventRepo,
 		workerRepo:       opts.WorkerRepo,
+		workerPoolRepo:   opts.WorkerPoolRepo,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		computeRepo:      opts.ComputeRepo,
 		keyEventManager:  opts.KeyEventManager,
@@ -72,6 +76,9 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	s.reconcileOnce.Do(func() {
+		if err := s.ReconcilePlatformPools(ctx); err != nil {
+			log.Error().Err(err).Msg("platform pool reconciliation failed")
+		}
 		go s.runReconciler(ctx)
 	})
 }

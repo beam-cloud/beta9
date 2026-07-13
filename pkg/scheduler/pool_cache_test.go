@@ -68,7 +68,7 @@ func TestWorkerCacheHostPathIsCreatedForLocalPools(t *testing.T) {
 
 func TestWorkerCacheHostPathIsCreatedForExternalPools(t *testing.T) {
 	config, poolConfig := cacheVolumeTestConfig()
-	controller := &ExternalWorkerPoolController{
+	controller := &LegacyExternalWorkerPoolController{
 		config:           config,
 		workerPoolConfig: poolConfig,
 	}

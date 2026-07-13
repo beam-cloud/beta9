@@ -40,6 +40,14 @@ func (r *WorkerPoolRedisRepository) GetWorkerPoolState(ctx context.Context, pool
 	return state, nil
 }
 
+// DeleteWorkerPoolState removes the cached health snapshot for a pool. Pool
+// configuration lives elsewhere, so this is safe to call while deleting a
+// dashboard-managed pool and prevents a later same-name pool from inheriting
+// stale health or capacity data.
+func (r *WorkerPoolRedisRepository) DeleteWorkerPoolState(ctx context.Context, poolName string) error {
+	return r.rdb.Del(ctx, common.RedisKeys.WorkerPoolState(poolName)).Err()
+}
+
 func (r *WorkerPoolRedisRepository) SetWorkerPoolStateLock(poolName string) error {
 	return r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolStateLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 0})
 }

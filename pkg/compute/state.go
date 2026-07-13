@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"errors"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -32,6 +33,47 @@ type PoolState struct {
 	// reservations terminate once the grace period is exceeded.
 	BillingDegradedSince time.Time          `json:"billing_degraded_since,omitempty"`
 	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
+	// PlatformManaged marks public/serverless inventory owned by the control
+	// plane rather than a tenant. WorkerConfig preserves the complete worker
+	// pool configuration used by both YAML and dashboard-managed pools.
+	PlatformManaged bool   `json:"platform_managed,omitempty"`
+	PlatformSource  string `json:"platform_source,omitempty"`
+	// PlatformInstanceID changes whenever a deleted platform pool is
+	// recreated, preventing an unexpired installer for the old pool from
+	// authorizing a machine into the new one.
+	PlatformInstanceID string                  `json:"platform_instance_id,omitempty"`
+	WorkerConfig       *types.WorkerPoolConfig `json:"worker_config,omitempty"`
+}
+
+const (
+	PlatformPoolSourceConfig    = "config"
+	PlatformPoolSourceDashboard = "dashboard"
+
+	PlatformPoolControllerLocal          = "local"
+	PlatformPoolControllerAgent          = "agent"
+	PlatformPoolControllerExternalLegacy = "external_legacy"
+)
+
+var (
+	ErrPlatformPermissionDenied = errors.New("platform operator permission required")
+	ErrPlatformPoolConflict     = errors.New("platform pool already exists")
+	ErrPlatformPoolNotFound     = errors.New("platform pool not found")
+	ErrPlatformPoolImmutable    = errors.New("config-defined platform pools are read-only")
+	ErrPlatformPoolInUse        = errors.New("platform pool must have no machines or workers")
+	ErrPlatformInvalidConfig    = errors.New("invalid platform pool configuration")
+)
+
+type PlatformPool struct {
+	Name              string                 `json:"name"`
+	Config            types.WorkerPoolConfig `json:"config"`
+	Source            string                 `json:"source"`
+	Controller        string                 `json:"controller"`
+	Editable          bool                   `json:"editable"`
+	State             *types.WorkerPoolState `json:"state,omitempty"`
+	MachineCount      int                    `json:"machine_count"`
+	ReadyMachineCount int                    `json:"ready_machine_count"`
+	CreatedAt         time.Time              `json:"created_at,omitempty"`
+	UpdatedAt         time.Time              `json:"updated_at,omitempty"`
 }
 
 const (
@@ -104,7 +146,9 @@ type JoinTokenState struct {
 	Revoked   bool      `json:"revoked"`
 	// BoundFingerprint pins a machine-specific join token to the first
 	// machine that used it.
-	BoundFingerprint string `json:"bound_fingerprint,omitempty"`
+	BoundFingerprint       string `json:"bound_fingerprint,omitempty"`
+	PlatformManaged        bool   `json:"platform_managed,omitempty"`
+	PlatformPoolInstanceID string `json:"platform_pool_instance_id,omitempty"`
 }
 
 type AgentTokenState struct {
@@ -185,6 +229,9 @@ type AgentWorkerSlotState struct {
 	WorkerImage               string    `json:"worker_image"`
 	NetworkSlotPoolSize       uint32    `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32    `json:"container_start_concurrency"`
+	RequiresPoolSelector      bool      `json:"requires_pool_selector"`
+	Priority                  int32     `json:"priority"`
+	Preemptable               bool      `json:"preemptable"`
 	CreatedAt                 time.Time `json:"created_at"`
 	UpdatedAt                 time.Time `json:"updated_at"`
 }

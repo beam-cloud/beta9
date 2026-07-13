@@ -26,15 +26,27 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 		}, nil
 	}
 
-	pools := gws.appConfig.Worker.Pools
+	formattedPools := []*pb.Pool{}
+	if gws.computeService != nil {
+		pools, err := gws.computeService.ListPlatformPools(ctx, authInfo)
+		if err != nil {
+			return nil, err
+		}
+		for _, pool := range pools {
+			if pool == nil {
+				continue
+			}
+			formattedPools = append(formattedPools, platformPoolToProto(pool.Name, pool.Config, pool.State))
+		}
+		return &pb.ListPoolsResponse{Ok: true, Pools: formattedPools}, nil
+	}
 
-	var keys []string
+	pools := gws.appConfig.Worker.Pools
+	keys := make([]string, 0, len(pools))
 	for key := range pools {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-
-	formattedPools := []*pb.Pool{}
 	for _, poolName := range keys {
 		poolConfig := pools[poolName]
 		poolState, err := gws.workerPoolRepo.GetWorkerPoolState(ctx, poolName)
@@ -42,21 +54,28 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 			return nil, err
 		}
 
-		formattedPools = append(formattedPools, &pb.Pool{
-			Name:                  poolName,
-			Gpu:                   poolConfig.GPUType,
-			MinFreeGpu:            poolConfig.PoolSizing.MinFreeGPU,
-			MinFreeCpu:            poolConfig.PoolSizing.MinFreeCPU,
-			MinFreeMemory:         poolConfig.PoolSizing.MinFreeMemory,
-			DefaultWorkerCpu:      poolConfig.PoolSizing.DefaultWorkerCPU,
-			DefaultWorkerMemory:   poolConfig.PoolSizing.DefaultWorkerMemory,
-			DefaultWorkerGpuCount: poolConfig.PoolSizing.DefaultWorkerGpuCount,
-			State:                 poolState.ToProto(),
-		})
+		formattedPools = append(formattedPools, platformPoolToProto(poolName, poolConfig, poolState))
 	}
 
 	return &pb.ListPoolsResponse{
 		Ok:    true,
 		Pools: formattedPools,
 	}, nil
+}
+
+func platformPoolToProto(name string, config types.WorkerPoolConfig, state *types.WorkerPoolState) *pb.Pool {
+	pool := &pb.Pool{
+		Name:                  name,
+		Gpu:                   config.GPUType,
+		MinFreeGpu:            config.PoolSizing.MinFreeGPU,
+		MinFreeCpu:            config.PoolSizing.MinFreeCPU,
+		MinFreeMemory:         config.PoolSizing.MinFreeMemory,
+		DefaultWorkerCpu:      config.PoolSizing.DefaultWorkerCPU,
+		DefaultWorkerMemory:   config.PoolSizing.DefaultWorkerMemory,
+		DefaultWorkerGpuCount: config.PoolSizing.DefaultWorkerGpuCount,
+	}
+	if state != nil {
+		pool.State = state.ToProto()
+	}
+	return pool
 }

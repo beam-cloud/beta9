@@ -49,6 +49,7 @@ type GatewayServiceOpts struct {
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ComputeRepo      repository.ComputeRepository
+	ComputeService   *computesvc.Service
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
@@ -66,20 +67,24 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		}
 		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
 	}
-	computeService := computesvc.New(computesvc.Options{
-		Config:           opts.Config,
-		BackendRepo:      opts.BackendRepo,
-		ContainerRepo:    opts.ContainerRepo,
-		Scheduler:        opts.Scheduler,
-		EventRepo:        opts.EventRepo,
-		WorkerRepo:       opts.WorkerRepo,
-		UsageMetricsRepo: opts.UsageMetricsRepo,
-		ComputeRepo:      computeRepo,
-		KeyEventManager:  keyEventManager,
-		RedisClient:      opts.RedisClient,
-		Tailscale:        opts.Tailscale,
-	})
-	computeService.Start(opts.Ctx)
+	computeService := opts.ComputeService
+	if computeService == nil {
+		computeService = computesvc.New(computesvc.Options{
+			Config:           opts.Config,
+			BackendRepo:      opts.BackendRepo,
+			ContainerRepo:    opts.ContainerRepo,
+			Scheduler:        opts.Scheduler,
+			EventRepo:        opts.EventRepo,
+			WorkerRepo:       opts.WorkerRepo,
+			WorkerPoolRepo:   opts.WorkerPoolRepo,
+			UsageMetricsRepo: opts.UsageMetricsRepo,
+			ComputeRepo:      computeRepo,
+			KeyEventManager:  keyEventManager,
+			RedisClient:      opts.RedisClient,
+			Tailscale:        opts.Tailscale,
+		})
+		computeService.Start(opts.Ctx)
+	}
 
 	return &GatewayService{
 		ctx:              opts.Ctx,

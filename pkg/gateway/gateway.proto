@@ -1448,9 +1448,9 @@ message AgentWorkerSlot {
   string worker_image = 11;
   uint32 network_slot_pool_size = 12;
   uint32 container_start_concurrency = 13;
-  // Pool mode ("private" / "marketplace") and the container runtime the
-  // worker must run with. Marketplace slots prefer gVisor but can fall back
-  // to runc for GPU families that are not compatible with gVisor GPU support.
+  // Pool mode ("private" / "marketplace" / "external") and the container
+  // runtime the worker must run with. Marketplace slots prefer gVisor but can
+  // fall back to runc for incompatible GPU families.
   string mode = 14;
   string container_runtime = 15;
   // Marketplace identity of the machine backing this slot. Machines join a
@@ -1458,6 +1458,9 @@ message AgentWorkerSlot {
   // buyer usage against it, so the request itself carries no billing fields.
   string marketplace_listing_id = 16;
   string seller_workspace_id = 17;
+  bool requires_pool_selector = 18;
+  int32 priority = 19;
+  bool preemptable = 20;
 }
 
 message StreamAgentRequest { string agent_token = 1; }
@@ -1584,6 +1587,9 @@ message CreateMachineResponse {
   string agent_upstream_url = 4;
   string agent_upstream_branch = 5;
   string agent_upstream_token = 6;
+  // Agent-backed platform pools return the systemd installer here. The join
+  // token embedded in the command is short-lived and machine-bound.
+  string install_command = 7;
 }
 
 message DeleteMachineRequest {

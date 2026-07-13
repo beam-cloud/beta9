@@ -14,6 +14,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+// Agent-backed external pools share the controller exercised by these tests.
 func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	ctx := context.Background()
 	redisServer, err := miniredis.Run()

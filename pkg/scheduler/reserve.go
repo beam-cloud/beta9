@@ -526,7 +526,13 @@ func (s *Scheduler) workerGPUCountForControllerRequest(controller WorkerPoolCont
 }
 
 func controllerUsesAgentCapacity(controller WorkerPoolController) bool {
-	return controller != nil && controller.Mode().AgentHosted()
+	if controller == nil {
+		return false
+	}
+	if _, ok := controller.(*AgentWorkerPoolController); ok {
+		return true
+	}
+	return controller.Mode().AgentHosted()
 }
 
 func (s *Scheduler) workerPoolSizingForController(controller WorkerPoolController) (*types.WorkerPoolSizingConfig, bool) {

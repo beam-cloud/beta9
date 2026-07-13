@@ -85,6 +85,21 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	computeRepo := repo.NewComputeRedisRepository(redisClient)
+	platformWorkspaceID := ""
+	getPlatformWorkspaceID := func() (string, error) {
+		if platformWorkspaceID != "" {
+			return platformWorkspaceID, nil
+		}
+		workspace, err := backendRepo.GetAdminWorkspace(ctx)
+		if err != nil {
+			return "", err
+		}
+		if workspace == nil || workspace.ExternalId == "" {
+			return "", errors.New("platform workspace is unavailable")
+		}
+		platformWorkspaceID = workspace.ExternalId
+		return platformWorkspaceID, nil
+	}
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewEventClientRepo(config)
@@ -109,19 +124,39 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				EventRepo:      eventRepo,
 			})
 		case types.PoolModeExternal:
-			controller, err = NewExternalWorkerPoolController(WorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           name,
-				Config:         config,
-				BackendRepo:    backendRepo,
-				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ContainerRepo:  containerRepo,
-				ProviderName:   pool.Provider,
-				Tailscale:      tailscale,
-				EventRepo:      eventRepo,
-			})
+			if pool.Provider == nil {
+				workspaceID, workspaceErr := getPlatformWorkspaceID()
+				if workspaceErr != nil {
+					err = workspaceErr
+					break
+				}
+				poolCopy := pool
+				controller, err = NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+					Context:        ctx,
+					Name:           name,
+					WorkspaceID:    workspaceID,
+					Config:         config,
+					WorkerPool:     pool,
+					PoolState:      &compute.PoolState{Name: name, Selector: name, Mode: string(types.PoolModeExternal), PlatformManaged: true, PlatformSource: compute.PlatformPoolSourceConfig, WorkerConfig: &poolCopy},
+					WorkerRepo:     workerRepo,
+					WorkerPoolRepo: workerPoolRepo,
+					ComputeRepo:    computeRepo,
+				})
+			} else {
+				controller, err = NewLegacyExternalWorkerPoolController(WorkerPoolControllerOptions{
+					Context:        ctx,
+					Name:           name,
+					Config:         config,
+					BackendRepo:    backendRepo,
+					WorkerRepo:     workerRepo,
+					ProviderRepo:   providerRepo,
+					WorkerPoolRepo: workerPoolRepo,
+					ContainerRepo:  containerRepo,
+					ProviderName:   pool.Provider,
+					Tailscale:      tailscale,
+					EventRepo:      eventRepo,
+				})
+			}
 		case types.PoolModePrivate, types.PoolModeMarketplace:
 			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
 			continue
@@ -137,6 +172,40 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 		workerPoolManager.SetPool(name, pool, controller)
 		log.Info().Str("pool_name", name).Str("mode", string(pool.Mode)).Str("gpu_type", pool.GPUType).Msg("loaded controller")
+	}
+
+	// Dashboard-managed platform pools are persisted independently of the
+	// process config. Restore only those states here; config-defined pools were
+	// loaded above and remain the source of truth for their names.
+	if states, listErr := computeRepo.ListAllPoolStates(ctx, 0); listErr != nil {
+		log.Warn().Err(listErr).Msg("unable to restore dashboard platform pools")
+	} else {
+		for _, state := range states {
+			if state == nil || !state.PlatformManaged || state.PlatformSource != compute.PlatformPoolSourceDashboard || state.WorkerConfig == nil {
+				continue
+			}
+			if _, static := config.Worker.Pools[state.Name]; static {
+				log.Error().Str("pool_name", state.Name).Msg("dashboard platform pool conflicts with config; skipping")
+				continue
+			}
+			pool := *state.WorkerConfig
+			controller, controllerErr := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+				Context:        ctx,
+				Name:           state.Name,
+				WorkspaceID:    state.WorkspaceID,
+				Config:         config,
+				WorkerPool:     pool,
+				PoolState:      state,
+				WorkerRepo:     workerRepo,
+				WorkerPoolRepo: workerPoolRepo,
+				ComputeRepo:    computeRepo,
+			})
+			if controllerErr != nil {
+				log.Error().Err(controllerErr).Str("pool_name", state.Name).Msg("unable to restore dashboard platform pool")
+				continue
+			}
+			workerPoolManager.SetPool(state.Name, pool, controller)
+		}
 	}
 
 	return &Scheduler{
@@ -205,6 +274,15 @@ func (s *Scheduler) DeleteAgentPool(selector string) {
 }
 
 func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolConfig {
+	if state != nil && state.PlatformManaged && state.WorkerConfig != nil {
+		config := *state.WorkerConfig
+		config.Mode = types.PoolModeExternal
+		config.Provider = nil
+		if config.ContainerRuntime == "" {
+			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
+		}
+		return config
+	}
 	config := types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
 		ContainerRuntime:     types.ContainerRuntimeRunc.String(),

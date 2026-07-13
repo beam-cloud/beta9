@@ -249,6 +249,28 @@ worker:
     #     minFreeGpu:
     #     minFreeMemory:
     #     sharedMemoryLimitPct: 100%
+    # Agent-backed public/serverless pool. Omitting provider is intentional:
+    # external + provider uses the legacy remote-k3s controller, while
+    # external without provider uses the agent controller and `machine create`.
+    # public-cpu:
+    #   mode: external
+    #   containerRuntime: runc
+    #   requiresPoolSelector: false
+    #   priority: 100
+    #   preemptable: false
+    #   containerStartConcurrency: 4
+    #   networkSlotPoolSize: 32
+    #   tmpSizeLimit: 50Gi
+    #   storagePath: /var/lib/beta9/storage
+    #   imagesPath: /var/lib/beta9/images
+    #   durableDisksPath: /var/lib/beta9/durable-disks
+    #   cache:
+    #     enabled: true
+    #     disk:
+    #       enabled: true
+    #       hostPath: /var/lib/beta9/cache
+    #       mountPath: /var/lib/beta9/cache
+    #       maxUsagePct: 0.95
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false

@@ -478,6 +478,13 @@ type WorkerPoolConfig struct {
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
 }
 
+// AgentHosted reports whether this concrete pool uses the agent control path.
+// External pools without a provider are agent-backed; external pools with a
+// provider remain on the legacy remote-k3s controller during migration.
+func (c WorkerPoolConfig) AgentHosted() bool {
+	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && c.Provider == nil)
+}
+
 type WorkerPoolCacheConfig struct {
 	Enabled *bool                     `key:"enabled" json:"enabled"`
 	Disk    WorkerPoolCacheDiskConfig `key:"disk" json:"disk"`

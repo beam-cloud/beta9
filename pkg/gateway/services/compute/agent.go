@@ -36,7 +36,15 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if poolState == nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
-	if poolState.CreatedByTokenID == "" || poolState.CreatedByTokenID != tokenState.CreatedByTokenID {
+	if tokenState.PlatformManaged {
+		if !poolState.PlatformManaged ||
+			poolState.Mode != string(types.PoolModeExternal) ||
+			tokenState.PlatformPoolInstanceID == "" ||
+			poolState.PlatformInstanceID == "" ||
+			tokenState.PlatformPoolInstanceID != poolState.PlatformInstanceID {
+			return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
+		}
+	} else if poolState.CreatedByTokenID == "" || poolState.CreatedByTokenID != tokenState.CreatedByTokenID {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 
@@ -75,6 +83,14 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		CreatedAt:                 now,
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
+	}
+	if poolState.PlatformManaged && poolState.WorkerConfig != nil {
+		if poolState.WorkerConfig.NetworkSlotPoolSize > 0 {
+			agentState.NetworkSlotPoolSize = uint32(poolState.WorkerConfig.NetworkSlotPoolSize)
+		}
+		if poolState.WorkerConfig.ContainerStartConcurrency > 0 {
+			agentState.ContainerStartConcurrency = uint32(poolState.WorkerConfig.ContainerStartConcurrency)
+		}
 	}
 	if err := s.enforcePoolGPUType(ctx, poolState, agentState); err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -474,7 +490,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 }
 
 func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *model.AgentTokenState) (*types.Workspace, string, error) {
-	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
+	if agentState != nil && (agentState.Mode == string(types.PoolModeMarketplace) || agentState.Mode == string(types.PoolModeExternal)) {
 		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
 		return workspace, types.TokenTypeWorker, err
 	}
@@ -487,7 +503,8 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 
 // agentWorkerToken mints (or reuses) the worker token for an agent worker
 // slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
-// marketplace workers use trusted worker tokens from the admin workspace.
+// marketplace and platform external workers use trusted worker tokens from
+// the admin workspace because they serve workloads from many workspaces.
 func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
@@ -548,6 +565,9 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		WorkerImage:               agentWorkerImage(config),
 		NetworkSlotPoolSize:       agentState.NetworkSlotPoolSize,
 		ContainerStartConcurrency: agentState.ContainerStartConcurrency,
+		RequiresPoolSelector:      worker.RequiresPoolSelector,
+		Priority:                  worker.Priority,
+		Preemptable:               worker.Preemptable,
 	}
 }
 
@@ -555,6 +575,9 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 // Marketplace machines prefer gVisor, but GPU families without gVisor CUDA
 // support fall back to runc and are advertised as such.
 func agentWorkerRuntime(agentState *model.AgentTokenState, worker *types.Worker) string {
+	if worker != nil && worker.Runtime != "" {
+		return worker.Runtime
+	}
 	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
 		return types.MarketplaceContainerRuntimeForGPU(agentWorkerGPU(agentState, worker))
 	}
@@ -606,6 +629,9 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		WorkerImage:               slot.WorkerImage,
 		NetworkSlotPoolSize:       slot.NetworkSlotPoolSize,
 		ContainerStartConcurrency: slot.ContainerStartConcurrency,
+		RequiresPoolSelector:      slot.RequiresPoolSelector,
+		Priority:                  slot.Priority,
+		Preemptable:               slot.Preemptable,
 	}
 }
 

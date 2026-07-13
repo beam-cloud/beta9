@@ -154,3 +154,17 @@ func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Conte
 		return next(ctx)
 	}
 }
+
+// WithPlatformOperatorAuth protects platform-wide inventory and configuration
+// routes. The platform_operator value returned to clients is only a UI hint;
+// this middleware always derives authorization from the authenticated token.
+func WithPlatformOperatorAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
+	return func(ctx echo.Context) error {
+		cc, ok := ctx.(*HttpAuthContext)
+		if !ok || !IsPlatformOperator(cc.AuthInfo) {
+			return echo.NewHTTPError(http.StatusForbidden)
+		}
+
+		return next(ctx)
+	}
+}

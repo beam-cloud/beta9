@@ -1289,9 +1289,9 @@ class AgentWorkerSlot(betterproto.Message):
     container_start_concurrency: int = betterproto.uint32_field(13)
     mode: str = betterproto.string_field(14)
     """
-    Pool mode ("private" / "marketplace") and the container runtime the
-     worker must run with. Marketplace slots prefer gVisor but can fall back
-     to runc for GPU families that are not compatible with gVisor GPU support.
+    Pool mode ("private" / "marketplace" / "external") and the container
+     runtime the worker must run with. Marketplace slots prefer gVisor but can
+     fall back to runc for incompatible GPU families.
     """
 
     container_runtime: str = betterproto.string_field(15)
@@ -1303,6 +1303,9 @@ class AgentWorkerSlot(betterproto.Message):
     """
 
     seller_workspace_id: str = betterproto.string_field(17)
+    requires_pool_selector: bool = betterproto.bool_field(18)
+    priority: int = betterproto.int32_field(19)
+    preemptable: bool = betterproto.bool_field(20)
 
 
 @dataclass(eq=False, repr=False)
@@ -1451,6 +1454,11 @@ class CreateMachineResponse(betterproto.Message):
     agent_upstream_url: str = betterproto.string_field(4)
     agent_upstream_branch: str = betterproto.string_field(5)
     agent_upstream_token: str = betterproto.string_field(6)
+    install_command: str = betterproto.string_field(7)
+    """
+    Agent-backed platform pools return the systemd installer here. The join
+     token embedded in the command is short-lived and machine-bound.
+    """
 
 
 @dataclass(eq=False, repr=False)

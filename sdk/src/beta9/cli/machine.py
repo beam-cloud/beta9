@@ -36,7 +36,9 @@ def management():
     pass
 
 
-def _machine_list_renderables(gpus: Dict[str, bool], machines: Sequence[Machine]) -> List[Any]:
+def _machine_list_renderables(
+    gpus: Dict[str, bool], machines: Sequence[Machine]
+) -> List[Any]:
     return [gpu_availability_table(gpus), machine_table(machines)]
 
 
@@ -81,7 +83,9 @@ def list_machines(
     pool: str,
 ):
     res: ListMachinesResponse
-    res = service.gateway.list_machines(ListMachinesRequest(pool_name=pool, limit=limit))
+    res = service.gateway.list_machines(
+        ListMachinesRequest(pool_name=pool, limit=limit)
+    )
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -118,6 +122,13 @@ def create_machine(service: ServiceClient, pool: str):
     res = service.gateway.create_machine(CreateMachineRequest(pool_name=pool))
     if not res.ok:
         return terminal.error(f"Error: {res.err_msg}")
+
+    if res.install_command:
+        terminal.header(
+            f"Created machine with ID: '{res.machine.id}'. Run the following command on the node:"
+        )
+        terminal.detail(res.install_command, crop=False, overflow="ignore")
+        return
 
     terminal.header(
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
