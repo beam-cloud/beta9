@@ -1,4 +1,4 @@
-package function
+package abstractions
 
 import (
 	"context"
@@ -6,30 +6,46 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
 
-const schedulingFailureHandlerTimeout = 10 * time.Second
+const taskSchedulingFailureTimeout = 10 * time.Second
 
-func (fs *ContainerFunctionService) listenForSchedulingFailures() {
-	events := common.NewEventBus(fs.rdb, common.EventBusSubscriber{
-		Type:     common.EventTypeContainerSchedulingFailed,
-		Callback: fs.handleContainerSchedulingFailure,
-	})
-	events.ReceiveEvents(fs.ctx)
+type taskSchedulingFailureHandler struct {
+	backendRepo repository.BackendRepository
+	dispatcher  *task.Dispatcher
 }
 
-func (fs *ContainerFunctionService) handleContainerSchedulingFailure(event *common.Event) bool {
+func ListenForTaskSchedulingFailures(
+	ctx context.Context,
+	rdb *common.RedisClient,
+	backendRepo repository.BackendRepository,
+	dispatcher *task.Dispatcher,
+) {
+	handler := &taskSchedulingFailureHandler{
+		backendRepo: backendRepo,
+		dispatcher:  dispatcher,
+	}
+	events := common.NewEventBus(rdb, common.EventBusSubscriber{
+		Type:     common.EventTypeContainerSchedulingFailed,
+		Callback: handler.handle,
+	})
+	events.ReceiveEvents(ctx)
+}
+
+func (h *taskSchedulingFailureHandler) handle(event *common.Event) bool {
 	failure, ok := common.ParseContainerSchedulingFailure(event)
 	if !ok {
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), schedulingFailureHandlerTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulingFailureTimeout)
 	defer cancel()
 
-	task, err := fs.backendRepo.GetTaskWithRelated(ctx, failure.TaskID)
+	task, err := h.backendRepo.GetTaskWithRelated(ctx, failure.TaskID)
 	if err != nil {
 		log.Error().Err(err).Str("task_id", failure.TaskID).Msg("failed to load task after container scheduling failure")
 		return false
@@ -42,13 +58,13 @@ func (fs *ContainerFunctionService) handleContainerSchedulingFailure(event *comm
 		task.Status = types.TaskStatusError
 		task.FailureReason = schedulingFailureMessage(failure)
 		task.EndedAt = types.NullTime{}.Now()
-		if _, err := fs.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
+		if _, err := h.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 			log.Error().Err(err).Str("task_id", failure.TaskID).Msg("failed to mark task after container scheduling failure")
 			return false
 		}
 	}
 
-	if err := fs.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId); err != nil {
+	if err := h.dispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId); err != nil {
 		log.Error().Err(err).Str("task_id", failure.TaskID).Msg("failed to remove unscheduled task from dispatcher")
 		return false
 	}

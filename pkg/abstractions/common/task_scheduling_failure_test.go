@@ -1,4 +1,4 @@
-package function
+package abstractions
 
 import (
 	"context"
@@ -26,7 +26,7 @@ func (r *schedulingFailureBackend) UpdateTask(_ context.Context, _ string, task 
 	return &task, nil
 }
 
-func TestContainerSchedulingFailureEndsTaskAndClearsDispatcherState(t *testing.T) {
+func TestTaskSchedulingFailureEndsTaskAndClearsDispatcherState(t *testing.T) {
 	server := miniredis.RunT(t)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
 	require.NoError(t, err)
@@ -52,9 +52,9 @@ func TestContainerSchedulingFailureEndsTaskAndClearsDispatcherState(t *testing.T
 		Workspace: types.Workspace{Name: "workspace"},
 		Stub:      types.Stub{ExternalId: "stub-id"},
 	}}
-	service := &ContainerFunctionService{backendRepo: backend, taskDispatcher: dispatcher}
+	handler := &taskSchedulingFailureHandler{backendRepo: backend, dispatcher: dispatcher}
 
-	handled := service.handleContainerSchedulingFailure(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
+	handled := handler.handle(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
 		TaskID:       "task-id",
 		ContainerID:  "container-id",
 		PoolSelector: "my-pool",
@@ -69,13 +69,13 @@ func TestContainerSchedulingFailureEndsTaskAndClearsDispatcherState(t *testing.T
 	require.Error(t, err)
 }
 
-func TestContainerSchedulingFailureIgnoresStaleContainer(t *testing.T) {
+func TestTaskSchedulingFailureIgnoresStaleContainer(t *testing.T) {
 	backend := &schedulingFailureBackend{task: &types.TaskWithRelated{
 		Task: types.Task{ExternalId: "task-id", ContainerId: "new-container", Status: types.TaskStatusPending},
 	}}
-	service := &ContainerFunctionService{backendRepo: backend}
+	handler := &taskSchedulingFailureHandler{backendRepo: backend}
 
-	handled := service.handleContainerSchedulingFailure(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
+	handled := handler.handle(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
 		TaskID:      "task-id",
 		ContainerID: "old-container",
 		Reason:      "worker_capacity_timeout",
