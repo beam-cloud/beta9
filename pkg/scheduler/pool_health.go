@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -19,6 +20,7 @@ type PoolHealthMonitorOptions struct {
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ProviderRepo     repository.ProviderRepository
 	ContainerRepo    repository.ContainerRepository
+	BackendRepo      repository.BackendRepository
 	EventRepo        repository.EventRepository
 }
 
@@ -31,7 +33,9 @@ type PoolHealthMonitor struct {
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
+	backendRepo      repository.BackendRepository
 	eventRepo        repository.EventRepository
+	workspaceID      string
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
@@ -44,6 +48,7 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
+		backendRepo:      opts.BackendRepo,
 		eventRepo:        opts.EventRepo,
 	}
 }
@@ -63,7 +68,7 @@ func (p *PoolHealthMonitor) Start() {
 				}
 				defer p.workerPoolRepo.RemoveWorkerPoolStateLock(p.wpc.Name())
 
-				poolState, err := p.getPoolState()
+				poolState, workers, err := p.getPoolState()
 				if err != nil {
 					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to get pool state")
 					return
@@ -80,13 +85,14 @@ func (p *PoolHealthMonitor) Start() {
 					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to set pool state")
 					return
 				}
+				p.pushPoolMetrics(poolMetricsEvent(p.wpc.Name(), p.workerPoolConfig, poolState, workers))
 			}()
 		}
 	}
 }
 
 // getPoolState measures various metrics about pool health and returns them
-func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
+func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Worker, error) {
 	schedulingLatencies := []time.Duration{}
 	availableWorkers := 0
 	pendingWorkers := 0
@@ -98,7 +104,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 
 	workers, err := p.workerRepo.GetAllWorkersInPool(p.wpc.Name())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	switch p.wpc.Mode() {
@@ -106,7 +112,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 		if p.workerPoolConfig.Provider == nil {
 			poolState, err := p.wpc.State()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			registeredMachines = int(poolState.RegisteredMachines)
 			pendingMachines = int(poolState.PendingMachines)
@@ -115,7 +121,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 			providerName := string(*p.workerPoolConfig.Provider)
 			machines, err := p.providerRepo.ListAllMachines(providerName, p.wpc.Name(), false)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			for _, machine := range machines {
@@ -132,7 +138,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 	case types.PoolModePrivate:
 		poolState, err := p.wpc.State()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		registeredMachines = int(poolState.RegisteredMachines)
 		pendingMachines = int(poolState.PendingMachines)
@@ -192,7 +198,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 
 	freeCapacity, err := p.wpc.FreeCapacity()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	return &types.WorkerPoolState{
@@ -207,7 +213,74 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 		RegisteredMachines: int64(registeredMachines),
 		PendingMachines:    int64(pendingMachines),
 		ReadyMachines:      int64(readyMachines),
-	}, nil
+	}, workers, nil
+}
+
+func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *types.WorkerPoolState, workers []*types.Worker) types.EventComputeSchema {
+	var totalCPU, freeCPU, totalMemory, freeMemory int64
+	var totalGPU, freeGPU uint32
+	machines := map[string]struct{}{}
+	for _, worker := range workers {
+		if worker == nil || worker.Status != types.WorkerStatusAvailable {
+			continue
+		}
+		if id := firstNonEmpty(worker.MachineId, worker.Id); id != "" {
+			machines[id] = struct{}{}
+		}
+		totalCPU += max(worker.TotalCpu, 0)
+		freeCPU += max(worker.FreeCpu, 0)
+		totalMemory += max(worker.TotalMemory, 0)
+		freeMemory += max(worker.FreeMemory, 0)
+		totalGPU += worker.TotalGpuCount
+		freeGPU += min(worker.FreeGpuCount, worker.TotalGpuCount)
+	}
+
+	percentage := func(free, total int64) float64 {
+		if total <= 0 {
+			return 0
+		}
+		return float64(total-min(free, total)) / float64(total) * 100
+	}
+	hourlyCostMicros := types.ComputeDollarsToMicros(config.DefaultMachineCost * 3600 * float64(len(machines)))
+	return types.EventComputeSchema{
+		PoolName:     poolName,
+		Action:       types.EventComputeActionPoolHeartbeat,
+		Status:       string(state.Status),
+		CPUCount:     uint32((totalCPU + 999) / 1000),
+		MemoryMB:     uint64(totalMemory),
+		GPUCount:     totalGPU,
+		MachineCount: uint32(len(machines)),
+		Attrs: map[string]string{
+			"container_count":         fmt.Sprintf("%d", state.RunningContainers),
+			"free_gpu_count":          fmt.Sprintf("%d", freeGPU),
+			"cpu_utilization_pct":     fmt.Sprintf("%.2f", percentage(freeCPU, totalCPU)),
+			"memory_used_mb":          fmt.Sprintf("%d", totalMemory-min(freeMemory, totalMemory)),
+			"memory_utilization_pct":  fmt.Sprintf("%.2f", percentage(freeMemory, totalMemory)),
+			"hourly_cost_micros":      fmt.Sprintf("%d", hourlyCostMicros),
+			"worker_count":            fmt.Sprintf("%d", len(workers)),
+			"available_worker_count":  fmt.Sprintf("%d", state.AvailableWorkers),
+			"pending_worker_count":    fmt.Sprintf("%d", state.PendingWorkers),
+			"pending_container_count": fmt.Sprintf("%d", state.PendingContainers),
+			"scheduling_latency_ms":   fmt.Sprintf("%d", state.SchedulingLatency),
+			"pool_mode":               string(config.Mode),
+		},
+	}
+}
+
+func (p *PoolHealthMonitor) pushPoolMetrics(event types.EventComputeSchema) {
+	if p.eventRepo == nil || p.backendRepo == nil {
+		return
+	}
+	if p.workspaceID == "" {
+		workspace, err := p.backendRepo.GetAdminWorkspace(p.ctx)
+		if err != nil || workspace == nil || workspace.ExternalId == "" {
+			return
+		}
+		p.workspaceID = workspace.ExternalId
+	}
+	event.Timestamp = time.Now().UTC()
+	event.WorkspaceID = p.workspaceID
+	p.eventRepo.PushComputeEvent(types.EventComputePool, event)
 }
 
 // updatePoolStatus updates the status of the pool based on the current state

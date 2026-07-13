@@ -298,6 +298,9 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 	if !pool.RequiresPoolSelector {
 		t.Fatal("private pool should require pool selector")
 	}
+	if pool.Priority != 1000 {
+		t.Fatalf("legacy slot priority = %d, want private default 1000", pool.Priority)
+	}
 	if config.ManagedCompute != nil {
 		t.Fatal("private workers must not receive billing config")
 	}
@@ -385,6 +388,20 @@ func TestAgentWorkerConfigPlatformExternalPreservesPoolSemantics(t *testing.T) {
 	}
 	if pool.NetworkSlotPoolSize != 64 || pool.ContainerStartConcurrency != 8 {
 		t.Fatalf("agent capacity config = %+v", pool)
+	}
+}
+
+func TestAgentWorkerConfigPreservesExplicitZeroPriority(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:    "lowest-priority",
+		Mode:        string(types.PoolModeExternal),
+		Priority:    0,
+		PrioritySet: true,
+	}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if priority := config.Worker.Pools[slot.PoolName].Priority; priority != 0 {
+		t.Fatalf("priority = %d, want explicit zero", priority)
 	}
 }
 

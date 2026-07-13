@@ -1306,6 +1306,11 @@ class AgentWorkerSlot(betterproto.Message):
     requires_pool_selector: bool = betterproto.bool_field(18)
     priority: int = betterproto.int32_field(19)
     preemptable: bool = betterproto.bool_field(20)
+    priority_set: bool = betterproto.bool_field(21)
+    """
+    Distinguishes an explicitly configured zero priority from legacy
+     gateways that did not send scheduling priority metadata.
+    """
 
 
 @dataclass(eq=False, repr=False)

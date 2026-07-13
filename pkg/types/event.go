@@ -211,6 +211,7 @@ const (
 	EventComputeActionReservationRenewed         = "reservation.renewed"
 	EventComputeActionReservationTerminating     = "reservation.terminating"
 	EventComputeActionReservationStatusUpdated   = "reservation.status_updated"
+	EventComputeActionPoolHeartbeat              = "pool.heartbeat"
 	EventComputeActionJoinTokenCreated           = "join_token.created"
 	EventComputeActionJoinTokenRevoked           = "join_token.revoked"
 	EventComputeActionMachineJoined              = "machine.joined"
@@ -974,6 +975,31 @@ type MetricsTimeseriesResponse struct {
 	Timeseries struct {
 		AggregationBuckets []MetricsAggregationBucket `json:"aggregation_buckets"`
 	} `json:"timeseries"`
+}
+
+type PoolMetrics struct {
+	WorkspaceID          string  `json:"workspace_id"`
+	PoolName             string  `json:"pool_name"`
+	MachineCount         int     `json:"machine_count"`
+	ContainerCount       uint32  `json:"container_count"`
+	GPUCount             uint32  `json:"gpu_count"`
+	FreeGPUCount         uint32  `json:"free_gpu_count"`
+	CPUUtilizationPct    float64 `json:"cpu_utilization_pct"`
+	MemoryUtilizationPct float64 `json:"memory_utilization_pct"`
+	GPUUtilizationPct    float64 `json:"gpu_utilization_pct"`
+	DiskUsagePct         float64 `json:"disk_usage_pct"`
+	HourlyCost           float64 `json:"hourly_cost"`
+	EstimatedCost        float64 `json:"estimated_cost"`
+}
+
+type PoolMetricsPoint struct {
+	Timestamp int64         `json:"timestamp"`
+	Pools     []PoolMetrics `json:"pools"`
+}
+
+type PoolMetricsTimeseriesResponse struct {
+	Workspaces []string           `json:"workspaces"`
+	Points     []PoolMetricsPoint `json:"points"`
 }
 
 type ContainerEventRecord struct {

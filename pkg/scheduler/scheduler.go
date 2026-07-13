@@ -85,22 +85,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	computeRepo := repo.NewComputeRedisRepository(redisClient)
-	platformWorkspaceID := ""
-	getPlatformWorkspaceID := func() (string, error) {
-		if platformWorkspaceID != "" {
-			return platformWorkspaceID, nil
-		}
-		workspace, err := backendRepo.GetAdminWorkspace(ctx)
-		if err != nil {
-			return "", err
-		}
-		if workspace == nil || workspace.ExternalId == "" {
-			return "", errors.New("platform workspace is unavailable")
-		}
-		platformWorkspaceID = workspace.ExternalId
-		return platformWorkspaceID, nil
-	}
-
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewEventClientRepo(config)
 
@@ -125,23 +109,10 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 			})
 		case types.PoolModeExternal:
 			if pool.Provider == nil {
-				workspaceID, workspaceErr := getPlatformWorkspaceID()
-				if workspaceErr != nil {
-					err = workspaceErr
-					break
-				}
-				poolCopy := pool
-				controller, err = NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
-					Context:        ctx,
-					Name:           name,
-					WorkspaceID:    workspaceID,
-					Config:         config,
-					WorkerPool:     pool,
-					PoolState:      &compute.PoolState{Name: name, Selector: name, Mode: string(types.PoolModeExternal), PlatformManaged: true, PlatformSource: compute.PlatformPoolSourceConfig, WorkerConfig: &poolCopy},
-					WorkerRepo:     workerRepo,
-					WorkerPoolRepo: workerPoolRepo,
-					ComputeRepo:    computeRepo,
-				})
+				// Agent pools require workspace state and are registered by the
+				// compute service after it reconciles persisted pool ownership.
+				log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
+				continue
 			} else {
 				controller, err = NewLegacyExternalWorkerPoolController(WorkerPoolControllerOptions{
 					Context:        ctx,
@@ -174,56 +145,21 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		log.Info().Str("pool_name", name).Str("mode", string(pool.Mode)).Str("gpu_type", pool.GPUType).Msg("loaded controller")
 	}
 
-	// Dashboard-managed platform pools are persisted independently of the
-	// process config. Restore only those states here; config-defined pools were
-	// loaded above and remain the source of truth for their names.
-	if states, listErr := computeRepo.ListAllPoolStates(ctx, 0); listErr != nil {
-		log.Warn().Err(listErr).Msg("unable to restore dashboard platform pools")
-	} else {
-		for _, state := range states {
-			if state == nil || !state.PlatformManaged || state.PlatformSource != compute.PlatformPoolSourceDashboard || state.WorkerConfig == nil {
-				continue
-			}
-			if _, static := config.Worker.Pools[state.Name]; static {
-				log.Error().Str("pool_name", state.Name).Msg("dashboard platform pool conflicts with config; skipping")
-				continue
-			}
-			pool := *state.WorkerConfig
-			controller, controllerErr := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           state.Name,
-				WorkspaceID:    state.WorkspaceID,
-				Config:         config,
-				WorkerPool:     pool,
-				PoolState:      state,
-				WorkerRepo:     workerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ComputeRepo:    computeRepo,
-			})
-			if controllerErr != nil {
-				log.Error().Err(controllerErr).Str("pool_name", state.Name).Msg("unable to restore dashboard platform pool")
-				continue
-			}
-			workerPoolManager.SetPool(state.Name, pool, controller)
-		}
-	}
-
 	return &Scheduler{
-		ctx:                   ctx,
-		config:                config,
-		eventBus:              eventBus,
-		backendRepo:           backendRepo,
-		providerRepo:          providerRepo,
-		workerRepo:            workerRepo,
-		workerPoolRepo:        workerPoolRepo,
-		computeRepo:           computeRepo,
-		workerPoolManager:     workerPoolManager,
-		requestBacklog:        requestBacklog,
-		containerRepo:         containerRepo,
-		schedulerUsageMetrics: schedulerUsage,
-		eventRepo:             eventRepo,
-		workspaceRepo:         workspaceRepo,
-
+		ctx:                       ctx,
+		config:                    config,
+		eventBus:                  eventBus,
+		backendRepo:               backendRepo,
+		providerRepo:              providerRepo,
+		workerRepo:                workerRepo,
+		workerPoolRepo:            workerPoolRepo,
+		computeRepo:               computeRepo,
+		workerPoolManager:         workerPoolManager,
+		requestBacklog:            requestBacklog,
+		containerRepo:             containerRepo,
+		workspaceRepo:             workspaceRepo,
+		eventRepo:                 eventRepo,
+		schedulerUsageMetrics:     schedulerUsage,
 		provisioning:              newProvisioningTracker(),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
@@ -249,15 +185,14 @@ func (s *Scheduler) RegisterAgentPool(workspaceID string, state *compute.PoolSta
 
 	config := normalizeAgentWorkerPoolConfig(state)
 	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
-		Context:        s.ctx,
-		Name:           name,
-		WorkspaceID:    workspaceID,
-		Config:         s.config,
-		WorkerPool:     config,
-		PoolState:      state,
-		WorkerRepo:     s.workerRepo,
-		WorkerPoolRepo: s.workerPoolRepo,
-		ComputeRepo:    s.computeRepo,
+		Context:     s.ctx,
+		Name:        name,
+		WorkspaceID: workspaceID,
+		Config:      s.config,
+		WorkerPool:  config,
+		PoolState:   state,
+		WorkerRepo:  s.workerRepo,
+		ComputeRepo: s.computeRepo,
 	})
 	if err != nil {
 		return err
@@ -629,7 +564,7 @@ func (s *Scheduler) privateWorkerRequest(worker *types.Worker) bool {
 		return false
 	}
 
-	pool, ok := s.workerPoolManager.GetPool(worker.PoolName)
+	pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
 	return ok && pool.Config.Mode == types.PoolModePrivate
 }
 
@@ -928,12 +863,19 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	}
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
-		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
+		if (request.PoolSelector != "" && workerPoolSelector(worker) == request.PoolSelector) ||
 			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}
 	return filteredWorkers
+}
+
+func workerPoolSelector(worker *types.Worker) string {
+	if worker.PoolSelector != "" {
+		return worker.PoolSelector
+	}
+	return worker.PoolName
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
@@ -1182,7 +1124,7 @@ func (s *Scheduler) isMarketplaceWorker(worker *types.Worker) bool {
 	if s == nil || s.workerPoolManager == nil || worker == nil {
 		return false
 	}
-	pool, ok := s.workerPoolManager.GetPool(worker.PoolName)
+	pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
 	return ok && pool.Config.Mode == types.PoolModeMarketplace
 }
 

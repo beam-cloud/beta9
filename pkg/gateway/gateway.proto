@@ -1461,6 +1461,9 @@ message AgentWorkerSlot {
   bool requires_pool_selector = 18;
   int32 priority = 19;
   bool preemptable = 20;
+  // Distinguishes an explicitly configured zero priority from legacy
+  // gateways that did not send scheduling priority metadata.
+  bool priority_set = 21;
 }
 
 message StreamAgentRequest { string agent_token = 1; }

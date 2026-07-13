@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -110,6 +111,7 @@ func NewLegacyExternalWorkerPoolController(opts WorkerPoolControllerOptions) (Wo
 		ProviderRepo:     wpc.providerRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
+		BackendRepo:      wpc.backendRepo,
 		EventRepo:        wpc.eventRepo,
 	})
 	if err != nil {
@@ -259,7 +261,7 @@ func (wpc *LegacyExternalWorkerPoolController) attemptToAssignWorkerToMachine(wo
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
 	}
 
-	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
+	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && legacyMachineGPUCompatible(machine.State.Gpu, gpuType, gpuCount) && remainingMachineGpuCount >= gpuCount {
 		log.Info().Str("machine_id", machine.State.MachineId).Str("hostname", machine.State.HostName).Msg("using existing machine")
 
 		// If there is only one GPU available on the machine, give the worker access to everything
@@ -707,7 +709,7 @@ func (wpc *LegacyExternalWorkerPoolController) getProxiedClient(hostname, token 
 }
 
 func (wpc *LegacyExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
-	return freePoolCapacity(wpc.workerRepo, wpc)
+	return freePoolCapacity(wpc.workerRepo, wpc.name)
 }
 
 func (wpc *LegacyExternalWorkerPoolController) monitorAndCleanupWorkers() {
@@ -726,27 +728,34 @@ func (wpc *LegacyExternalWorkerPoolController) monitorAndCleanupWorkers() {
 		case <-wpc.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
-				continue
-			}
-
-			machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
-			if err != nil {
-				continue
-			}
-
-			for _, machine := range machines {
-				kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
-				if err != nil {
-					continue
-				}
-
-				cleaner.MachineId = machine.State.MachineId
-				cleaner.KubeClient = kubeClient
-				cleaner.Clean(wpc.ctx)
-			}
-
-			wpc.workerPoolRepo.RemoveWorkerCleanerLock(wpc.name)
+			wpc.cleanupWorkers(&cleaner)
 		}
+	}
+}
+
+func legacyMachineGPUCompatible(machineGPU, requestedGPU string, requestedCount uint32) bool {
+	return requestedCount == 0 || requestedGPU == "" || strings.EqualFold(requestedGPU, string(types.GPU_ANY)) || strings.EqualFold(machineGPU, requestedGPU)
+}
+
+func (wpc *LegacyExternalWorkerPoolController) cleanupWorkers(cleaner *WorkerResourceCleaner) {
+	if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
+		return
+	}
+	defer wpc.workerPoolRepo.RemoveWorkerCleanerLock(wpc.name)
+
+	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
+	if err != nil {
+		return
+	}
+
+	for _, machine := range machines {
+		kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
+		if err != nil {
+			continue
+		}
+
+		cleaner.MachineId = machine.State.MachineId
+		cleaner.KubeClient = kubeClient
+		cleaner.Clean(wpc.ctx)
 	}
 }

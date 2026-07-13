@@ -65,6 +65,7 @@ type Worker struct {
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 	Runtime              string       `json:"runtime" redis:"runtime"`
+	PoolSelector         string       `json:"pool_selector" redis:"pool_selector"`
 }
 
 type WorkerKeepAlive struct {
@@ -103,6 +104,7 @@ func (w *Worker) ToProto() *pb.Worker {
 		BuildVersion:         w.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              w.Runtime,
+		PoolSelector:         w.PoolSelector,
 	}
 }
 
@@ -131,6 +133,7 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		BuildVersion:         in.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              in.Runtime,
+		PoolSelector:         in.PoolSelector,
 	}
 }
 

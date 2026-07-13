@@ -16,7 +16,9 @@ import (
 
 type fakePlatformBackendRepo struct {
 	repository.BackendRepository
-	workspace *types.Workspace
+	workspace         *types.Workspace
+	workspaceFailures int
+	workspaceCalls    int
 }
 
 type fakePlatformWorkerPoolRepo struct {
@@ -30,6 +32,11 @@ func (r *fakePlatformWorkerPoolRepo) DeleteWorkerPoolState(_ context.Context, po
 }
 
 func (r *fakePlatformBackendRepo) GetAdminWorkspace(context.Context) (*types.Workspace, error) {
+	r.workspaceCalls++
+	if r.workspaceFailures > 0 {
+		r.workspaceFailures--
+		return nil, errors.New("workspace temporarily unavailable")
+	}
 	return r.workspace, nil
 }
 
@@ -60,26 +67,27 @@ func TestPlatformPoolServiceRejectsForgedClientCapability(t *testing.T) {
 		Token:     &types.Token{ExternalId: "user-token", TokenType: types.TokenTypeWorkspacePrimary},
 	}
 
-	if _, err := service.ListPlatformPools(context.Background(), nonOperator); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("ListPlatformPools() error = %v, want permission denied", err)
+	ctx := context.Background()
+	if _, err := service.ListPlatformPools(ctx, nonOperator); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
-	if _, err := service.CreatePlatformPool(context.Background(), nonOperator, "forged", types.WorkerPoolConfig{}); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("CreatePlatformPool() error = %v, want permission denied", err)
+	if _, err := service.CreatePlatformPool(ctx, nonOperator, "forged", types.WorkerPoolConfig{}); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
-	if _, err := service.UpdatePlatformPool(context.Background(), nonOperator, "forged", types.WorkerPoolConfig{}); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("UpdatePlatformPool() error = %v, want permission denied", err)
+	if _, err := service.UpdatePlatformPool(ctx, nonOperator, "forged", types.WorkerPoolConfig{}); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
-	if err := service.DeletePlatformPool(context.Background(), nonOperator, "forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("DeletePlatformPool() error = %v, want permission denied", err)
+	if err := service.DeletePlatformPool(ctx, nonOperator, "forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
-	if _, _, err := service.CreatePlatformMachine(context.Background(), nonOperator, "forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("CreatePlatformMachine() error = %v, want permission denied", err)
+	if _, _, err := service.CreatePlatformMachine(ctx, nonOperator, "forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
-	if _, _, err := service.ListPlatformMachines(context.Background(), nonOperator, "forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("ListPlatformMachines() error = %v, want permission denied", err)
+	if _, _, err := service.ListPlatformMachines(ctx, nonOperator, "forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
-	if _, err := service.DeletePlatformMachine(context.Background(), nonOperator, "forged", "machine-forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
-		t.Fatalf("DeletePlatformMachine() error = %v, want permission denied", err)
+	if _, err := service.DeletePlatformMachine(ctx, nonOperator, "forged", "machine-forged"); !errors.Is(err, model.ErrPlatformPermissionDenied) {
+		t.Fatal(err)
 	}
 }
 
@@ -114,7 +122,7 @@ func TestPlatformPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created.Editable || created.Controller != model.PlatformPoolControllerAgent {
+	if created.Source != model.PlatformPoolSourceAPI || created.Controller != model.PlatformPoolControllerAgent {
 		t.Fatalf("created pool = %+v", created)
 	}
 	if created.Config.Cache.Disk.HostPath != config.Cache.Disk.HostPath || created.Config.ContainerStartConcurrency != 7 {
@@ -124,7 +132,7 @@ func TestPlatformPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if err != nil || state == nil {
 		t.Fatalf("saved state = %+v, err = %v", state, err)
 	}
-	if !state.PlatformManaged || state.PlatformSource != model.PlatformPoolSourceDashboard || state.Mode != string(types.PoolModeExternal) {
+	if !state.PlatformManaged || state.PlatformSource != model.PlatformPoolSourceAPI || state.Mode != string(types.PoolModeExternal) {
 		t.Fatalf("saved platform identity = %+v", state)
 	}
 	if state.WorkerConfig == nil || state.WorkerConfig.DurableDisksPath != "/mnt/disks" {
@@ -188,18 +196,27 @@ func TestReconcilePlatformPoolsOnlyMaterializesProviderlessExternalPools(t *test
 	}
 }
 
-func TestReconcilePlatformPoolsBackfillsDashboardPoolInstanceIdentity(t *testing.T) {
-	state := newPlatformPoolState("platform-workspace", "dashboard-pool", model.PlatformPoolSourceDashboard, "operator-token", types.WorkerPoolConfig{Mode: types.PoolModeExternal}, time.Now())
-	state.PlatformInstanceID = ""
-	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"platform-workspace": {state}}}
-	service := platformTestService(types.AppConfig{}, repo)
-
-	if err := service.ReconcilePlatformPools(context.Background()); err != nil {
-		t.Fatal(err)
+func TestPlatformPoolReconciliationRetriesStartupFailure(t *testing.T) {
+	repo := &fakeComputeRepo{}
+	service := platformTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"public-agent": {Mode: types.PoolModeExternal},
+	}}}, repo)
+	backend := &fakePlatformBackendRepo{
+		workspace:         &types.Workspace{ExternalId: "platform-workspace"},
+		workspaceFailures: 1,
 	}
-	updated, err := repo.GetPoolState(context.Background(), "platform-workspace", "dashboard-pool")
-	if err != nil || updated == nil || updated.PlatformInstanceID == "" {
-		t.Fatalf("reconciled dashboard state = %+v, err = %v", updated, err)
+	service.backendRepo = backend
+
+	if err := service.ReconcilePlatformPools(context.Background()); err == nil {
+		t.Fatal("initial reconciliation unexpectedly succeeded")
+	}
+	service.retryPlatformPoolReconciliation(context.Background(), 0)
+	state, err := repo.GetPoolState(context.Background(), "platform-workspace", "public-agent")
+	if err != nil || state == nil {
+		t.Fatalf("pool was not restored after retry: state=%+v err=%v", state, err)
+	}
+	if backend.workspaceCalls != 2 {
+		t.Fatalf("workspace calls = %d, want 2", backend.workspaceCalls)
 	}
 }
 
@@ -254,6 +271,11 @@ func TestCreatePlatformMachineUsesMachineBoundPlatformToken(t *testing.T) {
 	}}, repo)
 	if _, err := service.CreatePlatformPool(context.Background(), platformOperatorAuth(), "public-cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal}); err != nil {
 		t.Fatal(err)
+	}
+	state, _ := repo.GetPoolState(context.Background(), "platform-workspace", "public-cpu")
+	state.PlatformInstanceID = "" // Simulate state created before instance-scoped installers.
+	if err := service.ReconcilePlatformPools(context.Background()); err != nil || state.PlatformInstanceID == "" {
+		t.Fatalf("reconcile instance identity: state=%+v err=%v", state, err)
 	}
 
 	bootstrap, handled, err := service.CreatePlatformMachine(context.Background(), platformOperatorAuth(), "public-cpu")

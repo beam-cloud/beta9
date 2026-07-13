@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -1318,6 +1319,87 @@ func TestComputeEventMetadataExtensionsRoundTrip(t *testing.T) {
 		metadata.ContainerID != "container-1" ||
 		metadata.RouteID != "route-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)
+	}
+}
+
+func TestComputeHeartbeatUsesDedicatedPoolMetricsStream(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	tests := []struct {
+		eventType, action string
+	}{
+		{types.EventComputeMachine, types.EventComputeActionMachineHeartbeat},
+		{types.EventComputePool, types.EventComputeActionPoolHeartbeat},
+	}
+	for _, test := range tests {
+		streams := repo.streamNamesForEvent(test.eventType, eventMetadata{
+			WorkspaceID: "workspace-1",
+			MachineID:   "machine-1",
+			Action:      test.action,
+		})
+
+		if !slices.Contains(streams, s2.StreamName("events/workspaces/workspace-1/compute/metrics")) {
+			t.Fatalf("pool metrics stream missing for %q from %#v", test.action, streams)
+		}
+		if slices.Contains(streams, s2.StreamName("events/workspaces/workspace-1/compute")) {
+			t.Fatalf("heartbeat %q leaked into lifecycle history: %#v", test.action, streams)
+		}
+	}
+}
+
+func TestComputePoolSnapshotFromS2(t *testing.T) {
+	body, err := json.Marshal(map[string]any{
+		"type": types.EventComputePool,
+		"time": time.Unix(1, 0).UTC(),
+		"data": types.EventComputeSchema{PoolName: "pool-a", Action: types.EventComputeActionPoolHeartbeat, MachineCount: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample, eventTime, ok := computePoolMetricFromS2(s2.SequencedRecord{Body: body})
+	if !ok || sample.PoolName != "pool-a" || sample.MachineCount != 2 || !eventTime.Equal(time.Unix(1, 0).UTC()) {
+		t.Fatalf("unexpected pool sample: ok=%v time=%v sample=%+v", ok, eventTime, sample)
+	}
+}
+
+func TestPoolMetricsBucketAggregatesLatestMachineState(t *testing.T) {
+	bucket := &poolMetricsBucket{key: 1_000, samples: map[string]types.EventComputeSchema{}}
+	bucket.samples["pool-a\x00machine-1"] = types.EventComputeSchema{
+		WorkspaceID: "workspace-1", PoolName: "pool-a", MachineID: "machine-1", CPUCount: 4, MemoryMB: 8_000, GPUCount: 2,
+		Attrs: map[string]string{"container_count": "3", "free_gpu_count": "1", "cpu_utilization_pct": "60", "memory_used_mb": "4000", "disk_used_mb": "100", "disk_total_mb": "200", "hourly_cost_micros": "2000000"},
+	}
+	bucket.samples["pool-a\x00machine-2"] = types.EventComputeSchema{
+		WorkspaceID: "workspace-1", PoolName: "pool-a", MachineID: "machine-2", CPUCount: 8, MemoryMB: 16_000, GPUCount: 2,
+		Attrs: map[string]string{"container_count": "5", "free_gpu_count": "0", "cpu_utilization_pct": "30", "memory_used_mb": "12000", "disk_used_mb": "300", "disk_total_mb": "600", "hourly_cost_micros": "3000000"},
+	}
+	bucket.samples["pool-b\x00"] = types.EventComputeSchema{
+		WorkspaceID: "workspace-1", PoolName: "pool-b", Action: types.EventComputeActionPoolHeartbeat, MachineCount: 3, CPUCount: 12, MemoryMB: 24_000, GPUCount: 4,
+		Attrs: map[string]string{"container_count": "7", "free_gpu_count": "2", "cpu_utilization_pct": "25", "memory_used_mb": "6000", "hourly_cost_micros": "6000000"},
+	}
+
+	metrics := bucket.point(time.Minute).Pools
+	metric := metrics[0]
+	if metric.MachineCount != 2 || metric.ContainerCount != 8 || metric.GPUCount != 4 || metric.FreeGPUCount != 1 {
+		t.Fatalf("unexpected capacity metrics: %+v", metric)
+	}
+	checks := []struct {
+		name      string
+		got, want float64
+	}{
+		{"cpu utilization", metric.CPUUtilizationPct, 40},
+		{"memory utilization", metric.MemoryUtilizationPct, 200.0 / 3},
+		{"gpu utilization", metric.GPUUtilizationPct, 75},
+		{"disk utilization", metric.DiskUsagePct, 50},
+		{"hourly cost", metric.HourlyCost, 5},
+		{"estimated cost", metric.EstimatedCost, 5.0 / 60},
+	}
+	for _, check := range checks {
+		if math.Abs(check.got-check.want) > 0.001 {
+			t.Fatalf("%s = %v, want %v: %+v", check.name, check.got, check.want, metric)
+		}
+	}
+	pool := metrics[1]
+	if pool.PoolName != "pool-b" || pool.MachineCount != 3 || pool.GPUCount != 4 || pool.FreeGPUCount != 2 || pool.ContainerCount != 7 {
+		t.Fatalf("unexpected pool snapshot: %+v", pool)
 	}
 }
 

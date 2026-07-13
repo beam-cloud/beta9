@@ -21,7 +21,6 @@ type PlatformMachineBootstrap struct {
 	PoolName       string
 	Token          string
 	InstallCommand string
-	ExpiresAt      time.Time
 }
 
 func requirePlatformOperator(authInfo *auth.AuthInfo) error {
@@ -31,18 +30,18 @@ func requirePlatformOperator(authInfo *auth.AuthInfo) error {
 	return nil
 }
 
-func (s *Service) platformWorkspace(ctx context.Context) (*types.Workspace, error) {
+func (s *Service) adminWorkspaceID(ctx context.Context) (string, error) {
 	if s == nil || s.backendRepo == nil {
-		return nil, fmt.Errorf("platform workspace repository is unavailable")
+		return "", fmt.Errorf("admin workspace repository is unavailable")
 	}
 	workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if workspace == nil || strings.TrimSpace(workspace.ExternalId) == "" {
-		return nil, fmt.Errorf("platform workspace is unavailable")
+		return "", fmt.Errorf("admin workspace is unavailable")
 	}
-	return workspace, nil
+	return workspace.ExternalId, nil
 }
 
 func normalizePlatformWorkerPoolConfig(config types.WorkerPoolConfig) (types.WorkerPoolConfig, error) {
@@ -50,10 +49,10 @@ func normalizePlatformWorkerPoolConfig(config types.WorkerPoolConfig) (types.Wor
 		config.Mode = types.PoolModeExternal
 	}
 	if config.Mode != types.PoolModeExternal {
-		return types.WorkerPoolConfig{}, fmt.Errorf("dashboard-managed pools must use mode %q", types.PoolModeExternal)
+		return types.WorkerPoolConfig{}, fmt.Errorf("API-managed pools must use mode %q", types.PoolModeExternal)
 	}
 	if config.Provider != nil {
-		return types.WorkerPoolConfig{}, fmt.Errorf("dashboard-managed pools are agent-backed and cannot set provider")
+		return types.WorkerPoolConfig{}, fmt.Errorf("API-managed pools are agent-backed and cannot set provider")
 	}
 	if config.ContainerRuntime == "" {
 		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
@@ -69,7 +68,7 @@ func normalizePlatformWorkerPoolConfig(config types.WorkerPoolConfig) (types.Wor
 	return config, nil
 }
 
-func platformPoolProtoConfig(name string, config types.WorkerPoolConfig) *pb.PoolConfig {
+func platformPoolConfig(name string, config types.WorkerPoolConfig) *pb.PoolConfig {
 	pool := &pb.PoolConfig{
 		Name:      name,
 		Selector:  name,
@@ -90,7 +89,7 @@ func newPlatformPoolState(workspaceID, name, source, createdBy string, config ty
 		WorkspaceID:        workspaceID,
 		Name:               name,
 		Selector:           name,
-		Config:             platformPoolProtoConfig(name, config),
+		Config:             platformPoolConfig(name, config),
 		Status:             "active",
 		Source:             model.SourceAttached,
 		Mode:               string(types.PoolModeExternal),
@@ -108,18 +107,16 @@ func newPlatformPoolState(workspaceID, name, source, createdBy string, config ty
 	}
 }
 
-// ReconcilePlatformPools materializes config-defined agent pools in the same
-// state store as dashboard-created pools and restores dynamic controllers
-// after a gateway restart. It never converts local or provider-backed pools.
+// ReconcilePlatformPools owns the persisted runtime state for config- and
+// API-managed agent pools. It never converts local or provider-backed pools.
 func (s *Service) ReconcilePlatformPools(ctx context.Context) error {
 	if s == nil || s.computeRepo == nil {
 		return nil
 	}
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return err
 	}
-	workspaceID := workspace.ExternalId
 	now := time.Now().UTC()
 
 	for name, config := range s.appConfig.Worker.Pools {
@@ -135,7 +132,7 @@ func (s *Service) ReconcilePlatformPools(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if existing != nil && (!existing.PlatformManaged || existing.PlatformSource == model.PlatformPoolSourceDashboard) {
+			if existing != nil && (!existing.PlatformManaged || existing.PlatformSource == model.PlatformPoolSourceAPI) {
 				return fmt.Errorf("config-defined platform pool %q conflicts with persisted pool state", name)
 			}
 			state := newPlatformPoolState(workspaceID, name, model.PlatformPoolSourceConfig, "platform-config", config, now)
@@ -207,9 +204,9 @@ func (s *Service) ReconcilePlatformPools(ctx context.Context) error {
 				}
 				continue
 			}
-		case model.PlatformPoolSourceDashboard:
+		case model.PlatformPoolSourceAPI:
 			if static {
-				reconcileErrors = append(reconcileErrors, fmt.Errorf("dashboard platform pool %q conflicts with config", state.Name))
+				reconcileErrors = append(reconcileErrors, fmt.Errorf("API-managed platform pool %q conflicts with config", state.Name))
 				continue
 			}
 		default:
@@ -226,11 +223,11 @@ func (s *Service) ReconcilePlatformPools(ctx context.Context) error {
 }
 
 func (s *Service) platformPoolState(ctx context.Context, name string) (*model.PoolState, error) {
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	state, err := s.computeRepo.GetPoolState(ctx, workspace.ExternalId, name)
+	state, err := s.computeRepo.GetPoolState(ctx, workspaceID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -249,9 +246,6 @@ func (s *Service) platformPoolView(ctx context.Context, state *model.PoolState) 
 		Config:     *state.WorkerConfig,
 		Source:     state.PlatformSource,
 		Controller: model.PlatformPoolControllerAgent,
-		Editable:   state.PlatformSource == model.PlatformPoolSourceDashboard,
-		CreatedAt:  state.CreatedAt,
-		UpdatedAt:  state.UpdatedAt,
 	}
 	if s.workerPoolRepo != nil {
 		poolState, err := s.workerPoolRepo.GetWorkerPoolState(ctx, state.Name)
@@ -264,8 +258,9 @@ func (s *Service) platformPoolView(ctx context.Context, state *model.PoolState) 
 		return nil, err
 	}
 	view.MachineCount = len(machines)
+	now := time.Now().UTC()
 	for _, machine := range machines {
-		if machine != nil && machine.Schedulable && model.AgentMachineConnected(machine, time.Now().UTC()) {
+		if machine != nil && machine.Schedulable && model.AgentMachineConnected(machine, now) {
 			view.ReadyMachineCount++
 		}
 	}
@@ -289,7 +284,7 @@ func (s *Service) ListPlatformPools(ctx context.Context, authInfo *auth.AuthInfo
 	if err := requirePlatformOperator(authInfo); err != nil {
 		return nil, err
 	}
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +296,6 @@ func (s *Service) ListPlatformPools(ctx context.Context, authInfo *auth.AuthInfo
 			Config:     config,
 			Source:     model.PlatformPoolSourceConfig,
 			Controller: configuredPlatformPoolController(config),
-			Editable:   false,
 		}
 		if s.workerPoolRepo != nil {
 			if poolState, stateErr := s.workerPoolRepo.GetWorkerPoolState(ctx, name); stateErr == nil {
@@ -311,27 +305,24 @@ func (s *Service) ListPlatformPools(ctx context.Context, authInfo *auth.AuthInfo
 			}
 		}
 		if view.Controller == model.PlatformPoolControllerAgent {
-			if state, stateErr := s.computeRepo.GetPoolState(ctx, workspace.ExternalId, name); stateErr != nil {
+			if state, stateErr := s.computeRepo.GetPoolState(ctx, workspaceID, name); stateErr != nil {
 				return nil, stateErr
 			} else if state != nil && state.PlatformManaged && state.WorkerConfig != nil {
-				agentView, viewErr := s.platformPoolView(ctx, state)
-				if viewErr != nil {
-					return nil, viewErr
+				view, err = s.platformPoolView(ctx, state)
+				if err != nil {
+					return nil, err
 				}
-				view.State = agentView.State
-				view.MachineCount = agentView.MachineCount
-				view.ReadyMachineCount = agentView.ReadyMachineCount
 			}
 		}
 		views[name] = view
 	}
 
-	states, err := s.computeRepo.ListPoolStates(ctx, workspace.ExternalId, 0)
+	states, err := s.computeRepo.ListPoolStates(ctx, workspaceID, 0)
 	if err != nil {
 		return nil, err
 	}
 	for _, state := range states {
-		if state == nil || !state.PlatformManaged || state.PlatformSource != model.PlatformPoolSourceDashboard {
+		if state == nil || !state.PlatformManaged || state.PlatformSource != model.PlatformPoolSourceAPI {
 			continue
 		}
 		if _, collision := views[state.Name]; collision {
@@ -374,12 +365,11 @@ func (s *Service) CreatePlatformPool(ctx context.Context, authInfo *auth.AuthInf
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrPlatformInvalidConfig, err)
 	}
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	workspaceID := workspace.ExternalId
-	state := newPlatformPoolState(workspaceID, name, model.PlatformPoolSourceDashboard, computeOwnerTokenID(authInfo), config, time.Now().UTC())
+	state := newPlatformPoolState(workspaceID, name, model.PlatformPoolSourceAPI, computeOwnerTokenID(authInfo), config, time.Now().UTC())
 
 	err = s.withPoolStateLock(ctx, workspaceID, name, func() error {
 		existing, err := s.computeRepo.GetPoolState(ctx, workspaceID, name)
@@ -432,11 +422,10 @@ func (s *Service) UpdatePlatformPool(ctx context.Context, authInfo *auth.AuthInf
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrPlatformInvalidConfig, err)
 	}
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	workspaceID := workspace.ExternalId
 	var updated *model.PoolState
 	err = s.withPoolStateLock(ctx, workspaceID, name, func() error {
 		existing, err := s.computeRepo.GetPoolState(ctx, workspaceID, name)
@@ -446,7 +435,7 @@ func (s *Service) UpdatePlatformPool(ctx context.Context, authInfo *auth.AuthInf
 		if existing == nil || !existing.PlatformManaged {
 			return model.ErrPlatformPoolNotFound
 		}
-		if existing.PlatformSource != model.PlatformPoolSourceDashboard {
+		if existing.PlatformSource != model.PlatformPoolSourceAPI {
 			return model.ErrPlatformPoolImmutable
 		}
 		if existing.WorkerConfig == nil {
@@ -461,9 +450,15 @@ func (s *Service) UpdatePlatformPool(ctx context.Context, authInfo *auth.AuthInf
 				return model.ErrPlatformPoolInUse
 			}
 		}
-		updated = newPlatformPoolState(workspaceID, name, model.PlatformPoolSourceDashboard, existing.CreatedByTokenID, config, time.Now().UTC())
-		updated.CreatedAt = existing.CreatedAt
-		updated.PlatformInstanceID = existing.PlatformInstanceID
+		now := time.Now().UTC()
+		next := *existing
+		configCopy := config
+		next.Config = platformPoolConfig(name, config)
+		next.Priority = config.Priority
+		next.Preemptible = config.Preemptable
+		next.WorkerConfig = &configCopy
+		next.UpdatedAt = now
+		updated = &next
 		if updated.PlatformInstanceID == "" {
 			updated.PlatformInstanceID = uuid.NewString()
 		}
@@ -488,11 +483,10 @@ func (s *Service) DeletePlatformPool(ctx context.Context, authInfo *auth.AuthInf
 	if err := requirePlatformOperator(authInfo); err != nil {
 		return err
 	}
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return err
 	}
-	workspaceID := workspace.ExternalId
 	return s.withPoolStateLock(ctx, workspaceID, name, func() error {
 		state, err := s.computeRepo.GetPoolState(ctx, workspaceID, name)
 		if err != nil {
@@ -501,7 +495,7 @@ func (s *Service) DeletePlatformPool(ctx context.Context, authInfo *auth.AuthInf
 		if state == nil || !state.PlatformManaged {
 			return model.ErrPlatformPoolNotFound
 		}
-		if state.PlatformSource != model.PlatformPoolSourceDashboard {
+		if state.PlatformSource != model.PlatformPoolSourceAPI {
 			return model.ErrPlatformPoolImmutable
 		}
 		inUse, err := s.platformPoolHasInventory(ctx, state)
@@ -568,7 +562,6 @@ func (s *Service) CreatePlatformMachine(ctx context.Context, authInfo *auth.Auth
 		PoolName:       state.Name,
 		Token:          token,
 		InstallCommand: command,
-		ExpiresAt:      tokenState.ExpiresAt,
 	}, true, nil
 }
 
@@ -576,11 +569,11 @@ func (s *Service) ListPlatformMachines(ctx context.Context, authInfo *auth.AuthI
 	if err := requirePlatformOperator(authInfo); err != nil {
 		return nil, false, err
 	}
-	workspace, err := s.platformWorkspace(ctx)
+	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
 		return nil, false, err
 	}
-	states, err := s.computeRepo.ListPoolStates(ctx, workspace.ExternalId, 0)
+	states, err := s.computeRepo.ListPoolStates(ctx, workspaceID, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -594,7 +587,7 @@ func (s *Service) ListPlatformMachines(ctx context.Context, authInfo *auth.AuthI
 			continue
 		}
 		found = true
-		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspace.ExternalId, state.Name)
+		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
 		if err != nil {
 			return nil, true, err
 		}

@@ -336,6 +336,33 @@ func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
 	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
 }
 
+func TestRegisterAgentPoolNormalizesPersistedPlatformConfig(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+
+	provider := types.ProviderGeneric
+	err = scheduler.RegisterAgentPool("admin-workspace", &compute.PoolState{
+		Name:            "api-pool",
+		Selector:        "api-pool",
+		PlatformManaged: true,
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:     types.PoolModeLocal,
+			Provider: &provider,
+			Priority: 7,
+			GPUType:  "A10G",
+		},
+	})
+	assert.NoError(t, err)
+
+	pool, ok := scheduler.workerPoolManager.GetPool("api-pool")
+	assert.True(t, ok)
+	assert.Equal(t, types.PoolModeExternal, pool.Config.Mode)
+	assert.Nil(t, pool.Config.Provider)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), pool.Config.ContainerRuntime)
+	assert.Equal(t, int32(7), pool.Config.Priority)
+}
+
 // Machine-pinned requests (marketplace rentals) must only ever see the pinned
 // machine's worker, regardless of pool selector requirements.
 func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
@@ -2049,7 +2076,12 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 	}
 	worker, err := wb.workerRepo.GetWorkerById(compute.AgentMachineWorkerID("machine-1"))
 	assert.NoError(t, err)
-	assert.Equal(t, poolState.Selector, worker.PoolName)
+	assert.Equal(t, poolState.Name, worker.PoolName)
+	assert.Equal(t, poolState.Selector, worker.PoolSelector)
+	assert.NoError(t, wb.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
+	selected, err := wb.selectWorker(request)
+	assert.NoError(t, err)
+	assert.Equal(t, worker.Id, selected.Id)
 
 	shouldSanitize, err := wb.privateBacklogRequest(request)
 	assert.NoError(t, err)

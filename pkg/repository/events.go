@@ -24,6 +24,7 @@ type eventReader interface {
 	GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error)
 	GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
 	GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
+	GetPoolMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.PoolMetricsTimeseriesResponse, error)
 	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
 }
 
@@ -228,6 +229,13 @@ func (r *EventClientRepo) GetWorkspaceMetricsTimeseries(ctx context.Context, que
 		return nil, ErrEventReadUnsupported
 	}
 	return r.reader.GetWorkspaceMetricsTimeseries(ctx, query, start, end, interval)
+}
+
+func (r *EventClientRepo) GetPoolMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.PoolMetricsTimeseriesResponse, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.GetPoolMetricsTimeseries(ctx, query, start, end, interval)
 }
 
 func (r *EventClientRepo) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {

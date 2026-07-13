@@ -1395,10 +1395,12 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	if isComputeEvent(eventType) && metadata.WorkspaceID != "" {
 		// Workspace stream powers the live workspace SSE; the compute stream keeps
 		// a dense history for fast compute-only history queries. Heartbeats fire
-		// every few seconds per machine and would drown out lifecycle events in
-		// the history stream, so they only go to the live workspace stream.
+		// every few seconds per machine, so they use a separate metrics stream
+		// instead of drowning out lifecycle history.
 		add(r.workspaceStreamName(metadata.WorkspaceID))
-		if metadata.Action != types.EventComputeActionMachineHeartbeat {
+		if isComputeMetricsAction(metadata.Action) {
+			add(r.workspacePoolMetricsStreamName(metadata.WorkspaceID))
+		} else {
 			add(r.workspaceComputeStreamName(metadata.WorkspaceID))
 		}
 	}
@@ -1446,6 +1448,10 @@ func appendUniqueS2Stream(streams []s2.StreamName, stream s2.StreamName) []s2.St
 
 func isComputeEvent(eventType string) bool {
 	return strings.HasPrefix(eventType, "compute.")
+}
+
+func isComputeMetricsAction(action string) bool {
+	return action == types.EventComputeActionMachineHeartbeat || action == types.EventComputeActionPoolHeartbeat
 }
 
 func (r *S2EventRepository) primaryLogStreamName(metadata eventMetadata) s2.StreamName {
@@ -1586,6 +1592,10 @@ func (r *S2EventRepository) workspaceStreamName(workspaceID string) s2.StreamNam
 // shared workspace stream (which also carries container metrics/lifecycle).
 func (r *S2EventRepository) workspaceComputeStreamName(workspaceID string) s2.StreamName {
 	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/compute", r.streamPrefix, eventStreamPart(workspaceID)))
+}
+
+func (r *S2EventRepository) workspacePoolMetricsStreamName(workspaceID string) s2.StreamName {
+	return s2.StreamName(fmt.Sprintf("%s/workspaces/%s/compute/metrics", r.streamPrefix, eventStreamPart(workspaceID)))
 }
 
 func (r *S2EventRepository) stubStreamName(workspaceID, stubID string) s2.StreamName {

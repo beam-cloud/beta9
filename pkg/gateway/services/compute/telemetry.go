@@ -213,6 +213,20 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	if poolState != nil {
 		attrs["pool_mode"] = string(poolState.Mode)
 		attrs["transport"] = poolState.Transport
+		hourlyCostMicros := int64(0)
+		for _, reservation := range poolState.Reservations {
+			if reservation.MachineID == agentState.MachineID {
+				hourlyCostMicros = s.billableMicros(reservation.HourlyCostMicros)
+				break
+			}
+		}
+		if hourlyCostMicros == 0 && poolState.WorkerConfig != nil {
+			// DefaultMachineCost is the existing per-machine, per-second usage rate.
+			hourlyCostMicros = model.DollarsToMicros(poolState.WorkerConfig.DefaultMachineCost * 3600)
+		}
+		if hourlyCostMicros > 0 {
+			attrs["hourly_cost_micros"] = fmt.Sprintf("%d", hourlyCostMicros)
+		}
 	}
 
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{

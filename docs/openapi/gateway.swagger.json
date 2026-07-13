@@ -2517,6 +2517,10 @@
         },
         "preemptable": {
           "type": "boolean"
+        },
+        "prioritySet": {
+          "type": "boolean",
+          "description": "Distinguishes an explicitly configured zero priority from legacy\ngateways that did not send scheduling priority metadata."
         }
       }
     },
@@ -5487,6 +5491,9 @@
           }
         },
         "runtime": {
+          "type": "string"
+        },
+        "poolSelector": {
           "type": "string"
         }
       }

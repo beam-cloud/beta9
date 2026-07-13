@@ -22,20 +22,18 @@ type AgentWorkerPoolController struct {
 	workerPoolConfig types.WorkerPoolConfig
 	poolState        *compute.PoolState
 	workerRepo       repository.WorkerRepository
-	workerPoolRepo   repository.WorkerPoolRepository
 	computeRepo      repository.ComputeRepository
 }
 
 type AgentWorkerPoolControllerOptions struct {
-	Context        context.Context
-	Name           string
-	WorkspaceID    string
-	Config         types.AppConfig
-	WorkerPool     types.WorkerPoolConfig
-	PoolState      *compute.PoolState
-	WorkerRepo     repository.WorkerRepository
-	WorkerPoolRepo repository.WorkerPoolRepository
-	ComputeRepo    repository.ComputeRepository
+	Context     context.Context
+	Name        string
+	WorkspaceID string
+	Config      types.AppConfig
+	WorkerPool  types.WorkerPoolConfig
+	PoolState   *compute.PoolState
+	WorkerRepo  repository.WorkerRepository
+	ComputeRepo repository.ComputeRepository
 }
 
 type agentMachineWorker struct {
@@ -45,6 +43,7 @@ type agentMachineWorker struct {
 	gpu                  string
 	gpuCount             uint32
 	poolName             string
+	poolSelector         string
 	machineID            string
 	requiresPoolSelector bool
 	priority             int32
@@ -106,7 +105,6 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (Worker
 		workerPoolConfig: opts.WorkerPool,
 		poolState:        opts.PoolState,
 		workerRepo:       opts.WorkerRepo,
-		workerPoolRepo:   opts.WorkerPoolRepo,
 		computeRepo:      opts.ComputeRepo,
 	}
 	if err := wpc.ensureMachineWorkers(); err != nil {
@@ -144,16 +142,10 @@ func (wpc *AgentWorkerPoolController) Mode() types.PoolMode {
 }
 
 func (wpc *AgentWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
-	return freePoolCapacity(wpc.workerRepo, wpc)
+	return freePoolCapacity(wpc.workerRepo, wpc.poolName())
 }
 
 func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
-	if wpc.workerPoolRepo != nil {
-		if state, err := wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name); err == nil && state != nil {
-			return state, nil
-		}
-	}
-
 	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {
 		return nil, err
@@ -368,7 +360,7 @@ func (wpc *AgentWorkerPoolController) machineWorker(machine *compute.AgentTokenS
 		}
 		return nil, err
 	}
-	if worker.PoolName != wpc.name || worker.MachineId != machine.MachineID {
+	if worker.PoolName != wpc.poolName() || worker.MachineId != machine.MachineID {
 		return nil, nil
 	}
 	return worker, nil
@@ -406,7 +398,8 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,
 		gpuCount:             machine.GPUCount,
-		poolName:             wpc.name,
+		poolName:             wpc.poolName(),
+		poolSelector:         wpc.name,
 		machineID:            machine.MachineID,
 		requiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
 		priority:             wpc.workerPoolConfig.Priority,
@@ -428,6 +421,7 @@ func (m agentMachineWorker) worker() *types.Worker {
 		FreeGpuCount:         m.gpuCount,
 		Gpu:                  m.gpu,
 		PoolName:             m.poolName,
+		PoolSelector:         m.poolSelector,
 		MachineId:            m.machineID,
 		RequiresPoolSelector: m.requiresPoolSelector,
 		Priority:             m.priority,

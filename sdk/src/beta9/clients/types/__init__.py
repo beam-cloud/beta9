@@ -284,6 +284,7 @@ class Worker(betterproto.Message):
     build_version: str = betterproto.string_field(16)
     active_containers: List["Container"] = betterproto.message_field(17)
     runtime: str = betterproto.string_field(18)
+    pool_selector: str = betterproto.string_field(19)
 
 
 @dataclass(eq=False, repr=False)

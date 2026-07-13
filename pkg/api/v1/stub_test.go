@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"bytes"
@@ -27,16 +28,23 @@ import (
 type sandboxRowsEventRepo struct {
 	repository.EventRepository
 	history          *types.EventHistoryResponse
+	workspaceHistory *types.EventHistoryResponse
 	historiesByStub  map[string]*types.EventHistoryResponse
 	containers       map[string]*types.ContainerEventsResponse
 	queries          []types.EventQuery
 	containerQueries []types.EventQuery
+	mu               sync.Mutex
 }
 
 func (r *sandboxRowsEventRepo) GetEventHistory(_ context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	r.mu.Lock()
 	r.queries = append(r.queries, query)
+	r.mu.Unlock()
 	if r.historiesByStub != nil && query.StubID != "" {
 		return r.historiesByStub[query.StubID], nil
+	}
+	if query.AppID == "" && query.StubID == "" && r.workspaceHistory != nil {
+		return r.workspaceHistory, nil
 	}
 	return r.history, nil
 }
@@ -309,23 +317,20 @@ func TestBuildSandboxStatsRowsUsesAppHistoryForAppNamespaceStats(t *testing.T) {
 	if got, want := len(rows), 3; got != want {
 		t.Fatalf("expected %d sandbox stats rows, got %d", want, got)
 	}
-	if got := len(eventRepo.queries); got != 3 {
-		t.Fatalf("expected app, legacy, and bounded stub fallback history queries, got %d", got)
+	if got := len(eventRepo.queries); got != 2 {
+		t.Fatalf("expected app and bounded stub fallback history queries, got %d", got)
 	}
-	query := eventRepo.queries[0]
-	if query.AppID != "app-1" {
-		t.Fatalf("history query app_id = %q, want app-1", query.AppID)
+	var foundAppQuery, foundStubQuery bool
+	for _, query := range eventRepo.queries {
+		if query.AppID == "app-1" && query.StubID == "" {
+			foundAppQuery = true
+		}
+		if query.AppID == "" && query.StubID == "sandbox-stub" {
+			foundStubQuery = true
+		}
 	}
-	if query.StubID != "" {
-		t.Fatalf("history query stub_id = %q, want empty", query.StubID)
-	}
-	query = eventRepo.queries[1]
-	if query.AppID != "" || query.StubID != "" {
-		t.Fatalf("legacy query app_id/stub_id = %q/%q, want empty", query.AppID, query.StubID)
-	}
-	query = eventRepo.queries[2]
-	if query.AppID != "" || query.StubID != "sandbox-stub" {
-		t.Fatalf("stub fallback query app_id/stub_id = %q/%q, want empty/sandbox-stub", query.AppID, query.StubID)
+	if !foundAppQuery || !foundStubQuery {
+		t.Fatalf("expected app and stub fallback queries, got %#v", eventRepo.queries)
 	}
 }
 
@@ -379,6 +384,54 @@ func TestBuildSandboxStatsRowsMergesStubFallbackForPartialAppHistory(t *testing.
 	}
 	if fallback.LifetimeMs == nil || *fallback.LifetimeMs != 2000 {
 		t.Fatalf("fallback lifetime_ms = %v, want 2000", fallback.LifetimeMs)
+	}
+	for _, query := range eventRepo.queries {
+		if query.AppID == "" && query.StubID == "" {
+			t.Fatalf("unexpected workspace-wide history query when scoped history was available: %#v", query)
+		}
+	}
+}
+
+func TestSandboxStatsContainerSummariesUsesWorkspaceFallbackOnlyWhenScopedHistoryIsEmpty(t *testing.T) {
+	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
+	stubs := []types.StubWithRelated{{
+		Stub: types.Stub{
+			ExternalId: "sandbox-stub",
+			Name:       "sandbox",
+			CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+		},
+	}}
+
+	eventRepo := &sandboxRowsEventRepo{
+		historiesByStub: map[string]*types.EventHistoryResponse{
+			"sandbox-stub": nil,
+		},
+		workspaceHistory: &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-legacy", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-legacy", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(time.Second)},
+		}},
+	}
+	group := &StubGroup{eventRepo: eventRepo}
+
+	summaries := group.sandboxStatsContainerSummaries(context.Background(), "workspace", "app-1", stubs)
+	if got, want := len(summaries), 1; got != want {
+		t.Fatalf("expected %d legacy sandbox summary, got %d", want, got)
+	}
+	if got, want := summaries[0].ContainerID, "sandbox-stub-legacy"; got != want {
+		t.Fatalf("container_id = %q, want %q", got, want)
+	}
+	if got := len(eventRepo.queries); got != 3 {
+		t.Fatalf("expected app, stub, then workspace fallback queries, got %d", got)
+	}
+	var foundLegacy bool
+	for _, query := range eventRepo.queries {
+		if query.AppID == "" && query.StubID == "" {
+			foundLegacy = true
+			break
+		}
+	}
+	if !foundLegacy {
+		t.Fatalf("expected unscoped workspace fallback query, got %#v", eventRepo.queries)
 	}
 }
 

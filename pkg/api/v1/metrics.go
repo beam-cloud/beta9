@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -29,6 +30,7 @@ func NewMetricsGroup(g *echo.Group, backendRepo repository.BackendRepository, ev
 
 	g.GET("/:workspaceId/stub-timeseries", auth.WithWorkspaceAuth(group.GetStubMetricTimeseries))
 	g.GET("/:workspaceId/workspace-timeseries", auth.WithWorkspaceAuth(group.GetWorkspaceMetricTimeseries))
+	g.GET("/:workspaceId/pool-timeseries", auth.WithWorkspaceAuth(group.GetPoolMetricTimeseries))
 	g.GET("/:workspaceId/stubs/:stubId/stream", auth.WithWorkspaceAuth(group.StreamStubMetrics))
 
 	return group
@@ -59,21 +61,9 @@ func (g *MetricsGroup) GetStubMetricTimeseries(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	start, err := time.Parse(time.RFC3339Nano, ctx.QueryParam("start"))
+	start, end, interval, err := metricRangeFromContext(ctx, "1h")
 	if err != nil {
-		return HTTPBadRequest("Invalid start time")
-	}
-	end, err := time.Parse(time.RFC3339Nano, ctx.QueryParam("end"))
-	if err != nil {
-		return HTTPBadRequest("Invalid end time")
-	}
-	if !end.After(start) {
-		return HTTPBadRequest("Invalid metrics time range")
-	}
-
-	interval := ctx.QueryParam("interval")
-	if interval == "" {
-		interval = "1h"
+		return HTTPBadRequest(err.Error())
 	}
 
 	response, err := g.eventRepo.GetStubMetricsTimeseries(ctx.Request().Context(), types.EventQuery{
@@ -103,21 +93,9 @@ func (g *MetricsGroup) GetWorkspaceMetricTimeseries(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	start, err := time.Parse(time.RFC3339Nano, ctx.QueryParam("start"))
+	start, end, interval, err := metricRangeFromContext(ctx, "1m")
 	if err != nil {
-		return HTTPBadRequest("Invalid start time")
-	}
-	end, err := time.Parse(time.RFC3339Nano, ctx.QueryParam("end"))
-	if err != nil {
-		return HTTPBadRequest("Invalid end time")
-	}
-	if !end.After(start) {
-		return HTTPBadRequest("Invalid metrics time range")
-	}
-
-	interval := ctx.QueryParam("interval")
-	if interval == "" {
-		interval = "1m"
+		return HTTPBadRequest(err.Error())
 	}
 
 	response, err := g.eventRepo.GetWorkspaceMetricsTimeseries(ctx.Request().Context(), types.EventQuery{
@@ -134,6 +112,94 @@ func (g *MetricsGroup) GetWorkspaceMetricTimeseries(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, response)
+}
+
+func (g *MetricsGroup) GetPoolMetricTimeseries(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := authInfoFromContext(cc)
+	if g.eventRepo == nil {
+		return HTTPInternalServerError("Event repository is unavailable")
+	}
+
+	start, end, interval, err := metricRangeFromContext(ctx, "10s")
+	if err != nil {
+		return HTTPBadRequest(err.Error())
+	}
+	bucketSize, err := time.ParseDuration(interval)
+	if err != nil || bucketSize < 5*time.Second || bucketSize > time.Hour || end.Sub(start) > 24*time.Hour || end.Sub(start)/bucketSize > 1000 {
+		return HTTPBadRequest("Invalid pool metrics range or interval")
+	}
+
+	workspaceID := requestedEventWorkspaceID(ctx, authInfo)
+	if workspaceID == "" {
+		return HTTPNotFound()
+	}
+	workspaceIDs := []string{workspaceID}
+	if auth.IsPlatformOperator(authInfo) {
+		adminWorkspace, err := g.backendRepo.GetAdminWorkspace(ctx.Request().Context())
+		if err != nil {
+			return HTTPInternalServerError("Failed to resolve admin workspace")
+		}
+		if adminWorkspace != nil && adminWorkspace.ExternalId != "" && adminWorkspace.ExternalId != workspaceID {
+			workspaceIDs = append(workspaceIDs, adminWorkspace.ExternalId)
+		}
+	}
+
+	points := map[int64]map[string]types.PoolMetrics{}
+	for _, id := range workspaceIDs {
+		response, err := g.eventRepo.GetPoolMetricsTimeseries(ctx.Request().Context(), types.EventQuery{WorkspaceID: id}, start.UTC(), end.UTC(), interval)
+		if err != nil {
+			if errors.Is(err, repository.ErrEventReadUnsupported) {
+				return NewHTTPError(http.StatusServiceUnavailable, "Pool metric reads are not configured")
+			}
+			return HTTPInternalServerError("Failed to retrieve pool metrics")
+		}
+		for _, point := range response.Points {
+			if points[point.Timestamp] == nil {
+				points[point.Timestamp] = map[string]types.PoolMetrics{}
+			}
+			for _, metric := range point.Pools {
+				points[point.Timestamp][metric.WorkspaceID+"\x00"+metric.PoolName] = metric
+			}
+		}
+	}
+
+	timestamps := make([]int64, 0, len(points))
+	for timestamp := range points {
+		timestamps = append(timestamps, timestamp)
+	}
+	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
+	response := &types.PoolMetricsTimeseriesResponse{Workspaces: workspaceIDs, Points: make([]types.PoolMetricsPoint, 0, len(timestamps))}
+	for _, timestamp := range timestamps {
+		poolMetrics := make([]types.PoolMetrics, 0, len(points[timestamp]))
+		for _, metric := range points[timestamp] {
+			poolMetrics = append(poolMetrics, metric)
+		}
+		sort.Slice(poolMetrics, func(i, j int) bool {
+			return poolMetrics[i].WorkspaceID+poolMetrics[i].PoolName < poolMetrics[j].WorkspaceID+poolMetrics[j].PoolName
+		})
+		response.Points = append(response.Points, types.PoolMetricsPoint{Timestamp: timestamp, Pools: poolMetrics})
+	}
+	return ctx.JSON(http.StatusOK, response)
+}
+
+func metricRangeFromContext(ctx echo.Context, defaultInterval string) (time.Time, time.Time, string, error) {
+	start, err := time.Parse(time.RFC3339Nano, ctx.QueryParam("start"))
+	if err != nil {
+		return time.Time{}, time.Time{}, "", errors.New("Invalid start time")
+	}
+	end, err := time.Parse(time.RFC3339Nano, ctx.QueryParam("end"))
+	if err != nil {
+		return time.Time{}, time.Time{}, "", errors.New("Invalid end time")
+	}
+	if !end.After(start) {
+		return time.Time{}, time.Time{}, "", errors.New("Invalid metrics time range")
+	}
+	interval := ctx.QueryParam("interval")
+	if interval == "" {
+		interval = defaultInterval
+	}
+	return start, end, interval, nil
 }
 
 func (g *MetricsGroup) StreamStubMetrics(ctx echo.Context) error {

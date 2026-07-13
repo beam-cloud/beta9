@@ -133,6 +133,191 @@ func (r *S2EventRepository) GetWorkspaceMetricsTimeseries(ctx context.Context, q
 	return r.getMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, end, interval, query)
 }
 
+func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query types.EventQuery, start, end time.Time, interval string) (*types.PoolMetricsTimeseriesResponse, error) {
+	response := &types.PoolMetricsTimeseriesResponse{}
+	if query.WorkspaceID == "" {
+		return response, nil
+	}
+	bucketSize, err := time.ParseDuration(interval)
+	if err != nil || bucketSize <= 0 {
+		return nil, fmt.Errorf("invalid pool metrics interval %q", interval)
+	}
+
+	response, err = r.getPoolMetricsTimeseries(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize)
+	if err != nil {
+		return nil, err
+	}
+	legacyEnd := end
+	if len(response.Points) > 0 {
+		legacyEnd = time.UnixMilli(response.Points[0].Timestamp)
+	}
+	if legacyEnd.After(start.Add(bucketSize)) {
+		// The dedicated stream is new. Fill any prefix written before rollout
+		// from the workspace stream; once the requested range is fully covered,
+		// this fallback disappears without a migration flag.
+		legacy, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize)
+		if err != nil {
+			return nil, err
+		}
+		response.Points = append(legacy.Points, response.Points...)
+	}
+	response.Workspaces = []string{query.WorkspaceID}
+	return response, nil
+}
+
+func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration) (*types.PoolMetricsTimeseriesResponse, error) {
+	response := &types.PoolMetricsTimeseriesResponse{}
+	buckets := map[int64]*poolMetricsBucket{}
+	seqNum := uint64(0)
+	startMs := uint64(start.UTC().UnixMilli())
+	endMs := uint64(end.UTC().UnixMilli())
+
+	for {
+		opts := &s2.ReadOptions{SeqNum: &seqNum, Count: countOption(s2MetricsReadLimit), Until: &endMs}
+		if seqNum == 0 {
+			opts.Timestamp = &startMs
+			opts.SeqNum = nil
+		}
+		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
+		if err != nil {
+			if isS2ReadEmpty(err) {
+				break
+			}
+			return nil, fmt.Errorf("read pool metrics from s2 stream %q: %w", streamName, err)
+		}
+		if len(batch.Records) == 0 {
+			break
+		}
+
+		for _, record := range batch.Records {
+			sample, eventTime, ok := computePoolMetricFromS2(record)
+			if !ok || eventTime.Before(start) || !eventTime.Before(end) {
+				continue
+			}
+			key := eventTime.UTC().Truncate(bucketSize).UnixMilli()
+			bucket := buckets[key]
+			if bucket == nil {
+				bucket = &poolMetricsBucket{key: key, samples: map[string]types.EventComputeSchema{}}
+				buckets[key] = bucket
+			}
+			bucket.samples[sample.PoolName+"\x00"+sample.MachineID] = sample
+		}
+
+		last := batch.Records[len(batch.Records)-1]
+		seqNum = last.SeqNum + 1
+		if len(batch.Records) < s2MetricsReadLimit {
+			break
+		}
+	}
+
+	keys := make([]int64, 0, len(buckets))
+	for key := range buckets {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	response.Points = make([]types.PoolMetricsPoint, 0, len(keys))
+	for _, key := range keys {
+		response.Points = append(response.Points, buckets[key].point(bucketSize))
+	}
+	return response, nil
+}
+
+func computePoolMetricFromS2(record s2.SequencedRecord) (types.EventComputeSchema, time.Time, bool) {
+	var envelope struct {
+		Type string                   `json:"type"`
+		Time time.Time                `json:"time"`
+		Data types.EventComputeSchema `json:"data"`
+	}
+	if json.Unmarshal(record.Body, &envelope) != nil ||
+		(envelope.Type != types.EventComputeMachine && envelope.Type != types.EventComputePool) || !isComputeMetricsAction(envelope.Data.Action) {
+		return types.EventComputeSchema{}, time.Time{}, false
+	}
+	if envelope.Data.PoolName == "" || (envelope.Data.Action == types.EventComputeActionMachineHeartbeat && envelope.Data.MachineID == "") {
+		return types.EventComputeSchema{}, time.Time{}, false
+	}
+	eventTime := envelope.Data.Timestamp
+	if eventTime.IsZero() {
+		eventTime = envelope.Time
+	}
+	if eventTime.IsZero() {
+		eventTime = time.Unix(0, int64(s2TimestampMillisToNanos(record.Timestamp))).UTC()
+	}
+	return envelope.Data, eventTime, true
+}
+
+type poolMetricsBucket struct {
+	key     int64
+	samples map[string]types.EventComputeSchema
+}
+
+func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoint {
+	byPool := map[string][]types.EventComputeSchema{}
+	for _, sample := range b.samples {
+		byPool[sample.PoolName] = append(byPool[sample.PoolName], sample)
+	}
+	names := make([]string, 0, len(byPool))
+	for name := range byPool {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	point := types.PoolMetricsPoint{Timestamp: b.key, Pools: make([]types.PoolMetrics, 0, len(names))}
+	for _, name := range names {
+		metric := types.PoolMetrics{PoolName: name}
+		var cpuWeighted, cpuWeight, memoryUsed, memoryTotal, diskUsed, diskTotal, hourlyCostMicros float64
+		for _, sample := range byPool[name] {
+			metric.WorkspaceID = sample.WorkspaceID
+			if sample.Action == types.EventComputeActionPoolHeartbeat {
+				metric.MachineCount += int(sample.MachineCount)
+			} else {
+				metric.MachineCount++
+			}
+			metric.ContainerCount += metricAttrUint(sample.Attrs, "container_count")
+			metric.GPUCount += sample.GPUCount
+			metric.FreeGPUCount += metricAttrUint(sample.Attrs, "free_gpu_count")
+
+			weight := float64(sample.CPUCount)
+			if weight == 0 {
+				weight = 1
+			}
+			cpuWeighted += metricAttrFloat(sample.Attrs, "cpu_utilization_pct") * weight
+			cpuWeight += weight
+			memoryUsed += metricAttrFloat(sample.Attrs, "memory_used_mb")
+			memoryTotal += float64(sample.MemoryMB)
+			diskUsed += metricAttrFloat(sample.Attrs, "disk_used_mb")
+			diskTotal += metricAttrFloat(sample.Attrs, "disk_total_mb")
+			hourlyCostMicros += metricAttrFloat(sample.Attrs, "hourly_cost_micros")
+		}
+		if cpuWeight > 0 {
+			metric.CPUUtilizationPct = cpuWeighted / cpuWeight
+		}
+		if memoryTotal > 0 {
+			metric.MemoryUtilizationPct = memoryUsed / memoryTotal * 100
+		}
+		if diskTotal > 0 {
+			metric.DiskUsagePct = diskUsed / diskTotal * 100
+		}
+		if metric.GPUCount > 0 {
+			free := min(metric.FreeGPUCount, metric.GPUCount)
+			metric.GPUUtilizationPct = float64(metric.GPUCount-free) / float64(metric.GPUCount) * 100
+		}
+		metric.HourlyCost = hourlyCostMicros / 1_000_000
+		metric.EstimatedCost = metric.HourlyCost * bucketSize.Hours()
+		point.Pools = append(point.Pools, metric)
+	}
+	return point
+}
+
+func metricAttrFloat(attrs map[string]string, key string) float64 {
+	value, _ := strconv.ParseFloat(attrs[key], 64)
+	return value
+}
+
+func metricAttrUint(attrs map[string]string, key string) uint32 {
+	value, _ := strconv.ParseUint(attrs[key], 10, 32)
+	return uint32(value)
+}
+
 func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string, query types.EventQuery) (*types.MetricsTimeseriesResponse, error) {
 	response := &types.MetricsTimeseriesResponse{}
 	buckets := map[int64]*metricsBucketAccumulator{}

@@ -208,6 +208,13 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	poolMode := slotPoolMode(slot)
 	poolRuntime := slotContainerRuntime(slot)
+	priority := int(slot.Priority)
+	if priority == 0 && !slot.PrioritySet {
+		priority = 1000
+		if poolMode == string(types.PoolModeMarketplace) {
+			priority = 100
+		}
+	}
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
@@ -276,9 +283,9 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
 					NetworkPreallocation:      true,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),
-					RequiresPoolSelector:      slotRequiresPoolSelector(slot, poolMode),
-					Priority:                  slotPriority(slot),
-					Preemptable:               slot != nil && slot.Preemptable,
+					RequiresPoolSelector:      slot.RequiresPoolSelector || poolMode == string(types.PoolModePrivate),
+					Priority:                  priority,
+					Preemptable:               slot.Preemptable,
 					CRIUEnabled:               true,
 					TmpSizeLimit:              types.AgentTmpSizeLimit,
 					StorageMode:               workspaceStorageMode,
@@ -318,23 +325,6 @@ func slotPoolMode(slot *pb.AgentWorkerSlot) string {
 		}
 	}
 	return string(types.PoolModePrivate)
-}
-
-func slotRequiresPoolSelector(slot *pb.AgentWorkerSlot, poolMode string) bool {
-	if slot != nil && slot.RequiresPoolSelector {
-		return true
-	}
-	return poolMode == string(types.PoolModePrivate)
-}
-
-func slotPriority(slot *pb.AgentWorkerSlot) int {
-	if slot != nil && slot.Priority != 0 {
-		return int(slot.Priority)
-	}
-	if slotPoolMode(slot) == string(types.PoolModeMarketplace) {
-		return 100
-	}
-	return 1000
 }
 
 // slotContainerRuntime returns the runtime the gateway assigned to this slot.

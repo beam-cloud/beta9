@@ -16,8 +16,7 @@ import (
 const platformPoolRequestLimit = 1024 * 1024
 
 type PlatformPoolGroup struct {
-	routerGroup *echo.Group
-	service     PlatformPoolService
+	service PlatformPoolService
 }
 
 type PlatformPoolService interface {
@@ -33,7 +32,7 @@ type platformPoolRequest struct {
 }
 
 func NewPlatformPoolGroup(g *echo.Group, service PlatformPoolService) *PlatformPoolGroup {
-	group := &PlatformPoolGroup{routerGroup: g, service: service}
+	group := &PlatformPoolGroup{service: service}
 	g.GET("", auth.WithPlatformOperatorAuth(group.List))
 	g.POST("", auth.WithPlatformOperatorAuth(group.Create))
 	g.PUT("/:name", auth.WithPlatformOperatorAuth(group.Update))

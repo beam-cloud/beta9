@@ -631,6 +631,7 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		ContainerStartConcurrency: slot.ContainerStartConcurrency,
 		RequiresPoolSelector:      slot.RequiresPoolSelector,
 		Priority:                  slot.Priority,
+		PrioritySet:               true,
 		Preemptable:               slot.Preemptable,
 	}
 }

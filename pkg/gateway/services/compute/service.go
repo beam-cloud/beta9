@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const platformPoolReconcileRetryInterval = 10 * time.Second
+
 type Service struct {
 	appConfig            types.AppConfig
 	backendRepo          repository.BackendRepository
@@ -78,7 +80,27 @@ func (s *Service) Start(ctx context.Context) {
 	s.reconcileOnce.Do(func() {
 		if err := s.ReconcilePlatformPools(ctx); err != nil {
 			log.Error().Err(err).Msg("platform pool reconciliation failed")
+			go s.retryPlatformPoolReconciliation(ctx, platformPoolReconcileRetryInterval)
 		}
 		go s.runReconciler(ctx)
 	})
+}
+
+func (s *Service) retryPlatformPoolReconciliation(ctx context.Context, interval time.Duration) {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			if err := s.ReconcilePlatformPools(ctx); err != nil {
+				log.Warn().Err(err).Msg("platform pool reconciliation retry failed")
+				timer.Reset(interval)
+				continue
+			}
+			return
+		}
+	}
 }

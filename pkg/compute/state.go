@@ -35,7 +35,7 @@ type PoolState struct {
 	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
 	// PlatformManaged marks public/serverless inventory owned by the control
 	// plane rather than a tenant. WorkerConfig preserves the complete worker
-	// pool configuration used by both YAML and dashboard-managed pools.
+	// pool configuration used by both config- and API-managed pools.
 	PlatformManaged bool   `json:"platform_managed,omitempty"`
 	PlatformSource  string `json:"platform_source,omitempty"`
 	// PlatformInstanceID changes whenever a deleted platform pool is
@@ -46,8 +46,8 @@ type PoolState struct {
 }
 
 const (
-	PlatformPoolSourceConfig    = "config"
-	PlatformPoolSourceDashboard = "dashboard"
+	PlatformPoolSourceConfig = "config"
+	PlatformPoolSourceAPI    = "api"
 
 	PlatformPoolControllerLocal          = "local"
 	PlatformPoolControllerAgent          = "agent"
@@ -68,12 +68,9 @@ type PlatformPool struct {
 	Config            types.WorkerPoolConfig `json:"config"`
 	Source            string                 `json:"source"`
 	Controller        string                 `json:"controller"`
-	Editable          bool                   `json:"editable"`
-	State             *types.WorkerPoolState `json:"state,omitempty"`
+	State             *types.WorkerPoolState `json:"-"` // Used by the admin CLI, not the HTTP API.
 	MachineCount      int                    `json:"machine_count"`
 	ReadyMachineCount int                    `json:"ready_machine_count"`
-	CreatedAt         time.Time              `json:"created_at,omitempty"`
-	UpdatedAt         time.Time              `json:"updated_at,omitempty"`
 }
 
 const (
