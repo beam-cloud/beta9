@@ -8,6 +8,7 @@ import (
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -15,10 +16,7 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	if in == nil {
 		return nil
 	}
-	out := *in
-	out.Gpu = append([]string(nil), in.Gpu...)
-	out.Providers = append([]string(nil), in.Providers...)
-	out.Regions = append([]string(nil), in.Regions...)
+	out := proto.Clone(in).(*pb.PoolConfig)
 	if out.Selector == "" {
 		out.Selector = out.Name
 	}
@@ -35,7 +33,7 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	if out.Priority == 0 {
 		out.Priority = defaultPrivatePriority
 	}
-	return &out
+	return out
 }
 
 func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservation bool) (model.Pool, error) {

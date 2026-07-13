@@ -284,6 +284,7 @@ var EventTaskSchemaVersion = "1.0"
 type EventTaskSchema struct {
 	ID                  string     `json:"id"`
 	Status              TaskStatus `json:"status"`
+	FailureReason       string     `json:"failure_reason"`
 	ContainerID         string     `json:"container_id"`
 	StartedAt           *time.Time `json:"started_at"`
 	EndedAt             *time.Time `json:"ended_at"`

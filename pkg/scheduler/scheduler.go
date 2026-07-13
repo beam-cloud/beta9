@@ -888,8 +888,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		gpuRequestsMap[gpu] = index
 	}
 
-	// If the request contains the "any" GPU selector, we need to check all GPU types
-	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
+	anyGPU := slices.Contains(gpuRequests, string(types.GPU_ANY))
+	// A selector-bound request is already constrained to a specific pool. Its
+	// hardware may not be part of Beta9's managed GPU catalog, so "any" must be
+	// a true wildcard within that pool.
+	if anyGPU && request.PoolSelector == "" {
 		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}
 
@@ -917,6 +920,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		if requiresGPU {
 			// Validate GPU resource availability
 			_, validGpu := gpuRequestsMap[worker.Gpu]
+			validGpu = validGpu || (anyGPU && request.PoolSelector != "")
 			if !validGpu || worker.FreeGpuCount < gpuCount {
 				continue
 			}

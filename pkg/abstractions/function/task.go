@@ -98,6 +98,7 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 
 	task.Status = types.TaskStatusRetry
 	task.ContainerId = containerId
+	task.FailureReason = ""
 	updatedTask, err := t.fs.backendRepo.UpdateTask(ctx, taskId, task.Task)
 	if err != nil {
 		return err
@@ -212,6 +213,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		GpuCount:     uint32(gpuCount),
 		ImageId:      stubConfig.Runtime.ImageId,
 		StubId:       stub.ExternalId,
+		TaskId:       task.ExternalId,
 		AppId:        stub.App.ExternalId,
 		WorkspaceId:  stub.Workspace.ExternalId,
 		Workspace:    stub.Workspace,
@@ -231,6 +233,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		}
 
 		task.Status = types.TaskStatusCancelled
+		task.FailureReason = err.Error()
 		task.EndedAt = types.NullTime{}.Now()
 		t.fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 

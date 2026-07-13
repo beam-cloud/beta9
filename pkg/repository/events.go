@@ -931,15 +931,16 @@ func (r *EventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 
 func eventTaskSchemaFromTask(task *types.TaskWithRelated) types.EventTaskSchema {
 	event := types.EventTaskSchema{
-		ID:          task.ExternalId,
-		Status:      task.Status,
-		ContainerID: task.ContainerId,
-		CreatedAt:   task.CreatedAt.Time,
-		UpdatedAt:   task.UpdatedAt.Time,
-		StubID:      task.Stub.ExternalId,
-		StubType:    task.Stub.Type,
-		WorkspaceID: task.Workspace.ExternalId,
-		AppID:       task.App.ExternalId,
+		ID:            task.ExternalId,
+		Status:        task.Status,
+		FailureReason: task.FailureReason,
+		ContainerID:   task.ContainerId,
+		CreatedAt:     task.CreatedAt.Time,
+		UpdatedAt:     task.UpdatedAt.Time,
+		StubID:        task.Stub.ExternalId,
+		StubType:      task.Stub.Type,
+		WorkspaceID:   task.Workspace.ExternalId,
+		AppID:         task.App.ExternalId,
 	}
 
 	if task.StartedAt.Valid {

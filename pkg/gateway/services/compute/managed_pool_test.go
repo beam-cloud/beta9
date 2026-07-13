@@ -61,10 +61,10 @@ func managedPoolTestService(config types.AppConfig, repo *fakeComputeRepo) *Serv
 }
 
 func TestManagedPoolServiceRejectsForgedClientCapability(t *testing.T) {
-	service := &Service{}
+	service := managedPoolTestService(types.AppConfig{}, &fakeComputeRepo{})
 	nonAdmin := &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: "workspace-1"},
-		Token:     &types.Token{ExternalId: "user-token", TokenType: types.TokenTypeWorkspacePrimary},
+		Token:     &types.Token{ExternalId: "user-token", TokenType: types.TokenTypeWorkspacePrimary, Active: true},
 	}
 
 	ctx := context.Background()

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -181,6 +182,16 @@ func (a *schedulingAttempt) fail(reason string) {
 	}
 	if err := a.scheduler.containerRepo.SetContainerRequestStatus(a.request.ContainerId, types.ContainerRequestStatusFailed); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to record container request scheduling failure")
+	}
+	if a.request.TaskId != "" && a.scheduler.eventBus != nil {
+		if _, err := a.scheduler.eventBus.Send(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
+			TaskID:       a.request.TaskId,
+			ContainerID:  a.request.ContainerId,
+			PoolSelector: a.request.PoolSelector,
+			Reason:       reason,
+		})); err != nil {
+			requestLog(log.Error(), a.request).Err(err).Msg("failed to publish container scheduling failure")
+		}
 	}
 	metrics.RecordRequestScheduleFailure(a.request)
 }

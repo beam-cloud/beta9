@@ -272,7 +272,7 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, serializedStub)
 }
 
-func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub *types.StubWithRelated) error {
+func (g *StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub *types.StubWithRelated) error {
 	var stubConfig types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return HTTPBadRequest("Failed to process overrides")
@@ -317,7 +317,7 @@ func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub 
 	return nil
 }
 
-func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
+func (g *StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
 	for i, volume := range volumes {
 		if volume.Config != nil {
 			// De-reference secrets
@@ -1585,10 +1585,6 @@ func (g *StubGroup) recentSandboxContainerSummaries(ctx context.Context, workspa
 }
 
 func (g *StubGroup) recentSandboxContainerSummariesResult(ctx context.Context, workspaceID, stubID string, maxContainers int) ([]sandboxContainerSummary, error) {
-	if g.eventRepo == nil {
-		return nil, nil
-	}
-
 	limit := uint64(sandboxContainerHistoryLimit)
 	if maxContainers > 0 {
 		limit = uint64(maxContainers * sandboxHistoryEventsPerRow)
@@ -1600,12 +1596,28 @@ func (g *StubGroup) recentSandboxContainerSummariesResult(ctx context.Context, w
 		}
 	}
 
-	history, err := g.coalescedSandboxEventHistory(ctx, types.EventQuery{
+	return g.recentSandboxSummariesResult(ctx, types.EventQuery{
 		WorkspaceID: workspaceID,
 		StubID:      stubID,
 		Limit:       limit,
-		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
-	})
+	}, maxContainers)
+}
+
+func (g *StubGroup) recentSandboxStatsContainerSummariesResult(ctx context.Context, workspaceID, appID string) ([]sandboxContainerSummary, error) {
+	return g.recentSandboxSummariesResult(ctx, types.EventQuery{
+		WorkspaceID: workspaceID,
+		AppID:       appID,
+		Limit:       sandboxStatsHistoryLimit,
+	}, 0)
+}
+
+func (g *StubGroup) recentSandboxSummariesResult(ctx context.Context, query types.EventQuery, maxContainers int) ([]sandboxContainerSummary, error) {
+	if g.eventRepo == nil {
+		return nil, nil
+	}
+
+	query.EventTypes = []string{types.EventContainerLifecycle, types.EventContainerEvent}
+	history, err := g.coalescedSandboxEventHistory(ctx, query)
 	if err != nil {
 		return nil, sandboxHistoryAdmissionError(err)
 	}
@@ -1613,26 +1625,6 @@ func (g *StubGroup) recentSandboxContainerSummariesResult(ctx context.Context, w
 		return nil, nil
 	}
 	return sandboxContainerSummariesFromHistory(history.Events, maxContainers), nil
-}
-
-func (g *StubGroup) recentSandboxStatsContainerSummariesResult(ctx context.Context, workspaceID, appID string) ([]sandboxContainerSummary, error) {
-	if g.eventRepo == nil {
-		return nil, nil
-	}
-
-	history, err := g.coalescedSandboxEventHistory(ctx, types.EventQuery{
-		WorkspaceID: workspaceID,
-		AppID:       appID,
-		Limit:       sandboxStatsHistoryLimit,
-		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
-	})
-	if err != nil {
-		return nil, sandboxHistoryAdmissionError(err)
-	}
-	if history == nil {
-		return nil, nil
-	}
-	return sandboxContainerSummariesFromHistory(history.Events, 0), nil
 }
 
 // sandboxStatsContainerSummaries reads the scoped app and stub streams first.

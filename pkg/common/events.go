@@ -45,9 +45,10 @@ type Event struct {
 }
 
 const (
-	EventTypeStopContainer  EventType = "STOP_CONTAINER"
-	EventTypeStopBuild      EventType = "STOP_BUILD"
-	EventTypeReloadInstance EventType = "RELOAD_INSTANCE"
+	EventTypeStopContainer             EventType = "STOP_CONTAINER"
+	EventTypeStopBuild                 EventType = "STOP_BUILD"
+	EventTypeReloadInstance            EventType = "RELOAD_INSTANCE"
+	EventTypeContainerSchedulingFailed EventType = "CONTAINER_SCHEDULING_FAILED"
 )
 
 func StopBuildEventType(containerId string) EventType {

@@ -237,6 +237,7 @@ type ContainerRequest struct {
 	GpuCount                 uint32          `json:"gpu_count"`
 	ImageId                  string          `json:"image_id"`
 	StubId                   string          `json:"stub_id"`
+	TaskId                   string          `json:"task_id,omitempty"`
 	WorkspaceId              string          `json:"workspace_id"`
 	Workspace                Workspace       `json:"workspace"`
 	Stub                     StubWithRelated `json:"stub"`
