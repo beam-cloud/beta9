@@ -302,7 +302,7 @@ def override_config_options(func: click.Command):
     f = click.option(
         "--cpu",
         type=click.FLOAT,
-        help="The amount of CPU to allocate (in cores, e.g. --cpu 0.5).",
+        help="The number of vCPUs to allocate (for example, --cpu 0.5 or --cpu 1).",
         required=False,
     )(func)
     f = click.option(

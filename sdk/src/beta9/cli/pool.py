@@ -680,7 +680,7 @@ def join_command(service: ServiceClient, name: str, ttl: str):
     help="Override the agent executor returned by preflight.",
 )
 @click.option("--worker-image", default="", help="Worker image for the worker-container executor.")
-@click.option("--max-cpu", default="", help="Maximum CPU cores to advertise from this machine.")
+@click.option("--max-cpu", default="", help="Maximum vCPU to advertise from this machine.")
 @click.option("--max-memory", default="", help="Maximum memory to advertise, for example 32Gi.")
 @click.option("--max-gpus", type=click.IntRange(0), default=0, help="Maximum GPUs to advertise.")
 @click.option("--gpu-ids", default="", help="Comma-separated GPU device IDs to expose.")

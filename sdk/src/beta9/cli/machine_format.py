@@ -68,10 +68,10 @@ def machine_memory(machine: Machine) -> str:
 
 
 def format_cpu(millicores: int) -> str:
-    cores = millicores / 1000
-    if cores.is_integer():
-        return f"{int(cores)}CPU"
-    return f"{cores:.2f}CPU"
+    vcpu = millicores / 1000
+    if vcpu.is_integer():
+        return f"{int(vcpu)} vCPU"
+    return f"{vcpu:.2f} vCPU"
 
 
 def format_memory(memory_mb: int) -> str:

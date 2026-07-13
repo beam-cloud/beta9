@@ -175,7 +175,7 @@ class VLLM(ASGI):
 
     Parameters:
         cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the container. Default is 1.0.
+            The number of vCPUs allocated to the container. ``cpu=1`` means 1 vCPU. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.

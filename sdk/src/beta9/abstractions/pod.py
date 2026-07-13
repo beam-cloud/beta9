@@ -80,7 +80,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             An optional app name for this pod. If not specified, it will be the name of the
             working directory containing the python file with the pod class.
         cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the pod. Default is 1.0.
+            The number of vCPUs allocated to the pod. ``cpu=1`` means 1 vCPU. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the pod. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.

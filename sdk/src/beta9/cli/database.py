@@ -661,7 +661,7 @@ def _create_options(func):
         help="Change the format of the output.",
     )(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
-    func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
+    func = click.option("--cpu", type=click.FLOAT, default=None, help="vCPU to allocate, for example 0.5 or 2.")(func)
     func = click.option(
         "--min-replicas",
         type=click.IntRange(min=0, max=1),
@@ -971,7 +971,7 @@ def _scale_options(func):
     func = click.option("--format", type=click.Choice(("table", "json")), default="table")(func)
     func = click.option("--pool", type=click.STRING, default=None, help="Redeploy the database on a pool.")(func)
     func = click.option("--memory", type=click.STRING, default=None, help="Memory to allocate, for example 1024 or 2Gi.")(func)
-    func = click.option("--cpu", type=click.FLOAT, default=None, help="CPU cores to allocate, for example 0.5 or 2.")(func)
+    func = click.option("--cpu", type=click.FLOAT, default=None, help="vCPU to allocate, for example 0.5 or 2.")(func)
     func = click.option("--serverless", is_flag=True, help="Scale to zero when idle.")(func)
     return click.option("--always-on", is_flag=True, help="Keep one database container warm.")(func)
 

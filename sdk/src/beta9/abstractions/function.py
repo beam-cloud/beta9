@@ -41,7 +41,7 @@ class Function(RunnerAbstraction):
             Assign the function to an app. If the app does not exist, it will be created with the given name.
             An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the container. Default is 0.125.
+            The number of vCPUs allocated to the container. ``cpu=1`` means 1 vCPU. Default is 0.125.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
@@ -352,7 +352,7 @@ class Schedule(Function):
             A cron expression that specifies when the task should be run. For example "*/5 * * * *".
             The timezone is always UTC.
         cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the container. Default is 1.0.
+            The number of vCPUs allocated to the container. ``cpu=1`` means 1 vCPU. Default is 1.0.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.

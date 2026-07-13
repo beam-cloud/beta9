@@ -414,7 +414,8 @@ class RunnerAbstraction(BaseAbstraction):
         Parse the cpu argument to an integer value in millicores.
 
         Args:
-        cpu (Union[int, float, str]): The CPU requirement specified as a float (cores) or string (millicores).
+        cpu (Union[int, float, str]): The CPU requirement specified as a number of vCPUs
+            (for example, ``1`` means 1 vCPU) or as a millicore string.
 
         Returns:
         int: The CPU requirement in millicores.
@@ -422,19 +423,19 @@ class RunnerAbstraction(BaseAbstraction):
         Raises:
         ValueError: If the input is invalid or out of the specified range.
         """
-        min_cores = 0.1
-        max_cores = 64.0
+        min_vcpu = 0.1
+        max_vcpu = 64.0
 
         if isinstance(cpu, float) or isinstance(cpu, int):
-            if min_cores <= cpu <= max_cores:
-                return int(cpu * 1000)  # convert cores to millicores
+            if min_vcpu <= cpu <= max_vcpu:
+                return int(cpu * 1000)  # convert vCPU to millicores
             else:
-                raise ValueError("CPU value out of range. Must be between 0.1 and 64 cores.")
+                raise ValueError("CPU value out of range. Must be between 0.1 and 64 vCPU.")
 
         elif isinstance(cpu, str):
             if cpu.endswith("m") and cpu[:-1].isdigit():
                 millicores = int(cpu[:-1])
-                if min_cores * 1000 <= millicores <= max_cores * 1000:
+                if min_vcpu * 1000 <= millicores <= max_vcpu * 1000:
                     return millicores
                 else:
                     raise ValueError("CPU value out of range. Must be between 100m and 64000m.")
