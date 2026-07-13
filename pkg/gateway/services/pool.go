@@ -28,7 +28,7 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 
 	formattedPools := []*pb.Pool{}
 	if gws.computeService != nil {
-		pools, err := gws.computeService.ListPlatformPools(ctx, authInfo)
+		pools, err := gws.computeService.ListManagedPools(ctx, authInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -36,7 +36,7 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 			if pool == nil {
 				continue
 			}
-			formattedPools = append(formattedPools, platformPoolToProto(pool.Name, pool.Config, pool.State))
+			formattedPools = append(formattedPools, poolToProto(pool.Name, pool.Config, pool.State))
 		}
 		return &pb.ListPoolsResponse{Ok: true, Pools: formattedPools}, nil
 	}
@@ -54,7 +54,7 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 			return nil, err
 		}
 
-		formattedPools = append(formattedPools, platformPoolToProto(poolName, poolConfig, poolState))
+		formattedPools = append(formattedPools, poolToProto(poolName, poolConfig, poolState))
 	}
 
 	return &pb.ListPoolsResponse{
@@ -63,7 +63,7 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 	}, nil
 }
 
-func platformPoolToProto(name string, config types.WorkerPoolConfig, state *types.WorkerPoolState) *pb.Pool {
+func poolToProto(name string, config types.WorkerPoolConfig, state *types.WorkerPoolState) *pb.Pool {
 	pool := &pb.Pool{
 		Name:                  name,
 		Gpu:                   config.GPUType,

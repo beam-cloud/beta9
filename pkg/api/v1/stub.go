@@ -762,6 +762,7 @@ const (
 	sandboxStatsHistoryLimit       = 5000
 	sandboxStatsFallbackStubLimit  = 25
 	sandboxStatsFallbackWorkers    = 8
+	sandboxHistoryAdmissionTimeout = 100 * time.Millisecond
 	sandboxHistoryQueryConcurrency = 16
 	sandboxHistoryQueryTimeout     = 15 * time.Second
 	sandboxTimingHydrationLimit    = 50
@@ -847,17 +848,25 @@ func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 	}
 
 	containersByStub := g.activeContainersByStub(workspaceID)
-	summariesByStubID := indexSandboxContainerSummariesByStubID(g.sandboxStatsContainerSummaries(
+	summaries, err := g.sandboxStatsContainerSummariesResult(
 		ctx.Request().Context(),
 		workspaceID,
 		ctx.QueryParam("app_id"),
 		page.Data,
-	))
+	)
+	if err != nil {
+		return sandboxHistoryUnavailable(ctx, err)
+	}
+	summariesByStubID := indexSandboxContainerSummariesByStubID(summaries)
 
 	rows := make([]SandboxRow, 0, limit)
 	for i := range page.Data {
 		if len(rows) >= limit {
 			break
+		}
+		stubSummaries := summariesByStubID[page.Data[i].ExternalId]
+		if stubSummaries == nil {
+			stubSummaries = []sandboxContainerSummary{}
 		}
 		rows = append(rows, g.buildSandboxRowsWithPreloadedSummaries(
 			ctx.Request().Context(),
@@ -865,7 +874,7 @@ func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 			&page.Data[i],
 			containersByStub[page.Data[i].ExternalId],
 			limit-len(rows),
-			summariesByStubID[page.Data[i].ExternalId],
+			stubSummaries,
 		)...)
 	}
 
@@ -889,7 +898,10 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 	containersByStub := g.activeContainersByStub(workspaceID)
 
 	appID := ctx.QueryParam("app_id")
-	summaries := g.sandboxStatsContainerSummaries(ctx.Request().Context(), workspaceID, appID, stubs)
+	summaries, err := g.sandboxStatsContainerSummariesResult(ctx.Request().Context(), workspaceID, appID, stubs)
+	if err != nil {
+		return sandboxHistoryUnavailable(ctx, err)
+	}
 	sandboxRows := g.buildSandboxStatsRowsWithSummaries(ctx.Request().Context(), workspaceID, stubs, containersByStub, summaries)
 
 	statusCounts := map[string]int{
@@ -1220,6 +1232,7 @@ func (g *StubGroup) buildSandboxRows(ctx context.Context, workspaceID string, st
 }
 
 func (g *StubGroup) buildSandboxRowsWithPreloadedSummaries(ctx context.Context, workspaceID string, stub *types.StubWithRelated, containers []types.ContainerState, maxRows int, summaries []sandboxContainerSummary) []SandboxRow {
+	historyLoaded := summaries != nil
 	rows := make([]SandboxRow, 0, len(containers)+1)
 	activeContainerIDs := make(map[string]struct{}, len(containers))
 	activeRowsNeedSummary := false
@@ -1278,7 +1291,14 @@ func (g *StubGroup) buildSandboxRowsWithPreloadedSummaries(ctx context.Context, 
 	}
 
 	if len(rows) == 0 {
-		rows = append(rows, g.buildFallbackSandboxRow(ctx, workspaceID, stub))
+		if historyLoaded {
+			rows = append(rows, SandboxRow{
+				Id: stub.ExternalId, StubId: stub.ExternalId, Name: stub.Name,
+				CreatedAt: stub.CreatedAt.Time, Status: SandboxStatusStopped,
+			})
+		} else {
+			rows = append(rows, g.buildFallbackSandboxRow(ctx, workspaceID, stub))
+		}
 	}
 
 	g.hydrateSandboxRowTimings(ctx, workspaceID, rows, maxRows)
@@ -1560,8 +1580,13 @@ func (g *StubGroup) containerEvents(ctx context.Context, workspaceID, stubID, co
 }
 
 func (g *StubGroup) recentSandboxContainerSummaries(ctx context.Context, workspaceID, stubID string, maxContainers int) []sandboxContainerSummary {
+	summaries, _ := g.recentSandboxContainerSummariesResult(ctx, workspaceID, stubID, maxContainers)
+	return summaries
+}
+
+func (g *StubGroup) recentSandboxContainerSummariesResult(ctx context.Context, workspaceID, stubID string, maxContainers int) ([]sandboxContainerSummary, error) {
 	if g.eventRepo == nil {
-		return nil
+		return nil, nil
 	}
 
 	limit := uint64(sandboxContainerHistoryLimit)
@@ -1581,15 +1606,18 @@ func (g *StubGroup) recentSandboxContainerSummaries(ctx context.Context, workspa
 		Limit:       limit,
 		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
 	})
-	if err != nil || history == nil {
-		return nil
+	if err != nil {
+		return nil, sandboxHistoryAdmissionError(err)
 	}
-	return sandboxContainerSummariesFromHistory(history.Events, maxContainers)
+	if history == nil {
+		return nil, nil
+	}
+	return sandboxContainerSummariesFromHistory(history.Events, maxContainers), nil
 }
 
-func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, workspaceID, appID string) []sandboxContainerSummary {
+func (g *StubGroup) recentSandboxStatsContainerSummariesResult(ctx context.Context, workspaceID, appID string) ([]sandboxContainerSummary, error) {
 	if g.eventRepo == nil {
-		return nil
+		return nil, nil
 	}
 
 	history, err := g.coalescedSandboxEventHistory(ctx, types.EventQuery{
@@ -1598,10 +1626,13 @@ func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, wo
 		Limit:       sandboxStatsHistoryLimit,
 		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
 	})
-	if err != nil || history == nil {
-		return nil
+	if err != nil {
+		return nil, sandboxHistoryAdmissionError(err)
 	}
-	return sandboxContainerSummariesFromHistory(history.Events, 0)
+	if history == nil {
+		return nil, nil
+	}
+	return sandboxContainerSummariesFromHistory(history.Events, 0), nil
 }
 
 // sandboxStatsContainerSummaries reads the scoped app and stub streams first.
@@ -1609,26 +1640,35 @@ func (g *StubGroup) recentSandboxStatsContainerSummaries(ctx context.Context, wo
 // fallback: it is dense with unrelated realtime events and can require tens of
 // thousands of records to be scanned for a single dashboard request.
 func (g *StubGroup) sandboxStatsContainerSummaries(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated) []sandboxContainerSummary {
+	summaries, _ := g.sandboxStatsContainerSummariesResult(ctx, workspaceID, appID, stubs)
+	return summaries
+}
+
+func (g *StubGroup) sandboxStatsContainerSummariesResult(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated) ([]sandboxContainerSummary, error) {
 	if appID == "" {
-		return g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID)
+		return g.recentSandboxStatsContainerSummariesResult(ctx, workspaceID, appID)
 	}
 
 	var summaries, fallbackSummaries []sandboxContainerSummary
+	var summariesErr, fallbackErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		summaries = g.recentSandboxStatsContainerSummaries(ctx, workspaceID, appID)
+		summaries, summariesErr = g.recentSandboxStatsContainerSummariesResult(ctx, workspaceID, appID)
 	}()
 	go func() {
 		defer wg.Done()
-		fallbackSummaries = g.hydrateSandboxStatsSummaries(ctx, workspaceID, appID, stubs, nil)
+		fallbackSummaries, fallbackErr = g.hydrateSandboxStatsSummariesResult(ctx, workspaceID, appID, stubs, nil)
 	}()
 	wg.Wait()
+	if err := errors.Join(summariesErr, fallbackErr); err != nil {
+		return nil, err
+	}
 
 	summaries = mergeSandboxStatsSummaries(appID, summaries, fallbackSummaries)
 	if len(summaries) > 0 || len(stubs) == 0 {
-		return summaries
+		return summaries, nil
 	}
 
 	legacyLimit := uint64(len(stubs) * sandboxHistoryEventsPerRow)
@@ -1644,10 +1684,13 @@ func (g *StubGroup) sandboxStatsContainerSummaries(ctx context.Context, workspac
 		Limit:       legacyLimit,
 		EventTypes:  []string{types.EventContainerLifecycle, types.EventContainerEvent},
 	})
-	if err != nil || legacy == nil {
-		return summaries
+	if err != nil {
+		return nil, sandboxHistoryAdmissionError(err)
 	}
-	return sandboxContainerSummariesFromHistory(legacySandboxEventsForApp(legacy.Events, stubs), 0)
+	if legacy == nil {
+		return summaries, nil
+	}
+	return sandboxContainerSummariesFromHistory(legacySandboxEventsForApp(legacy.Events, stubs), 0), nil
 }
 
 func (g *StubGroup) coalescedSandboxEventHistory(ctx context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
@@ -1660,7 +1703,7 @@ func (g *StubGroup) coalescedSandboxEventHistory(ctx context.Context, query type
 		return nil, err
 	}
 	result := g.sandboxHistoryQueries.DoChan(key, func() (interface{}, error) {
-		if err := acquireSandboxHistoryQuerySlot(ctx, sandboxHistoryQuerySlots); err != nil {
+		if err := acquireSandboxHistoryQuerySlot(ctx, sandboxHistoryQuerySlots, sandboxHistoryAdmissionTimeout); err != nil {
 			return nil, err
 		}
 		defer func() { <-sandboxHistoryQuerySlots }()
@@ -1694,10 +1737,24 @@ func sandboxHistoryQueryKey(query types.EventQuery) (string, error) {
 	return string(key[:]), nil
 }
 
-func acquireSandboxHistoryQuerySlot(ctx context.Context, slots chan struct{}) error {
+func acquireSandboxHistoryQuerySlot(ctx context.Context, slots chan struct{}, wait time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if wait <= 0 {
+		select {
+		case slots <- struct{}{}:
+			if err := ctx.Err(); err != nil {
+				<-slots
+				return err
+			}
+			return nil
+		default:
+			return errSandboxHistoryBusy
+		}
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
 	select {
 	case slots <- struct{}{}:
 		if err := ctx.Err(); err != nil {
@@ -1707,18 +1764,34 @@ func acquireSandboxHistoryQuerySlot(ctx context.Context, slots chan struct{}) er
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
+	case <-timer.C:
 		return errSandboxHistoryBusy
 	}
 }
 
-func (g *StubGroup) hydrateSandboxStatsSummaries(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated, summaries []sandboxContainerSummary) []sandboxContainerSummary {
+func sandboxHistoryAdmissionError(err error) error {
+	if errors.Is(err, errSandboxHistoryBusy) {
+		return err
+	}
+	return nil
+}
+
+func sandboxHistoryUnavailable(ctx echo.Context, err error) error {
+	if !errors.Is(err, errSandboxHistoryBusy) {
+		return HTTPInternalServerError("Failed to retrieve sandbox history")
+	}
+	ctx.Response().Header().Set("Retry-After", "1")
+	return NewHTTPError(http.StatusServiceUnavailable, "Sandbox history is temporarily busy")
+}
+
+func (g *StubGroup) hydrateSandboxStatsSummariesResult(ctx context.Context, workspaceID, appID string, stubs []types.StubWithRelated, summaries []sandboxContainerSummary) ([]sandboxContainerSummary, error) {
 	if g.eventRepo == nil || appID == "" || len(stubs) == 0 {
-		return summaries
+		return summaries, nil
 	}
 
 	candidates := recentSandboxStatsFallbackStubs(stubs, sandboxStatsFallbackStubLimit)
 	results := make([][]sandboxContainerSummary, len(candidates))
+	errs := make([]error, len(candidates))
 	workers := make(chan struct{}, sandboxStatsFallbackWorkers)
 
 	var wg sync.WaitGroup
@@ -1726,11 +1799,15 @@ func (g *StubGroup) hydrateSandboxStatsSummaries(ctx context.Context, workspaceI
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			workers <- struct{}{}
+			select {
+			case workers <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-workers }()
 
 			stub := candidates[index]
-			results[index] = g.recentSandboxContainerSummaries(ctx, workspaceID, stub.ExternalId, 0)
+			results[index], errs[index] = g.recentSandboxContainerSummariesResult(ctx, workspaceID, stub.ExternalId, 0)
 			for summaryIndex := range results[index] {
 				if results[index][summaryIndex].StubID == "" {
 					results[index][summaryIndex].StubID = stub.ExternalId
@@ -1744,7 +1821,7 @@ func (g *StubGroup) hydrateSandboxStatsSummaries(ctx context.Context, workspaceI
 	for i := range results {
 		fallbacks = append(fallbacks, results[i]...)
 	}
-	return mergeSandboxStatsSummaries(appID, summaries, fallbacks)
+	return mergeSandboxStatsSummaries(appID, summaries, fallbacks), errors.Join(errs...)
 }
 
 func mergeSandboxStatsSummaries(appID string, summaries, fallbacks []sandboxContainerSummary) []sandboxContainerSummary {

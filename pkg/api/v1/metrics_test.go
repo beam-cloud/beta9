@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -45,10 +46,14 @@ func (r *poolMetricsBackend) GetAdminWorkspace(context.Context) (*types.Workspac
 type poolMetricsEvents struct {
 	repository.EventRepository
 	workspaces []string
+	responses  map[string]*types.PoolMetricsTimeseriesResponse
 }
 
 func (r *poolMetricsEvents) GetPoolMetricsTimeseries(_ context.Context, query types.EventQuery, _, _ time.Time, _ string) (*types.PoolMetricsTimeseriesResponse, error) {
 	r.workspaces = append(r.workspaces, query.WorkspaceID)
+	if response := r.responses[query.WorkspaceID]; response != nil {
+		return response, nil
+	}
 	return &types.PoolMetricsTimeseriesResponse{}, nil
 }
 
@@ -64,9 +69,9 @@ func TestPoolMetricsScopeIsDerivedFromAuthenticatedRole(t *testing.T) {
 			want: []string{"user-workspace"},
 		},
 		{
-			name: "platform operator includes platform inventory",
+			name: "cluster admin includes serverless inventory",
 			auth: &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "operator-workspace"}, Token: &types.Token{TokenType: types.TokenTypeClusterAdmin, Active: true}},
-			want: []string{"route-workspace", "platform-workspace"},
+			want: []string{"route-workspace", "admin-workspace"},
 		},
 	}
 
@@ -79,7 +84,7 @@ func TestPoolMetricsScopeIsDerivedFromAuthenticatedRole(t *testing.T) {
 			ctx.SetParamValues("route-workspace")
 			events := &poolMetricsEvents{}
 			group := &MetricsGroup{
-				backendRepo: &poolMetricsBackend{admin: &types.Workspace{ExternalId: "platform-workspace"}},
+				backendRepo: &poolMetricsBackend{admin: &types.Workspace{ExternalId: "admin-workspace"}},
 				eventRepo:   events,
 			}
 
@@ -90,5 +95,36 @@ func TestPoolMetricsScopeIsDerivedFromAuthenticatedRole(t *testing.T) {
 				t.Fatalf("workspaces = %#v, want %#v", events.workspaces, tt.want)
 			}
 		})
+	}
+}
+
+func TestPoolMetricsPreservesAggregateScanMetadata(t *testing.T) {
+	e := echo.New()
+	request := httptest.NewRequest(http.MethodGet, "/?start=2026-07-13T10:00:00Z&end=2026-07-13T10:30:00Z&interval=15s", nil)
+	recorder := httptest.NewRecorder()
+	ctx := e.NewContext(request, recorder)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues("operator-workspace")
+	group := &MetricsGroup{
+		backendRepo: &poolMetricsBackend{admin: &types.Workspace{ExternalId: "admin-workspace"}},
+		eventRepo: &poolMetricsEvents{responses: map[string]*types.PoolMetricsTimeseriesResponse{
+			"operator-workspace": {ScannedRecords: 12},
+			"admin-workspace":    {ScannedRecords: 50_000, Truncated: true},
+		}},
+	}
+	authInfo := &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "operator-workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeClusterAdmin, Active: true},
+	}
+
+	if err := group.GetPoolMetricTimeseries(&auth.HttpAuthContext{Context: ctx, AuthInfo: authInfo}); err != nil {
+		t.Fatal(err)
+	}
+	var response types.PoolMetricsTimeseriesResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.ScannedRecords != 50_012 || !response.Truncated {
+		t.Fatalf("scan metadata = (%d, %v), want (50012, true)", response.ScannedRecords, response.Truncated)
 	}
 }

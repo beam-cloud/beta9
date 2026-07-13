@@ -1346,6 +1346,18 @@ func TestComputeHeartbeatUsesDedicatedPoolMetricsStream(t *testing.T) {
 	}
 }
 
+func TestS2MetricsScanBudgetReportsExhaustion(t *testing.T) {
+	budget := s2MetricsScanBudget(s2ReadScanLimit).consume(123)
+	if scanned, truncated := budget.state(); scanned != 123 || truncated {
+		t.Fatalf("partial budget state = (%d, %v), want (123, false)", scanned, truncated)
+	}
+
+	budget = budget.consume(s2ReadScanLimit)
+	if scanned, truncated := budget.state(); scanned != s2ReadScanLimit || !truncated {
+		t.Fatalf("exhausted budget state = (%d, %v), want (%d, true)", scanned, truncated, s2ReadScanLimit)
+	}
+}
+
 func TestComputePoolSnapshotFromS2(t *testing.T) {
 	body, err := json.Marshal(map[string]any{
 		"type": types.EventComputePool,

@@ -279,7 +279,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
 	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.RedisClient, g.Config)
 	apiv1.NewAppGroup(g.baseRouteGroup.Group("/app", authMiddleware), g.BackendRepo, g.Config, g.ContainerRepo, *g.Scheduler, g.RedisClient)
-	apiv1.NewPlatformPoolGroup(g.baseRouteGroup.Group("/platform/pools", authMiddleware), g.ComputeService)
+	apiv1.NewPoolGroup(g.baseRouteGroup.Group("/pools", authMiddleware), g.ComputeService)
 
 	return nil
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const platformPoolReconcileRetryInterval = 10 * time.Second
+const managedPoolReconcileRetryInterval = 10 * time.Second
 
 type Service struct {
 	appConfig            types.AppConfig
@@ -78,15 +78,15 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	s.reconcileOnce.Do(func() {
-		if err := s.ReconcilePlatformPools(ctx); err != nil {
-			log.Error().Err(err).Msg("platform pool reconciliation failed")
-			go s.retryPlatformPoolReconciliation(ctx, platformPoolReconcileRetryInterval)
+		if err := s.ReconcileManagedPools(ctx); err != nil {
+			log.Error().Err(err).Msg("managed pool reconciliation failed")
+			go s.retryManagedPoolReconciliation(ctx, managedPoolReconcileRetryInterval)
 		}
 		go s.runReconciler(ctx)
 	})
 }
 
-func (s *Service) retryPlatformPoolReconciliation(ctx context.Context, interval time.Duration) {
+func (s *Service) retryManagedPoolReconciliation(ctx context.Context, interval time.Duration) {
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 
@@ -95,8 +95,8 @@ func (s *Service) retryPlatformPoolReconciliation(ctx context.Context, interval 
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if err := s.ReconcilePlatformPools(ctx); err != nil {
-				log.Warn().Err(err).Msg("platform pool reconciliation retry failed")
+			if err := s.ReconcileManagedPools(ctx); err != nil {
+				log.Warn().Err(err).Msg("managed pool reconciliation retry failed")
 				timer.Reset(interval)
 				continue
 			}

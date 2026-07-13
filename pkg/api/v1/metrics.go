@@ -135,7 +135,7 @@ func (g *MetricsGroup) GetPoolMetricTimeseries(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 	workspaceIDs := []string{workspaceID}
-	if auth.IsPlatformOperator(authInfo) {
+	if isClusterAdmin(authInfo) {
 		adminWorkspace, err := g.backendRepo.GetAdminWorkspace(ctx.Request().Context())
 		if err != nil {
 			return HTTPInternalServerError("Failed to resolve admin workspace")
@@ -146,6 +146,8 @@ func (g *MetricsGroup) GetPoolMetricTimeseries(ctx echo.Context) error {
 	}
 
 	points := map[int64]map[string]types.PoolMetrics{}
+	var scannedRecords uint64
+	truncated := false
 	for _, id := range workspaceIDs {
 		response, err := g.eventRepo.GetPoolMetricsTimeseries(ctx.Request().Context(), types.EventQuery{WorkspaceID: id}, start.UTC(), end.UTC(), interval)
 		if err != nil {
@@ -154,6 +156,8 @@ func (g *MetricsGroup) GetPoolMetricTimeseries(ctx echo.Context) error {
 			}
 			return HTTPInternalServerError("Failed to retrieve pool metrics")
 		}
+		scannedRecords += response.ScannedRecords
+		truncated = truncated || response.Truncated
 		for _, point := range response.Points {
 			if points[point.Timestamp] == nil {
 				points[point.Timestamp] = map[string]types.PoolMetrics{}
@@ -169,7 +173,12 @@ func (g *MetricsGroup) GetPoolMetricTimeseries(ctx echo.Context) error {
 		timestamps = append(timestamps, timestamp)
 	}
 	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
-	response := &types.PoolMetricsTimeseriesResponse{Workspaces: workspaceIDs, Points: make([]types.PoolMetricsPoint, 0, len(timestamps))}
+	response := &types.PoolMetricsTimeseriesResponse{
+		Workspaces:     workspaceIDs,
+		Points:         make([]types.PoolMetricsPoint, 0, len(timestamps)),
+		ScannedRecords: scannedRecords,
+		Truncated:      truncated,
+	}
 	for _, timestamp := range timestamps {
 		poolMetrics := make([]types.PoolMetrics, 0, len(points[timestamp]))
 		for _, metric := range points[timestamp] {

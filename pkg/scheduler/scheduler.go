@@ -208,7 +208,7 @@ func (s *Scheduler) DeleteAgentPool(selector string) {
 }
 
 func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolConfig {
-	if state != nil && state.PlatformManaged && state.WorkerConfig != nil {
+	if state != nil && state.ManagementSource != "" && state.WorkerConfig != nil {
 		config := *state.WorkerConfig
 		config.Mode = types.PoolModeExternal
 		config.Provider = nil

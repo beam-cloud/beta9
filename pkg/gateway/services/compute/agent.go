@@ -36,12 +36,11 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if poolState == nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
-	if tokenState.PlatformManaged {
-		if !poolState.PlatformManaged ||
+	if tokenState.ManagedPoolInstanceID != "" {
+		if poolState.ManagementSource == "" ||
 			poolState.Mode != string(types.PoolModeExternal) ||
-			tokenState.PlatformPoolInstanceID == "" ||
-			poolState.PlatformInstanceID == "" ||
-			tokenState.PlatformPoolInstanceID != poolState.PlatformInstanceID {
+			poolState.ManagedInstanceID == "" ||
+			tokenState.ManagedPoolInstanceID != poolState.ManagedInstanceID {
 			return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 		}
 	} else if poolState.CreatedByTokenID == "" || poolState.CreatedByTokenID != tokenState.CreatedByTokenID {
@@ -84,7 +83,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
 	}
-	if poolState.PlatformManaged && poolState.WorkerConfig != nil {
+	if poolState.ManagementSource != "" && poolState.WorkerConfig != nil {
 		if poolState.WorkerConfig.NetworkSlotPoolSize > 0 {
 			agentState.NetworkSlotPoolSize = uint32(poolState.WorkerConfig.NetworkSlotPoolSize)
 		}
@@ -503,7 +502,7 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 
 // agentWorkerToken mints (or reuses) the worker token for an agent worker
 // slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
-// marketplace and platform external workers use trusted worker tokens from
+// marketplace and managed external workers use trusted worker tokens from
 // the admin workspace because they serve workloads from many workspaces.
 func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {

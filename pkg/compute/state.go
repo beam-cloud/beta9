@@ -33,37 +33,35 @@ type PoolState struct {
 	// reservations terminate once the grace period is exceeded.
 	BillingDegradedSince time.Time          `json:"billing_degraded_since,omitempty"`
 	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
-	// PlatformManaged marks public/serverless inventory owned by the control
-	// plane rather than a tenant. WorkerConfig preserves the complete worker
-	// pool configuration used by both config- and API-managed pools.
-	PlatformManaged bool   `json:"platform_managed,omitempty"`
-	PlatformSource  string `json:"platform_source,omitempty"`
-	// PlatformInstanceID changes whenever a deleted platform pool is
+	// ManagementSource marks serverless inventory owned by the control plane
+	// rather than a tenant. WorkerConfig preserves its complete configuration.
+	ManagementSource string `json:"management_source,omitempty"`
+	// ManagedInstanceID changes whenever a deleted managed pool is
 	// recreated, preventing an unexpired installer for the old pool from
 	// authorizing a machine into the new one.
-	PlatformInstanceID string                  `json:"platform_instance_id,omitempty"`
-	WorkerConfig       *types.WorkerPoolConfig `json:"worker_config,omitempty"`
+	ManagedInstanceID string                  `json:"managed_instance_id,omitempty"`
+	WorkerConfig      *types.WorkerPoolConfig `json:"worker_config,omitempty"`
 }
 
 const (
-	PlatformPoolSourceConfig = "config"
-	PlatformPoolSourceAPI    = "api"
+	ManagedPoolSourceConfig = "config"
+	ManagedPoolSourceAPI    = "api"
 
-	PlatformPoolControllerLocal          = "local"
-	PlatformPoolControllerAgent          = "agent"
-	PlatformPoolControllerExternalLegacy = "external_legacy"
+	ManagedPoolControllerLocal          = "local"
+	ManagedPoolControllerAgent          = "agent"
+	ManagedPoolControllerExternalLegacy = "external_legacy"
 )
 
 var (
-	ErrPlatformPermissionDenied = errors.New("platform operator permission required")
-	ErrPlatformPoolConflict     = errors.New("platform pool already exists")
-	ErrPlatformPoolNotFound     = errors.New("platform pool not found")
-	ErrPlatformPoolImmutable    = errors.New("config-defined platform pools are read-only")
-	ErrPlatformPoolInUse        = errors.New("platform pool must have no machines or workers")
-	ErrPlatformInvalidConfig    = errors.New("invalid platform pool configuration")
+	ErrManagedPermissionDenied  = errors.New("cluster admin permission required")
+	ErrManagedPoolConflict      = errors.New("pool already exists")
+	ErrManagedPoolNotFound      = errors.New("pool not found")
+	ErrManagedPoolImmutable     = errors.New("config-managed pools are read-only")
+	ErrManagedPoolInUse         = errors.New("pool must have no machines or workers")
+	ErrInvalidManagedPoolConfig = errors.New("invalid pool configuration")
 )
 
-type PlatformPool struct {
+type ManagedPool struct {
 	Name              string                 `json:"name"`
 	Config            types.WorkerPoolConfig `json:"config"`
 	Source            string                 `json:"source"`
@@ -143,9 +141,8 @@ type JoinTokenState struct {
 	Revoked   bool      `json:"revoked"`
 	// BoundFingerprint pins a machine-specific join token to the first
 	// machine that used it.
-	BoundFingerprint       string `json:"bound_fingerprint,omitempty"`
-	PlatformManaged        bool   `json:"platform_managed,omitempty"`
-	PlatformPoolInstanceID string `json:"platform_pool_instance_id,omitempty"`
+	BoundFingerprint      string `json:"bound_fingerprint,omitempty"`
+	ManagedPoolInstanceID string `json:"managed_pool_instance_id,omitempty"`
 }
 
 type AgentTokenState struct {

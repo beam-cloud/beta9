@@ -972,7 +972,9 @@ type MetricsAggregationBucket struct {
 }
 
 type MetricsTimeseriesResponse struct {
-	Timeseries struct {
+	ScannedRecords uint64 `json:"scanned_records"`
+	Truncated      bool   `json:"truncated"`
+	Timeseries     struct {
 		AggregationBuckets []MetricsAggregationBucket `json:"aggregation_buckets"`
 	} `json:"timeseries"`
 }
@@ -998,8 +1000,10 @@ type PoolMetricsPoint struct {
 }
 
 type PoolMetricsTimeseriesResponse struct {
-	Workspaces []string           `json:"workspaces"`
-	Points     []PoolMetricsPoint `json:"points"`
+	Workspaces     []string           `json:"workspaces"`
+	Points         []PoolMetricsPoint `json:"points"`
+	ScannedRecords uint64             `json:"scanned_records"`
+	Truncated      bool               `json:"truncated"`
 }
 
 type ContainerEventRecord struct {

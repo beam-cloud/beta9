@@ -85,15 +85,7 @@ func (g *WorkspaceGroup) CurrentWorkspace(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to serialize workspace")
 	}
 
-	currentUser, ok := serializedWorkspace.(map[string]interface{})
-	if !ok {
-		return HTTPInternalServerError("Unable to serialize workspace")
-	}
-	// This field is useful for navigation and route gating only. Every
-	// platform endpoint independently validates the authenticated token.
-	currentUser["platform_operator"] = auth.IsPlatformOperator(authContext.AuthInfo)
-
-	return ctx.JSON(http.StatusOK, currentUser)
+	return ctx.JSON(http.StatusOK, serializedWorkspace)
 }
 
 type WorkspaceConfigExport struct {

@@ -209,7 +209,7 @@ func (s *Service) assignManagedReservationToMachine(ctx context.Context, state *
 	if machine == nil {
 		return nil
 	}
-	if token != nil && token.PlatformManaged {
+	if token != nil && token.ManagedPoolInstanceID != "" {
 		return nil
 	}
 	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func() error {

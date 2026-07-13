@@ -38,14 +38,14 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 	// Cluster admins see all machines associated with a cluster
 	formattedMachines := []*pb.Machine{}
 	if gws.computeService != nil {
-		platformMachines, handled, err := gws.computeService.ListPlatformMachines(ctx, authInfo, in.PoolName)
+		managedMachines, handled, err := gws.computeService.ListManagedMachines(ctx, authInfo, in.PoolName)
 		if err != nil {
 			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 		if handled && in.PoolName != "" {
-			return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, Machines: platformMachines}, nil
+			return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, Machines: managedMachines}, nil
 		}
-		formattedMachines = append(formattedMachines, platformMachines...)
+		formattedMachines = append(formattedMachines, managedMachines...)
 	}
 	if in.PoolName != "" {
 		pool, ok := gws.appConfig.Worker.Pools[in.PoolName]
@@ -169,7 +169,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 	}
 
 	if gws.computeService != nil {
-		bootstrap, handled, err := gws.computeService.CreatePlatformMachine(ctx, authInfo, in.PoolName)
+		bootstrap, handled, err := gws.computeService.CreateManagedMachine(ctx, authInfo, in.PoolName)
 		if err != nil {
 			return &pb.CreateMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
@@ -245,8 +245,9 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 
 func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	if gws.computeService != nil && auth.IsPlatformOperator(authInfo) {
-		handled, err := gws.computeService.DeletePlatformMachine(ctx, authInfo, in.PoolName, in.MachineId)
+	clusterAdmin, _ := isClusterAdmin(ctx)
+	if gws.computeService != nil && clusterAdmin {
+		handled, err := gws.computeService.DeleteManagedMachine(ctx, authInfo, in.PoolName, in.MachineId)
 		if err != nil {
 			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}

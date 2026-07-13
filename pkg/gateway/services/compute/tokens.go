@@ -177,6 +177,17 @@ func (s *Service) createPersistentPrivatePoolJoinTokenForOwner(ctx context.Conte
 }
 
 func (s *Service) createPrivatePoolJoinTokenStateForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName string, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
+	token, state, err := newPoolJoinToken(workspaceID, ownerTokenID, poolName, ttl, machineID)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := s.savePoolJoinToken(ctx, state, ttl); err != nil {
+		return "", nil, err
+	}
+	return token, state, nil
+}
+
+func newPoolJoinToken(workspaceID, ownerTokenID, poolName string, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
 	poolName = strings.TrimSpace(poolName)
 	if poolName == "" {
 		return "", nil, fmt.Errorf("pool name is required")
@@ -197,7 +208,7 @@ func (s *Service) createPrivatePoolJoinTokenStateForOwner(ctx context.Context, w
 	if ttl > 0 {
 		expiresAt = now.Add(ttl)
 	}
-	tokenState := &model.JoinTokenState{
+	state := &model.JoinTokenState{
 		TokenHash:        hashComputeToken(token),
 		WorkspaceID:      workspaceID,
 		PoolName:         poolName,
@@ -206,24 +217,28 @@ func (s *Service) createPrivatePoolJoinTokenStateForOwner(ctx context.Context, w
 		CreatedAt:        now,
 		ExpiresAt:        expiresAt,
 	}
-	if err := s.saveComputeJoinTokenState(ctx, tokenState, ttl); err != nil {
-		return "", nil, err
+	return token, state, nil
+}
+
+func (s *Service) savePoolJoinToken(ctx context.Context, state *model.JoinTokenState, ttl time.Duration) error {
+	if err := s.saveComputeJoinTokenState(ctx, state, ttl); err != nil {
+		return err
 	}
 	attrs := map[string]string{}
-	if tokenState.ExpiresAt.IsZero() {
+	if state.ExpiresAt.IsZero() {
 		attrs["persistent"] = "true"
 	} else {
-		attrs["expires_at"] = tokenState.ExpiresAt.UTC().Format(time.RFC3339)
+		attrs["expires_at"] = state.ExpiresAt.UTC().Format(time.RFC3339)
 		attrs["ttl_seconds"] = fmt.Sprintf("%.0f", ttl.Seconds())
 	}
 	s.emitComputeEvent(types.EventComputeJoinToken, types.EventComputeSchema{
-		WorkspaceID: tokenState.WorkspaceID,
-		PoolName:    tokenState.PoolName,
+		WorkspaceID: state.WorkspaceID,
+		PoolName:    state.PoolName,
 		Action:      types.EventComputeActionJoinTokenCreated,
 		Status:      "active",
 		Attrs:       attrs,
 	})
-	return token, tokenState, nil
+	return nil
 }
 
 func (s *Service) revokeComputeJoinTokenHash(ctx context.Context, tokenHash string) error {

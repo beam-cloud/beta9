@@ -195,14 +195,3 @@ func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Contex
 func HasPermission(authInfo *AuthInfo) bool {
 	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
 }
-
-// IsPlatformOperator is the authoritative capability check for control-plane
-// inventory and configuration. Client-provided capability flags are never
-// consulted when authorizing an operation.
-func IsPlatformOperator(authInfo *AuthInfo) bool {
-	return authInfo != nil &&
-		authInfo.Token != nil &&
-		authInfo.Token.Active &&
-		!authInfo.Token.DisabledByClusterAdmin &&
-		authInfo.Token.TokenType == types.TokenTypeClusterAdmin
-}

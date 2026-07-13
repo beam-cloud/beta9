@@ -33,6 +33,10 @@ func (b s2MetricsScanBudget) consume(records int) s2MetricsScanBudget {
 	return b - min(b, s2MetricsScanBudget(records))
 }
 
+func (b s2MetricsScanBudget) state() (uint64, bool) {
+	return uint64(s2ReadScanLimit) - uint64(b), b == 0
+}
+
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
 	limit := query.Limit
 	if limit == 0 {
@@ -162,17 +166,19 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 	if len(response.Points) > 0 {
 		legacyEnd = time.UnixMilli(response.Points[0].Timestamp)
 	}
-	if legacyEnd.After(start.Add(bucketSize)) {
+	if scanBudget > 0 && legacyEnd.After(start.Add(bucketSize)) {
 		// The dedicated stream is new. Fill any prefix written before rollout
 		// from the workspace stream; once the requested range is fully covered,
 		// this fallback disappears without a migration flag.
-		legacy, _, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
+		legacy, remaining, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
 		if err != nil {
 			return nil, err
 		}
+		scanBudget = remaining
 		response.Points = append(legacy.Points, response.Points...)
 	}
 	response.Workspaces = []string{query.WorkspaceID}
+	response.ScannedRecords, response.Truncated = scanBudget.state()
 	return response, nil
 }
 
@@ -419,6 +425,7 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 	for _, key := range keys {
 		response.Timeseries.AggregationBuckets = append(response.Timeseries.AggregationBuckets, buckets[key].bucket())
 	}
+	response.ScannedRecords, response.Truncated = scanBudget.state()
 	return response, nil
 }
 

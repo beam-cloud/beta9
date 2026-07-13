@@ -336,16 +336,16 @@ func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
 	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
 }
 
-func TestRegisterAgentPoolNormalizesPersistedPlatformConfig(t *testing.T) {
+func TestRegisterAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
 	scheduler.workerPoolManager = NewWorkerPoolManager(false)
 
 	provider := types.ProviderGeneric
 	err = scheduler.RegisterAgentPool("admin-workspace", &compute.PoolState{
-		Name:            "api-pool",
-		Selector:        "api-pool",
-		PlatformManaged: true,
+		Name:             "api-pool",
+		Selector:         "api-pool",
+		ManagementSource: compute.ManagedPoolSourceAPI,
 		WorkerConfig: &types.WorkerPoolConfig{
 			Mode:     types.PoolModeLocal,
 			Provider: &provider,

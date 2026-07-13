@@ -143,26 +143,12 @@ func WithStrictWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Co
 func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		cc, ok := ctx.(*HttpAuthContext)
-		if !ok {
+		if !ok || cc.AuthInfo == nil || cc.AuthInfo.Token == nil {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
 		if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 			return echo.NewHTTPError(http.StatusUnauthorized)
-		}
-
-		return next(ctx)
-	}
-}
-
-// WithPlatformOperatorAuth protects platform-wide inventory and configuration
-// routes. The platform_operator value returned to clients is only a UI hint;
-// this middleware always derives authorization from the authenticated token.
-func WithPlatformOperatorAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
-	return func(ctx echo.Context) error {
-		cc, ok := ctx.(*HttpAuthContext)
-		if !ok || !IsPlatformOperator(cc.AuthInfo) {
-			return echo.NewHTTPError(http.StatusForbidden)
 		}
 
 		return next(ctx)
