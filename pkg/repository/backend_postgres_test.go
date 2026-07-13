@@ -50,6 +50,22 @@ func TestListTaskWithRelated(t *testing.T) {
 	require.NotNil(t, res.Next)
 }
 
+func TestGetAdminWorkspaceMapsExternalID(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	createdAt := time.Now().UTC()
+	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
+	}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, nil, true, true))
+
+	workspace, err := repo.GetAdminWorkspace(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "admin-workspace", workspace.ExternalId)
+	require.Equal(t, uint(7), workspace.Id)
+	require.True(t, workspace.VolumeCacheEnabled)
+	require.True(t, workspace.MultiGpuEnabled)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestHandleTaskEventUsesProvidedTaskSnapshot(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)

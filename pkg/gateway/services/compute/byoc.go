@@ -700,7 +700,7 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 		Name:             config.Name,
 		Selector:         config.Selector,
 		Config:           config,
-		Status:           "active",
+		Status:           types.ComputePoolStatusActive,
 		Source:           provider.Source(),
 		Mode:             config.Mode,
 		Transport:        config.Transport,

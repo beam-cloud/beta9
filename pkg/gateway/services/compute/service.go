@@ -11,7 +11,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
+
+const managedPoolReconcileRetryInterval = 10 * time.Second
 
 type Service struct {
 	appConfig            types.AppConfig
@@ -20,6 +23,7 @@ type Service struct {
 	scheduler            *scheduler.Scheduler
 	eventRepo            repository.EventRepository
 	workerRepo           repository.WorkerRepository
+	workerPoolRepo       repository.WorkerPoolRepository
 	usageMetricsRepo     repository.UsageMetricsRepository
 	computeRepo          repository.ComputeRepository
 	keyEventManager      *common.KeyEventManager
@@ -39,6 +43,7 @@ type Options struct {
 	Scheduler        *scheduler.Scheduler
 	EventRepo        repository.EventRepository
 	WorkerRepo       repository.WorkerRepository
+	WorkerPoolRepo   repository.WorkerPoolRepository
 	UsageMetricsRepo repository.UsageMetricsRepository
 	ComputeRepo      repository.ComputeRepository
 	KeyEventManager  *common.KeyEventManager
@@ -54,6 +59,7 @@ func New(opts Options) *Service {
 		scheduler:        opts.Scheduler,
 		eventRepo:        opts.EventRepo,
 		workerRepo:       opts.WorkerRepo,
+		workerPoolRepo:   opts.WorkerPoolRepo,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		computeRepo:      opts.ComputeRepo,
 		keyEventManager:  opts.KeyEventManager,
@@ -72,6 +78,29 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	s.reconcileOnce.Do(func() {
+		if err := s.ReconcileManagedPools(ctx); err != nil {
+			log.Error().Err(err).Msg("managed pool reconciliation failed")
+			go s.retryManagedPoolReconciliation(ctx, managedPoolReconcileRetryInterval)
+		}
 		go s.runReconciler(ctx)
 	})
+}
+
+func (s *Service) retryManagedPoolReconciliation(ctx context.Context, interval time.Duration) {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			if err := s.ReconcileManagedPools(ctx); err != nil {
+				log.Warn().Err(err).Msg("managed pool reconciliation retry failed")
+				timer.Reset(interval)
+				continue
+			}
+			return
+		}
+	}
 }

@@ -193,5 +193,5 @@ func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Contex
 }
 
 func HasPermission(authInfo *AuthInfo) bool {
-	return authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
+	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
 }

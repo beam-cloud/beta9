@@ -91,6 +91,7 @@ type ContainerRepository interface {
 type WorkerPoolRepository interface {
 	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
 	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
+	DeleteWorkerPoolState(ctx context.Context, poolName string) error
 	SetWorkerPoolStateLock(poolName string) error
 	RemoveWorkerPoolStateLock(poolName string) error
 	SetWorkerPoolSizerLock(poolName string) error
@@ -294,6 +295,7 @@ type EventRepository interface {
 	GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error)
 	GetStubMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
 	GetWorkspaceMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.MetricsTimeseriesResponse, error)
+	GetPoolMetricsTimeseries(ctx context.Context, query types.EventQuery, start time.Time, end time.Time, interval string) (*types.PoolMetricsTimeseriesResponse, error)
 	StreamContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (EventStream, error)
 	StreamStubEvents(ctx context.Context, query types.EventQuery) (EventStream, error)
 	StreamTaskEvents(ctx context.Context, query types.EventQuery) (EventStream, error)

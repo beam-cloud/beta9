@@ -194,7 +194,7 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 		Reservations:         newReservations,
 		ReservedNodes:        activeReservationNodes(newReservations, now),
 		CommittedSpendMicros: existingCommittedSpendMicros(existing) + s.billableMicros(plan.CommittedCostMicros),
-		Status:               "active",
+		Status:               types.ComputePoolStatusActive,
 		Source:               model.SourceCLIReservation,
 		Mode:                 config.Mode,
 		Transport:            config.Transport,

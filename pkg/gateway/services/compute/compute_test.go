@@ -5130,6 +5130,10 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	}
 	worker := &types.Worker{Id: "worker-1", TotalCpu: 4000, TotalMemory: 8192, Gpu: "A10G", TotalGpuCount: 1}
 	slot := agentWorkerSlotState(config, marketplaceState, worker, "token-id", "token-hash")
+	wireSlot := agentWorkerSlotToProto(slot, "worker-token")
+	if !wireSlot.PrioritySet || wireSlot.Priority != 0 {
+		t.Fatalf("wire priority = %d (set=%v), want explicit zero", wireSlot.Priority, wireSlot.PrioritySet)
+	}
 	if slot.Mode != string(types.PoolModeMarketplace) {
 		t.Fatalf("slot mode = %q, want marketplace", slot.Mode)
 	}

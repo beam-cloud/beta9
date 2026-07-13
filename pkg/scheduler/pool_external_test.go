@@ -14,6 +14,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+// Agent-backed external pools share the controller exercised by these tests.
 func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	ctx := context.Background()
 	redisServer, err := miniredis.Run()
@@ -32,6 +33,7 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 
 	workspaceID := "workspace-agent-test"
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
+	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	computeRepo := repo.NewComputeRedisRepository(redisClient)
 	poolState := &compute.PoolState{
 		Name:     "private-gpu",
@@ -67,6 +69,12 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if err := computeRepo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	if err := workerPoolRepo.SetWorkerPoolState(ctx, poolState.Selector, &types.WorkerPoolState{
+		RegisteredMachines: 99,
+		ReadyMachines:      99,
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	opts := AgentWorkerPoolControllerOptions{
 		Context:     ctx,
@@ -94,6 +102,13 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state, err := controller.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RegisteredMachines != 1 || state.PendingMachines != 1 || state.ReadyMachines != 0 {
+		t.Fatalf("machine state = registered %d pending %d ready %d, want live 1/1/0", state.RegisteredMachines, state.PendingMachines, state.ReadyMachines)
+	}
 
 	worker, err := controller.AddWorker(2000, 1024, 1)
 	if err != nil {
@@ -102,8 +117,11 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if worker == nil {
 		t.Fatal("expected worker")
 	}
-	if worker.PoolName != poolState.Selector {
-		t.Fatalf("worker pool = %q, want %q", worker.PoolName, poolState.Selector)
+	if worker.PoolName != poolState.Name {
+		t.Fatalf("worker pool = %q, want machine identity %q", worker.PoolName, poolState.Name)
+	}
+	if worker.PoolSelector != poolState.Selector {
+		t.Fatalf("worker selector = %q, want scheduling selector %q", worker.PoolSelector, poolState.Selector)
 	}
 	if worker.MachineId != machine.MachineID {
 		t.Fatalf("worker machine = %q, want %q", worker.MachineId, machine.MachineID)
@@ -119,6 +137,13 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	}
 	if worker.TotalGpuCount != machine.GPUCount {
 		t.Fatalf("worker gpus = %d, want %d", worker.TotalGpuCount, machine.GPUCount)
+	}
+	capacity, err := controller.FreeCapacity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capacity.PendingCpu != worker.FreeCpu || capacity.PendingMemory != worker.FreeMemory {
+		t.Fatalf("pending capacity = %d cpu/%d memory, want %d/%d", capacity.PendingCpu, capacity.PendingMemory, worker.FreeCpu, worker.FreeMemory)
 	}
 
 	secondWorker, err := controller.AddWorker(1000, 1024, 1)

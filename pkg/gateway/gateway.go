@@ -41,6 +41,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	gatewaymiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -72,6 +73,7 @@ type Gateway struct {
 	ContainerRepo        repository.ContainerRepository
 	BackendRepo          repository.BackendRepository
 	ComputeRepo          repository.ComputeRepository
+	ComputeService       *computesvc.Service
 	ProviderRepo         repository.ProviderRepository
 	WorkerPoolRepo       repository.WorkerPoolRepository
 	EventRepo            repository.EventRepository
@@ -184,6 +186,26 @@ func NewGateway() (*Gateway, error) {
 	gateway.workerRepo = workerRepo
 	gateway.DefaultStorageClient = storageClient
 
+	keyEventManager, err := common.NewKeyEventManager(redisClient)
+	if err != nil {
+		return nil, err
+	}
+	gateway.ComputeService = computesvc.New(computesvc.Options{
+		Config:           config,
+		BackendRepo:      backendRepo,
+		ContainerRepo:    containerRepo,
+		Scheduler:        scheduler,
+		EventRepo:        eventRepo,
+		WorkerRepo:       workerRepo,
+		WorkerPoolRepo:   workerPoolRepo,
+		UsageMetricsRepo: usageMetricsRepo,
+		ComputeRepo:      computeRepo,
+		KeyEventManager:  keyEventManager,
+		RedisClient:      redisClient,
+		Tailscale:        tailscale,
+	})
+	gateway.ComputeService.Start(ctx)
+
 	return gateway, nil
 }
 
@@ -257,6 +279,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
 	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.RedisClient, g.Config)
 	apiv1.NewAppGroup(g.baseRouteGroup.Group("/app", authMiddleware), g.BackendRepo, g.Config, g.ContainerRepo, *g.Scheduler, g.RedisClient)
+	apiv1.NewPoolGroup(g.baseRouteGroup.Group("/pools", authMiddleware), g.ComputeService)
 
 	return nil
 }
@@ -549,6 +572,7 @@ func (g *Gateway) registerServices() error {
 		WorkerRepo:       g.workerRepo,
 		WorkerPoolRepo:   g.WorkerPoolRepo,
 		ComputeRepo:      g.ComputeRepo,
+		ComputeService:   g.ComputeService,
 		UsageMetricsRepo: g.UsageMetricsRepo,
 		Tailscale:        g.Tailscale,
 	})

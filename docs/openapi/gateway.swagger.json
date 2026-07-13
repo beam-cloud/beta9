@@ -2496,7 +2496,7 @@
         },
         "mode": {
           "type": "string",
-          "description": "Pool mode (\"private\" / \"marketplace\") and the container runtime the\nworker must run with. Marketplace slots prefer gVisor but can fall back\nto runc for GPU families that are not compatible with gVisor GPU support."
+          "description": "Pool mode (\"private\" / \"marketplace\" / \"external\") and the container\nruntime the worker must run with. Marketplace slots prefer gVisor but can\nfall back to runc for incompatible GPU families."
         },
         "containerRuntime": {
           "type": "string"
@@ -2507,6 +2507,20 @@
         },
         "sellerWorkspaceId": {
           "type": "string"
+        },
+        "requiresPoolSelector": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "preemptable": {
+          "type": "boolean"
+        },
+        "prioritySet": {
+          "type": "boolean",
+          "description": "Distinguishes an explicitly configured zero priority from legacy\ngateways that did not send scheduling priority metadata."
         }
       }
     },
@@ -2758,6 +2772,10 @@
         },
         "agentUpstreamToken": {
           "type": "string"
+        },
+        "installCommand": {
+          "type": "string",
+          "description": "Agent-backed platform pools return the systemd installer here. The join\ntoken embedded in the command is short-lived and machine-bound."
         }
       }
     },
@@ -5473,6 +5491,9 @@
           }
         },
         "runtime": {
+          "type": "string"
+        },
+        "poolSelector": {
           "type": "string"
         }
       }

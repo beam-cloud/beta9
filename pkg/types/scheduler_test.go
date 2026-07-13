@@ -43,13 +43,22 @@ func TestWorkerStartConcurrencyCapsByWorkerCPU(t *testing.T) {
 	require.Equal(t, 2, WorkerStartConcurrency(config, worker))
 }
 
-func TestWorkerProtoRoundTripPreservesRuntime(t *testing.T) {
+func TestWorkerProtoRoundTripPreservesRuntimeAndPoolSelector(t *testing.T) {
 	worker := &Worker{
-		Id:      "worker-1",
-		Runtime: ContainerRuntimeRunc.String(),
+		Id:           "worker-1",
+		Runtime:      ContainerRuntimeRunc.String(),
+		PoolSelector: "private-cpu",
 	}
 
-	require.Equal(t, ContainerRuntimeRunc.String(), NewWorkerFromProto(worker.ToProto()).Runtime)
+	roundTrip := NewWorkerFromProto(worker.ToProto())
+	require.Equal(t, ContainerRuntimeRunc.String(), roundTrip.Runtime)
+	require.Equal(t, "private-cpu", roundTrip.PoolSelector)
+}
+
+func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
+	request := &ContainerRequest{TaskId: "task-1"}
+
+	require.Equal(t, request.TaskId, NewContainerRequestFromProto(request.ToProto()).TaskId)
 }
 
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {

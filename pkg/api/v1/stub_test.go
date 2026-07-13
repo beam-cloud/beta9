@@ -2,13 +2,16 @@ package apiv1
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"bytes"
@@ -19,6 +22,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	repocommon "github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"k8s.io/utils/ptr"
@@ -27,16 +31,35 @@ import (
 type sandboxRowsEventRepo struct {
 	repository.EventRepository
 	history          *types.EventHistoryResponse
+	workspaceHistory *types.EventHistoryResponse
 	historiesByStub  map[string]*types.EventHistoryResponse
 	containers       map[string]*types.ContainerEventsResponse
 	queries          []types.EventQuery
 	containerQueries []types.EventQuery
+	mu               sync.Mutex
+}
+
+type sandboxHistoryBackendRepo struct {
+	repository.BackendRepository
+}
+
+func (sandboxHistoryBackendRepo) ListStubs(context.Context, types.StubFilter) ([]types.StubWithRelated, error) {
+	return nil, nil
+}
+
+func (sandboxHistoryBackendRepo) ListStubsPaginated(context.Context, types.StubFilter) (repocommon.CursorPaginationInfo[types.StubWithRelated], error) {
+	return repocommon.CursorPaginationInfo[types.StubWithRelated]{}, nil
 }
 
 func (r *sandboxRowsEventRepo) GetEventHistory(_ context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
+	r.mu.Lock()
 	r.queries = append(r.queries, query)
+	r.mu.Unlock()
 	if r.historiesByStub != nil && query.StubID != "" {
 		return r.historiesByStub[query.StubID], nil
+	}
+	if query.AppID == "" && query.StubID == "" && r.workspaceHistory != nil {
+		return r.workspaceHistory, nil
 	}
 	return r.history, nil
 }
@@ -70,6 +93,114 @@ func NewStubGroupForTest() *StubGroup {
 		nil,
 		config,
 	)
+}
+
+func TestSandboxHistoryQueryKeyDoesNotAliasDelimitedInput(t *testing.T) {
+	left, err := sandboxHistoryQueryKey(types.EventQuery{WorkspaceID: "workspace", AppID: "app\x00stub", StubID: "container"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := sandboxHistoryQueryKey(types.EventQuery{WorkspaceID: "workspace", AppID: "app", StubID: "stub\x00container"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == right {
+		t.Fatal("distinct sandbox history queries produced the same coalescing key")
+	}
+	if len(left) != sha256.Size {
+		t.Fatalf("coalescing key length = %d, want %d", len(left), sha256.Size)
+	}
+}
+
+func TestAcquireSandboxHistoryQuerySlotBoundsConcurrencyAndHonorsCancellation(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	if err := acquireSandboxHistoryQuerySlot(context.Background(), slots, 0); !errors.Is(err, errSandboxHistoryBusy) {
+		t.Fatalf("slot acquisition error = %v, want capacity exhausted", err)
+	}
+	if len(slots) != 1 {
+		t.Fatalf("slot count = %d, want the original holder only", len(slots))
+	}
+
+	available := make(chan struct{}, 1)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := acquireSandboxHistoryQuerySlot(canceled, available, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled slot acquisition error = %v, want context canceled", err)
+	}
+	if len(available) != 0 {
+		t.Fatal("pre-canceled acquisition consumed an available slot")
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- acquireSandboxHistoryQuerySlot(context.Background(), slots, time.Second)
+	}()
+	<-slots
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("bounded admission did not accept a released slot: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bounded admission did not complete")
+	}
+	<-slots
+}
+
+func TestSandboxHistoryCapacityReturnsRetryableError(t *testing.T) {
+	previousSlots := sandboxHistoryQuerySlots
+	sandboxHistoryQuerySlots = make(chan struct{}, 1)
+	sandboxHistoryQuerySlots <- struct{}{}
+	t.Cleanup(func() { sandboxHistoryQuerySlots = previousSlots })
+
+	handlers := map[string]func(*StubGroup, echo.Context) error{
+		"list":  func(group *StubGroup, ctx echo.Context) error { return group.ListSandboxes(ctx) },
+		"stats": func(group *StubGroup, ctx echo.Context) error { return group.GetSandboxStats(ctx) },
+	}
+	for name, handler := range handlers {
+		t.Run(name, func(t *testing.T) {
+			group := &StubGroup{
+				backendRepo: sandboxHistoryBackendRepo{},
+				eventRepo:   &sandboxRowsEventRepo{history: &types.EventHistoryResponse{}},
+			}
+			e := echo.New()
+			recorder := httptest.NewRecorder()
+			ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), recorder)
+			ctx.SetParamNames("workspaceId")
+			ctx.SetParamValues("workspace")
+
+			err := handler(group, ctx)
+			var httpErr *echo.HTTPError
+			if !errors.As(err, &httpErr) || httpErr.Code != http.StatusServiceUnavailable {
+				t.Fatalf("handler error = %v, want HTTP 503", err)
+			}
+			if got := recorder.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After = %q, want 1", got)
+			}
+		})
+	}
+}
+
+func TestBuildSandboxRowsDoesNotReloadPreloadedEmptyHistory(t *testing.T) {
+	repo := &sandboxRowsEventRepo{history: &types.EventHistoryResponse{}}
+	group := &StubGroup{eventRepo: repo}
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "sandbox-stub",
+		Name:       "sandbox",
+		CreatedAt:  types.Time{Time: time.Now().UTC()},
+	}}
+
+	rows := group.buildSandboxRowsWithPreloadedSummaries(context.Background(), "workspace", stub, nil, 50, []sandboxContainerSummary{})
+	if len(rows) != 1 || rows[0].Status != SandboxStatusStopped {
+		t.Fatalf("rows = %+v, want one stopped fallback", rows)
+	}
+	repo.mu.Lock()
+	queryCount := len(repo.queries)
+	repo.mu.Unlock()
+	if queryCount != 0 {
+		t.Fatalf("event history queries = %d, want 0 after preload", queryCount)
+	}
 }
 
 // NewStubGroupWithMockForTest creates a StubGroup with a mock repository for testing
@@ -309,23 +440,20 @@ func TestBuildSandboxStatsRowsUsesAppHistoryForAppNamespaceStats(t *testing.T) {
 	if got, want := len(rows), 3; got != want {
 		t.Fatalf("expected %d sandbox stats rows, got %d", want, got)
 	}
-	if got := len(eventRepo.queries); got != 3 {
-		t.Fatalf("expected app, legacy, and bounded stub fallback history queries, got %d", got)
+	if got := len(eventRepo.queries); got != 2 {
+		t.Fatalf("expected app and bounded stub fallback history queries, got %d", got)
 	}
-	query := eventRepo.queries[0]
-	if query.AppID != "app-1" {
-		t.Fatalf("history query app_id = %q, want app-1", query.AppID)
+	var foundAppQuery, foundStubQuery bool
+	for _, query := range eventRepo.queries {
+		if query.AppID == "app-1" && query.StubID == "" {
+			foundAppQuery = true
+		}
+		if query.AppID == "" && query.StubID == "sandbox-stub" {
+			foundStubQuery = true
+		}
 	}
-	if query.StubID != "" {
-		t.Fatalf("history query stub_id = %q, want empty", query.StubID)
-	}
-	query = eventRepo.queries[1]
-	if query.AppID != "" || query.StubID != "" {
-		t.Fatalf("legacy query app_id/stub_id = %q/%q, want empty", query.AppID, query.StubID)
-	}
-	query = eventRepo.queries[2]
-	if query.AppID != "" || query.StubID != "sandbox-stub" {
-		t.Fatalf("stub fallback query app_id/stub_id = %q/%q, want empty/sandbox-stub", query.AppID, query.StubID)
+	if !foundAppQuery || !foundStubQuery {
+		t.Fatalf("expected app and stub fallback queries, got %#v", eventRepo.queries)
 	}
 }
 
@@ -379,6 +507,54 @@ func TestBuildSandboxStatsRowsMergesStubFallbackForPartialAppHistory(t *testing.
 	}
 	if fallback.LifetimeMs == nil || *fallback.LifetimeMs != 2000 {
 		t.Fatalf("fallback lifetime_ms = %v, want 2000", fallback.LifetimeMs)
+	}
+	for _, query := range eventRepo.queries {
+		if query.AppID == "" && query.StubID == "" {
+			t.Fatalf("unexpected workspace-wide history query when scoped history was available: %#v", query)
+		}
+	}
+}
+
+func TestSandboxStatsContainerSummariesUsesWorkspaceFallbackOnlyWhenScopedHistoryIsEmpty(t *testing.T) {
+	base := time.Date(2026, 6, 16, 20, 1, 0, 0, time.UTC)
+	stubs := []types.StubWithRelated{{
+		Stub: types.Stub{
+			ExternalId: "sandbox-stub",
+			Name:       "sandbox",
+			CreatedAt:  types.Time{Time: base.Add(-time.Hour)},
+		},
+	}}
+
+	eventRepo := &sandboxRowsEventRepo{
+		historiesByStub: map[string]*types.EventHistoryResponse{
+			"sandbox-stub": nil,
+		},
+		workspaceHistory: &types.EventHistoryResponse{Events: []types.ContainerEventRecord{
+			{Type: types.EventContainerLifecycle, EventID: string(types.ContainerLifecycleSchedulerQueuePush), ContainerID: "sandbox-stub-legacy", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base},
+			{Type: types.EventContainerEvent, EventID: "runtime.exited", ContainerID: "sandbox-stub-legacy", WorkspaceID: "workspace", StubID: "sandbox-stub", Timestamp: base.Add(time.Second)},
+		}},
+	}
+	group := &StubGroup{eventRepo: eventRepo}
+
+	summaries := group.sandboxStatsContainerSummaries(context.Background(), "workspace", "app-1", stubs)
+	if got, want := len(summaries), 1; got != want {
+		t.Fatalf("expected %d legacy sandbox summary, got %d", want, got)
+	}
+	if got, want := summaries[0].ContainerID, "sandbox-stub-legacy"; got != want {
+		t.Fatalf("container_id = %q, want %q", got, want)
+	}
+	if got := len(eventRepo.queries); got != 3 {
+		t.Fatalf("expected app, stub, then workspace fallback queries, got %d", got)
+	}
+	var foundLegacy bool
+	for _, query := range eventRepo.queries {
+		if query.AppID == "" && query.StubID == "" {
+			foundLegacy = true
+			break
+		}
+	}
+	if !foundLegacy {
+		t.Fatalf("expected unscoped workspace fallback query, got %#v", eventRepo.queries)
 	}
 }
 

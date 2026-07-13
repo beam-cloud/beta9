@@ -88,8 +88,11 @@ const (
 	AgentTelemetrySourceAgent       = "agent"
 	AgentTelemetrySourceWorker      = "worker"
 	AgentMachineStatusSchedulable   = "schedulable"
+	AgentMachineStatusUnschedulable = "unschedulable"
 	AgentMachineStatusDisconnected  = "disconnected"
 	AgentMachineStatusPreflightFail = "preflight_failed"
+	AgentPreflightSeverityInfo      = "info"
+	AgentPreflightSeverityError     = "error"
 )
 
 const (

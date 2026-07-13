@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -105,7 +106,7 @@ func (a *schedulingAttempt) provisionWorker() {
 		requestLog(log.Error(), a.request).
 			Err(err).
 			Msg("no controller found for request")
-		a.fail("no_controller")
+		a.fail(types.ContainerSchedulingFailureNoController)
 		return
 	}
 
@@ -129,7 +130,7 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 
 func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reason string) {
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
-		a.fail("worker_capacity_timeout")
+		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
 	}
 
@@ -139,7 +140,7 @@ func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reaso
 
 	if err := a.scheduler.pushBacklog(a.request, delay); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
-		a.fail(reason + "_requeue_failed")
+		a.fail(types.ContainerSchedulingFailureReason(reason + "_requeue_failed"))
 	}
 }
 
@@ -149,12 +150,12 @@ func (a *schedulingAttempt) retry(reason string) {
 
 func (a *schedulingAttempt) retrySoon(reason string) {
 	if a.request.RetryCount >= maxScheduleRetryCount {
-		a.fail("retry_limit")
+		a.fail(types.ContainerSchedulingFailureRetryLimit)
 		return
 	}
 
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
-		a.fail("worker_capacity_timeout")
+		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
 	}
 
@@ -165,22 +166,32 @@ func (a *schedulingAttempt) retrySoon(reason string) {
 			Str("reason", reason).
 			Err(err).
 			Msg("failed to requeue request")
-		a.fail(reason + "_requeue_failed")
+		a.fail(types.ContainerSchedulingFailureReason(reason + "_requeue_failed"))
 	}
 }
 
-func (a *schedulingAttempt) fail(reason string) {
+func (a *schedulingAttempt) fail(reason types.ContainerSchedulingFailureReason) {
 	requestLog(log.Error(), a.request).
-		Str("reason", reason).
+		Str("reason", string(reason)).
 		Msg("giving up on request")
 
-	a.recordBacklogWait(false, reason)
+	a.recordBacklogWait(false, string(reason))
 
 	if err := a.scheduler.containerRepo.DeleteContainerState(a.request.ContainerId); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to delete container state after scheduling failure")
 	}
 	if err := a.scheduler.containerRepo.SetContainerRequestStatus(a.request.ContainerId, types.ContainerRequestStatusFailed); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to record container request scheduling failure")
+	}
+	if a.request.TaskId != "" && a.scheduler.eventBus != nil {
+		if _, err := a.scheduler.eventBus.Send(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
+			TaskID:       a.request.TaskId,
+			ContainerID:  a.request.ContainerId,
+			PoolSelector: a.request.PoolSelector,
+			Reason:       reason,
+		})); err != nil {
+			requestLog(log.Error(), a.request).Err(err).Msg("failed to publish container scheduling failure")
+		}
 	}
 	metrics.RecordRequestScheduleFailure(a.request)
 }
@@ -526,7 +537,13 @@ func (s *Scheduler) workerGPUCountForControllerRequest(controller WorkerPoolCont
 }
 
 func controllerUsesAgentCapacity(controller WorkerPoolController) bool {
-	return controller != nil && controller.Mode().AgentHosted()
+	if controller == nil {
+		return false
+	}
+	if _, ok := controller.(*AgentWorkerPoolController); ok {
+		return true
+	}
+	return controller.Mode().AgentHosted()
 }
 
 func (s *Scheduler) workerPoolSizingForController(controller WorkerPoolController) (*types.WorkerPoolSizingConfig, bool) {

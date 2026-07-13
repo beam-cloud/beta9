@@ -85,46 +85,38 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	computeRepo := repo.NewComputeRedisRepository(redisClient)
-
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewEventClientRepo(config)
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
 	for name, pool := range config.Worker.Pools {
-		var controller WorkerPoolController = nil
-		var err error = nil
+		if pool.AgentHosted() {
+			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("deferring agent-hosted pool until workspace state is reconciled")
+			continue
+		}
+
+		controllerOptions := WorkerPoolControllerOptions{
+			Context:        ctx,
+			Name:           name,
+			Config:         config,
+			BackendRepo:    backendRepo,
+			WorkerRepo:     workerRepo,
+			ProviderRepo:   providerRepo,
+			WorkerPoolRepo: workerPoolRepo,
+			ContainerRepo:  containerRepo,
+			EventRepo:      eventRepo,
+		}
+		var controller WorkerPoolController
+		var err error
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(WorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           name,
-				Config:         config,
-				BackendRepo:    backendRepo,
-				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ContainerRepo:  containerRepo,
-				EventRepo:      eventRepo,
-			})
+			controller, err = NewLocalKubernetesWorkerPoolController(controllerOptions)
 		case types.PoolModeExternal:
-			controller, err = NewExternalWorkerPoolController(WorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           name,
-				Config:         config,
-				BackendRepo:    backendRepo,
-				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ContainerRepo:  containerRepo,
-				ProviderName:   pool.Provider,
-				Tailscale:      tailscale,
-				EventRepo:      eventRepo,
-			})
-		case types.PoolModePrivate, types.PoolModeMarketplace:
-			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
-			continue
+			controllerOptions.ProviderName = pool.Provider
+			controllerOptions.Tailscale = tailscale
+			controller, err = NewLegacyExternalWorkerPoolController(controllerOptions)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -140,21 +132,20 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}
 
 	return &Scheduler{
-		ctx:                   ctx,
-		config:                config,
-		eventBus:              eventBus,
-		backendRepo:           backendRepo,
-		providerRepo:          providerRepo,
-		workerRepo:            workerRepo,
-		workerPoolRepo:        workerPoolRepo,
-		computeRepo:           computeRepo,
-		workerPoolManager:     workerPoolManager,
-		requestBacklog:        requestBacklog,
-		containerRepo:         containerRepo,
-		schedulerUsageMetrics: schedulerUsage,
-		eventRepo:             eventRepo,
-		workspaceRepo:         workspaceRepo,
-
+		ctx:                       ctx,
+		config:                    config,
+		eventBus:                  eventBus,
+		backendRepo:               backendRepo,
+		providerRepo:              providerRepo,
+		workerRepo:                workerRepo,
+		workerPoolRepo:            workerPoolRepo,
+		computeRepo:               computeRepo,
+		workerPoolManager:         workerPoolManager,
+		requestBacklog:            requestBacklog,
+		containerRepo:             containerRepo,
+		workspaceRepo:             workspaceRepo,
+		eventRepo:                 eventRepo,
+		schedulerUsageMetrics:     schedulerUsage,
 		provisioning:              newProvisioningTracker(),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
@@ -180,15 +171,14 @@ func (s *Scheduler) RegisterAgentPool(workspaceID string, state *compute.PoolSta
 
 	config := normalizeAgentWorkerPoolConfig(state)
 	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
-		Context:        s.ctx,
-		Name:           name,
-		WorkspaceID:    workspaceID,
-		Config:         s.config,
-		WorkerPool:     config,
-		PoolState:      state,
-		WorkerRepo:     s.workerRepo,
-		WorkerPoolRepo: s.workerPoolRepo,
-		ComputeRepo:    s.computeRepo,
+		Context:     s.ctx,
+		Name:        name,
+		WorkspaceID: workspaceID,
+		Config:      s.config,
+		WorkerPool:  config,
+		PoolState:   state,
+		WorkerRepo:  s.workerRepo,
+		ComputeRepo: s.computeRepo,
 	})
 	if err != nil {
 		return err
@@ -205,6 +195,15 @@ func (s *Scheduler) DeleteAgentPool(selector string) {
 }
 
 func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolConfig {
+	if state != nil && state.ManagementSource != "" && state.WorkerConfig != nil {
+		config := *state.WorkerConfig
+		config.Mode = types.PoolModeExternal
+		config.Provider = nil
+		if config.ContainerRuntime == "" {
+			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
+		}
+		return config
+	}
 	config := types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
 		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
@@ -297,7 +296,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	})
 	if err != nil {
 		requestLog(log.Error(), request).Err(err).Msg("failed to add request to backlog")
-		newSchedulingAttempt(s, request, nil).fail("backlog_push_failed")
+		newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureBacklogPushFailed)
 		return err
 	}
 
@@ -551,7 +550,7 @@ func (s *Scheduler) privateWorkerRequest(worker *types.Worker) bool {
 		return false
 	}
 
-	pool, ok := s.workerPoolManager.GetPool(worker.PoolName)
+	pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
 	return ok && pool.Config.Mode == types.PoolModePrivate
 }
 
@@ -850,12 +849,19 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	}
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
-		if (request.PoolSelector != "" && worker.PoolName == request.PoolSelector) ||
+		if (request.PoolSelector != "" && workerPoolSelector(worker) == request.PoolSelector) ||
 			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}
 	return filteredWorkers
+}
+
+func workerPoolSelector(worker *types.Worker) string {
+	if worker.PoolSelector != "" {
+		return worker.PoolSelector
+	}
+	return worker.PoolName
 }
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
@@ -869,8 +875,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		gpuRequestsMap[gpu] = index
 	}
 
-	// If the request contains the "any" GPU selector, we need to check all GPU types
-	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
+	anyGPU := slices.Contains(gpuRequests, string(types.GPU_ANY))
+	// A selector-bound request is already constrained to a specific pool. Its
+	// hardware may not be part of Beta9's managed GPU catalog, so "any" must be
+	// a true wildcard within that pool.
+	if anyGPU && request.PoolSelector == "" {
 		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}
 
@@ -898,6 +907,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		if requiresGPU {
 			// Validate GPU resource availability
 			_, validGpu := gpuRequestsMap[worker.Gpu]
+			validGpu = validGpu || (anyGPU && request.PoolSelector != "")
 			if !validGpu || worker.FreeGpuCount < gpuCount {
 				continue
 			}
@@ -1104,7 +1114,7 @@ func (s *Scheduler) isMarketplaceWorker(worker *types.Worker) bool {
 	if s == nil || s.workerPoolManager == nil || worker == nil {
 		return false
 	}
-	pool, ok := s.workerPoolManager.GetPool(worker.PoolName)
+	pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
 	return ok && pool.Config.Mode == types.PoolModeMarketplace
 }
 
@@ -1264,7 +1274,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	}
 
 	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
-		newSchedulingAttempt(s, request, nil).fail("retry_limit")
+		newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureRetryLimit)
 		return nil
 	}
 

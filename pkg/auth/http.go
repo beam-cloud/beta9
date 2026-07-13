@@ -143,7 +143,7 @@ func WithStrictWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Co
 func WithClusterAdminAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		cc, ok := ctx.(*HttpAuthContext)
-		if !ok {
+		if !ok || cc.AuthInfo == nil || cc.AuthInfo.Token == nil {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 

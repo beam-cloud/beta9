@@ -12,6 +12,8 @@ import (
 )
 
 const (
+	ComputePoolStatusActive = "active"
+
 	ComputeSourceAutosolver     ComputeCapacitySource = "autosolver"
 	ComputeSourceCLIReservation ComputeCapacitySource = "cli_reservation"
 	ComputeSourceAttached       ComputeCapacitySource = "attached"

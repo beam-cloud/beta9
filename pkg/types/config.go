@@ -436,11 +436,23 @@ type FailoverConfig struct {
 
 type PoolMode string
 
+type WorkerPoolManagementSource string
+type WorkerPoolController string
+
 var (
 	PoolModeLocal       PoolMode = "local"
 	PoolModeExternal    PoolMode = "external"
 	PoolModePrivate     PoolMode = "private"
 	PoolModeMarketplace PoolMode = "marketplace"
+)
+
+const (
+	WorkerPoolManagementSourceConfig WorkerPoolManagementSource = "config"
+	WorkerPoolManagementSourceAPI    WorkerPoolManagementSource = "api"
+
+	WorkerPoolControllerLocal          WorkerPoolController = "local"
+	WorkerPoolControllerAgent          WorkerPoolController = "agent"
+	WorkerPoolControllerExternalLegacy WorkerPoolController = "external_legacy"
 )
 
 // AgentHosted reports whether pools of this mode run on agent-managed
@@ -476,6 +488,13 @@ type WorkerPoolConfig struct {
 	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume (clip layer cache + image mounts); defaults to /images
 	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; defaults to /var/lib/beta9/durable-disks
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
+}
+
+// AgentHosted reports whether this concrete pool uses the agent control path.
+// External pools without a provider are agent-backed; external pools with a
+// provider remain on the legacy remote-k3s controller during migration.
+func (c WorkerPoolConfig) AgentHosted() bool {
+	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && c.Provider == nil)
 }
 
 type WorkerPoolCacheConfig struct {

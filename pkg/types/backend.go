@@ -370,6 +370,7 @@ type Task struct {
 	Id                  uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
 	ExternalId          string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Status              TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
+	FailureReason       string     `db:"failure_reason" json:"failure_reason,omitempty" serializer:"failure_reason"`
 	ContainerId         string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
 	StartedAt           NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
 	EndedAt             NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`

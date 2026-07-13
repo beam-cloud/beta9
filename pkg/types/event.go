@@ -211,6 +211,7 @@ const (
 	EventComputeActionReservationRenewed         = "reservation.renewed"
 	EventComputeActionReservationTerminating     = "reservation.terminating"
 	EventComputeActionReservationStatusUpdated   = "reservation.status_updated"
+	EventComputeActionPoolHeartbeat              = "pool.heartbeat"
 	EventComputeActionJoinTokenCreated           = "join_token.created"
 	EventComputeActionJoinTokenRevoked           = "join_token.revoked"
 	EventComputeActionMachineJoined              = "machine.joined"
@@ -225,6 +226,29 @@ const (
 	EventComputeActionTransportPrewarm           = "transport.prewarm"
 	EventComputeActionTransportSnapshot          = "transport.snapshot"
 	EventComputeActionRouteStatusUpdated         = "route.status_updated"
+)
+
+const (
+	EventComputeAttrAvailableWorkerCount     = "available_worker_count"
+	EventComputeAttrContainerCount           = "container_count"
+	EventComputeAttrCPUUtilizationPct        = "cpu_utilization_pct"
+	EventComputeAttrDiskPath                 = "disk_path"
+	EventComputeAttrDiskTotalMB              = "disk_total_mb"
+	EventComputeAttrDiskUsagePct             = "disk_usage_pct"
+	EventComputeAttrDiskUsedMB               = "disk_used_mb"
+	EventComputeAttrFreeGPUCount             = "free_gpu_count"
+	EventComputeAttrHostCPUUtilizationPct    = "host_cpu_utilization_pct"
+	EventComputeAttrHostMemoryUsedMB         = "host_memory_used_mb"
+	EventComputeAttrHostMemoryUtilizationPct = "host_memory_utilization_pct"
+	EventComputeAttrHourlyCostMicros         = "hourly_cost_micros"
+	EventComputeAttrMemoryUsedMB             = "memory_used_mb"
+	EventComputeAttrMemoryUtilizationPct     = "memory_utilization_pct"
+	EventComputeAttrPendingContainerCount    = "pending_container_count"
+	EventComputeAttrPendingWorkerCount       = "pending_worker_count"
+	EventComputeAttrPoolMode                 = "pool_mode"
+	EventComputeAttrSchedulingLatencyMs      = "scheduling_latency_ms"
+	EventComputeAttrTransport                = "transport"
+	EventComputeAttrWorkerCount              = "worker_count"
 )
 
 type EventComputeSchema struct {
@@ -283,6 +307,7 @@ var EventTaskSchemaVersion = "1.0"
 type EventTaskSchema struct {
 	ID                  string     `json:"id"`
 	Status              TaskStatus `json:"status"`
+	FailureReason       string     `json:"failure_reason,omitempty"`
 	ContainerID         string     `json:"container_id"`
 	StartedAt           *time.Time `json:"started_at"`
 	EndedAt             *time.Time `json:"ended_at"`
@@ -450,6 +475,7 @@ const (
 	EventAttrSource             = "source"
 	EventAttrStatus             = "status"
 	EventAttrTaskID             = "task_id"
+	EventAttrPoolSelector       = "pool_selector"
 	EventAttrTimeoutSeconds     = "timeout_seconds"
 	EventAttrTotalRequests      = "total_requests"
 	EventAttrDurationUs         = "duration_us"
@@ -971,9 +997,38 @@ type MetricsAggregationBucket struct {
 }
 
 type MetricsTimeseriesResponse struct {
-	Timeseries struct {
+	ScannedRecords uint64 `json:"scanned_records"`
+	Truncated      bool   `json:"truncated"`
+	Timeseries     struct {
 		AggregationBuckets []MetricsAggregationBucket `json:"aggregation_buckets"`
 	} `json:"timeseries"`
+}
+
+type PoolMetrics struct {
+	WorkspaceID          string  `json:"workspace_id"`
+	PoolName             string  `json:"pool_name"`
+	MachineCount         int     `json:"machine_count"`
+	ContainerCount       uint32  `json:"container_count"`
+	GPUCount             uint32  `json:"gpu_count"`
+	FreeGPUCount         uint32  `json:"free_gpu_count"`
+	CPUUtilizationPct    float64 `json:"cpu_utilization_pct"`
+	MemoryUtilizationPct float64 `json:"memory_utilization_pct"`
+	GPUUtilizationPct    float64 `json:"gpu_utilization_pct"`
+	DiskUsagePct         float64 `json:"disk_usage_pct"`
+	HourlyCost           float64 `json:"hourly_cost"`
+	EstimatedCost        float64 `json:"estimated_cost"`
+}
+
+type PoolMetricsPoint struct {
+	Timestamp int64         `json:"timestamp"`
+	Pools     []PoolMetrics `json:"pools"`
+}
+
+type PoolMetricsTimeseriesResponse struct {
+	Workspaces     []string           `json:"workspaces"`
+	Points         []PoolMetricsPoint `json:"points"`
+	ScannedRecords uint64             `json:"scanned_records"`
+	Truncated      bool               `json:"truncated"`
 }
 
 type ContainerEventRecord struct {

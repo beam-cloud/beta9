@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"errors"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -32,6 +33,33 @@ type PoolState struct {
 	// reservations terminate once the grace period is exceeded.
 	BillingDegradedSince time.Time          `json:"billing_degraded_since,omitempty"`
 	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
+	// ManagementSource marks serverless inventory owned by the control plane
+	// rather than a tenant. WorkerConfig preserves its complete configuration.
+	ManagementSource types.WorkerPoolManagementSource `json:"management_source,omitempty"`
+	// ManagedInstanceID changes whenever a deleted managed pool is
+	// recreated, preventing an unexpired installer for the old pool from
+	// authorizing a machine into the new one.
+	ManagedInstanceID string                  `json:"managed_instance_id,omitempty"`
+	WorkerConfig      *types.WorkerPoolConfig `json:"worker_config,omitempty"`
+}
+
+var (
+	ErrManagedPermissionDenied  = errors.New("cluster admin permission required")
+	ErrManagedPoolConflict      = errors.New("pool already exists")
+	ErrManagedPoolNotFound      = errors.New("pool not found")
+	ErrManagedPoolImmutable     = errors.New("config-managed pools are read-only")
+	ErrManagedPoolInUse         = errors.New("pool must have no machines or workers")
+	ErrInvalidManagedPoolConfig = errors.New("invalid pool configuration")
+)
+
+type ManagedPool struct {
+	Name              string                           `json:"name"`
+	Config            types.WorkerPoolConfig           `json:"config"`
+	Source            types.WorkerPoolManagementSource `json:"source"`
+	Controller        types.WorkerPoolController       `json:"controller"`
+	State             *types.WorkerPoolState           `json:"-"` // Used by the admin CLI, not the HTTP API.
+	MachineCount      int                              `json:"machine_count"`
+	ReadyMachineCount int                              `json:"ready_machine_count"`
 }
 
 const (
@@ -104,7 +132,8 @@ type JoinTokenState struct {
 	Revoked   bool      `json:"revoked"`
 	// BoundFingerprint pins a machine-specific join token to the first
 	// machine that used it.
-	BoundFingerprint string `json:"bound_fingerprint,omitempty"`
+	BoundFingerprint      string `json:"bound_fingerprint,omitempty"`
+	ManagedPoolInstanceID string `json:"managed_pool_instance_id,omitempty"`
 }
 
 type AgentTokenState struct {
@@ -185,6 +214,9 @@ type AgentWorkerSlotState struct {
 	WorkerImage               string    `json:"worker_image"`
 	NetworkSlotPoolSize       uint32    `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32    `json:"container_start_concurrency"`
+	RequiresPoolSelector      bool      `json:"requires_pool_selector"`
+	Priority                  int32     `json:"priority"`
+	Preemptable               bool      `json:"preemptable"`
 	CreatedAt                 time.Time `json:"created_at"`
 	UpdatedAt                 time.Time `json:"updated_at"`
 }
@@ -248,7 +280,7 @@ func AgentMachineLastSeen(state *AgentTokenState) time.Time {
 
 func AgentPreflightFailed(checks []PreflightCheckState) bool {
 	for _, check := range checks {
-		if check.Severity == "error" && !check.OK {
+		if check.Severity == types.AgentPreflightSeverityError && !check.OK {
 			return true
 		}
 	}

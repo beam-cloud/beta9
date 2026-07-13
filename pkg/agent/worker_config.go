@@ -146,6 +146,7 @@ type agentConfigPool struct {
 	NetworkSlotPoolSize       int              `json:"networkSlotPoolSize"`
 	RequiresPoolSelector      bool             `json:"requiresPoolSelector"`
 	Priority                  int              `json:"priority"`
+	Preemptable               bool             `json:"preemptable"`
 	CRIUEnabled               bool             `json:"criuEnabled"`
 	TmpSizeLimit              string           `json:"tmpSizeLimit"`
 	StorageMode               string           `json:"storageMode"`
@@ -207,6 +208,13 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	poolMode := slotPoolMode(slot)
 	poolRuntime := slotContainerRuntime(slot)
+	priority := int(slot.Priority)
+	if priority == 0 && !slot.PrioritySet {
+		priority = 1000
+		if poolMode == string(types.PoolModeMarketplace) {
+			priority = 100
+		}
+	}
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
@@ -275,8 +283,9 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
 					NetworkPreallocation:      true,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),
-					RequiresPoolSelector:      poolMode != string(types.PoolModeMarketplace),
-					Priority:                  1000,
+					RequiresPoolSelector:      slot.RequiresPoolSelector || poolMode == string(types.PoolModePrivate),
+					Priority:                  priority,
+					Preemptable:               slot.Preemptable,
 					CRIUEnabled:               true,
 					TmpSizeLimit:              types.AgentTmpSizeLimit,
 					StorageMode:               workspaceStorageMode,
@@ -309,8 +318,11 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 // slotPoolMode returns the pool mode the gateway assigned to this worker slot,
 // defaulting to private for older gateways that don't send one.
 func slotPoolMode(slot *pb.AgentWorkerSlot) string {
-	if slot != nil && slot.Mode == string(types.PoolModeMarketplace) {
-		return string(types.PoolModeMarketplace)
+	if slot != nil {
+		switch slot.Mode {
+		case string(types.PoolModeMarketplace), string(types.PoolModeExternal):
+			return slot.Mode
+		}
 	}
 	return string(types.PoolModePrivate)
 }
@@ -375,9 +387,9 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 	c.Worker.UseHostResolvConf = true
 	c.Worker.CacheEnabled = true
 	for name, pool := range c.Worker.Pools {
-		// Agent workers only ever run in private or marketplace mode; anything
-		// else collapses to private so cluster-only modes can't leak in.
-		if pool.Mode != string(types.PoolModeMarketplace) {
+		// Agent workers run in private, marketplace, or platform external mode;
+		// cluster-local and legacy provider modes still collapse to private.
+		if pool.Mode != string(types.PoolModeMarketplace) && pool.Mode != string(types.PoolModeExternal) {
 			pool.Mode = string(types.PoolModePrivate)
 			pool.RequiresPoolSelector = true
 		}

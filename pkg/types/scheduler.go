@@ -39,10 +39,18 @@ const (
 )
 
 type ContainerRequestStatus string
+type ContainerSchedulingFailureReason string
 
 const (
 	ContainerRequestStatusFailed ContainerRequestStatus = "failed"
 	ContainerRequestStatusTTL                           = 10 * time.Minute
+
+	ContainerSchedulingFailureBacklogPushFailed               ContainerSchedulingFailureReason = "backlog_push_failed"
+	ContainerSchedulingFailureNoController                    ContainerSchedulingFailureReason = "no_controller"
+	ContainerSchedulingFailureWorkerCapacityTimeout           ContainerSchedulingFailureReason = "worker_capacity_timeout"
+	ContainerSchedulingFailureRetryLimit                      ContainerSchedulingFailureReason = "retry_limit"
+	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
+	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
 )
 
 // @go2proto
@@ -65,6 +73,7 @@ type Worker struct {
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 	Runtime              string       `json:"runtime" redis:"runtime"`
+	PoolSelector         string       `json:"pool_selector" redis:"pool_selector"`
 }
 
 type WorkerKeepAlive struct {
@@ -103,6 +112,7 @@ func (w *Worker) ToProto() *pb.Worker {
 		BuildVersion:         w.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              w.Runtime,
+		PoolSelector:         w.PoolSelector,
 	}
 }
 
@@ -131,6 +141,7 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		BuildVersion:         in.BuildVersion,
 		ActiveContainers:     containers,
 		Runtime:              in.Runtime,
+		PoolSelector:         in.PoolSelector,
 	}
 }
 
@@ -261,6 +272,7 @@ type ContainerRequest struct {
 	// rental); empty means any machine.
 	MachineId         string             `json:"machine_id,omitempty"`
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
+	TaskId            string             `json:"task_id,omitempty"`
 }
 
 // @go2proto
@@ -573,6 +585,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		ImageId:                  c.ImageId,
 		Mounts:                   mounts,
 		StubId:                   c.StubId,
+		TaskId:                   c.TaskId,
 		AppId:                    c.AppId,
 		WorkspaceId:              c.WorkspaceId,
 		Workspace:                c.Workspace.ToProto(),
@@ -636,6 +649,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Workspace:                *NewWorkspaceFromProto(in.Workspace),
 		Stub:                     *NewStubWithRelatedFromProto(in.Stub),
 		StubId:                   in.StubId,
+		TaskId:                   in.TaskId,
 		Timestamp:                in.GetTimestamp().AsTime(),
 		RetryCount:               int(in.RetryCount),
 		CheckpointEnabled:        in.CheckpointEnabled,

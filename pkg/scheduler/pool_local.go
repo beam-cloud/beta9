@@ -78,6 +78,7 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		ProviderRepo:     opts.ProviderRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
+		BackendRepo:      wpc.backendRepo,
 		EventRepo:        opts.EventRepo,
 	})
 	if err != nil {
@@ -110,7 +111,7 @@ func (wpc *LocalKubernetesWorkerPoolController) RequiresPoolSelector() bool {
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
-	return freePoolCapacity(wpc.workerRepo, wpc)
+	return freePoolCapacity(wpc.workerRepo, wpc.name)
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) State() (*types.WorkerPoolState, error) {

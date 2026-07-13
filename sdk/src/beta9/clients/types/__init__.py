@@ -121,6 +121,7 @@ class ContainerRequest(betterproto.Message):
     allow_marketplace: bool = betterproto.bool_field(33)
     machine_id: str = betterproto.string_field(34)
     checkpoint_trigger: "CheckpointTrigger" = betterproto.message_field(35)
+    task_id: str = betterproto.string_field(36)
 
 
 @dataclass(eq=False, repr=False)
@@ -284,6 +285,7 @@ class Worker(betterproto.Message):
     build_version: str = betterproto.string_field(16)
     active_containers: List["Container"] = betterproto.message_field(17)
     runtime: str = betterproto.string_field(18)
+    pool_selector: str = betterproto.string_field(19)
 
 
 @dataclass(eq=False, repr=False)

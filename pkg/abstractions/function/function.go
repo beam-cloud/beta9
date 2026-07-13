@@ -98,7 +98,6 @@ func NewContainerFunctionService(ctx context.Context,
 		eventRepo:        opts.EventRepo,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 	}
-
 	// Register task dispatcher
 	fs.taskDispatcher.Register(string(types.ExecutorFunction), fs.functionTaskFactory)
 
@@ -108,6 +107,7 @@ func NewContainerFunctionService(ctx context.Context,
 	registerFunctionRoutes(fs.routeGroup.Group(scheduleRoutePrefix, authMiddleware), fs)
 
 	go fs.listenForScheduledJobs()
+	go abstractions.ListenForTaskSchedulingFailures(ctx, fs.rdb, fs.backendRepo, fs.taskDispatcher)
 
 	return fs, nil
 }

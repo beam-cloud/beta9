@@ -298,6 +298,9 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 	if !pool.RequiresPoolSelector {
 		t.Fatal("private pool should require pool selector")
 	}
+	if pool.Priority != 1000 {
+		t.Fatalf("legacy slot priority = %d, want private default 1000", pool.Priority)
+	}
 	if config.ManagedCompute != nil {
 		t.Fatal("private workers must not receive billing config")
 	}
@@ -357,6 +360,48 @@ func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testin
 	}
 	if config.Monitoring.ContainerCostHook == nil || config.Monitoring.ContainerCostHook.Endpoint != bootstrap.Billing.CostHookEndpoint {
 		t.Fatalf("cost hook config = %+v, want endpoint threaded through", config.Monitoring.ContainerCostHook)
+	}
+}
+
+func TestAgentWorkerConfigPlatformExternalPreservesPoolSemantics(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:                  "public-h100",
+		Mode:                      string(types.PoolModeExternal),
+		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		RequiresPoolSelector:      false,
+		Priority:                  250,
+		Preemptable:               true,
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 8,
+	}
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	pool := config.Worker.Pools[slot.PoolName]
+
+	if pool.Mode != string(types.PoolModeExternal) {
+		t.Fatalf("pool mode = %q, want external", pool.Mode)
+	}
+	if pool.RequiresPoolSelector {
+		t.Fatal("public external pool unexpectedly requires a selector")
+	}
+	if pool.Priority != 250 || !pool.Preemptable {
+		t.Fatalf("scheduling config = priority %d preemptable %v", pool.Priority, pool.Preemptable)
+	}
+	if pool.NetworkSlotPoolSize != 64 || pool.ContainerStartConcurrency != 8 {
+		t.Fatalf("agent capacity config = %+v", pool)
+	}
+}
+
+func TestAgentWorkerConfigPreservesExplicitZeroPriority(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:    "lowest-priority",
+		Mode:        string(types.PoolModeExternal),
+		Priority:    0,
+		PrioritySet: true,
+	}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if priority := config.Worker.Pools[slot.PoolName].Priority; priority != 0 {
+		t.Fatalf("priority = %d, want explicit zero", priority)
 	}
 }
 

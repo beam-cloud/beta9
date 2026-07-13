@@ -36,19 +36,19 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Name:     "k3s",
 			Ok:       true,
 			Message:  "not required for agent worker-container mode",
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		},
 		{
 			Name:     "flux",
 			Ok:       true,
 			Message:  "not installed or required for agent worker-container mode",
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		},
 		{
 			Name:     "tailscale-daemon",
 			Ok:       true,
 			Message:  "not installed or required; agent transport is embedded and route-scoped",
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		},
 	}
 	if devMode {
@@ -56,7 +56,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Name:     "local-dev",
 			Ok:       true,
 			Message:  "macOS and Linux local joins use the agent route listener without k3s, Flux, or a system Tailscale daemon",
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		})
 	}
 	if envBool(types.AgentInContainerEnv) {
@@ -64,7 +64,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Name:     "agent-container",
 			Ok:       true,
 			Message:  "running the Linux agent inside Docker; worker containers are started as siblings through the Docker socket",
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		})
 	}
 
@@ -84,7 +84,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Name:     "root",
 			Ok:       root,
 			Message:  "not required when the user can run rootful Docker; sudo install remains supported",
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		})
 
 		runtimeOK := commandExists("docker")
@@ -158,7 +158,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 			Name:     "network-manager",
 			Ok:       true,
 			Message:  networkManagerMessage(networkManager),
-			Severity: "info",
+			Severity: types.AgentPreflightSeverityInfo,
 		})
 
 		fuse := pathExists(types.HostFuseDevicePath)
@@ -202,7 +202,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 				Name:     "cuda-driver-init",
 				Ok:       cudaOK,
 				Message:  cudaMessage,
-				Severity: "info",
+				Severity: types.AgentPreflightSeverityInfo,
 			})
 		}
 	}
@@ -217,7 +217,7 @@ func runPreflight(devMode bool, executor string) preflightResult {
 
 func allRequiredChecksPassed(checks []check) bool {
 	for _, c := range checks {
-		if c.Severity == "error" && !c.Ok {
+		if c.Severity == types.AgentPreflightSeverityError && !c.Ok {
 			return false
 		}
 	}
@@ -226,9 +226,9 @@ func allRequiredChecksPassed(checks []check) bool {
 
 func severity(ok bool) string {
 	if ok {
-		return "info"
+		return types.AgentPreflightSeverityInfo
 	}
-	return "error"
+	return types.AgentPreflightSeverityError
 }
 
 func commandExists(name string) bool {

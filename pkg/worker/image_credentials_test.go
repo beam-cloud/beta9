@@ -208,7 +208,7 @@ func TestLazyMountOptionsForPrivateClipV2UsesCheckpoints(t *testing.T) {
 }
 
 func TestGetCredentialProviderForAgentPoolImageUsesGatewayCredentialsOnly(t *testing.T) {
-	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace} {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &fakeImageCredentialWorkerRepo{
 				resp: &pb.GetCacheOriginCredentialsResponse{
@@ -245,7 +245,7 @@ func TestGetCredentialProviderForAgentPoolImageUsesGatewayCredentialsOnly(t *tes
 }
 
 func TestGetCredentialProviderForAgentPoolImageAvoidsAmbientKeychainWithoutGatewayCredentials(t *testing.T) {
-	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace} {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &fakeImageCredentialWorkerRepo{
 				resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
@@ -312,7 +312,7 @@ func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
 }
 
 func TestPullImageFromRegistryAgentPoolsRequireBrokeredOrigin(t *testing.T) {
-	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace} {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &fakeImageCredentialWorkerRepo{
 				resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
@@ -354,6 +354,16 @@ func TestPullImageFromRegistryAgentPoolsUseWorkerPoolWhenRequestSelectorIsEmpty(
 	require.Contains(t, err.Error(), "gateway-brokered image archive origin is unavailable")
 	require.Len(t, repo.requests, 1)
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
+}
+
+func TestLegacyProviderExternalPoolDoesNotUseAgentCredentials(t *testing.T) {
+	provider := types.ProviderEC2
+	client := agentPoolImageClient(types.PoolModeExternal, &fakeImageCredentialWorkerRepo{})
+	pool := client.config.Worker.Pools["agent-pool"]
+	pool.Provider = &provider
+	client.config.Worker.Pools["agent-pool"] = pool
+
+	require.False(t, client.brokeredImageAccessRequest(&types.ContainerRequest{PoolSelector: "agent-pool"}))
 }
 
 func agentPoolImageClient(mode types.PoolMode, repo *fakeImageCredentialWorkerRepo) *ImageClient {

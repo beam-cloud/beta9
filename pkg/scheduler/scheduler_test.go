@@ -336,6 +336,33 @@ func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
 	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
 }
 
+func TestRegisterAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+
+	provider := types.ProviderGeneric
+	err = scheduler.RegisterAgentPool("admin-workspace", &compute.PoolState{
+		Name:             "api-pool",
+		Selector:         "api-pool",
+		ManagementSource: types.WorkerPoolManagementSourceAPI,
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:     types.PoolModeLocal,
+			Provider: &provider,
+			Priority: 7,
+			GPUType:  "A10G",
+		},
+	})
+	assert.NoError(t, err)
+
+	pool, ok := scheduler.workerPoolManager.GetPool("api-pool")
+	assert.True(t, ok)
+	assert.Equal(t, types.PoolModeExternal, pool.Config.Mode)
+	assert.Nil(t, pool.Config.Provider)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), pool.Config.ContainerRuntime)
+	assert.Equal(t, int32(7), pool.Config.Priority)
+}
+
 // Machine-pinned requests (marketplace rentals) must only ever see the pinned
 // machine's worker, regardless of pool selector requirements.
 func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
@@ -1926,9 +1953,13 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, _ := wb.requestBacklog.rdb.Subscribe(ctx, common.EventChannelKey(common.EventTypeContainerSchedulingFailed))
 
 	request := &types.ContainerRequest{
 		ContainerId: uuid.New().String(),
+		TaskId:      uuid.New().String(),
 		WorkspaceId: "test-workspace",
 		Cpu:         100,
 		Memory:      100,
@@ -1947,6 +1978,19 @@ func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 	status, err := statusRepo.GetContainerRequestStatus(request.ContainerId)
 	assert.Nil(t, err)
 	assert.Equal(t, types.ContainerRequestStatusFailed, status)
+
+	select {
+	case message := <-events:
+		event, _, claimed := wb.eventBus.Claim(message.Payload)
+		assert.True(t, claimed)
+		failure, ok := common.ParseContainerSchedulingFailure(event)
+		assert.True(t, ok)
+		assert.Equal(t, request.TaskId, failure.TaskID)
+		assert.Equal(t, request.ContainerId, failure.ContainerID)
+		assert.Equal(t, types.ContainerSchedulingFailureNoController, failure.Reason)
+	case <-time.After(time.Second):
+		t.Fatal("expected container scheduling failure event")
+	}
 }
 
 func TestGetController(t *testing.T) {
@@ -2049,7 +2093,12 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 	}
 	worker, err := wb.workerRepo.GetWorkerById(compute.AgentMachineWorkerID("machine-1"))
 	assert.NoError(t, err)
-	assert.Equal(t, poolState.Selector, worker.PoolName)
+	assert.Equal(t, poolState.Name, worker.PoolName)
+	assert.Equal(t, poolState.Selector, worker.PoolSelector)
+	assert.NoError(t, wb.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
+	selected, err := wb.selectWorker(request)
+	assert.NoError(t, err)
+	assert.Equal(t, worker.Id, selected.Id)
 
 	shouldSanitize, err := wb.privateBacklogRequest(request)
 	assert.NoError(t, err)
@@ -2485,6 +2534,30 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
+	worker := &types.Worker{
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              1000,
+		FreeMemory:           1250,
+		FreeGpuCount:         1,
+		Gpu:                  "NVIDIA GeForce RTX 3080 Ti",
+		PoolName:             "my-pool",
+		RequiresPoolSelector: true,
+	}
+	request := &types.ContainerRequest{
+		Cpu:          1000,
+		Memory:       1000,
+		GpuRequest:   []string{string(types.GPU_ANY)},
+		GpuCount:     1,
+		PoolSelector: "my-pool",
+	}
+
+	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, request))
+
+	request.PoolSelector = ""
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request))
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {

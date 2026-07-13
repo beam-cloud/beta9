@@ -49,7 +49,8 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 		tokenType = types.TokenTypeWorkspace
 	}
 
-	if tokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+	clusterAdmin := cc.AuthInfo.Token.TokenType == types.TokenTypeClusterAdmin
+	if tokenType != types.TokenTypeWorkspace && !(clusterAdmin && tokenType == types.TokenTypeWorkspacePrimary) {
 		return HTTPBadRequest("Invalid token type")
 	}
 

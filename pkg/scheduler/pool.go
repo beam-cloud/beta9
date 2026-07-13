@@ -177,24 +177,13 @@ func MonitorPoolSize(wpc WorkerPoolController,
 }
 
 func MonitorPoolHealth(opts PoolHealthMonitorOptions) error {
-	poolHealthMonitor := NewPoolHealthMonitor(PoolHealthMonitorOptions{
-		Controller:       opts.Controller,
-		WorkerPoolConfig: opts.WorkerPoolConfig,
-		WorkerConfig:     opts.WorkerConfig,
-		WorkerRepo:       opts.WorkerRepo,
-		ProviderRepo:     opts.ProviderRepo,
-		WorkerPoolRepo:   opts.WorkerPoolRepo,
-		ContainerRepo:    opts.ContainerRepo,
-		EventRepo:        opts.EventRepo,
-	})
-
+	poolHealthMonitor := NewPoolHealthMonitor(opts)
 	go poolHealthMonitor.Start()
-
 	return nil
 }
 
-func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolController) (*WorkerPoolCapacity, error) {
-	workers, err := workerRepo.GetAllWorkersInPool(wpc.Name())
+func freePoolCapacity(workerRepo repository.WorkerRepository, poolName string) (*WorkerPoolCapacity, error) {
+	workers, err := workerRepo.GetAllWorkersInPool(poolName)
 	if err != nil {
 		return nil, err
 	}

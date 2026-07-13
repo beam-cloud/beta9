@@ -254,7 +254,7 @@ func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*typ
 
 	var adminWorkspace types.Workspace
 
-	query := `SELECT w.id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+	query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.token_type = 'admin';`
@@ -565,7 +565,7 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 	query := `
     INSERT INTO task (external_id, container_id, workspace_id, external_workspace_id, stub_id)
     VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, external_id, status, container_id, workspace_id, external_workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
+    RETURNING id, external_id, status, failure_reason, container_id, workspace_id, external_workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
     `
 
 	var newTask types.Task
@@ -583,16 +583,16 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error) {
 	query := `
 	UPDATE task
-	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, workspace_id = $6, stub_id = $7, updated_at = CURRENT_TIMESTAMP
+	SET status = $2, container_id = $3, started_at = $4, ended_at = $5, workspace_id = $6, stub_id = $7, failure_reason = $8, updated_at = CURRENT_TIMESTAMP
 	WHERE external_id = $1
-	RETURNING id, external_id, status, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
+	RETURNING id, external_id, status, failure_reason, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
 	`
 
 	var task types.Task
 	if err := r.client.GetContext(ctx, &task, query,
 		externalId, updatedTask.Status, updatedTask.ContainerId,
 		updatedTask.StartedAt, updatedTask.EndedAt,
-		updatedTask.WorkspaceId, updatedTask.StubId); err != nil {
+		updatedTask.WorkspaceId, updatedTask.StubId, updatedTask.FailureReason); err != nil {
 		return &types.Task{}, err
 	}
 
@@ -610,7 +610,7 @@ func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId s
 
 func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId string) (*types.Task, error) {
 	var task types.Task
-	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, external_workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
+	query := `SELECT id, external_id, status, failure_reason, container_id, started_at, ended_at, workspace_id, external_workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &task, query, externalId)
 	if err != nil {
 		return &types.Task{}, err
@@ -712,7 +712,7 @@ func (r *PostgresBackendRepository) GetTaskByWorkspace(ctx context.Context, exte
 
 func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task, error) {
 	var tasks []types.Task
-	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task;`
+	query := `SELECT id, external_id, status, failure_reason, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task;`
 	err := r.client.SelectContext(ctx, &tasks, query)
 	if err != nil {
 		return nil, err
