@@ -3,8 +3,10 @@ package apiv1
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -753,15 +755,21 @@ const (
 )
 
 const (
-	defaultSandboxListLimit       = 50
-	maxSandboxListLimit           = 200
-	sandboxContainerHistoryLimit  = 500
-	sandboxHistoryEventsPerRow    = 32
-	sandboxStatsHistoryLimit      = 5000
-	sandboxStatsFallbackStubLimit = 25
-	sandboxStatsFallbackWorkers   = 8
-	sandboxHistoryQueryTimeout    = 15 * time.Second
-	sandboxTimingHydrationLimit   = 50
+	defaultSandboxListLimit        = 50
+	maxSandboxListLimit            = 200
+	sandboxContainerHistoryLimit   = 500
+	sandboxHistoryEventsPerRow     = 32
+	sandboxStatsHistoryLimit       = 5000
+	sandboxStatsFallbackStubLimit  = 25
+	sandboxStatsFallbackWorkers    = 8
+	sandboxHistoryQueryConcurrency = 16
+	sandboxHistoryQueryTimeout     = 15 * time.Second
+	sandboxTimingHydrationLimit    = 50
+)
+
+var (
+	sandboxHistoryQuerySlots = make(chan struct{}, sandboxHistoryQueryConcurrency)
+	errSandboxHistoryBusy    = errors.New("sandbox history query capacity exhausted")
 )
 
 type SandboxRow struct {
@@ -1647,17 +1655,16 @@ func (g *StubGroup) coalescedSandboxEventHistory(ctx context.Context, query type
 		return nil, nil
 	}
 
-	key := strings.Join([]string{
-		query.WorkspaceID,
-		query.AppID,
-		query.StubID,
-		query.ContainerID,
-		query.TaskID,
-		strconv.FormatUint(query.Limit, 10),
-		strings.Join(query.EventTypes, ","),
-	}, "\x00")
-
+	key, err := sandboxHistoryQueryKey(query)
+	if err != nil {
+		return nil, err
+	}
 	result := g.sandboxHistoryQueries.DoChan(key, func() (interface{}, error) {
+		if err := acquireSandboxHistoryQuerySlot(ctx, sandboxHistoryQuerySlots); err != nil {
+			return nil, err
+		}
+		defer func() { <-sandboxHistoryQuerySlots }()
+
 		queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxHistoryQueryTimeout)
 		defer cancel()
 		return g.eventRepo.GetEventHistory(queryCtx, query)
@@ -1675,6 +1682,33 @@ func (g *StubGroup) coalescedSandboxEventHistory(ctx context.Context, query type
 			return nil, fmt.Errorf("unexpected sandbox history response type %T", call.Val)
 		}
 		return history, nil
+	}
+}
+
+func sandboxHistoryQueryKey(query types.EventQuery) (string, error) {
+	encoded, err := json.Marshal(query)
+	if err != nil {
+		return "", fmt.Errorf("encode sandbox history query: %w", err)
+	}
+	key := sha256.Sum256(encoded)
+	return string(key[:]), nil
+}
+
+func acquireSandboxHistoryQuerySlot(ctx context.Context, slots chan struct{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case slots <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-slots
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return errSandboxHistoryBusy
 	}
 }
 

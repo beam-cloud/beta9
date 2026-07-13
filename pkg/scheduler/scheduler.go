@@ -91,8 +91,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
 	for name, pool := range config.Worker.Pools {
-		var controller WorkerPoolController = nil
-		var err error = nil
+		var controller WorkerPoolController
+		var err error
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
@@ -113,21 +113,20 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				// compute service after it reconciles persisted pool ownership.
 				log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
 				continue
-			} else {
-				controller, err = NewLegacyExternalWorkerPoolController(WorkerPoolControllerOptions{
-					Context:        ctx,
-					Name:           name,
-					Config:         config,
-					BackendRepo:    backendRepo,
-					WorkerRepo:     workerRepo,
-					ProviderRepo:   providerRepo,
-					WorkerPoolRepo: workerPoolRepo,
-					ContainerRepo:  containerRepo,
-					ProviderName:   pool.Provider,
-					Tailscale:      tailscale,
-					EventRepo:      eventRepo,
-				})
 			}
+			controller, err = NewLegacyExternalWorkerPoolController(WorkerPoolControllerOptions{
+				Context:        ctx,
+				Name:           name,
+				Config:         config,
+				BackendRepo:    backendRepo,
+				WorkerRepo:     workerRepo,
+				ProviderRepo:   providerRepo,
+				WorkerPoolRepo: workerPoolRepo,
+				ContainerRepo:  containerRepo,
+				ProviderName:   pool.Provider,
+				Tailscale:      tailscale,
+				EventRepo:      eventRepo,
+			})
 		case types.PoolModePrivate, types.PoolModeMarketplace:
 			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("skipping static agent pool without workspace state")
 			continue

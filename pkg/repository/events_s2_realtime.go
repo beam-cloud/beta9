@@ -20,8 +20,18 @@ const (
 	defaultS2LogReadLimit = 100
 	maxS2LogReadLimit     = 1000
 	s2MetricsReadLimit    = 1000
-	s2LogPageScanLimit    = 50000
+	s2ReadScanLimit       = 50000
 )
+
+type s2MetricsScanBudget uint64
+
+func (b s2MetricsScanBudget) readLimit() uint64 {
+	return min(s2MetricsReadLimit, uint64(b))
+}
+
+func (b s2MetricsScanBudget) consume(records int) s2MetricsScanBudget {
+	return b - min(b, s2MetricsScanBudget(records))
+}
 
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
 	limit := query.Limit
@@ -143,7 +153,8 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 		return nil, fmt.Errorf("invalid pool metrics interval %q", interval)
 	}
 
-	response, err = r.getPoolMetricsTimeseries(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize)
+	scanBudget := s2MetricsScanBudget(s2ReadScanLimit)
+	response, scanBudget, err = r.getPoolMetricsTimeseries(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize, scanBudget)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +166,7 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 		// The dedicated stream is new. Fill any prefix written before rollout
 		// from the workspace stream; once the requested range is fully covered,
 		// this fallback disappears without a migration flag.
-		legacy, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize)
+		legacy, _, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
 		if err != nil {
 			return nil, err
 		}
@@ -165,15 +176,16 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 	return response, nil
 }
 
-func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration) (*types.PoolMetricsTimeseriesResponse, error) {
+func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration, scanBudget s2MetricsScanBudget) (*types.PoolMetricsTimeseriesResponse, s2MetricsScanBudget, error) {
 	response := &types.PoolMetricsTimeseriesResponse{}
 	buckets := map[int64]*poolMetricsBucket{}
 	seqNum := uint64(0)
 	startMs := uint64(start.UTC().UnixMilli())
 	endMs := uint64(end.UTC().UnixMilli())
 
-	for {
-		opts := &s2.ReadOptions{SeqNum: &seqNum, Count: countOption(s2MetricsReadLimit), Until: &endMs}
+	for scanBudget > 0 {
+		readLimit := scanBudget.readLimit()
+		opts := &s2.ReadOptions{SeqNum: &seqNum, Count: countOption(readLimit), Until: &endMs}
 		if seqNum == 0 {
 			opts.Timestamp = &startMs
 			opts.SeqNum = nil
@@ -183,11 +195,12 @@ func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, stream
 			if isS2ReadEmpty(err) {
 				break
 			}
-			return nil, fmt.Errorf("read pool metrics from s2 stream %q: %w", streamName, err)
+			return nil, scanBudget, fmt.Errorf("read pool metrics from s2 stream %q: %w", streamName, err)
 		}
 		if len(batch.Records) == 0 {
 			break
 		}
+		scanBudget = scanBudget.consume(len(batch.Records))
 
 		for _, record := range batch.Records {
 			sample, eventTime, ok := computePoolMetricFromS2(record)
@@ -200,12 +213,16 @@ func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, stream
 				bucket = &poolMetricsBucket{key: key, samples: map[string]types.EventComputeSchema{}}
 				buckets[key] = bucket
 			}
-			bucket.samples[sample.PoolName+"\x00"+sample.MachineID] = sample
+			sampleKey := sample.PoolName + "\x00" + sample.MachineID
+			if sample.Action == types.EventComputeActionPoolHeartbeat {
+				sampleKey = sample.PoolName + "\x00"
+			}
+			bucket.samples[sampleKey] = sample
 		}
 
 		last := batch.Records[len(batch.Records)-1]
 		seqNum = last.SeqNum + 1
-		if len(batch.Records) < s2MetricsReadLimit {
+		if uint64(len(batch.Records)) < readLimit {
 			break
 		}
 	}
@@ -219,7 +236,7 @@ func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, stream
 	for _, key := range keys {
 		response.Points = append(response.Points, buckets[key].point(bucketSize))
 	}
-	return response, nil
+	return response, scanBudget, nil
 }
 
 func computePoolMetricFromS2(record s2.SequencedRecord) (types.EventComputeSchema, time.Time, bool) {
@@ -252,8 +269,21 @@ type poolMetricsBucket struct {
 
 func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoint {
 	byPool := map[string][]types.EventComputeSchema{}
+	poolSnapshots := map[string]types.EventComputeSchema{}
 	for _, sample := range b.samples {
+		if sample.Action == types.EventComputeActionPoolHeartbeat {
+			poolSnapshots[sample.PoolName] = sample
+			continue
+		}
 		byPool[sample.PoolName] = append(byPool[sample.PoolName], sample)
+	}
+	// Machine heartbeats contain the finer-grained machine capacity, disk,
+	// and cost data. Pool heartbeats are the fallback for controllers that do
+	// not publish machine telemetry; combining both double-counts the pool.
+	for name, snapshot := range poolSnapshots {
+		if len(byPool[name]) == 0 {
+			byPool[name] = []types.EventComputeSchema{snapshot}
+		}
 	}
 	names := make([]string, 0, len(byPool))
 	for name := range byPool {
@@ -324,10 +354,12 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 	seqNum := uint64(0)
 	startMs := uint64(start.UTC().UnixMilli())
 	endMs := uint64(end.UTC().UnixMilli())
-	for {
+	scanBudget := s2MetricsScanBudget(s2ReadScanLimit)
+	for scanBudget > 0 {
+		readLimit := scanBudget.readLimit()
 		opts := &s2.ReadOptions{
 			SeqNum: &seqNum,
-			Count:  countOption(s2MetricsReadLimit),
+			Count:  countOption(readLimit),
 			Until:  &endMs,
 		}
 		if seqNum == 0 {
@@ -345,6 +377,7 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 		if len(batch.Records) == 0 {
 			break
 		}
+		scanBudget = scanBudget.consume(len(batch.Records))
 
 		for _, record := range batch.Records {
 			metrics, eventTime, ok := containerMetricsFromS2(record)
@@ -371,7 +404,7 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 
 		last := batch.Records[len(batch.Records)-1]
 		seqNum = last.SeqNum + 1
-		if len(batch.Records) < s2MetricsReadLimit {
+		if uint64(len(batch.Records)) < readLimit {
 			break
 		}
 	}
@@ -474,7 +507,7 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 	recordsScanned := uint64(0)
 	scannedFromTail := uint64(0)
 	exhausted := false
-	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < s2LogPageScanLimit {
+	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < s2ReadScanLimit {
 		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
 		tailOffsetValue := int64(tailOffset)
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{

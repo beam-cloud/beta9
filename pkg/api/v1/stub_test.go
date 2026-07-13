@@ -2,9 +2,11 @@ package apiv1
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -78,6 +80,44 @@ func NewStubGroupForTest() *StubGroup {
 		nil,
 		config,
 	)
+}
+
+func TestSandboxHistoryQueryKeyDoesNotAliasDelimitedInput(t *testing.T) {
+	left, err := sandboxHistoryQueryKey(types.EventQuery{WorkspaceID: "workspace", AppID: "app\x00stub", StubID: "container"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := sandboxHistoryQueryKey(types.EventQuery{WorkspaceID: "workspace", AppID: "app", StubID: "stub\x00container"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == right {
+		t.Fatal("distinct sandbox history queries produced the same coalescing key")
+	}
+	if len(left) != sha256.Size {
+		t.Fatalf("coalescing key length = %d, want %d", len(left), sha256.Size)
+	}
+}
+
+func TestAcquireSandboxHistoryQuerySlotBoundsConcurrencyAndHonorsCancellation(t *testing.T) {
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	if err := acquireSandboxHistoryQuerySlot(context.Background(), slots); !errors.Is(err, errSandboxHistoryBusy) {
+		t.Fatalf("slot acquisition error = %v, want capacity exhausted", err)
+	}
+	if len(slots) != 1 {
+		t.Fatalf("slot count = %d, want the original holder only", len(slots))
+	}
+
+	available := make(chan struct{}, 1)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := acquireSandboxHistoryQuerySlot(canceled, available); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pre-canceled slot acquisition error = %v, want context canceled", err)
+	}
+	if len(available) != 0 {
+		t.Fatal("pre-canceled acquisition consumed an available slot")
+	}
 }
 
 // NewStubGroupWithMockForTest creates a StubGroup with a mock repository for testing

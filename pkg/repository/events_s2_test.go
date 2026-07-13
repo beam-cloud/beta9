@@ -1363,6 +1363,10 @@ func TestComputePoolSnapshotFromS2(t *testing.T) {
 
 func TestPoolMetricsBucketAggregatesLatestMachineState(t *testing.T) {
 	bucket := &poolMetricsBucket{key: 1_000, samples: map[string]types.EventComputeSchema{}}
+	bucket.samples["pool-a\x00"] = types.EventComputeSchema{
+		WorkspaceID: "workspace-1", PoolName: "pool-a", Action: types.EventComputeActionPoolHeartbeat, MachineCount: 20, CPUCount: 100, MemoryMB: 100_000, GPUCount: 20,
+		Attrs: map[string]string{"container_count": "30", "free_gpu_count": "10", "cpu_utilization_pct": "99", "memory_used_mb": "99000", "hourly_cost_micros": "20000000"},
+	}
 	bucket.samples["pool-a\x00machine-1"] = types.EventComputeSchema{
 		WorkspaceID: "workspace-1", PoolName: "pool-a", MachineID: "machine-1", CPUCount: 4, MemoryMB: 8_000, GPUCount: 2,
 		Attrs: map[string]string{"container_count": "3", "free_gpu_count": "1", "cpu_utilization_pct": "60", "memory_used_mb": "4000", "disk_used_mb": "100", "disk_total_mb": "200", "hourly_cost_micros": "2000000"},
