@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const adminWorkspaceQueryPattern = `SELECT w\.id, w\.external_id.*WHERE w\.is_cluster_admin`
+
 func TestListTaskWithRelated(t *testing.T) {
 	// Remove this skip if you are testing on local data
 	t.Skip()
@@ -54,7 +56,7 @@ func TestListTaskWithRelated(t *testing.T) {
 func TestGetAdminWorkspaceMapsExternalID(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	createdAt := time.Now().UTC()
-	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).WillReturnRows(sqlmock.NewRows([]string{
+	mock.ExpectQuery(adminWorkspaceQueryPattern).WillReturnRows(sqlmock.NewRows([]string{
 		"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
 	}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, nil, true, true))
 
@@ -80,7 +82,7 @@ func TestGetAdminWorkspaceCanceledCallerDoesNotWaitForLoad(t *testing.T) {
 	repository, mock := NewBackendPostgresRepositoryForTest()
 	repo := repository.(*PostgresBackendRepository)
 	createdAt := time.Now().UTC()
-	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).
+	mock.ExpectQuery(adminWorkspaceQueryPattern).
 		WillDelayFor(200 * time.Millisecond).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
@@ -106,7 +108,7 @@ func TestGetAdminWorkspaceSharesFailedLoadWithWaiters(t *testing.T) {
 	repository, mock := NewBackendPostgresRepositoryForTest()
 	repo := repository.(*PostgresBackendRepository)
 	loadErr := errors.New("database unavailable")
-	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).
+	mock.ExpectQuery(adminWorkspaceQueryPattern).
 		WillDelayFor(200 * time.Millisecond).
 		WillReturnError(loadErr)
 
@@ -131,7 +133,7 @@ func TestGetAdminWorkspaceSharesFailedLoadWithWaiters(t *testing.T) {
 	}
 
 	createdAt := time.Now().UTC()
-	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).WillReturnRows(sqlmock.NewRows([]string{
+	mock.ExpectQuery(adminWorkspaceQueryPattern).WillReturnRows(sqlmock.NewRows([]string{
 		"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
 	}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, nil, true, true))
 	workspace, err := repo.GetAdminWorkspace(context.Background())
@@ -147,7 +149,7 @@ func TestGetAdminWorkspaceRetriesCanceledSharedLoad(t *testing.T) {
 	repo.adminWorkspaceLoading = loading
 
 	createdAt := time.Now().UTC()
-	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).WillReturnRows(sqlmock.NewRows([]string{
+	mock.ExpectQuery(adminWorkspaceQueryPattern).WillReturnRows(sqlmock.NewRows([]string{
 		"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
 	}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, nil, true, true))
 

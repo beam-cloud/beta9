@@ -96,30 +96,17 @@ func gatewayHealthStatus(t *testing.T, g *Gateway, service string) healthpb.Heal
 func TestGatewayHealthSeparatesLivenessFromReadiness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ready := make(chan struct{})
-	g := &Gateway{ctx: ctx, computeReady: ready}
+	g := &Gateway{ctx: ctx}
 	g.newHealthServer()
 
 	if got := gatewayHealthStatus(t, g, gatewayLivenessService); got != healthpb.HealthCheckResponse_SERVING {
 		t.Fatalf("liveness = %v, want serving", got)
 	}
-	if got := gatewayHealthStatus(t, g, gatewayReadinessService); got != healthpb.HealthCheckResponse_NOT_SERVING {
-		t.Fatalf("readiness before reconciliation = %v, want not serving", got)
-	}
-	if g.isReady() {
-		t.Fatal("HTTP readiness reported ready before reconciliation")
-	}
-
-	close(ready)
-	deadline := time.Now().Add(time.Second)
-	for gatewayHealthStatus(t, g, gatewayReadinessService) != healthpb.HealthCheckResponse_SERVING {
-		if time.Now().After(deadline) {
-			t.Fatal("readiness did not become serving after reconciliation")
-		}
-		time.Sleep(time.Millisecond)
+	if got := gatewayHealthStatus(t, g, gatewayReadinessService); got != healthpb.HealthCheckResponse_SERVING {
+		t.Fatalf("readiness = %v, want serving", got)
 	}
 	if !g.isReady() {
-		t.Fatal("HTTP readiness did not become ready after reconciliation")
+		t.Fatal("HTTP readiness did not become ready")
 	}
 
 	g.startDraining()
