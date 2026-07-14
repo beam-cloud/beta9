@@ -4610,6 +4610,24 @@ func TestAssignManagedReservationToMachineRejectsClosedManagedJoinToken(t *testi
 	}
 }
 
+func TestAssignManagedReservationToMachineRequiresRepository(t *testing.T) {
+	state := &model.PoolState{Reservations: []model.Reservation{{
+		Source:                model.SourceCLIReservation,
+		Status:                model.ReservationPending,
+		RegistrationTokenHash: "join-token-hash",
+	}}}
+	token := &model.JoinTokenState{TokenHash: "join-token-hash"}
+	machine := &model.AgentTokenState{MachineID: "machine-1"}
+
+	err := (&Service{}).assignManagedReservationToMachine(context.Background(), state, token, machine)
+	if err == nil || !strings.Contains(err.Error(), "compute repository is unavailable") {
+		t.Fatalf("assignManagedReservationToMachine() error = %v", err)
+	}
+	if state.Reservations[0].MachineID != "" {
+		t.Fatal("reservation was mutated without a repository")
+	}
+}
+
 func testAuthContext(workspaceID, tokenID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
@@ -5071,6 +5089,11 @@ type fakeWorkerRepo struct {
 	worker  *types.Worker
 	workers []*types.Worker
 	status  types.WorkerStatus
+}
+
+func (r *fakeWorkerRepo) AddWorker(worker *types.Worker) error {
+	r.worker = worker
+	return nil
 }
 
 func (r *fakeWorkerRepo) GetWorkerById(workerID string) (*types.Worker, error) {

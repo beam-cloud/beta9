@@ -218,9 +218,6 @@ func (s *Service) assignManagedReservationToMachine(ctx context.Context, state *
 	if token != nil && token.ManagedPoolInstanceID != "" {
 		return nil
 	}
-	if s == nil || s.computeRepo == nil {
-		return s.assignManagedReservationToMachineLocked(ctx, state, token, machine)
-	}
 	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func(lockCtx context.Context) error {
 		fresh, err := s.getPrivatePoolState(lockCtx, machine.WorkspaceID, machine.PoolName)
 		if err != nil {
