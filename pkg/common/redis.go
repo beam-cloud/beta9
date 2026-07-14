@@ -474,9 +474,6 @@ func (l *RedisLock) Refresh(ctx context.Context, key string, ttl time.Duration) 
 }
 
 func (l *RedisLock) ReleaseWithToken(key string, token string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	rc := redislock.New(l.client)
 	lock, err := rc.RetrieveLock(context.Background(), key, token)
 	if err != nil {
@@ -488,19 +485,22 @@ func (l *RedisLock) ReleaseWithToken(key string, token string) error {
 
 func (l *RedisLock) Release(key string) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	lock, ok := l.locks[key]
+	l.mu.Unlock()
 
-	// Check if the lock is available in memory and release if so
-	if lock, ok := l.locks[key]; ok {
-		err := lock.Release(context.Background())
-		if err != nil {
-			return err
-		}
-		delete(l.locks, key)
-		return nil
+	if !ok {
+		return redislock.ErrLockNotHeld
+	}
+	if err := lock.Release(context.Background()); err != nil {
+		return err
 	}
 
-	return redislock.ErrLockNotHeld
+	l.mu.Lock()
+	if l.locks[key] == lock {
+		delete(l.locks, key)
+	}
+	l.mu.Unlock()
+	return nil
 }
 
 func CopyStruct(src, dst any) error {

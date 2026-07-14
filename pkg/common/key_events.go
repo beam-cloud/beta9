@@ -55,23 +55,46 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
 	keyspacePattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
-	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePattern, keyEventChan)
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePattern, keyEventChan, func() ([]string, error) {
+		return kem.fetchExistingKeys(patternPrefix)
+	})
 }
 
 func (kem *KeyEventManager) ListenForPublishedPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
 	pattern := fmt.Sprintf("%s*", patternPrefix)
-	return kem.listenForSubscriptionPattern(ctx, patternPrefix, pattern, keyEventChan)
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, pattern, keyEventChan, func() ([]string, error) {
+		return kem.fetchExistingKeys(patternPrefix)
+	})
 }
 
-func (kem *KeyEventManager) listenForSubscriptionPattern(ctx context.Context, patternPrefix, pattern string, keyEventChan chan KeyEvent) error {
+// ListenForKey watches one exact key without scanning the database. Subscribing
+// before checking existence ensures a write cannot be missed between the two.
+func (kem *KeyEventManager) ListenForKey(ctx context.Context, key string, keyEventChan chan KeyEvent) error {
+	return kem.listenForSubscriptionPattern(ctx, key, keyspacePrefix+key, keyEventChan, func() ([]string, error) {
+		exists, err := kem.rdb.Exists(ctx, key).Result()
+		if err != nil || exists == 0 {
+			return nil, err
+		}
+		return []string{""}, nil
+	})
+}
+
+func (kem *KeyEventManager) listenForSubscriptionPattern(
+	ctx context.Context,
+	patternPrefix string,
+	pattern string,
+	keyEventChan chan KeyEvent,
+	existingKeys func() ([]string, error),
+) error {
 	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
 
-	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
+	keys, err := existingKeys()
 	if err != nil {
+		close()
 		return err
 	}
 
-	for _, key := range existingKeys {
+	for _, key := range keys {
 		keyEventChan <- KeyEvent{
 			Key:       key,
 			Operation: KeyOperationSet,

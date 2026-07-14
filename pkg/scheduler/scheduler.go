@@ -610,13 +610,20 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	normalizeGPURequest(request)
-
-	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
-		workerLog(requestLog(log.Error(), request), worker).Err(err).Msg("failed to update assigned container gpu")
+	workerRequest, err := s.prepareWorkerRequest(worker, request)
+	if err != nil {
+		return err
+	}
+	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{request}, []*types.ContainerRequest{workerRequest}); err != nil {
 		return err
 	}
 
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(workerRequest.Clone())
+	return nil
+}
+
+func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) (*types.ContainerRequest, error) {
+	normalizeGPURequest(request)
 	request.Gpu = worker.Gpu
 
 	s.attachImageCredentials(request)
@@ -624,21 +631,18 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	workerRequest := s.workerRequest(worker, request)
 	workerRequest.Timestamp = time.Now()
-	if err := s.pushWorkerRequest(worker, request, workerRequest); err != nil {
-		return err
-	}
-
-	scheduledEvent := workerRequest.Clone()
-	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
-	return nil
+	return workerRequest, nil
 }
 
-func (s *Scheduler) pushWorkerRequest(worker *types.Worker, originalRequest, workerRequest *types.ContainerRequest) error {
+func (s *Scheduler) pushWorkerRequests(worker *types.Worker, originalRequests, workerRequests []*types.ContainerRequest) error {
 	start := time.Now()
-	err := s.workerRepo.ScheduleContainerRequest(worker, workerRequest)
-	s.recordContainerLifecycle(originalRequest, types.ContainerLifecycleSchedulerWorkerQueuePush, start, time.Now(), err == nil, map[string]string{
-		"worker_id": worker.Id,
-	})
+	err := s.workerRepo.ScheduleContainerRequests(worker, workerRequests)
+	end := time.Now()
+	for _, request := range originalRequests {
+		s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerQueuePush, start, end, err == nil, map[string]string{
+			"worker_id": worker.Id,
+		})
+	}
 	return err
 }
 
@@ -1420,9 +1424,7 @@ func (s *Scheduler) ensureAgentPoolForRequest(request *types.ContainerRequest) (
 		return nil, nil
 	}
 	if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
-		if _, agent := pool.Controller.(*AgentWorkerPoolController); !agent || s.computeRepo == nil {
-			return pool, nil
-		}
+		return pool, nil
 	}
 
 	state, err := s.agentPoolStateForRequest(request)

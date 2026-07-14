@@ -371,6 +371,7 @@ func TestDropCancelledContainerRequestReleasesCapacityForMissingState(t *testing
 }
 
 func TestHandleContainerRequestDoesNotBlockRequestStream(t *testing.T) {
+	sourceImage := "python:3.12"
 	stateLookupStarted := make(chan struct{})
 	stateLookupRelease := make(chan struct{})
 	repoClient := &fakeContainerRepoClient{
@@ -386,7 +387,10 @@ func TestHandleContainerRequestDoesNotBlockRequestStream(t *testing.T) {
 		containerInstances:  common.NewSafeMap[*ContainerInstance](),
 		completedRequests:   make(chan *types.ContainerRequest, 1),
 	}
-	request := &types.ContainerRequest{ContainerId: "container-1"}
+	request := &types.ContainerRequest{
+		ContainerId:  "container-1",
+		BuildOptions: types.BuildOptions{SourceImage: &sourceImage},
+	}
 
 	returned := make(chan struct{})
 	go func() {

@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -18,6 +19,8 @@ type taskLifecycleBackendRepo struct {
 	repository.BackendRepository
 	task    *types.TaskWithRelated
 	updates []types.Task
+	update  func()
+	err     error
 }
 
 func (r *taskLifecycleBackendRepo) GetTaskWithRelated(ctx context.Context, externalID string) (*types.TaskWithRelated, error) {
@@ -28,11 +31,63 @@ func (r *taskLifecycleBackendRepo) GetTaskWithRelated(ctx context.Context, exter
 }
 
 func (r *taskLifecycleBackendRepo) UpdateTask(ctx context.Context, externalID string, updatedTask types.Task) (*types.Task, error) {
+	if r.update != nil {
+		r.update()
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
 	r.updates = append(r.updates, updatedTask)
 	if r.task != nil && r.task.ExternalId == externalID {
 		r.task.Task = updatedTask
 	}
 	return &updatedTask, nil
+}
+
+func TestStartTaskClaimsBeforePersisting(t *testing.T) {
+	gws, taskRepo := newTaskLifecycleGateway(t, "workspace-id")
+	updateStarted := make(chan struct{})
+	allowUpdate := make(chan struct{})
+	gws.backendRepo.(*taskLifecycleBackendRepo).update = func() {
+		close(updateStarted)
+		<-allowUpdate
+	}
+
+	response := make(chan *pb.StartTaskResponse, 1)
+	go func() {
+		resp, _ := gws.StartTask(restrictedTaskLifecycleContext("workspace-id"), &pb.StartTaskRequest{
+			TaskId:      "task-id",
+			ContainerId: "container-id",
+		})
+		response <- resp
+	}()
+
+	<-updateStarted
+	claimed, err := taskRepo.IsClaimed(context.Background(), "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	close(allowUpdate)
+	require.True(t, (<-response).Ok)
+	claimed, err = taskRepo.IsClaimed(context.Background(), "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.True(t, claimed)
+}
+
+func TestStartTaskReleasesClaimAfterFailedUpdate(t *testing.T) {
+	gws, taskRepo := newTaskLifecycleGateway(t, "workspace-id")
+	gws.backendRepo.(*taskLifecycleBackendRepo).err = errors.New("update failed")
+
+	resp, err := gws.StartTask(restrictedTaskLifecycleContext("workspace-id"), &pb.StartTaskRequest{
+		TaskId:      "task-id",
+		ContainerId: "container-id",
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	claimed, err := taskRepo.IsClaimed(context.Background(), "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.False(t, claimed)
 }
 
 func TestStartTaskAllowsRestrictedRuntimeToken(t *testing.T) {

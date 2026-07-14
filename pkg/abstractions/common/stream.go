@@ -57,7 +57,7 @@ type containerClientResult struct {
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
 	outputChan := make(chan common.OutputMsg, 1000)
 	keyEventChan := make(chan common.KeyEvent, 1000)
-	if err := l.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan); err != nil {
+	if err := l.keyEventManager.ListenForKey(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan); err != nil {
 		return err
 	}
 

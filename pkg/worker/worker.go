@@ -239,7 +239,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	eventRepo := repo.NewEventClientRepo(config)
+	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
@@ -640,7 +640,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 	}
 
 	go func() {
-		if s.dropCancelledContainerRequest(request) {
+		if request.IsBuildRequest() && s.dropCancelledContainerRequest(request) {
 			s.containerInstances.Delete(request.ContainerId)
 			return
 		}

@@ -479,6 +479,58 @@ func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	require.NotContains(t, second.Process.Env, "LEAKED=true")
 }
 
+func TestSpecFromRequestRejectsInvalidOCIInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		request *types.ContainerRequest
+		options *ContainerOptions
+		match   string
+	}{
+		{
+			name: "missing bind port",
+			request: &types.ContainerRequest{
+				ContainerId: "container-no-port",
+				EntryPoint:  []string{"true"},
+			},
+			options: &ContainerOptions{},
+			match:   "no reserved bind port",
+		},
+		{
+			name: "malformed environment",
+			request: &types.ContainerRequest{
+				ContainerId: "container-bad-env",
+				EntryPoint:  []string{"true"},
+				Env:         []string{"INVALID"},
+			},
+			options: &ContainerOptions{BindPorts: []int{8001}},
+			match:   "invalid environment entry",
+		},
+		{
+			name: "relative working directory",
+			request: &types.ContainerRequest{
+				ContainerId: "container-bad-cwd",
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					Type: types.StubType(types.StubTypePodDeployment),
+				}},
+			},
+			options: &ContainerOptions{
+				BindPorts:   []int{8001},
+				InitialSpec: &specs.Spec{Process: &specs.Process{Args: []string{"true"}, Cwd: "workspace"}},
+			},
+			match: "working directory must be absolute",
+		},
+	}
+
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, err := worker.specFromRequest(tt.request, tt.options)
+			require.Nil(t, spec)
+			require.ErrorContains(t, err, tt.match)
+		})
+	}
+}
+
 func TestSpecFromRequestDefaultsMissingRunnerEntrypoint(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1332,7 +1384,6 @@ func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"data": localPath}, volumeCacheMap)
-	require.DirExists(t, localPath)
 	require.Len(t, spec.Mounts, 1)
 	require.Equal(t, localPath, spec.Mounts[0].Source)
 	require.Equal(t, request.Mounts[0].MountPath, spec.Mounts[0].Destination)

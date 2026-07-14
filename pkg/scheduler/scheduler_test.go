@@ -439,6 +439,48 @@ func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	assert.Equal(t, types.PoolModeLocal, global.Config.Mode)
 }
 
+func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+
+	const workspaceID = "workspace-private"
+	state := &compute.PoolState{
+		Name:     "private-pool",
+		Selector: "private-selector",
+		Mode:     string(types.PoolModePrivate),
+		Config:   &pb.PoolConfig{Name: "private-pool", Selector: "private-selector", Mode: string(types.PoolModePrivate)},
+	}
+	machine := &compute.AgentTokenState{
+		WorkspaceID:     workspaceID,
+		PoolName:        state.Name,
+		MachineID:       "machine-private",
+		CPUCount:        4,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now(),
+	}
+	assert.NoError(t, scheduler.computeRepo.SavePoolState(context.Background(), workspaceID, state))
+	assert.NoError(t, scheduler.computeRepo.SaveAgentTokenState(context.Background(), machine, time.Hour))
+
+	request := &types.ContainerRequest{WorkspaceId: workspaceID, PoolSelector: state.Selector}
+	_, err = scheduler.ensureAgentPoolForRequest(request)
+	assert.NoError(t, err)
+
+	worker, err := scheduler.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
+	assert.NoError(t, err)
+	assert.NoError(t, scheduler.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
+	assert.NoError(t, scheduler.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{Cpu: 100, Memory: 100}, types.RemoveCapacity))
+	version := worker.ResourceVersion
+
+	_, err = scheduler.ensureAgentPoolForRequest(request)
+	assert.NoError(t, err)
+	worker, err = scheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, version, worker.ResourceVersion)
+}
+
 // Machine-pinned requests (marketplace rentals) must only ever see the pinned
 // machine's worker, regardless of pool selector requirements.
 func TestFilterWorkersByMachinePinsWorker(t *testing.T) {

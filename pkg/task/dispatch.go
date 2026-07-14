@@ -170,6 +170,10 @@ func (d *Dispatcher) Claim(ctx context.Context, workspaceName, stubId, taskId, c
 	return d.taskRepo.ClaimTask(ctx, workspaceName, stubId, taskId, containerId)
 }
 
+func (d *Dispatcher) Release(ctx context.Context, workspaceName, stubId, taskId string) error {
+	return d.taskRepo.RemoveTaskClaim(ctx, workspaceName, stubId, taskId)
+}
+
 func (d *Dispatcher) monitor(ctx context.Context) {
 	monitorRate := time.Duration(5) * time.Second
 	ticker := time.NewTicker(monitorRate)

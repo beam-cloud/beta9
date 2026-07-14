@@ -139,6 +139,37 @@ end
 return requests
 `)
 
+var adjustWorkerCapacityScript = redis.NewScript(`
+local status = redis.call("HGET", KEYS[1], "status")
+if not status then
+    return {-1}
+end
+if ARGV[5] == "1" and status ~= "available" then
+    return {-2, status}
+end
+
+local free_cpu = tonumber(redis.call("HGET", KEYS[1], "free_cpu") or "0") + tonumber(ARGV[1])
+local free_memory = tonumber(redis.call("HGET", KEYS[1], "free_memory") or "0") + tonumber(ARGV[2])
+local free_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0") + tonumber(ARGV[3])
+if free_cpu < 0 or free_memory < 0 or free_gpu < 0 then
+    return {-3}
+end
+
+local total_cpu = tonumber(redis.call("HGET", KEYS[1], "total_cpu") or "0")
+local total_memory = tonumber(redis.call("HGET", KEYS[1], "total_memory") or "0")
+local total_gpu = tonumber(redis.call("HGET", KEYS[1], "total_gpu_count") or "0")
+if total_cpu > 0 and free_cpu > total_cpu then free_cpu = total_cpu end
+if total_memory > 0 and free_memory > total_memory then free_memory = total_memory end
+if total_gpu > 0 and free_gpu > total_gpu then free_gpu = total_gpu end
+
+redis.call("HSET", KEYS[1],
+    "free_cpu", free_cpu,
+    "free_memory", free_memory,
+    "gpu_count", free_gpu)
+local version = redis.call("HINCRBY", KEYS[1], "resource_version", ARGV[4])
+return {1, redis.call("HGET", KEYS[1], "machine_id") or "", free_cpu, free_memory, free_gpu, version}
+`)
+
 func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
 	lock := common.NewRedisLock(r)
 	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
@@ -324,18 +355,22 @@ func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status types
 		}
 	}
 
-	// Update worker status
-	worker.Status = status
-	worker.ResourceVersion++
-	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(worker)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to update worker status <%s>: %v", stateKey, err)
+	ctx := context.TODO()
+	pipe := r.rdb.TxPipeline()
+	if reconcileCapacity {
+		pipe.HSet(ctx, stateKey,
+			"status", string(status),
+			"free_cpu", worker.FreeCpu,
+			"free_memory", worker.FreeMemory,
+			"gpu_count", worker.FreeGpuCount,
+		)
+	} else {
+		pipe.HSet(ctx, stateKey, "status", string(status))
 	}
-
-	// Set TTL on state key
-	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
+	pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
+	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to update worker state <%v>: %w", stateKey, err)
 	}
 
 	return nil
@@ -501,25 +536,15 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	}
 
 	oldMachineID := worker.MachineId
-	oldStatus := worker.Status
 	machineID := strings.TrimSpace(keepAlive.MachineId)
 	if machineID != "" {
 		worker.MachineId = machineID
 	}
-	if worker.Status == types.WorkerStatusPending || worker.Status == types.WorkerStatusAvailable {
-		if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
-			return err
-		}
-	}
-	if worker.Status == types.WorkerStatusPending {
-		worker.Status = types.WorkerStatusAvailable
-	}
-	if worker.MachineId != oldMachineID || worker.Status != oldStatus {
-		worker.ResourceVersion++
-	}
-
 	pipe := r.rdb.TxPipeline()
-	pipe.HSet(ctx, stateKey, common.ToSlice(worker))
+	if worker.MachineId != oldMachineID {
+		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
+		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
+	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
 	if oldMachineID != "" && oldMachineID != worker.MachineId {
 		pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldMachineID), stateKey)
@@ -875,187 +900,209 @@ func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions)
-	if err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
-
-	updatedWorker, err := r.updateWorkerCapacityLocked(context.TODO(), worker.Id, request, capacityUpdateType)
-	if err != nil {
-		return err
+	if worker == nil || request == nil {
+		return errors.New("worker and container request are required")
 	}
 
-	*worker = *updatedWorker
-	return nil
-}
-
-func (r *WorkerRedisRepository) updateWorkerCapacityLocked(ctx context.Context, workerId string, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) (*types.Worker, error) {
-	updatedWorker, err := r.workerWithCapacityChange(workerId, request, capacityUpdateType)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := r.setWorkerCapacityLocked(ctx, updatedWorker); err != nil {
-		return nil, err
-	}
-
-	return updatedWorker, nil
-}
-
-func (r *WorkerRedisRepository) workerWithCapacityChange(workerId string, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) (*types.Worker, error) {
-	key := common.RedisKeys.SchedulerWorkerState(workerId)
-
-	// Retrieve current worker capacity
-	currentWorker, err := r.getWorkerFromKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get worker state <%v>: %v", key, err)
-	}
-
-	if currentWorker == nil {
-		return nil, &types.ErrWorkerNotFound{WorkerId: workerId}
-	}
-
-	updatedWorker := &types.Worker{}
-	if err := common.CopyStruct(currentWorker, updatedWorker); err != nil {
-		return nil, fmt.Errorf("failed to copy worker struct: %v", err)
-	}
-
-	if err := applyWorkerCapacityChange(updatedWorker, request, capacityUpdateType); err != nil {
-		return nil, err
-	}
-
-	return updatedWorker, nil
-}
-
-func applyWorkerCapacityChange(worker *types.Worker, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) error {
-	switch capacityUpdateType {
-	case types.AddCapacity:
-		worker.FreeCpu += request.Cpu
-		worker.FreeMemory += capacityMemoryForRequest(request)
-		worker.FreeGpuCount += gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)
-		capWorkerFreeCapacity(worker)
-	case types.RemoveCapacity:
-		cpu := request.Cpu
-		memory := capacityMemoryForRequest(request)
-		gpuCount := gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)
-		if worker.FreeCpu < cpu || worker.FreeMemory < memory {
-			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
-		}
-
-		if gpuCount > 0 {
-			if worker.FreeGpuCount < gpuCount {
-				return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
-			}
-			worker.FreeGpuCount -= gpuCount
-		}
-
-		worker.FreeCpu -= cpu
-		worker.FreeMemory -= memory
-	default:
+	direction := int64(1)
+	if capacityUpdateType == types.RemoveCapacity {
+		direction = -1
+	} else if capacityUpdateType != types.AddCapacity {
 		return errors.New("invalid capacity update type")
 	}
-
+	result, err := r.adjustWorkerCapacity(
+		worker.Id,
+		direction*request.Cpu,
+		direction*capacityMemoryForRequest(request),
+		direction*int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)),
+		1,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	worker.FreeCpu = result.freeCPU
+	worker.FreeMemory = result.freeMemory
+	worker.FreeGpuCount = uint32(result.freeGPU)
+	worker.ResourceVersion = result.resourceVersion
+	worker.MachineId = result.machineID
 	return nil
 }
 
-func capWorkerFreeCapacity(worker *types.Worker) {
-	if worker.TotalCpu > 0 && worker.FreeCpu > worker.TotalCpu {
-		worker.FreeCpu = worker.TotalCpu
-	}
-	if worker.TotalMemory > 0 && worker.FreeMemory > worker.TotalMemory {
-		worker.FreeMemory = worker.TotalMemory
-	}
-	if worker.TotalGpuCount > 0 && worker.FreeGpuCount > worker.TotalGpuCount {
-		worker.FreeGpuCount = worker.TotalGpuCount
-	}
+type workerCapacityResult struct {
+	machineID       string
+	freeCPU         int64
+	freeMemory      int64
+	freeGPU         int64
+	resourceVersion int64
 }
 
-func (r *WorkerRedisRepository) setWorkerCapacityLocked(ctx context.Context, worker *types.Worker) error {
-	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
-	worker.ResourceVersion++
-
-	if err := r.rdb.HSet(ctx, key, common.ToSlice(worker)).Err(); err != nil {
-		return fmt.Errorf("failed to update worker capacity <%s>: %v", key, err)
+func (r *WorkerRedisRepository) adjustWorkerCapacity(workerID string, cpu, memory, gpu, version int64, requireAvailable bool) (workerCapacityResult, error) {
+	requireAvailableArg := "0"
+	if requireAvailable {
+		requireAvailableArg = "1"
 	}
-
-	return nil
+	value, err := adjustWorkerCapacityScript.Run(
+		context.TODO(),
+		r.rdb,
+		[]string{common.RedisKeys.SchedulerWorkerState(workerID)},
+		cpu,
+		memory,
+		gpu,
+		version,
+		requireAvailableArg,
+	).Result()
+	if err != nil {
+		return workerCapacityResult{}, err
+	}
+	items, ok := value.([]interface{})
+	if !ok || len(items) == 0 {
+		return workerCapacityResult{}, fmt.Errorf("unexpected worker capacity result: %T", value)
+	}
+	code, ok := items[0].(int64)
+	if !ok {
+		return workerCapacityResult{}, fmt.Errorf("unexpected worker capacity status: %T", items[0])
+	}
+	switch code {
+	case -1:
+		return workerCapacityResult{}, &types.ErrWorkerNotFound{WorkerId: workerID}
+	case -2:
+		status := "unknown"
+		if len(items) > 1 {
+			status, _ = items[1].(string)
+		}
+		return workerCapacityResult{}, fmt.Errorf("worker <%s> is not available: %s", workerID, status)
+	case -3:
+		return workerCapacityResult{}, errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
+	case 1:
+		if len(items) != 6 {
+			return workerCapacityResult{}, fmt.Errorf("unexpected worker capacity result length: %d", len(items))
+		}
+		machineID, _ := items[1].(string)
+		freeCPU, cpuOK := items[2].(int64)
+		freeMemory, memoryOK := items[3].(int64)
+		freeGPU, gpuOK := items[4].(int64)
+		resourceVersion, versionOK := items[5].(int64)
+		if !cpuOK || !memoryOK || !gpuOK || !versionOK {
+			return workerCapacityResult{}, errors.New("invalid worker capacity values")
+		}
+		return workerCapacityResult{
+			machineID:       machineID,
+			freeCPU:         freeCPU,
+			freeMemory:      freeMemory,
+			freeGPU:         freeGPU,
+			resourceVersion: resourceVersion,
+		}, nil
+	default:
+		return workerCapacityResult{}, fmt.Errorf("unknown worker capacity status: %d", code)
+	}
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	return r.ScheduleContainerRequests(worker, []*types.ContainerRequest{request})
+}
+
+type queuedContainerRequest struct {
+	request    *types.ContainerRequest
+	payload    []byte
+	stateKey   string
+	assignment string
+	push       *redis.IntCmd
+}
+
+func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
+	if worker == nil {
+		return errors.New("cannot schedule requests without a worker")
+	}
+	if len(requests) == 0 {
+		return nil
+	}
+
+	var cpu, memory, gpu int64
+	queued := make([]queuedContainerRequest, 0, len(requests))
+	for _, request := range requests {
+		if request == nil {
+			return errors.New("cannot schedule a nil container request")
+		}
+		cpu += request.Cpu
+		memory += capacityMemoryForRequest(request)
+		gpu += int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount))
+		queued = append(queued, queuedContainerRequest{
+			request:    request,
+			stateKey:   common.RedisKeys.SchedulerContainerState(request.ContainerId),
+			assignment: uuid.NewString(),
+		})
+	}
+
+	capacity, err := r.adjustWorkerCapacity(worker.Id, -cpu, -memory, -gpu, int64(len(requests)), true)
+	if err != nil {
+		return err
+	}
+	releaseCapacity := func() error {
+		_, err := r.adjustWorkerCapacity(worker.Id, cpu, memory, gpu, 1, false)
+		return err
+	}
+
+	for index := range queued {
+		queuedRequest := *queued[index].request
+		queuedRequest.Timestamp = time.Now()
+		queuedRequest.MachineId = capacity.machineID
+		payload, err := json.Marshal(&queuedRequest)
+		if err != nil {
+			return errors.Join(fmt.Errorf("failed to serialize request: %w", err), releaseCapacity())
+		}
+		queued[index].payload = payload
+	}
+
 	ctx := context.TODO()
-	if err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions); err != nil {
-		return err
-	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
-
-	currentWorker, err := r.getWorkerFromKey(common.RedisKeys.SchedulerWorkerState(worker.Id))
-	if err != nil {
-		return err
-	}
-	if currentWorker.Status != types.WorkerStatusAvailable {
-		return fmt.Errorf("worker <%s> is not available: %s", worker.Id, currentWorker.Status)
-	}
-
-	updatedWorker, err := r.updateWorkerCapacityLocked(ctx, worker.Id, request, types.RemoveCapacity)
-	if err != nil {
-		return err
-	}
-
-	queuedRequest := *request
-	queuedRequest.Timestamp = time.Now()
-	queuedRequest.MachineId = currentWorker.MachineId
-	request.MachineId = currentWorker.MachineId
-	requestJSON, err := json.Marshal(&queuedRequest)
-	if err != nil {
-		return fmt.Errorf("failed to serialize request: %w", err)
-	}
-
-	containerStateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
 	queueKey := common.RedisKeys.SchedulerWorkerRequests(worker.Id)
 	workerContainerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id)
-	assignmentID := uuid.NewString()
-
-	// Push the serialized ContainerRequest and stamp the selected node together
-	// so container state can be correlated to the worker before runtime start.
 	pipe := r.rdb.TxPipeline()
-	pushCmd := pipe.RPush(ctx, queueKey, requestJSON)
-	pipe.HSet(ctx, containerStateKey, "worker_id", currentWorker.Id, "machine_id", currentWorker.MachineId, schedulerAssignmentIDField, assignmentID)
-	pipe.SAdd(ctx, workerContainerIndexKey, containerStateKey)
-	if _, err := pipe.Exec(ctx); err != nil {
-		cleanupErr := r.cleanupScheduledContainerRequest(ctx, scheduleCleanup{
-			queue:   queueKey,
-			index:   workerContainerIndexKey,
-			state:   containerStateKey,
-			payload: requestJSON,
-			queued:  pushCmd.Err() == nil,
-			token:   assignmentID,
-			worker:  currentWorker.Id,
-		})
-		rollbackWorker := &types.Worker{}
-		if copyErr := common.CopyStruct(updatedWorker, rollbackWorker); copyErr != nil {
-			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to copy worker for queue push rollback: %w", copyErr))
-		}
-		if rollbackErr := applyWorkerCapacityChange(rollbackWorker, request, types.AddCapacity); rollbackErr != nil {
-			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
-		}
-		if rollbackErr := r.setWorkerCapacityLocked(ctx, rollbackWorker); rollbackErr != nil {
-			return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr, fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
-		}
-		return errors.Join(fmt.Errorf("failed to push request: %w", err), cleanupErr)
+	for index := range queued {
+		item := &queued[index]
+		item.push = pipe.RPush(ctx, queueKey, item.payload)
+		pipe.HSet(ctx, item.stateKey, "worker_id", worker.Id, "machine_id", capacity.machineID, "gpu", item.request.Gpu, schedulerAssignmentIDField, item.assignment)
+		pipe.SAdd(ctx, workerContainerIndexKey, item.stateKey)
 	}
 
-	*worker = *updatedWorker
+	if _, err := pipe.Exec(ctx); err != nil {
+		errs := []error{fmt.Errorf("failed to push requests: %w", err)}
+		for _, item := range queued {
+			err := r.cleanupScheduledContainerRequest(ctx, scheduleCleanup{
+				queue:   queueKey,
+				index:   workerContainerIndexKey,
+				state:   item.stateKey,
+				payload: item.payload,
+				queued:  item.push.Err() == nil,
+				token:   item.assignment,
+				worker:  worker.Id,
+			})
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if err := releaseCapacity(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to restore worker capacity after queue push error: %w", err))
+		}
+		return errors.Join(errs...)
+	}
+
+	worker.FreeCpu = capacity.freeCPU
+	worker.FreeMemory = capacity.freeMemory
+	worker.FreeGpuCount = uint32(capacity.freeGPU)
+	worker.ResourceVersion = capacity.resourceVersion
+	worker.MachineId = capacity.machineID
+	for _, item := range queued {
+		item.request.MachineId = capacity.machineID
+	}
 	metrics.RecordWorkerQueueDepth(worker.Id, r.rdb.LLen(ctx, common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 
 	log.Info().
-		Str("workspace_id", request.WorkspaceId).
-		Str("stub_id", request.StubId).
-		Str("container_id", request.ContainerId).
 		Str("worker_id", worker.Id).
 		Str("pool_name", worker.PoolName).
 		Str("machine_id", worker.MachineId).
-		Msg("request for container added")
+		Int("request_count", len(requests)).
+		Msg("container requests added")
 
 	return nil
 }
@@ -1085,7 +1132,7 @@ end
 
 redis.call("SREM", KEYS[2], KEYS[3])
 if worker == ARGV[4] then
-	redis.call("HDEL", KEYS[3], "worker_id", "machine_id", "schedule_assignment_id")
+	redis.call("HDEL", KEYS[3], "worker_id", "machine_id", "gpu", "schedule_assignment_id")
 end
 return 1
 `)
@@ -1131,7 +1178,21 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 }
 
 func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types.ContainerRequest, error) {
-	requestJSON, err := r.rdb.LPop(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Bytes()
+	requests, err := r.GetNextContainerRequests(workerId, 1)
+	if err != nil || len(requests) == 0 {
+		return nil, err
+	}
+	return requests[0], nil
+}
+
+func (r *WorkerRedisRepository) GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	ctx := context.TODO()
+	queueKey := common.RedisKeys.SchedulerWorkerRequests(workerId)
+	encoded, err := r.rdb.LPopCount(ctx, queueKey, limit).Result()
 	if err == redis.Nil {
 		metrics.RecordWorkerQueueDepth(workerId, 0)
 		metrics.RecordWorkerQueueEmptyPoll(workerId)
@@ -1141,21 +1202,48 @@ func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types
 		return nil, err
 	}
 
-	var request types.ContainerRequest = types.ContainerRequest{}
-	err = json.Unmarshal(requestJSON, &request)
-	if err != nil {
-		return nil, err
+	requests := make([]*types.ContainerRequest, 0, len(encoded))
+	var decodeErr error
+	for _, raw := range encoded {
+		request := &types.ContainerRequest{}
+		if err := json.Unmarshal([]byte(raw), request); err != nil {
+			decodeErr = errors.Join(decodeErr, err)
+			continue
+		}
+		requests = append(requests, request)
 	}
-	queueLength, err := r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Result()
+	if decodeErr != nil {
+		return nil, errors.Join(decodeErr, r.RequeueContainerRequests(workerId, requests))
+	}
+
+	queueLength, err := r.rdb.LLen(ctx, queueKey).Result()
 	if err == nil {
 		metrics.RecordWorkerQueueDepth(workerId, queueLength)
 	}
-	if !request.Timestamp.IsZero() {
-		metrics.RecordWorkerQueueReceiveLatency(workerId, time.Since(request.Timestamp), &request)
+	for _, request := range requests {
+		if !request.Timestamp.IsZero() {
+			metrics.RecordWorkerQueueReceiveLatency(workerId, time.Since(request.Timestamp), request)
+		}
 	}
+	return requests, nil
+}
 
-	return &request, nil
-
+func (r *WorkerRedisRepository) RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error {
+	values := make([]interface{}, 0, len(requests))
+	for i := len(requests) - 1; i >= 0; i-- {
+		if requests[i] == nil {
+			return errors.New("cannot requeue a nil container request")
+		}
+		encoded, err := json.Marshal(requests[i])
+		if err != nil {
+			return err
+		}
+		values = append(values, encoded)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return r.rdb.LPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId), values...).Err()
 }
 
 func (r *WorkerRedisRepository) GetId() string {

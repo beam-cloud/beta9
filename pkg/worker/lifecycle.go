@@ -26,6 +26,7 @@ import (
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -297,19 +298,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
-	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
-	phaseStart := time.Now()
-	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
-		ContainerId: containerId,
-		Address:     hostname,
-		Route:       s.backendRouteFor(request, types.BackendRouteKindWorker, 0, hostname),
-	}))
-	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, phaseStart, err == nil, nil)
-	if err != nil {
-		return err
-	}
+	startupBaseCtx, cancelStartup := context.WithCancel(ctx)
+	defer cancelStartup()
+	startup, startupCtx := errgroup.WithContext(startupBaseCtx)
+	startup.Go(func() error { return s.setWorkerAddress(startupCtx, request) })
 
 	logChan := make(chan common.LogRecord, 1000)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
@@ -358,7 +350,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return nil
 	}
 
-	phaseStart = time.Now()
+	phaseStart := time.Now()
 	requestedPorts := append([]uint32(nil), request.Ports...)
 	request.Ports = portsForRequest(request)
 	bindPorts, err := s.containerNetworkManager.ReservePorts(containerId, len(request.Ports))
@@ -408,6 +400,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	startup.Go(func() error { return ensureBindMountSourceDirs(request.Mounts) })
 
 	// Generate dynamic runc spec for this container
 	phaseStart = time.Now()
@@ -418,6 +411,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
+
+	if err := startup.Wait(); err != nil {
+		return err
+	}
 
 	s.containerWg.Add(1)
 
@@ -435,6 +432,19 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	logCaptureClosed = true
 	return nil
+}
+
+func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerRequest) error {
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
+	startedAt := time.Now()
+	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{
+		ContainerId: request.ContainerId,
+		Address:     hostname,
+		Route:       s.backendRouteFor(request, types.BackendRouteKindWorker, 0, hostname),
+	}))
+	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(startedAt), request, nil)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetWorkerAddress, startedAt, err == nil, nil)
+	return err
 }
 
 func (s *Worker) loadContainerImage(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, bool, error) {
@@ -690,6 +700,12 @@ func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *
 
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
+	if request == nil {
+		return nil, errors.New("cannot build a spec for a nil container request")
+	}
+	if options == nil || len(options.BindPorts) == 0 {
+		return nil, fmt.Errorf("container <%s> has no reserved bind port", request.ContainerId)
+	}
 	if err := os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm); err != nil {
 		return nil, fmt.Errorf("create container config directory: %w", err)
 	}
@@ -714,7 +730,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			spec.Process.Args = append([]string(nil), options.InitialSpec.Process.Args...)
 		}
 
-		spec.Process.Cwd = options.InitialSpec.Process.Cwd
+		if options.InitialSpec.Process.Cwd != "" {
+			spec.Process.Cwd = options.InitialSpec.Process.Cwd
+		}
 		spec.Process.User.UID = options.InitialSpec.Process.User.UID
 		spec.Process.User.GID = options.InitialSpec.Process.User.GID
 	}
@@ -749,7 +767,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			}
 		}
 		if memoryEnforced && resources.Memory != nil {
-			spec.Linux.Resources.Unified = cgroupV2Parameters
+			spec.Linux.Resources.Unified = cgroupV2Parameters()
 			spec.Linux.Resources.Memory = resources.Memory
 		}
 	}
@@ -851,11 +869,15 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
 		for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
+				m.Options = append([]string(nil), m.Options...)
 				spec.Mounts = append(spec.Mounts, m)
 			}
 		}
 	}
 
+	if err := validateContainerSpec(spec); err != nil {
+		return nil, fmt.Errorf("invalid spec for container <%s>: %w", request.ContainerId, err)
+	}
 	return spec, nil
 }
 
@@ -971,11 +993,6 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 		volumeCacheMap[filepath.Base(mount.MountPath)] = mount.LocalPath
 	}
 
-	if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-		return false, nil
-	}
-
 	return true, nil
 }
 
@@ -1013,6 +1030,9 @@ func (s *Worker) enableVolumeCaching(request *types.ContainerRequest, volumeCach
 }
 
 func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
+	if s == nil || s.runtime == nil {
+		return nil, errors.New("container runtime is unavailable")
+	}
 	var newSpec specs.Spec
 	// Get the appropriate base config for the runtime
 	baseConfig := runtime.GetBaseConfig(s.runtime.Name())
@@ -1021,7 +1041,37 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	if err != nil {
 		return nil, err
 	}
+	if newSpec.Process == nil || newSpec.Root == nil || newSpec.Linux == nil || newSpec.Linux.Resources == nil {
+		return nil, fmt.Errorf("runtime <%s> has an incomplete base OCI spec", s.runtime.Name())
+	}
 	return &newSpec, nil
+}
+
+func validateContainerSpec(spec *specs.Spec) error {
+	if spec == nil || spec.Process == nil || spec.Root == nil || spec.Linux == nil || spec.Linux.Resources == nil {
+		return errors.New("required OCI sections are missing")
+	}
+	if spec.Root.Path == "" {
+		return errors.New("root path is empty")
+	}
+	if len(spec.Process.Args) == 0 || strings.TrimSpace(spec.Process.Args[0]) == "" {
+		return errors.New("process executable is empty")
+	}
+	if !filepath.IsAbs(spec.Process.Cwd) {
+		return errors.New("process working directory must be absolute")
+	}
+	for _, env := range spec.Process.Env {
+		name, _, ok := strings.Cut(env, "=")
+		if !ok || name == "" {
+			return fmt.Errorf("invalid environment entry %q", env)
+		}
+	}
+	for _, mount := range spec.Mounts {
+		if !filepath.IsAbs(mount.Destination) {
+			return fmt.Errorf("mount destination %q must be absolute", mount.Destination)
+		}
+	}
+	return nil
 }
 
 // spawn a container using runc binary
@@ -1195,19 +1245,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Prepare spec for the selected runtime
 	phaseStart = time.Now()
-	if err := ensureBindMountSourceDirs(request.Mounts); err != nil {
-		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
-			"runtime": s.runtime.Name(),
-			"reason":  "bind_mount_source",
-			"success": "false",
-		})
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRuntimePrepare, phaseStart, false, map[string]string{
-			"reason":  "bind_mount_source",
-			"runtime": s.runtime.Name(),
-		})
-		log.Error().Err(err).Str("container_id", containerId).Msg("failed to create bind mount source directories")
-		return
-	}
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
 			"runtime": s.runtime.Name(),

@@ -113,17 +113,46 @@ func (b *schedulingBatch) dispatch() {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			for _, schedule := range schedules {
-				b.dispatchSchedule(schedule)
-			}
+			b.dispatchSchedules(schedules)
 		}()
 	}
 
 	wg.Wait()
 }
 
-func (b *schedulingBatch) dispatchSchedule(schedule plannedSchedule) {
-	if err := b.scheduler.scheduleRequest(schedule.worker, schedule.request); err != nil {
+func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
+	workerRequests := make([]*types.ContainerRequest, 0, len(schedules))
+	prepared := make([]plannedSchedule, 0, len(schedules))
+	for _, schedule := range schedules {
+		workerRequest, err := b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
+		if err != nil {
+			b.completeSchedule(schedule, err)
+			continue
+		}
+		workerRequests = append(workerRequests, workerRequest)
+		prepared = append(prepared, schedule)
+	}
+	if len(prepared) == 0 {
+		return
+	}
+
+	originalRequests := make([]*types.ContainerRequest, len(prepared))
+	for i := range prepared {
+		originalRequests[i] = prepared[i].request
+	}
+	err := b.scheduler.pushWorkerRequests(prepared[0].worker, originalRequests, workerRequests)
+	if err == nil {
+		for _, request := range workerRequests {
+			go b.scheduler.schedulerUsageMetrics.CounterIncContainerScheduled(request.Clone())
+		}
+	}
+	for _, schedule := range prepared {
+		b.completeSchedule(schedule, err)
+	}
+}
+
+func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) {
+	if err != nil {
 		workerLog(requestLog(log.Error(), schedule.request), schedule.worker).
 			Err(err).
 			Msg("unable to schedule planned request on worker")

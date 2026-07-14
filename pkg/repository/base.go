@@ -26,7 +26,10 @@ type WorkerRepository interface {
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
+	ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
+	GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error)
+	RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error
 	AddContainerToWorker(workerId string, containerId string) error
 	RemoveContainerFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
@@ -61,7 +64,6 @@ type ContainerRepository interface {
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
-	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	SetWorkerAddress(containerId string, addr string) error
