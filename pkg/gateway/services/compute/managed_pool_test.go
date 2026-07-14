@@ -64,14 +64,21 @@ type fakeManagedPoolWorkerPoolRepo struct {
 }
 
 type fakeManagedPoolRepo struct {
-	repo *fakeComputeRepo
+	repo  *fakeComputeRepo
+	saved chan struct{}
 }
 
 func (*fakeManagedPoolRepo) WithManagedPoolStateLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
 	return fn(ctx)
 }
 func (r *fakeManagedPoolRepo) SaveManagedPoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {
-	return r.repo.SavePoolState(ctx, workspaceID, state)
+	if err := r.repo.SavePoolState(ctx, workspaceID, state); err != nil {
+		return err
+	}
+	if r.saved != nil {
+		r.saved <- struct{}{}
+	}
+	return nil
 }
 func (r *fakeManagedPoolRepo) GetManagedPoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
 	return r.repo.GetPoolState(ctx, workspaceID, name)
@@ -110,7 +117,6 @@ func managedPoolTestService(config types.AppConfig, repo *fakeComputeRepo) *Serv
 		computeRepo:          repo,
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: managedStates},
 		workerRepo:           workers,
-		managedPoolReady:     make(chan struct{}),
 		managedPoolInstances: map[string]string{},
 	}
 }
@@ -128,7 +134,6 @@ func TestServiceStartDoesNotWaitForManagedPoolReconciliation(t *testing.T) {
 		scheduler:            scheduler.NewSchedulerForCapacityChecks(&fakeWorkerRepo{}, &fakeComputeRepo{}, scheduler.NewWorkerPoolManager(false)),
 		computeRepo:          &fakeComputeRepo{},
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: &fakeComputeRepo{}},
-		managedPoolReady:     make(chan struct{}),
 		managedPoolInstances: map[string]string{},
 	}
 
@@ -299,7 +304,6 @@ func TestManagedPoolsConvergeAcrossGatewayReplicas(t *testing.T) {
 			managedPoolRepo:      repository.NewManagedPoolRedisRepository(rdb),
 			workerRepo:           workers,
 			redisClient:          rdb,
-			managedPoolReady:     make(chan struct{}),
 			managedPoolInstances: map[string]string{},
 		}, manager
 	}
@@ -310,13 +314,6 @@ func TestManagedPoolsConvergeAcrossGatewayReplicas(t *testing.T) {
 	defer cancel()
 	go replicaA.runManagedPoolReconciler(ctx)
 	go replicaB.runManagedPoolReconciler(ctx)
-	for _, replica := range []*Service{replicaA, replicaB} {
-		select {
-		case <-replica.Ready():
-		case <-time.After(time.Second):
-			t.Fatal("replica did not complete initial managed pool reconciliation")
-		}
-	}
 	waitForManagedPoolReplicas(t, []*scheduler.WorkerPoolManager{managerA, managerB}, "config-pool", true, 5)
 	stateA, err := replicaA.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "config-pool")
 	if err != nil {
@@ -464,9 +461,11 @@ func TestManagedPoolReconciliationRetriesStartupFailure(t *testing.T) {
 		t.Fatal("initial reconciliation unexpectedly succeeded")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	saved := make(chan struct{}, 1)
+	service.managedPoolRepo.(*fakeManagedPoolRepo).saved = saved
 	go service.runManagedPoolReconciler(ctx)
 	select {
-	case <-service.Ready():
+	case <-saved:
 	case <-time.After(time.Second):
 		cancel()
 		t.Fatal("managed pool reconciliation did not recover")

@@ -66,7 +66,6 @@ type Gateway struct {
 	httpServer           *http.Server
 	grpcServer           *grpc.Server
 	healthServer         *health.Server
-	computeReady         <-chan struct{}
 	RedisClient          *common.RedisClient
 	TaskDispatcher       *task.Dispatcher
 	TaskRepo             repository.TaskRepository
@@ -206,7 +205,6 @@ func NewGateway() (*Gateway, error) {
 		RedisClient:      redisClient,
 		Tailscale:        tailscale,
 	})
-	gateway.computeReady = gateway.ComputeService.Ready()
 	gateway.ComputeService.Start(ctx)
 
 	return gateway, nil
@@ -662,18 +660,7 @@ func (g *Gateway) Start() error {
 }
 
 func (g *Gateway) isReady() bool {
-	if g.draining.Load() {
-		return false
-	}
-	if g.computeReady == nil {
-		return true
-	}
-	select {
-	case <-g.computeReady:
-		return true
-	default:
-		return false
-	}
+	return !g.draining.Load()
 }
 
 func (g *Gateway) registerHealthService() {
@@ -683,25 +670,10 @@ func (g *Gateway) registerHealthService() {
 
 func (g *Gateway) newHealthServer() *health.Server {
 	hs := health.NewServer()
-	// Keep the unnamed service serving for clients using the legacy health
-	// check. Kubernetes uses the named services below so reconciliation can
-	// gate readiness without coupling it to liveness.
 	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	hs.SetServingStatus(gatewayLivenessService, healthpb.HealthCheckResponse_SERVING)
-	hs.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_NOT_SERVING)
+	hs.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_SERVING)
 	g.healthServer = hs
-
-	if g.computeReady == nil {
-		g.markReady()
-	} else if g.ctx != nil {
-		go func() {
-			select {
-			case <-g.computeReady:
-				g.markReady()
-			case <-g.ctx.Done():
-			}
-		}()
-	}
 
 	if g.ctx != nil {
 		go func() {
@@ -710,18 +682,6 @@ func (g *Gateway) newHealthServer() *health.Server {
 		}()
 	}
 	return hs
-}
-
-func (g *Gateway) markReady() {
-	if g.healthServer == nil || g.draining.Load() {
-		return
-	}
-	g.healthServer.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_SERVING)
-	// Draining can begin between the check and status update. Reasserting the
-	// terminal readiness state closes that race without coupling liveness to it.
-	if g.draining.Load() {
-		g.healthServer.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_NOT_SERVING)
-	}
 }
 
 func (g *Gateway) drainMiddleware(next echo.HandlerFunc) echo.HandlerFunc {

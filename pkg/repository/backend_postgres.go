@@ -196,8 +196,8 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 	signingKey := "sk_" + base64.StdEncoding.EncodeToString(signingKeyBytes)
 
 	query := `
-	INSERT INTO workspace (name, external_id, signing_key)
-	VALUES ($1, $2, $3)
+	INSERT INTO workspace (name, external_id, signing_key, is_cluster_admin)
+	VALUES ($1, $2, $3, NOT EXISTS (SELECT 1 FROM workspace))
 	RETURNING id, name, external_id, signing_key, created_at, updated_at;
 	`
 
@@ -287,11 +287,8 @@ func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*typ
 
 		var adminWorkspace types.Workspace
 		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
-	FROM token t
-	INNER JOIN workspace w ON t.workspace_id = w.id
-	WHERE t.token_type = 'admin'
-	ORDER BY t.id
-	LIMIT 1;`
+	FROM workspace w
+	WHERE w.is_cluster_admin;`
 		err := r.client.GetContext(ctx, &adminWorkspace, query)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = ctxErr

@@ -39,8 +39,6 @@ type Service struct {
 	tailscale            *network.Tailscale
 	routePrewarm         routePrewarmer
 	reconcileOnce        sync.Once
-	managedPoolReady     chan struct{}
-	managedPoolReadyOnce sync.Once
 	managedPoolSyncMu    sync.Mutex
 	managedPoolInstances map[string]string
 }
@@ -79,7 +77,6 @@ func New(opts Options) *Service {
 		rentalUsage:          clients.NewMarketplaceUsageClient(opts.Config.ManagedCompute.Billing),
 		tailscale:            opts.Tailscale,
 		routePrewarm:         routePrewarmer{lastAttempt: map[string]time.Time{}},
-		managedPoolReady:     make(chan struct{}),
 		managedPoolInstances: map[string]string{},
 	}
 	service.telemetryCredentials = newTelemetryCredentialIssuer(opts.Config.Database.S2)
@@ -100,23 +97,6 @@ func (s *Service) Start(ctx context.Context) {
 		}
 		go s.runManagedPoolReconciler(ctx)
 	})
-}
-
-// Ready closes after this replica has loaded every managed pool into its local scheduler.
-func (s *Service) Ready() <-chan struct{} {
-	if s == nil || s.managedPoolReady == nil {
-		ready := make(chan struct{})
-		close(ready)
-		return ready
-	}
-	return s.managedPoolReady
-}
-
-func (s *Service) markManagedPoolsReady() {
-	if s == nil || s.managedPoolReady == nil {
-		return
-	}
-	s.managedPoolReadyOnce.Do(func() { close(s.managedPoolReady) })
 }
 
 func (s *Service) runManagedPoolReconciler(ctx context.Context) {
@@ -152,7 +132,6 @@ func (s *Service) runManagedPoolReconciler(ctx context.Context) {
 				resetManagedPoolTimer(timer, managedPoolReconcileRetryInterval)
 				continue
 			}
-			s.markManagedPoolsReady()
 			log.Debug().Dur("duration", time.Since(started)).Msg("managed pools reconciled")
 			resetManagedPoolTimer(timer, managedPoolReconcileInterval)
 		}
