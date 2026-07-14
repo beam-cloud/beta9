@@ -1776,7 +1776,7 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 
 	assert.Equal(t, secondRequest.ContainerId, requeuedRequest.ContainerId)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
-	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+	assert.Empty(t, requeuedRequest.Gpu)
 }
 
 func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T) {
@@ -1882,7 +1882,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	_, requeuedWasAlreadyQueued := queuedIds[requeuedRequest.ContainerId]
 	assert.False(t, requeuedWasAlreadyQueued)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
-	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+	assert.Empty(t, requeuedRequest.Gpu)
 
 	extraRequeuedRequest, err := firstScheduler.requestBacklog.Pop()
 	assert.Error(t, err)

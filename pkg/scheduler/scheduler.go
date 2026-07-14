@@ -611,7 +611,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	workerRequest := s.prepareWorkerRequest(worker, request)
-	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{request}, []*types.ContainerRequest{workerRequest}); err != nil {
+	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{workerRequest}); err != nil {
 		return err
 	}
 
@@ -620,35 +620,30 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 }
 
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
-	normalizeGPURequest(request)
-	request.Gpu = worker.Gpu
+	workerRequest := request.Clone()
+	normalizeGPURequest(workerRequest)
+	workerRequest.Gpu = worker.Gpu
 
-	s.attachImageCredentials(request)
-	s.attachBuildRegistryCredentials(request)
+	s.attachImageCredentials(workerRequest)
+	s.attachBuildRegistryCredentials(workerRequest)
 
-	workerRequest := s.workerRequest(worker, request)
+	if s.privateWorkerRequest(worker, workerRequest) {
+		workerRequest = workerRequest.PrivateWorkerRequest()
+	}
 	workerRequest.Timestamp = time.Now()
 	return workerRequest
 }
 
-func (s *Scheduler) pushWorkerRequests(worker *types.Worker, originalRequests, workerRequests []*types.ContainerRequest) error {
+func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
 	start := time.Now()
-	err := s.workerRepo.ScheduleContainerRequests(worker, workerRequests)
+	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
 	end := time.Now()
-	for _, request := range originalRequests {
+	for _, request := range requests {
 		s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerQueuePush, start, end, err == nil, map[string]string{
 			"worker_id": worker.Id,
 		})
 	}
 	return err
-}
-
-func (s *Scheduler) workerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
-	workerRequest := request.Clone()
-	if s.privateWorkerRequest(worker, request) {
-		return workerRequest.PrivateWorkerRequest()
-	}
-	return workerRequest
 }
 
 func (s *Scheduler) privateWorkerRequest(worker *types.Worker, request *types.ContainerRequest) bool {

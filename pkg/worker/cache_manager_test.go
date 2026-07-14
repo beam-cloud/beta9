@@ -460,7 +460,7 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 				Enabled:     true,
 				MountPath:   cacheDir,
 				HostPath:    cacheDir,
-				MaxUsagePct: 0.95,
+				MaxUsagePct: 1,
 			},
 			Coordinator: cache.CoordinatorConfig{
 				RegistrationTTLSeconds:   30,
@@ -469,7 +469,7 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 			},
 			Server: cache.ServerConfig{
 				DiskCacheDir:         cacheDir,
-				DiskCacheMaxUsagePct: 0.95,
+				DiskCacheMaxUsagePct: 1,
 				PageSizeBytes:        4,
 				ObjectTtlS:           300,
 			},

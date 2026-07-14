@@ -14,23 +14,23 @@ import (
 var errWorkerLifecycleUnauthorized = errors.New("unauthorized worker lifecycle event")
 
 func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) (*pb.PushContainerLifecycleEventsResponse, error) {
-	if err := authorizeWorkerLifecycle(ctx, req); err != nil {
+	authInfo, err := workerLifecycleAuth(ctx, req)
+	if err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
 	if s.eventRepo == nil || s.containerRepo == nil || s.workerRepo == nil {
-		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: "event repository is unavailable"}, nil
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: "worker lifecycle service is unavailable"}, nil
 	}
 
 	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
 	if err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
-	if err := s.authorizeWorkerLifecycleWorker(ctx, req.WorkerId, worker); err != nil {
+	if err := s.authorizeWorkerLifecycleWorker(ctx, authInfo, req.WorkerId, worker); err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
 	states := make(map[string]*types.ContainerState)
 	events := make([]types.EventContainerLifecycleSchema, 0, len(req.Events))
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	for _, data := range req.Events {
 		var event types.EventContainerLifecycleSchema
 		if err := json.Unmarshal(data, &event); err != nil || event.ContainerID == "" {
@@ -69,8 +69,7 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	return &pb.PushContainerLifecycleEventsResponse{Ok: true}, nil
 }
 
-func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Context, workerID string, worker *types.Worker) error {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Context, authInfo *auth.AuthInfo, workerID string, worker *types.Worker) error {
 	if worker == nil || worker.Id != workerID {
 		return errWorkerLifecycleUnauthorized
 	}
@@ -93,13 +92,13 @@ func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Con
 	return errWorkerLifecycleUnauthorized
 }
 
-func authorizeWorkerLifecycle(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) error {
+func workerLifecycleAuth(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) (*auth.AuthInfo, error) {
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
 	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
-		return errWorkerLifecycleUnauthorized
+		return nil, errWorkerLifecycleUnauthorized
 	}
 	if req == nil || req.WorkerId == "" || len(req.Events) == 0 {
-		return fmt.Errorf("worker id and events are required")
+		return nil, fmt.Errorf("worker id and events are required")
 	}
-	return nil
+	return authInfo, nil
 }

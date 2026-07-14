@@ -121,28 +121,21 @@ func (b *schedulingBatch) dispatch() {
 }
 
 func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
-	workerRequests := make([]*types.ContainerRequest, 0, len(schedules))
-	prepared := make([]plannedSchedule, 0, len(schedules))
-	for _, schedule := range schedules {
-		workerRequest := b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
-		workerRequests = append(workerRequests, workerRequest)
-		prepared = append(prepared, schedule)
-	}
-	if len(prepared) == 0 {
+	if len(schedules) == 0 {
 		return
 	}
 
-	originalRequests := make([]*types.ContainerRequest, len(prepared))
-	for i := range prepared {
-		originalRequests[i] = prepared[i].request
+	workerRequests := make([]*types.ContainerRequest, len(schedules))
+	for i, schedule := range schedules {
+		workerRequests[i] = b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
 	}
-	err := b.scheduler.pushWorkerRequests(prepared[0].worker, originalRequests, workerRequests)
+	err := b.scheduler.pushWorkerRequests(schedules[0].worker, workerRequests)
 	if err == nil {
 		for _, request := range workerRequests {
 			go b.scheduler.schedulerUsageMetrics.CounterIncContainerScheduled(request.Clone())
 		}
 	}
-	for _, schedule := range prepared {
+	for _, schedule := range schedules {
 		b.completeSchedule(schedule, err)
 	}
 }
