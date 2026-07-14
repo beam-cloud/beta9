@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/clients"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -208,6 +209,89 @@ func TestCreatePoolStoresCanonicalGPUType(t *testing.T) {
 	}
 }
 
+func TestCreatePoolRejectsConfiguredWorkerPoolIdentity(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	for _, pool := range []*pb.PoolConfig{
+		{Name: "configured"},
+		{Name: "private", Selector: "configured"},
+	} {
+		repo := &fakeComputeRepo{}
+		service := &Service{
+			computeRepo: repo,
+			appConfig: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+				"configured": {Mode: types.PoolModeLocal},
+			}}},
+		}
+
+		res, err := service.CreatePool(ctx, &pb.CreatePoolRequest{Pool: pool})
+		if err != nil || res.Ok || !strings.Contains(res.ErrMsg, "configured worker pool") {
+			t.Fatalf("CreatePool(%+v) = %+v, %v; want config conflict", pool, res, err)
+		}
+		if repo.savedPool {
+			t.Fatal("config conflict persisted private pool state")
+		}
+	}
+}
+
+func TestCreatePoolRollsBackFailedRegistration(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	manager := scheduler.NewWorkerPoolManager(false)
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, manager)
+	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
+		Name: "selector-owner", Selector: "shared", Mode: string(types.PoolModePrivate),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{computeRepo: repo, scheduler: s}
+
+	res, err := service.CreatePool(ctx, &pb.CreatePoolRequest{Pool: &pb.PoolConfig{Name: "requested", Selector: "shared"}})
+	if err != nil || res.Ok {
+		t.Fatalf("CreatePool() = %+v, %v; want registration conflict", res, err)
+	}
+	if state, err := repo.GetPoolState(ctx, "workspace-1", "requested"); err != nil || state != nil {
+		t.Fatalf("partial pool state = %+v, %v; want rollback", state, err)
+	}
+
+	previous := &model.PoolState{
+		Name: "requested", Selector: "old", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token",
+	}
+	if err := repo.SavePoolState(ctx, "workspace-1", previous); err != nil {
+		t.Fatal(err)
+	}
+	res, err = service.CreatePool(ctx, &pb.CreatePoolRequest{Pool: &pb.PoolConfig{Name: "requested", Selector: "shared"}})
+	if err != nil || res.Ok {
+		t.Fatalf("CreatePool(update) = %+v, %v; want registration conflict", res, err)
+	}
+	state, err := repo.GetPoolState(ctx, "workspace-1", "requested")
+	if err != nil || state == nil || state.Selector != "old" {
+		t.Fatalf("restored pool state = %+v, %v; want old selector", state, err)
+	}
+}
+
+func TestCreatePoolRemovesOldSelectorAfterReplacement(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	previous := &model.PoolState{
+		Name: "private", Selector: "old", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token",
+	}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {previous}}}
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager(false))
+	if err := s.EnsureAgentPool("workspace-1", previous); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{computeRepo: repo, scheduler: s}
+
+	res, err := service.CreatePool(ctx, &pb.CreatePoolRequest{Pool: &pb.PoolConfig{Name: "private", Selector: "new"}})
+	if err != nil || !res.Ok {
+		t.Fatalf("CreatePool() = %+v, %v", res, err)
+	}
+	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
+		Name: "old-selector-replacement", Selector: "old", Mode: string(types.PoolModePrivate),
+	}); err != nil {
+		t.Fatalf("old selector controller was not removed: %v", err)
+	}
+}
+
 func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
@@ -327,6 +411,34 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 	}
 	if res.GetByoc().GetGpu() != "" || res.GetByoc().GetGpuCount() != 0 {
 		t.Fatalf("CPU BYOC gpu = %q/%d, want none", res.GetByoc().GetGpu(), res.GetByoc().GetGpuCount())
+	}
+}
+
+func TestCreateBYOCPoolRollsBackFailedRegistration(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager(false))
+	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
+		Name: "selector-owner", Selector: "aws-cpu", Mode: string(types.PoolModePrivate),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		computeRepo: repo,
+		scheduler:   s,
+		appConfig: types.AppConfig{ManagedCompute: types.ManagedComputeConfig{BYOC: types.ManagedComputeBYOCConfig{
+			AWS: types.ManagedComputeBYOCAWSConfig{TemplateURL: "https://example.com/template.yaml"},
+		}}},
+	}
+
+	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
+		Provider: "aws", PoolName: "aws-cpu", Region: "us-east-1", InstanceType: "i4i.xlarge", DesiredNodes: 1, MaxNodes: 1,
+	})
+	if err != nil || res.Ok {
+		t.Fatalf("CreateBYOCPool() = %+v, %v; want registration conflict", res, err)
+	}
+	if state, err := repo.GetPoolState(ctx, "workspace-1", "aws-cpu"); err != nil || state != nil {
+		t.Fatalf("partial BYOC pool state = %+v, %v; want rollback", state, err)
 	}
 }
 
@@ -4618,12 +4730,8 @@ func (r *fakeComputeRepo) DeleteMarketplaceRental(ctx context.Context, state *mo
 	return nil
 }
 
-func (r *fakeComputeRepo) LockPoolState(ctx context.Context, workspaceID, name string) error {
-	return nil
-}
-
-func (r *fakeComputeRepo) UnlockPoolState(ctx context.Context, workspaceID, name string) error {
-	return nil
+func (r *fakeComputeRepo) WithPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 func (r *fakeComputeRepo) PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error {
@@ -4985,6 +5093,14 @@ func (r *fakeWorkerRepo) UpdateWorkerStatus(workerID string, status types.Worker
 	}
 	r.worker.Status = status
 	r.status = status
+	return nil
+}
+
+func (r *fakeWorkerRepo) RemoveWorker(workerID string) error {
+	if r.worker == nil || r.worker.Id != workerID {
+		return &types.ErrWorkerNotFound{WorkerId: workerID}
+	}
+	r.worker = nil
 	return nil
 }
 
@@ -5720,9 +5836,9 @@ func TestCreateMarketplaceListingStoresRegion(t *testing.T) {
 	}
 }
 
-// Pool names are deterministic and seller-controllable — derived from the GPU
-// type by default, or a name the seller picks — so machines across publishes
-// land in the same pool and keep cache locality.
+// Pool names are deterministic and seller-scoped — derived from the GPU type
+// by default, or a name the seller picks — so one seller keeps cache locality
+// without colliding with another seller's workers.
 func TestCreateMarketplaceListingPoolNaming(t *testing.T) {
 	ctx := testAuthContext("seller-1", "owner-token")
 	repo := &fakeComputeRepo{}
@@ -5736,8 +5852,8 @@ func TestCreateMarketplaceListingPoolNaming(t *testing.T) {
 	if err != nil || !byGPU.Ok {
 		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, byGPU.GetErrMsg())
 	}
-	if byGPU.Listing.PoolName != "marketplace-a100-40" {
-		t.Fatalf("pool = %q, want gpu-derived marketplace-a100-40", byGPU.Listing.PoolName)
+	if want := model.MarketplacePoolNameForSeller("seller-1", "A100-40"); byGPU.Listing.PoolName != want {
+		t.Fatalf("pool = %q, want %q", byGPU.Listing.PoolName, want)
 	}
 
 	// Seller override; "marketplace-" is never doubled, casing/spaces normalize.
@@ -5750,8 +5866,11 @@ func TestCreateMarketplaceListingPoolNaming(t *testing.T) {
 	if err != nil || !named.Ok {
 		t.Fatalf("CreateMarketplaceListing() = %v, %s", err, named.GetErrMsg())
 	}
-	if named.Listing.PoolName != "marketplace-west-rack" {
-		t.Fatalf("pool = %q, want marketplace-west-rack", named.Listing.PoolName)
+	if want := model.MarketplacePoolNameForSeller("seller-1", "Marketplace West Rack"); named.Listing.PoolName != want {
+		t.Fatalf("pool = %q, want %q", named.Listing.PoolName, want)
+	}
+	if named.Listing.PoolName == model.MarketplacePoolNameForSeller("seller-2", "Marketplace West Rack") {
+		t.Fatal("marketplace pool names must differ across sellers")
 	}
 }
 
@@ -5816,7 +5935,7 @@ func TestMarketplaceListingsSharePool(t *testing.T) {
 	if res, err := service.DeleteMarketplaceListing(ctx, &pb.DeleteMarketplaceListingRequest{ListingId: first.Listing.Id}); err != nil || !res.Ok {
 		t.Fatalf("DeleteMarketplaceListing() = %v, %s", err, res.GetErrMsg())
 	}
-	if state, err := repo.GetPoolState(ctx, "seller-1", "marketplace-west-rack"); err != nil || state == nil {
+	if state, err := repo.GetPoolState(ctx, "seller-1", first.Listing.PoolName); err != nil || state == nil {
 		t.Fatalf("shared pool state = %+v, %v; want pool preserved while a listing remains", state, err)
 	}
 
@@ -5824,7 +5943,7 @@ func TestMarketplaceListingsSharePool(t *testing.T) {
 	if res, err := service.DeleteMarketplaceListing(ctx, &pb.DeleteMarketplaceListingRequest{ListingId: second.Listing.Id}); err != nil || !res.Ok {
 		t.Fatalf("DeleteMarketplaceListing() = %v, %s", err, res.GetErrMsg())
 	}
-	if state, err := repo.GetPoolState(ctx, "seller-1", "marketplace-west-rack"); err != nil || state != nil {
+	if state, err := repo.GetPoolState(ctx, "seller-1", first.Listing.PoolName); err != nil || state != nil {
 		t.Fatalf("pool state after last listing = %+v, %v; want deleted", state, err)
 	}
 }
@@ -6004,7 +6123,7 @@ func TestMarketplaceListingRejectsNonMarketplacePool(t *testing.T) {
 	service := &Service{computeRepo: repo}
 
 	if err := repo.SavePoolState(ctx, "seller-1", &model.PoolState{
-		Name: "marketplace-web",
+		Name: model.MarketplacePoolNameForSeller("seller-1", "web"),
 		Mode: string(types.PoolModePrivate),
 	}); err != nil {
 		t.Fatal(err)
@@ -6021,6 +6140,110 @@ func TestMarketplaceListingRejectsNonMarketplacePool(t *testing.T) {
 	}
 	if res.Ok || !strings.Contains(res.ErrMsg, "non-marketplace pool") {
 		t.Fatalf("listing over private pool = %+v, want rejection", res)
+	}
+}
+
+func TestMarketplacePoolStateRollsBackFailedRegistration(t *testing.T) {
+	ctx := context.Background()
+	repo := &fakeComputeRepo{}
+	poolName := model.MarketplacePoolNameForSeller("seller-1", "a100")
+	manager := scheduler.NewWorkerPoolManager(false)
+	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
+	service := &Service{
+		computeRepo: repo,
+		scheduler:   scheduler.NewSchedulerForCapacityChecks(nil, repo, manager),
+	}
+
+	err := service.ensureMarketplacePoolState(ctx, &model.MarketplaceListingState{
+		ID: "listing-1", SellerWorkspaceID: "seller-1", PoolName: poolName, GPU: "A100-40", Status: model.MarketplaceListingStatusActive,
+	}, "owner-token")
+	if err == nil {
+		t.Fatal("ensureMarketplacePoolState() unexpectedly registered over a configured controller")
+	}
+	if state, err := repo.GetPoolState(ctx, "seller-1", poolName); err != nil || state != nil {
+		t.Fatalf("partial marketplace pool state = %+v, %v; want rollback", state, err)
+	}
+}
+
+func TestMarketplaceListingRollsBackFailedRegistration(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	poolName := model.MarketplacePoolNameForSeller("seller-1", "a100")
+	manager := scheduler.NewWorkerPoolManager(false)
+	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
+	service := &Service{
+		computeRepo: repo,
+		scheduler:   scheduler.NewSchedulerForCapacityChecks(nil, repo, manager),
+	}
+
+	res, err := service.CreateMarketplaceListing(ctx, &pb.CreateMarketplaceListingRequest{
+		DisplayName: "a100 listing",
+		PoolName:    "a100",
+		Gpu:         "A100-40",
+		GpuCount:    1,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketplaceListing() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("CreateMarketplaceListing() unexpectedly succeeded")
+	}
+	listingID := model.MarketplaceListingID("seller-1", "a100 listing")
+	if listing, err := repo.GetMarketplaceListing(ctx, "seller-1", listingID); err != nil || listing != nil {
+		t.Fatalf("partial marketplace listing = %+v, %v; want rollback", listing, err)
+	}
+	if state, err := repo.GetPoolState(ctx, "seller-1", poolName); err != nil || state != nil {
+		t.Fatalf("partial marketplace pool = %+v, %v; want rollback", state, err)
+	}
+}
+
+func TestMarketplaceUpdateRestoresListingAndPoolAfterFailedRegistration(t *testing.T) {
+	ctx := testAuthContext("seller-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	poolName := model.MarketplacePoolNameForSeller("seller-1", "gpu")
+	now := time.Now().UTC()
+	listing := &model.MarketplaceListingState{
+		ID:                "listing-1",
+		SellerWorkspaceID: "seller-1",
+		DisplayName:       "gpu listing",
+		GPU:               "A100-40",
+		GPUCount:          1,
+		Source:            defaultMarketplaceSource,
+		Status:            model.MarketplaceListingStatusActive,
+		PoolName:          poolName,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := repo.SaveMarketplaceListing(ctx, listing); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SavePoolState(ctx, "seller-1", marketplacePoolState(listing, "owner-token", now, now)); err != nil {
+		t.Fatal(err)
+	}
+	manager := scheduler.NewWorkerPoolManager(false)
+	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
+	service := &Service{
+		computeRepo: repo,
+		scheduler:   scheduler.NewSchedulerForCapacityChecks(nil, repo, manager),
+	}
+
+	res, err := service.UpdateMarketplaceListing(ctx, &pb.UpdateMarketplaceListingRequest{
+		ListingId: listing.ID,
+		Gpu:       "H100",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMarketplaceListing() error = %v", err)
+	}
+	if res.Ok {
+		t.Fatal("UpdateMarketplaceListing() unexpectedly succeeded")
+	}
+	restoredListing, err := repo.GetMarketplaceListing(ctx, "seller-1", listing.ID)
+	if err != nil || restoredListing == nil || restoredListing.GPU != "A100-40" {
+		t.Fatalf("restored listing = %+v, %v; want A100-40", restoredListing, err)
+	}
+	restoredPool, err := repo.GetPoolState(ctx, "seller-1", poolName)
+	if err != nil || restoredPool == nil || restoredPool.Config == nil || !sameStrings(restoredPool.Config.Gpu, []string{"A100-40"}) {
+		t.Fatalf("restored pool = %+v, %v; want A100-40", restoredPool, err)
 	}
 }
 

@@ -293,6 +293,24 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 }
 
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
+	lock, err := l.obtain(ctx, key, opts)
+	if err != nil {
+		return err
+	}
+
+	l.mu.Lock()
+	l.locks[key] = lock
+	l.mu.Unlock()
+	return nil
+}
+
+func (l *RedisLock) obtain(ctx context.Context, key string, opts RedisLockOptions) (*redislock.Lock, error) {
+	if l == nil || l.client == nil {
+		return nil, errors.New("redis lock client is unavailable")
+	}
+	if opts.TtlS <= 0 {
+		return nil, errors.New("redis lock TTL must be positive")
+	}
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
 		baseRetryStrategy := redislock.RetryStrategy(redislock.ExponentialBackoff(100*time.Millisecond, time.Duration(opts.TtlS)*time.Second))
@@ -302,17 +320,56 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 		retryStrategy = redislock.LimitRetry(baseRetryStrategy, opts.Retries)
 	}
 
-	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
+	return redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 		RetryStrategy: retryStrategy,
 	})
+}
+
+func (l *RedisLock) WithLease(ctx context.Context, key string, opts RedisLockOptions, fn func(context.Context) error) error {
+	if fn == nil {
+		return errors.New("redis lock callback is required")
+	}
+	lock, err := l.obtain(ctx, key, opts)
 	if err != nil {
 		return err
 	}
 
-	l.mu.Lock()
-	l.locks[key] = lock
-	l.mu.Unlock()
-	return nil
+	ttl := time.Duration(opts.TtlS) * time.Second
+	leaseCtx, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	refreshErr := make(chan error, 1)
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(ttl / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-leaseCtx.Done():
+				return
+			case <-ticker.C:
+				if err := lock.Refresh(leaseCtx, ttl, nil); err != nil {
+					refreshErr <- err
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	workErr := fn(leaseCtx)
+	close(stop)
+	<-done
+	cancel()
+	var leaseErr error
+	select {
+	case leaseErr = <-refreshErr:
+	default:
+	}
+	releaseErr := lock.Release(context.Background())
+	return errors.Join(workErr, leaseErr, releaseErr)
 }
 
 func (l *RedisLock) Token(key string) (string, error) {
@@ -324,6 +381,16 @@ func (l *RedisLock) Token(key string) (string, error) {
 	}
 
 	return "", redislock.ErrLockNotHeld
+}
+
+func (l *RedisLock) Refresh(ctx context.Context, key string, ttl time.Duration) error {
+	l.mu.Lock()
+	lock, ok := l.locks[key]
+	l.mu.Unlock()
+	if !ok {
+		return redislock.ErrLockNotHeld
+	}
+	return lock.Refresh(ctx, ttl, nil)
 }
 
 func (l *RedisLock) ReleaseWithToken(key string, token string) error {

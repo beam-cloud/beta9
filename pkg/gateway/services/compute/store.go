@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,19 +14,11 @@ func (s *Service) savePrivatePoolState(ctx context.Context, workspaceID string, 
 	return s.computeRepo.SavePoolState(ctx, workspaceID, state)
 }
 
-// withPoolStateLock serializes read-modify-write cycles on a pool's state.
-// Callers must (re)load the pool state inside fn.
-func (s *Service) withPoolStateLock(ctx context.Context, workspaceID, poolName string, fn func() error) error {
+func (s *Service) withPoolStateLock(ctx context.Context, workspaceID, poolName string, fn func(context.Context) error) error {
 	if s == nil || s.computeRepo == nil {
-		return fn()
+		return errors.New("compute repository is unavailable")
 	}
-	if err := s.computeRepo.LockPoolState(ctx, workspaceID, poolName); err != nil {
-		return fmt.Errorf("acquire pool state lock for %s/%s: %w", workspaceID, poolName, err)
-	}
-	defer func() {
-		_ = s.computeRepo.UnlockPoolState(ctx, workspaceID, poolName)
-	}()
-	return fn()
+	return s.computeRepo.WithPoolStateLock(ctx, workspaceID, poolName, fn)
 }
 
 func (s *Service) getPrivatePoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
@@ -38,6 +31,16 @@ func (s *Service) listPrivatePoolStates(ctx context.Context, workspaceID string,
 
 func (s *Service) deletePrivatePoolState(ctx context.Context, workspaceID, name string) error {
 	return s.computeRepo.DeletePoolState(ctx, workspaceID, name)
+}
+
+func (s *Service) rollbackPoolState(ctx context.Context, workspaceID, poolName string, previous *model.PoolState, cause error) error {
+	var rollbackErr error
+	if previous == nil {
+		rollbackErr = s.deletePrivatePoolState(ctx, workspaceID, poolName)
+	} else {
+		rollbackErr = s.savePrivatePoolState(ctx, workspaceID, previous)
+	}
+	return errors.Join(cause, rollbackErr)
 }
 
 func (s *Service) saveComputeJoinTokenState(ctx context.Context, state *model.JoinTokenState, ttl time.Duration) error {

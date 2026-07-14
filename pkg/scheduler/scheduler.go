@@ -8,9 +8,11 @@ import (
 	"math"
 	"net"
 	"path"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -69,6 +71,7 @@ type Scheduler struct {
 	provisioning              *provisioningTracker
 	workerProvisioningBackoff *workerProvisioningBackoff
 	credentials               *schedulerCredentialCache
+	agentPoolMu               sync.Mutex
 }
 
 type schedulerCredentialAttachResult struct {
@@ -87,6 +90,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	computeRepo := repo.NewComputeRedisRepository(redisClient)
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewEventClientRepo(config)
+	pushPoolMetrics := newPoolMetricsPusher(ctx, backendRepo, eventRepo)
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
@@ -97,15 +101,16 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		}
 
 		controllerOptions := WorkerPoolControllerOptions{
-			Context:        ctx,
-			Name:           name,
-			Config:         config,
-			BackendRepo:    backendRepo,
-			WorkerRepo:     workerRepo,
-			ProviderRepo:   providerRepo,
-			WorkerPoolRepo: workerPoolRepo,
-			ContainerRepo:  containerRepo,
-			EventRepo:      eventRepo,
+			Context:         ctx,
+			Name:            name,
+			Config:          config,
+			BackendRepo:     backendRepo,
+			WorkerRepo:      workerRepo,
+			ProviderRepo:    providerRepo,
+			WorkerPoolRepo:  workerPoolRepo,
+			ContainerRepo:   containerRepo,
+			EventRepo:       eventRepo,
+			PushPoolMetrics: pushPoolMetrics,
 		}
 		var controller WorkerPoolController
 		var err error
@@ -154,25 +159,113 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 func NewSchedulerForCapacityChecks(workerRepo repo.WorkerRepository, computeRepo repo.ComputeRepository, workerPoolManager *WorkerPoolManager) *Scheduler {
 	return &Scheduler{
+		ctx:               context.Background(),
 		workerRepo:        workerRepo,
 		computeRepo:       computeRepo,
 		workerPoolManager: workerPoolManager,
 	}
 }
 
-func (s *Scheduler) RegisterAgentPool(workspaceID string, state *compute.PoolState) error {
-	if s == nil || state == nil {
+func (s *Scheduler) EnsureAgentPool(workspaceID string, state *compute.PoolState) error {
+	if s == nil {
 		return nil
 	}
-	name := firstNonEmpty(state.Selector, state.Name)
-	if name == "" {
-		return errors.New("pool selector is required")
+	s.agentPoolMu.Lock()
+	defer s.agentPoolMu.Unlock()
+	_, err := s.ensureAgentPool(workspaceID, state)
+	return err
+}
+
+func (s *Scheduler) EnsureAgentMachine(workspaceID string, state *compute.PoolState, machineID string) error {
+	if s == nil {
+		return nil
 	}
+	s.agentPoolMu.Lock()
+	defer s.agentPoolMu.Unlock()
+	controller, err := s.ensureAgentPool(workspaceID, state)
+	if err != nil || machineID == "" {
+		return err
+	}
+	return controller.ensureMachine(machineID)
+}
+
+func agentPoolControllerKey(workspaceID string, state *compute.PoolState) string {
+	selector := ""
+	if state != nil {
+		selector = firstNonEmpty(state.Selector, state.Name)
+	}
+	if selector == "" || workspaceID == "" || state.ManagementSource != "" || state.Mode == string(types.PoolModeMarketplace) {
+		return selector
+	}
+	return strings.Join([]string{"agent", workspaceID, selector}, ":")
+}
+
+func (s *Scheduler) poolForWorkspaceSelector(workspaceID, selector string) (*WorkerPool, bool) {
+	if s == nil || s.workerPoolManager == nil || selector == "" {
+		return nil, false
+	}
+	if workspaceID != "" {
+		state := &compute.PoolState{Selector: selector}
+		if pool, ok := s.workerPoolManager.GetPool(agentPoolControllerKey(workspaceID, state)); ok {
+			return pool, true
+		}
+	}
+	pool, ok := s.workerPoolManager.GetPool(selector)
+	if !ok {
+		return nil, false
+	}
+	if controller, agent := pool.Controller.(*AgentWorkerPoolController); agent &&
+		controller.poolState.ManagementSource == "" && controller.workspaceID != workspaceID {
+		return nil, false
+	}
+	return pool, true
+}
+
+func (s *Scheduler) privateAgentPool(workspaceID, selector string) (*WorkerPool, bool) {
+	if s == nil || s.workerPoolManager == nil || workspaceID == "" || selector == "" {
+		return nil, false
+	}
+	state := &compute.PoolState{Selector: selector}
+	pool, ok := s.workerPoolManager.GetPool(agentPoolControllerKey(workspaceID, state))
+	return pool, ok && pool.Config.Mode == types.PoolModePrivate
+}
+
+func (s *Scheduler) poolForController(controller WorkerPoolController) (*WorkerPool, bool) {
+	if s == nil || s.workerPoolManager == nil || controller == nil {
+		return nil, false
+	}
+	if agent, ok := controller.(*AgentWorkerPoolController); ok {
+		return s.workerPoolManager.GetPool(agentPoolControllerKey(agent.workspaceID, agent.poolState))
+	}
+	return s.workerPoolManager.GetPool(controller.Name())
+}
+
+func (s *Scheduler) ensureAgentPool(workspaceID string, state *compute.PoolState) (*AgentWorkerPoolController, error) {
+	if state == nil {
+		return nil, errors.New("pool state is required")
+	}
+	selector := firstNonEmpty(state.Selector, state.Name)
+	if selector == "" {
+		return nil, errors.New("pool selector is required")
+	}
+	key := agentPoolControllerKey(workspaceID, state)
 
 	config := normalizeAgentWorkerPoolConfig(state)
-	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+	if current, exists := s.workerPoolManager.GetPool(key); exists {
+		controller, ok := current.Controller.(*AgentWorkerPoolController)
+		if !ok || !controller.owns(workspaceID, selector, state) {
+			return nil, fmt.Errorf("pool selector %q is already owned by another pool", selector)
+		}
+		if controller.workspaceID == workspaceID &&
+			controller.poolState.ManagedInstanceID == state.ManagedInstanceID &&
+			reflect.DeepEqual(current.Config, config) {
+			return controller, nil
+		}
+	}
+
+	created, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
 		Context:     s.ctx,
-		Name:        name,
+		Name:        selector,
 		WorkspaceID: workspaceID,
 		Config:      s.config,
 		WorkerPool:  config,
@@ -181,14 +274,49 @@ func (s *Scheduler) RegisterAgentPool(workspaceID string, state *compute.PoolSta
 		ComputeRepo: s.computeRepo,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	s.workerPoolManager.SetPool(name, config, controller)
-	return nil
+	s.workerPoolManager.SetPoolAt(key, selector, config, created)
+	return created, nil
 }
 
-func (s *Scheduler) DeleteAgentPool(selector string) {
+func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState) {
+	if s == nil || state == nil {
+		return
+	}
+	selector := firstNonEmpty(state.Selector, state.Name)
+	key := agentPoolControllerKey(workspaceID, state)
+	s.agentPoolMu.Lock()
+	defer s.agentPoolMu.Unlock()
+	pool, ok := s.workerPoolManager.GetPool(key)
+	if !ok {
+		return
+	}
+	controller, ok := pool.Controller.(*AgentWorkerPoolController)
+	if !ok || !controller.owns(workspaceID, selector, state) || controller.poolState.ManagementSource != "" {
+		return
+	}
+	s.workerPoolManager.DeletePool(key)
+}
+
+// DeleteManagedAgentPool removes only the managed controller generation the
+// caller reconciled. It cannot delete a private, local, legacy, or newly
+// recreated controller that happens to reuse the same selector.
+func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if s == nil || selector == "" {
+		return
+	}
+	s.agentPoolMu.Lock()
+	defer s.agentPoolMu.Unlock()
+	pool, ok := s.workerPoolManager.GetPool(selector)
+	if !ok {
+		return
+	}
+	controller, ok := pool.Controller.(*AgentWorkerPoolController)
+	if !ok || controller.poolState == nil || controller.poolState.ManagementSource == "" {
+		return
+	}
+	if instanceID != "" && controller.poolState.ManagedInstanceID != instanceID {
 		return
 	}
 	s.workerPoolManager.DeletePool(selector)
@@ -342,22 +470,17 @@ func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool
 		return false
 	}
 
-	poolSelector := request.PoolSelector
-	if poolSelector == "" {
+	candidate := request
+	if candidate.PoolSelector == "" {
 		stubConfig, err := request.Stub.UnmarshalConfig()
 		if err != nil || stubConfig == nil {
 			return false
 		}
-		poolSelector = stubConfig.PoolSelector()
+		candidate = request.Clone()
+		candidate.PoolSelector = stubConfig.PoolSelector()
 	}
-	if poolSelector == "" {
-		return false
-	}
-	pool, ok := s.workerPoolManager.GetPool(poolSelector)
-	if !ok || pool.Config.Mode != types.PoolModePrivate {
-		return false
-	}
-	return true
+	pool, err := s.ensureAgentPoolForRequest(candidate)
+	return err == nil && pool != nil && pool.Config.Mode == types.PoolModePrivate
 }
 
 func (s *Scheduler) CheckConcurrencyLimit(request *types.ContainerRequest) error {
@@ -539,19 +662,23 @@ func (s *Scheduler) pushWorkerRequest(worker *types.Worker, originalRequest, wor
 
 func (s *Scheduler) workerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
-	if s.privateWorkerRequest(worker) {
+	if s.privateWorkerRequest(worker, request) {
 		return workerRequest.PrivateWorkerRequest()
 	}
 	return workerRequest
 }
 
-func (s *Scheduler) privateWorkerRequest(worker *types.Worker) bool {
+func (s *Scheduler) privateWorkerRequest(worker *types.Worker, request *types.ContainerRequest) bool {
 	if s == nil || worker == nil || s.workerPoolManager == nil {
 		return false
 	}
 
-	pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
-	return ok && pool.Config.Mode == types.PoolModePrivate
+	workspaceID := ""
+	if request != nil {
+		workspaceID = request.WorkspaceId
+	}
+	_, ok := s.privateAgentPool(workspaceID, workerPoolSelector(worker))
+	return ok
 }
 
 func (s *Scheduler) recordContainerLifecycle(request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, start time.Time, end time.Time, success bool, attrs map[string]string) {
@@ -1184,7 +1311,7 @@ func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, reque
 		return workers
 	}
 
-	pool, ok := s.workerPoolManager.GetPool(request.PoolSelector)
+	pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector)
 	if !ok || pool.Controller == nil || pool.Controller.Mode() != types.PoolModePrivate {
 		return workers
 	}
@@ -1310,26 +1437,27 @@ func (s *Scheduler) ensureAgentPoolForRequest(request *types.ContainerRequest) (
 	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
 		return nil, nil
 	}
-	if pool, ok := s.workerPoolManager.GetPool(request.PoolSelector); ok {
-		return pool, nil
-	}
-
-	state, err := s.agentPoolStateForRequest(request)
-	if err != nil || state == nil {
-		return nil, err
-	}
-	if err := s.RegisterAgentPool(request.WorkspaceId, state); err != nil {
-		return nil, err
-	}
-	if pool, ok := s.workerPoolManager.GetPool(request.PoolSelector); ok {
-		return pool, nil
-	}
-	if name := firstNonEmpty(state.Selector, state.Name); name != request.PoolSelector {
-		if pool, ok := s.workerPoolManager.GetPool(name); ok {
+	if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
+		if _, agent := pool.Controller.(*AgentWorkerPoolController); !agent || s.computeRepo == nil {
 			return pool, nil
 		}
 	}
-	return nil, nil
+
+	state, err := s.agentPoolStateForRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		// A private controller is only valid while its durable workspace state
+		// exists. Global managed/configured pools are safe to resolve directly.
+		pool, _ := s.workerPoolManager.GetPool(request.PoolSelector)
+		return pool, nil
+	}
+	if err := s.EnsureAgentPool(request.WorkspaceId, state); err != nil {
+		return nil, err
+	}
+	pool, _ := s.workerPoolManager.GetPool(agentPoolControllerKey(request.WorkspaceId, state))
+	return pool, nil
 }
 
 func (s *Scheduler) agentPoolStateForRequest(request *types.ContainerRequest) (*compute.PoolState, error) {

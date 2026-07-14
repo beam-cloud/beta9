@@ -175,8 +175,8 @@ func (s *Service) prepareBYOCPoolSetup(ctx context.Context, provider byocProvide
 	}
 
 	var state *model.PoolState
-	lockErr := s.withPoolStateLock(ctx, workspaceID, req.poolName, func() error {
-		next, err := s.createOrUpdateBYOCPool(ctx, authInfo, provider, req)
+	lockErr := s.withPoolStateLock(ctx, workspaceID, req.poolName, func(lockCtx context.Context) error {
+		next, err := s.createOrUpdateBYOCPool(lockCtx, authInfo, provider, req)
 		if err != nil {
 			return err
 		}
@@ -304,8 +304,8 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 	}
 
 	var response *pb.ScaleBYOCPoolResponse
-	lockErr := s.withPoolStateLock(ctx, workspaceID, poolName, func() error {
-		state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	lockErr := s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
+		state, err := s.getOwnedPrivatePoolState(lockCtx, authInfo, poolName)
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -338,7 +338,7 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
-		if err := provider.Scale(ctx, byocProviderScaleInput{
+		if err := provider.Scale(lockCtx, byocProviderScaleInput{
 			WorkspaceID:  workspaceID,
 			Config:       s.appConfig.ManagedCompute,
 			Request:      req,
@@ -353,16 +353,16 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 			return nil
 		}
 		state.UpdatedAt = time.Now().UTC()
-		if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		if err := s.savePrivatePoolState(lockCtx, workspaceID, state); err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
-		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+		machines, err := s.computeRepo.ListAgentTokenStates(lockCtx, workspaceID, state.Name)
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
-		machines, err = s.pruneBYOCPoolMachinesAboveDesired(ctx, workspaceID, state, machines, time.Now().UTC())
+		machines, err = s.pruneBYOCPoolMachinesAboveDesired(lockCtx, workspaceID, state, machines, time.Now().UTC())
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -435,12 +435,12 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 	}
 
 	deleted := false
-	err := s.withPoolStateLock(ctx, workspaceID, state.Name, func() error {
-		fresh, err := s.getPrivatePoolState(ctx, workspaceID, state.Name)
+	err := s.withPoolStateLock(ctx, workspaceID, state.Name, func(lockCtx context.Context) error {
+		fresh, err := s.getPrivatePoolState(lockCtx, workspaceID, state.Name)
 		if err != nil || fresh == nil {
 			return err
 		}
-		freshMachines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, fresh.Name)
+		freshMachines, err := s.computeRepo.ListAgentTokenStates(lockCtx, workspaceID, fresh.Name)
 		if err != nil {
 			return err
 		}
@@ -448,7 +448,7 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 			return nil
 		}
 		deleted = true
-		return s.deleteBYOCPoolLocalState(ctx, workspaceID, fresh, freshMachines, "cloud_resource_deleted")
+		return s.deleteBYOCPoolLocalState(lockCtx, workspaceID, fresh, freshMachines, "cloud_resource_deleted")
 	})
 	return deleted, err
 }
@@ -640,7 +640,7 @@ func (s *Service) deleteBYOCPoolLocalState(ctx context.Context, workspaceID stri
 		return err
 	}
 	if s.scheduler != nil {
-		s.scheduler.DeleteAgentPool(firstNonEmpty(state.Selector, state.Name))
+		s.scheduler.DeleteAgentPool(workspaceID, state)
 	}
 	event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolDeleted, status)
 	event.MachineCount = uint32(len(machines))
@@ -652,6 +652,9 @@ func (s *Service) deleteBYOCPoolLocalState(ctx context.Context, workspaceID stri
 func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.AuthInfo, provider byocProvider, req byocPoolRequest) (*model.PoolState, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	ownerTokenID := computeOwnerTokenID(authInfo)
+	if _, exists := s.appConfig.Worker.Pools[req.poolName]; exists {
+		return nil, fmt.Errorf("pool %q conflicts with a configured worker pool", req.poolName)
+	}
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, req.poolName)
 	if err != nil {
 		return nil, err
@@ -723,8 +726,8 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 		return nil, err
 	}
 	if s.scheduler != nil {
-		if err := s.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
-			return nil, err
+		if err := s.scheduler.EnsureAgentPool(workspaceID, state); err != nil {
+			return nil, s.rollbackPoolState(ctx, workspaceID, state.Name, existing, err)
 		}
 	}
 	return state, nil

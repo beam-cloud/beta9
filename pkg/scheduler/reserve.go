@@ -436,7 +436,7 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 	gpu := ""
 	gpuCount := s.workerGPUCountForControllerRequest(controller, request)
 	if request.RequiresGPU() {
-		if pool, ok := s.workerPoolManager.GetPool(controller.Name()); ok {
+		if pool, ok := s.poolForController(controller); ok {
 			gpu = pool.Config.GPUType
 		}
 	}
@@ -458,7 +458,7 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 		Preemptable:          controller.IsPreemptable(),
 	}
 
-	if pool, ok := s.workerPoolManager.GetPool(controller.Name()); ok {
+	if pool, ok := s.poolForController(controller); ok {
 		worker.Priority = pool.Config.Priority
 	}
 
@@ -550,7 +550,7 @@ func (s *Scheduler) workerPoolSizingForController(controller WorkerPoolControlle
 	if controller == nil {
 		return nil, false
 	}
-	pool, ok := s.workerPoolManager.GetPool(controller.Name())
+	pool, ok := s.poolForController(controller)
 	if !ok {
 		return nil, false
 	}

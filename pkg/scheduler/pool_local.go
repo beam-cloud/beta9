@@ -78,8 +78,8 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		ProviderRepo:     opts.ProviderRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
-		BackendRepo:      wpc.backendRepo,
 		EventRepo:        opts.EventRepo,
+		PushMetrics:      opts.PushPoolMetrics,
 	})
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")

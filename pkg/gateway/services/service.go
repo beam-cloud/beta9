@@ -19,6 +19,7 @@ type GatewayService struct {
 	ctx              context.Context
 	appConfig        types.AppConfig
 	backendRepo      repository.BackendRepository
+	workspaceRepo    repository.WorkspaceRepository
 	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
 	scheduler        *scheduler.Scheduler
@@ -40,6 +41,7 @@ type GatewayServiceOpts struct {
 	Ctx              context.Context
 	Config           types.AppConfig
 	BackendRepo      repository.BackendRepository
+	WorkspaceRepo    repository.WorkspaceRepository
 	ContainerRepo    repository.ContainerRepository
 	ProviderRepo     repository.ProviderRepository
 	Scheduler        *scheduler.Scheduler
@@ -67,6 +69,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		}
 		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
 	}
+	managedPoolRepo := repository.NewManagedPoolRedisRepository(opts.RedisClient)
 	computeService := opts.ComputeService
 	if computeService == nil {
 		computeService = computesvc.New(computesvc.Options{
@@ -79,6 +82,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 			WorkerPoolRepo:   opts.WorkerPoolRepo,
 			UsageMetricsRepo: opts.UsageMetricsRepo,
 			ComputeRepo:      computeRepo,
+			ManagedPoolRepo:  managedPoolRepo,
 			KeyEventManager:  keyEventManager,
 			RedisClient:      opts.RedisClient,
 			Tailscale:        opts.Tailscale,
@@ -90,6 +94,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		ctx:              opts.Ctx,
 		appConfig:        opts.Config,
 		backendRepo:      opts.BackendRepo,
+		workspaceRepo:    opts.WorkspaceRepo,
 		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
 		scheduler:        opts.Scheduler,

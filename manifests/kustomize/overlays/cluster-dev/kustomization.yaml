@@ -19,21 +19,7 @@ patches:
   patch: |-
     - op: remove
       path: /spec/template/spec/containers/0/resources
-# Remove resources from monitoring components
-- target:
-    kind: StatefulSet
-    name: elasticsearch-master
-  patch: |-
-    - op: remove
-      path: /spec/template/spec/containers/0/resources
-- target:
-    kind: Deployment
-    name: elasticsearch-kibana
-  patch: |-
-    - op: remove
-      path: /spec/template/spec/initContainers/0/resources
-    - op: remove
-      path: /spec/template/spec/containers/0/resources
+# Scale monitoring components for local development
 - target:
     kind: Deployment
     name: victoria-metrics-agent

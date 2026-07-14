@@ -47,6 +47,16 @@ func MarketplacePoolName(slug string) string {
 	return "marketplace-" + slug
 }
 
+// MarketplacePoolNameForSeller keeps shared pools stable within one seller
+// while making their worker/controller identity globally unambiguous.
+func MarketplacePoolNameForSeller(workspaceID, slug string) string {
+	name := MarketplacePoolName(slug)
+	if name == "" {
+		return ""
+	}
+	return name + "-" + shortComputeID("seller", workspaceID)
+}
+
 func AgentMachineWorkerID(machineID string) string {
 	return shortComputeID(machineID)
 }

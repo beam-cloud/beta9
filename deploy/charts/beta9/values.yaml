@@ -76,10 +76,10 @@ controllers:
     pod:
       # 180s gateway shutdownTimeout + 10s readiness propagation + 5s buffer.
       terminationGracePeriodSeconds: "195"
-    strategy: Recreate # Can be Recreate or RollingUpdate
+    strategy: RollingUpdate
     rollingUpdate:
-      unavailable:
-      surge:
+      unavailable: "0"
+      surge: 1
     initContainers:
       wait-on-backends:
         image:

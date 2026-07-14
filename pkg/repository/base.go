@@ -101,8 +101,7 @@ type WorkerPoolRepository interface {
 }
 
 type ComputeRepository interface {
-	LockPoolState(ctx context.Context, workspaceID, name string) error
-	UnlockPoolState(ctx context.Context, workspaceID, name string) error
+	WithPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error
 	SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error
 	GetPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error)
 	ListPoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error)
@@ -134,6 +133,18 @@ type ComputeRepository interface {
 	ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*compute.MarketplaceRentalState, error)
 	ListAllMarketplaceRentals(ctx context.Context) ([]*compute.MarketplaceRentalState, error)
 	DeleteMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
+}
+
+// ManagedPoolRepository keeps managed pool definitions separate from
+// tenant/private compute state. That boundary lets mixed gateway versions roll
+// safely: replicas that predate managed pools cannot enumerate or rewrite these
+// records through ComputeRepository.
+type ManagedPoolRepository interface {
+	WithManagedPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error
+	SaveManagedPoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error
+	GetManagedPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error)
+	ListManagedPoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error)
+	DeleteManagedPoolState(ctx context.Context, workspaceID, name string) error
 }
 
 type WorkspaceRepository interface {

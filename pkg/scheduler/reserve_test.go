@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/tj/assert"
@@ -192,6 +193,7 @@ func TestWorkerProvisioningBackoffDoesNotBlockExistingPoolCapacity(t *testing.T)
 func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
+	workspaceID := "workspace-private-fallback"
 
 	privateController := &capacityCheckingWorkerPoolControllerForTest{
 		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
@@ -203,7 +205,8 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 		},
 		hasCapacity: false,
 	}
-	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
+	state := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
+	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, state), "private-cpu", types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
 		RequiresPoolSelector: true,
 	}, privateController)
@@ -228,6 +231,7 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 
 	request := &types.ContainerRequest{
 		ContainerId:  uuid.New().String(),
+		WorkspaceId:  workspaceID,
 		Cpu:          1000,
 		Memory:       1000,
 		PoolSelector: "private-cpu",
@@ -250,6 +254,7 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
+	workspaceID := "workspace-private-durable"
 
 	privateController := &capacityCheckingWorkerPoolControllerForTest{
 		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
@@ -261,13 +266,15 @@ func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
 		},
 		hasCapacity: false,
 	}
-	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
+	state := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
+	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, state), "private-cpu", types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
 		RequiresPoolSelector: true,
 	}, privateController)
 
 	request := &types.ContainerRequest{
 		ContainerId:  uuid.New().String(),
+		WorkspaceId:  workspaceID,
 		Cpu:          1000,
 		Memory:       1000,
 		PoolSelector: "private-cpu",
@@ -290,6 +297,7 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	workspaceID := "workspace-private-no-capacity"
 
 	started := make(chan struct{}, 1)
 	privateController := &capacityCheckingWorkerPoolControllerForTest{
@@ -304,13 +312,15 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 		},
 		hasCapacity: false,
 	}
-	scheduler.workerPoolManager.SetPool("private-cpu", types.WorkerPoolConfig{
+	state := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
+	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, state), "private-cpu", types.WorkerPoolConfig{
 		Mode:                 types.PoolModePrivate,
 		RequiresPoolSelector: true,
 	}, privateController)
 
 	request := &types.ContainerRequest{
 		ContainerId:  uuid.New().String(),
+		WorkspaceId:  workspaceID,
 		Cpu:          1000,
 		Memory:       1000,
 		PoolSelector: "private-cpu",

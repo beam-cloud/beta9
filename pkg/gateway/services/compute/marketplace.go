@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,13 +54,10 @@ func (s *Service) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMar
 	}
 	now := time.Now().UTC()
 	listing.ID = model.MarketplaceListingID(authCtx.workspaceID, listing.DisplayName)
-	listing.PoolName = model.MarketplacePoolName(firstNonEmpty(in.GetPoolName(), listing.GPU))
+	listing.PoolName = model.MarketplacePoolNameForSeller(authCtx.workspaceID, firstNonEmpty(in.GetPoolName(), listing.GPU))
 	listing.CreatedAt = now
 	listing.UpdatedAt = now
-	if err := s.validateMarketplacePoolAssignment(ctx, listing); err != nil {
-		return &pb.CreateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID); err != nil {
+	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID, nil); err != nil {
 		return &pb.CreateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return &pb.CreateMarketplaceListingResponse{Ok: true, Listing: s.marketplaceListingToProto(ctx, listing)}, nil
@@ -75,15 +73,13 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
 
+	previous := *listing
+	updated := previous
+	listing = &updated
 	if err := applyMarketplaceListingUpdate(listing, in); err != nil {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	// Updates can change the GPU type, so shared-pool invariants must hold
-	// here just as on create.
-	if err := s.validateMarketplacePoolAssignment(ctx, listing); err != nil {
-		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID); err != nil {
+	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID, &previous); err != nil {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return &pb.UpdateMarketplaceListingResponse{Ok: true, Listing: s.marketplaceListingToProto(ctx, listing)}, nil
@@ -104,26 +100,36 @@ func (s *Service) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMar
 	if listing == nil {
 		return &pb.DeleteMarketplaceListingResponse{Ok: true}, nil
 	}
-	// A pool can back several listings (shared machine caches); only tear it
-	// down with the last listing that references it.
-	others, err := s.otherListingsSharingPool(ctx, listing)
+	err = s.withPoolStateLock(ctx, authCtx.workspaceID, listing.PoolName, func(lockCtx context.Context) error {
+		current, err := s.computeRepo.GetMarketplaceListing(lockCtx, authCtx.workspaceID, listing.ID)
+		if err != nil || current == nil {
+			return err
+		}
+		others, err := s.otherListingsSharingPool(lockCtx, current)
+		if err != nil {
+			return err
+		}
+		if len(others) == 0 {
+			state, err := s.getPrivatePoolState(lockCtx, authCtx.workspaceID, current.PoolName)
+			if err != nil {
+				return err
+			}
+			if state != nil {
+				if err := s.releasePrivatePoolMachinesLocked(lockCtx, authCtx.workspaceID, state); err != nil {
+					return err
+				}
+				if err := s.deletePrivatePoolState(lockCtx, authCtx.workspaceID, state.Name); err != nil {
+					return err
+				}
+				if s.scheduler != nil {
+					s.scheduler.DeleteAgentPool(authCtx.workspaceID, state)
+				}
+			}
+		}
+		return s.computeRepo.DeleteMarketplaceListing(lockCtx, authCtx.workspaceID, current.ID)
+	})
 	if err != nil {
 		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	poolShared := len(others) > 0
-	if !poolShared {
-		if err := s.releasePrivatePoolMachines(ctx, authCtx.workspaceID, listing.PoolName); err != nil {
-			return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
-		if err := s.deletePrivatePoolState(ctx, authCtx.workspaceID, listing.PoolName); err != nil {
-			return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
-	}
-	if err := s.computeRepo.DeleteMarketplaceListing(ctx, authCtx.workspaceID, listing.ID); err != nil {
-		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if !poolShared && s.scheduler != nil {
-		s.scheduler.DeleteAgentPool(listing.PoolName)
 	}
 	return &pb.DeleteMarketplaceListingResponse{Ok: true}, nil
 }
@@ -435,7 +441,7 @@ func validateMarketplaceListing(listing *model.MarketplaceListingState) error {
 		return fmt.Errorf("unsupported listing status")
 	}
 	if listing.PoolName == "" && listing.ID != "" {
-		listing.PoolName = model.MarketplacePoolName(firstNonEmpty(listing.GPU, listing.ID))
+		listing.PoolName = model.MarketplacePoolNameForSeller(listing.SellerWorkspaceID, firstNonEmpty(listing.GPU, listing.ID))
 	}
 	return nil
 }
@@ -444,20 +450,40 @@ func normalizeMarketplaceGPU(value string) string {
 	return string(types.NormalizeGPUType(strings.TrimSpace(value)))
 }
 
-func (s *Service) saveMarketplaceListing(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string) error {
+func (s *Service) saveMarketplaceListing(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string, previous *model.MarketplaceListingState) error {
 	if err := validateMarketplaceListing(listing); err != nil {
 		return err
 	}
-	if err := s.computeRepo.SaveMarketplaceListing(ctx, listing); err != nil {
-		return err
-	}
-	return s.ensureMarketplacePoolState(ctx, listing, ownerTokenID)
+	return s.withPoolStateLock(ctx, listing.SellerWorkspaceID, listing.PoolName, func(lockCtx context.Context) error {
+		if err := s.validateMarketplacePoolAssignment(lockCtx, listing); err != nil {
+			return err
+		}
+		if err := s.computeRepo.SaveMarketplaceListing(lockCtx, listing); err != nil {
+			return err
+		}
+		if err := s.ensureMarketplacePoolStateLocked(lockCtx, listing, ownerTokenID); err != nil {
+			var rollbackErr error
+			if previous == nil {
+				rollbackErr = s.computeRepo.DeleteMarketplaceListing(lockCtx, listing.SellerWorkspaceID, listing.ID)
+			} else {
+				rollbackErr = s.computeRepo.SaveMarketplaceListing(lockCtx, previous)
+			}
+			return errors.Join(err, rollbackErr)
+		}
+		return nil
+	})
 }
 
 func (s *Service) ensureMarketplacePoolState(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string) error {
 	if listing == nil || listing.PoolName == "" {
 		return fmt.Errorf("listing pool name is required")
 	}
+	return s.withPoolStateLock(ctx, listing.SellerWorkspaceID, listing.PoolName, func(lockCtx context.Context) error {
+		return s.ensureMarketplacePoolStateLocked(lockCtx, listing, ownerTokenID)
+	})
+}
+
+func (s *Service) ensureMarketplacePoolStateLocked(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string) error {
 	now := time.Now().UTC()
 	existing, err := s.computeRepo.GetPoolState(ctx, listing.SellerWorkspaceID, listing.PoolName)
 	if err != nil {
@@ -479,7 +505,9 @@ func (s *Service) ensureMarketplacePoolState(ctx context.Context, listing *model
 		return err
 	}
 	if s.scheduler != nil {
-		return s.scheduler.RegisterAgentPool(listing.SellerWorkspaceID, state)
+		if err := s.scheduler.EnsureAgentPool(listing.SellerWorkspaceID, state); err != nil {
+			return s.rollbackPoolState(ctx, listing.SellerWorkspaceID, state.Name, existing, err)
+		}
 	}
 	return nil
 }

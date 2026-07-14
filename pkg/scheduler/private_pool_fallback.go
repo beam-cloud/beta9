@@ -129,8 +129,8 @@ func (a *schedulingAttempt) selectedPrivatePool() (*WorkerPool, bool) {
 		return nil, false
 	}
 
-	pool, ok := a.scheduler.workerPoolManager.GetPool(a.request.PoolSelector)
-	if !ok || pool.Config.Mode != types.PoolModePrivate {
+	pool, ok := a.scheduler.privateAgentPool(a.request.WorkspaceId, a.request.PoolSelector)
+	if !ok {
 		return nil, false
 	}
 	return pool, true

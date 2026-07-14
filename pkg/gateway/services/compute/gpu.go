@@ -35,6 +35,9 @@ func (s *Service) enforcePoolGPUType(ctx context.Context, pool *model.PoolState,
 
 	poolGPU := configuredPoolGPU(pool)
 	if poolGPU == "" {
+		if pool.ManagementSource != "" {
+			return nil
+		}
 		return s.lockUnsetPoolGPU(ctx, pool, agent.WorkspaceID, machineGPU)
 	}
 

@@ -103,11 +103,8 @@ func (wr *WorkspaceRedisRepository) SetAuthorizationToken(token *types.Token, wo
 		return err
 	}
 
-	tokenKey := common.RedisKeys.WorkspaceAuthorizedToken(token.Key)
-	err = wr.rdb.Set(context.Background(), tokenKey, bytes, time.Duration(cachedTokenTTLS)*time.Second).Err()
-	if err != nil {
+	if err := wr.rdb.Set(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(token.Key), bytes, time.Duration(cachedTokenTTLS)*time.Second).Err(); err != nil {
 		return err
 	}
-
 	return nil
 }

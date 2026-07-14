@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -20,8 +21,8 @@ type PoolHealthMonitorOptions struct {
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ProviderRepo     repository.ProviderRepository
 	ContainerRepo    repository.ContainerRepository
-	BackendRepo      repository.BackendRepository
 	EventRepo        repository.EventRepository
+	PushMetrics      func(types.EventComputeSchema)
 }
 
 type PoolHealthMonitor struct {
@@ -33,9 +34,8 @@ type PoolHealthMonitor struct {
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
-	backendRepo      repository.BackendRepository
 	eventRepo        repository.EventRepository
-	workspaceID      string
+	pushMetrics      func(types.EventComputeSchema)
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
@@ -48,8 +48,8 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
-		backendRepo:      opts.BackendRepo,
 		eventRepo:        opts.EventRepo,
+		pushMetrics:      opts.PushMetrics,
 	}
 }
 
@@ -85,7 +85,9 @@ func (p *PoolHealthMonitor) Start() {
 					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to set pool state")
 					return
 				}
-				p.pushPoolMetrics(poolMetricsEvent(p.wpc.Name(), p.workerPoolConfig, poolState, workers))
+				if p.pushMetrics != nil {
+					p.pushMetrics(poolMetricsEvent(p.wpc.Name(), p.workerPoolConfig, poolState, workers))
+				}
 			}()
 		}
 	}
@@ -267,20 +269,36 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 	}
 }
 
-func (p *PoolHealthMonitor) pushPoolMetrics(event types.EventComputeSchema) {
-	if p.eventRepo == nil || p.backendRepo == nil {
-		return
+func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRepository, eventRepo repository.EventRepository) func(types.EventComputeSchema) {
+	if backendRepo == nil || eventRepo == nil {
+		return func(types.EventComputeSchema) {}
 	}
-	if p.workspaceID == "" {
-		workspace, err := p.backendRepo.GetAdminWorkspace(p.ctx)
-		if err != nil || workspace == nil || workspace.ExternalId == "" {
-			return
+	var mu sync.Mutex
+	var workspaceID string
+	var nextLookup time.Time
+
+	return func(event types.EventComputeSchema) {
+		now := time.Now().UTC()
+		mu.Lock()
+		if workspaceID == "" {
+			if now.Before(nextLookup) {
+				mu.Unlock()
+				return
+			}
+			nextLookup = now.Add(5 * time.Second)
+			workspace, err := backendRepo.GetAdminWorkspace(ctx)
+			if err != nil || workspace == nil || workspace.ExternalId == "" {
+				mu.Unlock()
+				return
+			}
+			workspaceID = workspace.ExternalId
 		}
-		p.workspaceID = workspace.ExternalId
+		event.WorkspaceID = workspaceID
+		mu.Unlock()
+
+		event.Timestamp = now
+		eventRepo.PushComputeEvent(types.EventComputePool, event)
 	}
-	event.Timestamp = time.Now().UTC()
-	event.WorkspaceID = p.workspaceID
-	p.eventRepo.PushComputeEvent(types.EventComputePool, event)
 }
 
 // updatePoolStatus updates the status of the pool based on the current state

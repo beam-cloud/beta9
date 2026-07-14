@@ -111,7 +111,11 @@ func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
 
 // SetPool adds or updates a WorkerPool in the manager.
 func (m *WorkerPoolManager) SetPool(name string, config types.WorkerPoolConfig, controller WorkerPoolController) {
-	m.poolMap.Set(name, &WorkerPool{Name: name, Config: config, Controller: controller})
+	m.SetPoolAt(name, name, config, controller)
+}
+
+func (m *WorkerPoolManager) SetPoolAt(key, name string, config types.WorkerPoolConfig, controller WorkerPoolController) {
+	m.poolMap.Set(key, &WorkerPool{Name: name, Config: config, Controller: controller})
 }
 
 func (m *WorkerPoolManager) DeletePool(name string) {

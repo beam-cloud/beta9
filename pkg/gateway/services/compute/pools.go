@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -92,46 +93,62 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	config.Gpu = pool.GPUs
+	for _, name := range []string{config.Name, config.Selector} {
+		if _, exists := s.appConfig.Worker.Pools[name]; exists {
+			return &pb.CreatePoolResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q conflicts with a configured worker pool", name)}, nil
+		}
+	}
 
-	existing, err := s.getPrivatePoolState(ctx, workspaceID, config.Name)
+	var state *model.PoolState
+	err = s.withPoolStateLock(ctx, workspaceID, config.Name, func(lockCtx context.Context) error {
+		existing, err := s.getPrivatePoolState(lockCtx, workspaceID, config.Name)
+		if err != nil {
+			return err
+		}
+		if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
+			return fmt.Errorf("pool already exists in this workspace")
+		}
+
+		now := time.Now()
+		state = &model.PoolState{
+			Name:             config.Name,
+			Selector:         config.Selector,
+			Config:           config,
+			Status:           types.ComputePoolStatusActive,
+			Source:           model.SourceAttached,
+			Mode:             config.Mode,
+			Transport:        config.Transport,
+			Fallback:         config.Fallback,
+			Priority:         config.Priority,
+			CreatedByTokenID: ownerTokenID,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		if existing != nil {
+			state.Reservations = existing.Reservations
+			state.ReservedNodes = existing.ReservedNodes
+			state.CommittedSpendMicros = existing.CommittedSpendMicros
+			state.Source = existing.Source
+			state.CreatedByTokenID = existing.CreatedByTokenID
+			state.CreatedAt = existing.CreatedAt
+			state.ExpiresAt = existing.ExpiresAt
+		}
+		if err := s.savePrivatePoolState(lockCtx, workspaceID, state); err != nil {
+			return err
+		}
+		if s.scheduler == nil {
+			return nil
+		}
+		if err := s.scheduler.EnsureAgentPool(workspaceID, state); err != nil {
+			return s.rollbackPoolState(lockCtx, workspaceID, state.Name, existing, err)
+		}
+		if existing != nil && firstNonEmpty(existing.Selector, existing.Name) != firstNonEmpty(state.Selector, state.Name) {
+			s.scheduler.DeleteAgentPool(workspaceID, existing)
+		}
+		return nil
+	})
 	if err != nil {
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
-		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "pool already exists in this workspace"}, nil
-	}
-
-	now := time.Now()
-	state := &model.PoolState{
-		Name:             config.Name,
-		Selector:         config.Selector,
-		Config:           config,
-		Status:           types.ComputePoolStatusActive,
-		Source:           model.SourceAttached,
-		Mode:             config.Mode,
-		Transport:        config.Transport,
-		Fallback:         config.Fallback,
-		Priority:         config.Priority,
-		CreatedByTokenID: ownerTokenID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-	}
-	if existing != nil {
-		state.Reservations = existing.Reservations
-		state.ReservedNodes = existing.ReservedNodes
-		state.CommittedSpendMicros = existing.CommittedSpendMicros
-		state.Source = existing.Source
-		state.CreatedByTokenID = existing.CreatedByTokenID
-		state.CreatedAt = existing.CreatedAt
-		state.ExpiresAt = existing.ExpiresAt
-	}
-	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
-		return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if s.scheduler != nil {
-		if err := s.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
-			return &pb.CreatePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreated, ""))
 	return &pb.CreatePoolResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
@@ -143,49 +160,66 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 	if workspaceID == "" {
 		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, in.Name)
+	var state *model.PoolState
+	err := s.withPoolStateLock(ctx, workspaceID, in.Name, func(lockCtx context.Context) error {
+		var err error
+		state, err = s.getOwnedPrivatePoolState(lockCtx, authInfo, in.Name)
+		if err != nil || state == nil {
+			return err
+		}
+		if err := s.releasePrivatePoolMachinesLocked(lockCtx, workspaceID, state); err != nil {
+			return err
+		}
+		if err := s.revokeBYOCBootstrapJoinTokens(lockCtx, state); err != nil {
+			return err
+		}
+
+		vendors := s.computeVendors()
+		for _, reservation := range state.Reservations {
+			if reservation.Source.IsAttached() || reservation.Source == model.SourceAutosolver {
+				continue
+			}
+			if vendor := vendors[reservation.Provider]; vendor != nil {
+				_ = vendor.DeleteReservation(lockCtx, computeReservationInstanceID(reservation))
+			}
+		}
+		if err := s.deletePrivatePoolState(lockCtx, workspaceID, in.Name); err != nil {
+			return err
+		}
+		if s.scheduler != nil {
+			s.scheduler.DeleteAgentPool(workspaceID, state)
+		}
+		return nil
+	})
 	if err != nil {
 		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if state == nil {
 		return &pb.DeletePoolResponse{Ok: true}, nil
 	}
-
-	if err := s.releasePrivatePoolMachines(ctx, workspaceID, state.Name); err != nil {
-		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if err := s.revokeBYOCBootstrapJoinTokens(ctx, state); err != nil {
-		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-
-	vendors := s.computeVendors()
-	for _, reservation := range state.Reservations {
-		if reservation.Source.IsAttached() || reservation.Source == model.SourceAutosolver {
-			continue
-		}
-		vendor := vendors[reservation.Provider]
-		if vendor == nil {
-			continue
-		}
-		_ = vendor.DeleteReservation(ctx, computeReservationInstanceID(reservation))
-	}
-
-	if err := s.deletePrivatePoolState(ctx, workspaceID, in.Name); err != nil {
-		return &pb.DeletePoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if s.scheduler != nil {
-		s.scheduler.DeleteAgentPool(firstNonEmpty(state.Selector, state.Name))
-	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolDeleted, "deleted"))
 	return &pb.DeletePoolResponse{Ok: true}, nil
 }
 
-func (s *Service) releasePrivatePoolMachines(ctx context.Context, workspaceID, poolName string) error {
-	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, poolName)
+func (s *Service) releasePrivatePoolMachinesLocked(ctx context.Context, workspaceID string, state *model.PoolState) error {
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
 	if err != nil {
 		return err
 	}
 	for _, machine := range machines {
+		if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil &&
+			!byocReleaseErrorAllowsLocalReconcile(err) && !errors.Is(err, errBYOCDirectScaleUnavailable) {
+			return err
+		}
+		reservation, err := managedReservationForMachineRelease(state, machine.MachineID)
+		if err != nil {
+			return err
+		}
+		if reservation != nil {
+			if err := s.releaseManagedReservation(ctx, workspaceID, state, reservation); err != nil {
+				return err
+			}
+		}
 		if err := s.removePrivateMachine(ctx, machine); err != nil {
 			return err
 		}
@@ -201,8 +235,8 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 	}
 
 	var response *pb.ExtendPoolCapacityResponse
-	lockErr := s.withPoolStateLock(ctx, workspaceID, in.Name, func() error {
-		state, err := s.getOwnedPrivatePoolState(ctx, authInfo, in.Name)
+	lockErr := s.withPoolStateLock(ctx, workspaceID, in.Name, func(lockCtx context.Context) error {
+		state, err := s.getOwnedPrivatePoolState(lockCtx, authInfo, in.Name)
 		if err != nil {
 			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -219,13 +253,13 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 				return nil
 			}
 			state.ExpiresAt = time.Now().Add(ttl)
-			s.extendManagedReservations(ctx, state, state.ExpiresAt)
+			s.extendManagedReservations(lockCtx, state, state.ExpiresAt)
 		}
 		if in.MaxSpend > 0 {
 			state.Config.MaxSpend = in.MaxSpend
 		}
 		state.UpdatedAt = time.Now()
-		if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		if err := s.savePrivatePoolState(lockCtx, workspaceID, state); err != nil {
 			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
 		}
@@ -440,8 +474,8 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 
 	found := false
 	machineID := ""
-	err := s.withPoolStateLock(ctx, workspaceID, poolName, func() error {
-		state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	err := s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
+		state, err := s.getOwnedPrivatePoolState(lockCtx, authInfo, poolName)
 		if err != nil || state == nil {
 			return err
 		}
@@ -457,9 +491,9 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 			now := time.Now().UTC()
 			state.ReservedNodes = activeReservationNodes(state.Reservations, now)
 			state.UpdatedAt = now
-			return s.savePrivatePoolState(ctx, workspaceID, state)
+			return s.savePrivatePoolState(lockCtx, workspaceID, state)
 		}
-		return s.releaseManagedReservation(ctx, workspaceID, state, reservation)
+		return s.releaseManagedReservation(lockCtx, workspaceID, state, reservation)
 	})
 	if err != nil || !found {
 		return found, err

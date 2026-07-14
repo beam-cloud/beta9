@@ -143,6 +143,7 @@ type AgentTokenState struct {
 	Mode                      string                `json:"mode,omitempty"`
 	MarketplaceListingID      string                `json:"marketplace_listing_id,omitempty"`
 	SellerWorkspaceID         string                `json:"seller_workspace_id,omitempty"`
+	ManagedPoolInstanceID     string                `json:"managed_pool_instance_id,omitempty"`
 	MachineID                 string                `json:"machine_id"`
 	MachineFingerprint        string                `json:"machine_fingerprint"`
 	Hostname                  string                `json:"hostname"`

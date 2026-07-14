@@ -11874,7 +11874,7 @@ type CreateMachineResponse struct {
 	AgentUpstreamUrl    string   `protobuf:"bytes,4,opt,name=agent_upstream_url,json=agentUpstreamUrl,proto3" json:"agent_upstream_url,omitempty"`
 	AgentUpstreamBranch string   `protobuf:"bytes,5,opt,name=agent_upstream_branch,json=agentUpstreamBranch,proto3" json:"agent_upstream_branch,omitempty"`
 	AgentUpstreamToken  string   `protobuf:"bytes,6,opt,name=agent_upstream_token,json=agentUpstreamToken,proto3" json:"agent_upstream_token,omitempty"`
-	// Agent-backed platform pools return the systemd installer here. The join
+	// Agent-backed managed pools return the systemd installer here. The join
 	// token embedded in the command is short-lived and machine-bound.
 	InstallCommand string `protobuf:"bytes,7,opt,name=install_command,json=installCommand,proto3" json:"install_command,omitempty"`
 }

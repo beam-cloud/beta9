@@ -9,12 +9,15 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/component: gateway
       app.kubernetes.io/name: beta9
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels:
@@ -51,6 +54,7 @@ spec:
           timeoutSeconds: 1
           grpc:
             port: 1993
+            service: readiness
         livenessProbe:
           initialDelaySeconds: 10
           successThreshold: 1
@@ -59,6 +63,14 @@ spec:
           timeoutSeconds: 1
           grpc:
             port: 1993
+            service: liveness
+        startupProbe:
+          periodSeconds: 3
+          timeoutSeconds: 1
+          failureThreshold: 100
+          grpc:
+            port: 1993
+            service: liveness
         resources:
           limits:
             cpu: 4000m

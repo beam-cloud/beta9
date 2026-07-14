@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/redislock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func NewRedisClientForTest() (*RedisClient, error) {
@@ -97,6 +98,93 @@ func TestRedisLockWithTTLAndRetry(t *testing.T) {
 	// Get the result from the channel and check it
 	err = <-resultCh
 	assert.NoError(t, err)
+}
+
+func TestRedisLockWithLease(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	key := "test_lease"
+	opts := RedisLockOptions{TtlS: 1}
+	first, second := NewRedisLock(rdb), NewRedisLock(rdb)
+	entered, release := make(chan struct{}), make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- first.WithLease(ctx, key, opts, func(ctx context.Context) error {
+			close(entered)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("lease callback did not start")
+	}
+	server.FastForward(900 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return server.TTL(key) > 500*time.Millisecond
+	}, time.Second, 10*time.Millisecond, "lease was not refreshed")
+	server.FastForward(200 * time.Millisecond)
+
+	secondRan := false
+	err = second.WithLease(ctx, key, opts, func(context.Context) error {
+		secondRan = true
+		return nil
+	})
+	require.ErrorIs(t, err, redislock.ErrNotObtained)
+	require.False(t, secondRan)
+
+	close(release)
+	select {
+	case err = <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("lease callback did not finish")
+	}
+	require.NoError(t, second.WithLease(ctx, key, opts, func(context.Context) error { return nil }))
+}
+
+func TestRedisLockWithLeaseCancellationReleases(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	key := "test_canceled_lease"
+	opts := RedisLockOptions{TtlS: 1}
+	entered, result := make(chan struct{}), make(chan error, 1)
+	go func() {
+		result <- NewRedisLock(rdb).WithLease(ctx, key, opts, func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("lease callback did not start")
+	}
+	cancel()
+	select {
+	case err = <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled lease did not finish")
+	}
+	require.NoError(t, NewRedisLock(rdb).WithLease(context.Background(), key, opts, func(context.Context) error { return nil }))
 }
 
 func TestCopyStruct(t *testing.T) {

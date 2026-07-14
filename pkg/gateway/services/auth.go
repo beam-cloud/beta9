@@ -44,6 +44,12 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 			ErrorMsg: "Failed to create new token",
 		}, nil
 	}
+	if gws.workspaceRepo == nil || gws.workspaceRepo.SetAuthorizationToken(&token, &workspace) != nil {
+		return &pb.AuthorizeResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to cache admin workspace",
+		}, nil
+	}
 
 	// Also create a workspace primary token
 	_, err = gws.backendRepo.CreateToken(ctx, workspace.Id, types.TokenTypeWorkspacePrimary, true)

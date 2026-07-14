@@ -111,8 +111,8 @@ func NewLegacyExternalWorkerPoolController(opts WorkerPoolControllerOptions) (Wo
 		ProviderRepo:     wpc.providerRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
-		BackendRepo:      wpc.backendRepo,
 		EventRepo:        wpc.eventRepo,
+		PushMetrics:      opts.PushPoolMetrics,
 	})
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
