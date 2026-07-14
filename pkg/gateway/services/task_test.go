@@ -90,6 +90,24 @@ func TestStartTaskReleasesClaimAfterFailedUpdate(t *testing.T) {
 	require.False(t, claimed)
 }
 
+func TestStartTaskReleasesClaimWhenUpdateCancelsRequest(t *testing.T) {
+	gws, taskRepo := newTaskLifecycleGateway(t, "workspace-id")
+	ctx, cancel := context.WithCancel(restrictedTaskLifecycleContext("workspace-id"))
+	gws.backendRepo.(*taskLifecycleBackendRepo).update = cancel
+	gws.backendRepo.(*taskLifecycleBackendRepo).err = context.Canceled
+
+	resp, err := gws.StartTask(ctx, &pb.StartTaskRequest{
+		TaskId:      "task-id",
+		ContainerId: "container-id",
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	claimed, err := taskRepo.IsClaimed(context.Background(), "workspace", "stub-id", "task-id")
+	require.NoError(t, err)
+	require.False(t, claimed)
+}
+
 func TestStartTaskAllowsRestrictedRuntimeToken(t *testing.T) {
 	gws, taskRepo := newTaskLifecycleGateway(t, "workspace-id")
 	ctx := restrictedTaskLifecycleContext("workspace-id")

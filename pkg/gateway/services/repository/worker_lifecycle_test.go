@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -35,6 +36,15 @@ type lifecycleEventRepo struct {
 	events []types.EventContainerLifecycleSchema
 }
 
+type lifecycleComputeRepo struct {
+	repository.ComputeRepository
+	slots []*compute.AgentWorkerSlotState
+}
+
+func (r *lifecycleComputeRepo) ListAgentWorkerSlotStates(context.Context, string, string, string) ([]*compute.AgentWorkerSlotState, error) {
+	return r.slots, nil
+}
+
 func (r *lifecycleEventRepo) PushContainerLifecycleEvent(event types.EventContainerLifecycleSchema) {
 	r.events = append(r.events, event)
 }
@@ -49,8 +59,11 @@ func TestPushContainerLifecycleEventsUsesAuthoritativeIdentity(t *testing.T) {
 	events := &lifecycleEventRepo{}
 	service := &WorkerRepositoryService{
 		containerRepo: &lifecycleContainerRepo{state: state},
-		workerRepo:    &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", MachineId: "machine-1"}},
-		eventRepo:     events,
+		workerRepo:    &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
+		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
+			WorkerID: "worker-1", WorkerTokenID: "token-1",
+		}}},
+		eventRepo: events,
 	}
 	data, err := json.Marshal(types.EventContainerLifecycleSchema{
 		ID:          types.ContainerLifecycleImageLoad,
@@ -83,7 +96,35 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
 			WorkerId:    "worker-1",
 		}},
 		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1"}},
-		eventRepo:  &lifecycleEventRepo{},
+		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
+			WorkerID: "worker-1", WorkerTokenID: "token-1",
+		}}},
+		eventRepo: &lifecycleEventRepo{},
+	}
+	data, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-1"})
+	require.NoError(t, err)
+
+	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
+		WorkerId: "worker-1",
+		Events:   [][]byte{data},
+	})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, errWorkerLifecycleUnauthorized.Error(), response.ErrorMsg)
+}
+
+func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {
+	service := &WorkerRepositoryService{
+		containerRepo: &lifecycleContainerRepo{state: &types.ContainerState{
+			ContainerId: "container-1",
+			WorkspaceId: "workspace-1",
+			WorkerId:    "worker-1",
+		}},
+		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
+		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
+			WorkerID: "worker-1", WorkerTokenID: "token-2",
+		}}},
+		eventRepo: &lifecycleEventRepo{},
 	}
 	data, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-1"})
 	require.NoError(t, err)
@@ -99,7 +140,7 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
 
 func workerLifecycleContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate},
+		Token: &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorkerPrivate},
 		Workspace: &types.Workspace{
 			ExternalId: workspaceID,
 		},

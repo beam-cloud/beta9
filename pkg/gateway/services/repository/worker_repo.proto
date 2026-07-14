@@ -89,6 +89,7 @@ message GetNextContainerRequestResponse {
   bool ok = 1;
   types.ContainerRequest container_request = 2;
   string error_msg = 3;
+  string delivery_token = 4;
 }
 
 message StreamWorkerEventsRequest {
@@ -139,6 +140,7 @@ message AddContainerToWorkerRequest {
   string container_id = 2;
   string pool_name = 3;
   string pod_hostname = 4;
+  string delivery_token = 5;
 }
 
 message AddContainerToWorkerResponse {

@@ -252,7 +252,10 @@ async def invoke_function(
         callback_url = kwargs.pop("callback_url", None)
 
         if ready_path := os.getenv("BETA9_RUNNER_READY_PATH"):
-            Path(ready_path).touch()
+            try:
+                Path(ready_path).touch()
+            except OSError as exc:
+                print(f"Unable to signal runner readiness: {exc}")
 
         if handler.is_async:
             result = await handler.__acall__(

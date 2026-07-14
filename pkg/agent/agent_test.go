@@ -818,8 +818,12 @@ func assertGVisorRuntimeConfig(t *testing.T, config map[string]any, slot *pb.Age
 	if got := config["gvisorRoot"]; got != slot.GvisorRoot {
 		t.Fatalf("gVisor root = %v, want %q", got, slot.GvisorRoot)
 	}
-	if got := config["gvisorExtraArgs"]; !reflect.DeepEqual(got, []any{"--overlay2=none", "--file-access=exclusive"}) {
-		t.Fatalf("gVisor extra args = %#v", got)
+	wantExtraArgs := make([]any, len(slot.GvisorExtraArgs))
+	for i, arg := range slot.GvisorExtraArgs {
+		wantExtraArgs[i] = arg
+	}
+	if got := config["gvisorExtraArgs"]; !reflect.DeepEqual(got, wantExtraArgs) {
+		t.Fatalf("gVisor extra args = %#v, want %#v", got, wantExtraArgs)
 	}
 }
 

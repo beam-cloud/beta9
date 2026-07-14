@@ -25,6 +25,9 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	if err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
+	if err := s.authorizeWorkerLifecycleWorker(ctx, req.WorkerId, worker); err != nil {
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+	}
 	states := make(map[string]*types.ContainerState)
 	events := make([]types.EventContainerLifecycleSchema, 0, len(req.Events))
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -64,6 +67,30 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	}
 
 	return &pb.PushContainerLifecycleEventsResponse{Ok: true}, nil
+}
+
+func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Context, workerID string, worker *types.Worker) error {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if worker == nil || worker.Id != workerID {
+		return errWorkerLifecycleUnauthorized
+	}
+	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
+		return nil
+	}
+	if s.computeRepo == nil || authInfo.Workspace == nil {
+		return errWorkerLifecycleUnauthorized
+	}
+
+	slots, err := s.computeRepo.ListAgentWorkerSlotStates(ctx, authInfo.Workspace.ExternalId, worker.PoolName, worker.MachineId)
+	if err != nil {
+		return err
+	}
+	for _, slot := range slots {
+		if slot != nil && slot.WorkerID == worker.Id && slot.WorkerTokenID == authInfo.Token.ExternalId {
+			return nil
+		}
+	}
+	return errWorkerLifecycleUnauthorized
 }
 
 func authorizeWorkerLifecycle(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) error {

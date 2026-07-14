@@ -29,6 +29,20 @@ func (c *cleanupContextWorkerRepoClient) MoveContainerIp(ctx context.Context, in
 	return &pb.MoveContainerIpResponse{Ok: true}, nil
 }
 
+type networkIPWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	loads atomic.Int32
+}
+
+func (c *networkIPWorkerRepoClient) GetContainerIps(context.Context, *pb.GetContainerIpsRequest, ...grpc.CallOption) (*pb.GetContainerIpsResponse, error) {
+	c.loads.Add(1)
+	return &pb.GetContainerIpsResponse{Ok: true}, nil
+}
+
+func (c *networkIPWorkerRepoClient) SetContainerIp(context.Context, *pb.SetContainerIpRequest, ...grpc.CallOption) (*pb.SetContainerIpResponse, error) {
+	return &pb.SetContainerIpResponse{Ok: true}, nil
+}
+
 func TestGetIPFromEnv(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -439,6 +453,31 @@ func TestContainerNetworkSlotPoolSizeEnvOverride(t *testing.T) {
 
 	if got := containerNetworkSlotPoolSizeForPool(types.WorkerPoolConfig{}, 128); got != 256 {
 		t.Fatalf("expected env override slot pool, got %d", got)
+	}
+}
+
+func TestNetworkSlotReservationsLoadAllocatedIPsOnce(t *testing.T) {
+	repo := &networkIPWorkerRepoClient{}
+	manager := &ContainerNetworkManager{
+		ctx:              context.Background(),
+		workerRepoClient: repo,
+		allocatedIPs:     map[string]struct{}{},
+		containerIPs:     map[string]string{},
+	}
+
+	first, err := manager.reserveNetworkSlotIP("slot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.reserveNetworkSlotIP("slot-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.IP.Equal(second.IP) {
+		t.Fatalf("slot reservations reused %s", first.IP)
+	}
+	if loads := repo.loads.Load(); loads != 1 {
+		t.Fatalf("expected one allocated IP load, got %d", loads)
 	}
 }
 

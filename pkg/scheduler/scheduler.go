@@ -610,10 +610,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	workerRequest, err := s.prepareWorkerRequest(worker, request)
-	if err != nil {
-		return err
-	}
+	workerRequest := s.prepareWorkerRequest(worker, request)
 	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{request}, []*types.ContainerRequest{workerRequest}); err != nil {
 		return err
 	}
@@ -622,7 +619,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	return nil
 }
 
-func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) (*types.ContainerRequest, error) {
+func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	normalizeGPURequest(request)
 	request.Gpu = worker.Gpu
 
@@ -631,7 +628,7 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 
 	workerRequest := s.workerRequest(worker, request)
 	workerRequest.Timestamp = time.Now()
-	return workerRequest, nil
+	return workerRequest
 }
 
 func (s *Scheduler) pushWorkerRequests(worker *types.Worker, originalRequests, workerRequests []*types.ContainerRequest) error {

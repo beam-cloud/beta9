@@ -258,7 +258,7 @@ func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) er
 	}
 
 	// Remove task claim so other replicas of Dispatcher don't try to retry the same task
-	err = d.taskRepo.RemoveTaskClaim(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	err = d.Release(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	if err != nil {
 		log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher failed to remove task claim")
 		return err

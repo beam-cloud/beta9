@@ -167,6 +167,11 @@ func TestSetupBuildahDirsFallsBackWhenLayerCacheUnavailable(t *testing.T) {
 }
 
 func TestGetContainerEnvironmentUsesGatewayConfigFallback(t *testing.T) {
+	t.Setenv(types.ContainerGatewayGRPCHostEnv, "")
+	t.Setenv(types.ContainerGatewayGRPCPortEnv, "")
+	t.Setenv(types.ContainerGatewayHTTPHostEnv, "")
+	t.Setenv(types.ContainerGatewayHTTPPortEnv, "")
+
 	worker := &Worker{
 		podAddr: "127.0.0.1",
 		config: types.AppConfig{
@@ -767,7 +772,10 @@ func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.
 	}, &ContainerOptions{BindPorts: []int{8001}})
 	require.NoError(t, err)
 	require.NotNil(t, spec.Linux.Resources)
-	require.Nil(t, spec.Linux.Resources.CPU)
+	require.NotNil(t, spec.Linux.Resources.CPU)
+	require.NotNil(t, spec.Linux.Resources.CPU.Shares)
+	require.Nil(t, spec.Linux.Resources.CPU.Quota)
+	require.Nil(t, spec.Linux.Resources.CPU.Period)
 	require.NotNil(t, spec.Linux.Resources.Memory)
 
 	instance, exists := containerInstances.Get("container-1")
@@ -810,6 +818,33 @@ func TestSpecFromRequestKeepsSandboxCPUThrottleWhenRuntimeCannotUpdate(t *testin
 	require.Nil(t, instance.DeferredCPUQuota)
 }
 
+func TestFunctionCPUThrottleUsesStubTypeOnAgentWorkers(t *testing.T) {
+	const containerID = "function-custom-entrypoint"
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Runtime: &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}},
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		EntryPoint:  []string{"custom-function-runner"},
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypeFunction),
+		}},
+	}
+
+	require.False(t, (&Worker{containerInstances: instances}).deferCPUThrottle(request, &specs.LinuxCPU{}))
+
+	worker := &Worker{
+		containerInstances: instances,
+		persistent:         true,
+		machineID:          "machine-1",
+		routeTransport:     types.BackendRouteTransportTSNet,
+	}
+	require.True(t, worker.deferCPUThrottle(request, &specs.LinuxCPU{}))
+	require.True(t, worker.hasDeferredCPUThrottle(containerID))
+}
+
 func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing.T) {
 	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
 	cpuQuota := int64(10000)
@@ -837,7 +872,7 @@ func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing
 	require.Nil(t, updated.DeferredCPUQuota)
 }
 
-func TestEnforceRunnerCPUThrottleStopsContainerWhenUpdateFails(t *testing.T) {
+func TestDeferredFunctionCPUThrottleStopsContainerWhenUpdateFails(t *testing.T) {
 	containerID := "cpu-throttle-update-failure"
 	readyDir := runnerSignalDir(containerID)
 	require.NoError(t, os.MkdirAll(readyDir, 0o755))
@@ -861,7 +896,7 @@ func TestEnforceRunnerCPUThrottleStopsContainerWhenUpdateFails(t *testing.T) {
 	})
 	worker := &Worker{containerInstances: instances}
 
-	err := worker.enforceRunnerCPUThrottle(context.Background(), &types.ContainerRequest{ContainerId: containerID})
+	err := worker.applyDeferredCPUThrottleAfterRunnerReady(context.Background(), &types.ContainerRequest{ContainerId: containerID})
 
 	require.ErrorIs(t, err, assert.AnError)
 	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.signals)
@@ -871,6 +906,13 @@ func TestNormalizeContainerExitCodePreservesUnexpectedSigkill(t *testing.T) {
 	assert.Equal(t,
 		int(types.ContainerExitCodeOomKill),
 		normalizeContainerExitCode(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false),
+	)
+}
+
+func TestNormalizeContainerExitCodeMapsGracefulSigtermToSuccess(t *testing.T) {
+	assert.Equal(t,
+		int(types.ContainerExitCodeSuccess),
+		normalizeContainerExitCode(int(types.ContainerExitCodeSigterm), types.StopContainerReasonUnknown, false),
 	)
 }
 

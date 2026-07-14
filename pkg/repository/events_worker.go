@@ -15,6 +15,7 @@ const (
 	workerLifecycleFlushInterval = 50 * time.Millisecond
 	workerLifecycleQueueSize     = 16384
 	workerLifecyclePushTimeout   = 5 * time.Second
+	workerLifecycleRetryInterval = time.Second
 )
 
 type workerLifecycleRelay struct {
@@ -35,11 +36,13 @@ func NewWorkerEventClientRepo(config types.AppConfig, client pb.WorkerRepository
 	return events
 }
 
-func (r *workerLifecycleRelay) push(event types.EventContainerLifecycleSchema) {
+func (r *workerLifecycleRelay) push(event types.EventContainerLifecycleSchema) bool {
 	select {
 	case r.events <- event:
+		return true
 	default:
 		log.Warn().Str("worker_id", r.workerID).Msg("worker lifecycle event queue is full")
+		return false
 	}
 }
 
@@ -52,7 +55,9 @@ func (r *workerLifecycleRelay) run() {
 		if len(batch) == 0 {
 			return
 		}
-		r.flush(batch)
+		for !r.flush(batch) {
+			time.Sleep(workerLifecycleRetryInterval)
+		}
 		batch = batch[:0]
 	}
 
@@ -69,7 +74,7 @@ func (r *workerLifecycleRelay) run() {
 	}
 }
 
-func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchema) {
+func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchema) bool {
 	request := &pb.PushContainerLifecycleEventsRequest{
 		WorkerId: r.workerID,
 		Events:   make([][]byte, 0, len(events)),
@@ -82,7 +87,7 @@ func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchem
 		request.Events = append(request.Events, data)
 	}
 	if len(request.Events) == 0 {
-		return
+		return true
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), workerLifecyclePushTimeout)
@@ -94,5 +99,7 @@ func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchem
 			logger = logger.Str("error_msg", response.ErrorMsg)
 		}
 		logger.Msg("failed to relay worker lifecycle events")
+		return false
 	}
+	return true
 }

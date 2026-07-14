@@ -82,7 +82,9 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 	}
 
 	if _, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
-		releaseErr := gws.taskDispatcher.Release(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		releaseErr := gws.taskDispatcher.Release(cleanupCtx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
+		cancel()
 		log.Warn().
 			Err(errors.Join(err, releaseErr)).
 			Str("task_id", task.ExternalId).

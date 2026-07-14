@@ -29,8 +29,9 @@ type WorkerRepository interface {
 	ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
 	GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error)
+	RecoverPendingContainerRequests(workerId string) error
 	RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error
-	AddContainerToWorker(workerId string, containerId string) error
+	AddContainerToWorker(workerId, containerId, deliveryToken string) error
 	RemoveContainerFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
 	SetImagePullLock(workerId, imageId string) (string, error)

@@ -124,11 +124,7 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 	workerRequests := make([]*types.ContainerRequest, 0, len(schedules))
 	prepared := make([]plannedSchedule, 0, len(schedules))
 	for _, schedule := range schedules {
-		workerRequest, err := b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
-		if err != nil {
-			b.completeSchedule(schedule, err)
-			continue
-		}
+		workerRequest := b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
 		workerRequests = append(workerRequests, workerRequest)
 		prepared = append(prepared, schedule)
 	}

@@ -516,6 +516,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 				log.Warn().Err(err).Msg("failed to clean up stale preallocated network slots")
 			}
 		}
+		m.fillNetworkSlotPool()
 		go m.maintainNetworkSlotPool()
 	}
 
@@ -557,8 +558,6 @@ func isMissingNetworkReservation(err error) bool {
 }
 
 func (m *ContainerNetworkManager) maintainNetworkSlotPool() {
-	m.fillNetworkSlotPool()
-
 	ticker := time.NewTicker(containerNetworkSlotFillInterval)
 	defer ticker.Stop()
 
@@ -1320,7 +1319,7 @@ func (m *ContainerNetworkManager) reserveNetworkSlotIP(reservationID string) (*n
 	m.ipMu.Lock()
 	defer m.ipMu.Unlock()
 
-	if err := m.reloadAllocatedIPsLocked(); err != nil {
+	if err := m.ensureAllocatedIPsLoadedLocked(); err != nil {
 		return nil, err
 	}
 

@@ -18,8 +18,34 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type logAttachmentStream struct {
+	pb.ContainerService_ContainerStreamLogsServer
+	attached bool
+}
+
+func (s *logAttachmentStream) SendHeader(metadata.MD) error {
+	s.attached = true
+	return nil
+}
+
+func (s *logAttachmentStream) Context() context.Context {
+	return context.Background()
+}
+
+func TestContainerStreamLogsAcknowledgesAttachment(t *testing.T) {
+	logBuffer := common.NewLogBuffer()
+	logBuffer.Close()
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	server.containerInstances.Set("container-id", &ContainerInstance{LogBuffer: logBuffer})
+	stream := &logAttachmentStream{}
+
+	require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: "container-id"}, stream))
+	require.True(t, stream.attached)
+}
 
 func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.T) {
 	containerId := "sandbox-test"

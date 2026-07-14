@@ -273,6 +273,7 @@ type ContainerRequest struct {
 	MachineId         string             `json:"machine_id,omitempty"`
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
+	DeliveryToken     string             `json:"-" go2proto:"ignore"`
 }
 
 // @go2proto

@@ -465,6 +465,23 @@ func TestPushContainerLogSkipsCallbackSinks(t *testing.T) {
 	}
 }
 
+func TestPushContainerLifecycleFallsBackWhenRelayIsFull(t *testing.T) {
+	sink := &captureEventSink{}
+	repo := &EventClientRepo{
+		storageSinks:           []eventSink{sink},
+		containerLifecyclePush: func(types.EventContainerLifecycleSchema) bool { return false },
+	}
+
+	repo.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+		ID:        types.ContainerLifecycleImageLoad,
+		StartTime: time.Now(),
+	})
+
+	if got, want := len(sink.events), 1; got != want {
+		t.Fatalf("unexpected fallback event count: got %d want %d", got, want)
+	}
+}
+
 func TestPushContainerLogEventQueuedOptionalProcessFields(t *testing.T) {
 	storageSink := &captureEventSink{}
 	repo := &EventClientRepo{storageSinks: []eventSink{storageSink}}

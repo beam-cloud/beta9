@@ -237,6 +237,9 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 	if !exists {
 		return errors.New("container not found")
 	}
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}

@@ -187,11 +187,16 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return manager.runningCacheServer() && len(repo.activeHosts()) == 1
 	}, 5*time.Second, 50*time.Millisecond)
+	var registrationID string
+	for _, host := range repo.activeHosts() {
+		registrationID = host.GetRegistrationId()
+	}
+	require.NotEmpty(t, registrationID)
 
 	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-single-node", "pod-a"))
 
 	require.Eventually(t, func() bool {
-		return !manager.runningCacheServer() && repo.unregisterCalled("worker-a")
+		return !manager.runningCacheServer() && repo.unregisterCalled(registrationID)
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
