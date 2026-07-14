@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -36,7 +37,9 @@ const (
 	markRunningRetryTimeout              = 15 * time.Second
 	markRunningRetryInterval             = 100 * time.Millisecond
 	runtimeDeleteTimeout                 = 30 * time.Second
-	sandboxCPUQuotaApplyTimeout          = 2 * time.Second
+	cpuQuotaApplyTimeout                 = 2 * time.Second
+	runnerReadyTimeout                   = 30 * time.Second
+	runnerReadyPollInterval              = 10 * time.Millisecond
 	restoredContainerPollInterval        = 500 * time.Millisecond
 )
 
@@ -135,16 +138,19 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	return nil
 }
 
-func (s *Worker) finalizeContainer(containerId string, request *types.ContainerRequest, exitCode *int) {
+func (s *Worker) finalizeContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
 	defer s.containerWg.Done()
 
-	if *exitCode < 0 {
-		*exitCode = 1
-	} else if *exitCode == int(types.ContainerExitCodeSigterm) {
-		*exitCode = 0
+	if exitCode < 0 {
+		exitCode = 1
+	} else if exitCode == int(types.ContainerExitCodeSigterm) {
+		exitCode = 0
 	}
 
-	s.clearContainer(containerId, request, *exitCode)
+	if !exitReported {
+		s.setContainerExitCode(containerId, exitCode)
+	}
+	s.clearContainer(containerId, request, exitCode)
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int) {
@@ -153,8 +159,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
 		}
 	}
-
-	s.setContainerExitCode(containerId, exitCode)
 
 	// Keep the local instance state consistent with the reported exit code.
 	instance, exists := s.containerInstances.Get(containerId)
@@ -213,9 +217,9 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}()
 }
 
-func (s *Worker) setContainerExitCode(containerId string, exitCode int) {
+func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 	if s.containerRepoClient == nil {
-		return
+		return false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -227,7 +231,9 @@ func (s *Worker) setContainerExitCode(containerId string, exitCode int) {
 	}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+		return false
 	}
+	return true
 }
 
 func (s *Worker) markContainerStopping(containerId string) {
@@ -341,9 +347,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// runc container or execute any commands inside it. Mark the build as successful and exit.
 	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		exitCode := 0
+		exitReported := false
 		s.containerWg.Add(1)
 		go func() {
-			s.finalizeContainer(containerId, request, &exitCode)
+			s.finalizeContainer(containerId, request, exitCode, exitReported)
 		}()
 		outputLogger.Info("", "done", true, "success", true)
 		logCaptureClosed = true
@@ -354,10 +361,16 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	phaseStart = time.Now()
 	requestedPorts := append([]uint32(nil), request.Ports...)
 	request.Ports = portsForRequest(request)
-	bindPorts, err := allocateBindPorts(len(request.Ports))
+	bindPorts, err := s.containerNetworkManager.ReservePorts(containerId, len(request.Ports))
 	if err != nil {
 		return err
 	}
+	portsHandedOff := false
+	defer func() {
+		if !portsHandedOff {
+			s.containerNetworkManager.ReleasePortReservations(containerId)
+		}
+	}()
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 	metrics.RecordWorkerStartupPhase("port_allocation", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
@@ -414,6 +427,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	default:
 		// Start the container
 		phaseStart = time.Now()
+		portsHandedOff = true
 		go s.spawn(request, spec, outputLogger, opts)
 		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
 	}
@@ -544,31 +558,21 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 	}
 
 	containerId := request.ContainerId
-	if len(bindings) > 0 {
-		containerAddr := joinHostPort(s.podAddr, bindings[0].HostPort)
-		phaseStart := time.Now()
-		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
-			ContainerId: containerId,
-			Address:     containerAddr,
-		}))
-		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, phaseStart, err == nil, nil)
-		if err != nil {
-			return err
-		}
-		log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
-	}
-
 	addressMap := make(map[int32]string, len(bindings))
 	for _, binding := range bindings {
 		addressMap[int32(binding.ContainerPort)] = joinHostPort(s.podAddr, binding.HostPort)
 	}
 	s.cacheContainerAddressMap(containerId, addressMap)
+	var primaryPort int32
+	if len(bindings) > 0 {
+		primaryPort = int32(bindings[0].ContainerPort)
+	}
 
 	phaseStart := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
 		ContainerId: containerId,
 		AddressMap:  addressMap,
+		PrimaryPort: primaryPort,
 	}))
 	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
@@ -583,18 +587,6 @@ func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.C
 		Interface("address_map", addressMap).
 		Msg("set container address map")
 	return nil
-}
-
-func allocateBindPorts(count int) ([]int, error) {
-	bindPorts := make([]int, 0, count)
-	for i := 0; i < count; i++ {
-		bindPort, err := getRandomFreePort()
-		if err != nil {
-			return nil, err
-		}
-		bindPorts = append(bindPorts, bindPort)
-	}
-	return bindPorts, nil
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
@@ -698,7 +690,9 @@ func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *
 
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
-	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
+	if err := os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm); err != nil {
+		return nil, fmt.Errorf("create container config directory: %w", err)
+	}
 
 	spec, err := s.newSpecTemplate()
 	if err != nil {
@@ -706,7 +700,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Process.Cwd = defaultContainerDirectory
-	spec.Process.Args = request.EntryPoint
+	spec.Process.Args = append([]string(nil), request.EntryPoint...)
 	spec.Process.Terminal = false
 
 	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil && options.InitialSpec.Process != nil {
@@ -717,7 +711,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				Str("entrypoint", strings.Join(request.EntryPoint, " ")).
 				Msg("no entrypoint provided, using initial spec entrypoint")
 
-			spec.Process.Args = options.InitialSpec.Process.Args
+			spec.Process.Args = append([]string(nil), options.InitialSpec.Process.Args...)
 		}
 
 		spec.Process.Cwd = options.InitialSpec.Process.Cwd
@@ -750,7 +744,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 		if cpuEnforced && resources.CPU != nil {
-			if !s.deferSandboxCPUThrottle(request, resources.CPU) {
+			if !s.deferCPUThrottle(request, resources.CPU) {
 				spec.Linux.Resources.CPU = resources.CPU
 			}
 		}
@@ -760,7 +754,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
+	if s.runnerCPUThrottleDeferred(request) {
+		if err := os.MkdirAll(runnerSignalDir(request.ContainerId), 0755); err != nil {
+			return nil, err
+		}
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "bind",
+			Source:      runnerSignalDir(request.ContainerId),
+			Destination: filepath.Dir(types.ContainerRunnerReadyPath),
+			Options:     []string{"rbind", "rprivate", "nosuid", "nodev"},
+		})
+	}
+
 	env := s.getContainerEnvironment(request, options)
+	if s.runnerCPUThrottleDeferred(request) {
+		env = append(env, types.ContainerRunnerReadyPathEnv+"="+types.ContainerRunnerReadyPath)
+	}
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
@@ -1018,6 +1027,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
+	defer s.containerNetworkManager.ReleasePortReservations(request.ContainerId)
 
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
@@ -1038,13 +1048,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer cancel()
 
 	exitCode := -1
+	exitReported := false
 	containerId := request.ContainerId
 
 	// Unmount external s3 buckets
 	defer s.containerMountManager.RemoveContainerMounts(containerId)
 
 	// Cleanup container state and resources
-	defer s.finalizeContainer(containerId, request, &exitCode)
+	defer func() {
+		s.finalizeContainer(containerId, request, exitCode, exitReported)
+	}()
 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
@@ -1296,7 +1309,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 			if processManagerReady {
 				phaseStart = time.Now()
-				err := s.applyDeferredSandboxCPUThrottle(request, instance)
+				err := s.applyDeferredCPUThrottle(request, instance)
 				metrics.RecordWorkerStartupPhase("sandbox_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
 					"success": fmt.Sprintf("%t", err == nil),
 				})
@@ -1319,6 +1332,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
+			}
+		} else if s.runnerCPUThrottleDeferred(request) {
+			phaseStart := time.Now()
+			err := s.waitForRunnerReadyAndApplyCPUThrottle(ctx, request)
+			metrics.RecordWorkerStartupPhase("runner_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
+				"success": fmt.Sprintf("%t", err == nil),
+			})
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleRunnerApplyCPUQuota, phaseStart, err == nil, nil)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				log.Error().Err(err).Str("container_id", containerId).Msg("failed to apply runner CPU quota")
 			}
 		}
 	}()
@@ -1364,6 +1387,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			types.EventAttrReason:         string(stopReason),
 		},
 	})
+	// Runtime deletion can be slow under burst load. Report completion before
+	// cleanup so clients are never blocked on resource reclamation.
+	exitReported = s.setContainerExitCode(containerId, exitCode)
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
@@ -1515,6 +1541,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
 			"runtime": instance.Runtime.Name(),
 		})
+		log.Info().Str("container_id", request.ContainerId).Dur("duration", time.Since(runtimeStart)).Msg("container runtime process started")
 		s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleRuntimeStartToPID, request, runtimeStart, time.Since(runtimeStart), true, map[string]string{
 			"runtime": instance.Runtime.Name(),
 			"pid":     fmt.Sprintf("%d", pid),
@@ -1779,8 +1806,12 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 	}, nil
 }
 
-func (s *Worker) deferSandboxCPUThrottle(request *types.ContainerRequest, cpu *specs.LinuxCPU) bool {
-	if cpu == nil || request.Stub.Type.Kind() != types.StubTypeSandbox {
+func (s *Worker) deferCPUThrottle(request *types.ContainerRequest, cpu *specs.LinuxCPU) bool {
+	if cpu == nil {
+		return false
+	}
+	kind := request.Stub.Type.Kind()
+	if kind != types.StubTypeSandbox && !isFunctionRunner(request) {
 		return false
 	}
 
@@ -1797,7 +1828,7 @@ func (s *Worker) deferSandboxCPUThrottle(request *types.ContainerRequest, cpu *s
 	return true
 }
 
-func (s *Worker) applyDeferredSandboxCPUThrottle(request *types.ContainerRequest, instance *ContainerInstance) error {
+func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, instance *ContainerInstance) error {
 	if instance == nil || instance.DeferredCPUQuota == nil {
 		return nil
 	}
@@ -1810,7 +1841,7 @@ func (s *Worker) applyDeferredSandboxCPUThrottle(request *types.ContainerRequest
 		return fmt.Errorf("runtime %s does not support resource updates", instance.Runtime.Name())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), sandboxCPUQuotaApplyTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), cpuQuotaApplyTimeout)
 	defer cancel()
 
 	resources := &specs.LinuxResources{CPU: instance.DeferredCPUQuota}
@@ -1821,4 +1852,43 @@ func (s *Worker) applyDeferredSandboxCPUThrottle(request *types.ContainerRequest
 	instance.DeferredCPUQuota = nil
 	s.containerInstances.Set(request.ContainerId, instance)
 	return nil
+}
+
+func isFunctionRunner(request *types.ContainerRequest) bool {
+	return request != nil && request.Stub.Type.Kind() == types.StubTypeFunction &&
+		len(request.EntryPoint) >= 3 && request.EntryPoint[1] == "-m" && request.EntryPoint[2] == "beta9.runner.function"
+}
+
+func (s *Worker) runnerCPUThrottleDeferred(request *types.ContainerRequest) bool {
+	if !isFunctionRunner(request) {
+		return false
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	return exists && instance.DeferredCPUQuota != nil
+}
+
+func (s *Worker) waitForRunnerReadyAndApplyCPUThrottle(ctx context.Context, request *types.ContainerRequest) error {
+	ctx, cancel := context.WithTimeout(ctx, runnerReadyTimeout)
+	defer cancel()
+
+	readyPath := filepath.Join(runnerSignalDir(request.ContainerId), filepath.Base(types.ContainerRunnerReadyPath))
+	ticker := time.NewTicker(runnerReadyPollInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			instance, exists := s.containerInstances.Get(request.ContainerId)
+			if !exists {
+				return fmt.Errorf("container instance not found")
+			}
+			return s.applyDeferredCPUThrottle(request, instance)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

@@ -23,10 +23,10 @@ func (s *Worker) listenForWorkerEvents() {
 			}
 
 			log.Warn().Err(err).Msg("failed to connect worker event stream")
-			if !s.sleepBeforeWorkerEventReconnect(delay) {
+			if !waitForReconnect(s.ctx, delay) {
 				return
 			}
-			delay = nextWorkerEventReconnectDelay(delay)
+			delay = nextReconnectDelay(delay, workerEventStreamReconnectMax)
 			continue
 		}
 
@@ -46,29 +46,29 @@ func (s *Worker) listenForWorkerEvents() {
 			s.handleWorkerEvent(event)
 		}
 
-		if !s.sleepBeforeWorkerEventReconnect(delay) {
+		if !waitForReconnect(s.ctx, delay) {
 			return
 		}
-		delay = nextWorkerEventReconnectDelay(delay)
+		delay = nextReconnectDelay(delay, workerEventStreamReconnectMax)
 	}
 }
 
-func (s *Worker) sleepBeforeWorkerEventReconnect(delay time.Duration) bool {
+func waitForReconnect(ctx context.Context, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
 	select {
-	case <-s.ctx.Done():
+	case <-ctx.Done():
 		return false
 	case <-timer.C:
 		return true
 	}
 }
 
-func nextWorkerEventReconnectDelay(delay time.Duration) time.Duration {
+func nextReconnectDelay(delay, maximum time.Duration) time.Duration {
 	delay *= 2
-	if delay > workerEventStreamReconnectMax {
-		return workerEventStreamReconnectMax
+	if delay > maximum {
+		return maximum
 	}
 	return delay
 }

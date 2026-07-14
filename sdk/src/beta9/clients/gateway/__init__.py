@@ -1312,6 +1312,10 @@ class AgentWorkerSlot(betterproto.Message):
      gateways that did not send scheduling priority metadata.
     """
 
+    gvisor_platform: str = betterproto.string_field(22)
+    gvisor_root: str = betterproto.string_field(23)
+    gvisor_extra_args: List[str] = betterproto.string_field(24)
+
 
 @dataclass(eq=False, repr=False)
 class StreamAgentRequest(betterproto.Message):

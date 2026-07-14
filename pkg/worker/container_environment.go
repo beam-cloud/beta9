@@ -24,7 +24,12 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	gatewayEnv := s.gatewayContainerEnvironment()
 
 	// Most of these env vars are required to communicate with the gateway and vice versa.
-	env := []string{
+	env := make([]string, 0, len(request.Env)+9)
+	if options.InitialSpec != nil && options.InitialSpec.Process != nil {
+		env = append(env, options.InitialSpec.Process.Env...)
+	}
+	env = append(env, request.Env...)
+	env = append(env,
 		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
 		fmt.Sprintf("%s=%s", types.ContainerHostnameEnv, fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
@@ -34,12 +39,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("%s=%s", types.ContainerGatewayHTTPPortEnv, gatewayEnv.httpPort),
 		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
 		"PYTHONUNBUFFERED=1",
-	}
-
-	env = append(request.Env, env...)
-	if options.InitialSpec != nil {
-		env = append(options.InitialSpec.Process.Env, env...)
-	}
+	)
 
 	return env
 }

@@ -37,6 +37,10 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	res.Bootstrap = normalizeBootstrapForAgentRuntime(opts.GatewayURL, res.Bootstrap)
 	if err := saveRuntimeState(opts.GatewayURL, res); err != nil {
 		fmt.Fprintf(opts.Stderr, "failed to save agent state: %v\n", err)
+	} else if opts.JoinTokenFile != "" {
+		if err := os.Remove(opts.JoinTokenFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(opts.Stderr, "failed to remove consumed join token: %v\n", err)
+		}
 	}
 
 	grpcClient, grpcConn, err := newGatewayGRPCClient(opts.GatewayURL, res.Bootstrap.GatewayGRPCHost, res.Bootstrap.GatewayGRPCPort, res.Bootstrap.GatewayGRPCTLS)
@@ -91,7 +95,7 @@ func normalizeJoinOptions(opts types.AgentJoinOptions) (types.AgentJoinOptions, 
 	opts.JoinTokenFile = strings.TrimSpace(opts.JoinTokenFile)
 	if opts.JoinToken == "" && opts.JoinTokenFile != "" {
 		data, err := os.ReadFile(opts.JoinTokenFile)
-		if err != nil {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return types.AgentJoinOptions{}, fmt.Errorf("read join token file: %w", err)
 		}
 		opts.JoinToken = strings.TrimSpace(string(data))
@@ -123,6 +127,9 @@ func resolveAgentIdentity(ctx context.Context, client *Client, opts types.AgentJ
 	res, err := join(ctx, client, opts)
 	if err == nil && res != nil && res.Ok {
 		return res, nil
+	}
+	if res != nil && savedState != nil {
+		return savedState, nil
 	}
 	if res != nil {
 		return nil, fmt.Errorf("join failed: %s", res.ErrMsg)

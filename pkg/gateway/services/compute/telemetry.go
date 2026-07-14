@@ -170,6 +170,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 		poolState, _ = s.getAgentPoolState(ctx, agentState)
 	}
 	agentState.Metrics = metrics
+
 	// Liveness is always tracked on the gateway clock: agent-supplied
 	// timestamps can be skewed or stale (buffered telemetry after a
 	// reconnect), which would oscillate the machine across the heartbeat
@@ -183,6 +184,10 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)
+
+	// The scheduler's container index is the source of truth for per-machine
+	// container counts; the agent snapshot and worker state don't carry them.
+	s.applyAgentContainerCount(agentState, capacityMetrics)
 	if err := s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, now); err != nil {
 		log.Warn().
 			Err(err).

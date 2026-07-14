@@ -172,8 +172,11 @@ func (s *Scheduler) EnsureAgentPool(workspaceID string, state *compute.PoolState
 	}
 	s.agentPoolMu.Lock()
 	defer s.agentPoolMu.Unlock()
-	_, err := s.ensureAgentPool(workspaceID, state)
-	return err
+	controller, err := s.ensureAgentPool(workspaceID, state)
+	if err != nil {
+		return err
+	}
+	return controller.reconcileMachines()
 }
 
 func (s *Scheduler) EnsureAgentMachine(workspaceID string, state *compute.PoolState, machineID string) error {

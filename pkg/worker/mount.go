@@ -418,6 +418,10 @@ func checkpointSignalDir(containerId string) string {
 	return filepath.Join(types.AgentTmpPath, containerId, "criu")
 }
 
+func runnerSignalDir(containerId string) string {
+	return filepath.Join(types.AgentTmpPath, containerId, "runner")
+}
+
 func getAndExtractStubCodeToPath(ctx context.Context, request *types.ContainerRequest, destPath string) error {
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {

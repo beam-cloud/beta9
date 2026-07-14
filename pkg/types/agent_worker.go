@@ -129,6 +129,8 @@ const (
 	ContainerGatewayHTTPHostEnv = "BETA9_GATEWAY_HOST_HTTP"
 	ContainerGatewayHTTPPortEnv = "BETA9_GATEWAY_PORT_HTTP"
 	ContainerHostnameEnv        = "CONTAINER_HOSTNAME"
+	ContainerRunnerReadyPathEnv = "BETA9_RUNNER_READY_PATH"
+	ContainerRunnerReadyPath    = "/run/beta9/runner-ready"
 )
 
 const (

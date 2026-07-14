@@ -164,35 +164,115 @@ func (r *RedisClient) Publish(ctx context.Context, channel string, message inter
 
 func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error, func()) {
 	outCh := make(chan *redis.Message, redisPubSubChannelBufferSize)
-	errCh := make(chan error, 1)
-	onSubscribe := make(chan bool, 1)
+	errCh := make(chan error, 64)
+	ctx, cancel := context.WithCancel(ctx)
+	ready := make(chan error, 64)
+	started := make(chan struct{})
+	done := make(chan struct{})
 
 	go func() {
-		switch client := r.UniversalClient.(type) {
-		case *redis.Client:
-			r.handleChannelSubs(ctx, client.PSubscribe, onSubscribe, outCh, errCh, channels...)
-
-		case *redis.ClusterClient:
-			// Shared pattern subscribe doesn't exist yet, use ForEachMaster here
-			err := client.ForEachMaster(ctx, func(ctx context.Context, rdb *redis.Client) error {
-				r.handleChannelSubs(ctx, rdb.PSubscribe, onSubscribe, outCh, errCh, channels...)
-				return nil
-			})
-
-			if err != nil {
-				errCh <- err
-			}
-		}
-	}()
-
-	<-onSubscribe
-
-	close := func() {
+		defer close(done)
 		defer close(outCh)
 		defer close(errCh)
+
+		var subscriptions sync.WaitGroup
+		start := func(subscribe func(context.Context, ...string) *redis.PubSub) {
+			subscriptions.Add(1)
+			go func() {
+				defer subscriptions.Done()
+				r.handlePatternSub(ctx, subscribe, ready, outCh, errCh, channels...)
+			}()
+		}
+
+		count := 0
+		switch client := r.UniversalClient.(type) {
+		case *redis.Client:
+			count = 1
+			start(client.PSubscribe)
+
+		case *redis.ClusterClient:
+			// Keyspace notifications are node-local, so pattern subscriptions must
+			// remain active on every master in the cluster.
+			err := client.ForEachMaster(ctx, func(_ context.Context, master *redis.Client) error {
+				count++
+				start(master.PSubscribe)
+				return nil
+			})
+			if err != nil {
+				sendRedisSubscriptionError(ctx, errCh, err)
+			}
+		}
+
+		for range count {
+			if err := <-ready; err != nil {
+				sendRedisSubscriptionError(ctx, errCh, err)
+			}
+		}
+		close(started)
+		subscriptions.Wait()
+	}()
+
+	<-started
+
+	var closeOnce sync.Once
+	close := func() {
+		closeOnce.Do(func() {
+			cancel()
+			<-done
+		})
 	}
 
 	return outCh, errCh, close
+}
+
+func (r *RedisClient) handlePatternSub(
+	ctx context.Context,
+	subscribe func(context.Context, ...string) *redis.PubSub,
+	ready chan<- error,
+	outCh chan<- *redis.Message,
+	errCh chan<- error,
+	channels ...string,
+) {
+	pubsub := subscribe(ctx, channels...)
+	defer pubsub.Close()
+	if _, err := pubsub.Receive(ctx); err != nil {
+		ready <- err
+		return
+	}
+	ready <- nil
+
+	messages := pubsub.Channel(
+		redis.WithChannelSize(redisPubSubChannelBufferSize),
+		redis.WithChannelSendTimeout(3*time.Second),
+		redis.WithChannelHealthCheckInterval(3*time.Second),
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-messages:
+			if !ok {
+				sendRedisSubscriptionError(ctx, errCh, ErrChannelClosed)
+				return
+			}
+			if message == nil {
+				sendRedisSubscriptionError(ctx, errCh, ErrNilMessage)
+				return
+			}
+			select {
+			case outCh <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func sendRedisSubscriptionError(ctx context.Context, errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	case <-ctx.Done():
+	}
 }
 
 func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error) {

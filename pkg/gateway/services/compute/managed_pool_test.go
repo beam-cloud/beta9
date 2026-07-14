@@ -247,8 +247,8 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		t.Fatalf("priority = %d, want 250", updated.Config.Priority)
 	}
 	state, err = service.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "public-h100")
-	if err != nil || state == nil || state.ManagedInstanceID == createdInstanceID {
-		t.Fatalf("updated generation = %+v, err = %v", state, err)
+	if err != nil || state == nil || state.ManagedInstanceID != createdInstanceID {
+		t.Fatalf("updated pool identity = %+v, err = %v", state, err)
 	}
 
 	repo.machines = map[string][]*model.AgentTokenState{
@@ -257,8 +257,9 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		},
 	}
 	config.Priority = 300
-	if _, err := service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config); !errors.Is(err, model.ErrManagedPoolInUse) {
-		t.Fatalf("update with inventory error = %v, want in-use", err)
+	updated, err = service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config)
+	if err != nil || updated.Config.Priority != 300 {
+		t.Fatalf("live update = %+v, err = %v", updated, err)
 	}
 	if err := service.DeleteManagedPool(context.Background(), clusterAdminAuth(), "public-h100"); !errors.Is(err, model.ErrManagedPoolInUse) {
 		t.Fatalf("delete with inventory error = %v, want in-use", err)

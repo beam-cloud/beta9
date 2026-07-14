@@ -367,14 +367,27 @@ func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineC
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool name and machine id are required"}, nil
 	}
 
+	ownerWorkspaceID := workspaceID
 	state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
 	if err != nil {
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if state == nil {
+	poolFound := state != nil
+	if !poolFound && requireClusterAdmin(authInfo) == nil && s.managedPoolRepo != nil {
+		// Serverless (managed) pools are not private pool states — they live
+		// in the managed pool store under the admin workspace. Cluster admins
+		// can inspect their machines from any workspace.
+		if adminID, adminErr := s.adminWorkspaceID(ctx); adminErr == nil && adminID != "" {
+			if managed, managedErr := s.managedPoolRepo.GetManagedPoolState(ctx, adminID, poolName); managedErr == nil && managed != nil {
+				ownerWorkspaceID = adminID
+				poolFound = true
+			}
+		}
+	}
+	if !poolFound {
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
-	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, state.Name, machineID)
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, ownerWorkspaceID, poolName, machineID)
 	if err != nil {
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}

@@ -232,19 +232,8 @@ func (c *ImageClient) mountedImageReady(imageId string) bool {
 	if c.mountedFuseServers == nil {
 		return false
 	}
-
 	_, mounted := c.mountedFuseServers.Get(imageId)
-	if !mounted {
-		return false
-	}
-
-	mountPoint := c.imageMountPoint(imageId)
-	if _, err := os.Stat(mountPoint); err == nil {
-		return true
-	}
-
-	c.mountedFuseServers.Delete(imageId)
-	return false
+	return mounted
 }
 
 func (c *ImageClient) lockImageMount(imageId string) func() {

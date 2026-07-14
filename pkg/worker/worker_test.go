@@ -370,6 +370,45 @@ func TestDropCancelledContainerRequestReleasesCapacityForMissingState(t *testing
 	}
 }
 
+func TestHandleContainerRequestDoesNotBlockRequestStream(t *testing.T) {
+	stateLookupStarted := make(chan struct{})
+	stateLookupRelease := make(chan struct{})
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{
+			ContainerId: "container-1",
+			Status:      string(types.ContainerStatusStopping),
+		},
+		getStateStarted: stateLookupStarted,
+		getStateRelease: stateLookupRelease,
+	}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		completedRequests:   make(chan *types.ContainerRequest, 1),
+	}
+	request := &types.ContainerRequest{ContainerId: "container-1"}
+
+	returned := make(chan struct{})
+	go func() {
+		worker.handleContainerRequest(request)
+		close(returned)
+	}()
+
+	<-stateLookupStarted
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("container request stream blocked on state lookup")
+	}
+
+	close(stateLookupRelease)
+	require.Eventually(t, func() bool {
+		_, exists := worker.containerInstances.Get(request.ContainerId)
+		return !exists
+	}, time.Second, time.Millisecond)
+	require.Equal(t, request, <-worker.completedRequests)
+}
+
 type fakeContainerRepoClient struct {
 	state                 *pb.ContainerState
 	getStateErrorMsg      string
@@ -383,10 +422,22 @@ type fakeContainerRepoClient struct {
 	lastSetAddress        *pb.SetContainerAddressRequest
 	setAddressMapCalls    int
 	lastSetAddressMap     *pb.SetContainerAddressMapRequest
+	getStateStarted       chan struct{}
+	getStateRelease       chan struct{}
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
 	f.getStateCalls++
+	if f.getStateStarted != nil {
+		close(f.getStateStarted)
+	}
+	if f.getStateRelease != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.getStateRelease:
+		}
+	}
 	if f.getStateErrorMsg != "" {
 		return &pb.GetContainerStateResponse{
 			Ok:       false,

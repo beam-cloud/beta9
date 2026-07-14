@@ -240,6 +240,31 @@ func (wpc *AgentWorkerPoolController) ensureMachine(machineID string) error {
 	return err
 }
 
+func (wpc *AgentWorkerPoolController) reconcileMachines() error {
+	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, machine := range machines {
+		if machine == nil {
+			continue
+		}
+		if !wpc.machineSchedulable(machine) {
+			worker, workerErr := wpc.machineWorker(machine)
+			if workerErr != nil {
+				errs = append(errs, workerErr)
+			} else if worker != nil {
+				errs = append(errs, wpc.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled))
+			}
+			continue
+		}
+		_, workerErr := wpc.ensureMachineWorker(machine)
+		errs = append(errs, workerErr)
+	}
+	return errors.Join(errs...)
+}
+
 func (wpc *AgentWorkerPoolController) findMachine(match func(*compute.AgentTokenState) bool) (*compute.AgentTokenState, error) {
 	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {

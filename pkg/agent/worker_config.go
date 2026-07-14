@@ -138,20 +138,27 @@ type agentConfigWorkerFailover struct {
 }
 
 type agentConfigPool struct {
-	Mode                      string           `json:"mode"`
-	GPUType                   string           `json:"gpuType"`
-	ContainerRuntime          string           `json:"containerRuntime"`
-	ContainerStartConcurrency int              `json:"containerStartConcurrency"`
-	NetworkPreallocation      bool             `json:"networkPreallocation"`
-	NetworkSlotPoolSize       int              `json:"networkSlotPoolSize"`
-	RequiresPoolSelector      bool             `json:"requiresPoolSelector"`
-	Priority                  int              `json:"priority"`
-	Preemptable               bool             `json:"preemptable"`
-	CRIUEnabled               bool             `json:"criuEnabled"`
-	TmpSizeLimit              string           `json:"tmpSizeLimit"`
-	StorageMode               string           `json:"storageMode"`
-	CheckpointPath            string           `json:"checkpointPath"`
-	Cache                     agentConfigCache `json:"cache"`
+	Mode                      string                   `json:"mode"`
+	GPUType                   string                   `json:"gpuType"`
+	ContainerRuntime          string                   `json:"containerRuntime"`
+	ContainerRuntimeConfig    agentConfigRuntimeConfig `json:"containerRuntimeConfig"`
+	ContainerStartConcurrency int                      `json:"containerStartConcurrency"`
+	NetworkPreallocation      bool                     `json:"networkPreallocation"`
+	NetworkSlotPoolSize       int                      `json:"networkSlotPoolSize"`
+	RequiresPoolSelector      bool                     `json:"requiresPoolSelector"`
+	Priority                  int                      `json:"priority"`
+	Preemptable               bool                     `json:"preemptable"`
+	CRIUEnabled               bool                     `json:"criuEnabled"`
+	TmpSizeLimit              string                   `json:"tmpSizeLimit"`
+	StorageMode               string                   `json:"storageMode"`
+	CheckpointPath            string                   `json:"checkpointPath"`
+	Cache                     agentConfigCache         `json:"cache"`
+}
+
+type agentConfigRuntimeConfig struct {
+	GVisorPlatform  string   `json:"gvisorPlatform"`
+	GVisorRoot      string   `json:"gvisorRoot"`
+	GVisorExtraArgs []string `json:"gvisorExtraArgs"`
 }
 
 type agentConfigCache struct {
@@ -208,6 +215,16 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	poolMode := slotPoolMode(slot)
 	poolRuntime := slotContainerRuntime(slot)
+	runtimeConfig := types.RuntimeConfig{
+		GVisorPlatform:  slot.GvisorPlatform,
+		GVisorRoot:      slot.GvisorRoot,
+		GVisorExtraArgs: append([]string(nil), slot.GvisorExtraArgs...),
+	}.WithDefaults(poolRuntime)
+	agentRuntimeConfig := agentConfigRuntimeConfig{
+		GVisorPlatform:  runtimeConfig.GVisorPlatform,
+		GVisorRoot:      runtimeConfig.GVisorRoot,
+		GVisorExtraArgs: runtimeConfig.GVisorExtraArgs,
+	}
 	priority := int(slot.Priority)
 	if priority == 0 && !slot.PrioritySet {
 		priority = 1000
@@ -280,6 +297,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					Mode:                      poolMode,
 					GPUType:                   slot.Gpu,
 					ContainerRuntime:          poolRuntime,
+					ContainerRuntimeConfig:    agentRuntimeConfig,
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
 					NetworkPreallocation:      true,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),

@@ -548,6 +548,16 @@ func (f *fakeContainerNetworkController) ExposePorts(containerId string, binding
 	return nil
 }
 
+func (f *fakeContainerNetworkController) ReservePorts(_ string, count int) ([]int, error) {
+	ports := make([]int, count)
+	for i := range ports {
+		ports[i] = 30000 + i
+	}
+	return ports, nil
+}
+
+func (f *fakeContainerNetworkController) ReleasePortReservations(string) {}
+
 func (f *fakeContainerNetworkController) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
 	return nil
 }

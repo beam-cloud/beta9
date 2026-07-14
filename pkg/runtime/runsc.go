@@ -234,6 +234,32 @@ func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process
 	return cmd.Wait()
 }
 
+func (r *Runsc) UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error {
+	if resources == nil {
+		return fmt.Errorf("resources cannot be nil")
+	}
+
+	file, err := os.CreateTemp("", "runsc-resources-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+
+	if err := json.NewEncoder(file).Encode(resources); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+
+	args := append(r.baseArgs(false), "update", "--resources", file.Name(), containerID)
+	if output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to update container resources: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
 	args := r.baseArgs(false)
 	args = append(args, "kill")

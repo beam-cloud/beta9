@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"slices"
@@ -195,6 +196,36 @@ func TestContainerNetworkSlotReservationParsing(t *testing.T) {
 	}
 }
 
+func TestReservePortsIsUniqueAcrossConcurrentContainers(t *testing.T) {
+	manager := &ContainerNetworkManager{}
+	const containers = 100
+
+	ports := make(chan int, containers)
+	var wg sync.WaitGroup
+	for i := 0; i < containers; i++ {
+		wg.Add(1)
+		go func(containerID string) {
+			defer wg.Done()
+			reserved, err := manager.ReservePorts(containerID, 1)
+			if err != nil {
+				t.Errorf("ReservePorts(%q): %v", containerID, err)
+				return
+			}
+			ports <- reserved[0]
+		}(fmt.Sprintf("container-%d", i))
+	}
+	wg.Wait()
+	close(ports)
+
+	seen := map[int]struct{}{}
+	for port := range ports {
+		if _, exists := seen[port]; exists {
+			t.Fatalf("port %d was reserved twice", port)
+		}
+		seen[port] = struct{}{}
+	}
+}
+
 func TestReleasePreallocatedNetworkSlotUsesFreshCleanupContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -296,6 +327,25 @@ func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 				t.Fatalf("unexpected cleanup decision: got %t want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAdoptNetworkSlotRespectsPoolSize(t *testing.T) {
+	manager := &ContainerNetworkManager{slotPoolSize: 1}
+	first := &pb.ContainerIpAssignment{ContainerId: "network-slot:worker-a:slot-a", IpAddress: "192.168.0.2"}
+	second := &pb.ContainerIpAssignment{ContainerId: "network-slot:worker-a:slot-b", IpAddress: "192.168.0.3"}
+
+	if !manager.adoptNetworkSlot(first, "slot-a") {
+		t.Fatal("expected first slot to be adopted")
+	}
+	if manager.adoptNetworkSlot(second, "slot-b") {
+		t.Fatal("expected pool size to reject extra slot")
+	}
+	if manager.totalSlots != 1 || len(manager.freeSlots) != 1 {
+		t.Fatalf("unexpected adopted slot state: total=%d free=%d", manager.totalSlots, len(manager.freeSlots))
+	}
+	if got := manager.freeSlots[0]; got.id != "slot-a" || got.reservationID != first.ContainerId || got.ip != first.IpAddress {
+		t.Fatalf("unexpected adopted slot: %#v", got)
 	}
 }
 

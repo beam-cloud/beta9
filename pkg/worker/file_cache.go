@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/rs/zerolog/log"
@@ -14,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -24,8 +26,10 @@ const (
 )
 
 type FileCacheManager struct {
-	config types.AppConfig
-	client *cache.Client
+	config              types.AppConfig
+	client              *cache.Client
+	initialized         sync.Map
+	initializationGroup singleflight.Group
 }
 
 func NewFileCacheManager(config types.AppConfig, client *cache.Client) *FileCacheManager {
@@ -139,21 +143,34 @@ func envListContains(value string, item string) bool {
 
 func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
 	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
-	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
-
-	if cm.CacheAvailable() && cm.client.IsPathCachedReachable(context.Background(), fileName) {
+	if _, ok := cm.initialized.Load(workspaceVolumePath); ok {
 		return workspaceVolumePath, nil
 	}
 
-	_, err := cm.client.StoreContentAtPath([]byte{}, fileName, cache.StoreContentOptions{
-		RoutingKey: fileName,
-		Lock:       true,
-	})
-	if err != nil {
-		return "", err
-	}
+	_, err, _ := cm.initializationGroup.Do(workspaceVolumePath, func() (interface{}, error) {
+		if _, ok := cm.initialized.Load(workspaceVolumePath); ok {
+			return nil, nil
+		}
 
-	return workspaceVolumePath, nil
+		fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
+
+		if cm.CacheAvailable() && cm.client.IsPathCachedReachable(context.Background(), fileName) {
+			cm.initialized.Store(workspaceVolumePath, struct{}{})
+			return nil, nil
+		}
+
+		_, err := cm.client.StoreContentAtPath([]byte{}, fileName, cache.StoreContentOptions{
+			RoutingKey: fileName,
+			Lock:       true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		cm.initialized.Store(workspaceVolumePath, struct{}{})
+		return nil, nil
+	})
+
+	return workspaceVolumePath, err
 }
 
 // GetClient returns the cache client instance.

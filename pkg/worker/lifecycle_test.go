@@ -280,11 +280,8 @@ func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NotNil(t, repoClient.lastSetAddress)
-	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddress.Address)
-	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddress.Route.LocalTarget)
-
 	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
 	require.Equal(t, "192.168.0.44:8001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, "192.168.0.44:2222", repoClient.lastSetAddressMap.AddressMap[2222])
 	require.Len(t, repoClient.lastSetAddressMap.Routes, 2)
@@ -329,11 +326,8 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NotNil(t, repoClient.lastSetAddress)
-	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddress.Address)
-	require.Nil(t, repoClient.lastSetAddress.Route)
-
 	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
 	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, "10.0.0.2:30002", repoClient.lastSetAddressMap.AddressMap[2222])
 	require.Empty(t, repoClient.lastSetAddressMap.Routes)
@@ -362,10 +356,8 @@ func TestPublishContainerAddressesFormatsBracketedIPv6PodAddress(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NotNil(t, repoClient.lastSetAddress)
-	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddress.Address)
-
 	require.NotNil(t, repoClient.lastSetAddressMap)
+	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
 	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30002", repoClient.lastSetAddressMap.AddressMap[2222])
 }
@@ -442,6 +434,49 @@ func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
 			assert.Equal(t, tt.wantUnified, spec.Linux.Resources.Unified != nil)
 		})
 	}
+}
+
+func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+	initialEnv := make([]string, 1, 8)
+	initialEnv[0] = "IMAGE=one"
+	requestEnv := make([]string, 1, 8)
+	requestEnv[0] = "REQUEST=one"
+	firstRequest := &types.ContainerRequest{
+		ContainerId: "container-1",
+		EntryPoint:  []string{"python3", "-c", "print('one')"},
+		Env:         requestEnv,
+	}
+
+	first, err := worker.specFromRequest(firstRequest, &ContainerOptions{
+		BindPorts:   []int{8001},
+		InitialSpec: &specs.Spec{Process: &specs.Process{Env: initialEnv}},
+	})
+	require.NoError(t, err)
+
+	second, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-2",
+		EntryPoint:  []string{"python3", "-c", "print('two')"},
+		Env:         []string{"REQUEST=two"},
+	}, &ContainerOptions{BindPorts: []int{8002}})
+	require.NoError(t, err)
+
+	require.NotSame(t, first.Process, second.Process)
+	require.Equal(t, []string{"python3", "-c", "print('one')"}, first.Process.Args)
+	require.Equal(t, []string{"python3", "-c", "print('two')"}, second.Process.Args)
+	require.Contains(t, first.Process.Env, "REQUEST=one")
+	require.Contains(t, first.Process.Env, "IMAGE=one")
+	require.NotContains(t, first.Process.Env, "REQUEST=two")
+	require.Contains(t, second.Process.Env, "REQUEST=two")
+	require.NotContains(t, second.Process.Env, "REQUEST=one")
+
+	first.Process.Args[2] = "mutated"
+	first.Process.Env = append(first.Process.Env, "LEAKED=true")
+	require.Equal(t, "print('one')", firstRequest.EntryPoint[2])
+	require.Equal(t, []string{"REQUEST=one"}, firstRequest.Env)
+	require.Equal(t, []string{"IMAGE=one"}, initialEnv)
+	require.Equal(t, "print('two')", second.Process.Args[2])
+	require.NotContains(t, second.Process.Env, "LEAKED=true")
 }
 
 func TestSpecFromRequestDefaultsMissingRunnerEntrypoint(t *testing.T) {
@@ -739,7 +774,7 @@ func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing
 	containerInstances.Set("container-1", instance)
 
 	worker := &Worker{containerInstances: containerInstances}
-	err := worker.applyDeferredSandboxCPUThrottle(&types.ContainerRequest{ContainerId: "container-1"}, instance)
+	err := worker.applyDeferredCPUThrottle(&types.ContainerRequest{ContainerId: "container-1"}, instance)
 	require.NoError(t, err)
 	require.Equal(t, "container-1", rt.updateContainerID)
 	require.NotNil(t, rt.updatedResources)
@@ -912,9 +947,9 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, -1, exitCode)
-	require.Equal(t, 1, repoClient.setAddressCalls)
-	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddress.Address)
+	require.Zero(t, repoClient.setAddressCalls)
 	require.Equal(t, 1, repoClient.setAddressMapCalls)
+	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
 	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
@@ -1738,18 +1773,12 @@ func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
 	assert.Equal(t, "registry.example.com/team/image:latest", sourceRef)
 }
 
-func TestMountedImageReadyVerifiesMountPath(t *testing.T) {
+func TestMountedImageReadyTracksMountedServer(t *testing.T) {
 	imageId := "warm-image"
-	mountRoot := t.TempDir()
 	imageClient := &ImageClient{
-		imageMountPath:     mountRoot,
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 	}
 
-	imageClient.mountedFuseServers.Set(imageId, nil)
-	assert.False(t, imageClient.mountedImageReady(imageId))
-
-	require.NoError(t, os.MkdirAll(imageClient.imageMountPoint(imageId), 0755))
 	imageClient.mountedFuseServers.Set(imageId, nil)
 	assert.True(t, imageClient.mountedImageReady(imageId))
 }

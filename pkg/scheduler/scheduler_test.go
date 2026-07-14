@@ -369,6 +369,45 @@ func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	assert.Equal(t, int32(7), pool.Config.Priority)
 }
 
+func TestEnsureAgentPoolReconcilesExistingMachineWorkers(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	s.workerPoolManager = NewWorkerPoolManager(false)
+
+	state := &compute.PoolState{
+		Name:              "api-pool",
+		Selector:          "api-pool",
+		ManagementSource:  types.WorkerPoolManagementSourceAPI,
+		ManagedInstanceID: "instance-1",
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:             types.PoolModeExternal,
+			ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+		},
+	}
+	machine := &compute.AgentTokenState{
+		WorkspaceID:     "admin-workspace",
+		PoolName:        state.Name,
+		MachineID:       "machine-1",
+		CPUCount:        4,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now(),
+	}
+	assert.NoError(t, s.computeRepo.SaveAgentTokenState(context.Background(), machine, time.Hour))
+	assert.NoError(t, s.EnsureAgentPool(machine.WorkspaceID, state))
+
+	worker, err := s.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerRuntimeGvisor.String(), worker.Runtime)
+
+	state.WorkerConfig.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	assert.NoError(t, s.EnsureAgentPool(machine.WorkspaceID, state))
+	worker, err = s.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), worker.Runtime)
+}
+
 func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)

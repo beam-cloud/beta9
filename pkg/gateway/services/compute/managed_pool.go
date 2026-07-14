@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 type ManagedMachineBootstrap struct {
@@ -627,19 +628,8 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 			updated = existing
 			return nil
 		}
-		inUse, err := s.managedPoolHasInventory(lockCtx, existing)
-		if err != nil {
-			return err
-		}
-		if inUse {
-			return model.ErrManagedPoolInUse
-		}
-		next := managedPoolStateWithConfig(existing, config)
-		// A definition change starts a new generation. Any installer issued for
-		// the previous definition must not be able to join afterward.
-		next.ManagedInstanceID = uuid.NewString()
-		next.UpdatedAt = time.Now().UTC()
-		updated = next
+		updated = managedPoolStateWithConfig(existing, config)
+		updated.UpdatedAt = time.Now().UTC()
 		if err := s.managedPoolRepo.SaveManagedPoolState(lockCtx, workspaceID, updated); err != nil {
 			return err
 		}
@@ -647,6 +637,9 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 	})
 	if err != nil {
 		return nil, err
+	}
+	if err := s.notifyAgentPool(ctx, updated.WorkspaceID, updated.Name); err != nil {
+		log.Warn().Err(err).Str("pool_name", updated.Name).Msg("failed to notify pool agents; periodic refresh remains active")
 	}
 	return s.managedPoolView(ctx, updated)
 }

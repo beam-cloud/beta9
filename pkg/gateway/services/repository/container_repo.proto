@@ -74,6 +74,7 @@ message SetContainerAddressMapRequest {
   string container_id = 1;
   map<int32, string> address_map = 2;
   repeated BackendRoute routes = 3;
+  int32 primary_port = 4;
 }
 
 message SetContainerAddressMapResponse {

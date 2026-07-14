@@ -474,6 +474,7 @@ func (s *Worker) Run() error {
 	go s.processStopContainerEvents()
 
 	lastContainerRequest := time.Now()
+	reconnectDelay := containerRequestStreamInterval
 
 	// Listen for container requests
 containerRequestStream:
@@ -482,12 +483,15 @@ containerRequestStream:
 			WorkerId: s.workerId,
 		})
 		if err != nil {
-			if s.ctx.Err() == context.Canceled {
+			if s.ctx.Err() != nil {
 				break
 			}
 
 			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("worker container request stream failed to connect")
-			time.Sleep(containerRequestStreamInterval)
+			if !waitForReconnect(s.ctx, reconnectDelay) {
+				break
+			}
+			reconnectDelay = nextReconnectDelay(reconnectDelay, workerEventStreamReconnectMax)
 			continue
 		}
 		log.Info().Str("worker_id", s.workerId).Msg("worker container request stream connected")
@@ -502,9 +506,9 @@ containerRequestStream:
 			}
 			if !response.Ok {
 				log.Warn().Str("worker_id", s.workerId).Str("error", response.ErrorMsg).Msg("worker container request stream returned error")
-				time.Sleep(containerRequestStreamInterval)
 				break
 			}
+			reconnectDelay = containerRequestStreamInterval
 
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
@@ -525,6 +529,10 @@ containerRequestStream:
 				break containerRequestStream
 			}
 		}
+		if !waitForReconnect(s.ctx, reconnectDelay) {
+			break
+		}
+		reconnectDelay = nextReconnectDelay(reconnectDelay, workerEventStreamReconnectMax)
 	}
 
 	return s.shutdown()
@@ -627,15 +635,17 @@ func (s *Worker) dropCancelledContainerRequest(request *types.ContainerRequest) 
 
 // handleContainerRequest handles an individual container request.
 func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
-	if s.dropCancelledContainerRequest(request) {
-		return
-	}
-
 	if !s.reserveContainerInstance(request) {
 		return
 	}
 
-	go s.runContainerRequest(request)
+	go func() {
+		if s.dropCancelledContainerRequest(request) {
+			s.containerInstances.Delete(request.ContainerId)
+			return
+		}
+		s.runContainerRequest(request)
+	}()
 }
 
 func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
