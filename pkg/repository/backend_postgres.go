@@ -99,8 +99,14 @@ type PostgresBackendRepository struct {
 	eventRepo             EventRepository
 	adminWorkspaceMu      sync.Mutex
 	adminWorkspace        *types.Workspace
-	adminWorkspaceLoading chan struct{}
+	adminWorkspaceLoading *adminWorkspaceLoad
 	taskEvents            *taskEventPublisher
+}
+
+type adminWorkspaceLoad struct {
+	done      chan struct{}
+	workspace *types.Workspace
+	err       error
 }
 
 func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
@@ -255,45 +261,44 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx c
 }
 
 func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
-	for {
-		r.adminWorkspaceMu.Lock()
-		if r.adminWorkspace != nil {
-			workspace := r.adminWorkspace
-			r.adminWorkspaceMu.Unlock()
-			return workspace, nil
-		}
-		if loading := r.adminWorkspaceLoading; loading != nil {
-			r.adminWorkspaceMu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-loading:
-				continue
-			}
-		}
-		r.adminWorkspaceLoading = make(chan struct{})
+	r.adminWorkspaceMu.Lock()
+	if r.adminWorkspace != nil {
+		workspace := r.adminWorkspace
 		r.adminWorkspaceMu.Unlock()
+		return workspace, nil
+	}
+	if loading := r.adminWorkspaceLoading; loading != nil {
+		r.adminWorkspaceMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-loading.done:
+			return loading.workspace, loading.err
+		}
+	}
+	loading := &adminWorkspaceLoad{done: make(chan struct{})}
+	r.adminWorkspaceLoading = loading
+	r.adminWorkspaceMu.Unlock()
 
-		var adminWorkspace types.Workspace
-		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+	var adminWorkspace types.Workspace
+	query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.token_type = 'admin'
 	ORDER BY t.id
 	LIMIT 1;`
-		err := r.client.GetContext(ctx, &adminWorkspace, query)
+	err := r.client.GetContext(ctx, &adminWorkspace, query)
 
-		r.adminWorkspaceMu.Lock()
-		if err == nil {
-			r.adminWorkspace = &adminWorkspace
-		}
-		workspace := r.adminWorkspace
-		loading := r.adminWorkspaceLoading
-		r.adminWorkspaceLoading = nil
-		close(loading)
-		r.adminWorkspaceMu.Unlock()
-		return workspace, err
+	r.adminWorkspaceMu.Lock()
+	if err == nil {
+		r.adminWorkspace = &adminWorkspace
 	}
+	loading.workspace = r.adminWorkspace
+	loading.err = err
+	r.adminWorkspaceLoading = nil
+	close(loading.done)
+	r.adminWorkspaceMu.Unlock()
+	return loading.workspace, loading.err
 }
 
 // Token

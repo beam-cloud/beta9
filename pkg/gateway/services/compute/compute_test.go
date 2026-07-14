@@ -1600,6 +1600,65 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 	}
 }
 
+func TestDeletePoolKeepsMachineThatReconnectsDuringProviderRelease(t *testing.T) {
+	now := time.Now().UTC()
+	key := fakeComputeKey("workspace-1", "aws-cpu")
+	machine := &model.AgentTokenState{
+		WorkspaceID:      "workspace-1",
+		PoolName:         "aws-cpu",
+		MachineID:        "machine-1",
+		Schedulable:      true,
+		LastHeartbeatAt:  now.Add(-2 * time.Minute),
+		LastDisconnectAt: now.Add(-time.Minute),
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {{
+				Name:             "aws-cpu",
+				CreatedByTokenID: "owner-token",
+				Source:           model.SourceAWS,
+				BYOC: &model.BYOCProviderState{
+					Provider: string(model.SourceAWS),
+					Region:   "us-east-1",
+					Labels: map[string]string{
+						awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+						awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+						awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+					},
+				},
+			}},
+		},
+		machines: map[string][]*model.AgentTokenState{key: {machine}},
+	}
+
+	oldReleaseMachine := awsBYOCReleaseMachine
+	awsBYOCReleaseMachine = func(context.Context, awsBYOCReleaseMachineInput) error {
+		reconnected := *machine
+		reconnected.LastHeartbeatAt = time.Now().UTC()
+		reconnected.LastDisconnectAt = time.Time{}
+		repo.machines[key][0] = &reconnected
+		return errBYOCProviderControlUnavailable
+	}
+	defer func() { awsBYOCReleaseMachine = oldReleaseMachine }()
+
+	res, err := (&Service{computeRepo: repo}).DeletePool(
+		testAuthContext("workspace-1", "owner-token"),
+		&pb.DeletePoolRequest{Name: "aws-cpu"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePool() error = %v", err)
+	}
+	if res.Ok || !strings.Contains(res.ErrMsg, errBYOCProviderControlUnavailable.Error()) {
+		t.Fatalf("DeletePool() response = %#v, want provider control error", res)
+	}
+	if got := len(repo.machines[key]); got != 1 || !model.AgentMachineConnected(repo.machines[key][0], time.Now().UTC()) {
+		t.Fatalf("machine state after failed deletion = %#v, want connected machine", repo.machines[key])
+	}
+	if got := len(repo.pools["workspace-1"]); got != 1 {
+		t.Fatalf("pool count after failed deletion = %d, want 1", got)
+	}
+}
+
 func TestDeletePoolIsIdempotentWhenPoolAlreadyGone(t *testing.T) {
 	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{}}
 	service := &Service{computeRepo: repo}

@@ -25,6 +25,8 @@ var marketplaceListingStatuses = map[string]struct{}{
 	model.MarketplaceListingStatusInactive: {},
 }
 
+var errMarketplaceListingPoolChanged = errors.New("marketplace listing pool changed")
+
 type marketplaceAuthContext struct {
 	workspaceID  string
 	ownerTokenID string
@@ -68,30 +70,40 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 	if !authCtx.hasOwner() {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
-	listing, errMsg := s.marketplaceListing(ctx, authCtx.workspaceID, in.GetListingId())
-	if errMsg != "" {
-		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: errMsg}, nil
-	}
-	err := s.withPoolStateLock(ctx, authCtx.workspaceID, listing.PoolName, func(lockCtx context.Context) error {
-		current, errMsg := s.marketplaceListing(lockCtx, authCtx.workspaceID, listing.ID)
+	listingID := strings.TrimSpace(in.GetListingId())
+	for {
+		listing, errMsg := s.marketplaceListing(ctx, authCtx.workspaceID, listingID)
 		if errMsg != "" {
-			return errors.New(errMsg)
+			return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: errMsg}, nil
 		}
-		previous := *current
-		updated := previous
-		if err := applyMarketplaceListingUpdate(&updated, in); err != nil {
-			return err
+		lockedPool := listing.PoolName
+		err := s.withPoolStateLock(ctx, authCtx.workspaceID, lockedPool, func(lockCtx context.Context) error {
+			current, errMsg := s.marketplaceListing(lockCtx, authCtx.workspaceID, listingID)
+			if errMsg != "" {
+				return errors.New(errMsg)
+			}
+			if current.PoolName != lockedPool {
+				return errMarketplaceListingPoolChanged
+			}
+			previous := *current
+			updated := previous
+			if err := applyMarketplaceListingUpdate(&updated, in); err != nil {
+				return err
+			}
+			if err := s.saveMarketplaceListingLocked(lockCtx, &updated, authCtx.ownerTokenID, &previous); err != nil {
+				return err
+			}
+			listing = &updated
+			return nil
+		})
+		if errors.Is(err, errMarketplaceListingPoolChanged) {
+			continue
 		}
-		if err := s.saveMarketplaceListingLocked(lockCtx, &updated, authCtx.ownerTokenID, &previous); err != nil {
-			return err
+		if err != nil {
+			return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		listing = &updated
-		return nil
-	})
-	if err != nil {
-		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.UpdateMarketplaceListingResponse{Ok: true, Listing: s.marketplaceListingToProto(ctx, listing)}, nil
 	}
-	return &pb.UpdateMarketplaceListingResponse{Ok: true, Listing: s.marketplaceListingToProto(ctx, listing)}, nil
 }
 
 func (s *Service) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMarketplaceListingRequest) (*pb.DeleteMarketplaceListingResponse, error) {

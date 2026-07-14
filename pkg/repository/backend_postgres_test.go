@@ -83,25 +83,59 @@ func TestGetAdminWorkspaceCanceledCallerDoesNotWaitForLoad(t *testing.T) {
 		firstResult <- err
 	}()
 
-	deadline := time.Now().Add(time.Second)
-	for {
+	require.Eventually(t, func() bool {
 		repo.adminWorkspaceMu.Lock()
-		loading := repo.adminWorkspaceLoading != nil
-		repo.adminWorkspaceMu.Unlock()
-		if loading {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("admin workspace load did not start")
-		}
-		time.Sleep(time.Millisecond)
-	}
+		defer repo.adminWorkspaceMu.Unlock()
+		return repo.adminWorkspaceLoading != nil
+	}, time.Second, time.Millisecond, "admin workspace load did not start")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := repo.GetAdminWorkspace(ctx)
 	require.True(t, errors.Is(err, context.Canceled), "error = %v", err)
 	require.NoError(t, <-firstResult)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetAdminWorkspaceSharesFailedLoadWithWaiters(t *testing.T) {
+	repository, mock := NewBackendPostgresRepositoryForTest()
+	repo := repository.(*PostgresBackendRepository)
+	loadErr := errors.New("database unavailable")
+	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).
+		WillDelayFor(200 * time.Millisecond).
+		WillReturnError(loadErr)
+
+	const waiterCount = 8
+	results := make(chan error, waiterCount+1)
+	go func() {
+		_, err := repo.GetAdminWorkspace(context.Background())
+		results <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		repo.adminWorkspaceMu.Lock()
+		defer repo.adminWorkspaceMu.Unlock()
+		return repo.adminWorkspaceLoading != nil
+	}, time.Second, time.Millisecond, "admin workspace load did not start")
+
+	for range waiterCount {
+		go func() {
+			_, err := repo.GetAdminWorkspace(context.Background())
+			results <- err
+		}()
+	}
+
+	for range waiterCount + 1 {
+		require.ErrorIs(t, <-results, loadErr)
+	}
+
+	createdAt := time.Now().UTC()
+	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
+	}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, nil, true, true))
+	workspace, err := repo.GetAdminWorkspace(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "admin-workspace", workspace.ExternalId)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
