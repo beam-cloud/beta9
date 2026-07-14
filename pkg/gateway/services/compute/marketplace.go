@@ -72,14 +72,23 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 	if errMsg != "" {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
-
-	previous := *listing
-	updated := previous
-	listing = &updated
-	if err := applyMarketplaceListingUpdate(listing, in); err != nil {
-		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID, &previous); err != nil {
+	err := s.withPoolStateLock(ctx, authCtx.workspaceID, listing.PoolName, func(lockCtx context.Context) error {
+		current, errMsg := s.marketplaceListing(lockCtx, authCtx.workspaceID, listing.ID)
+		if errMsg != "" {
+			return errors.New(errMsg)
+		}
+		previous := *current
+		updated := previous
+		if err := applyMarketplaceListingUpdate(&updated, in); err != nil {
+			return err
+		}
+		if err := s.saveMarketplaceListingLocked(lockCtx, &updated, authCtx.ownerTokenID, &previous); err != nil {
+			return err
+		}
+		listing = &updated
+		return nil
+	})
+	if err != nil {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return &pb.UpdateMarketplaceListingResponse{Ok: true, Listing: s.marketplaceListingToProto(ctx, listing)}, nil
@@ -455,23 +464,24 @@ func (s *Service) saveMarketplaceListing(ctx context.Context, listing *model.Mar
 		return err
 	}
 	return s.withPoolStateLock(ctx, listing.SellerWorkspaceID, listing.PoolName, func(lockCtx context.Context) error {
-		if err := s.validateMarketplacePoolAssignment(lockCtx, listing); err != nil {
-			return err
-		}
-		if err := s.computeRepo.SaveMarketplaceListing(lockCtx, listing); err != nil {
-			return err
-		}
-		if err := s.ensureMarketplacePoolStateLocked(lockCtx, listing, ownerTokenID); err != nil {
-			var rollbackErr error
-			if previous == nil {
-				rollbackErr = s.computeRepo.DeleteMarketplaceListing(lockCtx, listing.SellerWorkspaceID, listing.ID)
-			} else {
-				rollbackErr = s.computeRepo.SaveMarketplaceListing(lockCtx, previous)
-			}
-			return errors.Join(err, rollbackErr)
-		}
-		return nil
+		return s.saveMarketplaceListingLocked(lockCtx, listing, ownerTokenID, previous)
 	})
+}
+
+func (s *Service) saveMarketplaceListingLocked(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string, previous *model.MarketplaceListingState) error {
+	if err := s.validateMarketplacePoolAssignment(ctx, listing); err != nil {
+		return err
+	}
+	if err := s.computeRepo.SaveMarketplaceListing(ctx, listing); err != nil {
+		return err
+	}
+	if err := s.ensureMarketplacePoolStateLocked(ctx, listing, ownerTokenID); err != nil {
+		if previous == nil {
+			return errors.Join(err, s.computeRepo.DeleteMarketplaceListing(ctx, listing.SellerWorkspaceID, listing.ID))
+		}
+		return errors.Join(err, s.computeRepo.SaveMarketplaceListing(ctx, previous))
+	}
+	return nil
 }
 
 func (s *Service) ensureMarketplacePoolState(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string) error {

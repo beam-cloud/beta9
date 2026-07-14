@@ -31,10 +31,20 @@ func (s *Service) requireManagedPoolRepository() error {
 }
 
 func (s *Service) withManagedPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error {
-	if s == nil || s.managedPoolRepo == nil {
-		return errors.New("managed pool repository is unavailable")
+	if err := s.requireManagedPoolRepository(); err != nil {
+		return err
 	}
 	return s.managedPoolRepo.WithManagedPoolStateLock(ctx, workspaceID, name, fn)
+}
+
+func (s *Service) requireManagedPoolReconciler() error {
+	if err := s.requireManagedPoolRepository(); err != nil {
+		return err
+	}
+	if s.scheduler == nil {
+		return errors.New("scheduler is unavailable")
+	}
+	return nil
 }
 
 func requireClusterAdmin(authInfo *auth.AuthInfo) error {
@@ -184,7 +194,7 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 // isolated managed-pool definitions in Redis. The distributed repository lock
 // protects definitions; every replica still performs its own local hydration.
 func (s *Service) ReconcileManagedPools(ctx context.Context) error {
-	if err := s.requireManagedPoolRepository(); err != nil {
+	if err := s.requireManagedPoolReconciler(); err != nil {
 		return err
 	}
 
@@ -298,18 +308,14 @@ func (s *Service) syncManagedPoolControllers(ctx context.Context, pools map[stri
 			continue
 		}
 		installed := s.managedPoolInstances[name] == instanceID
-		if s.scheduler != nil {
-			if err := s.scheduler.EnsureAgentPool(state.WorkspaceID, state); err != nil {
-				syncErrors = append(syncErrors, fmt.Errorf("hydrate managed pool %q: %w", name, err))
-				continue
-			}
+		if err := s.scheduler.EnsureAgentPool(state.WorkspaceID, state); err != nil {
+			syncErrors = append(syncErrors, fmt.Errorf("hydrate managed pool %q: %w", name, err))
+			continue
 		}
 
 		if !installed {
 			if err := s.confirmManagedPool(ctx, state); err != nil {
-				if s.scheduler != nil {
-					s.scheduler.DeleteManagedAgentPool(name, instanceID)
-				}
+				s.scheduler.DeleteManagedAgentPool(name, instanceID)
 				syncErrors = append(syncErrors, fmt.Errorf("confirm managed pool %q: %w", name, err))
 				continue
 			}
@@ -318,7 +324,7 @@ func (s *Service) syncManagedPoolControllers(ctx context.Context, pools map[stri
 	}
 
 	for name, instanceID := range s.managedPoolInstances {
-		if _, ok := next[name]; !ok && s.scheduler != nil {
+		if _, ok := next[name]; !ok {
 			s.scheduler.DeleteManagedAgentPool(name, instanceID)
 		}
 	}

@@ -206,10 +206,16 @@ func (s *Service) releasePrivatePoolMachinesLocked(ctx context.Context, workspac
 	if err != nil {
 		return err
 	}
+	now := time.Now().UTC()
 	for _, machine := range machines {
-		if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil &&
-			!byocReleaseErrorAllowsLocalReconcile(err) && !errors.Is(err, errBYOCDirectScaleUnavailable) {
-			return err
+		if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil {
+			providerGone := errors.Is(err, errBYOCProviderResourceNotFound)
+			if model.AgentMachineConnected(machine, now) && !providerGone {
+				return err
+			}
+			if !byocReleaseErrorAllowsLocalReconcile(err) && !errors.Is(err, errBYOCDirectScaleUnavailable) {
+				return err
+			}
 		}
 		reservation, err := managedReservationForMachineRelease(state, machine.MachineID)
 		if err != nil {

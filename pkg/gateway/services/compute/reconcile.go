@@ -97,8 +97,6 @@ func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc 
 	return s.reconcileManagedPoolMachines(ctx, now)
 }
 
-// Managed pool definitions live outside tenant compute state, but their agent
-// machines use the same liveness lifecycle as every other agent pool.
 func (s *Service) reconcileManagedPoolMachines(ctx context.Context, now time.Time) error {
 	workspaceID, err := s.adminWorkspaceID(ctx)
 	if err != nil {
@@ -112,7 +110,16 @@ func (s *Service) reconcileManagedPoolMachines(ctx context.Context, now time.Tim
 		if state == nil || state.WorkspaceID != workspaceID || state.Name == "" || state.ManagementSource == "" {
 			continue
 		}
-		s.reconcileStaleMachines(ctx, workspaceID, state, now)
+		if err := s.withManagedPoolStateLock(ctx, workspaceID, state.Name, func(lockCtx context.Context) error {
+			current, err := s.managedPoolRepo.GetManagedPoolState(lockCtx, workspaceID, state.Name)
+			if err != nil || current == nil || current.ManagementSource == "" {
+				return err
+			}
+			s.reconcileStaleMachines(lockCtx, workspaceID, current, now)
+			return nil
+		}); err != nil {
+			return fmt.Errorf("reconcile managed pool %q: %w", state.Name, err)
+		}
 	}
 	return nil
 }

@@ -16,6 +16,9 @@ func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.Agen
 	if machine == nil {
 		return nil
 	}
+	if s == nil || s.computeRepo == nil {
+		return errors.New("compute repository is unavailable")
+	}
 	if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil {
 		reconciled, reconcileErr := s.reconcileBYOCMachineReleaseFailure(ctx, machine, err)
 		if reconcileErr != nil {
@@ -82,6 +85,9 @@ func byocReleaseErrorAllowsLocalReconcile(err error) bool {
 func (s *Service) removePrivateMachine(ctx context.Context, machine *model.AgentTokenState) error {
 	if machine == nil {
 		return nil
+	}
+	if s == nil || s.computeRepo == nil {
+		return errors.New("compute repository is unavailable")
 	}
 	s.flushBYOCMachineManagedUsage(ctx, machine)
 	if err := s.markPrivateMachineUnschedulable(ctx, machine); err != nil {

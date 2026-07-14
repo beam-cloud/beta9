@@ -78,8 +78,8 @@ controllers:
       terminationGracePeriodSeconds: "195"
     strategy: RollingUpdate
     rollingUpdate:
-      unavailable: "0"
-      surge: 1
+      unavailable: 1
+      surge: 0
     initContainers:
       wait-on-backends:
         image:

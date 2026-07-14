@@ -24,7 +24,7 @@ type blockingMigrator struct {
 }
 
 func (m *blockingMigrator) MigrateContext(ctx context.Context) error {
-	m.calls.Add(1)
+	call := m.calls.Add(1)
 	current := m.concurrent.Add(1)
 	defer m.concurrent.Add(-1)
 	for {
@@ -33,7 +33,7 @@ func (m *blockingMigrator) MigrateContext(ctx context.Context) error {
 			break
 		}
 	}
-	if current == 1 && m.calls.Load() == 1 {
+	if call == 1 {
 		close(m.firstRun)
 		select {
 		case <-m.release:

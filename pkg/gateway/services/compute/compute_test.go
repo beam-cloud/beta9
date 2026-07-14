@@ -1537,9 +1537,13 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 					Source:           model.SourceAWS,
 					BYOC: &model.BYOCProviderState{
 						Provider: string(model.SourceAWS),
+						Region:   "us-east-1",
 						Labels: map[string]string{
 							byocBootstrapJoinTokenHashLabel:   hashComputeToken("byoc-token"),
 							byocBootstrapJoinTokenHashesLabel: strings.Join([]string{hashComputeToken("byoc-token"), hashComputeToken("old-byoc-token")}, ","),
+							awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+							awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+							awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
 						},
 					},
 				},
@@ -1565,6 +1569,9 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 	}
 	containerRepo := &fakeContainerRepo{}
 	service := &Service{computeRepo: repo, containerRepo: containerRepo}
+	oldReleaseMachine := awsBYOCReleaseMachine
+	awsBYOCReleaseMachine = func(context.Context, awsBYOCReleaseMachineInput) error { return nil }
+	defer func() { awsBYOCReleaseMachine = oldReleaseMachine }()
 
 	res, err := service.DeletePool(ctx, &pb.DeletePoolRequest{Name: "aws-cpu"})
 	if err != nil {

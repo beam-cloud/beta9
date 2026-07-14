@@ -94,8 +94,8 @@ func (s *Service) Start(ctx context.Context) {
 		if s.computeRepo != nil {
 			go s.runReconciler(ctx)
 		}
-		if s.managedPoolRepo == nil {
-			log.Error().Msg("managed pool repository is unavailable")
+		if err := s.requireManagedPoolReconciler(); err != nil {
+			log.Error().Err(err).Msg("managed pool reconciliation is unavailable")
 			return
 		}
 		go s.runManagedPoolReconciler(ctx)

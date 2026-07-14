@@ -200,27 +200,6 @@ func agentPoolControllerKey(workspaceID string, state *compute.PoolState) string
 	return strings.Join([]string{"agent", workspaceID, selector}, ":")
 }
 
-func (s *Scheduler) poolForWorkspaceSelector(workspaceID, selector string) (*WorkerPool, bool) {
-	if s == nil || s.workerPoolManager == nil || selector == "" {
-		return nil, false
-	}
-	if workspaceID != "" {
-		state := &compute.PoolState{Selector: selector}
-		if pool, ok := s.workerPoolManager.GetPool(agentPoolControllerKey(workspaceID, state)); ok {
-			return pool, true
-		}
-	}
-	pool, ok := s.workerPoolManager.GetPool(selector)
-	if !ok {
-		return nil, false
-	}
-	if controller, agent := pool.Controller.(*AgentWorkerPoolController); agent &&
-		controller.poolState.ManagementSource == "" && controller.workspaceID != workspaceID {
-		return nil, false
-	}
-	return pool, true
-}
-
 func (s *Scheduler) privateAgentPool(workspaceID, selector string) (*WorkerPool, bool) {
 	if s == nil || s.workerPoolManager == nil || workspaceID == "" || selector == "" {
 		return nil, false

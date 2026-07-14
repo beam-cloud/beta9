@@ -69,9 +69,12 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		}
 		computeRepo = repository.NewComputeRedisRepository(opts.RedisClient)
 	}
-	managedPoolRepo := repository.NewManagedPoolRedisRepository(opts.RedisClient)
 	computeService := opts.ComputeService
 	if computeService == nil {
+		var managedPoolRepo repository.ManagedPoolRepository
+		if opts.RedisClient != nil {
+			managedPoolRepo = repository.NewManagedPoolRedisRepository(opts.RedisClient)
+		}
 		computeService = computesvc.New(computesvc.Options{
 			Config:           opts.Config,
 			BackendRepo:      opts.BackendRepo,

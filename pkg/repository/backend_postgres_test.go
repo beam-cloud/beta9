@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -63,6 +64,44 @@ func TestGetAdminWorkspaceMapsExternalID(t *testing.T) {
 	require.Equal(t, uint(7), workspace.Id)
 	require.True(t, workspace.VolumeCacheEnabled)
 	require.True(t, workspace.MultiGpuEnabled)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetAdminWorkspaceCanceledCallerDoesNotWaitForLoad(t *testing.T) {
+	repository, mock := NewBackendPostgresRepositoryForTest()
+	repo := repository.(*PostgresBackendRepository)
+	createdAt := time.Now().UTC()
+	mock.ExpectQuery(`SELECT w\.id, w\.external_id`).
+		WillDelayFor(200 * time.Millisecond).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "external_id", "name", "created_at", "concurrency_limit_id", "volume_cache_enabled", "multi_gpu_enabled",
+		}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, nil, true, true))
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := repo.GetAdminWorkspace(context.Background())
+		firstResult <- err
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		repo.adminWorkspaceMu.Lock()
+		loading := repo.adminWorkspaceLoading != nil
+		repo.adminWorkspaceMu.Unlock()
+		if loading {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("admin workspace load did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := repo.GetAdminWorkspace(ctx)
+	require.True(t, errors.Is(err, context.Canceled), "error = %v", err)
+	require.NoError(t, <-firstResult)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

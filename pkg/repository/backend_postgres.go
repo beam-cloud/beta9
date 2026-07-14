@@ -94,12 +94,13 @@ func GenerateDSN(config types.PostgresConfig) string {
 }
 
 type PostgresBackendRepository struct {
-	client           *sqlx.DB
-	config           types.PostgresConfig
-	eventRepo        EventRepository
-	adminWorkspaceMu sync.Mutex
-	adminWorkspace   *types.Workspace
-	taskEvents       *taskEventPublisher
+	client                *sqlx.DB
+	config                types.PostgresConfig
+	eventRepo             EventRepository
+	adminWorkspaceMu      sync.Mutex
+	adminWorkspace        *types.Workspace
+	adminWorkspaceLoading chan struct{}
+	taskEvents            *taskEventPublisher
 }
 
 func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
@@ -254,28 +255,45 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx c
 }
 
 func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
-	r.adminWorkspaceMu.Lock()
-	defer r.adminWorkspaceMu.Unlock()
+	for {
+		r.adminWorkspaceMu.Lock()
+		if r.adminWorkspace != nil {
+			workspace := r.adminWorkspace
+			r.adminWorkspaceMu.Unlock()
+			return workspace, nil
+		}
+		if loading := r.adminWorkspaceLoading; loading != nil {
+			r.adminWorkspaceMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-loading:
+				continue
+			}
+		}
+		r.adminWorkspaceLoading = make(chan struct{})
+		r.adminWorkspaceMu.Unlock()
 
-	if r.adminWorkspace != nil {
-		return r.adminWorkspace, nil
-	}
-
-	var adminWorkspace types.Workspace
-
-	query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+		var adminWorkspace types.Workspace
+		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.token_type = 'admin'
 	ORDER BY t.id
 	LIMIT 1;`
-	err := r.client.GetContext(ctx, &adminWorkspace, query)
-	if err != nil {
-		return nil, err
-	}
+		err := r.client.GetContext(ctx, &adminWorkspace, query)
 
-	r.adminWorkspace = &adminWorkspace
-	return r.adminWorkspace, nil
+		r.adminWorkspaceMu.Lock()
+		if err == nil {
+			r.adminWorkspace = &adminWorkspace
+		}
+		workspace := r.adminWorkspace
+		loading := r.adminWorkspaceLoading
+		r.adminWorkspaceLoading = nil
+		close(loading)
+		r.adminWorkspaceMu.Unlock()
+		return workspace, err
+	}
 }
 
 // Token

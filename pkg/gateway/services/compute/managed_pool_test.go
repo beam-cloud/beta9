@@ -102,12 +102,14 @@ func clusterAdminAuth() *auth.AuthInfo {
 func managedPoolTestService(config types.AppConfig, repo *fakeComputeRepo) *Service {
 	managedStates := &fakeComputeRepo{pools: repo.pools}
 	repo.pools = nil
+	workers := &fakeWorkerRepo{}
 	return &Service{
 		appConfig:            config,
 		backendRepo:          &fakeManagedPoolBackendRepo{},
+		scheduler:            scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager(false)),
 		computeRepo:          repo,
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: managedStates},
-		workerRepo:           &fakeWorkerRepo{},
+		workerRepo:           workers,
 		managedPoolReady:     make(chan struct{}),
 		managedPoolInstances: map[string]string{},
 	}
@@ -123,6 +125,7 @@ func TestServiceStartDoesNotWaitForManagedPoolReconciliation(t *testing.T) {
 			}},
 		},
 		backendRepo:          backend,
+		scheduler:            scheduler.NewSchedulerForCapacityChecks(&fakeWorkerRepo{}, &fakeComputeRepo{}, scheduler.NewWorkerPoolManager(false)),
 		computeRepo:          &fakeComputeRepo{},
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: &fakeComputeRepo{}},
 		managedPoolReady:     make(chan struct{}),

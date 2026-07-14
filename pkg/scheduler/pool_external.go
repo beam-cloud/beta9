@@ -376,14 +376,7 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 		return nil, err
 	}
 	if worker != nil && worker.Status != types.WorkerStatusDisabled {
-		worker.Gpu = spec.gpu
-		worker.PoolName = spec.poolName
-		worker.PoolSelector = spec.poolSelector
-		worker.RequiresPoolSelector = spec.requiresPoolSelector
-		worker.Priority = spec.priority
-		worker.Preemptable = spec.preemptable
-		worker.Runtime = spec.runtime
-		worker.BuildVersion = spec.buildVersion
+		spec.applyToWorker(worker)
 		return worker, wpc.workerRepo.AddWorker(worker)
 	}
 
@@ -421,23 +414,28 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 }
 
 func (m agentMachineWorker) worker() *types.Worker {
-	return &types.Worker{
-		Id:                   m.id,
-		Status:               types.WorkerStatusPending,
-		TotalCpu:             m.cpu,
-		TotalMemory:          m.memory,
-		TotalGpuCount:        m.gpuCount,
-		FreeCpu:              m.cpu,
-		FreeMemory:           m.memory,
-		FreeGpuCount:         m.gpuCount,
-		Gpu:                  m.gpu,
-		PoolName:             m.poolName,
-		PoolSelector:         m.poolSelector,
-		MachineId:            m.machineID,
-		RequiresPoolSelector: m.requiresPoolSelector,
-		Priority:             m.priority,
-		Preemptable:          m.preemptable,
-		Runtime:              m.runtime,
-		BuildVersion:         m.buildVersion,
+	worker := &types.Worker{
+		Id:            m.id,
+		Status:        types.WorkerStatusPending,
+		TotalCpu:      m.cpu,
+		TotalMemory:   m.memory,
+		TotalGpuCount: m.gpuCount,
+		FreeCpu:       m.cpu,
+		FreeMemory:    m.memory,
+		FreeGpuCount:  m.gpuCount,
+		MachineId:     m.machineID,
 	}
+	m.applyToWorker(worker)
+	return worker
+}
+
+func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
+	worker.Gpu = m.gpu
+	worker.PoolName = m.poolName
+	worker.PoolSelector = m.poolSelector
+	worker.RequiresPoolSelector = m.requiresPoolSelector
+	worker.Priority = m.priority
+	worker.Preemptable = m.preemptable
+	worker.Runtime = m.runtime
+	worker.BuildVersion = m.buildVersion
 }
